@@ -13,10 +13,10 @@ a missing wire fails startup with a clear error, never with a deep
 `Cannot resolve` at first request.
 
 This category walks **`blog`** through the [**Publish**](/publish/) story
-— from an inline root (**step ①**: `BlogService` / `BlogController` in
-`apps/blog/`, no database) to a composed API with a `posts/` feature, the
-stage the [tutorial](/tutorial/) builds in the repo — and the primitives
-every binary leans on:
+— from the shape `nestrs new` writes (**step ①**: `BlogService` /
+`BlogController` in a feature's adapter, a root importing it, no database) to a
+composed API with a `posts/` feature, the stage the [tutorial](/tutorial/) builds
+in the repo — and the primitives every binary leans on:
 
 - **Modules** — the composition unit. `#[module]` declares what a module
   owns and what it depends on.
@@ -25,18 +25,19 @@ every binary leans on:
 - **Lifecycle** — the moments an app comes alive and winds down.
   `#[hooks]` tags async methods for the init and shutdown phases the
   framework drains in order. See [Lifecycle](/fundamentals/lifecycle/).
-- **Guards** — decide *who* gets through. `Guard::check_http(&mut Request)`
-  returns `Err(Denial)` to short-circuit the chain, or attaches
-  request-scoped context the handler reads back via `Ctx<T>`.
-- **Pipes** — convert and validate input at the request boundary.
-  Stateless transforms (`Parse<T>`, `ParseUuid`, `ValidationPipe<T>`, …)
-  bound by HTTP through the `Valid<E>` / `Piped<P, E>` extractors.
-- **Interceptors** — wrap handler execution. The same seam that lets you
-  log a request also installs the ambient database transaction and the
-  authorization context.
-- **Error handling** — map errors to responses. `#[use_filters(...)]`
-  for route-shaped mapping; `#[use_exception_filters(...)]` for typed
-  catches. See [Error handling](/fundamentals/exception-filters/).
+- **Guards** — decide *who* gets through. A guard writes its decision once,
+  `Guard::check`, which runs on every unit and on an HTTP request through
+  `Guard::check_http`; it returns `Err(Denial)` to short-circuit the chain, or
+  attaches context the handler reads back via `Ambient<T>`.
+- **Pipes** — convert input at the request boundary. Stateless transforms
+  (`Parse<T>`, `ParseUuid`, `Trim`, …) bound on any edge through `Piped`;
+  an argument whose type declares rules is validated there with no pipe.
+- **Interceptors** — wrap handler execution, after the guards: time it,
+  decorate the reply, or answer in its place.
+- **Error handling** — map errors to responses. `ToProblem` on the
+  error type for the default, on every edge; `#[use_exception_filters(...)]` for a typed
+  catch or one envelope for every error. See
+  [Error handling](/fundamentals/exception-filters/).
 - **Middleware** — NestRS doesn't have a middleware primitive. See [the
   page](/fundamentals/middleware/) for the Guards/Interceptors split if
   you're looking for one.
@@ -51,7 +52,6 @@ together, which is why no `service.rs` or `controller.rs` appears there.
 use nest_rs::core::injectable;
 
 #[injectable]
-#[derive(Default)]
 pub struct BlogService;
 
 impl BlogService {
@@ -87,28 +87,47 @@ impl BlogController {
 
 A controller is also a provider. `#[inject]` fields are resolved by type
 from the container; `#[routes]` mounts the verb methods on the
-controller's path. `#[public]` is the route's **posture** — every route declares
-one, and an unguarded route with no posture is flagged at boot
-(`unguarded routes detected`). This tagline is open on purpose, so it says so;
+controller's path. `#[public]` is the route's **posture**: a route no guard
+covers either says `#[public]` or refuses the boot, which names it. This
+tagline is open on purpose, so it says so;
 [Guards](/fundamentals/guards/) covers the other half.
+
+```rust title="crates/features/src/blog/module.rs"
+use nest_rs::core::module;
+
+use super::service::BlogService;
+
+#[module(providers = [BlogService])]
+pub struct BlogModule;
+```
+
+```rust title="crates/features/src/blog/http/module.rs"
+use nest_rs::core::module;
+
+use super::controller::BlogController;
+use crate::blog::BlogModule;
+
+#[module(imports = [BlogModule], providers = [BlogController])]
+pub struct BlogHttpModule;
+```
+
+The port owns the service, the adapter owns the handler and imports the port, and
+the app's root imports the adapter:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
-use features::blog::BlogController;
-use features::blog::BlogService;
 
-#[module(
-    imports = [HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() })],
-    providers = [BlogService, BlogController],
-)]
+use features::blog::BlogHttpModule;
+
+#[module(imports = [BlogHttpModule])]
 pub struct BlogModule;
 ```
 
 ```rust title="apps/blog/src/main.rs"
+use blog::BlogModule;
 use nest_rs::core::App;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> anyhow::Result<()> {
     App::builder()
         .module::<BlogModule>()
@@ -119,13 +138,16 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+`nestrs new` writes the same `main` with one more line, `let _otel =
+OpenTelemetry::init()?;`, the [telemetry](/opentelemetry/) a project starts with.
+
 ```bash frame="terminal"
-$ curl http://localhost:3005/
+$ curl http://localhost:3000/
 A minimal blog API
 ```
 
-Later pages move the domain into `posts/` (`PostsService`,
-`PostsController`, `PostsModule`, …) and grow `BlogModule` into a
+Later pages give the domain a feature of its own, `posts/` (`PostsService`,
+`PostsController`, `PostsModule`, …), and grow the app's `BlogModule` into a
 composed root — see [Modules](/fundamentals/modules/). The
 [tutorial](/tutorial/) is where you implement that composed root in the
 repo.
@@ -134,24 +156,24 @@ repo.
 
 1. **Collected** every provider in the import tree — `BlogService`,
    `BlogController` — into a link-time registry.
-2. **Built** the access graph from `BlogModule`. `BlogController`
-   declares it injects `BlogService`; `BlogModule` owns both; reachable. ✓
-3. **Constructed** each provider once. `BlogService::default()` produced
+2. **Built** the access graph from the app's `BlogModule`. `BlogController`
+   declares it injects `BlogService`; `BlogHttpModule` imports the port that owns
+   it; reachable. ✓
+3. **Constructed** each provider once. `BlogService` became
    one `Arc<BlogService>`, injected into `BlogController::svc`.
 4. **Mounted** `BlogController` on the HTTP transport from the route
    table `#[routes]` generated.
 
 ## Try breaking it
 
-Comment the line that lists `BlogService` in `BlogModule`'s providers,
-then build:
+Empty the port's `providers`, the line that lists `BlogService`, then build:
 
 ```text frame="terminal" "BlogService"
-Error: unmet dependency: `BlogController` (in module `BlogModule`) depends on `BlogService`, but no module provides it and it is not global infrastructure (a seed or factory output). Add a provider for `BlogService` to a module reachable from the root, or seed it at `App::builder()`.
+Error: unmet dependency: `BlogController` (in module `BlogHttpModule`) depends on `BlogService`, but no module provides it and it is not global infrastructure (a seed or factory output). Import the module that opens it, add a provider for `BlogService` to a module reachable from the root, or seed it at `App::builder()`.
 ```
 
 The error names the consumer (`BlogController`), the missing dependency
-(`BlogService`), and the two ways to fix it. Boot fails inside
+(`BlogService`), and the ways to fix it. Boot fails inside
 `build().await`, before the HTTP transport starts — never at the first
 request.
 
@@ -181,29 +203,54 @@ processors, MCP tools) are transport-specific and live in their own categories:
 
 - [Modules](/fundamentals/modules/) — the composition unit, `imports`, and
   the port + adapters layout.
-- [Providers](/fundamentals/providers/) — injectables, scopes, and the
-  boot-time access graph.
-- [Guards](/fundamentals/guards/) — pre-handler gates, the three scopes,
-  and declaring on the provider.
+- [Providers](/fundamentals/providers/) — injectables and the boot-time
+  access graph.
+- [Guards](/fundamentals/guards/) — pre-handler gates: write one, read an
+  earlier guard's principal, document what it refuses.
+- [Guard scopes](/fundamentals/guard-scopes/) — a controller, a route or the
+  app's pool, composed outermost first, declared on the provider.
 - [Pipes](/fundamentals/pipes/) — parse, normalize and validate at the
   request boundary.
-- [Interceptors](/fundamentals/interceptors/) — wrap handler execution,
-  install ambient state, shape the response.
+- [Interceptors](/fundamentals/interceptors/) — wrap a unit on every edge,
+  install ambient state, shape the reply.
 - [Error handling](/fundamentals/exception-filters/) — typed catches,
   unconditional mapping, and the defaults underneath.
 
 ### All options
 
+- [Module boot](/fundamentals/module-boot/) — the phases a boot runs over the
+  import tree, what is global, and a module imported twice.
+- [Provider scopes](/fundamentals/provider-scopes/) — singleton, request or
+  transient, and how a handler reaches a scoped provider.
+- [Providers behind a trait](/fundamentals/provider-traits/) — bind
+  `Impl as dyn Trait`, so another feature injects the port alone.
+- [Instances](/fundamentals/instances/) — one resource opened twice, each
+  instance a type of its own.
 - [Lifecycle](/fundamentals/lifecycle/) — `#[hooks]` on the init and
   shutdown phases the framework drains in order.
-- [The request lifecycle](/fundamentals/request-lifecycle/) — one pool per
-  layer family, deduplicated by `TypeId`, run exactly once.
+- [App state](/fundamentals/app-state/) — the sequence `App::run` walks, and
+  where the app stands on it.
+- [Shutdown](/fundamentals/shutdown/) — every bounded step from the signal
+  to the exit.
+- [The request lifecycle](/fundamentals/request-lifecycle/) — the stages
+  every unit runs, and one pool per layer family, run exactly once.
+- [Execution context](/fundamentals/execution-context/) — what every layer
+  reads about the unit it runs around, on every edge.
+- [Guard context](/fundamentals/guard-context/) — what a guard attaches, the
+  route metadata and posture it reads, the body it may read.
+- [Guards beyond HTTP](/fundamentals/guards-beyond-http/) — one guard on
+  GraphQL fields, WebSocket messages and MCP operations.
+- [Pipes beyond HTTP](/fundamentals/pipes-beyond-http/) — the same pipes on
+  every edge's wire value.
+- [Global pipes](/fundamentals/global-pipes/) — one pipe over every body,
+  set of variables and message.
+- [Interceptors beyond HTTP](/fundamentals/interceptors-beyond-http/) — an
+  interceptor around a GraphQL root field, the three places that run less, and
+  the table linking every other edge.
 - [Middleware](/fundamentals/middleware/) — why there is no middleware
-  primitive, and which of the two roles you actually want.
+  primitive, and which of the layers you actually want.
 - [Correlation](/fundamentals/correlation/) — the W3C trace every unit of
   work runs under, readable anywhere.
-- [Extending NestRS](/fundamentals/extending/) — the extension contract and
-  its three selection modes.
 
 ## Going further
 
@@ -211,3 +258,5 @@ processors, MCP tools) are transport-specific and live in their own categories:
   naming levels, and the reserved vocabulary.
 - [Tutorial](/tutorial/) — build the composed `posts/` root end to end.
 - [HTTP](/http/) — the first transport to mount on this vocabulary.
+- [Extending NestRS](/extending/) — a package, a transport, a decorator or a
+  driver of your own, on the same vocabulary.

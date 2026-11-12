@@ -1,0 +1,155 @@
+# A push inside a transaction is written into it, and a relay files it after the commit
+
+Settled on 2026-10-19 (DATA-04, 04b). A push called the backend where it was
+written: inside a unit's transaction, a rollback then left an orphan job behind.
+The rule's answer was "an event whose listener pushes", which loses the job when
+the process dies between the `COMMIT` and the push, and turns a push the backend
+refuses into a log line while the client already holds its `2xx`. Correctness
+decided, and "nothing to wire" decided how it is armed.
+
+**Chosen — the transactional outbox, on the unit's own executor.** The queue
+port seals a push as before, then hands the sealed jobs to
+`Executor::write_outbox` of the ambient executor: a driver keeping an outbox
+writes them on the transaction that executor holds, so they commit or roll back
+with the caller's writes, and the receipt names a job that exists exactly when
+those writes do. A push of many is one write, so it is atomic too. The relay —
+the queue port's transport, `OutboxRelay` — claims committed records with
+`FOR UPDATE SKIP LOCKED`, hands them to the backend, then deletes what was filed
+and makes what failed due again after the job retry backoff. Delivery stays at
+least once: a relay dying between its call and its settle sends the record
+again, which `JobProducer::enqueue`'s contract (an envelope whose job the
+backend holds is filed once) makes harmless while the job is held, and the
+handler's idempotency on `Attempt::job_id` covers a job that already ended.
+
+- **The executor, never the request scope.** The write is a method of the
+  ambient executor, the very transaction the record joins: an event listener's
+  unit and a WebSocket hook carry no request scope, and they push too.
+- **The port's records are opaque to the database port.** `OutboxRecord`
+  carries the sealed envelope as text; only the queue port reads it back, and
+  it checks the record names its own job before filing it.
+- **Armed by the relay, attached by the data driver's binding.** A store writes
+  nothing until the relay proved its table at boot — through the boot's proof,
+  so a missing table refuses at once and a lost connection is retried within
+  the store's net — and an app running no relay
+  (a test harness, an app with no queue backend) files every job at once. The
+  relay's module (`OutboxModule`) is imported by the binding that keeps the
+  store (`SeaOrmDatabaseModule` under the umbrella's `queue` feature): a queue
+  backend owes nothing beyond its id contract, and an app lists nothing. A
+  missing table fails the boot naming the remedy.
+- **What a caller opened itself keeps no outbox.** A pool, an
+  `Executor::Txn` and a block nested in it answer `None`, so their jobs are
+  filed at once: nothing ties a handle the caller built to the store a relay
+  armed, and `after_commit` runs at once there for the same reason. The pool a
+  unit's boundary hands on — to its after-commit work, to a step out of its
+  transaction — is the binding's, so it keeps the outbox as a pool unit does:
+  a push there is filed at once, a block of its own keeps its pushes until it
+  commits, a cancel deletes a record no relay has filed.
+- **A cancel waits for a relay's claim, never skips it.** Skipping a record a
+  relay holds would answer `false` between the relay's claim and its call, and
+  the job, filed a moment later, would run. The claim never waits on a unit's
+  rows, so the wait cannot deadlock, and the statement budget bounds it.
+- **A record is sealed only for a handle that keeps it.** The port hands
+  `write_outbox` records built as they are read, so a push filed at once pays
+  for no record it throws away.
+- **A unique key is the relay's to check.** The backend is not asked at the
+  push, so the record is superseded once committed — deleted, said at `info`
+  naming both jobs — rather than refused to the caller.
+- **The way down cuts no call.** Once the app stops, the relay starts none; the
+  one in flight answers within the port's net, and its settle gets what is left
+  of it, or the record is left to the next relay.
+- **A record holding no job a relay can file is deleted at `error`**, said
+  without its text: kept, it would come back on every pass and file nothing.
+- **The framework's tables are `nestrs_<pattern>`**, as its datastore keys are
+  `nestrs:…`; the table is created by a framework migration an app's migrator
+  lists (`OutboxMigration`), and a later change ships as a migration of its own.
+
+**Refused:**
+
+- **A listener pushes after the commit** — the prescribed pattern this retires.
+  A crash between the `COMMIT` and the push loses the job, and a refusal the
+  backend answers reaches no caller.
+- **A delivery API of the outbox's own**, an `@OnOutboxMessage`-style handler
+  beside `#[process]`: two ways for a job to run, each with its own retries and
+  idempotency. The outbox only defers the push; the job still runs through the
+  queue's one consume loop.
+- **Routing through the request scope** (`current_request_scope()?.root()`):
+  a listener's unit and a WebSocket hook have none, so their pushes would have
+  bypassed the outbox.
+- **An explicit import** of the relay by the app: an app forgetting it keeps the
+  lossy semantics without a word.
+- **Pushing before the `COMMIT`** — the rule's second alternative — leaves an
+  orphan job on every rollback.
+
+## 2026-10-21 — the CLI registers the framework's migration, and a queue brings it
+
+The boot refusing without the table names `nestrs g migration nestrs_outbox`, so
+the generator registers the framework's migration under its reserved name: one
+`migrator.rs` entry and the `nest-rs` features compiling it, never a file, kept
+by every later regeneration of `migrator.rs`; any other `nestrs_` name or table
+is refused, naming the one it accepts. `g queue` registers it too wherever the
+workspace keeps a migrations crate: the queue it enables arms the outbox in any
+app binding SeaORM's database. "Nothing to wire" decided.
+
+**Refused:**
+
+- **A queue generator that only prints the step.** The boot refusal would then
+  be the first thing every app adding a queue meets.
+- **The entry in every `nestrs new` workspace.** Most never bind a queue, and
+  each would create a table it never uses.
+- **A test harness running the relay unasked.** `TestApp` and `HeadlessApp`
+  run no transport a test did not spawn, the relay included; a test proving a
+  push waits for its commit arms the app's outbox and spawns `OutboxRelay`, as
+  the demo's api suite does.
+
+## 2026-10-23 — a suite over SeaORM arms its app's outbox at boot
+
+The demo's api suite filed every push of a test that only pushes on the
+suites' shared Redis database, where nothing drains and a job that never runs
+never ends: two dozen jobs a run, for good, among them the orphan of a publish
+its database refused. Its boot now arms the app's outbox, as the binary's relay
+does when served, so a push waits in the throwaway database and is dropped
+with it, and a test needing its job run spawns a relay beside its worker.
+Correctness decided: the suite runs the path its binary runs, and nothing is
+left to clean.
+
+**Refused:**
+
+- **Cancelling by receipt** alone: an HTTP push answers none. A push holding
+  one, with no database to keep it, is still cancelled that way.
+- **Flushing the suites' database where a run starts**: a step beside the
+  tests that every way of running them must remember, and a run's own jobs
+  stay until the next.
+- **A rule bounding how long a push may stay**: it names the leak instead of
+  closing it.
+
+## 2026-10-31 — the test harness arms the outbox at boot
+
+Every app suite armed its app's outbox by hand after the boot (a demo helper
+reaching the framework's `dyn OutboxStore`), so a suite that forgot it filed
+its pushes on the shared Redis database, and the "test harness files every
+job at once" sentence above held only for those. `TestApp` and `HeadlessApp`
+now arm the outbox of an app binding a store and a queue backend as their
+boot's last step (the `queue` feature of `nest-rs-testing`), through the very
+function the relay's `configure` runs (`nest_rs_queue::__private::arm_outbox`):
+a store without its table refuses the boot naming the remedy, as the
+binary's does. A push inside a unit then waits in the throwaway database, and
+a test needing its job run spawns `OutboxRelay` beside its worker. This
+amends the first section's "an app running no relay (a test harness, an app
+with no queue backend) files every job at once": a harness now runs the path
+the binary runs, and an app with no queue backend still files at once.
+Correctness decided — the suite boots what the binary boots — under the
+owner's "Tout faire" of 2026-10-28.
+
+**Refused:**
+
+- **The harness running the relay unasked** stays refused (2026-10-21): it
+  arms, and runs no transport a test did not spawn.
+- **Arming behind an opt-in builder step**: a suite forgetting it would file
+  jobs nothing drains, the leak the 2026-10-23 entry closed for one suite.
+
+## 2026-11-05 — no caller's handle is left to keep none
+
+`Executor::Txn`, and a block nested in it, are gone (`visibility-tiers.md`,
+2026-11-05), so "what a caller opened itself" above is a pool, or a `db.begin()`
+the framework never sees: a push beside one reads the ambient handle, which is
+the unit's, and a pool files it at once. Nothing else about that line moved.

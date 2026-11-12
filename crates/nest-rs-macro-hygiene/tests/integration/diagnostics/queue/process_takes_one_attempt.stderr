@@ -1,0 +1,5 @@
+error: a #[process] method takes at most one `Attempt` parameter — a method runs one attempt at a time
+  --> tests/integration/diagnostics/queue/process_takes_one_attempt.rs:27:17
+   |
+27 |         _again: Attempt,
+   |                 ^^^^^^^

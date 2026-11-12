@@ -21,26 +21,19 @@ field auto-resolves through a dataloader without an N+1.
 
 ## The resolver
 
-A resolver is a struct decorated with `#[resolver]`, with operations
-on the impl block. The reference feature wires both halves:
-
-The crate driving this page is
-[**`nest-rs-graphql`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-graphql),
-which builds on top of [async-graphql](https://async-graphql.github.io/async-graphql/).
-Schema discovery, dataloader registration, and the authz bridge come
-from the framework crate; the schema model itself is async-graphql's.
+A resolver is a struct decorated with `#[resolver]`, with operations on the
+impl block.
+[**`nest-rs-graphql`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-graphql)
+brings schema discovery, dataloader registration and the endpoint's guards;
+the schema model itself is [async-graphql](https://async-graphql.github.io/async-graphql/)'s.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
 use std::sync::Arc;
 
-use async_graphql::{Context, Result};
-use nest_rs::authz::{Create, Read};
 use nest_rs::graphql::{crud, resolver};
-use nest_rs::seaorm::graphql::bind;
 
-use crate::Claims;
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
+use crate::users::UsersService;
 
 #[resolver]
 #[use_guards(AuthzGuard)]
@@ -49,68 +42,54 @@ pub struct UsersResolver {
     svc: Arc<UsersService>,
 }
 
-#[crud(
-    service = svc,
-    entity = UserEntity,
-    output = User,
-    create = CreateUser,
-    update = UpdateUser,
-)]
-impl UsersResolver {
-    #[mutation]
-    #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUser) -> Result<User> {
-        let actor = ctx.data::<Claims>()?;
-        let user = self.svc.create_in_org(input, actor.org_id).await?;
-        Ok(User::from(&user))
-    }
-
-    #[query]
-    #[authorize(Read, UserEntity)]
-    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<Read, UsersService>(ctx, &id)
-            .await?
-            .as_ref()
-            .map(User::from))
-    }
-}
+#[crud(service = UsersService)]
+impl UsersResolver {}
 ```
 
+`#[crud]` generates `users`, `user`, `create_user`, `update_user` and
+`delete_user` — named for the resolver's resource, `UsersResolver` without
+`Resolver`, made singular — each typed off `UsersService` and its entity's
+`#[expose]`, and each declaring `#[authorize(Action, Entity)]` on the
+service's entity. The
+generated `create_user` needs nothing from you to land in the caller's org:
+the `Create` grant pins `org_id`, and the create fills it from there.
+
 `#[authorize(Action, Entity)]` is each operation's **access posture**:
-the macro emits the class-level gate before your body runs and masks
-the returned value after it — you never call `authorize` or a masking
-function by hand. A deliberately open operation declares `#[public]`
+the macro emits the class-level gate before your body runs, and each
+`User::from(&row)` judges its row for the caller — you never call
+`authorize` or a masking function by hand. A deliberately open operation declares `#[public]`
 instead.
 
 <Aside type="note">
 Posture is **mandatory and fail-secure**: a `#[query]`/`#[mutation]`
 with neither `#[authorize(...)]` nor `#[public]` does not compile. You
 cannot forget to think about access — the build breaks before an
-ungated, unmasked operation can ship.
+ungated operation can ship.
 </Aside>
 
-Symmetry with the HTTP controller is intentional — the service is the
-same, the inputs are the same, the policy is the same. The bridges
-are different:
+Symmetry with the HTTP controller is intentional — the same service, inputs,
+policy, posture attribute and principal's parameter:
 
 | HTTP | GraphQL | Job |
 |------|---------|-----|
-| `Authorize<Create, users::Entity>` extractor | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** mask the response fields |
-| `Bind<Read, UsersService>` extractor | `bind::<Read, UsersService>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
-| `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the authz bridge seeded |
+| `#[authorize(Create, users::Entity)]` attribute | `#[authorize(Create, users::Entity)]` attribute | Refuse the operation if the ability disallows it **and** read under the caller's ability |
+| `#[authorize(Read, bind = UsersService)]` attribute, an `Authorized<Read, UserEntity>` parameter | the same attribute and parameter, the `id` argument synthesised | Load the row through the service, refuse it on a denied ability |
+| `Ambient<Claims>` parameter | `Ambient<Claims>` parameter, no argument of the schema | Read the principal the endpoint's guards attached |
 
-The same `#[use_guards(...)]` declaration on the resolver struct — the
-markers are the same, the access graph checks the same thing. It names
-`AuthzGuard` alone here because `apps/api` already declares `AuthnGuard`
-with `use_guards_global`, and a guard bound at two scopes still runs
-exactly once: scope chooses the site, never the count.
+The resolver names `AuthzGuard` alone because `/graphql` authenticates at its
+request, before any field runs: `AuthzGraphqlModule`, imported below, declares
+`EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>` for it. `AuthnGuard`
+reads a bearer token off an HTTP request (`GuardFor<HttpView>` alone), so
+binding it on a resolver is a compile error; on a field, `AuthzGuard` refuses
+one no ability reached — a request that did not authenticate.
 
 ## The GraphQL module
 
-The adapter imports the port (`UsersModule`), the authz bridge
-(`AuthzGraphqlModule`), and — because the entity exposes a
-`belongs_to` org relation (next section) — the org port whose service
-hosts the auto-emitted loader:
+The adapter imports the port (`UsersModule`), the authz module
+(`AuthzGraphqlModule`) and the org and post ports, whose services host the
+auto-emitted loaders — the entity exposes relations, a `belongs_to` org (next
+section) and a `has_many` of posts. The resolver brings `GraphqlModule`, the
+endpoint its operations are served on:
 
 ```rust title="crates/features/src/users/graphql/module.rs (from the demo)"
 use nest_rs::core::module;
@@ -118,56 +97,31 @@ use nest_rs::core::module;
 use super::resolver::UsersResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
 use crate::orgs::OrgsModule;
+use crate::posts::PostsModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, OrgsModule, AuthzGraphqlModule],
+    imports = [UsersModule, OrgsModule, PostsModule, AuthzGraphqlModule],
     providers = [UsersResolver],
 )]
 pub struct UsersGraphqlModule;
 ```
 
-```rust title="crates/features/src/users/graphql/mod.rs (from the demo)"
-mod module;
-mod resolver;
+The folder's `mod.rs` exports the module alone, as the HTTP adapter's does,
+and `users/mod.rs` re-exports it beside `UsersHttpModule`.
 
-pub use module::UsersGraphqlModule;
-pub use resolver::UsersResolver;
-```
+## Wire the adapter
 
-And the feature root:
+The app root imports `UsersGraphqlModule`, whose resolver brings the endpoint
+with it: `GraphqlModule` mounts once however many resolvers bring it. The
+adapter imports `AuthzGraphqlModule`, which declares the guards `/graphql`'s
+request runs, so the root lists the adapter alone.
 
-```rust title="crates/features/src/users/mod.rs (from the demo)" {7, 12}
-mod entity;
-mod module;
-mod service;
-
-pub mod http;
-pub mod graphql;
-
-pub use entity::*;
-pub use module::UsersModule;
-pub use service::UsersService;
-
-pub use graphql::{UsersGraphqlModule, UsersResolver};
-pub use http::{UsersController, UsersHttpModule};
-```
-
-## Wire the transport once
-
-The app root imports `GraphqlModule::for_root(None)` to mount the HTTP
-endpoint, and the feature's GraphQL adapter for the operations.
-
-```rust title="apps/api/src/module.rs (from the demo)" {14-15}
-        UsersGraphqlModule,
-        GraphqlModule::for_root(None),
-```
-
-`GraphqlModule::for_root(...)` mounts `POST /graphql` on the HTTP transport.
-`GET /graphql` serves the playground **only when it is switched on** — it is
-off by default, so an unconfigured deployment exposes no interactive console
-and `GET /graphql` answers `405`. Turn it on for local work with
-`NESTRS_GRAPHQL__PLAYGROUND=true` (see
+`GraphqlModule` mounts `POST /graphql` on the HTTP transport it imports.
+`GET /graphql` serves the playground, and introspection answers, **under a
+declared development or test profile alone** — `nestrs run dev` declares
+`development` — so a deployment exposes no interactive console and
+`GET /graphql` answers `405` (see
 [GraphQL configuration](/graphql/configuration/)).
 
 The schema itself is composed from every `#[resolver]` the access graph
@@ -184,12 +138,9 @@ $ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 The ambient ability runs on the query — a plain user gets the same
-filter as the HTTP `GET /users`. The response side differs by one
-GraphQL rule: `email` is `String!` in the schema, and a non-null field
-cannot be nulled, so a caller whose grant excludes it is refused
-(`FORBIDDEN`, naming the field) rather than served a row without it.
-Asking for `{ users { id name } }` works. Same policy, two transports,
-each answering in its own shape.
+filter as the HTTP `GET /users`, and the same masking: the entity declares
+`email` `nullable`, so it is `String` in the schema and reads `null` for a
+caller whose grant withholds it, refusing nothing. Same policy, two transports.
 
 ## Relations resolve themselves
 
@@ -199,16 +150,22 @@ emits the `Org` PK loader on `OrgsService` and a `#[ComplexObject]`
 field resolver on the wire DTO. No `#[field_resolver]` to write, no
 `#[dataloader]` to call by hand.
 
-```rust title="crates/features/src/users/entity.rs"
-#[expose(name = "User", service = super::service::UsersService, graphql)]
+```rust title="crates/features/src/users/entities/user.rs (from the demo, abridged)"
+#[expose(
+    name = "User",
+    service = super::super::service::UsersService,
+    graphql,
+    // …
+)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
+// …
 pub struct Model {
-    // ... id, org_id, name, email — each carrying #[expose] ...
-
+    // … id, org_id, name, email — each carrying #[expose]
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
     #[expose]
     pub org: HasOne<crate::orgs::Entity>,
+    // …
 }
 ```
 
@@ -230,33 +187,35 @@ an out-of-scope org never surfaces — the row-level filter applies to
 each batched query the loader issues.
 
 <Aside type="caution">
-Add the `OrgsModule` import to `UsersGraphqlModule` when the
-`belongs_to` is present — the auto-emitted `User.org` resolver needs
-`OrgsServiceById` reachable from the access graph. Without it, the
-boot warning surfaces and the field returns `null` instead of
-panicking. The reference module's doc comment carries the rationale.
+Import `OrgsModule` into `UsersGraphqlModule` with the `belongs_to`: the
+`User.org` resolver reads `OrgsServiceById`, a loader of `OrgsService`. Without
+it the schema build refuses the boot, naming the field, the entity declaring it
+and the module to import.
 </Aside>
 
 ## Emit the SDL
 
 For tooling, commit a `schema.graphql` alongside the binary. The
-framework writes one as a side effect of the dev run when
-`NESTRS_GRAPHQL__EMIT_SDL=1`. Add the path to `.gitignore` for prod
-builds, commit it for dev:
+framework writes one beside the app's `Cargo.toml` as a side effect of every
+development run — the profile opens `<PREFIX>_GRAPHQL__EMIT`, and nothing
+else does:
 
 ```bash frame="terminal"
-$ NESTRS_GRAPHQL__EMIT_SDL=1 nestrs run dev api
-INFO nest_rs::graphql: wrote schema to apps/api/schema.graphql
+$ nestrs run dev api
+INFO nest_rs::graphql: wrote GraphQL SDL path=/home/dev/blog/apps/api/schema.graphql
 
-$ head -5 apps/api/schema.graphql
+$ grep -A7 '^type Query' apps/api/schema.graphql
 type Query {
-  user(id: String!): User
-  users(first: Int, after: String): [User!]!
+	org(id: String!): Org
+	orgs(after: String, first: Int): [Org!]!
+	post(id: String!): Post
+	posts(after: String, first: Int): [Post!]!
+	user(id: String!): User
+	users(after: String, first: Int): [User!]!
 }
 ```
 
-The dev run emits the SDL on demand — one env var, no extra binary to
-install. Commit the file and assert on it if you want a drift gate.
+Commit the file and assert on it if you want a drift gate.
 
 ## Now mirror your own `blog`
 
@@ -264,27 +223,27 @@ install. Commit the file and assert on it if you want a drift gate.
 more adapter over them:
 
 ```bash frame="terminal"
-$ nestrs g graphql posts
+$ nestrs g graphql posts --app blog
 ```
 
 That writes `crates/features/src/posts/graphql/{resolver.rs,module.rs,mod.rs}`
-and wires `PostsGraphqlModule` into `blog`. Add `GraphqlModule::for_root(None)`
-to the app's imports, restart, and `POST /graphql` answers
-`{ posts { id title } }` through the same ability filter your HTTP routes go
-through. No `User.org` equivalent — that field is the one thing on this page
-that needs a relation `blog` does not have.
+— the `#[crud]` resolver, and the module listing it — and the
+GraphQL authz module under `authz/graphql/`, flags the entity
+`#[expose(graphql)]`, and wires `PostsGraphqlModule` into `blog`. Restart, and
+`POST /graphql`, carrying the same bearer your `curl`s do, answers through the
+same ability your HTTP routes go through — a plain token reads, an admin's
+writes:
 
-## What the reference feature has
-
-- A `UsersResolver` mirroring the HTTP controller's operations, going
-  through the same service and the same policy.
-- A `UsersGraphqlModule` mounted in the app — `POST /graphql` answers
-  `{ users { id name } }` with the ambient ability filter applied.
-- An auto-resolved `User.org` field that batches through a dataloader
-  and respects the row-level scope.
+```bash frame="terminal"
+$ curl -s -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"{ posts { id title } }"}' \
+    http://localhost:3001/graphql
+{"data":{"posts":[{"id":"019f…","title":"Hello"}]}}
+```
 
 ## Going further
 
 - [Tutorial overview](/tutorial/) — recap the full `posts` build, start to finish.
-- [GraphQL](/graphql/) — the reference page for resolvers, dataloaders, and the authz bridge.
+- [GraphQL](/graphql/) — the reference page for resolvers, dataloaders, and the endpoint's guards.
 - [Publish](/publish/) — the reference workspace where this multi-transport feature ships.

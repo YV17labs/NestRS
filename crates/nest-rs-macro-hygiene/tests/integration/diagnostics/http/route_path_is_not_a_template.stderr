@@ -1,0 +1,23 @@
+error: #[get] `/{}`: `{}` names no parameter — write `{name}`
+  --> tests/integration/diagnostics/http/route_path_is_not_a_template.rs:12:11
+   |
+12 |     #[get("/{}")]
+   |           ^^^^^
+
+error: #[get] `/{id`: a `{` opens a parameter that no `}` closes — a literal brace is `{{`
+  --> tests/integration/diagnostics/http/route_path_is_not_a_template.rs:23:11
+   |
+23 |     #[get("/{id")]
+   |           ^^^^^^
+
+error: #[get] `/id}`: a `}` closes no parameter — a literal brace is `}}`
+  --> tests/integration/diagnostics/http/route_path_is_not_a_template.rs:34:11
+   |
+34 |     #[get("/id}")]
+   |           ^^^^^^
+
+error: #[get] `/items/:`: a `:` is the 6.x parameter syntax, and names none — a parameter is `{name}`
+  --> tests/integration/diagnostics/http/route_path_is_not_a_template.rs:45:11
+   |
+45 |     #[get("/items/:")]
+   |           ^^^^^^^^^^

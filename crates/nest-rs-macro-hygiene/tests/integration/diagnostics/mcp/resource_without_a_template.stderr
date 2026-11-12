@@ -1,0 +1,5 @@
+error: #[resource] needs a `template` — the URI template it is read at, e.g. `#[resource(template = "post://{id}")]`
+  --> tests/integration/diagnostics/mcp/resource_without_a_template.rs:13:5
+   |
+13 |     #[resource]
+   |     ^^^^^^^^^^^

@@ -10,6 +10,10 @@ pub struct ParseUuid;
 impl Pipe for ParseUuid {
     type In = String;
     type Out = Uuid;
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the refusal is the client's 400: it names the expected shape, never a parser's internals"
+    )]
     fn transform(input: String) -> Result<Uuid, PipeError> {
         Uuid::parse_str(&input).map_err(|_| PipeError::new("must be a valid UUID"))
     }

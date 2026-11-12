@@ -1,0 +1,5 @@
+error: unknown #[on_event] argument `retries`; expected `transactional` or `timeout`
+  --> tests/integration/diagnostics/events/on_event_takes_a_job_key.rs:17:16
+   |
+17 |     #[on_event(retries = 1)]
+   |                ^^^^^^^

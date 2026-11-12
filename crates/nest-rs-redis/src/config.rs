@@ -1,136 +1,199 @@
-//! [`RedisConfig`] — the connection's `#[config]`: how to reach Redis.
-//!
-//! Namespace `redis`, read off the path like every other config's. The
-//! connection is the crate's own subject — every binding folder (`queue/`,
-//! `worker/`, `throttler/`) shares it — so it lives at the crate root under the
-//! crate's word, `NESTRS_REDIS__*`, and the operator configures the resource
-//! they provisioned rather than the capability that happened to ask first.
+//! [`RedisConfig`] — the connection's `#[config]`: how to reach Redis, under
+//! `<PREFIX>_REDIS__*`.
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Namespaced, Result, config};
+use nest_rs_config::{
+    Bound, ClientTls, ConfigError, ConfigService, DurationBounds, Field, Floor, Result, config,
+};
+use nest_rs_core::Secret;
 
-const DEFAULT_URL: &str = "redis://127.0.0.1/";
-
-/// Default boot budget for reaching Redis: 10s — long enough to ride out a
-/// cold DNS lookup or a sidecar still starting, short enough that a
-/// misconfigured URL fails the container's startup probe instead of parking it.
+/// Default boot budget for reaching Redis: 10s.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// Redis settings, settable via `NESTRS_REDIS__*` or pinned through
-/// [`RedisModule::for_root`](crate::RedisModule::for_root). The URL is redacted
-/// in `Debug` output — it may embed credentials.
-#[config(namespace = "redis")]
-#[derive(Clone)]
-pub struct RedisConfig {
-    /// The Redis connection URL (e.g. `redis://127.0.0.1/`).
-    pub url: String,
-    /// How long boot may spend reaching Redis before failing with a named
-    /// error. The client retries an unreachable endpoint indefinitely on its
-    /// own, so without a budget a wrong URL parks the process forever with an
-    /// empty log — never healthy, never crashed. Read from
-    /// `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`; defaults to 10s.
-    pub connect_timeout: Duration,
-}
+/// The connect budget's range, and why. The ceiling also keeps the socket's
+/// liveness under what the kernel accepts, which `connection.rs` asserts at
+/// compile time.
+const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
+    Floor::AboveZero(
+        "the budget bounds the boot's connect and every command after it, and a zero one gives \
+         up before the first attempt and fails every command at once",
+    ),
+    Bound::new(
+        60 * 60,
+        "the budget bounds the boot's wait for Redis and every command a caller waits on, \
+         and past an hour it bounds neither — a Redis silent that long is gone rather than \
+         slow, and a boot that waits longer is a parked process",
+    ),
+);
 
-impl std::fmt::Debug for RedisConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RedisConfig")
-            .field("url", &"<redacted>")
-            .field("connect_timeout", &self.connect_timeout)
-            .finish()
-    }
+/// Redis settings, read by [`RedisModule`](crate::RedisModule) from
+/// `<PREFIX>_REDIS__*` over a base
+/// [`RedisModule::for_root`](crate::RedisModule::for_root) may pin.
+///
+/// No profile names a Redis: the boot refuses an unset `<PREFIX>_REDIS__URL`
+/// by name in every one, and the deployment — or the profile's `.env` file,
+/// as `nestrs new` writes it — names the server to dial.
+#[config(namespace = "redis")]
+#[derive(Clone, Debug)]
+pub struct RedisConfig {
+    /// The Redis connection URL, whose scheme declares the topology:
+    /// `redis://valkey:6379/2` one server;
+    /// `redis-sentinel://s1:26379/2?node=s2:26379&sentinelServiceName=orders`
+    /// the primary the sentinels name (`sentinelUsername` and
+    /// `sentinelPassword` for sentinels holding users); and
+    /// `redis-cluster://n1:6379/2?node=n2:6379` a Cluster. Each `rediss…://`
+    /// form connects over TLS, and a plaintext one is said once at `warn` in a
+    /// deployed profile, but for one server on this machine's loopback. A
+    /// [`Secret`], since it may carry a password.
+    #[config(with = url)]
+    pub url: Secret<String>,
+    /// How long boot may spend reaching Redis before failing with a named
+    /// error, and afterwards the most any command a caller waits on may take
+    /// from end to end — past it the command fails as a timeout. Read from
+    /// `<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, whole seconds from 1 to 3600 —
+    /// refused outside, and in code anything above zero up to an hour; defaults
+    /// to 10s. The boot refuses a budget at or past a net waiting on the
+    /// connection — each binding declares its port's, as does the
+    /// authentication guard when its strategy injects the connection — and the
+    /// queue binding (feature `queue`) a lease the port's renewal cannot fit
+    /// in, by the queue port's `lease_fits_renewal`.
+    #[config(bounds = CONNECT_TIMEOUT)]
+    pub connect_timeout: Duration,
+    /// What a `rediss://` URL trusts and presents: nothing set trusts the
+    /// system's authorities and presents no certificate. Read from
+    /// `<PREFIX>_REDIS__TLS_CA_CERT`, `<PREFIX>_REDIS__TLS_CERT` and
+    /// `<PREFIX>_REDIS__TLS_KEY`, each with its `_FILE` spelling — see
+    /// [`ClientTls`]. A certificate is presented to a Redis that requires one,
+    /// its default once TLS is on (`tls-auth-clients yes`).
+    pub tls: ClientTls,
 }
 
 impl Default for RedisConfig {
     fn default() -> Self {
         Self {
-            url: DEFAULT_URL.to_string(),
+            url: Secret::default(),
             connect_timeout: Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
+            tls: ClientTls::default(),
         }
     }
 }
 
-impl Config for RedisConfig {
-    /// The loopback URL is a dev convenience, so the *unpinned* baseline drops it
-    /// outside dev/test: an unset `NESTRS_REDIS__URL` then fails boot naming the
-    /// variable instead of silently pointing every Redis binding at a
-    /// non-existent local Redis (REDIS-Q1). It lives here rather than in
-    /// `from_env` so it applies only where it is a default, never over a pinned
-    /// value.
-    fn defaults() -> Self {
-        let d = Self::default();
-        if matches!(
-            Environment::from_env(),
-            Environment::Production | Environment::Staging
-        ) {
-            return Self {
-                url: String::new(),
-                ..d
-            };
+/// The deployment's URL, else the base's — a pin — refusing a blank one under
+/// the spelling that set it, or the variable of the instance `env` reads when
+/// neither holds one.
+fn url(env: &ConfigService, field: Field, base: Secret<String>) -> Result<Secret<String>> {
+    match env.setting(field.key())? {
+        Some(setting) if setting.value.trim().is_empty() => {
+            Err(setting.refuse("is blank — it must hold the Redis URL"))
         }
-        d
-    }
-
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        // A zero budget would restore the unbounded hang this knob exists to
-        // prevent, so it is rejected rather than silently normalized.
-        let connect_timeout = match env.parse::<u64>("CONNECT_TIMEOUT_SECS")? {
-            Some(0) => {
-                return Err(ConfigError::parse(
-                    env.var_name("CONNECT_TIMEOUT_SECS"),
-                    "must be at least 1 second — a zero budget cannot bound the connect",
-                ));
-            }
-            Some(secs) => Duration::from_secs(secs),
-            None => base.connect_timeout,
-        };
-        Ok(Self {
-            url: resolve_url(env.get("URL").or(Some(base.url)), Environment::from_env())?,
-            connect_timeout,
-        })
-    }
-}
-
-/// Resolve the Redis URL from the raw `NESTRS_REDIS__URL` value and the active
-/// profile. Unset or blank falls back to the loopback default **only** in
-/// dev/test; in staging/production it aborts boot — a silent
-/// `redis://127.0.0.1/` there points the queue and the rate limiter at a
-/// non-existent local Redis, a fail-open default (REDIS-Q1). Mirrors the DB
-/// posture. Pure, so the profile-dependent branch is testable without mutating
-/// the process env.
-fn resolve_url(raw: Option<String>, environment: Environment) -> Result<String> {
-    match raw {
-        Some(url) if !url.trim().is_empty() => Ok(url),
-        _ => {
-            if matches!(environment, Environment::Production | Environment::Staging) {
-                return Err(ConfigError::parse(
-                    nest_rs_config::var_name(RedisConfig::NAMESPACE, "URL"),
-                    format!(
-                        "must be set in the `{}` environment (no localhost fallback outside dev/test)",
-                        environment.as_str()
-                    ),
-                ));
-            }
-            Ok(DEFAULT_URL.to_string())
-        }
+        Some(setting) => Ok(Secret::new(setting.value)),
+        None if base.expose_secret().trim().is_empty() => Err(ConfigError::unset(
+            env.namespace(),
+            field.key(),
+            "the URL is deployment data, which no default holds in any profile, and a config \
+             pinned in code reads it from the deployment, not `.env`",
+        )),
+        None => Ok(base),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::{Config, Environment, Namespaced};
+
     use super::*;
 
     #[test]
-    fn default_url_targets_local_loopback_redis() {
-        assert_eq!(RedisConfig::default().url, "redis://127.0.0.1/");
+    fn the_struct_default_holds_no_url() {
+        assert!(
+            RedisConfig::default().url.expose_secret().is_empty(),
+            "an address is deployment data, never a default"
+        );
+    }
+
+    /// `profile` declared on the process for `read`, `""` declaring none.
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn in_profile<T>(profile: &str, read: impl FnOnce() -> T) -> T {
+        let mut out = None;
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(Environment::var_name(), profile);
+            out = Some(read());
+            Ok(())
+        });
+        out.expect("the jailed read ran")
+    }
+
+    #[test]
+    fn the_default_names_no_redis() {
+        assert!(
+            RedisConfig::default().url.expose_secret().is_empty(),
+            "an address is the profile file's, never the framework's"
+        );
+    }
+
+    #[test]
+    fn debug_never_prints_the_url() {
+        let config = RedisConfig {
+            url: "rediss://app:s3cret@valkey:6379/2".into(),
+            ..RedisConfig::default()
+        };
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("s3cret"), "{printed}");
+        assert!(printed.contains("url: <redacted>"), "{printed}");
+    }
+
+    #[test]
+    fn an_unset_url_is_refused_in_every_profile_whether_pinned_or_not() {
+        for ((profile, namespace), base) in ["development", "test", "staging", "production", ""]
+            .into_iter()
+            .flat_map(|profile| [(profile, "redis"), (profile, "redis__cache")])
+            .flat_map(|read| {
+                [
+                    (read, None),
+                    (
+                        read,
+                        Some(RedisConfig {
+                            connect_timeout: Duration::from_secs(7),
+                            ..RedisConfig::default()
+                        }),
+                    ),
+                ]
+            })
+        {
+            let pinned = base.is_some();
+            let refused = in_profile(profile, || {
+                RedisConfig::from_env(
+                    &ConfigService::with_vars(namespace, []),
+                    base.unwrap_or_default(),
+                )
+            })
+            .expect_err("nothing names a Redis to dial")
+            .to_string();
+            assert!(
+                refused.contains(&format!(
+                    "{}: must be set, inline or through {} — ",
+                    nest_rs_config::var_name(namespace, "URL"),
+                    nest_rs_config::var_name(namespace, "URL_FILE"),
+                )),
+                "the refusal names both spellings of the instance's variable: {profile:?}, \
+                 {namespace}, pinned {pinned}: {refused}"
+            );
+            assert!(
+                refused.contains(
+                    "no default holds in any profile, and a config pinned in code reads it from \
+                     the deployment, not `.env`"
+                ),
+                "a `.env` setting the URL is no answer to a pin: {profile:?}: {refused}"
+            );
+        }
     }
 
     #[test]
     fn the_namespace_is_the_crate_word() {
-        // The connection is the crate's subject, shared by every binding — so
-        // the operator sees the resource they provisioned, not the capability
-        // that first asked for it.
         assert_eq!(RedisConfig::NAMESPACE, "redis");
     }
 
@@ -139,6 +202,7 @@ mod tests {
         let pinned = RedisConfig {
             url: "redis://pinned:6379/".into(),
             connect_timeout: Duration::from_secs(7),
+            ..RedisConfig::default()
         };
         let cfg = RedisConfig::from_env(
             &ConfigService::with_vars("redis", [("URL", "redis://from-env:6379/")]),
@@ -146,7 +210,8 @@ mod tests {
         )
         .expect("the overlay resolves");
         assert_eq!(
-            cfg.url, "redis://from-env:6379/",
+            cfg.url.expose_secret(),
+            "redis://from-env:6379/",
             "the env outranks the pin"
         );
         assert_eq!(
@@ -157,39 +222,77 @@ mod tests {
     }
 
     #[test]
-    fn resolve_url_uses_loopback_default_in_dev_and_test() {
-        for env in [Environment::Development, Environment::Test] {
-            assert_eq!(
-                resolve_url(None, env).expect("dev/test defaults"),
-                DEFAULT_URL
-            );
-            assert_eq!(
-                resolve_url(Some("  ".into()), env).expect("blank ⇒ default in dev/test"),
-                DEFAULT_URL
-            );
-        }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test tears down its temp file best-effort"
+    )]
+    fn a_zero_connect_timeout_from_a_file_names_its_file_variable() {
+        let path = std::env::temp_dir().join(format!(
+            "nest-rs-redis-connect-timeout-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, "0\n").expect("write the fixture");
+        let refused = RedisConfig::from_env(
+            &ConfigService::with_vars(
+                "redis",
+                [(
+                    "CONNECT_TIMEOUT_SECS_FILE",
+                    path.to_str().expect("a UTF-8 path"),
+                )],
+            ),
+            RedisConfig {
+                url: "rediss://valkey.local".into(),
+                ..RedisConfig::default()
+            },
+        );
+        let _ = std::fs::remove_file(&path);
+        let err = refused.expect_err("a zero budget is refused").to_string();
+        assert!(
+            err.contains(&format!(
+                "{}:",
+                nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS_FILE")
+            )),
+            "{err}"
+        );
     }
 
     #[test]
-    fn resolve_url_aborts_when_unset_in_staging_or_production() {
-        // REDIS-Q1: no silent localhost fallback outside dev/test.
-        for env in [Environment::Staging, Environment::Production] {
-            let err = resolve_url(None, env).expect_err("must abort");
-            assert!(
-                err.to_string()
-                    .contains(&nest_rs_config::var_name("redis", "URL")),
-                "the error names the variable: {err}",
-            );
-            assert!(
-                resolve_url(Some(String::new()), env).is_err(),
-                "blank also aborts"
-            );
-        }
+    fn a_zero_connect_timeout_pinned_in_code_is_refused_naming_the_field() {
+        let err = RedisConfig::from_env(
+            &ConfigService::with_vars("redis", []),
+            RedisConfig {
+                url: "rediss://valkey.local".into(),
+                connect_timeout: Duration::ZERO,
+                ..RedisConfig::default()
+            },
+        )
+        .expect_err("a pinned zero budget is refused")
+        .to_string();
+        assert!(
+            err.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"))
+                && err.contains("`RedisConfig::connect_timeout` set in code is 0ns"),
+            "{err}"
+        );
     }
 
-    // C6: the connect budget is the knob that turns an unreachable backend from
-    // a silent forever-hang into a named boot failure — so it must be
-    // configurable, and a zero must not quietly restore the hang.
+    #[test]
+    fn a_blank_url_is_refused_under_the_spelling_that_set_it() {
+        let refused = RedisConfig::from_env(
+            &ConfigService::with_vars("redis", [("URL", "  ")]),
+            RedisConfig {
+                url: "redis://pinned:6379/".into(),
+                ..RedisConfig::default()
+            },
+        )
+        .expect_err("a blank URL dials nothing")
+        .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("redis", "URL"))
+                && refused.contains("is blank"),
+            "{refused}"
+        );
+    }
+
     #[test]
     fn connect_timeout_defaults_to_10s_and_reads_the_env() {
         assert_eq!(
@@ -225,15 +328,20 @@ mod tests {
     }
 
     #[test]
-    fn resolve_url_accepts_a_set_url_in_every_profile() {
-        for env in [
-            Environment::Development,
-            Environment::Test,
-            Environment::Staging,
-            Environment::Production,
-        ] {
-            let url = resolve_url(Some("redis://redis:6379/1".into()), env).expect("set ⇒ ok");
-            assert_eq!(url, "redis://redis:6379/1");
+    fn a_set_url_is_taken_in_every_profile() {
+        for profile in ["development", "test", "staging", "production", ""] {
+            let cfg = in_profile(profile, || {
+                RedisConfig::from_env(
+                    &ConfigService::with_vars("redis", [("URL", "redis://redis:6379/1")]),
+                    RedisConfig::default(),
+                )
+            })
+            .expect("set ⇒ ok");
+            assert_eq!(
+                cfg.url.expose_secret(),
+                "redis://redis:6379/1",
+                "{profile:?}"
+            );
         }
     }
 
@@ -244,6 +352,6 @@ mod tests {
             Default::default(),
         )
         .expect("ok");
-        assert_eq!(cfg.url, "redis://redis.staging:6379/2");
+        assert_eq!(cfg.url.expose_secret(), "redis://redis.staging:6379/2");
     }
 }

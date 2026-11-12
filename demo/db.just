@@ -1,9 +1,6 @@
-# Database lifecycle recipes, exposed as `nestrs run db <verb>` (see `mod db` in
-# the root Justfile). Verbs mirror SeaORM's migrate subcommands; the tools
-# resolve SeaOrmConfig from the `.env` cascade (NESTRS_SEAORM__*), same as
-# the apps.
+# Local migrations and seed run against the dev container, so they declare its profile.
+export NESTRS_ENV := "development"
 
-# Bare `nestrs run db` lists these instead of running the first recipe.
 _default:
     @just --list db
 

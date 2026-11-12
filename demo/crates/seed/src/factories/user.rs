@@ -1,5 +1,5 @@
-use anyhow::Result;
-use sea_orm::sea_query::{OnConflict, Query};
+use nest_rs::seaorm::RepoError;
+use sea_orm::sea_query::{Expr, ExprTrait, OnConflict, Query};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;
 
@@ -92,9 +92,10 @@ enum User {
     Email,
     Role,
     PasswordHash,
+    DeletedAt,
 }
 
-pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
+pub async fn seed(db: &DatabaseConnection) -> Result<u64, RepoError> {
     let mut inserted = 0;
     for (id, org_id, name, email, role, password_hash) in DEMO {
         let stmt = Query::insert()
@@ -115,7 +116,12 @@ pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
                 role.to_owned().into(),
                 password_hash.map(str::to_owned).into(),
             ])
-            .on_conflict(OnConflict::column(User::Email).do_nothing().to_owned())
+            .on_conflict(
+                OnConflict::column(User::Email)
+                    .target_and_where(Expr::col(User::DeletedAt).is_null())
+                    .do_nothing()
+                    .to_owned(),
+            )
             .to_owned();
         inserted += db.execute(&stmt).await?.rows_affected();
     }

@@ -1,89 +1,196 @@
-//! Ambient request state reaches a tool body.
-//!
-//! rmcp dispatches each tool call on its own spawned task, so a task-local
-//! installed around the poem endpoint does not reach it. `PropagatingHandler`
-//! closes that gap: the endpoint stashes the scope in the request extensions,
-//! rmcp forwards them as `http::request::Parts` into the operation's
-//! `RequestContext`, and the handler re-installs the task-local *inside* the
-//! spawned dispatch.
-//!
-//! This drives a real `tools/call` through the real endpoint. If it regresses,
-//! `Scoped<T>` silently stops resolving and `Repo`-backed tools fall back to
-//! failing closed — so the assertion is on what the tool body actually saw,
-//! not on the transport succeeding.
+//! Ambient request state reaches a tool body across rmcp's spawned dispatch,
+//! asserted on what the body saw rather than on the transport succeeding; a
+//! `Scoped<T>` parameter resolves the operation's request-scoped provider, and
+//! the boot checks it is reachable.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::{Container, RequestScope};
-use nest_rs_mcp::{
-    AllowAllMcpGuard, CallToolResult, ContentBlock, McpError, McpMount, McpOperationGuard, Scoped,
-    ServerHandler, endpoint, tool, tool_handler, tool_router,
-};
-use nest_rs_testing::mcp::call_tool;
-use poem::test::TestClient;
-use poem::{Endpoint, EndpointExt, IntoEndpoint};
+use nest_rs_core::{AccessGraphError, App, MissingDependencyError, Scoped, injectable, module};
+use nest_rs_http::{BoxEndpoint, Endpoint, endpoint_fn};
+use nest_rs_mcp::__private::{McpMount, endpoint};
+use nest_rs_mcp::model::{CallToolResult, ContentBlock};
+use nest_rs_mcp::rmcp::{tool, tool_handler, tool_router};
+use nest_rs_mcp::{McpError, ServerHandler, mcp, tools};
+use nest_rs_testing::TestApp;
+use nest_rs_testing::TestClient;
+use nest_rs_testing::mcp::{call_method, call_tool, open_session, result};
+use serde_json::json;
 use tracing::Instrument;
 
-/// A request-scoped provider the tool tries to resolve. Its presence is the
-/// signal; nothing reads the payload.
-struct Probe;
+/// Counts the instances built, so each one is told apart.
+static BUILT: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Clone)]
-struct ScopeProbeTool;
+/// Built once per request.
+#[injectable(scope = request)]
+struct Basket {
+    serial: usize,
+}
 
-#[tool_router]
-impl ScopeProbeTool {
-    /// Reports over the wire whether `Scoped::from_context` found the
-    /// task-local — the response *is* the assertion.
-    #[tool(description = "Report whether the request scope reached this tool body.")]
-    async fn probe_scope(&self) -> Result<CallToolResult, McpError> {
-        let seen = Scoped::<Probe>::from_context().is_ok();
-        Ok(CallToolResult::success(vec![ContentBlock::text(if seen {
-            "scoped"
-        } else {
-            "unscoped"
-        })]))
+impl Default for Basket {
+    fn default() -> Self {
+        Self {
+            serial: BUILT.fetch_add(1, Ordering::SeqCst),
+        }
     }
 }
 
-#[tool_handler]
-impl ServerHandler for ScopeProbeTool {}
+#[module(providers = [Basket])]
+struct BasketModule;
 
-/// Mirrors the HTTP transport edge: run the inner endpoint under the ambient
-/// request context so the MCP endpoint re-installs it across rmcp's spawn.
-fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
-    let container = Container::builder()
-        .provide_scoped::<Probe, _>(|_| Probe)
-        .build();
-    let inner = Arc::new(inner.into_endpoint().map_to_response());
-    poem::endpoint::make(move |req| {
-        let inner = Arc::clone(&inner);
-        let scope = Arc::new(RequestScope::new(container.clone()));
-        let correlation = nest_rs_core::Correlation::mint();
-        async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
-    })
+const BASKET: &str = "/mcp/basket";
+
+#[mcp(path = "/mcp/basket")]
+#[derive(Clone, Default)]
+struct BasketTools;
+
+#[tools]
+impl BasketTools {
+    /// Say which basket the operation reads, twice.
+    #[tool]
+    #[public]
+    async fn peek(
+        &self,
+        first: Scoped<Basket>,
+        second: Scoped<Basket>,
+    ) -> Result<String, McpError> {
+        Ok(format!("{} {}", first.serial, second.serial))
+    }
 }
 
+#[module(imports = [crate::open_mcp(), BasketModule], providers = [BasketTools])]
+struct BasketToolsModule;
+
 #[tokio::test]
-async fn ambient_request_scope_reaches_a_tool_body() {
-    let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
-    let app = with_scope_extension(endpoint(McpMount::deny_all().with_guard(guard), || {
-        ScopeProbeTool
-    }));
-    let client = TestClient::new(app);
+async fn a_scoped_parameter_resolves_the_operations_request_scoped_provider() {
+    let app = TestApp::for_module::<BasketToolsModule>()
+        .await
+        .expect("a request-scoped provider its module imports boots");
+    let session = open_session(app.http(), BASKET, None).await;
+    let peek = || {
+        call_method(
+            app.http(),
+            BASKET,
+            &session,
+            None,
+            "tools/call",
+            json!({ "name": "peek", "arguments": {} }),
+        )
+    };
 
-    let body = call_tool(&client, "/", "probe_scope", None).await;
+    let first = result(&peek().await)["result"]["content"][0]["text"].clone();
+    let second = result(&peek().await)["result"]["content"][0]["text"].clone();
 
-    assert!(
-        body.contains("scoped") && !body.contains("unscoped"),
-        "the request scope must reach the tool body across rmcp's spawn — \
-         `Scoped<T>` and every `Repo`-backed tool depend on it. Body: {body}",
+    let serials = |said: &serde_json::Value| -> Vec<String> {
+        said.as_str()
+            .unwrap_or_else(|| panic!("the tool answered: {said}"))
+            .split(' ')
+            .map(str::to_owned)
+            .collect()
+    };
+    let (first, second) = (serials(&first), serials(&second));
+    assert_eq!(
+        first[0], first[1],
+        "one instance within an operation's request"
+    );
+    assert_ne!(first[0], second[0], "a fresh one for the next request");
+}
+
+/// The tools' module reaches the basket's only through a sibling.
+#[module(providers = [BasketTools])]
+struct StrayBasketToolsModule;
+
+#[module(imports = [crate::open_mcp(), BasketModule, StrayBasketToolsModule])]
+struct StrayBasketRoot;
+
+#[tokio::test]
+async fn a_scoped_parameter_whose_module_is_not_imported_fails_the_boot() {
+    let refused = match App::builder().module::<StrayBasketRoot>().build().await {
+        Ok(_) => panic!("an unimported `Scoped` target must fail the boot"),
+        Err(refused) => refused,
+    };
+    let access = refused
+        .downcast::<AccessGraphError>()
+        .unwrap_or_else(|refused| panic!("not the access refusal: {refused:#}"));
+    assert_eq!(access.consumer, "BasketTools");
+    assert_eq!(access.owner, "BasketModule");
+}
+
+/// Offered by no module.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct Coupon;
+
+#[mcp(path = "/mcp/coupon")]
+#[derive(Clone, Default)]
+struct CouponTools;
+
+#[tools]
+impl CouponTools {
+    /// Redeem the coupon.
+    #[tool]
+    #[public]
+    async fn redeem(&self, _coupon: Scoped<Coupon>) -> Result<String, McpError> {
+        Ok("redeemed".to_owned())
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [CouponTools])]
+struct CouponToolsModule;
+
+#[tokio::test]
+async fn a_scoped_parameter_no_module_offers_fails_the_boot_naming_it() {
+    let missing = match App::builder().module::<CouponToolsModule>().build().await {
+        Ok(_) => panic!("a `Scoped` parameter no module offers must fail the boot"),
+        Err(refused) => refused
+            .downcast::<MissingDependencyError>()
+            .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}")),
+    };
+    assert_eq!(missing.consumer, "CouponTools");
+    assert_eq!(
+        missing.dependency, "Coupon",
+        "a refusal names a type by its short name, never its path"
     );
 }
 
-/// The span identity a tool body ran under, reported back to the test.
-/// What the tool body observed: the span it ran under, and the trace it was
-/// filed in.
+/// A request-scoped provider no module offers, reached by a host the boot
+/// never checked: a container built by hand.
+#[tokio::test]
+async fn a_scoped_parameter_that_resolves_nothing_answers_opaquely_and_names_it_to_the_operator() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = nest_rs_core::Container::builder()
+        .build()
+        .expect("the container builds");
+    let inner = endpoint(McpMount::public(), || CouponTools);
+    let scoped = endpoint_fn(move |req| {
+        let inner = inner.clone();
+        let scope = Arc::new(nest_rs_core::RequestScope::new(container.clone()));
+        let correlation = nest_rs_core::Correlation::minted(None);
+        async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
+    });
+
+    let body = call_tool(&TestClient::new(scoped), "/", "redeem", None).await;
+
+    assert_eq!(
+        result(&body)["error"]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{body}"
+    );
+    assert!(
+        !body.contains("Coupon") && !body.contains("redeemed"),
+        "{body}"
+    );
+    let failed = logs.expect_one(nest_rs_mcp::TARGET, "mcp operation failed");
+    assert!(
+        failed
+            .field("error")
+            .is_some_and(|chain| chain.contains("Coupon")),
+        "the operator reads the provider it missed: {:?}",
+        failed.fields,
+    );
+}
+
+/// What the tool body observed: the span it ran under, and its trace.
 type SeenSpan = Arc<Mutex<Option<(Option<&'static str>, Option<String>)>>>;
 
 #[derive(Clone)]
@@ -93,8 +200,6 @@ struct SpanProbeTool {
 
 #[tool_router]
 impl SpanProbeTool {
-    /// Records the ambient span rather than asserting on it: the tool body is
-    /// the only place that can answer what the dispatch installed.
     #[tool(description = "Record the span this tool body ran under.")]
     async fn probe_span(&self) -> Result<CallToolResult, McpError> {
         *self.seen.lock().expect("probe lock") = Some((
@@ -110,13 +215,10 @@ impl SpanProbeTool {
 #[tool_handler]
 impl ServerHandler for SpanProbeTool {}
 
-/// Mirrors what the HTTP transport's outermost band does: run the whole request
-/// under one span, the way the OTel interceptor's `http.request` wraps
-/// everything below it.
-fn under_span(inner: impl IntoEndpoint, span: tracing::Span) -> impl Endpoint {
-    let inner = Arc::new(inner.into_endpoint().map_to_response());
-    poem::endpoint::make(move |req| {
-        let inner = Arc::clone(&inner);
+/// Mirrors the OTel interceptor's `http.request` span around the whole request.
+fn under_span(inner: BoxEndpoint, span: tracing::Span) -> impl Endpoint {
+    endpoint_fn(move |req| {
+        let inner = inner.clone();
         let span = span.clone();
         async move { inner.call(req).instrument(span).await }
     })
@@ -124,16 +226,13 @@ fn under_span(inner: impl IntoEndpoint, span: tracing::Span) -> impl Endpoint {
 
 #[tokio::test]
 async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
-    // A subscriber, so spans have identities at all. Thread-local is enough:
-    // `#[tokio::test]` is a current-thread runtime, so rmcp's spawned dispatch
-    // stays on this thread.
+    // Thread-local is enough: on a current-thread runtime rmcp's spawn stays here.
     let logs = nest_rs_testing::LogCapture::install();
 
     let seen: SeenSpan = Arc::default();
     let host = SpanProbeTool { seen: seen.clone() };
-    let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
     let app = under_span(
-        endpoint(McpMount::deny_all().with_guard(guard), move || host.clone()),
+        endpoint(McpMount::public(), move || host.clone()),
         tracing::info_span!("http.request"),
     );
 
@@ -145,9 +244,6 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         .clone()
         .expect("the tool ran and reported what it ran under");
 
-    // rmcp dispatches every operation on a spawned task, so without the ambient
-    // being carried across it every event a tool and the services below it emit
-    // is rooted at the spawn — attributable to no request at all.
     assert_eq!(
         span_name,
         Some("mcp.operation"),
@@ -160,8 +256,7 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         .into_iter()
         .filter(|span| span.target == "nest_rs::mcp" && span.name == "mcp.operation")
         .collect();
-    // The handshake and the call are separate operations, so several spans are
-    // captured — which is itself the point: each is its own unit of work.
+    // The handshake and the call are separate operations, so several spans.
     let spans: std::collections::HashSet<_> = operations
         .iter()
         .filter_map(|span| span.field("span_id"))
@@ -188,9 +283,6 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         ran_under.field("parent_span_id"),
         "the operation is not a second name for the request that carried it",
     );
-    // The span says what the work was, in the conventions' dotted shape. It
-    // opened with the correlation and nothing else, so an exported trace showed
-    // one indistinguishable `mcp.operation` per call.
     assert_eq!(
         ran_under.field("mcp.method.name").as_deref(),
         Some("tools/call"),
@@ -202,18 +294,11 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         "{ran_under:?}",
     );
 
-    // Each operation also files the family's line. It is the only place a tool
-    // call reports itself: rmcp addresses many operations over one HTTP request,
-    // so the endpoint's access line names the session and says nothing about the
-    // work.
     let served = logs.find(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_mcp::unit::OPERATION,
+        nest_rs_mcp::unit::OPERATION.name(),
     );
-    // At least one line per operation span, and possibly more: a **notification**
-    // is dispatched work and files a line, but opens no `mcp.operation` span of
-    // its own — it runs under the request's. So the counts are not equal, and
-    // asserting they were would forbid the notification line rather than check it.
+    // `>=`: a notification files a line but opens no `mcp.operation` span.
     assert!(
         served.len() >= operations.len(),
         "every operation files a line: {} lines for {} operations: {served:?}",
@@ -221,42 +306,31 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         operations.len(),
     );
     assert!(
-        served.iter().all(|line| line.field("method").is_some()),
+        served.iter().all(|line| line.field("mcp_method").is_some()),
         "every line names the JSON-RPC method a client addressed: {served:?}",
     );
-    // The protocol's word for it, never rmcp's Rust ident: `call_tool` appears
-    // in no MCP document, and a line spelling it cannot be joined against a
-    // capture of the wire.
+    // The protocol's method name, never rmcp's ident (`call_tool`).
     let tool_call = served
         .iter()
-        .find(|line| line.field("method").as_deref() == Some("tools/call"))
+        .find(|line| line.field("mcp_method").as_deref() == Some("tools/call"))
         .unwrap_or_else(|| panic!("the tool call files a line: {served:?}"));
-    // The half that makes the line worth reading: every `tools/call` in a
-    // deployment carries the same method, so without the tool's own name they
-    // are byte-identical and the work stays anonymous.
     assert_eq!(
-        tool_call.field("operation").as_deref(),
+        tool_call.field("tool").as_deref(),
         Some("probe_span"),
         "the line names the tool the request addressed: {served:?}",
     );
-    // And absent — not empty, not a sentinel — where the protocol addresses
-    // nothing, so a query for a named operation can never match `initialize`.
+    // Absent, not empty, where the protocol addresses nothing.
     let handshake = served
         .iter()
-        .find(|line| line.field("method").as_deref() == Some("initialize"))
+        .find(|line| line.field("mcp_method").as_deref() == Some("initialize"))
         .unwrap_or_else(|| panic!("the handshake files a line: {served:?}"));
-    assert_eq!(handshake.field("operation"), None, "{served:?}");
+    assert_eq!(handshake.field("tool"), None, "{served:?}");
     assert!(
         served
             .iter()
             .all(|line| line.field("duration_ms").is_some()),
         "every line is timed: {served:?}",
     );
-    // The ids are deliberately *not* asserted here, and the reason is worth
-    // writing down: they are not fields of this event. The formatter reads them
-    // off the ambient context at emission, so `LogCapture` — which records what
-    // an event declared — cannot see them at any layer. That the line sits inside
-    // a context at all is what `nest-rs-core`'s own formatter tests cover, and
-    // this line emits through `RequestContinuation` precisely because the
-    // dispatch installs its scope deeper than the line is written.
+    // The ids are not asserted: the formatter reads them off the ambient context,
+    // which `LogCapture` cannot see; `nest-rs-core`'s formatter tests cover them.
 }

@@ -1,0 +1,5 @@
+error: `#[meta]` is not taken on a `#[hooks]` block: a lifecycle hook has no caller and no site, so no layer runs around it and nothing reads a value declared on it
+  --> tests/integration/diagnostics/core/meta_on_a_hooks_block.rs:13:1
+   |
+13 | #[meta(Tag)]
+   | ^^^^^^^^^^^^

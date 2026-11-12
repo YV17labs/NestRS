@@ -1,0 +1,8 @@
+error: #[subject] goes on a unit struct: a subject names a class and holds nothing — a rule grants the whole class, and an entity is the subject whose rows a rule narrows
+ --> tests/integration/diagnostics/authz/subject_on_a_struct_with_fields.rs:7:22
+  |
+7 |   pub struct Exporting {
+  |  ______________________^
+8 | |     pub org: u32,
+9 | | }
+  | |_^

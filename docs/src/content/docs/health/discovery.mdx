@@ -8,18 +8,89 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 `#[indicators]` submits each tagged method to a link-time registry.
-At probe time, `HealthService` drains that registry and filters it
+At boot, `HealthModule` reads that registry once and filters it
 against `ReachableProviders` — the access-graph-derived set of every
-provider reachable from the running app's root module. The same
+provider reachable from the running app's root module, which the boot seals
+into the container; a container built by hand carries none, and the wiring
+refuses it (`UngatedDiscoveryError`) rather than running every indicator
+linked. The same
 module-gating every transport uses for `#[controller]`, `#[resolver]`,
-or `#[processor]` applies here.
+or `#[processor]` applies here. The checks the framework ships — the pool's,
+each Redis instance's, the store's — are attached by the module that opens
+the resource, so they exist only in an app that opens it, directly or
+through a feature.
+
+## What `#[indicators]` does
+
+The orchestrator decorator walks the impl block, finds each method
+tagged with exactly one probe attribute, strips the attribute, and
+submits one `HealthIndicator` entry per method to the link-time
+inventory the boot reads once, beside the entries modules attach. The
+method stays on the impl block unchanged — still a regular method you can
+call from anywhere.
+
+- **`#[injectable]`** makes the indicator an ordinary DI provider —
+  same `#[inject]` shape as any other service.
+- **`#[indicators]`** on the impl block orchestrates the per-method
+  attributes; it takes no arguments.
+- **`#[liveness]` / `#[readiness]` / `#[startup]`** route the method
+  to its probe. Exactly one per method — the macro rejects two at
+  compile time.
+- Methods take `&self` and return `anyhow::Result<()>` (or any
+  `Result<(), E: Into<anyhow::Error>>`); an `async fn` is awaited, a
+  plain `fn` is called. A method with no return is treated as
+  infallible — always `up`.
+
+Multiple decorated methods on the same impl block share the
+provider's `#[inject]` dependencies — pool an upstream check and a
+migration check on one `AppHealth` rather than writing a struct per
+check:
+
+```rust title="crates/features/src/app_health/indicator.rs"
+#[injectable]
+pub struct AppHealth {
+    #[inject]
+    db: Arc<DatabaseConnection>,
+    #[inject]
+    upstream: Arc<UpstreamClient>,
+}
+
+#[indicators]
+impl AppHealth {
+    #[readiness]
+    async fn upstream(&self) -> anyhow::Result<()> {
+        self.upstream.ping().await
+    }
+
+    #[startup]
+    async fn migrations(&self) -> anyhow::Result<()> {
+        migration::Migrator::status(&self.db).await?;
+        Ok(())
+    }
+}
+```
+
+A check of a resource the framework opens is already attached by the module
+that opens it ([An indicator a module attaches](/health/indicators/#an-indicator-a-module-attaches)):
+write no second ping of the pool or of Valkey.
+
+A worker app or an MCP app that imports the feature's data layer
+without its `HealthModule` ships no probe surface for that feature —
+the access graph keeps the indicator out of the running binary. Apps
+opt into health the same way they opt into HTTP or GraphQL.
+
+<Aside type="note">
+A `Discoverable` impl is **not** emitted by `#[indicators]` — the
+provider's `#[injectable]` owns it. Inventory is the same seam
+`#[hooks]`, `#[scheduled]`, and `#[processor]` use.
+</Aside>
 
 ## The rule
 
 | Provider state                                                          | Indicator behavior |
 |-------------------------------------------------------------------------|---------------------|
-| Provider lives in a module **imported** by `AppModule` (directly or transitively) | Runs on every matching probe |
-| Provider linked into the binary but in **no reachable module**          | Skipped; named **once at boot** with a `warn` on `nest_rs::health`, so it shows at any production filter |
+| Provider lives in a module **imported** by the app root (directly or transitively) | Runs on every matching probe |
+| Provider linked into the binary but in **no reachable module**          | Skipped; named **once at boot** on `nest_rs::health` — a `warn` when it is your app's own code, `debug` when it is a dependency's |
 
 Linking a crate without importing its module keeps every provider in
 that crate inert — present in the binary, not mounted on any
@@ -52,18 +123,22 @@ discovery seam honours (`nest_rs::queue`, `nest_rs::events`):
 
 ```
  WARN nest_rs::health: skipped indicator: no instance of the provider in this
-      app's container indicator="upstream" kind=Readiness
-      origin="features::upstream::health" hint="nothing is registered under that
-      exact type. Common causes: …"
+      app's container indicator="upstream" kind="readiness"
+      origin="api::upstream::health" cause="module_not_imported"
+      hint="its module `UpstreamHealthModule` is not imported by this app: import
+      it, or delete the methods"
 ```
 
 `warn` for **your** indicator, so it shows at any production filter, and once —
-a wiring notice repeated on every probe is log volume, not a signal. An
-indicator a `nest-rs-*` crate ships and this app never opted into reports at
-`debug` instead: it is not your mistake and you cannot act on it, so a DB-less
-app is not told twice per boot to go bind `nest_rs_seaorm`'s. Probing then skips in
-silence. The usual cause is a missing `<Feature>HealthModule` import in
-`AppModule` — the feature's data module imports the service, not the
+a wiring notice repeated on every probe is log volume, not a signal. A
+dependency's indicator reports at `debug` instead, because it is not your
+mistake here: one that a crate your app depends on ships — the framework, a
+package, a shared `features` crate several binaries link — and whose module this
+app does not import (`cause="dependency"`, with that module in the `hint`). A
+binary is not told about another binary's. The boot reads which modules your app imports,
+never a crate's name. Probing then skips in silence. When a shared crate's indicator does not appear, read
+`nest_rs::health` at `debug`: the usual cause is a missing `<Feature>HealthModule`
+import in the app root — the feature's data module imports the service, not the
 health adapter.
 
 A second check: the response body. With the indicator's module
@@ -71,7 +146,7 @@ imported, the indicator's name appears under `details` on its probe:
 
 ```bash frame="terminal"
 $ curl -s http://localhost:3000/health/ready | jq '.details | keys'
-[ "db", "upstream" ]
+[ "seaorm", "upstream" ]
 ```
 
 Missing key, missing import. Present key with `status: "down"`,
@@ -79,10 +154,9 @@ genuine failure — read the `error` bucket.
 
 <Aside type="note">
 Stack traces and ambient context follow the indicator's owning
-provider. An indicator that injects an HTTP client logs under the
-provider's `tracing` target — usually `nest_rs::health` for
-framework-shipped ones, the feature crate's own `features::health` for
-product-level ones.
+provider. What an indicator logs itself goes on its provider's own target —
+`features::<feature>` for a product's — and the line reporting its failure, on
+`nest_rs::health`.
 </Aside>
 
 ## Going further

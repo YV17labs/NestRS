@@ -1,36 +1,27 @@
 //! **Adapter** skeletons — one transport bolted onto an existing port
-//! (`g http|graphql|ws|queue|schedule|mcp <feature>`).
+//! (`g http|graphql|ws|queue|schedule|mcp|events <feature>`).
 //!
 //! Each skeleton delegates to the port service's `count()` (the method
-//! `g feature` emits) so a freshly-generated port + any adapter compiles
-//! immediately. The handler is the seam the developer then fills in.
-//!
-//! **A `g resource` port has no `count()`** — its service is a `CrudService`
-//! (`list`/`page`/`access`/`create`/`update`/`delete`), so a skeleton calling
-//! `count()` on one does not compile. Each transport therefore renders one
-//! template with the differing handler supplied as `{{op}}` / `{{op_body}}` /
-//! `{{op_value}}` (see [`crud_vars`](super::crud::crud_vars)), rather than a second
-//! near-identical blob: the scaffolding, imports and path conventions have one
-//! home each. GraphQL is the exception that earns a second template
-//! ([`GRAPHQL_RESOLVER_CRUD`]) — over a resource it is not a stub but the full
-//! `#[crud]` block behind the app's guards.
+//! `g feature` emits). A `g resource` port's `CrudService` has none, so each
+//! transport takes the differing handler as `{{op}}` / `{{op_body}}` /
+//! `{{op_value}}` ([`crud_vars`](super::crud::crud_vars)); GraphQL alone gets a
+//! second template ([`GRAPHQL_RESOLVER_CRUD`]), the full `#[crud]` block.
 
 /// `mod.rs` for an adapter folder: `mod <handler>; mod module;` + re-exports.
 /// `{{handler_mod}}`/`{{handler}}`/`{{tmodule}}` are layered per transport.
-pub const MOD: &str = r#"mod {{handler_mod}};
+pub(crate) const MOD: &str = r#"mod {{handler_mod}};
 mod module;
 
 pub use module::{{tmodule}};
 "#;
 
-/// Adapter `module.rs` — imports the port, provides the handler.
+/// Adapter `module.rs` — imports the port, provides the handler, whose edge
+/// decorator brings what serves it, so the app importing the adapter serves it
+/// with no import of its own; only the app pins one.
 ///
-/// **Every adapter imports the port**, including the queue's: the moment the
-/// generated stub grows the shape the docs prescribe — a thin processor handing
-/// the job to the port service — the access graph fails the boot unless the port
-/// module is already there. Scaffolding the import costs nothing (registration
-/// is idempotent) and removes a boot error from the developer's first edit.
-pub const MODULE: &str = r#"use nest_rs::core::module;
+/// **Every adapter imports the port**, the queue's included: a processor
+/// handing the job to the port service would otherwise fail the access graph.
+pub(crate) const MODULE: &str = r#"use nest_rs::core::module;
 
 use super::{{handler_mod}}::{{handler}};
 use crate::{{snake}}::{{module}};
@@ -42,13 +33,18 @@ use crate::{{snake}}::{{module}};
 pub struct {{tmodule}};
 "#;
 
-pub const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
+/// The HTTP adapter for a port with no entity: guarded like its `#[crud]`
+/// twin, so the route answers only a caller the two guards admit.
+pub(crate) const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, routes};
 
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 use crate::{{snake}}::{{service}};
 
 #[controller(path = "/{{kebab}}")]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct {{controller}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -56,14 +52,11 @@ pub struct {{controller}} {
 
 #[routes]
 impl {{controller}} {
-    // SECURITY: scaffolded as #[public] because this port holds no entity.
-    // Before serving real rows, declare #[authorize(Action, Entity)] instead
-    // (class gate + automatic response masking), bind
-    // #[use_guards(AuthnGuard, AuthzGuard)] on the struct, and import
-    // AuthzModule in this adapter's module.rs — `nestrs g auth` writes all
-    // three, and `nestrs g http` on a `g resource` port emits them.
+    // Guarded by the two guards on the struct, so it needs no posture of its
+    // own; the boot refuses a route no guard identifying a caller covers. A route
+    // open on purpose says #[public], or #[public(Action, Entity)] where a visitor
+    // reads rows; one serving a caller's rows declares #[authorize(Action, Entity)].
     #[get("/")]
-    #[public]
     #[api(summary = "Count {{kebab}} items")]
     async fn list(&self) -> String {
         format!("{} items", self.svc.count())
@@ -71,14 +64,47 @@ impl {{controller}} {
 }
 "#;
 
-pub const GRAPHQL_RESOLVER: &str = r#"use std::sync::Arc;
+/// The note above a single operation gated on the port's entity: the grant it
+/// waits for, by the path `authz/ability.rs` resolves.
+pub(crate) const GATED_ON_ENTITY: &str =
+    "    // Gated on the port's entity: it answers FORBIDDEN until AuthzAbility grants
+    // `ab.can(nest_rs::authz::Action::Read, crate::{{snake}}::Entity)`.";
+
+/// The MCP tool's addition over an entity: rmcp reads the tool's output schema
+/// off the wire type it returns.
+pub(crate) const ROWS_AS_JSON: &str =
+    "    // An answer made of its rows returns the `#[expose]`d wire type wrapped in
+    // `Json<...>`, each row judged for the caller where it is built.";
+
+/// The note above a single operation gated on the port's `#[subject]`: rows wait
+/// for the posture on their entity, which refuses a caller holding no grant on
+/// them.
+pub(crate) const GATED_ON_SUBJECT: &str =
+    "    // Gated on {{entity}}, this port's #[subject]: a capability no table holds. It
+    // answers FORBIDDEN until AuthzAbility grants
+    // `ab.can(nest_rs::authz::Action::Read, crate::{{snake}}::{{entity}})`. Before it
+    // answers with an entity's rows, it is re-gated on that entity,
+    // `#[authorize(Read, {{entity}}Entity)]`, so a caller holding no grant on them is
+    // refused rather than handed an empty answer.";
+
+/// The GraphQL adapter for a port with no `CrudService`: guarded like its
+/// `#[crud]` twin, its operation gated on `{{subject}}` — the port's entity, or
+/// the `#[subject]` the generator writes for a port with none.
+pub(crate) const GRAPHQL_RESOLVER: &str = r#"use std::sync::Arc;
 
 use async_graphql::Result;
+use nest_rs::authz::Read;
 use nest_rs::graphql::{operations, resolver};
 
-use crate::{{snake}}::{{service}};
+use crate::authz::AuthzGuard;
+use crate::{{snake}}::{{{subject_use}}, {{service}}};
 
+// `/graphql` authenticates at its request, through the guards
+// AuthzGraphqlModule declares for it, so the resolver binds the ability guard
+// alone — AuthnGuard has no GraphQL check, and binding it here is a compile
+// error.
 #[resolver]
+#[use_guards(AuthzGuard)]
 pub struct {{resolver}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -86,14 +112,9 @@ pub struct {{resolver}} {
 
 #[operations]
 impl {{resolver}} {
-    // SECURITY: scaffolded as #[public] because this port holds no entity.
-    // Before serving real rows, declare #[authorize(Action, Entity)] instead
-    // (class gate + automatic response masking), bind
-    // #[use_guards(AuthnGuard, AuthzGuard)] on the struct, and import
-    // AuthzGraphqlModule in this adapter's module.rs — `nestrs g auth` writes
-    // all three, and `nestrs g graphql` on a `g resource` port emits them.
+{{posture_note}}
     #[query]
-    #[public]
+    #[authorize(Read, {{subject}})]
     async fn {{snake}}_count(&self) -> Result<usize> {
         Ok(self.svc.count())
     }
@@ -101,65 +122,53 @@ impl {{resolver}} {
 "#;
 
 /// The GraphQL adapter for a **resource** port: the `#[crud]` resolver behind
-/// the app's guards, the exact twin of `resource::HTTP_CONTROLLER` — same
-/// service, same ability, same rows, one transport over.
-pub const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
+/// the app's guards, the twin of `resource::HTTP_CONTROLLER`.
+///
+/// **One guard on the struct**: `/graphql` authenticates at its request through
+/// the guards `AuthzGraphqlModule` declares, and `AuthnGuard` declares no
+/// `GuardFor<GraphqlView>`, so `#[resolver]` refuses it at compile time.
+pub(crate) const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 
 use nest_rs::graphql::{crud, resolver};
 
-use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
-use crate::{{snake}}::{{{create_op}}, Entity as {{entity}}Entity, {{entity}}, {{service}}, {{update_op}}};
+use crate::{{snake}}::{{service}};
 
+// `/graphql` authenticates at its request, through the guards
+// AuthzGraphqlModule declares for it, so the resolver binds the ability guard
+// alone — AuthnGuard has no GraphQL check, and binding it here is a compile
+// error.
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct {{resolver}} {
     #[inject]
     svc: Arc<{{service}}>,
 }
 
 // Every operation declares #[authorize(Action, Entity)], so each is
-// authenticated, ability-filtered, transactional and field-masked — generated
-// by #[crud], the same way the HTTP controller is. They answer FORBIDDEN until
-// AuthzAbility grants a rule for {{entity}}.
-#[crud(
-    service = svc,
-    entity = {{entity}}Entity,
-    output = {{entity}},
-    create = {{create_op}},
-    update = {{update_op}},
-)]
+// authenticated, ability-filtered, transactional and judged per caller — generated
+// by #[crud], the same way the HTTP controller is. Each answers FORBIDDEN until
+// AuthzAbility grants its action on `crate::{{snake}}::Entity`.
+#[crud(service = {{service}})]
 impl {{resolver}} {}
 "#;
 
-/// The WS adapter's `module.rs`. `WsModule` is **not optional** — it owns the
-/// connection registry every `WsClient` reads, for the default namespace and for
-/// every `#[gateway(namespace = …)]` marker alike — so the generator writes it
-/// rather than leaving the app to discover it at boot.
-pub const WS_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::ws::WsModule;
+pub(crate) const WS_GATEWAY: &str = r#"use std::sync::Arc;
 
-use super::{{handler_mod}}::{{handler}};
-use crate::{{snake}}::{{module}};
-
-#[module(
-    imports = [{{module}}, WsModule],
-    providers = [{{handler}}],
-)]
-pub struct {{tmodule}};
-"#;
-
-pub const WS_GATEWAY: &str = r#"use std::sync::Arc;
-
+use nest_rs::core::error_message;
 use nest_rs::ws::{WsClient, gateway, messages};
 
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 use crate::{{snake}}::{{service}};
 
 // The path carries the feature name: a self-mount path is its exclusive
 // namespace, so a bare `/ws` made the *second* generated gateway fail boot on a
 // duplicate path. `/ws/<feature>` also stays clear of the HTTP controller
-// adapter, which claims `/<feature>`.
+// adapter, which claims `/<feature>`. The guards run at the upgrade, so the
+// socket opens only for a caller they admit.
 #[gateway(path = "/ws/{{kebab}}")]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct {{gateway}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -167,38 +176,40 @@ pub struct {{gateway}} {
 
 #[messages]
 impl {{gateway}} {
-    // Every message declares its access posture, and this scaffold's reply is a
-    // broadcast rather than entity rows — so `#[public]`: no gate, no mask, and
-    // the guards a gateway binds on its struct still run at the upgrade. A
-    // message that answers with entity rows takes
-    // `#[authorize(Read, Entity)]` instead, and the mask comes with it.
+    // Covered by the two guards on the struct, which ran at the upgrade, so it
+    // needs no posture of its own; the boot refuses a message no guard covers.
+    // A message answering with entity rows declares
+    // `#[authorize(Read, Entity)]`, its rows judged for the caller.
     #[subscribe_message("{{kebab}}.{{op}}")]
-    #[public]
     async fn {{op}}(&self, client: &WsClient) {
 {{op_body}}
         // Best-effort fan-out: a peer disconnecting mid-broadcast is normal, so
         // a delivery failure is logged rather than propagated (this handler
         // returns `()` — there is no client left to surface an error to).
         if let Err(e) = client.broadcast("{{kebab}}.{{op}}", {{op_value}}) {
-            tracing::warn!(target: "features::{{snake}}", error = %e, "broadcast failed");
+            tracing::warn!(target: crate::{{snake}}::TARGET, error = %error_message(&e), "broadcast failed");
         }
     }
 }
 "#;
 
-pub const QUEUE_PROCESSOR: &str = r#"use anyhow::Result;
+pub(crate) const QUEUE_PROCESSOR: &str = r#"use anyhow::Result;
 use nest_rs::core::injectable;
 use nest_rs::queue::processor;
 
-use crate::{{snake}}::{{{command}}, {{queue_name}}};
+use crate::{{snake}}::{{{command}}, {{queue}}};
 
 #[injectable]
-#[derive(Default)]
 pub struct {{processor}};
 
 #[processor]
 impl {{processor}} {
-    #[process(queue = {{queue_name}}, retries = 3)]
+    // One attempt at a time per replica, the default: `concurrency = N` runs N
+    // side by side in each replica, and more replicas scale the rest. `retries`
+    // is the budget the port counts, backing off between attempts; an `Err`
+    // carrying a `Problem` with a 4xx other than 408 and 429 dead-letters the
+    // job at once, since no retry clears a client's error.
+    #[process(queue = {{queue}}, retries = 3)]
     async fn handle(&self, job: {{command}}) -> Result<()> {
         let _ = job;
         Ok(())
@@ -206,17 +217,10 @@ impl {{processor}} {
 }
 "#;
 
-/// The queue payload **and its `QueueName`** — both at the feature *port*, not
-/// in the `queue/` adapter: they are the producer↔worker contract, and the
-/// producer is usually the port's own service, one directory up. Keeping the
-/// marker beside the payload is what makes `push_to::<Q>` reachable; declaring
-/// it inside the private `queue::processor` module would leave the untyped
-/// `push(name, job)` escape hatch as the only way to enqueue.
-///
-/// The default payload is a Command (the common case); rename it verb-led to
-/// the real action, or switch to an `…Event` (past tense) when a fact is
-/// published to several consumers.
-pub const QUEUE_COMMAND: &str = r#"use nest_rs::queue::queue;
+/// The queue payload **and its `#[queue]` marker**, at the feature *port*: they
+/// are the producer↔worker contract, and the marker outside the private
+/// `queue::processor` keeps the typed `push(Q, job, options)` reachable.
+pub(crate) const QUEUE_COMMAND: &str = r#"use nest_rs::queue::queue;
 use serde::{Deserialize, Serialize};
 
 /// Imperative payload for the `{{kebab}}` queue — "do this work", handled by one
@@ -225,7 +229,7 @@ use serde::{Deserialize, Serialize};
 /// Plain `serde` derives rather than `#[input]`, and the difference is not
 /// stylistic: `#[input]` carries `deny_unknown_fields`, which is right at an
 /// edge a client controls and wrong on a producer↔worker contract. A producer
-/// one deploy ahead that adds a field would have every job it enqueues refused
+/// one deploy ahead that adds a field would have every job it pushes refused
 /// by the older worker — and a decode failure is a `JobError::abort`, so the
 /// job dead-letters on its first attempt instead of retrying.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,13 +239,14 @@ pub struct {{command}} {
 
 /// The queue's identity — wire name + payload type in one artifact the producer
 /// and the processor both import, so a typo or a mismatched payload is a compile
-/// error rather than a job that silently never drains. Enqueue with
-/// `queue.push_to::<{{queue_name}}>(…)`.
+/// error rather than a job that silently never drains. Push with
+/// `jobs.push({{queue}}, job).await?` from a provider injecting
+/// `jobs: Arc<Jobs>`; it answers the job's `PushReceipt`.
 #[queue(name = "{{kebab}}", job = {{command}})]
-pub struct {{queue_name}};
+pub struct {{queue}};
 "#;
 
-pub const SCHEDULE_TASKS: &str = r#"use std::sync::Arc;
+pub(crate) const SCHEDULE_TASKS: &str = r#"use std::sync::Arc;
 
 use anyhow::Result;
 use nest_rs::core::injectable;
@@ -257,6 +262,10 @@ pub struct {{tasks}} {
 
 #[scheduled]
 impl {{tasks}} {
+    // Fires on every replica (`replicas = "each"`, the default), which suits
+    // per-process work. Work that is the deployment's declares
+    // `replicas = "one"`, and the app imports `RedisScheduleModule` (feature
+    // `redis-schedule`) so one replica claims each tick.
     #[every("60s")]
     async fn tick(&self) -> Result<()> {
 {{op_body}}
@@ -265,36 +274,77 @@ impl {{tasks}} {
 }
 "#;
 
-pub const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
+pub(crate) const EVENTS_LISTENER: &str = r#"use anyhow::Result;
+use nest_rs::core::injectable;
+use nest_rs::events::listeners;
+
+use crate::{{snake}}::{{event}};
+
+#[injectable]
+pub struct {{listener}};
+
+#[listeners]
+impl {{listener}} {
+    // Runs once the emitter's transaction has committed, as a unit of work of
+    // its own: an `Err` rolls back what it wrote and is logged at `error`.
+    // Cut after ten minutes unless `#[on_event(timeout = "…")]` says otherwise.
+    #[on_event]
+    async fn on_changed(&self, event: {{event}}) -> Result<()> {
+        let _ = event;
+        Ok(())
+    }
+}
+"#;
+
+/// The published fact the `events/` listener receives — at the feature *port*,
+/// where the emitting service and every listener import it.
+pub(crate) const EVENTS_EVENT: &str = r#"/// A `{{kebab}}` fact, emitted on the event bus. Rename it to what happened
+/// (e.g. `PostPublishedEvent`).
+#[derive(Debug, Clone)]
+pub struct {{event}} {
+    pub id: String,
+}
+"#;
+
+pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!
-//! Security: the MCP endpoint gates through the app's `dyn McpOperationGuard`,
-//! else the global guard pool (`use_guards_global`), else deny-all. Wire your
-//! app's `McpAbilityBridge` (`features::authz::mcp`) as `dyn McpOperationGuard`
-//! so callers are authenticated and the ambient `Ability` is installed.
+//! Security: the MCP endpoint gates at its request, through the global guard
+//! pool (`GlobalGuards`) and the `EndpointGuards<McpView, _>` a module
+//! declares, either alone, else deny-all. Import `AuthzMcpModule`
+//! (`features::authz::mcp`) so callers are authenticated and the ambient
+//! `Ability` is attached.
 //!
-//! Every operation then declares its own posture, exactly as a `#[query]` or an
-//! HTTP verb does:
+//! An operation those guards cover needs no posture of its own, as an HTTP route
+//! under a guard needs none. Where it gates more, it says so:
 //!
-//! * `#[authorize(Action, Entity)]` — the class-level gate plus automatic
-//!   field-level masking of the value you return. Reach for it whenever the
-//!   answer is entity data, and return the `#[expose]`d wire type (`Json<T>`)
-//!   so the mask has a shape to work on.
-//! * `#[public]` — no gate and no mask. The endpoint still authenticated the
-//!   caller; this says only that *this* operation has no entity to gate. Pair it
-//!   with `#[use_guards(...)]` when the answer is a capability rather than a row.
+//! * `#[authorize(Action, Entity)]` — the class-level gate, and reads under the
+//!   caller's ability. Reach for it whenever the answer is entity data, and
+//!   return the `#[expose]`d wire type (`Json<T>`), each row judged for the
+//!   caller where it is built.
+//! * `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate on a
+//!   capability no table holds, and reads under the caller's ability, as an
+//!   entity's does.
 //!
-//! Arguments validate through the same pipes every other transport uses:
-//! `Parameters<Valid<T>>` runs `validator` before the body and answers a
+//! `#[public]` admits a caller with no credential, so it belongs on an endpoint
+//! `McpAccess::Public` opens, where every operation states its posture; behind
+//! guards that authenticate it can open nothing, and the boot refuses it. Bare, it
+//! reads nothing a grant guards: `#[public(Action, Entity)]` names what a visitor
+//! reads, with the same gate and reads.
+//!
+//! Arguments are held to the rules their type declares, as on every other
+//! transport: `Parameters<T>` runs `validator` before the body and answers a
 //! rejection with `invalid_params`, which is the one MCP error a model can act
 //! on.
 use std::sync::Arc;
 
-// A fallible service call goes through `Opaque` — `use nest_rs::mcp::Opaque;`
-// then `.opaque()?` — which logs the real error for the operator and hands the
-// model a constant one. An error's `Display` reaches a language model verbatim.
+// A fallible service call returns its error: under `Result<String, ServiceError>`,
+// `?` answers the error's class, and one saying no problem answers a constant, its
+// chain logged, so no `Display` reaches a language model. `use nest_rs::mcp::Opaque;`
+// then `.opaque()?` says that at the call.
+use nest_rs::authz::Read;
 use nest_rs::mcp::{McpError, mcp, tools};
 
-use crate::{{snake}}::{{service}};
+use crate::{{snake}}::{{{subject_use}}, {{service}}};
 
 #[mcp]
 #[derive(Clone)]
@@ -310,11 +360,8 @@ impl {{tool}} {
     // compiles in rather than prose a cleanup could delete. `#[tool]` accepts a
     // doc comment as a fallback; an operation with neither does not compile.
     #[tool(description = "{{op_description}}")]
-    // This operation answers with a plain summary, so there is no entity to gate
-    // or mask. The moment it returns rows, swap this for
-    // `#[authorize(Read, <Entity>)]` and return the `#[expose]`d wire type
-    // wrapped in `Json<...>`, which is what arms the field-level mask.
-    #[public]
+{{posture_note}}
+    #[authorize(Read, {{subject}})]
     async fn {{op}}(&self) -> Result<String, McpError> {
 {{op_body}}
         Ok({{op_value}})

@@ -1,0 +1,5 @@
+error: `#[mcp]` must be on a concrete struct — each operation `#[tools]` declares on it runs a `static` site, which no parameter of the struct reaches, so a generic host's instances would share one site; write a non-generic host type per instantiation
+ --> tests/integration/diagnostics/mcp/mcp_on_a_generic_host.rs:9:16
+  |
+9 | struct DemoTool<T>(std::marker::PhantomData<T>);
+  |                ^^^

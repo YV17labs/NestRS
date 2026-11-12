@@ -1,0 +1,5 @@
+error: #[resource] reads `{id}` off its URI with `FromStr`: write `id: T`, not `Parameters<…>` — `Parameters` and `Piped` carry a tool's JSON arguments, which a URI does not send
+  --> tests/integration/diagnostics/mcp/resource_parameter_wrapped_as_a_tool_argument.rs:16:26
+   |
+16 |     async fn note(&self, id: Parameters<u32>) -> Result<String, McpError> {
+   |                          ^^^^^^^^^^^^^^^^^^^

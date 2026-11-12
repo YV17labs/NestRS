@@ -1,45 +1,54 @@
 //! OAuth 2.0 **authorization server** for nestrs — this app acting as the party
 //! that *issues* tokens.
 //!
-//! RFC 6749 §1.1 names four roles. `nest-rs-authn` answers a question that
-//! precedes all four (*who is calling?*), `nest-rs-oauth-client` is the client,
-//! `nest-rs-oauth-resource` is the discoverable half of the resource server,
-//! and this crate is the fourth: the authorization server's own vocabulary.
+//! - [`ClientAuthenticationGuard`] — §2.3's client authentication at the token
+//!   endpoint, over an authn [`Strategy`](nest_rs_authn::Strategy), refusing as
+//!   §5.2 answers: `invalid_client`, by the [`TokenEndpointAuthMethod`] the
+//!   client attempted.
+//! - [`OAuthServerModule`] and [`OAuthServerConfig`] — the clients this server
+//!   registers (§2), under `<PREFIX>_OAUTH__SERVER__*`, which
+//!   [`ClientSecretBasicStrategy`] authenticates against, in constant time,
+//!   behind [`ClientGuard`]: the module provides both.
+//! - [`AccessTokenRequest`] — §4.4.2's request, RFC 8707's `resource` with it,
+//!   read off its form as a handler parameter; one that does not parse is
+//!   §5.2's `invalid_request`, saying where, and one naming a grant the
+//!   endpoint does not serve `unsupported_grant_type` ([`GrantType`]).
+//! - [`AuthenticatedClient`] — the client the guard attaches, which reads what
+//!   its request is granted: the scope (§3.3,
+//!   [`scope_for`](AuthenticatedClient::scope_for)) and the token's audience
+//!   (RFC 8707, [`audience_for`](AuthenticatedClient::audience_for)).
+//! - [`TokenError`] — §5.2's closed set of six wire codes and RFC 8707 §2's
+//!   `invalid_target`, with the JSON envelope and the §5.1 cache directives the
+//!   token endpoint owes.
+//! - [`AccessTokenResponse`] — §5.1's success body, stating the scope granted
+//!   when it differs from the request, returned bare from a handler, which
+//!   renders with the same directives.
 //!
-//! Two things live here, and they are the same conversation seen from one end:
-//!
-//! - [`TokenError`] — §5.2's closed set of six wire codes, plus the JSON
-//!   envelope and the §5.1 cache directives the token endpoint owes. Held by the
-//!   framework so an app serving `/token` spells them once rather than per
-//!   deployment, and so a code outside the set — which no conforming client can
-//!   branch on — is unspellable.
-//! - [`authenticate_against_registry`] — §2.3.1 client authentication against a
-//!   static registry, in constant time. This is the **mirror** of
-//!   `nest-rs-oauth-client`: that crate presents credentials to somebody else's
-//!   token endpoint, this one checks them at ours.
-//!
-//! **Why not `nest-rs-authn`.** That crate resolves a caller's identity, and an
-//! authenticated machine client has none — [`AuthenticatedClient::actor_id`]
-//! returns `None`, which is the type answering authn's central question with
-//! *nobody*. Keeping the two together also meant every resource server compiled
-//! a token endpoint's error renderer and a credential registry it never serves.
-//! `TokenError::UnsupportedGrant` and `TokenError::InvalidScope` are the tell:
-//! neither is a credential verdict at all.
-//!
-//! Integration tests: `tests/integration/main.rs`, with paths mirroring `src/`.
+//! The product keeps what it decides: the payload a client carries, and the
+//! claims its token is minted with.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-// No span target: this crate emits no events. A rejected client credential is a
-// denial, and the guard that raised it already files one `warn` on
-// `nest_rs::authn` — a second here would be the same event said twice. The
-// constant is added by whichever of the two things above first has something of
-// its own to say.
+/// This crate's span target — RFC 6749's token endpoint: the `warn` for each
+/// client [`ClientAuthenticationGuard`] refuses, and for each scope or
+/// resource an authenticated client is refused. The cause a `server_error`
+/// answer withholds is the HTTP edge's line, on `nest_rs::http`, filed once
+/// the answer is final.
+pub const TARGET: &str = "nest_rs::oauth::server";
 
+mod config;
 mod error;
+mod guard;
+mod module;
 mod registry;
+mod strategy;
 mod token;
 
-pub use error::TokenError;
+pub use config::OAuthServerConfig;
+pub use error::{TokenEndpointAuthMethod, TokenError};
+pub use guard::{ClientAuthenticationGuard, ClientGuard};
+pub use module::{OAuthServerModule, OAuthServerSetup};
 pub use registry::{AuthenticatedClient, RegisteredClient, authenticate_against_registry};
-pub use token::{AccessTokenRequest, AccessTokenResponse};
+pub use strategy::ClientSecretBasicStrategy;
+pub use token::{AccessTokenRequest, AccessTokenResponse, GrantType};

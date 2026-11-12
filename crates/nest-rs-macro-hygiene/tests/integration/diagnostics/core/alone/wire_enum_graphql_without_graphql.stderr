@@ -1,0 +1,32 @@
+error: `#[wire_enum(graphql)]` expands into `nest_rs::graphql`, which this build does not enable. Add the feature to Cargo.toml:
+
+           nest-rs = { version = "7.0", features = ["graphql"] }
+ --> tests/integration/diagnostics/core/alone/wire_enum_graphql_without_graphql.rs:8:1
+  |
+8 | #[wire_enum(graphql)]
+  | ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `$crate::__requires_end` which comes from the expansion of the attribute macro `wire_enum` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: cannot find `graphql` in `nest_rs`
+ --> tests/integration/diagnostics/core/alone/wire_enum_graphql_without_graphql.rs:8:1
+  |
+8 | #[wire_enum(graphql)]
+  | ^^^^^^^^^^^^^^^^^^^^^ could not find `graphql` in `nest_rs`
+  |
+note: found an item that was configured out
+ --> $WORKSPACE/crates/nest-rs/src/lib.rs
+  |
+  | #[cfg(feature = "graphql")]
+  |       ------------------- the item is gated behind the `graphql` feature
+  | pub mod graphql {
+  |         ^^^^^^^
+  = note: this error originates in the attribute macro `wire_enum` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: cannot find attribute `graphql` in this scope
+ --> tests/integration/diagnostics/core/alone/wire_enum_graphql_without_graphql.rs:8:1
+  |
+8 | #[wire_enum(graphql)]
+  | ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `wire_enum` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,7 +1,6 @@
 ---
 title: Controllers & routes
 description: "Controllers as plain structs, routes from #[routes], path/query/JSON extractors, typed returns — the minimum to ship an HTTP handler."
-tier: basics
 sidebar:
   order: 3
 ---
@@ -10,10 +9,8 @@ A controller is a plain struct: inject what it needs, hang verb methods
 off its `impl` block, and `#[routes]` generates the route table. Verb
 attributes (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`) bind a
 method to a path, and [`#[sse]`](/http/streaming/) binds a `GET` that
-answers an event stream. Extractors, validation and response types all come from
-[poem](https://docs.rs/poem) — NestRS adds the DI shape, the self-composing
-route table, and a few framework-specific extractors covered on the
-[extractors](/http/extractors/) page.
+answers an event stream. Extractors, validation and response types all live in
+`nest_rs::http`, beside the DI shape and the self-composing route table.
 
 This page covers the minimum to ship an HTTP handler. Response shaping
 ([responses](/http/responses/)), error mapping ([errors](/http/errors/)),
@@ -24,6 +21,7 @@ versioning ([versioning](/http/versioning/)) each have their own page.
 
 ```rust title="crates/features/src/hello/http/controller.rs"
 use std::sync::Arc;
+
 use nest_rs::http::{controller, routes};
 
 use crate::hello::HelloService;
@@ -37,6 +35,7 @@ pub struct HelloController {
 #[routes]
 impl HelloController {
     #[get("/")]
+    #[public]
     async fn hello(&self) -> String {
         self.svc.greeting()
     }
@@ -48,17 +47,20 @@ impl HelloController {
   container hands the controller the shared `Arc<HelloService>` when it
   builds the controller.
 - **`#[routes]`** generates the route table; one entry per verb attribute.
+- **`#[public]`** declares the route open on purpose. A route with neither a
+  guard nor `#[public]` refuses the boot, which names every such route — see
+  [Security](/security/).
 - **`async fn hello(&self) -> String`** — any type that implements
-  `IntoResponse` is a valid return. `String`, `&'static str`, `i32`,
-  `Json<T>`, `(StatusCode, Body)` … all work.
-- **A controller with no `#[inject]` field needs `#[derive(Default)]`.**
-  Injected fields give the container everything it needs to build the struct;
-  with none, it falls back to `Default`. rustc names the fix, but the case only
-  shows up on a controller that reaches for nothing:
+  `IntoResponse` is a valid return. `String`, `&'static str`, `Json<T>`,
+  `StatusCode`, `(StatusCode, Body)`, a built `Response` … all work, and so does
+  a `Result` of any of them.
+- **A controller is built as an `#[injectable]` provider is.** Its `#[inject]`
+  fields resolve from the container; a struct with no field at all is built
+  as written, and one whose fields are all plain falls back to its own
+  `Default`, which rustc names when it is missing:
 
   ```rust title="crates/features/src/greetings/http/controller.rs"
   #[controller(path = "/greetings")]
-  #[derive(Default)]
   pub struct GreetingsController;
   ```
 
@@ -67,32 +69,36 @@ Run it:
 ```bash frame="terminal"
 $ nestrs run dev
 …
-2026-06-03T10:14:22Z  INFO nest_rs::routes: mounted route controller="HelloController" method="GET" path="/" handler="hello"
+2026-06-03T10:14:22Z  INFO nest_rs::routes: mounted host="HelloController" method="hello" verb="GET" path="/"
 
 $ curl http://localhost:3000
 Hello World
 ```
 
 **The boot line is authoritative about the served path.** One
-`nest_rs::routes: mounted route` event per route, with the full path in the
-`path` field — the transport logs what it actually mounted, prefix and version
-folded in.
+`nest_rs::routes: mounted` event per route — its `host` the controller, its
+`method` the handler, its `verb` the HTTP method — with the full path in the
+`path` field: the transport logs what it actually mounted, prefix and version
+folded in. Every edge says a unit it serves the same way, so one filter on
+`mounted` lists what the binary serves.
 
 `#[get("/")]` on `#[controller(path = "/greetings")]` serves `/greetings`, and
 `/greetings/` reaches the same handler: the transport edge trims the trailing
 slash before anything routes on the path, so both spellings run the same
-guards, interceptors and filters. The mounted path — the one the event above
-prints, the one the OpenAPI document lists — is the trimmed form. Interior
-slashes are left alone: `/greetings//hello` is a different path, not a typo.
+guards, interceptors and exception filters. The mounted path — the one the
+event above prints, the one the OpenAPI document lists — is the trimmed form.
+Interior slashes are left alone: `/greetings//hello` is a different path, not a
+typo.
 When a route seems missing, compare your URL against the `path` field of that
 event rather than against the attribute.
 
 ## Adding a path parameter
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::http::poem::web::Path;
+use nest_rs::http::Path;
 
-#[get("/:name")]
+#[get("/{name}")]
+#[public]
 async fn greet(&self, Path(name): Path<String>) -> String {
     format!("Hello, {name}!")
 }
@@ -103,22 +109,68 @@ before the handler runs — there is no `name.parse::<i32>()` to handle
 manually.
 
 **Destructuring in the parameter list is supported** — `Path(name)`,
-`Query(q)`, `Json(body)`, `Valid(input)` — as long as the pattern binds one
+`Query(q)`, `Json(body)`, `Piped(id)` — as long as the pattern binds one
 name. `#[routes]` forwards the argument to the handler it generates under that
 name, so the pattern stays where you wrote it. A pattern binding two
 (`Path((a, b))`) has no single name to forward and is a compile error naming
 the way out: bind the whole extractor and destructure in the body.
+
+A handler reading another number of path parameters than its route declares
+answers `500` and files `a handler reads path parameters its route cannot bind`,
+its `error` field counting both; bind every parameter, or read them through a
+struct.
 
 ```bash frame="terminal"
 $ curl http://localhost:3000/Ada
 Hello, Ada!
 ```
 
+## Route templates
+
+A route's path is written in OpenAPI's path templating, the spelling the
+[OpenAPI document](/openapi/) already prints: what you write in the attribute is
+what the document, the span's `http.route` and the
+[rate limiter's](/rate-limiting/) bucket all read back, `/users/{id}` everywhere.
+
+| Template | Matches | Binds |
+|---|---|---|
+| `/users/{id}` | `/users/42` | `id` = `42` |
+| `/@{handle}` | `/@ada` — a parameter may follow literal text in its segment | `handle` = `ada` |
+| `/files/{*path}` | `/files/a/b.txt` — the rest of the path | `path` = `a/b.txt` |
+| `/{{raw}}` | `/{raw}` — a doubled brace is a literal one | nothing |
+
+A parameter reads up to the next `/`, so it ends its segment; a catch-all takes
+the rest of the path, so it comes last. Neither matches an empty value:
+`/a//b` reaches no `/a/{x}/b`, and a root catch-all `/{*path}` leaves `/` to a
+route of its own — declare `#[get("/")]` beside it, or `/` answers the
+fallback's `404`. Each value is percent-decoded once, so a `%2F` is a `/` inside
+it; one whose bytes are not UTF-8 is a `400` naming the parameter, never its
+value. A controller's own `path` may hold parameters too (`/orgs/{org}/members`);
+it ends before its routes, so it holds no catch-all.
+
+**Everything else is refused at compile time, at the literal**, with the
+spelling to write instead:
+
+```text frame="terminal"
+error: #[get] `/users/:id`: `:id` is the 6.x parameter syntax — write `/users/{id}`
+error: #[get] `/files/*rest`: `*rest` is the 6.x catch-all syntax — write `/files/{*rest}`
+error: #[get] `/{id:\d+}`: a route parameter carries no pattern — parse it with its type (`Path<u64>`) or a pipe
+error: #[get] `/{id}.json`: `{id}` ends its segment — a parameter reads up to the next `/`
+error: #[get] `/{*rest}/meta`: `{*rest}` comes last — a catch-all takes the rest of the path
+```
+
+A parameter carries no pattern because its type already is one: `Path<u64>`
+answers `400` for `/users/abc` before the handler runs, and a
+[pipe](/fundamentals/pipes/) says why in a sentence of its own. Two spellings of
+one address — `/{id}` on one handler and `/{key}` on another — are one route
+with two names for its parameter, refused at compile time inside a controller
+and at boot across two, naming both handlers.
+
 ## Reading query parameters
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::http::poem::web::Query;
-use nest_rs::http::input;
+use nest_rs::http::Query;
+use nest_rs::core::input;
 
 #[input]
 struct Greet {
@@ -126,6 +178,7 @@ struct Greet {
 }
 
 #[get("/")]
+#[public]
 async fn hello(&self, Query(q): Query<Greet>) -> String {
     match q.lang.as_deref() {
         Some("fr") => "Bonjour le monde".to_string(),
@@ -142,9 +195,8 @@ Bonjour le monde
 ## Accepting a JSON body, validated
 
 ```rust title="crates/features/src/hello/http/controller.rs"
-use nest_rs::http::poem::Result;
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::{Valid, input};
+use nest_rs::core::{input, output};
+use nest_rs::http::{Json, Result};
 
 #[input]
 struct GreetInput {
@@ -152,36 +204,52 @@ struct GreetInput {
     name: String,
 }
 
-#[input]
+#[output]
 struct GreetReply {
     greeting: String,
 }
 
 #[post("/")]
-async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<GreetReply>> {
+#[public]
+async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>> {
     Ok(Json(GreetReply {
         greeting: format!("HELLO, {}!", input.name.to_uppercase()),
     }))
 }
 ```
 
-- **`#[input]`** is the shorthand for **wire** DTOs — the ones crossing the
-  edge in either direction. It appends
-  `#[derive(::serde::Serialize, ::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]`
-  and `#[serde(deny_unknown_fields)]` — an unknown field on the wire
+- **`#[input]`** is the shorthand for a DTO the edge **decodes**. It derives
+  `Serialize`, `Deserialize`, `Validate` and `JsonSchema` through the framework, so your
+  manifest names none of those crates, and adds `#[serde(deny_unknown_fields)]` — an unknown field on the wire
   (`{"name":"Ada","is_admin":true}`) is rejected with `400` at parse time
-  instead of silently dropped. `Serialize` is in that list on purpose: it is
-  what lets the same attribute carry a *response* type such as `GreetReply`
-  below, returned as `Json<T>`. Don't top the list up by hand — a manual
+  instead of silently dropped. Don't top the list up by hand — a manual
   `#[derive(Serialize)]`, `#[derive(Deserialize)]` or `#[derive(Validate)]`
   next to `#[input]` is a conflicting impl (`E0119`), not an addition. Need a
   custom `Deserialize` shape (e.g. untagged enums)? Skip `#[input]` and derive
   all four by hand.
-- **`Json<T>`** parses the request body into `T`. Malformed JSON is `400`.
-- **`Valid<E>`** runs [validator](https://docs.rs/validator) on the
-  extracted value. A failure returns `400` with the structured error list
-  — no manual checks in the handler. `Valid` is the ergonomic form of the
-  more general `Piped<P, E>` covered in [extractors](/http/extractors/).
+- **`#[output]`** is its twin for a DTO the edge only **sends**, such as
+  `GreetReply`: `Serialize` and `JsonSchema`, nothing to decode or validate.
+  An enum both decoded and sent, a role a client names and reads back, takes
+  [`#[wire_enum]`](/database/entities/#enum-columns).
+- **`Json<T>`** parses the request body into `T`. A body that does not decode
+  is `400`, and its `detail` says where, in the names `T` declares, what kind
+  of value it found and what was expected — ``JSON body at `author.name`:
+  invalid type: an integer, expected a string``, an element as `items[2]` — and
+  never the value refused, nor a key the client sent: serde's own sentence
+  quotes both, and a body field is where a password or a card number travels.
+  A map's entry is said as `limits[…]`, since its key is the client's. A body
+  that is not JSON at all keeps its line and column instead. A body sent under
+  another media type is `415`, naming the type it expected and never the one
+  sent. `Form<T>` (``form field `grant_type`: missing``), `Query<T>` (``query
+  parameter `file`: a value its type does not accept, expected a formatted UUID
+  string``), `Path<T>` and `Header<T>` refuse the same way, and so does a
+  handler's own decode returned as a `400`
+  (`HttpError::new(err, StatusCode::BAD_REQUEST)`).
+- **The rules `GreetInput` declares** run on the extracted value, after the
+  guards and before the handler, with nothing to wrap: a failure returns
+  `400` with the structured error list — no manual checks in the handler.
+  A transform other than validation is a pipe, `Piped<P, E>`, covered in
+  [extractors](/http/extractors/).
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/ \
@@ -192,18 +260,19 @@ $ curl -sX POST http://localhost:3000/ \
 $ curl -sX POST http://localhost:3000/ \
     -H 'Content-Type: application/json' \
     -d '{"name":""}'
-{"type":"https://www.rfc-editor.org/rfc/rfc9110#status.400","title":"Bad Request",
- "status":400,"detail":"validation failed",
- "errors":{"name":[{"code":"length","message":null,"params":{"min":1}}]}}
+{"type":"about:blank","title":"Bad Request",
+ "status":400,"detail":"validation failed","code":"INVALID_ARGUMENT",
+ "errors":{"name":[{"code":"length"}]}}
 ```
 
 ## Returning typed JSON
 
 `Json<T>` works as a return type as well — the framework serializes `T`
-and sets `Content-Type: application/json`:
+and sets `Content-Type: application/json; charset=utf-8`:
 
 ```rust title="crates/features/src/hello/http/controller.rs"
 #[get("/me")]
+#[public]
 async fn me(&self) -> Json<GreetReply> {
     Json(GreetReply { greeting: self.svc.greeting() })
 }
@@ -216,7 +285,7 @@ None of them can drift from the others — they share one source.
 Need a different status, a redirect, a custom header? See
 [responses](/http/responses/) for the response-shaping attributes that
 sit beside the verb. Need the handler's `Err(...)` to render a structured
-JSON body? See [errors](/http/errors/) for `ResponseError` and
+JSON body? See [errors](/http/errors/) for `ToProblem` and
 `ProblemDetails`.
 
 ## Going further
@@ -225,7 +294,7 @@ JSON body? See [errors](/http/errors/) for `ResponseError` and
   how several shapers compose.
 - [Extractors](/http/extractors/) — the full extractor surface a handler
   parameter can take.
-- [Errors](/http/errors/) — `ResponseError` on a feature error enum, and
+- [Errors](/http/errors/) — `ToProblem` on a feature error enum, and
   RFC 9457 problem responses.
 - [Security](/security/) — binding a guard so the handler runs with a
   principal and an ambient ability.

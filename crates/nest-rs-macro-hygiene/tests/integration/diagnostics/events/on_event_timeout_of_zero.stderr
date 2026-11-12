@@ -1,0 +1,5 @@
+error: #[on_event] `timeout` takes a duration literal: a whole number above zero with an `ms`, `s`, `m` or `h` suffix, at most `u64::MAX` milliseconds (e.g. "500ms", "30s", "5m", "1h")
+  --> tests/integration/diagnostics/events/on_event_timeout_of_zero.rs:16:26
+   |
+16 |     #[on_event(timeout = "0s")]
+   |                          ^^^^

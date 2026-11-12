@@ -1,9 +1,9 @@
-use schemars::JsonSchema;
-use serde::Serialize;
+use nest_rs::core::output;
 
 use crate::audio::TranscodeState;
 
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[output]
+#[derive(Debug, Clone, Copy)]
 pub struct TranscodeProgressDto {
     pub state: TranscodeState,
     pub attempt: u32,

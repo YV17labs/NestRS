@@ -1,17 +1,14 @@
 //! **Migration** templates — the `migrations` + `seed` crates every workspace
-//! ships, and the SeaORM migration skeleton `g migration` writes into them.
+//! ships, and the SeaORM migration `g migration` and `g resource` write into
+//! them.
 //!
-//! [`MIGRATION`] is a create-table starting point with the house columns
-//! (`created_at`/`updated_at`/`deleted_at`); edit it for an alter instead. The
-//! generator also registers it in `lib.rs` and regenerates `migrator.rs`, so
-//! the migration actually runs — the registration you forget is the one that
-//! silently never applies.
-//!
-//! The two crates are scaffolded by `nestrs new`, because `db.just` — shipped
-//! in the same breath — names them in every recipe: `nestrs run db up` on a
-//! fresh workspace has to apply zero migrations, not fail on a missing package.
+//! [`MIGRATION`] creates a table: the columns an entity declares, or, for a
+//! table none declares, a starting point with the house columns
+//! (`created_at`/`updated_at`/`deleted_at`); the generator also registers it in
+//! `lib.rs` and regenerates `migrator.rs`. `nestrs new` scaffolds both crates
+//! because `db.just` names them in every recipe.
 
-pub const CRATE_CARGO: &str = r#"[package]
+pub(crate) const CRATE_CARGO: &str = r#"[package]
 name = "migrations"
 version.workspace = true
 edition.workspace = true
@@ -23,55 +20,55 @@ anyhow.workspace = true
 nest-rs.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
-tokio.workspace = true
-tracing-subscriber.workspace = true
 "#;
 
-// `lib.rs` and `migrator.rs` are not consts: both are *derived* from the
-// migration module list (`render_lib` / `render_migrator` in the generator), so
-// a fresh crate and one with eight migrations come out of the same code path.
+// `lib.rs` and `migrator.rs` are derived from the migration module list
+// (`render_lib` / `render_migrator` in the generator).
 
-/// The binary behind every `nestrs run db <verb>`. `connect_from_env` is the
-/// single connector for tools outside the DI container: it resolves
-/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use, so a tool
-/// and its app can never disagree about which database they mean.
-pub const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
+/// The `migrations` crate's `clippy.toml`, which replaces the workspace's for this
+/// crate alone: clippy reads the nearest file upwards, so raw DDL needs no `#[expect]`.
+pub(crate) const CRATE_CLIPPY: &str = r#"# Empty on purpose: this replaces the workspace's `clippy.toml` for this crate. A
+# migration is DDL an operator runs, no request's value reaches it, and a default
+# such as `uuidv7()` has no typed builder, so raw SQL stays its own to write.
+"#;
+
+/// The binary behind every `nestrs run db <verb>`. `connect_from_env` resolves
+/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use, and what
+/// the server refuses is said as a `RepoError`, never by the value its message
+/// quotes.
+pub(crate) const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;
+use nest_rs::core::logging::{LogSettings, install_console};
+use nest_rs::seaorm::RepoError;
 use sea_orm_migration::MigratorTrait;
-use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
-    // `EnvPrefix::var` rather than a literal: this binary then reads the same
-    // log variable the apps do, including under a project's own prefix.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env(nest_rs::core::EnvPrefix::var("LOG"))
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // The apps' log settings, read and refused as they are, and their console.
+    install_console(&LogSettings::from_env()?);
 
     let conn = nest_rs::seaorm::connect_from_env().await?;
-    match std::env::args().nth(1).as_deref() {
-        Some("up") => Migrator::up(&conn, None).await?,
+    let migrated = match std::env::args().nth(1).as_deref() {
+        Some("up") => Migrator::up(&conn, None).await,
         Some("down") => {
             let steps: u32 = match std::env::args().nth(2) {
                 Some(arg) => arg.parse().context("steps must be a positive integer")?,
                 None => 1,
             };
-            Migrator::down(&conn, Some(steps)).await?
+            Migrator::down(&conn, Some(steps)).await
         }
-        Some("fresh") => Migrator::fresh(&conn).await?,
-        Some("refresh") => Migrator::refresh(&conn).await?,
-        Some("reset") => Migrator::reset(&conn).await?,
-        Some("status") => Migrator::status(&conn).await?,
+        Some("fresh") => Migrator::fresh(&conn).await,
+        Some("refresh") => Migrator::refresh(&conn).await,
+        Some("reset") => Migrator::reset(&conn).await,
+        Some("status") => Migrator::status(&conn).await,
         other => bail!("usage: migrate <up|down [N]|fresh|refresh|reset|status> (got {other:?})"),
-    }
+    };
+    migrated.map_err(RepoError::from)?;
     Ok(())
 }
 "#;
 
-pub const SEED_CARGO: &str = r#"[package]
+pub(crate) const SEED_CARGO: &str = r#"[package]
 name = "seed"
 version.workspace = true
 edition.workspace = true
@@ -82,23 +79,22 @@ publish = false
 anyhow.workspace = true
 nest-rs.workspace = true
 sea-orm.workspace = true
-tokio.workspace = true
 "#;
 
-/// `nestrs run db seed`. Empty, but connected: the wiring a fixture needs is
-/// already here, so adding one is a body edit rather than a new crate.
-pub const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
+/// `nestrs run db seed`. Empty, but connected.
+pub(crate) const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
 //!
 //! `nestrs run db reset` runs `fresh` and then this, and you will run it again
 //! on a database that already has rows — so every insert here must be
 //! idempotent (find-or-create, or `ON CONFLICT DO NOTHING`).
 
 use anyhow::Result;
+use nest_rs::seaorm::RepoError;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let conn = nest_rs::seaorm::connect_from_env().await?;
-    conn.ping().await?;
+    conn.ping().await.map_err(RepoError::from)?;
 
     // Insert your fixtures here.
     println!("seed: nothing to insert yet");
@@ -106,12 +102,14 @@ async fn main() -> Result<()> {
 }
 "#;
 
-/// The create-table skeleton. Render it through the **table**'s [`Names`]
+/// The create-table migration. Render it through the **table**'s [`Names`]
 /// ([`crate::naming::migration_subject`]), never the migration's — the enum
-/// reaches the DDL verbatim.
+/// reaches the DDL verbatim — with its `.col(…)` lines as `{{columns}}` and
+/// its enum's variants as `{{variants}}` ([`crate::column::Table`]), and
+/// `{{note}}` above the builder when what it creates is left to fill.
 ///
 /// [`Names`]: crate::naming::Names
-pub const MIGRATION: &str = r#"use sea_orm_migration::prelude::*;
+pub(crate) const MIGRATION: &str = r#"use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -119,32 +117,12 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Create-table skeleton — replace with an `alter_table` for a change.
-        manager
+{{note}}        manager
             .create_table(
                 Table::create()
                     .table({{singular}}::Table)
                     .if_not_exists()
-                    .col(ColumnDef::new({{singular}}::Id).uuid().not_null().primary_key())
-                    // TODO: add your columns here, and as a variant of the enum below.
-                    .col(
-                        ColumnDef::new({{singular}}::CreatedAt)
-                            .timestamp_with_time_zone()
-                            .not_null()
-                            .default(Expr::current_timestamp()),
-                    )
-                    .col(
-                        ColumnDef::new({{singular}}::UpdatedAt)
-                            .timestamp_with_time_zone()
-                            .not_null()
-                            .default(Expr::current_timestamp()),
-                    )
-                    .col(
-                        ColumnDef::new({{singular}}::DeletedAt)
-                            .timestamp_with_time_zone()
-                            .null(),
-                    )
-                    .to_owned(),
+{{columns}}                    .to_owned(),
             )
             .await
     }
@@ -162,9 +140,9 @@ impl MigrationTrait for Migration {
 #[derive(DeriveIden)]
 enum {{singular}} {
     Table,
-    Id,
-    CreatedAt,
-    UpdatedAt,
-    DeletedAt,
-}
+{{variants}}}
 "#;
+
+/// [`MIGRATION`]'s `{{note}}` over a table no entity declares.
+pub(crate) const SKELETON_NOTE: &str =
+    "        // Create-table skeleton — replace with an `alter_table` for a change.\n";

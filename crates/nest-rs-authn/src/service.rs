@@ -2,29 +2,86 @@
 
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::{
-    Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode, errors::ErrorKind,
+    DecodingKey, EncodingKey, Header, Validation, decode, decode_header, encode, errors::ErrorKind,
     get_current_timestamp,
 };
-use nest_rs_config::{Namespaced, var_name};
-use serde::{Serialize, de::DeserializeOwned};
+use nest_rs_config::{Namespaced, endpoint_shown};
+use nest_rs_core::Secret;
+use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use uuid::Uuid;
 
-use crate::JwtConfig;
-use crate::error::AuthError;
+use crate::algorithm::{Family, algorithms_of};
+use crate::error::{AuthError, SignError};
+use crate::jwks::Jwks;
+use crate::registered_claim::held_to_their_types;
+use crate::{Algorithm, PrincipalIdentity};
+use nest_rs_config::ClientTls;
 
-/// Minimum HS256 shared-secret length: 256 bits (32 bytes). HMAC-SHA256 derives
-/// all its security from the secret's entropy, so a shorter secret is
-/// brute-forceable and mints forgeable tokens. Enforced in [`JwtService::new`]
-/// — the derivation point every constructor funnels through (`JwtOptions::new`,
-/// the honest-API path, included), not only on the config-env path.
+use crate::AuthnConfig;
+use crate::binding::ResourceBinding;
+
+/// Prove an EdDSA private key and public key are one pair: a signature the
+/// private key makes has to verify under the public key.
+fn prove_one_pair(
+    encoding: &EncodingKey,
+    decoding: &DecodingKey,
+    algorithm: Algorithm,
+) -> Result<(), AuthError> {
+    const PROBE: &[u8] = b"nest-rs-authn: are these two keys one pair";
+    let signature = jsonwebtoken::crypto::sign(PROBE, encoding, algorithm.jwt())
+        .map_err(|e| AuthError::failed_because("invalid JWT private key", e))?;
+    let paired = jsonwebtoken::crypto::verify(&signature, PROBE, decoding, algorithm.jwt())
+        .map_err(|e| AuthError::failed_because("invalid JWT public key", e))?;
+    if paired {
+        return Ok(());
+    }
+    Err(AuthError::failed(format!(
+        "{}, and {}, are not one pair: tokens this service signed would be refused, and tokens \
+         the other pair's private key signed accepted",
+        crate::config::spellings(AuthnConfig::PRIVATE_KEY),
+        crate::config::spellings(AuthnConfig::PUBLIC_KEY),
+    )))
+}
+
+/// Minimum HS256 shared-secret length: 256 bits (32 bytes). Enforced in
+/// [`JwtService::new`], which every constructor path reaches.
 pub(crate) const HS256_MIN_SECRET_BYTES: usize = 32;
+
+/// The shortest shared secret `algorithm` accepts: the size of its hash output,
+/// RFC 7518 §3.2's floor — a longer hash signed with a shorter key is no stronger
+/// than the key.
+fn min_hmac_secret_bytes(algorithm: Algorithm) -> usize {
+    match algorithm {
+        Algorithm::HS384 => 48,
+        Algorithm::HS512 => 64,
+        _ => HS256_MIN_SECRET_BYTES,
+    }
+}
+
+/// The families a JWK Set's keys may verify, and a [`JwtKey::Jwks`]'s default:
+/// every asymmetric one, never HMAC — a JWK Set is public, and an HMAC
+/// algorithm would verify with a key anyone reads.
+pub(crate) const JWKS_FAMILIES: &[Family] = &[Family::Rsa, Family::Ec, Family::Ed];
+
+/// `algorithms` as a sentence names them: `HS256, HS384 or HS512`.
+pub(crate) fn one_of(algorithms: impl IntoIterator<Item = Algorithm>) -> String {
+    let names: Vec<&str> = algorithms.into_iter().map(Algorithm::as_str).collect();
+    match names.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+        None => String::new(),
+    }
+}
 
 /// Prefix of every media type this framework mints for a non-access purpose.
 ///
-/// A reserved namespace is what lets [`JwtService::verify`] refuse a handshake
-/// token without also refusing the legacy `typ: JWT` that `explicit_typing =
-/// false` exists to accept — the two questions are different, so one prefix
-/// answers the first and the flag answers the second.
+/// Reserved so [`JwtService::verify`] refuses a handshake token without also
+/// refusing the legacy `typ: JWT` that `explicit_typing = false` accepts.
 const HANDSHAKE_TYP_PREFIX: &str = "nrs-";
 
 /// Build the media type for a handshake `purpose` — `"oauth-tx"` ⇒
@@ -41,6 +98,26 @@ fn is_reserved_handshake_typ(typ: &str) -> bool {
         && typ[..HANDSHAKE_TYP_PREFIX.len()].eq_ignore_ascii_case(HANDSHAKE_TYP_PREFIX)
 }
 
+/// What [`JwtService::build`] holds a service to beside its key.
+#[derive(Clone, Copy)]
+enum Holds {
+    /// The issuer and the audience RFC 9068 §2.2 and §4 require.
+    Rfc9068,
+    /// Nothing more: a suite's forger signs what it is given.
+    Nothing,
+}
+
+/// Whose lifetime a token's `exp` states.
+#[derive(Clone, Copy)]
+enum Lifetime {
+    /// The signer's `expires_in` after `iat`, unless the claims name their own:
+    /// an access token.
+    Signer,
+    /// The claims' own, which they must carry: a handshake never inherits the
+    /// access-token lifetime.
+    Claims,
+}
+
 /// The media type RFC 9068 §2.1 assigns to a JWT access token. `at+jwt` is the
 /// SHOULD-form; §4 also obliges a verifier to accept the long form, so both are
 /// spelled here and nowhere else.
@@ -49,38 +126,86 @@ const AT_JWT: &str = "at+jwt";
 const AT_JWT_LONG: &str = "application/at+jwt";
 
 /// Key material backing a [`JwtService`].
+///
+/// `Debug` shows a JWK Set's `uri` through [`endpoint_shown`]: its userinfo or
+/// query may carry the issuer's credential.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum JwtKey {
     /// Shared secret: the same key signs and verifies. Every verifier can also mint.
-    Hmac(String),
+    Hmac(Secret<String>),
     /// Asymmetric PEM keys. `private_pem` is `None` on a verify-only resource server.
     Pem {
         /// EdDSA private key, PEM. `None` on a verify-only resource server —
         /// then [`sign`](JwtService::sign) refuses.
-        private_pem: Option<String>,
+        private_pem: Option<Secret<String>>,
         /// EdDSA public key, PEM. Always present — verification needs it.
         public_pem: String,
     },
+    /// The JWK Set (RFC 7517 §5) an external issuer publishes — Keycloak,
+    /// Auth0, better-auth — fetched when a token first needs it and kept
+    /// fresh. Verify-only: [`sign`](JwtService::sign) and the handshake
+    /// methods refuse.
+    Jwks {
+        /// Where the set is fetched; `https` only.
+        uri: String,
+        /// What the endpoint's certificate must chain to — the system's
+        /// authorities by default — and the certificate presented to it.
+        tls: ClientTls,
+    },
 }
 
-/// Runtime JWT settings passed to [`AuthnModule::for_root`](crate::AuthnModule::for_root).
-#[derive(Clone)]
+impl std::fmt::Debug for JwtKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Hmac(secret) => f.debug_tuple("Hmac").field(secret).finish(),
+            Self::Pem {
+                private_pem,
+                public_pem,
+            } => f
+                .debug_struct("Pem")
+                .field("private_pem", private_pem)
+                .field("public_pem", public_pem)
+                .finish(),
+            Self::Jwks { uri, tls } => f
+                .debug_struct("Jwks")
+                .field("uri", &endpoint_shown(uri))
+                .field("tls", tls)
+                .finish(),
+        }
+    }
+}
+
+/// Runtime JWT settings passed to [`JwtService::new`]; a field added in a minor
+/// release is set by assignment after a constructor, never in a literal.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct JwtOptions {
-    /// The key material (HMAC secret or EdDSA PEM pair) backing sign/verify.
+    /// The key material — an HMAC secret, an EdDSA PEM pair, or an issuer's
+    /// JWK Set — backing sign/verify.
     pub key: JwtKey,
-    /// The signing/verifying algorithm; kept alongside [`key`](Self::key) so
-    /// the header and validation agree on it.
-    pub algorithm: Algorithm,
-    /// Lifetime applied to minted tokens' `exp` (default 1 hour).
+    /// The algorithms a token may be signed with. A secret or a PEM key signs
+    /// and verifies with exactly one, which must fit it; a JWK Set verifies
+    /// any it holds, each key only with an algorithm of its own type, and never
+    /// an `HS*` one. Narrowing it binds a key that names no `alg` to the one
+    /// algorithm its issuer signs with (RFC 8725 §3.1).
+    pub algorithms: Vec<Algorithm>,
+    /// The lifetime the signer stamps as a minted token's `exp`, after its
+    /// `iat`, unless its claims name their own (default 1 hour).
     pub expires_in: Duration,
     /// Clock skew tolerated when validating `exp` / `nbf`.
     pub leeway: Duration,
-    /// When set, tokens must carry a matching `aud` claim.
+    /// The `aud` every token this service verifies must carry, and the one a
+    /// token it mints for itself carries — one minted for another resource
+    /// names that resource instead ([`JwtService::sign_for`]).
     ///
-    /// Leaving it unset does **not** switch the audience check off — see
-    /// [`allow_any_audience`](Self::allow_any_audience).
+    /// Required: unset or blank, [`JwtService::new`] refuses (RFC 9068 §2.2,
+    /// §4), but beside [`allow_any_audience`](Self::allow_any_audience), which
+    /// stands in for it on a service that mints nothing for itself.
     pub audience: Option<String>,
-    /// When set, tokens must carry a matching `iss` claim.
+    /// The `iss` every token this service verifies must carry, and the one
+    /// every token it mints carries. Required: unset or blank,
+    /// [`JwtService::new`] refuses (RFC 9068 §2.2, §4).
     pub issuer: Option<String>,
     /// RFC 9068 explicit typing: stamp `typ: at+jwt` when minting, and refuse a
     /// token whose `typ` is anything else when verifying. `true`, because §4
@@ -88,35 +213,40 @@ pub struct JwtOptions {
     /// OpenID Connect ID Token must not be accepted as an access token.
     ///
     /// Set it `false` only to verify tokens from an issuer that predates the
-    /// profile and mints a plain `typ: JWT`. Doing so gives up the one check
-    /// that distinguishes an access token from any other JWT the same key
-    /// signed, so it is a deliberate narrowing of what this service refuses.
+    /// profile and mints a plain `typ: JWT`, or none.
     pub explicit_typing: bool,
     /// Opt out of RFC 7519 §4.1.3 — accept a token whose `aud` names a
-    /// principal this service is not. `false`, and staying `false` is the
-    /// point: the clause is *"if the principal processing the claim does not
-    /// identify itself with a value in the `aud` claim when this claim is
-    /// present, then the JWT MUST be rejected"*, and it binds a verifier that
-    /// names no audience of its own just as much as one that does. Without it,
-    /// every app sharing an issuer is a deputy for every other.
+    /// principal this service is not. `false`: without it, every app sharing an
+    /// issuer is a deputy for every other.
     ///
-    /// Turn it on only for a verifier that is deliberately audience-agnostic —
-    /// a debugging proxy, an introspection endpoint — and never beside
-    /// [`audience`](Self::audience), which [`JwtService::new`] refuses as a
-    /// contradiction.
+    /// Turn it on only for a deliberately audience-agnostic verifier (a
+    /// debugging proxy, an introspection endpoint); [`JwtService::new`] refuses
+    /// it beside [`audience`](Self::audience). It stands in for the audience
+    /// the service requires, so the service mints no token for itself, only
+    /// one for a resource ([`JwtService::sign_for`]).
     pub allow_any_audience: bool,
 }
 
 impl JwtOptions {
-    const DEFAULT_LEEWAY: Duration = Duration::from_secs(30);
+    /// The clock-skew leeway a verifier allows unless told otherwise.
+    pub(crate) const DEFAULT_LEEWAY: Duration = Duration::from_secs(30);
 
-    /// HS256 options from a shared secret. Audience/issuer are unset (no
-    /// claim check) and TTL defaults to 1 hour — layer on via the fields.
-    pub fn new(secret: impl Into<String>) -> Self {
+    /// The lifetime of a token minted unless told otherwise: an hour.
+    pub(crate) const DEFAULT_EXPIRES_IN: Duration = Duration::from_secs(3600);
+
+    /// Options over `key`, accepting its default algorithms — HS256 for a
+    /// secret, EdDSA for a PEM key, every asymmetric one for a JWK Set — every
+    /// other field at its default.
+    pub(crate) fn with_key(key: JwtKey) -> Self {
+        let algorithms = match &key {
+            JwtKey::Hmac(_) => vec![Algorithm::HS256],
+            JwtKey::Pem { .. } => vec![Algorithm::EdDSA],
+            JwtKey::Jwks { .. } => algorithms_of(JWKS_FAMILIES).collect(),
+        };
         Self {
-            key: JwtKey::Hmac(secret.into()),
-            algorithm: Algorithm::HS256,
-            expires_in: Duration::from_secs(3600),
+            key,
+            algorithms,
+            expires_in: Self::DEFAULT_EXPIRES_IN,
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
             issuer: None,
@@ -125,181 +255,329 @@ impl JwtOptions {
         }
     }
 
+    /// HS256 options from a shared secret, the TTL an hour. The issuer and the
+    /// audience, which [`JwtService::new`] requires, are set by assignment.
+    pub fn new(secret: impl Into<String>) -> Self {
+        Self::with_key(JwtKey::Hmac(Secret::new(secret.into())))
+    }
+
     /// EdDSA options with both keys — a token *issuer* that can sign and verify.
     pub fn eddsa(private_pem: impl Into<String>, public_pem: impl Into<String>) -> Self {
-        Self {
-            key: JwtKey::Pem {
-                private_pem: Some(private_pem.into()),
-                public_pem: public_pem.into(),
-            },
-            algorithm: Algorithm::EdDSA,
-            expires_in: Duration::from_secs(3600),
-            leeway: Self::DEFAULT_LEEWAY,
-            audience: None,
-            issuer: None,
-            explicit_typing: true,
-            allow_any_audience: false,
-        }
+        Self::with_key(JwtKey::Pem {
+            private_pem: Some(Secret::new(private_pem.into())),
+            public_pem: public_pem.into(),
+        })
     }
 
     /// EdDSA options with only the public key — a *resource server* that can
     /// verify but never mint (the `apps/api` posture).
     pub fn eddsa_verify(public_pem: impl Into<String>) -> Self {
-        Self {
-            key: JwtKey::Pem {
-                private_pem: None,
-                public_pem: public_pem.into(),
-            },
-            algorithm: Algorithm::EdDSA,
-            expires_in: Duration::from_secs(3600),
-            leeway: Self::DEFAULT_LEEWAY,
-            audience: None,
-            issuer: None,
-            explicit_typing: true,
-            allow_any_audience: false,
-        }
+        Self::with_key(JwtKey::Pem {
+            private_pem: None,
+            public_pem: public_pem.into(),
+        })
+    }
+
+    /// Options verifying the tokens of an external issuer against the JWK Set
+    /// it publishes at `uri` — a resource server that never mints. Every
+    /// asymmetric algorithm is accepted until [`algorithms`](Self::algorithms)
+    /// narrows it, and the endpoint's certificate chains to the system's
+    /// authorities.
+    pub fn jwks(uri: impl Into<String>) -> Self {
+        Self::with_key(JwtKey::Jwks {
+            uri: uri.into(),
+            tls: ClientTls::default(),
+        })
     }
 }
 
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<JwtService>,
+        "Import `nest_rs::authn::AuthnModule`, which builds the one `JwtService` every guard and \
+         strategy verifies with.",
+    )
+}
+
 /// Singleton token signer/verifier, built once at boot and injected wherever a
-/// token is signed or verified. `encoding` is `None` on a verify-only server.
+/// token is signed or verified.
 pub struct JwtService {
-    encoding: Option<EncodingKey>,
-    decoding: DecodingKey,
-    header: Header,
-    validation: Validation,
+    /// `None` on a verify-only service.
+    signer: Option<Signer>,
+    verifier: Verifier,
     /// Whether RFC 9068 explicit typing is enforced on the verifying side.
     /// Read by [`verify`](Self::verify); the signing side already carries it in
-    /// `header`.
+    /// the signer's header.
     explicit_typing: bool,
     expires_in: Duration,
-    /// Stamped onto every minted token when configured — `validation` requires
-    /// them on the verifying side, so the signer must not leave them to the
-    /// app's claims struct.
+    /// Stamped onto a token minted for this service itself; a token minted for
+    /// another resource names that resource instead. `None` only where
+    /// [`JwtOptions::allow_any_audience`] stands in for it.
     audience: Option<String>,
+    /// Stamped onto every minted token, beside `iat` and `jti`. `None` only on
+    /// a bound service, which reads the issuers it accepts off its resource.
     issuer: Option<String>,
+}
+
+struct Signer {
+    key: EncodingKey,
+    header: Header,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one per process, built at boot: boxing the larger variant saves nothing"
+)]
+enum Verifier {
+    /// One key, one algorithm.
+    Static {
+        key: DecodingKey,
+        validation: Validation,
+        /// What a handshake meets: the audience and issuer this service stamps
+        /// on its own, which a resource binding never widens.
+        handshake: Validation,
+    },
+    /// An issuer's JWK Set, a validation per accepted algorithm: the token's
+    /// `alg` picks among them, and only among them.
+    Jwks {
+        set: Jwks,
+        /// One per algorithm: jsonwebtoken 11 refuses every token under a
+        /// `Validation` whose algorithms span two key families.
+        validations: Vec<(Algorithm, Validation)>,
+    },
+}
+
+/// `algorithms` without repeats, once each fits `key`: a static key takes
+/// exactly one algorithm of its type, a JWK Set any asymmetric ones.
+fn accepted(key: &JwtKey, algorithms: &[Algorithm]) -> Result<Vec<Algorithm>, AuthError> {
+    let mut accepted: Vec<Algorithm> = Vec::with_capacity(algorithms.len());
+    for algorithm in algorithms {
+        if !accepted.contains(algorithm) {
+            accepted.push(*algorithm);
+        }
+    }
+    let (families, key_name): (&[Family], &str) = match key {
+        JwtKey::Hmac(_) => (&[Family::Hmac], "an HMAC secret"),
+        JwtKey::Pem { .. } => (&[Family::Ed], "an EdDSA key"),
+        JwtKey::Jwks { .. } => (JWKS_FAMILIES, "a JWK Set, whose keys anyone can read"),
+    };
+    let fitting = || one_of(algorithms_of(families));
+    if accepted.is_empty() {
+        return Err(AuthError::failed(format!(
+            "{}, names no algorithm: name {}",
+            crate::config::algorithms_setting(),
+            fitting()
+        )));
+    }
+    if let Some(misfit) = accepted
+        .iter()
+        .find(|algorithm| !families.contains(&algorithm.family()))
+    {
+        return Err(AuthError::failed(format!(
+            "the {misfit} algorithm cannot be used with {key_name}: use {}",
+            fitting()
+        )));
+    }
+    if !matches!(key, JwtKey::Jwks { .. }) && accepted.len() > 1 {
+        return Err(AuthError::failed(format!(
+            "{}, names {} algorithms, and {key_name} signs and verifies with one",
+            crate::config::algorithms_setting(),
+            accepted.len()
+        )));
+    }
+    Ok(accepted)
 }
 
 impl JwtService {
     /// Build the service from [`JwtOptions`], deriving keys and pinning the
-    /// validation policy: `exp`/`nbf` always checked; `aud` always checked per
-    /// RFC 7519 §4.1.3 — a token carrying an audience this service is not named
-    /// in is refused whether or not one is configured — and `aud`/`iss`
-    /// additionally *required-present* when configured, so an omitting token
-    /// fails closed. Errors on unparseable PEM key material, on an HS256 secret
-    /// under 256 bits, and on the
+    /// validation policy: `exp`/`nbf` always checked, and the `iss` and `aud`
+    /// RFC 9068 §4 has a resource server check — each required present and
+    /// equal to the configured one, so a token naming another or none fails
+    /// closed. Errors on an issuer or an audience unset or blank (RFC 9068 §2.2
+    /// has every access token carry both), on unparseable PEM key material, on
+    /// an HMAC secret shorter than its hash, on an algorithm that does not fit
+    /// the key, on a JWK Set URI that is not `https`, and on the
     /// [`allow_any_audience`](JwtOptions::allow_any_audience) contradiction.
+    ///
+    /// A JWK Set is not fetched here: the first token that needs it fetches it.
     pub fn new(options: JwtOptions) -> Result<Self, AuthError> {
-        let (encoding, decoding) = match &options.key {
+        Self::build(options, None, Holds::Rfc9068)
+    }
+
+    /// [`new`](Self::new) for the resource `binding` describes: its audience
+    /// replaces the configured one, and a token's `iss` must be one of its
+    /// issuers (RFC 9068 §4), so it boots naming no issuer of its own. A token
+    /// this service mints carries the configured issuer, and with none it mints
+    /// no access token.
+    pub(crate) fn bound(
+        mut options: JwtOptions,
+        binding: &ResourceBinding,
+    ) -> Result<Self, AuthError> {
+        if binding.issuers.is_empty() {
+            return Err(AuthError::failed(
+                "the resource this service verifies tokens for trusts no authorization server, \
+                 so no token's issuer could be checked",
+            ));
+        }
+        options.audience = Some(binding.audience.clone());
+        Self::build(options, Some(&binding.issuers), Holds::Rfc9068)
+    }
+
+    /// The service over `options`, a token's `iss` one of the `bound` issuers,
+    /// or the configured one, held to what `holds` says.
+    fn build(
+        mut options: JwtOptions,
+        bound: Option<&[String]>,
+        holds: Holds,
+    ) -> Result<Self, AuthError> {
+        // `<PREFIX>_AUTHN__ISSUER=` in a `.env` reads as `Some("")`: no issuer.
+        options.issuer = options.issuer.filter(|issuer| !issuer.trim().is_empty());
+        options.audience = options
+            .audience
+            .filter(|audience| !audience.trim().is_empty());
+        let issuers = bound.unwrap_or(options.issuer.as_slice());
+        // The ranges the variables are held to, held again here: a `JwtOptions`
+        // built in code reaches this constructor without a config read, and an
+        // unbounded lifetime or leeway overflows the arithmetic below it.
+        for (setting, value) in [
+            (
+                AuthnConfig::EXPIRES_IN.pinned_through("JwtOptions::expires_in"),
+                options.expires_in,
+            ),
+            (
+                AuthnConfig::LEEWAY.pinned_through("JwtOptions::leeway"),
+                options.leeway,
+            ),
+        ] {
+            setting
+                .check(AuthnConfig::NAMESPACE, value)
+                .map_err(|refused| {
+                    AuthError::failed_because("the JWT options are refused", refused)
+                })?;
+        }
+        // A key and an algorithm that cannot work together fail here, not at the
+        // first request.
+        let algorithms = accepted(&options.key, &options.algorithms)?;
+        let signing = algorithms[0];
+
+        // A contradiction, refused rather than resolved.
+        if options.allow_any_audience {
+            if options.audience.is_some() {
+                return Err(AuthError::failed(format!(
+                    "{} contradicts {}: an audience-agnostic verifier cannot also require an audience",
+                    AuthnConfig::ALLOW_ANY_AUDIENCE.var(AuthnConfig::NAMESPACE),
+                    AuthnConfig::AUDIENCE.var(AuthnConfig::NAMESPACE),
+                )));
+            }
+            // Not silent: named once per boot, so the opt-out is actionable.
+            tracing::warn!(
+                target: crate::TARGET,
+                var = %AuthnConfig::ALLOW_ANY_AUDIENCE.var(AuthnConfig::NAMESPACE),
+                "audience validation is disabled — a token minted for another service verifies here",
+            );
+        }
+
+        // RFC 9068 §2.1 and §4 (explicit typing, RFC 8725 §3.11): mint `at+jwt`,
+        // and `verify` refuses any other `typ`.
+        let mut header = Header::new(signing.jwt());
+        if options.explicit_typing {
+            header.typ = Some(AT_JWT.to_owned());
+        }
+
+        let (signer, verifier) = match &options.key {
             JwtKey::Hmac(secret) => {
-                // Fail closed at the derivation point: an HS256 secret under 256
-                // bits is brute-forceable. This guards every constructor path —
-                // `JwtOptions::new` (the documented honest-API) as much as the
-                // config-env path (SEC-F3).
-                if secret.len() < HS256_MIN_SECRET_BYTES {
-                    return Err(AuthError::Failed(format!(
-                        "HS256 secret must be at least {HS256_MIN_SECRET_BYTES} bytes (256 bits); got {}",
+                let secret = secret.expose_secret();
+                // Fail closed at the derivation point every constructor reaches.
+                if secret.trim().is_empty() {
+                    return Err(AuthError::failed(format!(
+                        "{}, must not be empty",
+                        crate::config::secret_setting()
+                    )));
+                }
+                // RFC 7518 §3.2: a key of the same size as the hash output, or
+                // larger — 256 bits for HS256, 384 for HS384, 512 for HS512.
+                let minimum = min_hmac_secret_bytes(signing);
+                if secret.len() < minimum {
+                    return Err(AuthError::failed(format!(
+                        "{}, must be at least {minimum} bytes ({} bits) for {signing}; got {}",
+                        crate::config::secret_setting(),
+                        minimum * 8,
                         secret.len()
                     )));
                 }
                 let bytes = secret.as_bytes();
                 (
-                    Some(EncodingKey::from_secret(bytes)),
-                    DecodingKey::from_secret(bytes),
+                    Some(Signer {
+                        key: EncodingKey::from_secret(bytes),
+                        header,
+                    }),
+                    Verifier::Static {
+                        key: DecodingKey::from_secret(bytes),
+                        validation: validation(&options, signing, issuers),
+                        handshake: validation(&options, signing, options.issuer.as_slice()),
+                    },
                 )
             }
             JwtKey::Pem {
                 private_pem,
                 public_pem,
             } => {
-                let decoding = DecodingKey::from_ed_pem(public_pem.as_bytes())
-                    .map_err(|e| AuthError::Failed(format!("invalid JWT public key: {e}")))?;
-                let encoding = match private_pem {
+                let decoding = DecodingKey::from_ed_pem(public_pem.as_bytes()).map_err(|e| {
+                    AuthError::failed_because(
+                        format!(
+                            "{}, is not an EdDSA public key in PEM form",
+                            crate::config::spellings(AuthnConfig::PUBLIC_KEY),
+                        ),
+                        e,
+                    )
+                })?;
+                let signer = match private_pem {
                     Some(pem) => {
-                        Some(EncodingKey::from_ed_pem(pem.as_bytes()).map_err(|e| {
-                            AuthError::Failed(format!("invalid JWT private key: {e}"))
-                        })?)
+                        let encoding = EncodingKey::from_ed_pem(pem.expose_secret().as_bytes())
+                            .map_err(|e| {
+                                AuthError::failed_because(
+                                    format!(
+                                        "{}, is not an EdDSA private key in PEM form",
+                                        crate::config::spellings(AuthnConfig::PRIVATE_KEY),
+                                    ),
+                                    e,
+                                )
+                            })?;
+                        prove_one_pair(&encoding, &decoding, signing)?;
+                        Some(Signer {
+                            key: encoding,
+                            header,
+                        })
                     }
                     None => None,
                 };
-                (encoding, decoding)
+                (
+                    signer,
+                    Verifier::Static {
+                        key: decoding,
+                        validation: validation(&options, signing, issuers),
+                        handshake: validation(&options, signing, options.issuer.as_slice()),
+                    },
+                )
             }
+            JwtKey::Jwks { uri, tls } => (
+                None,
+                Verifier::Jwks {
+                    set: Jwks::new(uri, tls, &algorithms)?,
+                    validations: algorithms
+                        .iter()
+                        .map(|algorithm| (*algorithm, validation(&options, *algorithm, issuers)))
+                        .collect(),
+                },
+            ),
         };
 
-        // A contradiction, refused rather than resolved: one field says "only
-        // tokens for me", the other "tokens for anybody". Silently letting
-        // either win is how a deployment ends up believing the stricter one.
-        if options.allow_any_audience {
-            if options.audience.is_some() {
-                return Err(AuthError::Failed(format!(
-                    "{} contradicts {}: an audience-agnostic verifier cannot also require an audience",
-                    var_name(JwtConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
-                    var_name(JwtConfig::NAMESPACE, "AUDIENCE"),
-                )));
-            }
-            // Not the default, and not silent: an operator who opted out of RFC
-            // 7519 §4.1.3 reads it back once per boot, naming the variable that
-            // did it so the line is actionable rather than merely alarming.
-            tracing::warn!(
-                target: crate::TARGET,
-                var = %var_name(JwtConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
-                "audience validation is disabled — a token minted for another service verifies here",
-            );
-        }
-
-        let mut validation = Validation::new(options.algorithm);
-        // Pin expiry validation explicitly — the most security-critical claim
-        // check must not ride on a library default that a future version could
-        // flip. (jsonwebtoken defaults this to `true` today; we state intent.)
-        validation.validate_exp = true;
-        validation.validate_nbf = true;
-        validation.leeway = options.leeway.as_secs();
-        // RFC 7519 §4.1.3: "If the principal processing the claim does not
-        // identify itself with a value in the `aud` claim when this claim is
-        // present, then the JWT MUST be rejected." jsonwebtoken implements that
-        // clause under `validate_aud`, so the flag stays **on** whether or not
-        // this service names an audience — an unconfigured verifier still
-        // refuses a token minted for a sibling service by the shared issuer,
-        // which is the confused-deputy case `resource/` exists to prevent and
-        // which `OAuthResourceModule`, being opt-in, does not cover.
-        // Turning it off here is what made "no audience configured" mean "no
-        // audience check" on the default path.
-        validation.validate_aud = !options.allow_any_audience;
-        // `set_audience`/`set_issuer` only *compare* `aud`/`iss` when the token
-        // carries them — a signed token omitting the claim would pass despite the
-        // config promising it is mandatory. Add the claim to `required_spec_claims`
-        // so an omitting token fails closed.
-        if let Some(aud) = &options.audience {
-            validation.set_audience(&[aud.as_str()]);
-            validation.required_spec_claims.insert("aud".to_owned());
-        }
-        if let Some(iss) = &options.issuer {
-            validation.set_issuer(&[iss.as_str()]);
-            validation.required_spec_claims.insert("iss".to_owned());
-        }
-        // `iss` has no twin, and the asymmetry is the standard's rather than
-        // ours: RFC 7519 §4.1.1 states no clause obliging a verifier to reject a
-        // token carrying an issuer it does not name, so there is nothing here to
-        // switch on for an unconfigured verifier and nothing to opt out of.
-
-        // RFC 9068 §2.1: "JWT access tokens MUST include this media type in the
-        // `typ` header parameter … the `typ` value used SHOULD be `at+jwt`",
-        // and §4 makes the verifier's side a MUST: it "MUST verify that the
-        // `typ` header value is `at+jwt` or `application/at+jwt` and reject
-        // tokens carrying any other value". §2.1 names the reason — "preventing
-        // OpenID Connect ID Tokens … from being accepted as access tokens by
-        // resource servers" — and RFC 8725 §3.11 generalises it as explicit
-        // typing. This crate mints and verifies its own access tokens, so it
-        // does both halves.
-        let mut header = Header::new(options.algorithm);
-        if options.explicit_typing {
-            header.typ = Some(AT_JWT.to_owned());
+        if matches!(holds, Holds::Rfc9068) {
+            names_what_it_checks(&options, issuers)?;
         }
         Ok(Self {
-            encoding,
-            decoding,
-            header,
-            validation,
+            signer,
+            verifier,
             explicit_typing: options.explicit_typing,
             expires_in: options.expires_in,
             audience: options.audience,
@@ -307,77 +585,216 @@ impl JwtService {
         })
     }
 
-    /// Sign `claims` into a compact JWT. Errors on a verify-only service (no
-    /// encoding key) or a serialization failure.
-    pub fn sign<C: Serialize>(&self, claims: &C) -> Result<String, AuthError> {
-        self.encode_with(&self.header, claims)
-    }
-
-    /// Sign `claims` under `header`, stamping `aud`/`iss` first. The one place
-    /// the verify-only refusal is worded, and the one place the stamped and
-    /// unstamped paths choose between themselves — [`sign`](Self::sign) and
-    /// [`sign_handshake`](Self::sign_handshake) differ only in the header they
-    /// bring.
-    fn encode_with<C: Serialize>(&self, header: &Header, claims: &C) -> Result<String, AuthError> {
-        let encoding = self.encoding.as_ref().ok_or_else(|| {
-            AuthError::Failed("this JwtService is verify-only — no signing key configured".into())
-        })?;
-        match self.stamped(claims)? {
-            Some(stamped) => encode(header, &stamped, encoding),
-            None => encode(header, claims, encoding),
-        }
-        .map_err(|e| AuthError::Failed(e.to_string()))
-    }
-
-    /// Stamp the configured `aud` / `iss` onto a claims object.
+    /// Sign `claims` into a compact JWT this service mints for itself. Errors
+    /// on a verify-only service (no encoding key), on a service naming no
+    /// issuer or no audience of its own to stamp, on claims naming no subject
+    /// or no client or holding a registered claim of another JSON type, or on a
+    /// serialization failure.
     ///
-    /// Verification **requires** both when they are configured, so an app whose
-    /// claims struct omits them would mint tokens its own verifier rejects —
-    /// the kind of scoping the framework must carry rather than ask every
-    /// claims type to restate. Returns `None` when there is nothing to stamp
-    /// (neither configured), so the common path serializes exactly once. A
-    /// claims type that sets its own `aud`/`iss` wins: an explicit value is
-    /// never overwritten.
-    fn stamped<C: Serialize>(&self, claims: &C) -> Result<Option<serde_json::Value>, AuthError> {
-        if self.audience.is_none() && self.issuer.is_none() {
-            return Ok(None);
+    /// The token carries what the signer owns of RFC 9068 §2.2's required set
+    /// — `iat`, `exp` this service's lifetime after it, a fresh `jti`, and the
+    /// configured `aud` and `iss` — beside `claims`, which name the rest:
+    /// `sub`, their [`actor_id`](PrincipalIdentity::actor_id) when they carry no
+    /// such claim or a blank one, and `client_id`, the client the token was
+    /// issued to, which claims naming none — absent, `null` or blank — do not
+    /// mint. A claim `claims` already carry is never overwritten, so one
+    /// RFC 7519 §4.1 or RFC 9068 §2.2 registers holding another JSON type than
+    /// its specification gives it — a `client_id` or an `iss` that is no
+    /// string, an `exp` that is no NumericDate, a `scope` outside RFC 6749
+    /// §3.3's grammar — mints nothing, as do claims naming no subject; one they
+    /// hold as `null` is left out, and a type that is no principal does not
+    /// compile. A token for another resource is [`sign_for`](Self::sign_for)'s.
+    ///
+    /// ```compile_fail,E0277
+    /// use nest_rs_authn::{JwtOptions, JwtService};
+    ///
+    /// let jwt = JwtService::new(JwtOptions::new("a-secret-padded-to-thirty-two-bytes")).unwrap();
+    /// jwt.sign(&serde_json::json!({})).unwrap();
+    /// ```
+    pub fn sign<C: Serialize + PrincipalIdentity>(&self, claims: &C) -> Result<String, SignError> {
+        let signer = self.signer()?;
+        self.names_its_issuer()?;
+        if self.audience.is_none() {
+            return Err(SignError::new(format!(
+                "this JwtService allows any audience, so a token it minted for itself would \
+                 carry no `aud`, which RFC 9068 §2.2 requires — mint it for the resource it is \
+                 meant for with `sign_for`, or set {} in place of {}",
+                crate::config::spellings(AuthnConfig::AUDIENCE),
+                AuthnConfig::ALLOW_ANY_AUDIENCE.var(AuthnConfig::NAMESPACE),
+            )));
         }
-        let mut value =
-            serde_json::to_value(claims).map_err(|e| AuthError::Failed(e.to_string()))?;
-        let Some(map) = value.as_object_mut() else {
-            // A non-object claims body cannot carry registered claims; leave it
-            // to the encoder, which fails it the same way it always has.
-            return Ok(None);
+        self.encode_access_token(signer, an_access_token_of(claims)?, None)
+    }
+
+    /// Sign `claims` into a compact JWT for `resource`, the RFC 8707 §2
+    /// resource the token was requested for: its `aud`, whatever audience this
+    /// service requires of its own, so only a verifier serving that resource
+    /// accepts it.
+    ///
+    /// The token carries the stamps [`sign`](Self::sign) does but the
+    /// audience. Errors on a blank `resource`, on `claims` naming an `aud` of
+    /// their own, no subject, no client or a registered claim of another JSON
+    /// type, on a verify-only service or one naming no issuer of its own to
+    /// stamp, or on a serialization failure. Which resources a caller may be
+    /// minted a token for is the issuer's to decide before it calls this.
+    pub fn sign_for<C: Serialize + PrincipalIdentity>(
+        &self,
+        resource: &str,
+        claims: &C,
+    ) -> Result<String, SignError> {
+        if resource.trim().is_empty() {
+            return Err(SignError::new(
+                "a blank resource names no resource to sign a token for",
+            ));
+        }
+        let signer = self.signer()?;
+        self.names_its_issuer()?;
+        self.encode_access_token(signer, an_access_token_of(claims)?, Some(resource))
+    }
+
+    /// The signing half, or the refusal a verify-only service answers.
+    fn signer(&self) -> Result<&Signer, SignError> {
+        self.signer.as_ref().ok_or_else(|| {
+            SignError::new("this JwtService is verify-only — no signing key configured")
+        })
+    }
+
+    /// The refusal a bound service naming no issuer of its own answers when
+    /// asked for an access token, which would carry no `iss`.
+    fn names_its_issuer(&self) -> Result<(), SignError> {
+        if self.issuer.is_some() {
+            return Ok(());
+        }
+        Err(SignError::new(format!(
+            "this JwtService reads the issuers it accepts off the resource it serves and names \
+             none of its own, so a token it minted would carry no `iss`, which RFC 9068 §2.2 \
+             requires — set {}",
+            crate::config::spellings(AuthnConfig::ISSUER),
+        )))
+    }
+
+    /// [`encode_with`](Self::encode_with) for an access token: the signer's own
+    /// header, and its lifetime unless `claims` name their own.
+    fn encode_access_token(
+        &self,
+        signer: &Signer,
+        claims: Map<String, Value>,
+        resource: Option<&str>,
+    ) -> Result<String, SignError> {
+        self.encode_with(signer, &signer.header, claims, resource, Lifetime::Signer)
+    }
+
+    /// Sign `claims` under `header` for `resource` — this service itself when
+    /// `None` — stamping the signer's claims first, `exp` as `lifetime` says.
+    fn encode_with(
+        &self,
+        signer: &Signer,
+        header: &Header,
+        claims: Map<String, Value>,
+        resource: Option<&str>,
+        lifetime: Lifetime,
+    ) -> Result<String, SignError> {
+        encode(
+            header,
+            &self.stamped(claims, resource, lifetime)?,
+            &signer.key,
+        )
+        .map_err(|e| SignError::because("the claims could not be signed", e))
+    }
+
+    /// `claims` carrying `iat`, `exp` the configured lifetime after it (for a
+    /// [`Lifetime::Signer`] token), a fresh `jti`, the configured `iss`, and as
+    /// `aud` either `resource` or, for a token this service mints for itself,
+    /// the configured audience.
+    ///
+    /// Verification requires `aud` and `iss`, so a claims struct omitting them
+    /// would mint tokens its own verifier rejects. A claim the claims type
+    /// carries is never overwritten — but an `aud` beside `resource`, which it
+    /// would contradict, is refused, and so are [`Lifetime::Claims`] claims
+    /// carrying no `exp`; one serialized as `null` is absent.
+    fn stamped(
+        &self,
+        mut claims: Map<String, Value>,
+        resource: Option<&str>,
+        lifetime: Lifetime,
+    ) -> Result<Map<String, Value>, SignError> {
+        let signer_s_lifetime = match lifetime {
+            Lifetime::Signer => Some(self.expires_in.as_secs()),
+            Lifetime::Claims if claims.get("exp").is_none_or(Value::is_null) => {
+                return Err(SignError::new(
+                    "a handshake's claims carry no `exp` — name its lifetime with \
+                     `JwtService::expiry_in(secs)`: a handshake never inherits the access-token \
+                     lifetime",
+                ));
+            }
+            Lifetime::Claims => None,
         };
-        for (key, configured) in [("aud", &self.audience), ("iss", &self.issuer)] {
-            if let Some(v) = configured {
-                map.entry(key)
-                    .or_insert_with(|| serde_json::Value::String(v.clone()));
+        let audience = match resource {
+            Some(resource) => {
+                if claims.get("aud").is_some_and(|aud| !aud.is_null()) {
+                    return Err(SignError::new(
+                        "the claims carry an `aud` of their own beside the resource they are \
+                         signed for — leave `aud` to the signer",
+                    ));
+                }
+                Some(resource.to_owned())
+            }
+            None => self.audience.clone(),
+        };
+        let issued = get_current_timestamp();
+        let stamps: [(&str, Option<Value>); 5] = [
+            ("iat", Some(issued.into())),
+            (
+                "exp",
+                signer_s_lifetime.map(|secs| issued.saturating_add(secs).into()),
+            ),
+            ("jti", Some(Uuid::new_v4().to_string().into())),
+            ("aud", audience.map(Into::into)),
+            ("iss", self.issuer.clone().map(Into::into)),
+        ];
+        for (key, stamp) in stamps {
+            if let Some(stamp) = stamp
+                && claims.get(key).is_none_or(Value::is_null)
+            {
+                claims.insert(key.to_owned(), stamp);
             }
         }
-        Ok(Some(value))
+        Ok(claims)
     }
 
     /// Verify `token` and deserialize its claims into `C`, applying the pinned
     /// `exp`/`nbf`/`aud`/`iss` validation. Maps the failure to a typed
     /// [`AuthError`] (expired, bad signature, wrong algorithm, …).
-    pub fn verify<C: DeserializeOwned>(&self, token: &str) -> Result<C, AuthError> {
-        let data =
-            decode::<C>(token, &self.decoding, &self.validation).map_err(map_decode_error)?;
-        // RFC 9068 §4: the resource server "MUST verify that the `typ` header
-        // value is `at+jwt` or `application/at+jwt` and reject tokens carrying
-        // any other value". The media type is case-insensitive (RFC 9110 §8.3.1),
-        // and the check runs *after* the signature so an unsigned header can
-        // never steer it.
-        //
-        // `explicit_typing` is the opt-out for an issuer that predates the
-        // profile, so with it off a plain `typ: JWT` — or none — verifies.
-        //
-        // What it never relaxes is the framework's own reserved namespace. A
-        // handshake token ([`sign_handshake`](Self::sign_handshake)) is minted
-        // by *this* service for another purpose entirely, so accepting one as a
-        // credential would be the confusion RFC 9068 §2.1 names, arriving
-        // through the legacy hatch. Two conditions, two answers.
+    ///
+    /// Against a JWK Set it may wait on one fetch of the set, bounded by
+    /// [`JWKS_FETCH_TIMEOUT`](crate::JWKS_FETCH_TIMEOUT); a set that cannot be
+    /// had is [`AuthError::Unavailable`], never a verdict on the token. Against
+    /// a static key it never waits.
+    ///
+    /// A token its issuer bound to a key (`cnf`, RFC 7800 §3) is
+    /// [`AuthError::SenderConstrained`]: this service reads a bearer token,
+    /// which proves no key, so honouring it as one would drop the binding.
+    pub async fn verify<C: DeserializeOwned>(&self, token: &str) -> Result<C, AuthError> {
+        let data = match &self.verifier {
+            Verifier::Static {
+                key, validation, ..
+            } => decode::<C>(token, key, validation).map_err(map_decode_error)?,
+            Verifier::Jwks { set, validations } => {
+                // The header is unsigned: it only picks among what the verifier
+                // already accepts, and the signature then has to hold.
+                let header = decode_header(token).map_err(map_decode_error)?;
+                let Some((algorithm, validation)) = Algorithm::from_jwt(header.alg)
+                    .and_then(|named| validations.iter().find(|(accepted, _)| *accepted == named))
+                else {
+                    return Err(AuthError::InvalidAlgorithm);
+                };
+                let key = set.key_for(header.kid.as_deref(), *algorithm).await?;
+                decode::<C>(token, &key, validation).map_err(map_decode_error)?
+            }
+        };
+        // RFC 9068 §4, case-insensitive (RFC 9110 §8.3.1), checked after the
+        // signature so an unsigned header never steers it. `explicit_typing` off
+        // relaxes the `at+jwt` check, never the reserved handshake namespace.
         let typ = data.header.typ.as_deref();
         if typ.is_some_and(is_reserved_handshake_typ) {
             return Err(AuthError::InvalidToken);
@@ -388,6 +805,9 @@ impl JwtService {
                 return Err(AuthError::InvalidToken);
             }
         }
+        if confirms_a_key(token) {
+            return Err(AuthError::SenderConstrained);
+        }
         Ok(data.claims)
     }
 
@@ -395,27 +815,31 @@ impl JwtService {
     /// for one of its own flows (an OAuth transaction cookie), never a
     /// credential a resource server should accept.
     ///
-    /// RFC 8725 §3.11 (explicit typing) is the whole mechanism: `typ` names the
-    /// purpose, so [`verify`](Self::verify) refuses this token and
+    /// `typ` names the purpose (RFC 8725 §3.11): [`verify`](Self::verify)
+    /// refuses this token whatever `explicit_typing` is, and
     /// [`verify_handshake`](Self::verify_handshake) refuses an access token.
-    /// Without it a handshake value signed by this service is stamped `at+jwt`
-    /// with the deployment's `aud`/`iss` — which is precisely the confusion
-    /// RFC 9068 §2.1 introduced the media type to prevent.
+    /// `purpose` names the flow (`"oauth-tx"`); the reserved media type is built
+    /// from it.
     ///
-    /// `purpose` names the flow (`"oauth-tx"`); the media type is built from it
-    /// as `<prefix><purpose>+jwt`, so every handshake type this framework mints
-    /// lands in one reserved namespace [`verify`](Self::verify) refuses
-    /// **whatever `explicit_typing` is set to**. Building the type here rather
-    /// than taking it whole is what makes that guarantee the framework's
-    /// instead of each caller's.
+    /// The token carries the stamps [`sign`](Self::sign) does but `exp`, which
+    /// `claims` name themselves with [`expiry_in`](Self::expiry_in): claims
+    /// carrying none are refused rather than given the access-token lifetime,
+    /// and their registered claims are held to their JSON types as `sign`'s are.
     pub fn sign_handshake<C: Serialize>(
         &self,
         purpose: &str,
         claims: &C,
-    ) -> Result<String, AuthError> {
-        let mut header = self.header.clone();
+    ) -> Result<String, SignError> {
+        let signer = self.signer()?;
+        let mut header = signer.header.clone();
         header.typ = Some(handshake_typ(purpose));
-        self.encode_with(&header, claims)
+        self.encode_with(
+            signer,
+            &header,
+            typed_payload_of(claims)?,
+            None,
+            Lifetime::Claims,
+        )
     }
 
     /// Verify a handshake token minted by [`sign_handshake`](Self::sign_handshake)
@@ -424,13 +848,22 @@ impl JwtService {
     /// The type check is unconditional — a flow's separation from access tokens
     /// cannot depend on a configuration flag — and it is exact, so a
     /// transaction minted for one flow does not verify on another's.
+    ///
+    /// A handshake verifies only under the static key that signs this
+    /// deployment's own: a service verifying an issuer's JWK Set mints none, and
+    /// refuses as [`sign_handshake`](Self::sign_handshake) does.
     pub fn verify_handshake<C: DeserializeOwned>(
         &self,
         purpose: &str,
         token: &str,
     ) -> Result<C, AuthError> {
-        let data =
-            decode::<C>(token, &self.decoding, &self.validation).map_err(map_decode_error)?;
+        let Verifier::Static { key, handshake, .. } = &self.verifier else {
+            return Err(AuthError::failed(
+                "this JwtService verifies an issuer's JWK Set — it verifies no handshake of \
+                 this deployment's own",
+            ));
+        };
+        let data = decode::<C>(token, key, handshake).map_err(map_decode_error)?;
         let found = data.header.typ.as_deref().unwrap_or_default();
         if !found.eq_ignore_ascii_case(&handshake_typ(purpose)) {
             return Err(AuthError::InvalidToken);
@@ -438,17 +871,13 @@ impl JwtService {
         Ok(data.claims)
     }
 
-    /// Absolute `exp` for a token minted now with the default TTL — the value
-    /// callers put in a claims struct's `exp` field.
-    pub fn expiry(&self) -> u64 {
-        get_current_timestamp() + self.expires_in.as_secs()
-    }
-
     /// Absolute `exp` for a token that should live exactly `secs` seconds —
-    /// used for short-lived handshake tokens (e.g. the OAuth transaction) that
-    /// must not inherit the full access-token TTL.
+    /// a short-lived handshake token (the OAuth transaction), whose claims must
+    /// name it: [`sign_handshake`](Self::sign_handshake) stamps no lifetime.
+    ///
+    /// Saturates rather than wrapping: a wrapped sum would mint a token already expired.
     pub fn expiry_in(&self, secs: u64) -> u64 {
-        get_current_timestamp() + secs
+        get_current_timestamp().saturating_add(secs)
     }
 
     /// The configured default token lifetime, in seconds — e.g. to report a
@@ -456,6 +885,151 @@ impl JwtService {
     pub fn ttl_secs(&self) -> u64 {
         self.expires_in.as_secs()
     }
+}
+
+/// The service a suite forges tokens with, held to everything
+/// [`JwtService::new`] holds but the issuer and the audience, which a token it
+/// forges carries only where `options` name them.
+pub fn forger(options: JwtOptions) -> Result<JwtService, AuthError> {
+    JwtService::build(options, None, Holds::Nothing)
+}
+
+/// `claims` signed as `jwt` signs an access token, naming a subject or none as
+/// written: what a suite forges for a verifier to refuse.
+pub fn sign_unchecked<C: Serialize>(jwt: &JwtService, claims: &C) -> Result<String, SignError> {
+    let signer = jwt.signer()?;
+    jwt.encode_access_token(signer, payload_of(claims)?, None)
+}
+
+/// `claims` as what a JWT's payload is: a JSON object (RFC 7519 §7.2).
+fn payload_of<C: Serialize>(claims: &C) -> Result<Map<String, Value>, SignError> {
+    match serde_json::to_value(claims) {
+        Ok(Value::Object(payload)) => Ok(payload),
+        Ok(_) => Err(SignError::new("the claims serialize to no JSON object")),
+        Err(e) => Err(SignError::because("the claims could not be serialized", e)),
+    }
+}
+
+/// [`payload_of`], every registered claim it carries held to its JSON type and
+/// one it holds as `null` left out.
+fn typed_payload_of<C: Serialize>(claims: &C) -> Result<Map<String, Value>, SignError> {
+    let mut payload = payload_of(claims)?;
+    held_to_their_types(&mut payload)?;
+    Ok(payload)
+}
+
+/// `claims` as an access token's payload, each registered claim held to its
+/// JSON type, its `sub` theirs or, when they carry none, their actor, and its
+/// `client_id` theirs: RFC 9068 §2.2 requires both, strings by RFC 7519 §4.1.2
+/// and RFC 8693 §4.3, and a blank one names no one.
+fn an_access_token_of<C: Serialize + PrincipalIdentity>(
+    claims: &C,
+) -> Result<Map<String, Value>, SignError> {
+    let mut payload = typed_payload_of(claims)?;
+    if !names(&payload, "sub") {
+        let Some(actor) = claims.actor_id().filter(|actor| !actor.trim().is_empty()) else {
+            return Err(SignError::new(
+                "the claims name no subject: RFC 9068 §2.2 requires `sub`, which their \
+                 `actor_id` supplies when they carry none",
+            ));
+        };
+        payload.insert("sub".to_owned(), actor.into());
+    }
+    if !names(&payload, "client_id") {
+        return Err(SignError::new(
+            "the claims name no client: RFC 9068 §2.2 requires `client_id`, the client the \
+             token is issued to — a user's token names the client the user signed in through",
+        ));
+    }
+    Ok(payload)
+}
+
+/// Whether `payload` holds `claim` as a string that is not blank.
+fn names(payload: &Map<String, Value>, claim: &str) -> bool {
+    payload
+        .get(claim)
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+/// Refused, naming the settings it lacks, when `options` leave nothing to check
+/// a token's `iss` against among `issuers`, or its `aud` against: RFC 9068 §4
+/// has a resource server check both, and §2.2 has every access token carry
+/// both. [`JwtOptions::allow_any_audience`] stands in for the audience.
+fn names_what_it_checks(options: &JwtOptions, issuers: &[String]) -> Result<(), AuthError> {
+    let lacking: Vec<_> = [
+        issuers
+            .is_empty()
+            .then_some(("no issuer", AuthnConfig::ISSUER)),
+        (options.audience.is_none() && !options.allow_any_audience)
+            .then_some(("no audience", AuthnConfig::AUDIENCE)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if lacking.is_empty() {
+        return Ok(());
+    }
+    let named = lacking
+        .iter()
+        .map(|(what, _)| *what)
+        .collect::<Vec<_>>()
+        .join(" and ");
+    let settings = lacking
+        .iter()
+        .map(|(_, field)| crate::config::spellings(*field))
+        .collect::<Vec<_>>()
+        .join(", and ");
+    Err(AuthError::failed(format!(
+        "this JwtService names {named}: RFC 9068 §2.2 has every access token carry the `iss` \
+         and the `aud` it is minted under, and §4 has a resource server refuse a token naming \
+         another or none — set {settings}"
+    )))
+}
+
+/// The one claim a bearer token's verification reads besides what the claims
+/// type does.
+#[derive(Deserialize)]
+struct Confirmation {
+    cnf: Option<IgnoredAny>,
+}
+
+/// Whether `token`, whose signature already held, carries `cnf`. Read off the
+/// payload, as the claims type may not name it; what does not read as one is
+/// no token to serve.
+fn confirms_a_key(token: &str) -> bool {
+    token
+        .split('.')
+        .nth(1)
+        .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
+        .and_then(|payload| serde_json::from_slice::<Confirmation>(&payload).ok())
+        .is_none_or(|payload| payload.cnf.is_some())
+}
+
+/// The validation every token meets, for one `algorithm`, its `iss` one of
+/// `issuers` when any.
+fn validation(options: &JwtOptions, algorithm: Algorithm, issuers: &[String]) -> Validation {
+    let mut validation = Validation::new(algorithm.jwt());
+    // Pinned, not left to a library default a future version could flip.
+    validation.validate_exp = true;
+    validation.validate_nbf = true;
+    validation.leeway = options.leeway.as_secs();
+    // RFC 7519 §4.1.3 is jsonwebtoken's `validate_aud`: on whether or not an
+    // audience is configured, so an unconfigured verifier still refuses a
+    // token minted for a sibling service by the shared issuer.
+    validation.validate_aud = !options.allow_any_audience;
+    // `set_audience`/`set_issuer` only compare a claim the token carries;
+    // requiring it makes an omitting token fail closed.
+    if let Some(aud) = &options.audience {
+        validation.set_audience(&[aud.as_str()]);
+        validation.required_spec_claims.insert("aud".to_owned());
+    }
+    if !issuers.is_empty() {
+        validation.set_issuer(issuers);
+        validation.required_spec_claims.insert("iss".to_owned());
+    }
+    // No `iss` twin of `validate_aud`: RFC 7519 §4.1.1 states no such clause.
+    validation
 }
 
 fn map_decode_error(err: jsonwebtoken::errors::Error) -> AuthError {
@@ -466,11 +1040,114 @@ fn map_decode_error(err: jsonwebtoken::errors::Error) -> AuthError {
         ErrorKind::ImmatureSignature => AuthError::NotYetValid,
         _ => AuthError::InvalidToken,
     };
-    // The guard layer (`AuthnGuard::check_http`) emits the single `warn` for an
-    // authentication failure with strategy + route context; this stays `debug`
-    // so the typed decode reason is available without double-counting denials.
+    // `AuthnGuard` files the one `warn` per failure; this stays `debug`.
     if !matches!(mapped, AuthError::Expired) {
-        tracing::debug!(target: crate::TARGET, error = %err, "JWT verification failed");
+        // A claim that does not decode is said without the value serde quotes.
+        let error = match err.kind() {
+            ErrorKind::Json(json) => format!(
+                "the token's JSON does not decode: {}",
+                nest_rs_core::DecodeError::new(json)
+            ),
+            _ => nest_rs_core::error_message(&err),
+        };
+        tracing::debug!(target: crate::TARGET, error = %error, "JWT verification failed");
     }
     mapped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SECRET: &str = "0123456789abcdef0123456789abcdef";
+
+    /// `options` naming the issuer and the audience a service requires.
+    fn named(mut options: JwtOptions) -> JwtOptions {
+        options.issuer = Some("https://auth.example".into());
+        options.audience = Some("https://api.example".into());
+        options
+    }
+
+    fn refusal(options: JwtOptions) -> String {
+        match JwtService::new(options) {
+            Err(refused @ AuthError::Failed { .. }) => nest_rs_core::error_message(&refused),
+            Err(other) => panic!("refused as {other:?}"),
+            Ok(_) => panic!("built"),
+        }
+    }
+
+    /// RFC 8725 §3.1: what a JWK Set verifies is the verifier's, and no HMAC
+    /// algorithm is among it — the set is public.
+    #[test]
+    fn a_jwk_set_never_accepts_an_hmac_algorithm() {
+        for hmac in [Algorithm::HS256, Algorithm::HS384, Algorithm::HS512] {
+            let mut options = JwtOptions::jwks("https://issuer.example/jwks");
+            options.algorithms = vec![Algorithm::RS256, hmac];
+            let refused = refusal(options);
+            assert!(
+                refused.contains("algorithm cannot be used with a JWK Set"),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_jwk_set_accepts_every_asymmetric_algorithm_by_default() {
+        let options = JwtOptions::jwks("https://issuer.example/jwks");
+        assert_eq!(options.algorithms.len(), 9, "{:?}", options.algorithms);
+        assert!(
+            options
+                .algorithms
+                .iter()
+                .all(|algorithm| algorithm.family() != Family::Hmac)
+        );
+        JwtService::new(named(options)).expect("the default set fits a JWK Set");
+    }
+
+    #[test]
+    fn a_list_of_algorithms_reads_as_a_sentence() {
+        assert_eq!(
+            one_of(algorithms_of(&[Family::Hmac])),
+            "HS256, HS384 or HS512"
+        );
+        assert_eq!(one_of(algorithms_of(&[Family::Ed])), "EdDSA");
+    }
+
+    #[test]
+    fn a_static_key_signs_with_one_algorithm() {
+        let mut options = JwtOptions::new(SECRET.repeat(2));
+        options.algorithms = vec![Algorithm::HS256, Algorithm::HS512];
+        let refused = refusal(options);
+        assert!(
+            refused.contains("names 2 algorithms") && refused.contains("ALGORITHMS"),
+            "{refused}"
+        );
+
+        let mut repeated = JwtOptions::new(SECRET);
+        repeated.algorithms = vec![Algorithm::HS256, Algorithm::HS256];
+        JwtService::new(named(repeated)).expect("a repeat is one algorithm");
+    }
+
+    #[test]
+    fn no_algorithm_at_all_is_refused() {
+        let mut options = JwtOptions::jwks("https://issuer.example/jwks");
+        options.algorithms.clear();
+        assert!(refusal(options).contains("names no algorithm"));
+    }
+
+    /// The service a JWK Set backs mints nothing — handshakes included.
+    #[test]
+    fn a_jwk_set_service_signs_nothing() {
+        let jwt =
+            JwtService::new(named(JwtOptions::jwks("https://issuer.example/jwks"))).expect("built");
+        assert!(sign_unchecked(&jwt, &serde_json::json!({})).is_err());
+        assert!(
+            jwt.sign_handshake("oauth-tx", &serde_json::json!({}))
+                .is_err()
+        );
+        assert!(matches!(
+            jwt.verify_handshake::<serde_json::Value>("oauth-tx", "a.b.c"),
+            Err(AuthError::Failed { .. })
+        ));
+    }
 }

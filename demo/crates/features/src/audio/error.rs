@@ -1,9 +1,5 @@
-use nest_rs::http::ProblemDetails;
 use nest_rs::queue::QueueError;
 use nest_rs::storage::StorageError;
-use poem::error::ResponseError;
-use poem::http::StatusCode;
-use poem::{IntoResponse, Response};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
@@ -11,19 +7,8 @@ pub enum AudioError {
     Storage(#[from] StorageError),
     #[error("audio queue operation failed")]
     Queue(#[from] QueueError),
-}
-
-impl ResponseError for AudioError {
-    fn status(&self) -> StatusCode {
-        StatusCode::INTERNAL_SERVER_ERROR
-    }
-
-    fn as_response(&self) -> Response {
-        tracing::error!(target: "features::audio", error = ?self, "audio operation failed");
-        ProblemDetails::from_status(StatusCode::INTERNAL_SERVER_ERROR)
-            .with_detail(self.to_string())
-            .into_response()
-    }
+    #[error("audio transcode record operation failed")]
+    Transcodes(#[from] redis::RedisError),
 }
 
 #[cfg(test)]

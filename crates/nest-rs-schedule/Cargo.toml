@@ -13,26 +13,37 @@ categories = ["asynchronous"]
 
 [dependencies]
 nest-rs-core.workspace = true
-nest-rs-worker.workspace = true
+# Each tick is a unit of work the scheduler runs through the bound
+# `dyn UnitOfWork`, resolved once at boot; `TransactionPolicy` is what the
+# `transactional` key selects.
+nest-rs-database.workspace = true
 nest-rs-schedule-macros.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-# FutureExt::catch_unwind isolates a panicking `fire` so one bad job never
-# silently kills its schedule (mirrors the queue's CatchPanicLayer).
+# `join_all`: an overrun asks its lock about every skipped occurrence at once.
 futures-util.workspace = true
 tracing.workspace = true
-croner.workspace = true
-chrono.workspace = true
-chrono-tz.workspace = true
+# `OccurrenceLockError`, the opaque failure a lock backend reports.
+thiserror.workspace = true
+croner = { workspace = true, features = ["jiff"] }
+jiff.workspace = true
+jiff-tzdb.workspace = true
 
 [dev-dependencies]
-# Pins the wording of the `on_provider` wrong-shape diagnostic: the rule is
-# that it names the sibling decorator, and only a snapshot keeps it there.
-trybuild.workspace = true
 # Raising SIGINT to exercise App::run's graceful-shutdown path end-to-end.
 libc.workspace = true
 # `LogCapture`: a schedule reports a job it could not settle by logging it and
 # firing again, so the log *is* the outcome and only a capture can assert it.
 nest-rs-testing = { path = "../nest-rs-testing" }
+# `test-util` (not part of tokio's `full`) pauses time, so a lock that never
+# answers is abandoned at its occurrence's stale threshold — most of a minute —
+# without the suite waiting that minute out.
+tokio = { workspace = true, features = ["test-util"] }
+# Pins the decorators' compile-time copy of the `key` rule against the boot's
+# (tests/integration/scheduler.rs).
+nest-rs-codegen = { path = "../nest-rs-codegen" }
+
+[lints]
+workspace = true

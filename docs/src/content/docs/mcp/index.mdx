@@ -17,8 +17,11 @@ ambient ability — your tools live next to your controllers, not in a sidecar.
 
 That ambient ability covers **every** MCP capability, not tools alone. A
 prompt fetch, a resource read, a completion, a `tasks/*` call: each runs inside
-the caller's request scope, with the caller's ability installed and the
-operation's transaction around it. A handler writes no check on any of them.
+the caller's request scope, with the operation's transaction around it, and a
+handler writes no check on any of them. A declared operation's reads run under
+the caller's ability where its posture names what it reads, and read nothing a
+grant guards where it names nothing ([Authorization](/mcp/authorization/)); a
+host writing rmcp's handler by hand [reads under it too](/mcp/resources-and-prompts/#what-stays-hand-written).
 
 `nest-rs-mcp` builds on [rmcp](https://docs.rs/rmcp) 3.x — the framework wraps
 it so a server is an `#[injectable]` struct that self-mounts on the HTTP
@@ -32,9 +35,12 @@ cargo add nest-rs --features mcp
 ```
 
 The `mcp` feature pulls the HTTP transport the endpoint mounts on and the guard
-surface that gates it — including the fallback operation guard that lets a
-registered global pool gate `/mcp` instead of the endpoint staying deny-all.
-None of that is a line you write.
+surface that gates it: the transport runs the global pool and the endpoint's
+guards at every `/mcp` request, so `/mcp` is gated by them instead of staying
+deny-all.
+None of that is a line you write. Add `authz` when a tool carries
+`#[authorize]`, or `seaorm`, which implies it; the decorator names the feature
+when it is missing.
 
 `rmcp` is not a dependency either, and it is not an import: `#[tools]` emits
 the SDK's own macros inside generated code that carries its own scope. That keeps
@@ -47,7 +53,8 @@ A host that needs the raw SDK reaches it through `nest_rs::mcp::rmcp`.
 The fastest way to see the shape: one tool, one string in, one string out.
 
 ```rust title="crates/features/src/hello/mcp/tool.rs"
-use nest_rs::mcp::{McpError, Parameters, input, mcp, tools};
+use nest_rs::mcp::{McpError, Parameters, mcp, tools};
+use nest_rs::core::input;
 
 #[input]
 pub struct HelloParams {
@@ -68,40 +75,66 @@ impl HelloTool {
 }
 ```
 
-Every operation declares its access posture, and one of the two forms is
-**required** — `#[public]` here because a greeting gates nothing. An operation
-nobody thought about does not compile, rather than shipping ungated to a model.
-[Authorization](/mcp/authorization/) covers the other form.
+`#[public]` is the operation's access posture: a greeting gates nothing and reads
+nothing a grant guards, so a caller with no credential is admitted. On an endpoint the app's guards
+authenticate an operation needs no posture of its own, as a route needs none under
+a guard, and [Authorization](/mcp/authorization/) covers the form that gates one.
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
-default**. The endpoint gates through the app's `dyn McpOperationGuard`; with
-none registered it falls back to the global guard pool
-(`App::builder().use_guards_global(...)`), and with no pool either it is
+default**. Its request runs the global guard pool
+(the `GlobalGuards<(...)>` the module the app boots declares) and the
+[endpoint guards](/security/authorization/endpoint-guards/) the app's modules
+declare for it, either alone when the other is missing, and with neither it is
 **deny-all** — every request answers `401`, so a schema-added tool can never
-leak unauthenticated.
+leak unauthenticated. The boot says so once, on `nest_rs::layers`:
 
-Which posture you got is in the boot line: `mode="deny_all"` with nothing
-registered, `mode="global_guard_pool"` once a pool is.
-
-A *deliberately* public tool has to say so, by binding `AllowAllMcpGuard`:
-
-```rust title="crates/features/src/hello/module.rs"
-use nest_rs::core::module;
-use nest_rs::mcp::{AllowAllMcpGuard, McpOperationGuard};
-
-use crate::hello::tool::HelloTool;
-
-#[module(providers = [
-    HelloTool,
-    AllowAllMcpGuard as dyn McpOperationGuard,
-])]
-pub struct HelloModule;
+```text frame="terminal"
+WARN nest_rs::layers: no guard at the request surface="mcp" path="/mcp" then="denies every unit" hint="list `GlobalGuards<(...)>` in the providers of the module the app boots, bind `#[use_guards(...)]` on a controller or a gateway, `EndpointGuards<View, (...)>` on an endpoint carrying units, or open it on purpose: `#[public]` on a route, a message or a GraphQL operation, `McpModule::for_root(McpAccess::Public)` on an MCP endpoint. A guard that identifies no one, a rate limit or one of your own declaring no `phase()`, covers nothing: declare its `GuardPhase::Authentication` or `Authorization`, or write `#[public]`"
 ```
 
-`#[mcp]` mounts it on the existing HTTP transport — same port, same CORS, no
-second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
-tool called `hello` and can invoke it. (To authenticate instead of opening it,
-see [Authorization](/mcp/authorization/).)
+A `#[public]` operation there could open nothing, so the boot refuses it and names
+the opening below, which `HelloTool` takes.
+
+The feature's MCP adapter lists its tool like any provider. `#[mcp]` brings
+`McpModule` bare, which reads the endpoint's settings from `<PREFIX>_MCP__*`
+([MCP configuration](/mcp/configuration/)) and brings `HttpModule`, the server
+the endpoint mounts on:
+
+```rust title="crates/features/src/hello/mcp/module.rs"
+use nest_rs::core::module;
+
+use super::tool::HelloTool;
+
+#[module(providers = [HelloTool])]
+pub struct HelloMcpModule;
+```
+
+A *deliberately* public endpoint has to say so, where the app is composed:
+
+```rust title="apps/assistant/src/module.rs"
+use nest_rs::core::module;
+use nest_rs::mcp::{McpAccess, McpModule};
+
+use features::hello::HelloMcpModule;
+
+#[module(imports = [
+    McpModule::for_root(McpAccess::Public),
+    HelloMcpModule,
+])]
+pub struct AssistantModule;
+```
+
+A public `/mcp` runs no guard at its request, the global pool's included, so the
+opening belongs where the app is composed, never in a feature crate another app
+might import — and a module declaring guards for the endpoint beside it fails
+the boot rather than seeing them dropped. Every operation it serves states its
+posture, `#[public]`, `#[public(Action, Subject)]` or `#[authorize(Action, Subject)]`:
+no guard covers it there, and one stating none fails the boot too. The opening is made at one import: a
+second `McpModule::for_root` opening the endpoint fails the boot naming both,
+even when the two agree. `#[mcp]` mounts the tool on the existing HTTP transport —
+same port, same CORS, no second server. An MCP client pointed at
+`http://localhost:3003/mcp` sees one tool called `hello` and can invoke it. (To
+authenticate instead of opening it, see [Authorization](/mcp/authorization/).)
 
 Two decorators, one per item shape:
 
@@ -109,16 +142,27 @@ Two decorators, one per item shape:
   a streamable-HTTP endpoint on the HTTP transport, at `/mcp`. An optional
   `path` serves a different URL instead — write it whole, the way a client
   config carries it.
-- **`#[tools]` on the impl** declares the operations. Every `#[tool]` and
-  `#[prompt]` method is mounted, and the endpoint's advertised capabilities are
-  derived from the roles present — you cannot serve a tool you forgot to
-  declare. An operation declares the same request layers a `#[query]` does:
-  `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`, and a pipe on its
-  arguments.
+- **`#[tools]` on the impl** declares the operations. Every `#[tool]`,
+  `#[prompt]`, `#[resource]` and `#[resources]` method is mounted, and the
+  endpoint's advertised capabilities are derived from the roles present — you cannot serve a tool you forgot to
+  declare. An operation declares the same request layers a route does:
+  `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`,
+  `#[use_exception_filters(...)]`, `#[use_interceptors(...)]`, a pipe on its
+  arguments, a `Scoped<T>` parameter and an `Ambient<T>` one — see
+  [Layers around an operation](#layers-around-an-operation). An operation
+  answers a `Result`, known by its type: it fails with whatever error it
+  holds — an `McpError`, a domain error — answered by that type, an alias
+  such as `type Publishing<T> = Result<T, PublishError>` serves as well as the
+  spelled one, and a `String` is refused at the return type. One reading goes
+  by the spelling: rmcp derives a tool's output schema only from a return
+  spelled `Result<Json<T>, …>`.
 - **The description is `#[tool(description = "…")]`** — the sentence the model
   reads to pick this tool, so it is a value the decorator compiles in rather
   than commentary. Write a doc comment instead and it is used as a fallback, so
   the prose is never written twice; write **neither and it does not compile**.
+  A blank one is none: `description = "  "`, and a doc line or a stated value
+  the compiler evaluates — `include_str!` of an empty file, a `concat!` of
+  spaces, a constant — fails the build with the same sentence.
 
 The struct can take `#[inject]` fields like any other provider — `HelloTool` has
 none, real servers usually do.
@@ -133,9 +177,8 @@ $ nestrs run dev assistant
 ```
 
 ```text frame="terminal"
-INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
-DEBUG nest_rs::mcp: mcp operations gated mode="operation_guard"
-INFO nest_rs::http: transport listening addr=0.0.0.0:3003 tls=false
+INFO nest_rs::routes: mounted endpoint surface="mcp" host="McpModule" path="/mcp"
+INFO nest_rs::app: app ready transports="http" addresses="0.0.0.0:3003"
 ```
 
 Point an MCP-aware client at `http://localhost:3003/mcp`. With Claude Code, add
@@ -157,129 +200,100 @@ round trip — client → `/mcp` → your `#[tool]` method → response — is t
 surface. You have a running assistant, discovered and wired like any other
 provider.
 
-## Multiple tools on one server
+Several tools on one server, and arguments refused before a body runs, are on
+[MCP tools](/mcp/tools/).
 
-Each `#[tool]` method becomes its own callable. Share state through `&self` —
-`#[inject]` once, every tool reuses it.
+## Layers around an operation
 
-```rust title="crates/features/src/weather/mcp/tool.rs"
-#[mcp(path = "/mcp/weather")]
+Every request a client sends is an operation of its own — its span, its line,
+its unit of work — run on the same pipeline as a route. A tool call, a prompt
+fetch, a resource read and a listing run the layers their host and their
+method bind, then the app's,
+each family once: the guards' `check`, the posture's gate, the exception
+filters, the interceptors, then the pipes, the `Scoped<T>` and `Ambient<T>`
+parameters and the body, whose answer is written inside the operation, for the
+caller its site answers. A layer reads the operation through `McpView`:
+
+```rust title="crates/features/src/posts/mcp/tool.rs"
+#[mcp(path = "/mcp/posts")]
+#[use_interceptors(ToolMetrics)]
 #[derive(Clone)]
-pub struct WeatherTool {
+pub struct PostsTool {
     #[inject]
-    svc: Arc<dyn WeatherService>,
+    svc: Arc<PostsService>,
 }
 
 #[tools]
-impl WeatherTool {
-    #[tool(description = "Return the current temperature for a city.")]
-    #[public]
-    async fn current_temperature(
-        &self,
-        Parameters(p): Parameters<CityParams>,
-    ) -> Result<String, McpError> {
-        let t = self.svc.current(&p.city).await.opaque()?;
-        Ok(format!("{t:.1}°C"))
-    }
-
-    #[tool(description = "Return the forecast for a city, N days out.")]
-    #[public]
-    async fn forecast(
-        &self,
-        Parameters(p): Parameters<ForecastParams>,
-    ) -> Result<String, McpError> {
-        let f = self.svc.forecast(&p.city, p.days).await.opaque()?;
-        Ok(f.summary())
+impl PostsTool {
+    #[tool(description = "Publish the caller's open draft under its slug.")]
+    #[authorize(Create, post::Entity)]
+    #[use_exception_filters(SlugTakenFilter)]
+    async fn publish_draft(&self, draft: Scoped<Draft>) -> Result<String, PublishError> {
+        self.svc.publish(&draft).await
     }
 }
 ```
 
-The client now sees two tools — `current_temperature` and `forecast` — both
-sharing the injected `WeatherService`. The `description` is what the model
-reads to decide when to call each.
+`cx.switch_to::<McpView>()` answers the JSON-RPC method (`method()`), the
+router serving it (`kind()`), the tool, prompt or listing it names, or the
+template a resource is read through (`name()`), and the host declaring it
+(`host()`). `publish_draft` fails with the domain's own
+`PublishError`: `SlugTakenFilter` reads it as that type and may answer a
+problem — a `409` is `invalid_request` with `data.code: "CONFLICT"` — and an
+error no filter answers is rendered by its type: a `ToProblem` error says its
+problem, any other is answered opaquely, its chain filed at `error`. A filter
+answers what the client reads, never whether the operation failed: its unit of
+work rolls back either way.
 
-## A validated tool
+`Scoped<T>` resolves an `#[injectable(scope = request)]` provider from the
+`/mcp` request's scope, once the guards and the gate admitted the caller. It is
+checked at boot like an `#[inject]` field: a provider no imported module
+offers fails the boot rather than the first call. A host writing rmcp's handler
+by hand reads `nest_rs::core::current_request_scope()` instead.
 
-Tool inputs are deserialized to a typed struct, so the schema the client reads
-is already typed. For extra checks beyond shape — ranges, enums, mutual
-exclusion — add `validate(...)` attributes: `#[input]` already carries the
-`validator` derive, so no extra import and no extra manifest line.
+`Ambient<T>` reads what a guard attached — the principal the `/mcp` request's
+guards verified, or what a guard bound on the operation derived from it — as a
+route reads it. Neither parameter is an argument of the tool: the input schema
+a client lists names neither, and an absent value answers opaquely, its type
+filed at `error` — but for the principal a guard there produces: on a
+`#[public]` operation, a caller that guard did not identify is refused
+`UNAUTHENTICATED`.
 
-```rust title="crates/features/src/weather/coords.rs"
-use nest_rs::mcp::input;
+The app's own interceptors (`GlobalInterceptors`) run around every operation
+`#[tools]` declares too, outermost, after the guards. An `#[interceptor(stage = unit)]` serving MCP runs once
+around every request — a listing, a handshake, a tool call alike, one naming
+no declared tool included — before rmcp decodes it; `Layer::serves` reads the unit, `nest_rs::mcp::unit::OPERATION`.
+Every operation's layers are composed at boot, so one that no module provides,
+or two `#[meta]` values of one type on one operation, fail the boot.
 
-#[derive(Debug)]
-#[input]
-pub struct Coords {
-    #[validate(range(min = -90.0, max = 90.0))]
-    pub latitude: f64,
-
-    #[validate(range(min = -180.0, max = 180.0))]
-    pub longitude: f64,
-}
-```
-
-Wrap the arguments in `Valid<T>` and the check runs before the body — the same
-[pipe](/fundamentals/pipes/) binding GraphQL, WebSockets and queue handlers use:
-
-```rust title="crates/features/src/weather/mcp/tool.rs (abridged)"
-#[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
-#[public]
-async fn current_weather(
-    &self,
-    Parameters(params): Parameters<Valid<Coords>>,
-) -> Result<String, McpError> {
-    let params = params.into_inner();
-    let report = self.svc
-        .current(params.latitude, params.longitude)
-        .await
-        .opaque()?;
-
-    Ok(report.summary())
-}
-```
-
-`JsonSchema` derives the schema sent to the client — from `Coords`, not from the
-carrier, so a client never sees `Valid` — and a rejection answers
-`invalid_params` carrying the field errors, which is the one MCP error a model
-can act on:
-
-```json
-{"code":-32602,"message":"validation failed",
- "data":{"latitude":[{"code":"range"}]}}
-```
-
-`Piped<P, T>` runs any [pipe](/fundamentals/pipes/) in the same slot when the
-argument needs transforming rather than validating.
-
-## Failing without leaking
-
-A tool body talks to a **language model**, and an error's `Display` is handed to
-it verbatim: a `DbErr` carries schema, column names and sometimes row values.
-So a failure the model has no business reading goes through `opaque`:
-
-```rust title="crates/features/src/weather/mcp/tool.rs"
-let rows = self.svc.list().await.opaque()?;
-```
-
-The real error is logged at `error` on `nest_rs::mcp`, inside rmcp's own
-per-operation span; the model gets a constant `internal error`. A *deliberate*
-error is the opposite case — `McpError::invalid_params(...)` exists to be read,
-so return it directly and never route it through `opaque`.
+`#[mcp]` and `#[tools]` sit on a concrete type: each operation's site is a
+`static`, so a generic host does not compile.
 
 ## Trait-based DI
 
-Injecting `Arc<dyn WeatherService>` keeps the concrete provider
-module-private — a test app can swap in a stub by overriding the provider via
-`AppBuilder::override_dyn`. Same hexagonal pattern as the rest of the
+Injecting a trait — `Arc<dyn Upstream>` for a service the tool calls out to —
+keeps the concrete provider module-private: a test app swaps in a stub with
+`override_dyn::<dyn Upstream>(…)`, which every consumer then injects,
+the tool host and any service built at boot alike. Same hexagonal pattern as the rest of the
 framework: the tool depends on the trait, the impl lives behind the module,
 the access graph rejects accidental coupling at boot.
 
+## In this section
+
+### Basics
+
+- [MCP tools](/mcp/tools/) — several tools on one server, and validated inputs.
+- [MCP authorization](/mcp/authorization/) — the guards every request runs, and each operation's posture.
+
+### All options
+
+- [Endpoints](/mcp/endpoints/) — several features on one URL, and what the client is told the server is.
+- [Resources and prompts](/mcp/resources-and-prompts/) — `#[prompt]` and `#[resource]`, gated like a tool.
+- [MCP errors](/mcp/errors/) — what a failing operation answers the model, which repeats whatever an error says.
+- [MCP configuration](/mcp/configuration/) — the env keys, the operation timeout, sessions and the host allowlist.
+
 ## Going further
 
-- [Authorization](/mcp/authorization/) — the bridge every tool call is
-  gated by, and the posture each operation declares.
-- [Endpoints](/mcp/endpoints/) — several features on one URL, and what the
-  client is told the server is.
-- [Configuration](/mcp/configuration/) — the env keys, and how a failing
-  operation talks to a model.
+- [HTTP](/http/) — the transport an `#[mcp]` host self-mounts on.
+- [Authorization](/security/authorization/) — the ability every operation runs under.
+- [Driving the app](/testing/driving/) — a test posting to `/mcp` with a bearer its guards admit.

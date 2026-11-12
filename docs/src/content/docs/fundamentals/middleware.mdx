@@ -1,7 +1,6 @@
 ---
 title: Middleware
 description: NestRS has no middleware primitive — Guards and Interceptors cover the two roles. A short guide for readers looking for it.
-tier: all-options
 sidebar:
   order: 10
 ---
@@ -14,9 +13,13 @@ shape of each layer is explicit:
 
 - **Gate-and-context work** lives in **[Guards](/fundamentals/guards/)** —
   pre-handler, can short-circuit with a response, can attach typed
-  context the handler reads back via `Ctx<T>`.
+  context the handler reads back via `Ambient<T>`.
 - **Wrap-the-handler work** lives in **[Interceptors](/fundamentals/interceptors/)** —
   observe both sides, install ambient state, transform the response.
+- **Work around every request, before the access decision** — what a
+  pre-routing middleware usually does — is an interceptor its module declares
+  at the **unit stage**, `#[interceptor(stage = unit)]`: it sees every unit,
+  refusals and `404`s included.
 
 If you're looking for a place to put work the word "middleware" usually
 covers — logging, request id, rate limiting, auth, opening a transaction
@@ -27,13 +30,14 @@ covers — logging, request id, rate limiting, auth, opening a transaction
 | Role | NestRS primitive | Why |
 |------|------------------|-----|
 | Logging the request | **Interceptor** | Needs both sides (start time, end time, status) |
+| Timing every answer, refusals and `404`s included | **Unit-stage interceptor**, `#[interceptor(stage = unit)]` | Runs around the guards, so it sees what they refuse |
 | Adding a `X-Cache-Status` header to the response | **Interceptor** | Touches the response |
 | Authenticating the bearer token | **Guard** (`AuthnGuard`) | Short-circuit on 401, attach `Claims` for the handler |
 | Rate-limiting | **Guard** | Short-circuit on 429 before any work runs |
 | Parsing/normalizing the body | **Pipe** at the boundary | Pure transform, no DI |
-| Opening a database transaction | **Interceptor** (`DbContext`, auto-mounted) | Wraps the handler, commits/rolls back on exit |
+| Opening a database transaction | **Nothing to write** | Importing the database binding runs every request as a [unit of work](/database/transactions/), committed on its outcome |
 | Stamping a request / correlation id | **Nothing to write** | Every unit of work already runs under a [W3C trace](/fundamentals/correlation/) |
-| CORS, security headers | poem middleware, configured on `HttpConfig` | Lower-level than a Guard/Interceptor |
+| CORS, security headers | The transport, configured on `HttpConfig` | Lower-level than a Guard/Interceptor |
 
 The split is on purpose: "gate" and "wrap" are different shapes, the
 framework names them differently, and the request-layer ordering reflects
@@ -49,26 +53,26 @@ That's an interceptor.
 
 ```rust title="apps/api/src/interceptor.rs"
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct NoIndex;
-
-impl Layer for NoIndex {}
 
 #[async_trait]
 impl Interceptor for NoIndex {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        let mut resp = next.run(req).await?;
-        resp.headers_mut()
-            .insert("x-robots-tag", HeaderValue::from_static("noindex"));
-        Ok(resp)
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        if let Some(resp) = HttpView::of(cx).ok().and_then(HttpView::response_mut) {
+            resp.headers_mut()
+                .insert("x-robots-tag", HeaderValue::from_static("noindex"));
+        }
+        outcome
     }
 }
 ```
 
-Bind it globally — either by adding `#[interceptor]` on the struct
-(auto-mount on every route) or via
-`App::builder().use_interceptors_global([interceptor::<NoIndex>()])`
-in `main`.
+Bind it for the whole app by listing `GlobalInterceptors<(NoIndex,)>` in the
+providers of the module the app boots. It runs after the guards, so a refused
+request never reaches it; an interceptor that must see every answer, refusals
+and `404`s included, is declared `#[interceptor(stage = unit)]`.
 
 Do **not** write this one to stamp a correlation id: the framework already runs
 every request under a [trace](/fundamentals/correlation/) and reports it as
@@ -80,70 +84,92 @@ line or a queued job are filed under.
 That's a guard. Gate the request, return `Err(Denial)` on rejection.
 
 ```rust title="apps/api/src/guard.rs"
-use nest_rs::guards::prelude::*;
-use nest_rs::http::poem::Request as HttpRequest;
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
+use nest_rs::http::HttpView;
+use nest_rs::guards::GuardPhase;
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct RequireApiKey;
-
-impl Layer for RequireApiKey {}
 
 #[async_trait]
 impl Guard for RequireApiKey {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        if req.headers().get("x-api-key").is_some() {
-            Ok(())
-        } else {
-            Err(Denial::unauthorized("missing key"))
-        }
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
     }
-}
 
-impl HttpGuard for RequireApiKey {}
-```
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        HttpView::of(cx)?
+            .request()
+            .header("x-api-key")
+            .is_some()
+            .ok_or_else(|| Denial::unauthorized("missing key"))
+    }
 
-Bind with `#[use_guards(RequireApiKey)]` per controller or per handler,
-or globally via
-`App::builder().use_guards_global([guard::<RequireApiKey>()])`.
-
-### "I want to attach something to the request so the handler can read it."
-
-A guard does that too. The guard borrows the request mutably:
-
-```rust title="crates/features/src/authn/guard.rs"
-#[async_trait]
-impl Guard for AuthnGuard {
-    async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-        let claims = verify_bearer(req).map_err(|_| Denial::unauthorized("invalid token"))?;
-        req.extensions_mut().insert(claims);
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for AuthnGuard {}
-
-// In the handler:
-async fn me(&self, auth: Ctx<Claims>) -> Json<User> { /* ... */ }
+impl GuardFor<HttpView> for RequireApiKey {}
 ```
 
-See [Guards / Attach context](/fundamentals/guards/#attach-context-and-route-metadata).
+Bind with `#[use_guards(RequireApiKey)]` per controller or per handler,
+or globally by listing `GlobalGuards<(RequireApiKey,)>` in the module the app
+boots. The key is
+the request's, so `check_http` decides it, and `check` admits the GraphQL
+fields, WebSocket messages and MCP operations a checked request carries: the
+global pool runs `check` on each of them, where there is no HTTP request to
+read.
 
-## What about the raw poem middleware trait?
+### "I want to attach something to the request so the handler can read it."
 
-`nest-rs-http` builds on [poem](https://docs.rs/poem), and poem has its
-own `Middleware` trait. The framework exposes the named categories
-(Guard / Interceptor / Filter) layered over it. CORS, request-size
+A guard does that too: it attaches the value, which is ambient for the rest of
+the request once the guards passed:
+
+```rust title="crates/features/src/authn/guard.rs"
+#[async_trait]
+impl Guard for AuthnGuard {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let claims = verify_bearer(HttpView::of(cx)?.request())
+            .map_err(|_| Denial::unauthorized("invalid token"))?;
+        cx.attach(claims);
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for AuthnGuard {}
+
+// In the handler:
+async fn me(&self, auth: Ambient<Claims>) -> Json<User> { /* ... */ }
+```
+
+See [Guards / Attach context](/fundamentals/guard-context/#attach-context-and-route-metadata).
+
+## What about raw HTTP middleware?
+
+`nest-rs-http` serves requests itself, on [hyper](https://docs.rs/hyper),
+and has no lower-level middleware trait: the named categories
+(Guard / Interceptor / Exception filter) are the layers. CORS, request-size
 limits, body-decoding — those things live on `HttpConfig` and are
-applied as poem middleware by the transport, not as NestRS Guards or
+applied by the transport around every route, not as NestRS Guards or
 Interceptors.
 
-`nest-rs-http` owns the poem endpoint, which is what makes every layer
+`nest-rs-http` owns the endpoint, which is what makes every layer
 go through DI and the access graph — portable across controllers and
-checkable at boot. A third-party `poem::Middleware` ports to an
+checkable at boot. A middleware written for another HTTP library ports to an
 **Interceptor** in a few lines and gains both: it wraps the handler the
 same way, with DI and the access graph on top. The lower-level knobs
-poem middleware is often reached for — CORS, TLS, body-size limits,
+such middleware is often reached for — CORS, TLS, body-size limits,
 request timeout — are already `HttpConfig` fields.
 
 <Aside type="tip">

@@ -1,0 +1,5 @@
+error: `#[use_filters]` is not taken beside `#[controller]`: an exception filter whose `Exception` is `dyn Error + Send + Sync` catches every error — bind that with `#[use_exception_filters]`
+ --> tests/integration/diagnostics/http/filters_on_a_controller.rs:8:1
+  |
+8 | #[use_filters(SomeFilter)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^

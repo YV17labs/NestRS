@@ -1,9 +1,6 @@
-//! Health bridge (feature `health`) — the [`SeaOrmHealthIndicator`] that gates
-//! readiness on a `DatabaseConnection::ping`, and the [`SeaOrmHealthModule`]
-//! import seam that registers it.
+//! The pool's indicator (`health` feature), which the module opening the pool
+//! attaches from its `register`.
 
 mod indicator;
-mod module;
 
-pub use indicator::SeaOrmHealthIndicator;
-pub use module::SeaOrmHealthModule;
+pub(crate) use indicator::register;

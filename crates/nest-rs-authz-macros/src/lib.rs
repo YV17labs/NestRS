@@ -1,0 +1,19 @@
+//! `#[subject]`, re-exported by `nest-rs-authz`.
+#![warn(missing_docs)]
+
+use proc_macro::TokenStream;
+
+mod subject;
+
+/// Declares a unit struct an authorization subject no table holds: a
+/// capability a rule grants whole and `#[authorize(Action, Subject)]` gates on
+/// every edge, opening the unit's reads to the caller's ability as an entity's
+/// posture does.
+///
+/// Takes no argument; refuses a struct with fields or generics, and any other
+/// item. Emits the struct unchanged, its `Subject` impl, and the hidden impl
+/// that tells each edge's posture no table holds the subject's rows.
+#[proc_macro_attribute]
+pub fn subject(args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(subject::subject(args.into(), item.into())).into()
+}

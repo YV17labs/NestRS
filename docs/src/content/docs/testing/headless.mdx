@@ -1,0 +1,149 @@
+---
+title: Headless apps
+description: "Boot a worker or a scheduler with no HTTP transport, drive its queue on a Redis database of its own, relay its outbox, and prove its way down."
+sidebar:
+  order: 4.3
+---
+
+`HeadlessApp::builder()` boots without the HTTP transport, for queue workers,
+schedulers, or any binary without an HTTP surface. The four-phase build
+still runs, so the access-graph check still fires.
+
+```rust title="apps/worker/tests/e2e/module.rs"
+let app = HeadlessApp::builder()
+    .module::<WorkerModule>()
+    .ephemeral_database::<migrations::Migrator>()
+    .build_headless()
+    .await?;
+```
+
+It needs no `http` feature, so the suite of a crate that serves none links no
+HTTP stack; `TestApp` lives behind `http`.
+
+Drive non-HTTP transports through `HeadlessApp::spawn_transport` — the queue's
+is `nest_rs::queue::QueueWorker`. It runs a transport the way `App::run` does:
+configured, held to a stop bound the kernel accepts, listening, then serving —
+so once it returns, what the transport listens on accepts, and a client needs
+no retry loop. `attached_transports()` names what the composition attaches
+without starting any of it, the way to hold that a binary serves the edges you
+meant: `["queue"]` for a module serving the queue alone, and no `http`; the demo's
+worker, which also imports `HealthModule` and a schedule, attaches `http` and
+`schedule` too.
+
+## A worker drains its whole Redis database
+
+A `QueueWorker` on Redis takes every job on the queues its module declares, from
+whoever filed it on the logical database its Redis URL names — your running
+`nestrs run dev`, another test's process, a job a previous run left behind.
+The queue names are your `#[queue]`s, so a test cannot rename them; what it
+can own is the database. Two settings keep a suite apart:
+
+- **The suites' default is not your app's.** A committed `.env.test`,
+  loaded only under the test profile, points every suite at a database
+  nothing drains, so what a test enqueues never reaches the app you are
+  running; the one `nestrs new` writes puts Redis on database 1, beside
+  `.env.development`'s 0. A named instance reads a URL of its own, so it
+  takes a line of its own, on another database — without one, the test
+  profile reads the URL your running app writes to. A store takes a bucket of
+  its own the same way, so what a test uploads never sits among the objects
+  your app lists:
+
+  ```bash title=".env.test"
+  NESTRS_REDIS__URL=rediss://valkey-standalone:6379/1
+  NESTRS_REDIS__TRANSCODES__URL=rediss://valkey-standalone:6379/8
+  NESTRS_STORAGE__URL=s3://nestrs-test
+  ```
+
+- **A test that starts a worker takes a database of its own**, and seeds it
+  into every app of the test that must meet — the one that enqueues and the
+  one that drains. A seeded `RedisConfig` outranks the environment, so both
+  land on it whatever the suite's URL says:
+
+  ```rust title="apps/worker/tests/e2e/module.rs (from the demo, abridged)"
+  let worker = HeadlessApp::builder()
+      .module::<WorkerModule>()
+      .ephemeral_database::<migrations::Migrator>()
+      .provide(RedisDatabase::WorkerRuns.config())
+      .build_headless()
+      .await
+      .expect("WorkerModule boots against the throwaway database and its own Redis database");
+  let queue = worker
+      .spawn_transport(QueueWorker::new())
+      .await
+      .expect("WorkerModule's QueueWorker configures against Redis");
+  ```
+
+  `RedisDatabase` is the demo's list, in `features::testing`: an enum with one
+  entry per such test, so two entries on one database is a compile error, and
+  `config()` rewrites the suite's URL to that index. The list is short — one
+  database per test that starts a worker, not one per test — and bounded by
+  the range the suites hold among the databases the server declares (Valkey's
+  `databases`, sixteen unless set; the dev container declares thirty-two).
+
+## A job pushed inside a transaction waits for a relay
+
+A harness runs no transport you did not spawn, so the outbox relay a served app
+runs is absent. It does what that relay does at boot, though: `TestApp` and
+`HeadlessApp` arm the outbox of an app binding a store and a queue backend, so a
+push inside a unit waits in the throwaway database and is dropped with it, never
+filed on the suites' Redis database where nothing drains. A store whose table
+is missing refuses the boot, naming the migration, as the binary's does.
+
+A test proving that a job waits for its commit, or needing it run, spawns a
+relay beside the worker that drains — any relay files any app's records from
+the shared table:
+
+```rust title="apps/api/tests/e2e/posts.rs (from the demo, abridged)"
+let app = boot_on(RedisDatabase::PostsNotify).await;
+// …
+let relaying = worker
+    .spawn_transport(OutboxRelay::new())
+    .await
+    .expect("the worker's relay files what the api committed");
+```
+
+A request that answers `409` then rolls its job back with its writes, and the
+worker runs the job of the one that committed, once.
+
+## Proving the way down
+
+A harness app is dropped at the end of its test, and a drop runs no shutdown
+hook and closes nothing. A test that proves a teardown — a hook that
+deregisters, a pool that says goodbye — ends the app with `close()`, which
+`TestApp`, `HeadlessApp` and `WsApp` each have and which tears down exactly as
+[`App::close`](/fundamentals/app-state/#running-without-serving) does:
+
+```rust title="apps/api/tests/e2e/lifecycle.rs"
+let app = TestApp::builder().module::<ApiModule>().build().await?;
+let lifecycle = app.lifecycle().clone();
+
+app.close().await;
+
+assert_eq!(lifecycle.cause(), Some(StopCause::Closed));
+```
+
+A `HeadlessApp` stops the transports it spawned first — they serve under the
+app's stop token — and waits for them within the longest of their stop bounds,
+so a worker's last job finishes before the hooks it may depend on run, and one
+still serving past them is named at `error` and aborted; its `init()` does the
+same before tearing down an init that fails. A spawned transport whose `serve`
+fails or panics is logged at `error` with its cause, as `App::run` logs it. A boot
+that fails inside `build()` — a transport's configuration, an init hook — is
+torn down before the error returns, as `App::run` tears it down.
+
+## Test telemetry
+
+A suite asks nothing of telemetry. `main`'s `OpenTelemetry::init()` is the
+app's whole wiring, and a suite never runs `main`: it logs through the console
+the boot installs, under `RUST_LOG` (default `info`) and `<PREFIX>_LOG_*`, and
+exports nothing. A provider injecting `Metrics` gets them all the same,
+recording on a meter nothing exports. `App::run`'s refusal of an OTLP endpoint
+no exporter serves is the binary's: the boot a suite runs never makes it, so a
+`.env.test` naming a local collector stops no suite.
+
+## Going further
+
+- [End-to-end tests](/testing/e2e/) — the HTTP app beside the worker.
+- [Queues](/queue/) — the worker a `QueueWorker` runs, and the outbox it
+  relays.
+- [Shutdown](/fundamentals/shutdown/) — the bounded way down `close()` walks.

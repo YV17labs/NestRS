@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `#[indicators]` runs on a provider built once for the app, and `PerResolution` is `scope = transient`, rebuilt at every resolution, so what they do is dropped: move these methods to a plain `#[injectable]` provider
+  --> tests/integration/diagnostics/health/indicators_on_a_transient_provider.rs:13:1
+   |
+13 | #[indicators]
+   | ^^^^^^^^^^^^^ evaluation of `_` failed here

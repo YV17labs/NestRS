@@ -1,0 +1,5 @@
+error: an MCP operation needs a description — the model reads it to choose between operations. Write a doc comment above it, or state `description = "…"` on the attribute
+  --> tests/integration/diagnostics/mcp/tool_description_stated_blank.rs:12:26
+   |
+12 |     #[tool(description = "   ")]
+   |                          ^^^^^

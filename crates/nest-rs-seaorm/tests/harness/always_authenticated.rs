@@ -1,0 +1,29 @@
+//! The suites' authentication stand-in: every caller is the suite's own
+//! `Anyone`, since on GraphQL a visitor ability cannot satisfy an
+//! `#[authorize]`.
+
+use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+
+/// Authenticates every caller as `crate::Anyone`.
+#[injectable]
+#[derive(Default, Layer)]
+pub(crate) struct AlwaysAuthenticated;
+
+#[async_trait]
+impl Guard for AlwaysAuthenticated {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(crate::Anyone);
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for AlwaysAuthenticated {}

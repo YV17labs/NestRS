@@ -1,0 +1,5 @@
+error: #[sea_orm] `from`: "org id" is not a column name — `#[expose]` reads it as the field holding this relation's foreign key, e.g. `from = "org_id"`
+  --> tests/integration/diagnostics/seaorm/sea_orm_from_is_not_a_column_name.rs:18:34
+   |
+18 |     #[sea_orm(belongs_to, from = "org id", to = "id")]
+   |                                  ^^^^^^^^

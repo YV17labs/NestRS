@@ -2,11 +2,11 @@ use crate::PipeError;
 
 /// A pipe `transform`s an extracted value into a new value or a [`PipeError`].
 ///
-/// Pipes are **stateless** — a zero-sized marker named at a call site
-/// (`Piped<ParseInt, _>`), never instantiated — so `transform` is an associated
-/// function. Stateful/DI-injected pipes would need a different binding.
+/// Pipes are stateless zero-sized markers named at a call site
+/// (`Piped<ParseInt>`), so `transform` is an associated function.
 pub trait Pipe {
-    /// The value the pipe receives (the extractor's output).
+    /// The value the pipe receives: what its edge decoded, or what its HTTP
+    /// extractor carries.
     type In;
     /// The value the pipe hands the handler.
     type Out;

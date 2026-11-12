@@ -1,6 +1,6 @@
 ---
 title: Metrics
-description: "Inject Arc<OpenTelemetryMeter> and build counters, histograms or gauges; readings batch on a PeriodicReader and export through the same OTLP endpoint."
+description: "Inject Arc<Metrics> and record on counters, histograms and gauges; readings batch on a PeriodicReader and export through the same OTLP endpoint."
 sidebar:
   order: 4
 ---
@@ -9,52 +9,95 @@ Metrics are the aggregate counterpart to [traces](/opentelemetry/traces/) —
 reach for them when you need a number over time (signups per minute, job
 duration percentiles, queue depth) rather than the story of one request.
 
-`OpenTelemetryModule` provides `Arc<OpenTelemetryMeter>` — the OTel global
-meter, wrapped so it flows through the DI graph. Inject it like any other
-dependency.
+`OpenTelemetryModule` provides `Arc<Metrics>`, the app's meter: import it in
+the module whose provider injects it, and inject it like any other
+dependency. Telemetry itself needs no import — `main`'s `OpenTelemetry::init()`
+installs the meter the module hands out — so an app recording no metric of its
+own imports the module nowhere. The module installs `Metrics` in its own
+`register`, as `EventsModule` installs `EventBus`, so the access graph gates
+neither way ([What is global](/fundamentals/module-boot/#what-is-global)): an app
+in which nothing imports it fails the boot naming `OpenTelemetryModule`, and a
+provider whose module skips the import reaches `Metrics` only when a module
+importing it registered first — registered before, it fails the boot. The
+import beside each injection is what puts the module first. In a suite, which
+never runs `main`, `Metrics` record on a meter nothing exports.
 
 ## A first counter
 
-Inject the meter, then build the instrument from it. `Arc<OpenTelemetryMeter>`
-derefs to the inner `Meter`; the meter caches instruments by name, so building
-the counter at the call site is cheap and needs no extra field.
+Ask `Metrics` for the instrument by name, then record on it. The first call
+makes the instrument and every later one hands back the same, so asking at the
+call site costs a lookup and needs no extra field.
 
 ```rust title="crates/features/src/users/metrics.rs"
 use std::sync::Arc;
 
 use nest_rs::core::injectable;
-use nest_rs::opentelemetry::OpenTelemetryMeter;
+use nest_rs::opentelemetry::{Attribute, Metrics};
 
 #[injectable]
 pub struct SignupMetrics {
     #[inject]
-    meter: Arc<OpenTelemetryMeter>,
+    metrics: Arc<Metrics>,
 }
 
 impl SignupMetrics {
-    /// Call this after a successful signup.
-    pub fn record_signup(&self) {
-        self.meter.u64_counter("users.created").build().add(1, &[]);
+    pub fn record_signup(&self, source: &'static str) {
+        self.metrics
+            .counter("users.created")
+            .add(1, &[Attribute::new("source", source)]);
     }
 }
 ```
 
-Counters, histograms, gauges — anything the
-[`opentelemetry`](https://docs.rs/opentelemetry) meter exposes works. Inject
-`Arc<OpenTelemetryMeter>` into the service that owns the event and build the
-instrument lazily inside the method, as above.
+The instruments are the four synchronous kinds of the
+[OpenTelemetry Metrics API](https://opentelemetry.io/docs/specs/otel/metrics/api/),
+under their names:
+
+| Instrument | Asked for with | Records | For |
+|---|---|---|---|
+| `Counter` | `metrics.counter(name)` | `add(u64, …)` | what only grows — signups, failed jobs |
+| `UpDownCounter` | `metrics.up_down_counter(name)` | `add(i64, …)`, negative too | what is in flight — open sockets, queued jobs |
+| `Histogram` | `metrics.histogram(name)` | `record(f64, …)` | what is measured per event — a latency, a size |
+| `Gauge` | `metrics.gauge(name)` | `record(f64, …)` | what is sampled — a pool's idle connections |
+
+Each is a cheap `Clone`, so a service that records on every request may also
+keep one in a field.
+
+## Units, descriptions and buckets
+
+What an instrument declares — the unit its values are in, what it measures, a
+histogram's bucket boundaries — is declared once, by the `_with` call that
+makes it:
+
+```rust title="crates/features/src/posts/metrics.rs"
+use nest_rs::opentelemetry::Describe;
+
+let latency = self.metrics.histogram_with(
+    "posts.publish.latency",
+    Describe::default()
+        .with_unit("ms")
+        .with_description("time to publish a post"),
+    &[5.0, 25.0, 100.0, 500.0],
+);
+latency.record(elapsed_ms, &[]);
+```
+
+`counter_with`, `up_down_counter_with` and `gauge_with` take the same
+`Describe`. A later call by the same name returns the instrument already made,
+whatever it declares.
 
 ## Attributes
 
-The second argument to `.add(...)` / `.record(...)` is a slice of OTel
-attributes — the metric's labels at the OTel/Prometheus boundary.
+The second argument to `add` and `record` is a slice of `Attribute`s — the
+metric's labels at the OTel/Prometheus boundary. A value is a `bool`, an `i64`,
+an `f64` or a string:
 
 ```rust title="crates/features/src/users/metrics.rs"
-use opentelemetry::KeyValue;
+use nest_rs::opentelemetry::Attribute;
 
-self.meter.u64_counter("users.created").build().add(1, &[
-    KeyValue::new("org_id", org_id.to_string()),
-    KeyValue::new("source", "api"),
+self.metrics.counter("users.created").add(1, &[
+    Attribute::new("org_id", org_id.to_string()),
+    Attribute::new("source", "api"),
 ]);
 ```
 
@@ -65,50 +108,54 @@ attribute combination becomes a separate time series.
 
 Metrics batch on a
 [`PeriodicReader`](https://docs.rs/opentelemetry_sdk) and export through the
-same OTLP endpoint as the traces (set
-`NESTRS_OPENTELEMETRY__OTLP_ENDPOINT`). Without an endpoint, instrument
-construction still works — `counter()` and friends return real handles, so
+same OTLP endpoint as the traces (set `OTEL_EXPORTER_OTLP_ENDPOINT`, or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` for the metrics alone). Without an endpoint, or with
+`OTEL_METRICS_EXPORTER=none`, instrument construction still works — `counter()` and friends return real handles, so
 wiring compiles and runs — but the meter comes from a `NoopMeterProvider` and
-every reading is **dropped**. The SDK says so once, at `Meter was obtained from
-a NoopMeterProvider. No metrics will be recorded.` A test that needs to assert
+every reading is **dropped**. The SDK says so once, at `debug`: `Meter was obtained
+from a NoopMeterProvider. No metrics will be recorded.`, then how to set a provider. A test that needs to assert
 on an increment has to hold its own counter; there is nothing to read back
 here.
 
 **The interval is 60 seconds by default, and that will look broken.** Traces and
 logs reach a collector immediately; metrics wait for the reader's next flush. The
-natural first check — wire a meter, hit the route, look at the collector — shows
+natural first check — record on a counter, hit the route, look at the collector — shows
 spans and log records with **zero** metrics, for a full minute. Nothing is wrong;
 shorten the interval for a local run:
 
 ```bash frame="terminal"
-NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS=5 nestrs run dev api
+OTEL_METRIC_EXPORT_INTERVAL=5000 nestrs run dev api
 ```
 
 or pin it in code, as with any other field:
 
-```rust title="apps/api/src/module.rs"
-OpenTelemetryConfig::from_env("api").with_metric_interval(Duration::from_secs(5))
+```rust title="apps/api/src/main.rs"
+let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+    metric_interval: Duration::from_secs(5),
+    ..OpenTelemetryConfig::from_env()?
+})?;
 ```
 
-A value of `0` is the sentinel for "keep the 60 s default" — a `PeriodicReader`
-on a zero period is a tight export loop, which is worse than a slow one. A
-**non-numeric** value is a typo, not a sentinel: the default is kept and the
-variable is named on stderr (`nestrs: WARNING — unparseable
-NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS=…`). It is reported rather than
-boot-fatal because this config is what installs the subscriber, so it is built
-before there is anywhere to log or anything to propagate an error to.
+The variable is the specification's, in milliseconds, and wins over the pin.
+Either is held to a second to an hour — a `PeriodicReader` on a zero period
+is a tight export loop, and an hourly one reaches the collector after the
+dashboards that read it — and `OpenTelemetry::init` fails with
+`OpenTelemetryError::Config` outside that range, naming the variable or the
+field. A value that is not a whole number of milliseconds fails it too,
+naming the variable, where the SDK would keep its period in silence.
 
 ## Resource attributes
 
 Every exported metric carries the service-level resource attributes built from
-`OpenTelemetryConfig`:
+`OpenTelemetryConfig`, under what `OTEL_SERVICE_NAME` and
+`OTEL_RESOURCE_ATTRIBUTES` set:
 
-- `service.name` — argument to `OpenTelemetry::init`
-- `service.version` — `NESTRS_OPENTELEMETRY__SERVICE_VERSION`
-- `deployment.environment` — `NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT`
-- `service.instance_id` — `NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID` (a
-  fresh UUIDv7 per process by default, so restarts get distinct identities in
-  the backend)
+- `service.name` — the binary's package name, which `#[nest_rs::main]` reads
+  off its manifest
+- `service.version` — the binary's package version
+- `deployment.environment.name` — none unless set
+- `service.instance.id` — a fresh UUIDv7 per process by default, so restarts
+  get distinct identities in the backend
 
 These come from the
 [`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions)

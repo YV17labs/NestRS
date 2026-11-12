@@ -1,0 +1,5 @@
+error: `#[expose(..., timestamps)]` stamps `created_at` on insert, and `updated_at` on every save when the entity has one: add a `created_at` column, or drop `timestamps`
+  --> tests/integration/diagnostics/seaorm/timestamps_without_the_columns.rs:11:12
+   |
+11 | pub struct Model {
+   |            ^^^^^

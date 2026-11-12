@@ -59,18 +59,61 @@
         ],
         "type": "object"
       },
+      "IndicatorReport": {
+        "description": "Outcome of a single indicator check, included in a [`ProbeReport`].",
+        "properties": {
+          "error": {
+            "description": "`Some` only when the check failed — a **fixed, opaque** reason\n(`\"check failed\"`, for an error or a panic / `\"timed out\"` / `\"probe\ndeadline exceeded\"`), never the indicator's own error, which is logged\non `nest_rs::health` — at `warn`, a panic at `error`: `/health/*` is\nroutinely unauthenticated.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The indicator's stable id: its snake_case method name, or the crate\nowning a resource and its instance (`redis:cache`).",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IndicatorStatus",
+            "description": "Whether this indicator's check passed."
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "IndicatorStatus": {
+        "description": "`up` when the indicator's check returned `Ok`; `down` otherwise.",
+        "oneOf": [
+          {
+            "const": "up",
+            "description": "The check returned `Ok`.",
+            "type": "string"
+          },
+          {
+            "const": "down",
+            "description": "The check returned an error.",
+            "type": "string"
+          }
+        ]
+      },
       "Notification": {
         "properties": {
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "message": {
             "type": "string"
           },
           "org_id": {
+            "format": "uuid",
             "type": "string"
           }
         },
@@ -85,15 +128,18 @@
       "Org": {
         "properties": {
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "name": {
             "type": "string"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           }
         },
@@ -105,43 +151,25 @@
         ],
         "type": "object"
       },
-      "PageParams": {
-        "description": "The `?first=&after=` cursor query. An unparsable `after` is ignored — paging\nfrom the start, never an error.",
-        "properties": {
-          "after": {
-            "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "first": {
-            "description": "Requested page size; defaults to 20 and is clamped to `1..=100`.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
       "Post": {
         "properties": {
           "author_id": {
+            "format": "uuid",
             "type": "string"
           },
           "body": {
             "type": "string"
           },
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "org_id": {
+            "format": "uuid",
             "type": "string"
           },
           "status": {
@@ -151,6 +179,7 @@
             "type": "string"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           }
         },
@@ -175,7 +204,16 @@
       },
       "PresignedUrlDto": {
         "properties": {
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "key": {
+            "type": "string"
+          },
+          "method": {
             "type": "string"
           },
           "url": {
@@ -184,12 +222,55 @@
         },
         "required": [
           "key",
-          "url"
+          "url",
+          "method",
+          "headers"
+        ],
+        "type": "object"
+      },
+      "ProbeReport": {
+        "description": "Aggregated outcome of a probe: an overall `status` (`200` up, `503` down)\nplus per-indicator reports.",
+        "properties": {
+          "details": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Every indicator that ran, up or down — the union of `info` and `error`.",
+            "type": "object"
+          },
+          "error": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Down indicators, keyed by name. Empty when `status == Up`.",
+            "type": "object"
+          },
+          "info": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/IndicatorReport"
+            },
+            "description": "Up indicators, keyed by name.",
+            "type": "object"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IndicatorStatus",
+            "description": "The overall probe result — `down` if any indicator is down."
+          }
+        },
+        "required": [
+          "status",
+          "info",
+          "error",
+          "details"
         ],
         "type": "object"
       },
       "ProblemDetails": {
+        "description": "An RFC 9457 problem details object.",
         "properties": {
+          "code": {
+            "type": "string"
+          },
           "detail": {
             "type": "string"
           },
@@ -198,17 +279,19 @@
             "type": "object"
           },
           "instance": {
-            "format": "uri",
+            "format": "uri-reference",
             "type": "string"
           },
           "status": {
+            "maximum": 599,
+            "minimum": 100,
             "type": "integer"
           },
           "title": {
             "type": "string"
           },
           "type": {
-            "format": "uri",
+            "format": "uri-reference",
             "type": "string"
           }
         },
@@ -219,25 +302,11 @@
         ],
         "type": "object"
       },
-      "StreamResumeDto": {
-        "properties": {
-          "Last-Event-ID": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
       "TranscodeDto": {
         "additionalProperties": false,
         "properties": {
           "file": {
-            "maxLength": 255,
-            "minLength": 1,
+            "format": "uuid",
             "type": "string"
           }
         },
@@ -292,39 +361,45 @@
         ],
         "type": "object"
       },
-      "UploadRequestDto": {
-        "additionalProperties": false,
-        "properties": {
-          "filename": {
-            "maxLength": 255,
-            "minLength": 1,
-            "type": "string"
-          }
-        },
-        "required": [
-          "filename"
-        ],
-        "type": "object"
-      },
       "User": {
         "properties": {
           "created_at": {
-            "type": "string"
+            "description": "Field-level authorization applies: reads `null` where the caller's ability withholds it.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "email": {
-            "type": "string"
+            "description": "Field-level authorization applies: reads `null` where the caller's ability withholds it.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "name": {
             "type": "string"
           },
           "org_id": {
-            "type": "string"
+            "description": "Field-level authorization applies: reads `null` where the caller's ability withholds it.",
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "updated_at": {
-            "type": "string"
+            "description": "Field-level authorization applies: reads `null` where the caller's ability withholds it.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -348,14 +423,18 @@
   },
   "info": {
     "description": "Demo API built with nestrs",
-    "title": "nestrs API",
-    "version": "0.1.0"
+    "license": {
+      "identifier": "MIT",
+      "name": "MIT"
+    },
+    "title": "api",
+    "version": "7.0.0"
   },
   "openapi": "3.1.2",
   "paths": {
     "/audio/download": {
       "get": {
-        "description": "Given the source object `key` (query param `file`), streams the derived object's bytes chunk by chunk as the response body — the large file never sits whole in server memory — or `404` while the worker has not produced it yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; this endpoint is the streamed proxy. Requires a bearer JWT and the admin capability.",
+        "description": "Given the source object `key` (query param `file`, a UUID), streams the derived object's bytes chunk by chunk as the response body — the large file never sits whole in server memory — or `404` while the worker has not produced it yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; this endpoint is the streamed proxy. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability.",
         "operationId": "audio_download",
         "parameters": [
           {
@@ -363,8 +442,7 @@
             "name": "file",
             "required": true,
             "schema": {
-              "maxLength": 255,
-              "minLength": 1,
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -399,7 +477,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -410,6 +497,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -430,6 +527,36 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -439,13 +566,13 @@
         ],
         "summary": "Stream a transcoded object back through the server",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
     "/audio/events": {
       "get": {
-        "description": "Opens a `text/event-stream` that polls the derived object and emits a `transcode` event (`{state: pending|ready}`) until it is produced, then ends — a live progress feed the browser reads with `EventSource`. Each event carries the poll attempt as its SSE id, so a browser reconnecting sends it back as `Last-Event-ID` and is not re-sent the progress ticks it already displayed; the terminal state is always sent. Requires a bearer JWT and the admin capability.",
+        "description": "Opens a `text/event-stream` that polls the transcode — the derived object first, then the record the worker files once it has produced it — and emits a `transcode` event (`{state: pending|ready}`) until it is produced, then ends — a live progress feed the browser reads with `EventSource`. Each event carries the poll attempt as its SSE id, so a browser reconnecting sends it back as `Last-Event-ID` and is not re-sent the progress ticks it already displayed; the terminal state is always sent. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability.",
         "operationId": "audio_events",
         "parameters": [
           {
@@ -453,8 +580,7 @@
             "name": "file",
             "required": true,
             "schema": {
-              "maxLength": 255,
-              "minLength": 1,
+              "format": "uuid",
               "type": "string"
             }
           },
@@ -501,7 +627,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -512,6 +647,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -532,6 +677,36 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -541,13 +716,13 @@
         ],
         "summary": "Stream transcode progress as Server-Sent Events",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
     "/audio/results": {
       "get": {
-        "description": "Given the source object `key` (query param `file`, validated like the transcode request), returns a short-lived presigned GET URL for the derived object the worker produced, or `404` while it does not exist yet. Requires a bearer JWT and the admin capability.",
+        "description": "Given the source object `key` an upload returned (query param `file`, a UUID), returns a short-lived presigned GET URL for the derived object the worker produced, or `404` while it does not exist yet. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability.",
         "operationId": "audio_result",
         "parameters": [
           {
@@ -555,8 +730,7 @@
             "name": "file",
             "required": true,
             "schema": {
-              "maxLength": 255,
-              "minLength": 1,
+              "format": "uuid",
               "type": "string"
             }
           }
@@ -590,7 +764,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -601,6 +784,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -614,6 +807,36 @@
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying, until the rate-limit window resets.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
                 "schema": {
                   "format": "int32",
                   "minimum": 0,
@@ -630,13 +853,13 @@
         ],
         "summary": "Fetch a presigned GET URL for a transcoded object",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
     "/audio/transcode": {
       "post": {
-        "description": "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the shared `audio` queue; the separate worker deployable consumes it over Redis (two apps exchanging, no RPC). Requires a bearer JWT, is admin-only (`Manage` on the caller's org, enforced by `TranscodeGuard`), rate-limited by `ThrottlerGuard`, and its `file` is validated against a filename allowlist that blocks path traversal.",
+        "description": "Accepts a TranscodeDto body and enqueues a TranscodeCommand onto the shared `audio` queue, answering `202` once it is queued; the separate worker deployable consumes it over Redis (two apps exchanging, no RPC). Requires a bearer JWT granted the `audio:transcode` scope, is admin-only (`Manage` on `Transcoding`, which `#[authorize]` gates with the scope) and rate-limited by `ThrottlerGuard`; its `file` is the key an upload returned, a UUID, so no client names a storage path.",
         "operationId": "audio_transcode",
         "requestBody": {
           "content": {
@@ -649,15 +872,8 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TranscodeDto"
-                }
-              }
-            },
-            "description": "OK"
+          "202": {
+            "description": "Accepted"
           },
           "400": {
             "content": {
@@ -677,7 +893,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -688,6 +913,36 @@
               }
             },
             "description": "Forbidden"
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request Timeout"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
           },
           "429": {
             "content": {
@@ -701,6 +956,36 @@
             "headers": {
               "Retry-After": {
                 "description": "Seconds to wait before retrying, until the rate-limit window resets.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
                 "schema": {
                   "format": "int32",
                   "minimum": 0,
@@ -717,24 +1002,14 @@
         ],
         "summary": "Enqueue a transcode job for the worker to process",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
     "/audio/uploads": {
       "post": {
-        "description": "Returns a short-lived presigned PUT URL plus the object key it addresses. The client pushes the file bytes straight to object storage (the server never proxies the payload), then calls `POST /audio/transcode` with the returned key. The `filename` is validated against the same anti-traversal allowlist as the transcode request. Requires a bearer JWT and the admin capability (`Manage` on the caller's org).",
+        "description": "Returns a short-lived presigned PUT URL, the method and headers the upload sends verbatim, and the object key the server minted for it. The URL binds `Content-Type: audio/mpeg`: object storage refuses an upload sending another type, or none. The client pushes the file bytes straight to object storage (the server never proxies the payload), then calls `POST /audio/transcode` with the returned key. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability (`Manage` on `Transcoding`).",
         "operationId": "audio_create_upload",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UploadRequestDto"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "200": {
             "content": {
@@ -746,16 +1021,6 @@
             },
             "description": "OK"
           },
-          "400": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Bad Request"
-          },
           "401": {
             "content": {
               "application/problem+json": {
@@ -764,7 +1029,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -775,6 +1049,16 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
           },
           "429": {
             "content": {
@@ -795,6 +1079,36 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -804,13 +1118,13 @@
         ],
         "summary": "Mint a presigned PUT URL for a direct audio upload",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
     "/audio/uploads/direct": {
       "post": {
-        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part, which streams straight into the object store — the file never sits whole in server memory — and the response carries the object key plus a presigned GET URL. The part's filename is validated against the same anti-traversal allowlist as the presigned path. Requires a bearer JWT and the admin capability.",
+        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part, which streams straight into the object store — the file never sits whole in server memory — and the response carries the object key the server minted plus a presigned GET URL. The part's filename is never read: no client names a storage key. Requires a bearer JWT granted the `audio:transcode` scope and the admin capability.",
         "operationId": "audio_upload_direct",
         "requestBody": {
           "content": {
@@ -851,7 +1165,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -862,6 +1185,36 @@
               }
             },
             "description": "Forbidden"
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request Timeout"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
           },
           "429": {
             "content": {
@@ -882,6 +1235,36 @@
                 }
               }
             }
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -891,7 +1274,7 @@
         ],
         "summary": "Upload an audio file directly as multipart/form-data",
         "tags": [
-          "Audio"
+          "audio"
         ]
       }
     },
@@ -900,11 +1283,65 @@
         "operationId": "health_live",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
+        "security": [],
+        "summary": "Liveness probe: whether the process should keep running",
         "tags": [
-          "HealthController"
+          "health"
         ]
       }
     },
@@ -913,11 +1350,65 @@
         "operationId": "health_ready",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
+        "security": [],
+        "summary": "Readiness probe: whether the process can take traffic",
         "tags": [
-          "HealthController"
+          "health"
         ]
       }
     },
@@ -926,11 +1417,65 @@
         "operationId": "health_startup",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              }
+            },
             "description": "OK"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeReport"
+                }
+              },
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
+        "security": [],
+        "summary": "Startup probe: whether the process has finished booting",
         "tags": [
-          "HealthController"
+          "health"
         ]
       }
     },
@@ -943,7 +1488,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
+              "description": "The cursor a prior page's `next` link carries, passed back as given;\nabsent or empty for the first page, refused when no page issued it.",
               "type": [
                 "string",
                 "null"
@@ -977,7 +1522,25 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -987,7 +1550,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -998,6 +1570,46 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1007,7 +1619,7 @@
         ],
         "summary": "List Notification",
         "tags": [
-          "Notification"
+          "notifications"
         ]
       }
     },
@@ -1034,7 +1646,17 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -1044,7 +1666,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1065,6 +1696,46 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1074,7 +1745,7 @@
         ],
         "summary": "Fetch Notification by id",
         "tags": [
-          "Notification"
+          "notifications"
         ]
       }
     },
@@ -1087,7 +1758,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
+              "description": "The cursor a prior page's `next` link carries, passed back as given;\nabsent or empty for the first page, refused when no page issued it.",
               "type": [
                 "string",
                 "null"
@@ -1121,7 +1792,25 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -1131,7 +1820,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1142,6 +1840,46 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1151,7 +1889,7 @@
         ],
         "summary": "List Org",
         "tags": [
-          "Org"
+          "orgs"
         ]
       },
       "post": {
@@ -1175,7 +1913,7 @@
                 }
               }
             },
-            "description": "Created — field-level authorization applies: properties the caller's ability does not grant are omitted from the response.",
+            "description": "Created",
             "headers": {
               "Location": {
                 "description": "URI of the resource that was just created.",
@@ -1204,7 +1942,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1216,6 +1963,16 @@
             },
             "description": "Forbidden"
           },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request Timeout"
+          },
           "409": {
             "content": {
               "application/problem+json": {
@@ -1225,6 +1982,56 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1234,7 +2041,7 @@
         ],
         "summary": "Create Org",
         "tags": [
-          "Org"
+          "orgs"
         ]
       }
     },
@@ -1256,6 +2063,16 @@
           "204": {
             "description": "No Content"
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
           "401": {
             "content": {
               "application/problem+json": {
@@ -1264,7 +2081,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1295,6 +2121,46 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1304,7 +2170,7 @@
         ],
         "summary": "Delete Org by id",
         "tags": [
-          "Org"
+          "orgs"
         ]
       },
       "get": {
@@ -1329,7 +2195,17 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -1339,7 +2215,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1360,6 +2245,46 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1369,10 +2294,10 @@
         ],
         "summary": "Fetch Org by id",
         "tags": [
-          "Org"
+          "orgs"
         ]
       },
-      "patch": {
+      "put": {
         "operationId": "orgs_update",
         "parameters": [
           {
@@ -1404,7 +2329,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -1424,7 +2349,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1446,6 +2380,16 @@
             },
             "description": "Not Found"
           },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request Timeout"
+          },
           "409": {
             "content": {
               "application/problem+json": {
@@ -1455,6 +2399,56 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1464,7 +2458,7 @@
         ],
         "summary": "Update Org by id",
         "tags": [
-          "Org"
+          "orgs"
         ]
       }
     },
@@ -1477,7 +2471,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
+              "description": "The cursor a prior page's `next` link carries, passed back as given;\nabsent or empty for the first page, refused when no page issued it.",
               "type": [
                 "string",
                 "null"
@@ -1511,62 +2505,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
+            "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "type": "string"
                 }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Forbidden"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "summary": "List Post",
-        "tags": [
-          "Post"
-        ]
-      },
-      "post": {
-        "description": "Requires a bearer JWT with a subject. The org and author are taken from the token, never the body.",
-        "operationId": "posts_create",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreatePost"
               }
             }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Post"
-                }
-              }
-            },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
           },
           "400": {
             "content": {
@@ -1586,7 +2533,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1597,6 +2553,199 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List Post",
+        "tags": [
+          "posts"
+        ]
+      },
+      "post": {
+        "description": "Requires a bearer JWT naming a user. The org and author are taken from the token, never the body.",
+        "operationId": "posts_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePost"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Post"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "description": "URI of the resource that was just created.",
+                "schema": {
+                  "format": "uri-reference",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request Timeout"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1606,7 +2755,7 @@
         ],
         "summary": "Create a post in the caller's org",
         "tags": [
-          "Post"
+          "posts"
         ]
       }
     },
@@ -1628,6 +2777,16 @@
           "204": {
             "description": "No Content"
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
           "401": {
             "content": {
               "application/problem+json": {
@@ -1636,7 +2795,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1667,6 +2835,46 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1676,7 +2884,7 @@
         ],
         "summary": "Delete Post by id",
         "tags": [
-          "Post"
+          "posts"
         ]
       },
       "get": {
@@ -1701,7 +2909,17 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -1711,7 +2929,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1732,6 +2959,46 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1741,10 +3008,10 @@
         ],
         "summary": "Fetch Post by id",
         "tags": [
-          "Post"
+          "posts"
         ]
       },
-      "patch": {
+      "put": {
         "operationId": "posts_update",
         "parameters": [
           {
@@ -1776,7 +3043,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -1796,7 +3063,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1818,6 +3094,16 @@
             },
             "description": "Not Found"
           },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request Timeout"
+          },
           "409": {
             "content": {
               "application/problem+json": {
@@ -1827,6 +3113,56 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1836,13 +3172,13 @@
         ],
         "summary": "Update Post by id",
         "tags": [
-          "Post"
+          "posts"
         ]
       }
     },
     "/posts/{id}/publish": {
       "post": {
-        "description": "Transitions a draft to published and writes a publication audit row in the same transaction. The id is bound to the loaded, `Update`-authorized post through the service. Re-publishing an already published post returns RFC 9457 `application/problem+json` (409).",
+        "description": "Transitions a draft to published and writes a publication audit row in the same transaction. The id loads the `Update`-authorized post through the service. Re-publishing an already published post returns RFC 9457 `application/problem+json` (409).",
         "operationId": "posts_publish",
         "parameters": [
           {
@@ -1864,7 +3200,17 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -1874,7 +3220,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -1895,6 +3250,46 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1904,7 +3299,7 @@
         ],
         "summary": "Publish a draft post",
         "tags": [
-          "Post"
+          "posts"
         ]
       }
     },
@@ -1917,7 +3312,7 @@
             "name": "after",
             "required": false,
             "schema": {
-              "description": "Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.",
+              "description": "The cursor a prior page's `next` link carries, passed back as given;\nabsent or empty for the first page, refused when no page issued it.",
               "type": [
                 "string",
                 "null"
@@ -1951,62 +3346,15 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
-          },
-          "401": {
-            "content": {
-              "application/problem+json": {
+            "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "RFC 8288 `rel=\"next\"`: the next page, its `after` cursor carried in its query; absent on the last page.",
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
+                  "type": "string"
                 }
-              }
-            },
-            "description": "Unauthorized"
-          },
-          "403": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetails"
-                }
-              }
-            },
-            "description": "Forbidden"
-          }
-        },
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "summary": "List User",
-        "tags": [
-          "User"
-        ]
-      },
-      "post": {
-        "description": "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The user's org is taken from the caller's token, never the body.",
-        "operationId": "users_create",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateUser"
               }
             }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/User"
-                }
-              }
-            },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
           },
           "400": {
             "content": {
@@ -2026,7 +3374,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -2037,6 +3394,199 @@
               }
             },
             "description": "Forbidden"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List User",
+        "tags": [
+          "users"
+        ]
+      },
+      "post": {
+        "description": "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The user's org is taken from the caller's token, never the body.",
+        "operationId": "users_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Location": {
+                "description": "URI of the resource that was just created.",
+                "schema": {
+                  "format": "uri-reference",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request Timeout"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2046,7 +3596,7 @@
         ],
         "summary": "Create a user in the caller's org",
         "tags": [
-          "User"
+          "users"
         ]
       }
     },
@@ -2068,6 +3618,16 @@
           "204": {
             "description": "No Content"
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
           "401": {
             "content": {
               "application/problem+json": {
@@ -2076,7 +3636,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -2107,6 +3676,46 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2116,11 +3725,11 @@
         ],
         "summary": "Delete User by id",
         "tags": [
-          "User"
+          "users"
         ]
       },
       "get": {
-        "description": "The id is bound to the loaded, authorized user through the service — a row outside the caller's scope is 403, absent 404.",
+        "description": "A user outside the caller's org answers 403, an absent one 404.",
         "operationId": "users_get",
         "parameters": [
           {
@@ -2142,7 +3751,17 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Bad Request"
           },
           "401": {
             "content": {
@@ -2152,7 +3771,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -2173,6 +3801,46 @@
               }
             },
             "description": "Not Found"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2182,10 +3850,10 @@
         ],
         "summary": "Get a user in the caller's org by id",
         "tags": [
-          "User"
+          "users"
         ]
       },
-      "patch": {
+      "put": {
         "operationId": "users_update",
         "parameters": [
           {
@@ -2217,7 +3885,7 @@
                 }
               }
             },
-            "description": "OK — field-level authorization applies: properties the caller's ability does not grant are omitted from the response."
+            "description": "OK"
           },
           "400": {
             "content": {
@@ -2237,7 +3905,16 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge: `Bearer`, with RFC 6750's `error` when a credential arrived and was refused.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -2259,6 +3936,16 @@
             },
             "description": "Not Found"
           },
+          "408": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Request Timeout"
+          },
           "409": {
             "content": {
               "application/problem+json": {
@@ -2268,6 +3955,56 @@
               }
             },
             "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Content Too Large"
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported Media Type"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying, when what did not answer said how long.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2277,9 +4014,14 @@
         ],
         "summary": "Update User by id",
         "tags": [
-          "User"
+          "users"
         ]
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ]
 }

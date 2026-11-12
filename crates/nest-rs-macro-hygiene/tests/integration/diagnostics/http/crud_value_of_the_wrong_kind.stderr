@@ -1,0 +1,23 @@
+error: #[crud] `service` takes the type of the injected `CrudService`, e.g. `service = UsersService`
+  --> tests/integration/diagnostics/http/crud_value_of_the_wrong_kind.rs:11:18
+   |
+11 | #[crud(service = "svc")]
+   |                  ^^^^^
+
+error: #[crud] `ops` takes a list of operations, e.g. `ops = [list, get]`
+  --> tests/integration/diagnostics/http/crud_value_of_the_wrong_kind.rs:17:34
+   |
+17 | #[crud(service = BService, ops = list)]
+   |                                  ^^^^
+
+error: #[crud] `ops` takes a list of operations, e.g. `ops = [list, get]`
+  --> tests/integration/diagnostics/http/crud_value_of_the_wrong_kind.rs:23:35
+   |
+23 | #[crud(service = CService, ops = ["list"])]
+   |                                   ^^^^^^
+
+error: #[crud] `paginate` takes `cursor` or `none`
+  --> tests/integration/diagnostics/http/crud_value_of_the_wrong_kind.rs:29:39
+   |
+29 | #[crud(service = DService, paginate = "cursor")]
+   |                                       ^^^^^^^^

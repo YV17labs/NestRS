@@ -1,0 +1,5 @@
+error: unknown #[crud] argument `cached`; expected `service`, `ops`, `paginate` or `api`
+  --> tests/integration/diagnostics/http/crud_unknown_argument.rs:13:31
+   |
+13 | #[crud(service = OrgsService, cached = true)]
+   |                               ^^^^^^

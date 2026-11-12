@@ -1,0 +1,5 @@
+error: #[config] reads each field under its name, and a tuple struct's fields have none — name them, or write the overlay with `from_env = "manual"`
+ --> tests/integration/diagnostics/config/config_tuple_struct.rs:7:18
+  |
+7 | struct KilnConfig(u16);
+  |                  ^^^^^

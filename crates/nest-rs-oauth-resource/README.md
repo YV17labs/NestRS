@@ -2,7 +2,7 @@
 
 OAuth 2.0 Protected Resource Metadata (RFC 9728) for NestRS: the discovery document, and the interceptor that stamps the resource_metadata pointer onto every 401 across HTTP, WS and MCP.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features oauth-resource

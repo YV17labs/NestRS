@@ -1,55 +1,52 @@
 ---
 title: Validate inputs
-description: "Rules on the entity flow into #[crud]'s generated POST /posts — a malformed body becomes a structured 400 before the handler runs."
+description: "Rules on the entity flow into every edge that decodes a post — a malformed body becomes a structured 400 before the handler runs."
 sidebar:
   order: 7
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-You already wrote the validation rules on the entity in
+The rules are already on the entity, where `nestrs g resource` wrote them on
 [Declare the entity](/tutorial/entity/). The `#[crud]` macro's generated
-`POST /posts` handler takes `Valid<Json<CreatePost>>`, so every request
-body is checked against those rules before `PostsService::create` runs.
+`POST /posts` handler takes `Json<CreatePost>`, and the edge holds every
+argument it decodes to the rules its type declares, so every request body is
+checked before `PostsService::create` runs.
 By the end of this page, `curl` returns a structured `400` for an empty
 title, and a well-formed body persists a post through the database you
 wired on the previous page.
 
 ## No handler edit required
 
-On the previous page you left `impl PostsController {}` empty. That is
+`nestrs g resource` left `impl PostsController {}` empty, and you read it on
+[Expose over HTTP](/tutorial/http/). That is
 not a shortcut — for a bare CRUD feature, the macro is the handler.
-`#[crud]` emits `create` and `update` methods that already wrap the
-body in `Valid<...>`:
+`#[crud]` emits `create` and `update` methods whose body is a plain
+`Json<…>`:
 
-```rust title="(expanded by #[crud] — you don't write this)"
-async fn create(
-    &self,
-    __body: ::nest_rs::http::Valid<::poem::web::Json<CreatePost>>,
-) -> ::poem::Result<::poem::web::Json<Post>> {
-    // delegates to CrudService::create
+```rust title="from the #[crud] expansion, abridged — you don't write this"
+#[post("/")]
+async fn create(&self, __body: Json<CreatePost>) -> Result<Created<Json<Post>>> {
+    // Creatable::create, then a `201` naming the row it made
 }
 ```
 
-When you later override `create` on a richer feature — org id from a JWT,
-an explicit authz check — you keep the same extractor:
-`Valid<Json<CreatePost>>`. The
-[`users` controller in `api`](/tutorial/security/) is the
-reference override.
+There is nothing to wrap: the rules travel with the type. When you later
+write `create` by hand on a richer feature, `Json(input): Json<CreatePost>`
+is validated exactly as the generated one is — and so is a GraphQL mutation,
+a WebSocket message or an MCP tool taking a `CreatePost`.
 
 The crate driving this page is
 [**`nest-rs-pipes`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-pipes) —
-it provides the transport-agnostic `Pipe` trait, the bundled
-`ValidationPipe<T>`, and the value-form `Valid<T>` / `Piped<P, T>`
-carriers that GraphQL, WS, and queue handlers bind per argument. The
-HTTP binding lives in `nest-rs-http` as the `Valid<E>` extractor.
+it holds the check every edge runs on what it decoded, the transport-agnostic
+`Pipe` trait, and the `Piped` carrier a transform binds through.
 
 ## Where the rules live
 
-You already wrote the rules — on the entity, in
+The rules are on the entity, in
 [Declare the entity](/tutorial/entity/):
 
-```rust title="crates/features/src/posts/entity.rs"
+```rust title="crates/features/src/posts/entity.rs (abridged)"
 #[expose(input(create, update), validate(length(min = 1)))]
 pub title: String,
 
@@ -67,65 +64,70 @@ A malformed body comes back as an RFC 9457 `application/problem+json`
 `400` with the structured field errors `validator` produces riding as an
 `errors` extension member.
 
-`AuthnGuard` runs **before** the validation pipe, so both calls below carry the
+`AuthnGuard` runs **before** the validation, so both calls below carry the
 `$TOKEN` you signed on [Persist through Postgres](/tutorial/database/) — drop
-the header and the answer is a `401` that never reaches the pipe this page is
+the header and the answer is a `401` that never reaches the rules this page is
 about.
 
 ```bash frame="terminal"
-$ curl -i -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
+$ curl -i -X POST http://localhost:3001/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"","body":"World"}'
 HTTP/1.1 400 Bad Request
 content-type: application/problem+json
 
 {
-  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.400",
+  "type": "about:blank",
   "title": "Bad Request",
   "status": 400,
   "detail": "validation failed",
+  "code": "INVALID_ARGUMENT",
   "errors": {
-    "title": [{ "code": "length", "message": null, "params": { "min": 1 } }]
+    "title": [{ "code": "length" }]
   }
 }
 ```
 
 The failing field surfaces in `errors`. The client can render per-field
 messages from `errors.<field>[].code` without parsing the human message.
-`message` is `null` unless the rule sets one (`validate(length(min = 1, message
-= "…"))`), and `params` carries the rule's own arguments — not the rejected
-value, which never echoes back.
+An entry carries a `message` only when the rule sets one
+(`validate(length(min = 1, message = "…"))`), and never the rule's
+parameters, which can hold the rejected value: it never echoes back.
 
 <Aside type="tip">
 The shape is stable RFC 9457: `type`, `title`, `status`, `detail`, plus
-the `errors` extension member. A test against the
+the `code` and `errors` extension members. A test against the
 `errors.<field>[0].code` value catches a regression to a different
 validator without locking the message string.
 </Aside>
 
 ## The good-body path is unchanged
 
-A well-formed body flows straight through — the pipe is a no-op on
-successful validation — and, with the database wired on the previous
+A well-formed body flows straight through — a body keeping its rules is
+handed over untouched — and, with the database wired on the previous
 page, the handler persists the post and returns it.
 
 ```bash frame="terminal"
-$ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
+$ curl -i -X POST http://localhost:3001/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
     -d '{"title":"Hello","body":"World"}'
-{"id":"018f…","title":"Hello","body":"World"}
+HTTP/1.1 201 Created
+location: /posts/018f…
+content-type: application/json
+
+{"id":"018f…","title":"Hello","body":"World","created_at":"2026-…","updated_at":"2026-…"}
 ```
 
-A `2xx` with the created row — the body cleared validation and the
-service committed it in a transaction. The pipe only ever intercepts the
-malformed case.
+A `201` with the created row, and the `Location` that names it — the body
+cleared validation and the service committed it in a transaction. The check
+only ever intercepts the malformed case.
 
 ## Two failure modes worth the distinction
 
 | Failure | Status | Trigger |
 |---------|--------|---------|
-| The body isn't valid JSON | `400` | poem rejects before any pipe runs |
-| The body parses but a field is wrong | `400` with `errors` | `ValidationPipe` rejects after extraction |
+| The body isn't valid JSON | `400` | `Json` rejects before any rule runs |
+| The body parses but a field is wrong | `400` with `errors` | `CreatePost`'s rules reject after extraction |
 
 Both are `400`; the second carries the structured `errors` member a
 client form binds to. The handler never sees either.
@@ -137,7 +139,7 @@ field's `validate(...)` at a function — no hand-written DTO, the rule
 rides through to `CreatePost` / `UpdatePost` exactly like the built-in
 ones:
 
-```rust title="crates/features/src/posts/entity.rs"
+```rust title="crates/features/src/posts/entity.rs (abridged)"
 #[expose(
     input(create, update),
     validate(length(min = 1), custom(function = "not_a_placeholder_title"))
@@ -145,14 +147,20 @@ ones:
 pub title: String,
 ```
 
-```rust title="crates/features/src/posts/entity.rs"
-fn not_a_placeholder_title(title: &str) -> Result<(), validator::ValidationError> {
+```rust title="crates/features/src/posts/entity.rs (abridged)"
+use nest_rs::pipes::validator::ValidationError;
+
+fn not_a_placeholder_title(title: &str) -> Result<(), ValidationError> {
     if title.eq_ignore_ascii_case("todo") {
-        return Err(validator::ValidationError::new("placeholder_title"));
+        return Err(ValidationError::new("placeholder_title"));
     }
     Ok(())
 }
 ```
+
+The function returns `validator`'s own error type, which the framework
+re-exports at the release it derives with, so the feature crate's manifest gains
+no line.
 
 The error `code` (`"placeholder_title"`) surfaces in `errors.title[].code`
 — same shape, same client contract.
@@ -163,10 +171,10 @@ The error `code` (`"placeholder_title"`) surfaces in `errors.title[].code`
   the service — wired by `#[crud]`, not by hand.
 - A structured `400` body with one entry per failing field, codes
   stable enough to assert on.
-- A pattern you carry forward: entity rules → generated or overridden
-  handlers that take `Valid<Json<E>>`.
+- A pattern you carry forward: entity rules → every handler, generated or
+  written by hand, that takes the input type.
 
 ## Going further
 
 - [Test it end to end](/tutorial/testing/) — the next step: lock the round-trip down with an e2e suite.
-- [Pipes](/fundamentals/pipes/) — the reference page for `Valid<E>` and the pipe layer.
+- [Pipes](/fundamentals/pipes/) — the reference page for validation at the edge and the pipe layer.

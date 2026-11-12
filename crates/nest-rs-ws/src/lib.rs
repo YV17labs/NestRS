@@ -2,215 +2,327 @@
 //!
 //! A `#[gateway]` struct with a `#[messages]` impl holds
 //! `#[subscribe_message("event")]` handlers. Messages ride a JSON envelope
-//! `{ "event": "...", "data": ... }`. Because a WS upgrade is an HTTP `GET`,
-//! a gateway self-mounts on the existing HTTP transport — listing it in
-//! `#[module(providers = [...])]` is the entire wiring; it inherits port,
-//! CORS, TLS, and is governed by the boot-time access graph.
+//! `{ "event": "...", "data": ... }`. A gateway self-mounts on the HTTP
+//! transport — listing it in `#[module(providers = [...])]` is the entire
+//! wiring; it inherits port, CORS and TLS.
 //!
-//! ```ignore
+//! ```
+//! use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
+//! # use nest_rs_core::{Layer, async_trait, injectable, input};
+//! # use nest_rs_guards::{Guard, GuardFor};
+//! #
+//! # #[injectable]
+//! # #[derive(Default, Layer)]
+//! # struct AuthnGuard;
+//! #
+//! # #[async_trait]
+//! # impl Guard for AuthnGuard {
+//! #     async fn check(
+//! #         &self,
+//! #         _cx: &mut nest_rs_core::UnitContext<'_>,
+//! #     ) -> Result<(), nest_rs_guards::Denial> {
+//! #         Ok(())
+//! #     }
+//! # }
+//! #
+//! # impl GuardFor<nest_rs_http::HttpView> for AuthnGuard {}
+//! #
+//! # #[input]
+//! # struct SendMessage {
+//! #     text: String,
+//! # }
+//! #
+//! # #[derive(serde::Serialize)]
+//! # struct ChatMessage {
+//! #     text: String,
+//! # }
+//!
 //! #[gateway(path = "/ws")]
 //! #[use_guards(AuthnGuard)]
-//! struct ChatGateway {
-//!     #[inject] svc: Arc<RoomService>,
-//! }
+//! struct ChatGateway;
 //!
 //! #[messages]
 //! impl ChatGateway {
 //!     #[subscribe_message("message")]
-//!     #[public]
-//!     async fn on_message(&self, msg: SendMessage) -> ChatMessage { /* ... */ }
-//!
-//!     #[subscribe_message("rooms.list")]
-//!     #[authorize(Read, rooms::Entity)]  // class gate + reply mask, both emitted
-//!     async fn rooms(&self) -> Result<Vec<Room>, ServiceError> { /* ... */ }
+//!     async fn on_message(&self, msg: SendMessage) -> ChatMessage {
+//!         ChatMessage { text: msg.text }
+//!     }
 //! }
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let client = WsClient::for_test();
+//!
+//! let echoed = ChatGateway.dispatch(&client, "message", serde_json::json!({ "text": "hi" })).await;
+//! assert!(matches!(echoed, WsReply::Reply(reply) if reply["text"] == "hi"));
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! # Every message declares its access posture
+//! # A message's access posture
 //!
-//! `#[authorize(Action, Entity)]` or `#[public]`, and **neither is optional** —
-//! a message with no posture does not compile, the same rule a `#[query]` and a
-//! `#[tool]` carry. `#[authorize]` emits the class gate
-//! (`nest_rs_authz::ws::authorize`) before the payload is deserialized and the
-//! reply mask (`nest_rs_authz::ws::masked_reply_for`) around the returned value,
-//! so a handler answering with entity rows writes no masking call. `#[public]`
-//! declares the message deliberately ungated: the guards bound on the gateway and
-//! beside the message still run.
+//! A message the gateway's guards, the app's pool or a guard of its own cover,
+//! one of them identifying its caller, needs no posture, and the boot refuses one
+//! no such guard covers that does not say `#[public]`, as it refuses such a route,
+//! and a gateway running no such guard at its upgrade with no `#[public]` message,
+//! whatever guards its messages bind. `#[authorize(Action, Subject)]` emits the
+//! class gate (`nest_rs_authz::class_gate`) before the payload is deserialized,
+//! and the reads it opens to the ability the connection carries. `#[public]` means a caller with no
+//! credential is admitted, and reads nothing a grant guards unless it names what it
+//! reads, `#[public(Action, Subject)]`, with the same gate: behind an
+//! upgrade running a guard that establishes or reads who the caller is, it could
+//! open nothing, and the boot refuses it.
 //!
-//! The mask acts on the **serialized** reply, so a withheld column is absent from
-//! the frame rather than an error — HTTP's behaviour, since an envelope promises no
-//! schema. Fail-closed is reserved for a missing ambient ability and a body that
-//! cannot be reconciled with the entity. `unmasked` keeps the gate and hands
-//! masking to the body, for a shape the round-trip cannot see through.
-//!
-//! One compile rule, and its reason is the alias hazard below rather than masking:
-//! a masked handler returns a **literal** `Result<T, E>`.
+//! Each wire row a reply carries was judged for the connection's caller where it
+//! was built: a column its grant withholds reads `null`, and a row it may not read
+//! refuses the message with a `FORBIDDEN` frame. A push to other connections
+//! (`broadcast`, `emit_to`, `WsServer::emit`) carries no row judged for the caller
+//! pushing it: no recipient's ability judged it, so it refuses.
 //!
 //! # Return-type contract
 //!
 //! - `()` — send nothing.
 //! - `T` — serialize as the reply on the request's event name.
 //! - `Result<(), E>` / `Result<T, E>` — `Err(e)` becomes an error frame
-//!   `{ "event": "<event>", "data": { "error": "<Display of e>" } }` and a
-//!   `warn!(target: "nest_rs::ws", ...)` log.
+//!   `{ "event": "<event>", "data": { "error": "…", "code": "…", … } }`, said
+//!   by `e`'s **type**: a [`WsError`] as built; a
+//!   [`ToProblem`](nest_rs_core::ToProblem) error as the problem it says
+//!   ([`WsError::from_problem`]); a `Problem`, a pipe rejection or a decode
+//!   failure its chain carries, in its own form, without a decode failure's
+//!   value; anything else as
+//!   [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE) under the
+//!   `INTERNAL` code, the frame every failure the client is not told of
+//!   answers.
 //!
-//! Detection is syntactic on the type's last path segment being `Result`: a
-//! type alias over `Result` is **not** detected and would leak the error
-//! variant on the wire. Always return `Result` (or `std::result::Result`)
-//! directly.
-//!
-//! **`Display` for the error must be wire-safe**, and [`Opaque`] is the seam that
-//! makes it so without the handler having to think about it: `.opaque()?` logs the
-//! real error at `error` on `nest_rs::ws` and hands the client a constant. Reach
-//! for it on any failure a client is not owed an explanation for — a `DbErr` above
-//! all, whose `Display` carries SQL. A rejection the client *can* act on is the
-//! opposite case and travels as itself.
+//! A refusal is filed by the message's `ws.message` line alone, as HTTP files
+//! a `4xx`; an opaque error, and the chain behind a `5xx` problem, at `error`
+//! on `nest_rs::ws` — at `warn` behind a `503` — naming the message by its
+//! gateway's `path` and its `event`. An error's `Display` never reaches the
+//! frame. [`Opaque`]'s `.opaque()?` says at the call site that a failure is
+//! none of the client's business, whatever its type, and hands its chain to
+//! the gateway, which files it once that frame is the answer.
 //!
 //! # Server→client push
 //!
-//! [`WsServer`] is the `@WebSocketServer` analog — a connection registry
-//! provided by [`WsModule`]. A handler reaches it by declaring a
-//! `&`[`WsClient`] parameter (a reference, distinguished from the owned
-//! payload). Pushes funnel through a per-connection outbox drained by a
-//! writer task, so the read loop never blocks on a slow `Sink`.
+//! [`WsServer`] is the connection registry provided by [`WsModule`]. A handler
+//! reaches it by declaring a `&`[`WsClient`] parameter (a reference,
+//! distinguished from the owned payload).
 //!
 //! # Guards and lifecycle hooks
 //!
 //! - **Connection-level**: `#[use_guards]` on the gateway struct reuses the
 //!   HTTP `Guard` trait and runs on the upgrade request.
 //! - **Per-message**: `#[use_guards]` beside a `#[subscribe_message]` runs
-//!   the Layer System chain (global + per-message, deduped by `TypeId`)
-//!   each time the event fires — same `Guard::check_ws_message` interface.
+//!   `Guard::check` on the message's [`WsView`] (global + per-message, deduped
+//!   by `TypeId`) each time the event fires.
 //!
-//! `#[on_connect]` / `#[on_disconnect]` on the `#[messages]` impl block are
-//! the `OnGatewayConnection` / `OnGatewayDisconnect` analogs; `on_disconnect`
-//! runs while the connection is still registered.
+//! `#[use_interceptors]`, `#[use_exception_filters]` and `#[use_pipes]` bind on
+//! the gateway, for each of its messages, and beside a `#[subscribe_message]`,
+//! for that one.
+//!
+//! `#[on_connect]` / `#[on_disconnect]` on the `#[messages]` impl block are the
+//! lifecycle hooks; `on_disconnect` runs while the connection is still registered.
 //!
 //! # Versioning the mount
 //!
-//! `#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`. It is the same
-//! declaration `#[controller]` takes and it resolves through the same
-//! [`nest_rs_http::version_path`], because a gateway's mount *is* an address the
-//! client selects — the edges where it is not (GraphQL, MCP, queues) refuse the
-//! argument at compile time rather than accept a version nothing could apply.
+//! `#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`, the version
+//! prefixed to the path as `#[controller]` prefixes it. Two gateways may share
+//! a path under two versions; sharing a path *and* a version fails boot.
 //!
-//! A gateway owns its mount, so the version is part of the identity the boot
-//! checks: `#[gateway(path = "/ws", version = "1")]` and `version = "2"` are two
-//! mounts that both boot and serve their own message tables, while two gateways
-//! sharing a path *and* a version still fail boot naming both.
-//!
-//! **A gateway is selected by URI only.** `NESTRS_HTTP__VERSIONING` rewrites
-//! *controller* paths in front of routing, and the selector learns its prefixes
-//! from controllers alone — a self-mount is version-neutral to it. So under
-//! `header` or `media_type` a versioned gateway is still served at `/v1/ws`
-//! (rather than refused as a URI form), and `/ws` + a version header reaches
-//! nothing. That is the honest shape for this edge: a browser cannot set headers
-//! on a `WebSocket` handshake anyway.
+//! **A gateway is selected by URI only**: under `<PREFIX>_HTTP__VERSIONING`'s
+//! `header` or `media_type` a versioned gateway is still served at `/v1/ws`, and
+//! `/ws` plus a version header reaches nothing.
 //!
 //! # Per-gateway namespacing
 //!
 //! [`WsServer`] is generic over a zero-sized namespace marker (default
 //! [`Global`]). `#[gateway(namespace = MyNs)]` mounts against its own
-//! `WsServer<MyNs>` — a separate registry, also owned by [`WsModule`] (see
-//! `crate::namespace`) — so two gateways isolate without sharing a registry.
+//! `WsServer<MyNs>`, a separate registry also owned by [`WsModule`].
 //!
-//! # Ambient request data context
+//! # The pipeline, and units of work
 //!
-//! The connection loop runs in a task *after* the upgrade completes, so the
-//! task-locals an HTTP request installs have unwound by the time a message
-//! handler runs. The [`SocketContext`] seam captures opaque per-connection
-//! state from the post-guard upgrade request and re-installs it around each
-//! dispatch — this is how `nest_rs_seaorm::ws` re-binds executor + ability
-//! per message without `nest-rs-ws` depending on the ORM or authz.
+//! The upgrade runs as the HTTP transport's self-mount: its app-wide unit
+//! stage, its guard stage (the app's pool and the gateway's `#[use_guards]`)
+//! and the app's exception filters. Each message then runs through the same
+//! pipeline as a route, as a `ws.message` unit: the unit stage, its guard stage
+//! (the app's pool, the message's own guards, then the class gate its posture
+//! declares), its exception filters (the message's, the gateway's, the app's),
+//! its handler stage (the app's interceptors, the gateway's
+//! `#[use_interceptors]`, the message's) and its tail — the data pipes, the
+//! handler's own pipes and the call. A layer reads the message
+//! through [`WsView`] and may answer it through [`WsView::respond`].
+//!
+//! The connection loop runs after the upgrade completes, under what the
+//! upgrade carried into a [`Connection`](nest_rs_core::Continuation::Connection):
+//! its trace, its actor and every value that crosses reach each hook and message,
+//! the ability its guards attached each message's reads alone, since a hook states
+//! no posture naming what it reads, and never its scope or its transaction.
+//! Each message and each connection hook is a unit of work of its own, run
+//! through the bound `nest_rs_database::UnitOfWork` and cut at its deadline: a
+//! message commits unless it fails — an error frame, however a layer answered
+//! it — a hook unless it unwound or was cut.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-/// This crate's span target — The WebSocket edge: upgrades, connections, message dispatch.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
+/// This crate's span target — the WebSocket edge: upgrades, connections, message dispatch.
 pub const TARGET: &str = "nest_rs::ws";
 
-/// The two targets this crate **emits on but does not own**, re-exported so
-/// `nest-rs-ws-macros` reaches them through its own surface crate.
-///
-/// `framework.md` fixes the route: "A `*-macros` crate reaches the owner through
-/// **its own surface crate's** re-export (`::nest_rs_queue::TARGET` from
-/// `nest-rs-queue-macros`) … Reaching a *different* sibling is the breach that
-/// rule names". `#[gateway]` emitted `::nest_rs_core::target::LAYERS` and
-/// `#[messages]` emitted `::nest_rs_http::target::ROUTES`, which `CLAUDE.md`
-/// records by name as the two live breaches of it. Both are correct *values* —
-/// a gateway's layer note is a layer event and its mount line is a route line —
-/// so what was wrong was the path, and this is the one line that fixes it.
-pub mod target {
-    /// Layer composition and scope resolution, owned by `nest-rs-core`.
-    pub use nest_rs_core::target::LAYERS;
-    /// Mounted addresses, owned by `nest-rs-http`, which serves the upgrade.
-    pub use nest_rs_http::target::ROUTES;
-}
-
+mod ambient;
 mod config;
-mod context;
 mod envelope;
+mod error;
 mod gateway;
 mod guard;
+mod message;
 mod module;
 mod namespace;
 mod opaque;
 mod scope;
 mod server;
+#[cfg(test)]
+mod testing;
 pub mod unit;
+mod view;
 
 pub use config::WsConfig;
-pub use context::{BoxFuture, Captured, SocketContext};
-pub use envelope::{ReplyValue, ReplyValueFallback, WsEnvelope, WsError, WsReply};
-pub use gateway::{
-    Gateway, GatewayEndpoint, WsDataFold, WsDataPipe, gateway_endpoint, resolve_ws_data_pipe,
-};
-pub use guard::{EventLayerTable, WsMessageCheck};
+pub use envelope::{WsEnvelope, WsError, WsProblemType, WsReply};
+pub use gateway::Gateway;
+pub use guard::denial_to_ws_error;
 pub use module::{WsModule, WsSetup};
-pub use namespace::{WsNamespaceEntry, WsNamespaces};
+pub use namespace::WsNamespaces;
 pub use opaque::Opaque;
-/// Per-message accessor for `#[injectable(scope = request)]` providers inside a
-/// WS message handler — the WS mirror of `nest_rs_http::Scoped<T>`.
-pub use scope::{Scoped, WsScopeError};
 pub use server::{ConnId, Global, Registry, WsClient, WsServer};
+pub use view::WsView;
 
-// Re-exported so macro-generated code resolves these through the framework.
-pub use async_trait::async_trait;
-// Hidden: macro plumbing, not public API — like `nest-rs-queue`'s treatment of
-// the same two re-exports.
 #[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::ambient::ambient_parameter;
+    pub use crate::envelope::{
+        ErrorReport, ErrorReportChain, ErrorReportFallback, ErrorReportLocal, HandlerFailed,
+        ReplyOutcome, ReplyValue, ReplyValueFallback, decode_payload, reply_at,
+    };
+    pub use crate::gateway::{GATEWAY_LABEL, gateway_endpoint, served_path, wire_gateway};
+    pub use crate::guard::{MessageGuards, message_guard_stage, refused_origin};
+    pub use crate::message::{DeclaredMessage, MessageTable};
+    pub use crate::module::RUNTIME;
+    pub use crate::namespace::WsNamespaceEntry;
+    pub use crate::scope::scoped_parameter;
+    pub use nest_rs_pipes::__private::{
+        DeclaredRules, NoRules, OptionalRules, PipeSpec, ValidateProbe,
+    };
+    pub use nest_rs_pipes::GlobalPipe;
+
+    // So a crate on this one alone reaches the HTTP edge the upgrade rides.
+    pub use nest_rs_http;
+
+    /// The targets this crate emits on but does not own.
+    pub mod target {
+        pub use nest_rs_core::target::LAYERS;
+        pub use nest_rs_http::target::ROUTES;
+    }
+}
+
+/// The JSON a message's `data` is, re-exported so a gateway, a guard or a
+/// broadcast names `serde_json::Value` without its own dependency.
 pub use serde_json;
-#[doc(hidden)]
+/// The gateway's logger, re-exported so a gateway logs without its own
+/// `tracing` dependency.
 pub use tracing;
 
-/// The RFC 6455 §7.4.1 status codes, from the transport this crate serves
-/// sockets on. Published here because this crate *chooses* them — the
-/// gateway closes with `Away`, `Error` and `Policy` — so a caller writing a
-/// gateway and a caller testing one name one path. Until this existed, this
-/// crate's own suite reached into `nest-rs-testing` for it.
-pub use poem::web::websocket::CloseCode;
+/// The status a socket closes with (RFC 6455 §7.4), which a test reads off
+/// the socket it opened.
+///
+/// ```
+/// use nest_rs_ws::CloseCode;
+///
+/// assert_eq!(u16::from(CloseCode::Away), 1001);
+/// assert_eq!(CloseCode::from(1009), CloseCode::Size);
+/// assert_eq!(u16::from(CloseCode::from(4409)), 4409);
+/// ```
+pub use nest_rs_http::__private::websocket::CloseCode;
 
-pub use poem;
-
-// Re-exported so `#[messages]`-generated discovery metadata
-// (`HttpEndpointMeta` — the WS upgrade is an HTTP GET) resolves through this
-// crate: a WS-only gateway crate needs no direct `nest-rs-http` dependency.
-pub use nest_rs_http;
-
-/// The wire-DTO shorthand — same decorator the HTTP layer uses, re-exported
-/// here so a payload crossing this transport needs no `serde` of its own.
-pub use nest_rs_core::input;
-
+/// Bind a `#[gateway]` impl block's message handlers.
+///
+/// A handler's parameters are read by their shape: a reference is the
+/// `&`[`WsClient`], a [`Scoped<T>`](nest_rs_core::Scoped) a request-scoped
+/// provider the boot checks, and the one other parameter the payload `data` is
+/// decoded into. [`Gateway::dispatch`] calls a handler on its own, behind its
+/// posture's class gate — no guard, no layer — as a test does; on a socket each
+/// message runs through its site.
+///
+/// ```
+/// use nest_rs_core::Discoverable;
+/// use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
+///
+/// #[gateway(path = "/chat")]
+/// #[derive(Default)]
+/// struct ChatGateway;
+///
+/// #[messages]
+/// impl ChatGateway {
+///     #[subscribe_message("shout")]
+///     #[public]
+///     async fn shout(&self, text: String) -> String {
+///         text.to_uppercase()
+///     }
+/// }
+///
+/// fn implements<T: Gateway + Discoverable>() {}
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+/// implements::<ChatGateway>();
+///
+/// let reply = ChatGateway
+///     .dispatch(&WsClient::for_test(), "shout", serde_json::json!("hi"))
+///     .await;
+/// assert!(matches!(reply, WsReply::Reply(text) if text == "HI"));
+/// # Ok(())
+/// # }
+/// ```
 pub use nest_rs_ws_macros::messages;
 
-/// The gateway decorator. `#[use_interceptors(...)]` / `#[use_filters(...)]`
-/// are **HTTP-only** — the per-message WS seam is reserved but not invoked, so
-/// binding one on a gateway is rejected at compile time instead of silently
-/// doing nothing:
+/// Mark a struct as a WebSocket gateway.
+///
+/// ```
+/// use nest_rs_core::module;
+/// use nest_rs_ws::{gateway, messages};
+///
+/// #[gateway(path = "/ws", version = "1")]
+/// #[derive(Default)]
+/// struct ChatGateway;
+///
+/// #[messages]
+/// impl ChatGateway {
+///     #[subscribe_message("ping")]
+///     #[public]
+///     async fn ping(&self) -> String {
+///         "pong".into()
+///     }
+/// }
+///
+/// #[module(providers = [ChatGateway])]
+/// struct ChatModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+///
+/// assert_eq!(ChatGateway::PATH, "/ws");
+/// assert_eq!(ChatGateway::VERSION, Some("1"));
+/// # let app = nest_rs_testing::TestApp::builder().module::<ChatModule>().build_ws().await?;
+///
+/// let mut socket = app.socket("/v1/ws").connect().await;
+/// socket.send("ping", serde_json::Value::Null).await;
+/// assert_eq!(socket.next_envelope().await["data"], "pong");
+/// # app.shutdown().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// `#[use_interceptors(...)]`, `#[use_exception_filters(...)]` and
+/// `#[use_pipes(...)]` on the struct run around each of its messages;
+/// `#[use_filters(...)]`, an untyped error mapper an exception filter replaced,
+/// is refused at compile time:
 ///
 /// ```compile_fail
 /// use nest_rs_ws::gateway;

@@ -5,8 +5,6 @@ sidebar:
   order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 An indicator is one check a probe runs: a method on an `#[injectable]`
 provider, tagged with `#[liveness]`, `#[readiness]`, or `#[startup]`
 inside an `#[indicators]` impl block. It returns
@@ -16,7 +14,9 @@ method's name becomes the indicator's key.
 **The probe body carries a fixed reason, never your error.** A failed check
 reports `"check failed"` (or `"timed out"`), and the `anyhow` chain goes to
 the log instead: `warn` on `nest_rs::health`, with `indicator`, `kind` and
-`error` as fields. That is deliberate — `/health/*` is routinely
+`error` as fields. A check that panics reports `"check failed"` too, its panic
+filed once at `error`, `health indicator panicked`, and the probe still answers
+for every other indicator. That is deliberate — `/health/*` is routinely
 unauthenticated, and an error from a connection check carries a DSN, an
 internal hostname or a driver message. Triage is one filtered log query;
 it is not a value anyone can read off an open port.
@@ -55,7 +55,7 @@ use crate::upstream::health::indicator::UpstreamHealthIndicator;
 pub struct UpstreamHealthModule;
 ```
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use features::upstream::UpstreamHealthModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
@@ -75,123 +75,171 @@ The dividing rule matches every other adapter: a file lives in
 
 | Scope                                    | Home                                              | Example                              |
 |------------------------------------------|---------------------------------------------------|--------------------------------------|
-| Framework primitive (any nestrs project) | `crates/nest-rs-<concern>/` behind a Cargo feature | `HealthModule` (next section) |
+| Framework primitive (any nestrs project) | `crates/nest-rs-<concern>/` behind a Cargo feature | `redis`, from `RedisModule` (next section) |
 | Product feature (any app of this repo)   | `crates/features/<feature>/health/`               | `UpstreamHealthIndicator` above       |
 | App-specific glue (this binary only)     | `apps/<x>/<feature>/health/` (exception)          | a deployment-quirk check              |
 
 A loose `health.rs` at the root of `apps/<x>/src/` is never the answer:
 `apps/<x>/` is composition only (`main.rs` + `module.rs`), so the file
 would belong to no `#[module]`. See [Monorepo
-layout](/fundamentals/modules/#extract-a-feature) for
+layout](/fundamentals/modules/#a-feature-of-its-own) for
 the full rule.
 
-## Framework-shipped: `SeaOrmHealthModule`
+## Framework-shipped indicators
 
-A framework concern — a pool ping, a queue connection probe — belongs
-in the crate that owns the dependency, behind a Cargo feature so an
-app that does not import `HealthModule` does not pay for the
-indicator. The SeaORM pool ping is the first one to ship.
+A resource the framework opens ships its check in the crate that opens it,
+behind that crate's `health` feature — which `cargo add nest-rs --features
+health` turns on beside the resource's own feature, so the manifest still names
+the umbrella alone. The module that opens the resource attaches its check, so
+`HealthModule` checks every resource your app or its features opened, and you
+import nothing beside it:
 
-`nest-rs-seaorm` exposes it as `SeaOrmHealthModule`, which registers
-`SeaOrmHealthIndicator`. The indicator runs `DatabaseConnection::ping` on
-both `#[readiness]` and `#[startup]` — exactly what most apps want and
-zero code in the app:
+| Resource | Opened by | Key | Check |
+|---|---|---|---|
+| The SeaORM pool | `SeaOrmModule` | `seaorm` | `DatabaseConnection::ping` |
+| A Redis instance | `RedisModule` | `redis` | `PING` on the instance's connection |
+| A named Redis instance | `RedisModule::<Cache>` | `redis:cache` | the same, on that instance |
+| The object store | `StorageModule` | `storage` | one page of the bucket's listing |
 
-```toml title="apps/api/Cargo.toml (from the demo)"
-nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "health"] }
-```
+The queue and the outbox are read through the Valkey and the pool they run on; the
+OTLP collector, an authorization server and a social provider have no check,
+because their outage must not take every replica out of rotation.
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
+use nest_rs::redis::RedisModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
+use nest_rs::storage::StorageModule;
 
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        SeaOrmHealthModule,
+        RedisModule,
+        StorageModule,
         HealthModule,
     ],
 )]
 pub struct ApiModule;
 ```
 
-An unreachable pool drops readiness and startup to `503` until the
-connection comes back; liveness stays `up` (the orchestrator should
-not restart the pod just because the database blinked). See
-[Database / Health](/database/health/) for the full integration.
+```bash frame="terminal"
+$ curl -s http://localhost:3000/health/ready | jq '.details | keys'
+[ "redis", "seaorm", "storage" ]
+```
 
-## What `#[indicators]` does
+A resource a binding or a feature opens is checked the same way. The demo's `audio` feature
+opens the store and a second Valkey, `transcodes`; the `api` app imports the
+feature and `HealthModule`, never those resources, and its readiness reads
+`redis:transcodes` and `storage` beside its own. Two modules opening one
+resource report it once.
 
-The orchestrator decorator walks the impl block, finds each method
-tagged with exactly one probe attribute, strips the attribute, and
-submits one `HealthIndicator` entry per method to the link-time
-inventory `HealthService` drains at probe time. The method stays on
-the impl block unchanged — still a regular `async fn` you can call
-from anywhere.
+Each check runs on `/health/ready` and `/health/startup`, never on
+`/health/live`: the orchestrator should not restart a pod because the
+database or a Valkey blinked. A check answers within the ceilings of
+[Health](/health/#configuration), and its resource's own budget bounds what it
+sends — the Redis connection's
+`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, for one.
 
-- **`#[injectable]`** makes the indicator an ordinary DI provider —
-  same `#[inject]` shape as any other service.
-- **`#[indicators]`** on the impl block orchestrates the per-method
-  attributes; it takes no arguments.
-- **`#[liveness]` / `#[readiness]` / `#[startup]`** route the method
-  to its probe. Exactly one per method — the macro rejects two at
-  compile time.
-- Methods must be `async fn` returning `anyhow::Result<()>` (or any
-  `Result<(), E: Into<anyhow::Error>>`). A bare `async fn` with no
-  return is treated as infallible — always `up`.
+**A key names the resource, never the probe.** A framework indicator is named
+for the crate owning the resource, plus `:` and the instance for a
+[named one](/queue/topologies/#a-second-valkey) — `redis:cache` for the
+instance `RedisModule::<Cache>` opens — so a readiness `503`
+says which Valkey went away. Your own indicator keeps its method name: a method
+named `redis` in an app that opens Redis fails the boot naming both, and the
+fix is to drop yours.
 
-Multiple decorated methods on the same impl block share the
-provider's `#[inject]` dependencies — pool a DB ping, a Redis ping,
-and a migration check on one `AppHealth` rather than writing a struct
-per check:
+**A check exists where the module opening its resource is imported.** A
+seeded or overridden connection is what the pool's or an instance's check
+pings — a suite booting on `ephemeral_database` still reads `seaorm` — while a
+test that overrides `Storage` opens no store, and probes none.
 
-```rust title="apps/api/src/app_health.rs"
-#[injectable]
-pub struct AppHealth {
-    #[inject]
-    db: Arc<DatabaseConnection>,
-    #[inject]
-    redis: Arc<RedisPool>,
+**What each check reads.**
+
+- The pool's is a round-trip, `SELECT 1`.
+- A Redis instance's is a `PING`, which every binding's ACL rule already
+  grants. On a Cluster it reaches every primary, so a primary down reads
+  `down` until its replica takes over.
+- The store's is one attempt of the proof it passed at boot: a page of the
+  bucket's listing under the URL's prefix. A store reached over verified TLS
+  reads up even when it answers a `403` naming no rejected key — most often a
+  policy without `s3:ListBucket` — as it boots, and the probe that first meets that refusal
+  files the boot's `warn` naming the credential variables, so a policy revoked
+  under a running app is said once; a key the store rejects, a bucket gone, a
+  redirect, or no answer reads down. It sends that request on every probe, so a store billing per request
+  bills the orchestrator's probes too. A `memory:///` store has nothing to reach
+  and reads up.
+
+See [Database health](/database/health/) for the pool end to end.
+
+## An indicator a module attaches
+
+`#[indicators]` names a check after its method, and a link-time registry
+holds no generic type — so a resource opened once per instance cannot be
+checked that way. A package that opens one ships its check as the framework
+does: the module opening the resource attaches an `IndicatorEntry` from its
+`register`, which runs only when an app imports it, so the check is gated like
+every other discovered item and the app imports nothing more. Its key is
+rooted at the package's crate, as every name it owns is
+([Naming a package](/semver/#naming-a-package)): `nestrs_acme`, and
+`nestrs_acme:<instance>` for a named one.
+
+**The attaching module is imported by type.** Two features may each call
+`AcmeModule`, bare or through its `for_root`, and the entry must land once.
+`AcmeModule` is imported by type, and `ConfigModule::setup` imports it by type
+too, so its `register` runs once per app — as `SeaOrmModule` and `RedisModule`
+open their pool or instance. Never attach from a hand-written
+`DynamicModule`'s own `register`: it runs once per import site, so the second
+feature's entry claims the key again and the boot's name check refuses it.
+
+```rust title="crates/acme/src/module.rs"
+use nest_rs::config::{ConfigModule, ConfigSetup};
+use nest_rs::core::{Collecting, Container, ContainerBuilder, Module, Registering, Unnamed};
+use nest_rs::health::{IndicatorEntry, IndicatorFuture, ProbeKind};
+
+use crate::{AcmeClient, AcmeConfig};
+
+fn ping(container: &Container) -> IndicatorFuture<'_> {
+    Box::pin(async move {
+        let client = container
+            .get::<AcmeClient>()
+            .ok_or_else(|| anyhow::anyhow!("AcmeModule opened no client"))?;
+        client.ping().await
+    })
 }
 
-#[indicators]
-impl AppHealth {
-    #[readiness]
-    async fn db(&self) -> Result<(), sea_orm::DbErr> {
-        self.db.ping().await
+pub struct AcmeModule;
+pub type AcmeSetup = ConfigSetup<AcmeModule, AcmeConfig>;
+
+impl AcmeModule {
+    pub fn for_root(config: AcmeConfig) -> AcmeSetup {
+        ConfigModule::setup(config)
+    }
+}
+
+impl Module for AcmeModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature::<Unnamed, AcmeConfig>(builder)
+            .provide_factory(|_| AcmeClient::connect())
     }
 
-    #[readiness]
-    async fn redis(&self) -> anyhow::Result<()> {
-        self.redis.ping().await
-    }
-
-    #[startup]
-    async fn migrations(&self) -> anyhow::Result<()> {
-        migration::Migrator::status(&self.db).await?;
-        Ok(())
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_meta(IndicatorEntry::new::<Self>("nestrs_acme", ProbeKind::Readiness, ping))
+            .provide_meta(IndicatorEntry::new::<Self>("nestrs_acme", ProbeKind::Startup, ping))
     }
 }
 ```
 
-A worker app or an MCP app that imports the feature's data layer
-without its `HealthModule` ships no probe surface for that feature —
-the access graph keeps the indicator out of the running binary. Apps
-opt into health the same way they opt into HTTP or GraphQL.
-
-<Aside type="note">
-A `Discoverable` impl is **not** emitted by `#[indicators]` — the
-provider's `#[injectable]` owns it. Inventory is the same seam
-`#[hooks]`, `#[scheduled]`, and `#[processor]` use.
-</Aside>
+Both registries answer the same probes and pass one name check at boot: two
+indicators claiming a key on one probe fail it naming the method's module and
+the type of the module that attached the entry.
 
 ## Going further
 
-- [Discovery](/health/discovery/) — how module-gating decides which
-  indicators fire.
-- [Database / Health](/database/health/) — `SeaOrmHealthModule` end
+- [Discovery](/health/discovery/) — what `#[indicators]` registers, and how
+  module-gating decides which indicators fire.
+- [Database / Health](/database/health/) — the pool's indicator end
   to end.
 - [Providers](/fundamentals/providers/) — `#[injectable]`, the access
   graph, and what makes a provider reachable.

@@ -1,7 +1,6 @@
 ---
 title: End-to-end tests
-description: TestApp boots the real AppModule against an EphemeralDatabase — the route table, the DI graph, the access-graph check, authn/authz, and the data path all run.
-tier: basics
+description: TestApp boots the real ApiModule on a throwaway database and a key of the test's own — routes, DI graph, access graph, guards and data path all run.
 sidebar:
   order: 4
 ---
@@ -10,8 +9,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 An end-to-end test boots the **real** top-level module in process,
 against a throwaway Postgres database, and drives the HTTP surface
-through the same [`poem`](https://crates.io/crates/poem) runtime
-production uses. Every app ships one, at `apps/<app>/tests/e2e/main.rs`
+through the same transport production runs. Every app ships one, at `apps/<app>/tests/e2e/main.rs`
 — the same `tests/<suite>/main.rs` directory form as every test binary
 in the codebase (see [Integration tests](/testing/integration/) for the
 layout rule). The happy path covered here pairs with
@@ -21,57 +19,73 @@ never trips.
 
 ## A round-trip e2e test
 
-```rust title="apps/api/tests/e2e/harness.rs (abridged)"
+```rust title="apps/api/tests/e2e/main.rs (from the demo, abridged)"
 use api::ApiModule;
-use nest_rs::authn::JwtConfig;
-use nest_rs::testing::{EphemeralDatabase, TestApp};
-use nest_rs::http::poem::http::header;
-use serde_json::json;
+use features::{Role, Subject};
+use nest_rs::testing::{TestApp, TestAppBuilder, TestResponse};
+// …
 
-pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let app = TestApp::builder()
+pub(crate) async fn boot() -> TestApp {
+    boot_with(TestApp::builder()).await
+}
+// …
+
+async fn boot_with(builder: TestAppBuilder) -> TestApp {
+    builder
         .module::<ApiModule>()
-        .provide_arc(db.connection())
-        .provide(JwtConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            ..Default::default()
-        })
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
-        .expect("ApiModule boots against the throwaway database");
-    (db, app)
+        .expect("ApiModule boots against a throwaway database")
+}
+
+pub(crate) fn sign(app: &TestApp, org_id: Uuid, role: Role) -> String {
+    app.bearer(&claims(org_id, role, client()))
 }
 ```
 
-Each test module reaches for that `boot()` and the token helpers beside it:
+The suite boots `ApiModule`, the module the api's `main` boots, and nothing
+beside it: every route runs behind the guards the binary puts in front of it, its
+controller's and any pool that module's providers list, and the OpenAPI document
+describes them. The boot also arms the
+app's outbox, as the binary's relay does, so what a test pushes waits in the
+throwaway database
+([a job pushed inside a transaction](/testing/headless/#a-job-pushed-inside-a-transaction-waits-for-a-relay)). Each test gets
+a database of its own, created and migrated at the boot and dropped after the
+app, and the app verifies the tokens of a key the test holds, so `sign` mints a
+bearer the guards admit ([a bearer the app verifies](/testing/driving/#a-bearer-the-app-verifies)). Nothing else is
+configured: the api reads its audience from its own `.env` layer and its issuer
+from the root's, as `nestrs run dev` does.
+
+Each test module reaches for that `boot()` and the `sign` helper beside it:
 
 ```rust title="apps/api/tests/e2e/users.rs (from the demo, abridged)"
-use super::harness::*;
+use nest_rs::http::{StatusCode, header};
+// …
+use serde_json::json;
+// …
+use crate::*;
 
 #[tokio::test]
-async fn create_then_list_users() {
-    let (_db, app) = boot().await;
-    let bearer = format!("Bearer {}", login().await);
+async fn users_are_scoped_to_their_org_and_bound_by_id() {
+    let app = boot().await;
+
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
+    let org_a = create_org(&app, &bootstrap, "Acme").await;
+    // …
+    let token_a = sign(&app, org_a, Role::Admin);
+    // …
 
     let created = app
         .http()
         .post("/users")
-        .header(header::AUTHORIZATION, &bearer)
+        .header(header::AUTHORIZATION, &token_a)
         .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
         .send()
         .await;
-    created.assert_status_is_ok();
-
-    let listed = app
-        .http()
-        .get("/users")
-        .header(header::AUTHORIZATION, &bearer)
-        .send()
-        .await;
-    listed.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
+    // …
 }
 ```
 
@@ -81,8 +95,9 @@ regression fails this test, in this binary.
 
 ## Splitting a large suite
 
-A small suite keeps its tests directly in `main.rs`. When it gets
-unwieldy, add sibling modules — the path never changes. Cargo
+`main.rs` is the suite root — the `mod` list and the fixtures the siblings
+share — and each concern is a sibling module, so the path never changes as
+the suite grows. Cargo
 auto-detects `tests/e2e/main.rs` as a single integration-test binary
 named `e2e`, and — unlike top-level `tests/*.rs` — it does **not**
 compile the sibling files under `tests/e2e/` as their own binaries. So
@@ -93,35 +108,38 @@ the whole subtree links into one `e2e` binary that the nextest
 apps/api/
 └── tests/
     └── e2e/
-        ├── main.rs         ← the crate root: mod harness; mod users; …
-        ├── harness.rs      ← boot(), token_for(), fixtures
+        ├── main.rs         ← the suite root: mod users; …, boot(), sign(), fixtures
         ├── users.rs
         ├── orgs.rs
         ├── posts.rs
         └── graphql.rs
 ```
 
-`tests/e2e/main.rs` is a flat index:
+Its `mod` list is the suite's index:
 
-```rust title="apps/api/tests/e2e/main.rs (from the demo)"
-mod harness;
-
+```rust title="apps/api/tests/e2e/main.rs (from the demo, abridged)"
 mod audio;
+mod audit;
 mod graphql;
 mod health;
 mod http;
+mod module;
 mod openapi;
 mod orgs;
 mod posts;
+mod schema;
+mod scopes;
+mod subscription;
 mod users;
 ```
 
-Each module pulls shared setup from the harness with one line —
-`use super::harness::*;`, as in the test above.
+Each module pulls the shared setup with one line — `use crate::*;`, as in
+the test above.
 
 Because `main.rs` is the crate root, `mod users;` resolves to a sibling
-`tests/e2e/users.rs` in the same directory — and `harness.rs` needs no `mod.rs`
-trick, since nothing under `tests/e2e/` is auto-discovered as a binary.
+`tests/e2e/users.rs` in the same directory, and the `pub(crate)` fixtures
+beside the `mod` list are `crate::` items every sibling reaches — nothing
+under `tests/e2e/` is auto-discovered as a binary.
 
 <Aside type="caution">
 Do **not** split with a top-level `tests/e2e.rs` plus `mod users;`. That `mod`
@@ -132,200 +150,79 @@ unfiltered. The `tests/e2e/main.rs` directory form is what keeps it one binary.
 
 Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
 
-- The four-phase boot is the expensive part — sharing `boot()` through
-  `harness` keeps it written once.
+- The four-phase boot is the expensive part — sharing `boot()` from
+  `main.rs` keeps it written once.
 - Cargo links the app crate once per binary; one binary means one link
   step instead of one per concern file.
 - `nestrs run test e2e` runs the whole suite from the workspace root.
 
 ## Ephemeral Postgres
 
-`EphemeralDatabase::create::<Migrator>()` creates a uniquely-named
-Postgres database, runs migrations, and drops it on the guard's `Drop`
-— even on panic, even after a crashed previous run (it reaps
-`nest_rs_e2e_*` databases older than five minutes on the next call). The
-admin URL comes from `NESTRS_SEAORM__URL`.
+`ephemeral_database::<Migrator>()` is how a suite boots on a database: the
+harness creates a uniquely-named Postgres database at the boot, runs the
+migrations, seeds its connection in place of the pool `SeaOrmModule` would
+open, and drops it after the app, closed or dropped — even on panic, and even
+after a crashed previous run, whose `nest_rs_e2e_*` databases older than five
+minutes the next boot reaps. The admin URL comes from `<PREFIX>_SEAORM__URL`,
+and every connection the fixture opens is the app's pool's: TLS verified, or off
+by `sslmode=disable` in the URL or libpq's `PGSSLMODE=disable` beside a URL naming
+no mode, an `sslmode` that encrypts without verifying refused.
 
-`provide_arc(db.connection())` seeds the real connection into the
-container, short-circuiting `SeaOrmDatabaseModule`'s `for_root` factory. The
-rest of the app builds normally.
-
-```rust title="apps/api/tests/e2e/users.rs"
-let db = EphemeralDatabase::create::<migrations::Migrator>().await?;
-let app = TestApp::builder()
-    .module::<ApiModule>()
-    .provide_arc(db.connection())
-    .build()
-    .await?;
-```
-
-## Driving the HTTP surface
-
-`app.http()` returns
-[`poem::test::TestClient`](https://docs.rs/poem/latest/poem/test/struct.TestClient.html)
-— typed requests, typed responses, no socket. GraphQL
-(`POST /graphql`), the OpenAPI document (`GET /api-json`), and MCP all
-ride the same client because they self-mount as HTTP endpoints.
-
-It drives **the transport your app's `HttpModule::for_root(cfg)` describes**, not
-a bare one — so a global prefix, a versioning strategy, a body cap or a request
-timeout you pin on the module is what the suite exercises. Pin the `HttpConfig`
-on the module to test one; `TestAppBuilder::http(transport)` is for a transport
-the app does not declare at all.
-
-```rust title="apps/api/tests/e2e/openapi.rs"
-let resp = app.http().get("/api-json").send().await;
-resp.assert_status_is_ok();
-let paths = resp.json().await.value().object().get("paths").object();
-assert!(paths.get_opt("/users").is_some());
-```
-
-## Provider overrides
-
-Three builders swap a provider after the four-phase build. The override
-applies before any consumer resolves the type, so controllers, resolvers,
-and guards pick it up.
-
-| Builder | Takes | Use when |
-|---------|-------|----------|
-| `override_value::<T>(value)` | `T` (owned) | The test does not need to hold the fake — let the container own it |
-| `override_dyn::<T>(Arc<T>)` | `Arc<dyn Trait>` | The provider is registered behind a `pub trait` |
-| `override_arc::<T>(Arc<T>)` | `Arc<T>` (concrete) | The test still holds the fake to read its state |
-
-```rust title="apps/api/tests/e2e/weather.rs"
-struct StubWeather;
-
-#[async_trait]
-impl WeatherProvider for StubWeather {
-    async fn current(&self, _lat: f64, _lon: f64) -> Result<Report> {
-        Ok(Report {
-            temperature_c: 20.0,
-            wind_speed_kmh: 0.0,
-            wind_direction_deg: 0.0,
-            weather_code: 0,
-            observed_at: "2026-06-03T10:00:00Z".into(),
-        })
-    }
-}
-
-let app = TestApp::builder()
-    .module::<AppModule>()
-    .override_dyn::<dyn WeatherProvider>(Arc::new(StubWeather))
-    .build()
-    .await?;
-```
-
-`override_arc` is the right shape when the test needs to observe what
-the fake recorded — wrap it in `Arc` once, hand the same handle to the
-container *and* the test, then assert against the shared state after the
-request:
-
-```rust title="apps/api/tests/e2e/users.rs"
-use std::sync::Arc;
-
-use nest_rs::core::injectable;
-use parking_lot::Mutex;
-
-#[injectable]
-#[derive(Default)]
-struct RecordingMailer {
-    sent: Mutex<Vec<String>>,
-}
-
-impl RecordingMailer {
-    fn sent(&self) -> Vec<String> { self.sent.lock().clone() }
-}
-
-impl Mailer for RecordingMailer {
-    fn send(&self, to: &str) -> Result<(), MailError> {
-        self.sent.lock().push(to.to_owned());
-        Ok(())
-    }
-}
-
-#[tokio::test]
-async fn signup_emails_the_new_user() {
-    let mailer = Arc::new(RecordingMailer::default());
-    let app = TestApp::builder()
-        .module::<UsersModule>()
-        .override_arc::<RecordingMailer>(Arc::clone(&mailer))
+```rust title="crates/features/tests/e2e/main.rs (from the demo)"
+pub(crate) async fn data_app() -> TestApp {
+    TestApp::builder()
+        .module::<DataModule>()
+        .ephemeral_database::<migrations::Migrator>()
         .build()
         .await
-        .unwrap();
-
-    app.http()
-        .post("/users")
-        .body_json(&json!({ "email": "ada@example.com" }))
-        .send()
-        .await
-        .assert_status_is_ok();
-
-    assert_eq!(mailer.sent(), vec!["ada@example.com".to_string()]);
+        .expect("the data layer boots on a throwaway database")
 }
 ```
 
-`override_arc` and `override_value` both replace a concrete provider.
-The difference is who keeps the handle: `override_value` consumes its
-argument (you can't read it back later), `override_arc` takes a
-pre-cloned `Arc` so the test and the container share the same instance.
+A test that seeds rows, or boots a second app beside the first — a worker
+draining what the api filed — reads the connection back from the booted app's
+container and writes through your own entities:
 
-External-IO services — HTTP clients to third-party APIs, queue producers
-reaching an outside system — are the right override target. **The
-database is not.** A test that mocks `Repo` to make a service compile is
-asserting on a fiction; use `EphemeralDatabase` instead.
-
-## Headless apps
-
-`build_headless()` skips the HTTP transport for queue workers,
-schedulers, or any binary without an HTTP surface. The four-phase build
-still runs, so the access-graph check still fires.
-
-```rust title="apps/api/tests/e2e/worker.rs"
-let app = TestApp::builder()
-    .module::<RedisWorkerModule>()
-    .provide_arc(db.connection())
-    .build_headless()
-    .await?;
+```rust title="apps/api/tests/e2e/orgs.rs"
+let conn = app
+    .container()
+    .get::<DatabaseConnection>()
+    .expect("the app's pool is its throwaway database");
+let org = orgs::ActiveModel {
+    id: Set(Uuid::now_v7()),
+    name: Set("Acme".into()),
+    ..Default::default()
+}
+.insert(conn.as_ref())
+.await?;
 ```
 
-Drive non-HTTP transports through `HeadlessApp::spawn_transport`.
+`EphemeralDatabase::create::<Migrator>()` is the same database for a test that
+boots no app — a migration run, a seed script — held by the value and dropped
+with it.
 
-## Test telemetry
+## A service in a unit
 
-`with_test_telemetry()` calls `OpenTelemetry::init_for_tests` — a
-console-only init honouring `NESTRS_LOG` then `RUST_LOG` (default `warn` for noise
-control). It is idempotent; the first test to run wins, the rest no-op.
-Required when the module tree imports `OpenTelemetryModule` (the boot
-guard panics otherwise). Gated by the `opentelemetry` feature on
-`nest-rs-testing`.
+A service reads the executor and the ability its unit installs, so a test
+calling one directly runs it in a unit of the app's own binding:
+`app.unit(ability, || svc.list())` as a request granted `ability`,
+`app.system_unit(|| svc.purge_expired())` as a job. The unit commits on the
+body's `Ok` and rolls back on its `Err`, as an edge's does — never an executor or
+an ability installed by hand. It stands in for a unit naming its read, so a test of
+a `define_visitor` grant hands it the visitor's ability.
 
-A test whose module tree does **not** import `OpenTelemetryModule` does
-not need it.
+```rust title="crates/features/tests/e2e/orgs/service.rs (from the demo, abridged)"
+let app = data_app().await;
+let org_id = seed_org(&connection(app.container()), "Acme").await;
 
-## Subscriptions
-
-`TestApp`'s client speaks HTTP, and a subscription does not. `graphql_socket`
-drives the **graphql-transport-ws** protocol against the app's composed schema
-— `connection_init` → `connection_ack` → `subscribe` → `next` — with no socket
-bound. (`graphql-ws` is the *legacy* subprotocol identifier, which the mount
-also negotiates and this driver does not speak.)
-
-```rust title="apps/api/tests/e2e/subscription.rs"
-let mut socket = app.graphql_socket().data(ability).open();
-socket.connect().await;
-socket.subscribe("1", "subscription { postPublished { id title } }");
-
-let item = socket.next_item("1").await.expect("an item");
-assert_eq!(item["data"]["postPublished"]["title"], "Launch");
+let rows = app
+    .unit(read_all_ability(), || OrgsService.list())
+    .await
+    .expect("list succeeds");
 ```
 
-`data(..)` carries what the operation guard would install on a real
-upgrade — the caller's `Ability`. What this does *not* exercise is the
-upgrade itself: the guard that authenticates it, the socket-lifetime
-ceiling that bounds it, and `max_connection`. Those need a real connection, so
-a suite that must cover them binds a transport (`build_headless` +
-`spawn_transport`) and
-connects a WebSocket client to it.
+`unit` and `system_unit` are `nest-rs`'s `authz` and `database` features
+beside `testing`.
 
 ## What ends an HTTP/GraphQL change
 
@@ -334,15 +231,20 @@ and `curl` the affected endpoint:
 
 ```bash frame="terminal"
 $ nestrs run dev api &
-$ curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/users
+$ curl -H "Authorization: Bearer $TOKEN" http://localhost:3002/users
 $ kill %1
 ```
 
 **Stop the server when you're done** — `kill %1`, or the port stays
 bound for the next run.
 
+
 ## Going further
 
+- [Driving the app](/testing/driving/) — a bearer the app verifies, the HTTP
+  client, and a GraphQL subscription without a socket.
+- [Provider overrides](/testing/overrides/) — swap a provider for a double
+  before anything is built from it.
+- [Headless apps](/testing/headless/) — a worker, its Redis database, the
+  outbox relay and the way down.
 - [Negative-path tests](/testing/negative-path/) — the failure modes a 2xx round-trip never trips.
-- [Policy tests](/testing/policy/) — `Ability::mask` and `condition_for` as pure units.
-- [Publish demo](/publish/) — the exemplar apps these tests boot.

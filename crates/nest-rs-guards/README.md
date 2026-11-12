@@ -1,8 +1,8 @@
 # nest-rs-guards
 
-Transport-spanning guards for NestRS — one trait, four transports (HTTP, GraphQL, WS, MCP), declared once with App::builder().use_guards_global(...).
+Transport-spanning guards for NestRS — one trait, four transports (HTTP, GraphQL, WS, MCP), bound on a host or a method with `#[use_guards]`, or app-wide by the root module with `GlobalGuards<(…)>`.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features guards

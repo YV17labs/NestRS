@@ -1,0 +1,158 @@
+//! The class gate through the real macro: `#[authorize(Action, Entity)]`
+//! beside a `#[tool]` makes `#[tools]` run `nest_rs_authz::class_gate` after the
+//! operation's guards — the host writes no gate call.
+//!
+//! Pinned: a caller with the grant proceeds, one without is refused, the
+//! anonymous caller is refused whatever the visitor branch granted, and a
+//! refusal a wider token would have fixed says so.
+
+use std::sync::Arc;
+
+use nest_rs_authz::{AbilityBuilder, Action, Read};
+use nest_rs_core::{Layer, async_trait, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor, Scope};
+use nest_rs_http::EndpointGuards;
+use nest_rs_mcp::{McpError, McpView, mcp, tools};
+
+use crate::mcp::{PassGuard, call_as};
+use crate::widget;
+
+/// Builds the caller's ability from an `x-role` header. `visitor` is the
+/// anonymous branch — a *grant* it holds must still not satisfy the gate.
+#[injectable]
+#[derive(Default, Layer)]
+struct AbilityInjector;
+
+#[async_trait]
+impl Guard for AbilityInjector {
+    fn __attaches_ability(&self) -> bool {
+        true
+    }
+
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let role = nest_rs_http::HttpView::of(cx)?
+            .request()
+            .header("x-role")
+            .unwrap_or_default()
+            .to_owned();
+        let mut builder = AbilityBuilder::new();
+        match role.as_str() {
+            "admin" => {
+                builder.can(Action::Read, widget::Entity);
+            }
+            // A scope-aware credential delegated nothing: the rule is withheld,
+            // so the refusal can name the scope to ask for.
+            "scoped" => {
+                builder = AbilityBuilder::new().with_granted_scopes(Some(Arc::from([])));
+                builder
+                    .can(Action::Read, widget::Entity)
+                    .requires_scope(Scope::new("widgets:read"));
+            }
+            // The anonymous branch holds a real grant; the gate must still refuse it.
+            "visitor" => {
+                builder.can(Action::Read, widget::Entity);
+                cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+                    builder.build_visitor().expect("valid test ability"),
+                ));
+                return Ok(());
+            }
+            _ => {}
+        }
+        cx.attach(nest_rs_authz::__private::AmbientAbility::new(
+            builder.build().expect("valid test ability"),
+        ));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for AbilityInjector {}
+
+#[mcp(path = "/mcp/gate")]
+#[derive(Clone, Default)]
+struct GateTool;
+
+#[tools]
+impl GateTool {
+    /// Answer only for a caller the class gate admits.
+    #[tool]
+    #[authorize(Read, widget::Entity)]
+    async fn read_widgets(&self) -> Result<String, McpError> {
+        Ok("widgets".to_owned())
+    }
+
+    /// No posture: the guards at the endpoint's request cover it.
+    #[tool]
+    async fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
+#[module(providers = [
+    PassGuard,
+    AbilityInjector,
+    EndpointGuards<McpView, (PassGuard, AbilityInjector)>,
+    GateTool,
+])]
+struct GateModule;
+
+async fn call(role: &str, tool: &str) -> String {
+    call_as::<GateModule>("/mcp/gate", role, tool).await
+}
+
+#[tokio::test]
+async fn a_granted_caller_reaches_the_body() {
+    let body = call("admin", "read_widgets").await;
+    assert!(
+        body.contains("widgets"),
+        "the gate admits a caller holding the class grant: {body}",
+    );
+}
+
+#[tokio::test]
+async fn an_ungranted_caller_is_refused_before_the_body() {
+    let body = call("nobody", "read_widgets").await;
+    assert!(
+        body.contains("forbidden"),
+        "the gate refuses a caller with no class grant: {body}",
+    );
+    assert!(!body.contains("widgets"), "…and the body never ran: {body}",);
+}
+
+#[tokio::test]
+async fn the_anonymous_caller_is_refused_whatever_the_visitor_branch_granted() {
+    let body = call("visitor", "read_widgets").await;
+    assert!(
+        body.contains("unauthenticated"),
+        "authentication is decided first and separately, so a visitor grant \
+         written to serve a `#[public]` operation cannot satisfy an \
+         `#[authorize]` one: {body}",
+    );
+}
+
+#[tokio::test]
+async fn a_refusal_a_wider_token_would_fix_says_so() {
+    let body = call("scoped", "read_widgets").await;
+    assert!(
+        body.contains("insufficient_scope") && body.contains("widgets:read"),
+        "a scope refusal is actionable and a plain `forbidden` is final — a \
+         client that cannot tell them apart either gives up too early or \
+         retries forever: {body}",
+    );
+}
+
+#[tokio::test]
+async fn an_operation_stating_no_posture_runs_no_gate() {
+    let body = call("nobody", "ping").await;
+    assert!(
+        body.contains("pong"),
+        "the operation has no entity to gate, and the endpoint's guards cover it: {body}",
+    );
+}

@@ -1,3 +1,4 @@
+use nest_rs::seaorm::CreateModel;
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -15,3 +16,9 @@ pub struct Model {
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl CreateModel<Entity> for ActiveModel {
+    fn into_active_model(self) -> ActiveModel {
+        self
+    }
+}

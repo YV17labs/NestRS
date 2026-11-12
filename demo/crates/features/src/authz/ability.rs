@@ -3,13 +3,14 @@ use nest_rs::core::injectable;
 
 use super::constants;
 use crate::Claims;
+use crate::audio::Transcoding;
+use crate::chat::Posting;
 use crate::notifications as notification;
 use crate::orgs as org;
 use crate::posts as post;
 use crate::users as user;
 
 #[injectable]
-#[derive(Default)]
 pub struct AuthzAbility;
 
 impl AbilityFactory for AuthzAbility {
@@ -22,12 +23,16 @@ impl AbilityFactory for AuthzAbility {
             ab.can(Action::Manage, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Manage, org::Entity);
+            ab.can(Action::Manage, Transcoding)
+                .requires_scope(constants::AUDIO_TRANSCODE);
             ab.can(Action::Read, post::Entity)
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id))
                 .requires_scope(constants::POSTS_READ);
-            ab.can(Action::Manage, post::Entity)
-                .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-                .requires_scope(constants::POSTS_WRITE);
+            for action in [Action::Update, Action::Delete] {
+                ab.can(action, post::Entity)
+                    .when(|p| p.eq(post::Column::OrgId, actor.org_id))
+                    .requires_scope(constants::POSTS_WRITE);
+            }
             ab.can(Action::Read, notification::Entity)
                 .when(|p| p.eq(notification::Column::OrgId, actor.org_id));
         } else {
@@ -41,11 +46,22 @@ impl AbilityFactory for AuthzAbility {
             ab.can(Action::Read, post::Entity)
                 .when(|p| p.eq(post::Column::OrgId, actor.org_id))
                 .requires_scope(constants::POSTS_READ);
-            ab.can(Action::Create, post::Entity)
-                .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-                .requires_scope(constants::POSTS_WRITE);
             ab.can(Action::Read, notification::Entity)
                 .when(|p| p.eq(notification::Column::OrgId, actor.org_id));
+        }
+        if let Some(author) = actor.sub.user_id() {
+            ab.can(Action::Create, post::Entity)
+                .when(|p| {
+                    p.all([
+                        p.eq(post::Column::OrgId, actor.org_id),
+                        p.eq(post::Column::AuthorId, author),
+                    ])
+                })
+                .requires_scope(constants::POSTS_WRITE);
+            ab.can(Action::Create, post::publication::Entity)
+                .when(|p| p.eq(post::publication::Column::ActorId, author))
+                .requires_scope(constants::POSTS_WRITE);
+            ab.can(Action::Create, Posting);
         }
     }
 }
@@ -55,23 +71,27 @@ mod tests {
     use std::any::TypeId;
 
     use nest_rs::authz::{Ability, AbilityBuilder, FieldSet};
-    use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
+    use sea_orm::{DatabaseBackend, EntityTrait, IdenStatic, QueryFilter, QueryTrait};
     use uuid::Uuid;
 
     use super::*;
-    use crate::authn::Role;
+    use crate::authn::{Role, Subject};
 
     fn ability_for(roles: Vec<Role>, org_id: Uuid) -> Ability {
         ability_scoped(roles, org_id, constants::all())
     }
 
     fn ability_scoped(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>) -> Ability {
+        ability_of(roles, org_id, scopes, Subject::User(Uuid::nil()))
+    }
+
+    fn ability_of(roles: Vec<Role>, org_id: Uuid, scopes: Vec<String>, sub: Subject) -> Ability {
         let claims = Claims {
-            sub: Some(Uuid::nil()),
+            sub,
+            client_id: "publish-web".into(),
             org_id,
             roles,
             scopes: scopes.clone(),
-            exp: 0,
         };
         let mut b = AbilityBuilder::new().with_granted_scopes(Some(scopes.into()));
         AuthzAbility.define(&claims, &mut b);
@@ -188,7 +208,7 @@ mod tests {
                 assert!(cols.contains("name"));
                 assert!(!cols.contains("email"), "email is admin-only");
             }
-            FieldSet::All => panic!("members must have a restricted field set"),
+            _ => panic!("members must have a restricted field set"),
         }
     }
 
@@ -216,63 +236,145 @@ mod tests {
     }
 
     #[test]
-    fn member_mask_strips_admin_only_fields() {
+    fn a_user_authors_posts_in_their_own_org_alone() {
         let org = Uuid::now_v7();
-        let json = member(org).mask::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org));
-        let obj = json.as_object().expect("masked model is a JSON object");
-        assert!(obj.contains_key("id"));
-        assert!(obj.contains_key("name"));
-        assert!(!obj.contains_key("email"), "members must not see email");
+        for ab in [admin(org), member(org)] {
+            assert!(ab.can_class(Action::Create, TypeId::of::<post::Entity>()));
+            assert!(ab.can::<post::Entity>(
+                Action::Create,
+                &post_model(Uuid::now_v7(), org, Uuid::nil()),
+            ));
+            assert!(!ab.can::<post::Entity>(
+                Action::Create,
+                &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::nil()),
+            ));
+            assert!(!ab.can::<post::Entity>(
+                Action::Create,
+                &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
+            ));
+        }
     }
 
     #[test]
-    fn member_can_create_posts_in_own_org() {
+    fn a_create_takes_the_callers_org_and_authorship_from_the_grants() {
         let org = Uuid::now_v7();
-        let ab = member(org);
-        assert!(ab.can_class(Action::Create, TypeId::of::<post::Entity>()));
+        for ab in [admin(org), member(org)] {
+            let pinned: Vec<_> = ab
+                .pinned_values::<post::Entity>(Action::Create)
+                .into_iter()
+                .map(|(column, value)| (column.as_str(), value))
+                .collect();
+            assert_eq!(
+                pinned,
+                [("org_id", org.into()), ("author_id", Uuid::nil().into())]
+            );
+            let pinned: Vec<_> = ab
+                .pinned_values::<user::Entity>(Action::Create)
+                .into_iter()
+                .map(|(column, value)| (column.as_str(), value))
+                .collect();
+            assert_eq!(pinned, [("org_id", org.into())]);
+        }
+    }
+
+    #[test]
+    fn a_machine_authors_no_post_and_no_wider_token_would_change_it() {
+        let org = Uuid::now_v7();
+        let ab = ability_of(
+            vec![Role::Admin],
+            org,
+            constants::all(),
+            Subject::Client("ci".into()),
+        );
+        assert!(!ab.can_class(Action::Create, TypeId::of::<post::Entity>()));
+        assert!(
+            ab.missing_scopes(Action::Create, TypeId::of::<post::Entity>())
+                .is_empty()
+        );
         assert!(ab.can::<post::Entity>(
-            Action::Create,
+            Action::Update,
             &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
         ));
-        assert!(!ab.can::<post::Entity>(
-            Action::Create,
-            &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
-        ));
     }
 
     #[test]
-    fn admin_manage_posts_scopes_to_caller_org() {
+    fn a_user_posts_in_chat_whatever_their_role_and_a_machine_never_does() {
+        for ab in [admin(Uuid::now_v7()), member(Uuid::now_v7())] {
+            assert!(ab.can_class(Action::Create, TypeId::of::<Posting>()));
+        }
+        let machine = ability_of(
+            vec![Role::Admin],
+            Uuid::now_v7(),
+            constants::all(),
+            Subject::Client("ci".into()),
+        );
+        assert!(!machine.can_class(Action::Create, TypeId::of::<Posting>()));
+        assert!(
+            machine
+                .missing_scopes(Action::Create, TypeId::of::<Posting>())
+                .is_empty(),
+            "no wider token would change it",
+        );
+    }
+
+    #[test]
+    fn a_publication_row_names_the_user_writing_it_and_a_machine_writes_none() {
+        let user = Uuid::now_v7();
+        let org = Uuid::now_v7();
+        let ab = ability_of(
+            vec![Role::Admin],
+            org,
+            constants::all(),
+            Subject::User(user),
+        );
+        let pinned: Vec<_> = ab
+            .pinned_values::<post::publication::Entity>(Action::Create)
+            .into_iter()
+            .map(|(column, value)| (column.as_str(), value))
+            .collect();
+        assert_eq!(pinned, [("actor_id", user.into())]);
+
+        let machine = ability_of(
+            vec![Role::Admin],
+            org,
+            constants::all(),
+            Subject::Client("ci".into()),
+        );
+        assert!(!machine.can_class(Action::Create, TypeId::of::<post::publication::Entity>()));
+    }
+
+    #[test]
+    fn admin_update_and_delete_of_posts_scope_to_caller_org_whoever_wrote_them() {
         let org = Uuid::now_v7();
         let ab = admin(org);
-        assert!(ab.can::<post::Entity>(
-            Action::Delete,
-            &post_model(Uuid::now_v7(), org, Uuid::now_v7()),
-        ));
-        assert!(!ab.can::<post::Entity>(
-            Action::Delete,
-            &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
-        ));
+        for action in [Action::Update, Action::Delete] {
+            assert!(
+                ab.can::<post::Entity>(action, &post_model(Uuid::now_v7(), org, Uuid::now_v7()))
+            );
+            assert!(!ab.can::<post::Entity>(
+                action,
+                &post_model(Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()),
+            ));
+        }
     }
 
     #[test]
     fn a_read_only_delegation_cannot_write_even_as_admin() {
         let org = Uuid::now_v7();
-        let ab = ability_scoped(
-            vec![Role::Admin],
-            org,
-            vec![constants::POSTS_READ.to_owned()],
-        );
+        let ab = ability_scoped(vec![Role::Admin], org, vec![constants::POSTS_READ.into()]);
 
         assert!(
             ab.can_class(Action::Read, TypeId::of::<post::Entity>()),
             "the scope it does carry still works",
         );
-        assert!(!ab.can_class(Action::Manage, TypeId::of::<post::Entity>()));
-        assert_eq!(
-            ab.missing_scopes(Action::Manage, TypeId::of::<post::Entity>()),
-            [constants::POSTS_WRITE],
-            "and the refusal names what to go ask the authorization server for",
-        );
+        for action in [Action::Create, Action::Update, Action::Delete] {
+            assert!(!ab.can_class(action, TypeId::of::<post::Entity>()));
+            assert_eq!(
+                ab.missing_scopes(action, TypeId::of::<post::Entity>()),
+                [constants::POSTS_WRITE],
+                "and the refusal names what to go ask the authorization server for",
+            );
+        }
     }
 
     #[test]
@@ -281,7 +383,7 @@ mod tests {
         let ab = ability_scoped(
             vec![Role::Admin],
             org,
-            vec![constants::AUDIO_TRANSCODE.to_owned()],
+            vec![constants::AUDIO_TRANSCODE.into()],
         );
 
         assert!(!ab.can_class(Action::Read, TypeId::of::<post::Entity>()));
@@ -292,6 +394,51 @@ mod tests {
             ),
             "the withheld rule must not leak through the row check either",
         );
+    }
+
+    #[test]
+    fn an_admin_token_granted_the_transcode_scope_may_transcode() {
+        let ab = admin(Uuid::now_v7());
+        assert!(ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
+    }
+
+    #[test]
+    fn a_member_may_not_transcode_and_no_wider_token_would_change_it() {
+        let ab = member(Uuid::now_v7());
+        assert!(!ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
+        assert!(
+            ab.missing_scopes(Action::Manage, TypeId::of::<Transcoding>())
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_admin_token_narrowed_to_reading_posts_lacks_the_transcode_scope() {
+        let ab = ability_scoped(
+            vec![Role::Admin],
+            Uuid::now_v7(),
+            vec![constants::POSTS_READ.into()],
+        );
+        assert!(!ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
+        assert_eq!(
+            ab.missing_scopes(Action::Manage, TypeId::of::<Transcoding>()),
+            [constants::AUDIO_TRANSCODE],
+        );
+    }
+
+    #[test]
+    fn an_admin_whose_credential_is_not_scope_aware_may_transcode() {
+        let claims = Claims {
+            sub: Subject::User(Uuid::nil()),
+            client_id: "publish-web".into(),
+            org_id: Uuid::now_v7(),
+            roles: vec![Role::Admin],
+            scopes: Vec::new(),
+        };
+        let mut b = AbilityBuilder::new();
+        AuthzAbility.define(&claims, &mut b);
+        let ab = b.build().expect("valid test ability");
+        assert!(ab.can_class(Action::Manage, TypeId::of::<Transcoding>()));
     }
 
     #[test]
@@ -344,7 +491,7 @@ mod tests {
         assert!(!ab.can::<user::Entity>(Action::Delete, &user_model(Uuid::now_v7(), org)));
         match ab.permitted_fields::<user::Entity>(Action::Read, &user_model(Uuid::now_v7(), org)) {
             FieldSet::Only(cols) => assert!(!cols.contains("email")),
-            FieldSet::All => panic!("an empty-roles caller must have a restricted field set"),
+            _ => panic!("an empty-roles caller must have a restricted field set"),
         }
     }
 }

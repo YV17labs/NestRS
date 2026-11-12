@@ -1,7 +1,6 @@
 ---
 title: Migrations
 description: SeaORM migrations in the migrations crate — write one, register it, run it with nestrs run db.
-tier: basics
 sidebar:
   order: 5
 ---
@@ -14,6 +13,11 @@ the worker run migrations on startup; you run them explicitly with `nestrs run d
 
 ## Write a migration
 
+A table's first migration comes with its resource: `nestrs g resource` writes
+it from the same column list as the entity
+([CLI](/cli/generators/#the-columns-g-resource-takes)). Any other comes from
+`g migration`:
+
 ```bash
 nestrs g migration create_org
 ```
@@ -21,9 +25,21 @@ nestrs g migration create_org
 One file per migration, named `m<utc-date>_<seq>_<what>.rs`.
 `DeriveMigrationName` takes the version from the file name; a `DeriveIden`
 enum names the table and its columns so there are no stringly-typed
-identifiers. Fill in the columns the generator stubbed:
+identifiers. `create_<table>` over a table an entity declares creates the
+columns its `Model` does, each in the builder and in the enum, and the default
+its key takes: an identity for an integer key SeaORM auto-increments,
+`uuidv7()` for the `Uuid` key of a table no `#[expose]` seeds, and a key over
+several columns declared on the table. A field whose type the builder cannot
+read off it — an enum of yours, a `unique` — is named in the run's next steps,
+for you to add. Any other name writes the create-table skeleton, its columns
+yours to fill. A name registered already is refused, and so is a
+`create_<table>` whose table a registered one creates, however it is spelled
+(`create_post` after `create_posts`): its create-table, under
+`if_not_exists()`, would find the table and change nothing. The next change to
+a table takes a name of its own, `add_status_to_posts`.
+The demo's `org` table, filled in:
 
-```rust title="crates/migrations/src/m20260526_000000_create_org.rs (from the demo)"
+```rust title="crates/migrations/src/m20260526_000000_create_org.rs (from the demo, abridged)"
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -39,6 +55,7 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(ColumnDef::new(Org::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Org::Name).string().not_null().unique_key())
+                    // …
                     .to_owned(),
             )
             .await
@@ -56,19 +73,21 @@ enum Org {
     Table,
     Id,
     Name,
+    // …
 }
 ```
 
-`down` is the inverse of `up` — it's what `nestrs run db down` and `nestrs run db fresh`
-replay to roll back cleanly.
+`down` is the inverse of `up`: it's what `nestrs run db down` replays to roll back
+cleanly. `nestrs run db fresh` reads no `down`: it drops every table, then applies every `up`.
 
 ### Foreign keys
 
 A later migration references an earlier table by adding a foreign key — the
 `user` table hangs off `org`:
 
-```rust title="crates/migrations/src/m20260526_000001_create_user.rs (from the demo)"
+```rust title="crates/migrations/src/m20260526_000001_create_user.rs (from the demo, abridged)"
 .col(ColumnDef::new(User::OrgId).uuid().not_null())
+// …
 .foreign_key(
     ForeignKey::create()
         .name("fk_user_org_id")
@@ -85,9 +104,10 @@ Two registrations, both written by `g migration`: the `mod` line in `lib.rs`,
 and the ordered vec in `migrator.rs`. Migrations run top to bottom, so a table
 must appear after anything it references.
 
-```rust title="crates/migrations/src/lib.rs (from the demo)"
+```rust title="crates/migrations/src/lib.rs (from the demo, abridged)"
 mod m20260526_000000_create_org;
 mod m20260526_000001_create_user;
+// …
 mod migrator;
 
 pub use migrator::{Migrator, migrate};
@@ -96,10 +116,13 @@ pub use migrator::{Migrator, migrate};
 `migrator.rs` is **regenerated** from that `mod` list on every
 `g migration`, so the vec can never fall behind the files:
 
-```rust title="crates/migrations/src/migrator.rs (from the demo)"
+```rust title="crates/migrations/src/migrator.rs (from the demo, abridged)"
 use sea_orm_migration::prelude::*;
 
-use super::{m20260526_000000_create_org, m20260526_000001_create_user};
+use super::{
+    m20260526_000000_create_org, m20260526_000001_create_user, m20260609_000000_create_post,
+    // …
+};
 
 pub struct Migrator;
 
@@ -109,6 +132,8 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20260526_000000_create_org::Migration),
             Box::new(m20260526_000001_create_user::Migration),
+            Box::new(m20260609_000000_create_post::Migration),
+            // …
         ]
     }
 }
@@ -116,6 +141,26 @@ impl MigratorTrait for Migrator {
 
 Writing a migration by hand means writing both — the one you forget is the one
 that silently never runs.
+
+### The framework's own
+
+With the `queue` feature beside `seaorm`, the framework keeps a table of its
+own, `nestrs_outbox`, where a job pushed inside a transaction waits for its
+commit. Its migration ships with the framework,
+`nest_rs::seaorm::queue::OutboxMigration`, so it has no file in your crate:
+
+```bash frame="terminal"
+nestrs g migration nestrs_outbox
+```
+
+writes one entry in `migrations()`, at its date's place, and turns on the
+`nest-rs` features that compile it; `nestrs g queue` writes the same entry when
+it adds a queue. Every later `g migration` keeps the entry when it
+regenerates `migrator.rs`. The `nestrs_` prefix is the framework's: a migration
+of yours named `nestrs_<anything else>`, or creating a `nestrs_` table, is
+refused, and so is a `g resource` or `g entity` whose table would take it. An
+app binding a queue backend refuses to boot without the table, and says how to
+create it.
 
 ## Run them
 
@@ -129,10 +174,35 @@ nestrs run db fresh    # drop every table, then re-apply from scratch
 Each verb shells out to the crate's `migrate` binary at
 `crates/migrations/src/bin/migrate.rs`. It connects through
 **`nest_rs::seaorm::connect_from_env()`** — the single connector for tools
-outside the DI container, which resolves `NESTRS_SEAORM__*` through the same
-`.env` cascade the apps use. Reaching for `std::env::var("NESTRS_SEAORM__URL")`
+outside the DI container, which resolves `<PREFIX>_SEAORM__*` through the same
+`.env` cascade the apps use. Reaching for `std::env::var("<PREFIX>_SEAORM__URL")`
 in a tool of your own works only when the variable is really in the process
 environment; `connect_from_env` works either way.
+
+The binary runs no `App`, so it installs the console an app would have — the
+same filter, format and source location, from `RUST_LOG`,
+`<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION` — with one line at the
+top of `main`, and says what a migration met as a `RepoError`: by its SQLSTATE
+and the names the server gave, never by the value its message quotes, which a
+data migration's refusal holds. A tool of your own does the same:
+
+```rust title="crates/migrations/src/bin/migrate.rs (from the demo, abridged)"
+use nest_rs::core::logging::{LogSettings, install_console};
+use nest_rs::seaorm::RepoError;
+
+#[nest_rs::main]
+async fn main() -> Result<()> {
+    install_console(&LogSettings::from_env()?);
+
+    let conn = nest_rs::seaorm::connect_from_env().await?;
+    let migrated = match std::env::args().nth(1).as_deref() {
+        Some("up") => Migrator::up(&conn, None).await,
+        // …
+    };
+    migrated.map_err(RepoError::from)?;
+    Ok(())
+}
+```
 
 ## Going further
 

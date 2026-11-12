@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `#[indicators]` runs on a provider built once for the app, and `PerRequest` is `scope = request`, built per request: move these methods to a plain `#[injectable]` provider
+  --> tests/integration/diagnostics/health/indicators_on_a_request_scoped_provider.rs:13:1
+   |
+13 | #[indicators]
+   | ^^^^^^^^^^^^^ evaluation of `_` failed here

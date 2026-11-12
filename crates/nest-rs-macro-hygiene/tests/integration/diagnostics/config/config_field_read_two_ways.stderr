@@ -1,0 +1,5 @@
+error: #[config] reads a field one way: `json` already says how, so `with` has nothing left to read
+ --> tests/integration/diagnostics/config/config_field_read_two_ways.rs:9:20
+  |
+9 |     #[config(json, with = doubled)]
+  |                    ^^^^

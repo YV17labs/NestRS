@@ -6,11 +6,14 @@ sidebar:
   order: 1
 ---
 
-NestRS's HTTP layer is built on [poem](https://docs.rs/poem) — listener,
-extractors, middleware. NestRS wraps it so a controller is a struct, routes
-come from `#[routes]`, and the transport activates by importing
-[`HttpModule::for_root(...)`](/http/configuration/) in `AppModule.imports`
-— `main` never holds a transport.
+NestRS's HTTP layer accepts connections and routes requests itself, on
+[hyper](https://docs.rs/hyper); a handler reads its
+request through nestrs's own [extractors](/http/extractors/) and answers with
+nestrs's response types. A controller is a struct, routes come from
+`#[routes]`, and the transport activates with the module listing the controller
+— the feature's HTTP adapter — since `#[routes]` brings
+[`HttpModule`](/http/configuration/), with `HttpModule::for_root(cfg)` at the
+app's root only to pin its config: `main` never holds a transport.
 
 Other HTTP-shaped surfaces — GraphQL, OpenAPI, MCP, WebSocket gateways —
 all mount on the same `HttpTransport` via `HttpEndpointMeta`, so a single
@@ -27,9 +30,9 @@ cargo add nest-rs --features http
 ```
 
 That is the whole manifest for a controller. The `http` feature carries the
-per-route guard chain, the pipe fold and the interceptor / filter /
-exception-filter sites that `#[controller]` and `#[routes]` expand to — none of
-which is a crate you name.
+per-route guard chain, the pipe fold and the interceptor and exception-filter
+sites that `#[controller]` and `#[routes]` expand to — none of which is a crate
+you name.
 
 ## In this section
 
@@ -39,24 +42,33 @@ which is a crate you name.
   `#[routes]`, path/query/JSON extractors, typed returns.
 - [Responses](/http/responses/) — `Json<T>`, status + body tuples,
   `#[http_code]`, `#[response_header]`, `#[redirect]`.
-- [Errors](/http/errors/) — `ResponseError` on a feature error enum,
+- [Errors](/http/errors/) — `ToProblem` on a feature error enum,
   RFC 9457 `ProblemDetails` for one-off problem responses.
 - [Extractors](/http/extractors/) — the full extractor surface:
-  `RawBody`, `ClientIp`, `Scoped<T>`, `Ctx<T>`, `Reflector` +
-  `#[meta(...)]`.
+  `Header<T>`, `RawBody`, `ClientIp`, `Scoped<T>` and `Ambient<T>`.
 
 ### All options
 
 - [Configuration](/http/configuration/) — `HttpConfig`, env vars vs
-  pinned struct, TLS, CORS, the framework `Server:` header.
+  pinned struct, TLS, the mount prefix, the framework `Server:` header.
+- [CORS and security headers](/http/cors/) — the origins a browser page may
+  call from, and the headers every response carries.
+- [Limits and deadlines](/http/limits/) — the body cap, the request budget,
+  the connection cap and deadlines, the shutdown window.
+- [Problem details](/http/problem-details/) — an RFC 9457 document built
+  inline, and the `code` each status carries.
+- [Client IP](/http/client-ip/) — the peer, or the client a trusted proxy
+  names, and what to list behind each proxy.
 - [Versioning](/http/versioning/) — `#[controller(version = "1")]` and
   multi-version controllers.
-- [Compression](/http/compression/) — gzip/brotli negotiated from
+- [Compression](/http/compression/) — zstd, brotli, gzip or deflate negotiated from
   `Accept-Encoding`, behind one `HttpConfig` flag.
 - [Streaming responses](/http/streaming/) — a chunked body or a
   Server-Sent Events stream returned from a handler.
 - [File uploads](/http/file-uploads/) — a `multipart/form-data` part
   streamed straight into object storage.
+- [Static files](/http/static-files/) — a built single-page app and public
+  files, served from a directory or embedded in the binary.
 
 ## Going further
 

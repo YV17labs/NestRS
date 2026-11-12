@@ -1,143 +1,133 @@
-//! HTTP binding for request-scoped providers — the transport edge
-//! (`EdgeEndpoint`) installs a [`RequestScope`] per request; [`Scoped<T>`]
-//! reads it back to resolve an `#[injectable(scope = request)]` provider
-//! (or, falling through, a singleton — prefer plain `#[inject]` for those).
+//! HTTP's reading of [`Scoped<T>`]: an `#[injectable(scope = request)]`
+//! provider, from the scope the transport edge installs per request.
 
-use std::any::type_name;
-use std::ops::Deref;
-use std::sync::Arc;
+use nest_rs_core::__private::short_type_name;
+use nest_rs_core::Scoped;
 
-use poem::http::StatusCode;
-use poem::{Error, FromRequest, Request, RequestBody, Result};
+use crate::problem::ProblemDetails;
 
-/// Resolves a provider of type `T` from the current request's
-/// [`RequestScope`](nest_rs_core::RequestScope) the transport edge installed.
-/// Rejects with `500` if the
-/// scope is absent (a transport wiring bug) or if no provider is registered
-/// for `T`.
-pub struct Scoped<T>(pub Arc<T>);
-
-impl<T> Scoped<T> {
-    /// Take the resolved provider handle out of the extractor.
-    pub fn into_inner(self) -> Arc<T> {
-        self.0
-    }
+/// `T` from the running request's scope, or a miss, the type filed at `error`.
+fn resolve<T: Send + Sync + 'static>() -> Option<Scoped<T>> {
+    let Some(scope) = nest_rs_core::current_request_scope() else {
+        tracing::error!(
+            target: crate::target::HTTP,
+            provider = short_type_name::<T>(),
+            "request scope not installed — the transport edge must wrap the route tree",
+        );
+        return None;
+    };
+    let Some(provider) = scope.get::<T>() else {
+        tracing::error!(
+            target: crate::target::HTTP,
+            provider = short_type_name::<T>(),
+            "no provider for a request-scoped parameter — add it to a module's providers",
+        );
+        return None;
+    };
+    Some(Scoped(provider))
 }
 
-impl<T> Deref for Scoped<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-impl<'a, T: Send + Sync + 'static> FromRequest<'a> for Scoped<T> {
-    async fn from_request(_req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
-        let scope = crate::current_request_scope().ok_or_else(|| {
-            Error::from_string(
-                "request scope not installed — the transport edge must wrap the route tree",
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        })?;
-        match scope.get::<T>() {
-            Some(value) => Ok(Scoped(value)),
-            None => Err(Error::from_string(
-                format!(
-                    "no provider registered for `{}` — add it to a module's providers",
-                    type_name::<T>()
-                ),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )),
-        }
+/// Reads `T` from the scope the transport edge installed. Should it still be
+/// missing at a request, the request answers an opaque `500` and the type is
+/// filed at `error`, never answered.
+impl<'a, T: Send + Sync + 'static> crate::FromRequest<'a> for Scoped<T> {
+    async fn from_request(
+        _req: &'a crate::Request,
+        _body: &mut crate::RequestBody,
+    ) -> crate::Result<Self> {
+        resolve().ok_or_else(|| ProblemDetails::internal().into())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_core::{Container, RequestScope};
+    use std::sync::Arc;
+
+    use nest_rs_core::{Container, Correlation, RequestScope};
+    use nest_rs_testing::LogCapture;
 
     use super::*;
+    use crate::{FromRequest, Request, StatusCode};
 
     struct Marker(&'static str);
 
-    #[test]
-    fn scoped_into_inner_yields_the_arc() {
-        let value: Arc<Marker> = Arc::new(Marker("hi"));
-        let scoped = Scoped(value.clone());
-        let inner = scoped.into_inner();
-        assert!(Arc::ptr_eq(&inner, &value));
-    }
-
-    #[test]
-    fn scoped_deref_borrows_the_inner_value() {
-        let scoped = Scoped(Arc::new(Marker("bye")));
-        assert_eq!(scoped.0.as_ref().0, "bye");
-        // Deref reaches the field through `&*scoped`.
-        assert_eq!((*scoped).0, "bye");
+    async fn in_scope<F: std::future::Future>(container: Container, extract: F) -> F::Output {
+        let scope = Arc::new(RequestScope::new(container));
+        nest_rs_core::with_request_scope(Some(scope), Correlation::minted(None), extract).await
     }
 
     #[tokio::test]
     async fn scoped_from_request_resolves_a_registered_provider() {
-        // A singleton falls through `RequestScope::get`, the documented escape
-        // hatch for `Scoped<T>` when no scoped factory exists for `T`.
-        let container = Container::builder().provide(Marker("registered")).build();
-        let scope = Arc::new(RequestScope::new(container));
-
-        let (req, mut body) = Request::default().split();
-        let scoped: Scoped<Marker> = crate::with_request_scope(
-            Some(scope),
-            nest_rs_core::Correlation::mint(),
-            Scoped::from_request(&req, &mut body),
-        )
-        .await
-        .expect("resolves via singleton fallback");
+        // A singleton falls through `RequestScope::get`.
+        let container = Container::builder()
+            .provide(Marker("registered"))
+            .build()
+            .expect("the container builds");
+        let (req, mut body) = Request::builder().finish().split();
+        let scoped = in_scope(container, Scoped::<Marker>::from_request(&req, &mut body))
+            .await
+            .expect("resolves via singleton fallback");
         assert_eq!(scoped.0.0, "registered");
     }
 
-    #[tokio::test]
-    async fn scoped_from_request_returns_500_when_no_scope_is_installed() {
-        let req = Request::default();
-        let (req, mut body) = req.split();
+    /// The body a miss answers, asserted to be the one opaque `500`: its
+    /// class's code, no detail.
+    async fn opaque_body(error: crate::HttpError) -> String {
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let text = crate::testing::text(response).await;
+        let document: serde_json::Value = serde_json::from_str(&text).expect("problem json");
+        assert_eq!(document, crate::testing::internal_document());
+        text
+    }
 
-        let err = match Scoped::<Marker>::from_request(&req, &mut body).await {
-            Ok(_) => panic!("no ambient request scope should reject"),
-            Err(e) => e,
+    #[tokio::test]
+    async fn a_miss_answers_an_opaque_500_and_files_the_type_at_error() {
+        let logs = LogCapture::install();
+        let (req, mut body) = Request::builder().finish().split();
+        let Err(refused) = in_scope(
+            Container::builder().build().expect("the container builds"),
+            Scoped::<Marker>::from_request(&req, &mut body),
+        )
+        .await
+        else {
+            panic!("no provider for Marker");
         };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let text = String::from_utf8_lossy(&bytes);
+        let text = opaque_body(refused).await;
         assert!(
-            text.contains("request scope not installed"),
-            "diagnostic mentions the wiring bug: {text}",
+            !text.contains("Marker"),
+            "the type stays off the wire: {text}"
+        );
+
+        let event = logs.expect_one(
+            "nest_rs::http",
+            "no provider for a request-scoped parameter — add it to a module's providers",
+        );
+        assert_eq!(event.level, "error");
+        assert_eq!(
+            event.field("provider").as_deref(),
+            Some("Marker"),
+            "{:?}",
+            event.fields,
         );
     }
 
     #[tokio::test]
-    async fn scoped_from_request_returns_500_when_no_provider_is_registered() {
-        // Scope installed but `Marker` was never provided.
-        let container = Container::builder().build();
-        let scope = Arc::new(RequestScope::new(container));
-
-        let (req, mut body) = Request::default().split();
-        let err = match crate::with_request_scope(
-            Some(scope),
-            nest_rs_core::Correlation::mint(),
-            Scoped::<Marker>::from_request(&req, &mut body),
-        )
-        .await
-        {
-            Ok(_) => panic!("no provider for Marker should reject"),
-            Err(e) => e,
+    async fn a_request_with_no_scope_answers_an_opaque_500_and_files_it_at_error() {
+        let logs = LogCapture::install();
+        let (req, mut body) = Request::builder().finish().split();
+        let Err(refused) = Scoped::<Marker>::from_request(&req, &mut body).await else {
+            panic!("no ambient request scope");
         };
-        let resp = err.into_response();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(
-            text.contains("no provider registered for"),
-            "diagnostic names the missing type: {text}",
+        let text = opaque_body(refused).await;
+        assert!(!text.contains("Marker"), "{text}");
+        assert_eq!(
+            logs.expect_one(
+                "nest_rs::http",
+                "request scope not installed — the transport edge must wrap the route tree",
+            )
+            .level,
+            "error"
         );
-        assert!(text.contains("Marker"), "the type name surfaces: {text}");
     }
 }

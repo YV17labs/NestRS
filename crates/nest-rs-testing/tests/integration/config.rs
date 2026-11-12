@@ -1,14 +1,20 @@
-//! Namespaced-config flow end-to-end: load via `ConfigModule::for_feature`,
-//! inject as `Arc<C>`, verify a seed wins over the env-reading factory, and —
-//! the dual-path rule the framework promises — verify a config **pinned in
-//! code** still lets the environment override it **per field**.
+//! Namespaced config end-to-end: a config a provider injects loads with no
+//! import, a seed winning over the factory and held to the checks a read
+//! passes, and a config pinned in code overridden per field.
 
 use nest_rs_config::var_name;
+use std::any::TypeId;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigModule, ConfigService, MapSource, config};
-use nest_rs_core::{ContainerBuilder, DynamicModule, injectable, module};
-use nest_rs_testing::TestApp;
+use nest_rs_config::{Config, ConfigError, ConfigModule, ConfigService, MapSource, config};
+use nest_rs_core::{
+    Collecting, Container, ContainerBuilder, ContainerError, DynamicModule, Unnamed, injectable,
+    module,
+};
+use nest_rs_http::HttpConfig;
+use nest_rs_testing::HeadlessApp;
 
 #[config(namespace = "demoapp")]
 #[derive(Clone, Debug)]
@@ -27,17 +33,6 @@ impl Default for DemoConfig {
     }
 }
 
-impl Config for DemoConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            url: env.get("URL").unwrap_or(base.url),
-            max_connections: env
-                .parse("MAX_CONNECTIONS")?
-                .unwrap_or(base.max_connections),
-        })
-    }
-}
-
 #[injectable]
 struct DemoService {
     #[inject]
@@ -53,15 +48,9 @@ impl DemoService {
     }
 }
 
-#[module(
-    imports = [ConfigModule::for_feature::<DemoConfig>()],
-    providers = [DemoService],
-)]
+#[module(providers = [DemoService])]
 struct DemoModule;
 
-// `from_env` reads its namespaced vars hermetically from a `MapSource` — no
-// process env, no `.env`, no `unsafe`. This is the config-read half of the
-// wiring; the module boot below covers load/inject/seed-override.
 #[test]
 fn from_env_maps_each_namespaced_var_from_its_source() {
     let service = ConfigService::with_source(
@@ -76,11 +65,11 @@ fn from_env_maps_each_namespaced_var_from_its_source() {
     assert_eq!(cfg.max_connections, 7);
 }
 
+/// The provider's `#[inject] Arc<DemoConfig>` is the whole declaration: the
+/// boot queues the config's factory, and a seed still wins over it.
 #[tokio::test]
-async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
-    // No env set: the `for_feature` factory loads the in-code defaults and
-    // injects the config as `Arc<DemoConfig>`.
-    let app = TestApp::builder()
+async fn an_injected_config_loads_with_no_import_and_a_seed_overrides_the_factory() {
+    let app = HeadlessApp::builder()
         .module::<DemoModule>()
         .build_headless()
         .await
@@ -96,8 +85,7 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
         "the loaded config is a factory output, present in the container"
     );
 
-    // A seeded config wins over the env-reading factory.
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<DemoModule>()
         .provide(DemoConfig {
             url: "postgres://seeded/app".into(),
@@ -115,21 +103,50 @@ async fn for_feature_loads_injects_and_a_seed_overrides_the_factory() {
     assert_eq!(svc.max_connections(), 99);
 }
 
+/// A config only an unimported module's provider injects: linked, never read.
+#[config(namespace = "unreached_probe")]
+#[derive(Clone, Debug, Default)]
+struct UnreachedConfig {
+    token: Option<String>,
+}
+
+#[injectable]
+struct Unreached {
+    #[inject]
+    _cfg: Arc<UnreachedConfig>,
+}
+
+#[module(providers = [Unreached])]
+struct UnreachedModule;
+
+/// The load is gated by the provider that asks for it: a config whose only
+/// reader sits in a module the app does not import is never read.
+#[tokio::test]
+async fn a_config_no_reached_provider_injects_is_never_loaded() {
+    let _ = UnreachedModule;
+    let app = HeadlessApp::builder()
+        .module::<DemoModule>()
+        .build_headless()
+        .await
+        .expect("the app boots");
+    assert!(app.container().get::<UnreachedConfig>().is_none());
+}
+
 /// What every configurable module's `for_root(cfg)` does: hand the pinned struct
-/// to `ConfigModule::provide_feature`. Standing in for `HttpModule::for_root`
-/// here keeps the test on the seam all of them share rather than on one crate's
-/// spelling of it.
+/// to `ConfigModule::provide_root`.
 struct DemoPinnedSetup(DemoConfig);
 
 impl DynamicModule for DemoPinnedSetup {
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        ConfigModule::provide_feature(Some(self.0.clone()), builder)
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_root(self.0.clone(), builder)
     }
 }
 
 fn pinned_module() -> DemoPinnedSetup {
-    // The scaffold's shape: pin one field, let `..Default::default()` fill the
-    // rest. That is exactly the case that used to freeze the whole namespace.
     DemoPinnedSetup(DemoConfig {
         max_connections: 42,
         ..Default::default()
@@ -139,18 +156,14 @@ fn pinned_module() -> DemoPinnedSetup {
 #[module(imports = [pinned_module()], providers = [DemoService])]
 struct DemoPinnedModule;
 
-/// The finding this closes: `provide_feature(Some(cfg))` registered the struct
-/// verbatim, so **every** `NESTRS_DEMOAPP__*` variable went inert — a deployment
-/// setting one of them got silence, not an override. Pinning one field must
-/// leave the others live, and a set variable must beat the pin.
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_pinned_config_still_lets_the_environment_override_each_field() {
-    // `Jail` isolates the real process env (and reverts it), which is what the
-    // deployment tier means — no `unsafe { set_var }` in this crate. It hands
-    // nothing back out, so the boot's observations land in `seen`, and the
-    // runtime is built inside rather than via `#[tokio::test]` (which would
-    // already be running one).
+    // `Jail` returns nothing, and `#[tokio::test]` would already be running a
+    // runtime, so the boot runs inside and reports through `seen`.
     let mut seen: Option<(String, u32)> = None;
     figment::Jail::expect_with(|jail| {
         jail.set_env(var_name("demoapp", "URL"), "postgres://from-deployment/app");
@@ -160,7 +173,7 @@ fn a_pinned_config_still_lets_the_environment_override_each_field() {
                 .build()
                 .expect("runtime")
                 .block_on(async {
-                    let app = TestApp::builder()
+                    let app = HeadlessApp::builder()
                         .module::<DemoPinnedModule>()
                         .build_headless()
                         .await
@@ -183,11 +196,9 @@ fn a_pinned_config_still_lets_the_environment_override_each_field() {
     );
 }
 
-/// The other half: with nothing in the environment, the pin is the answer. Guards
-/// against "fixing" the override by dropping the pinned value on the floor.
 #[tokio::test]
 async fn a_pinned_field_survives_an_environment_that_says_nothing() {
-    let app = TestApp::builder()
+    let app = HeadlessApp::builder()
         .module::<DemoPinnedModule>()
         .build_headless()
         .await
@@ -195,4 +206,136 @@ async fn a_pinned_field_survives_an_environment_that_says_nothing() {
     let svc = app.container().get::<DemoService>().unwrap();
     assert_eq!(svc.max_connections(), 42, "the pin is the base");
     assert_eq!(svc.url(), "", "and an unpinned field keeps its own default");
+}
+
+#[tokio::test]
+async fn a_seed_outside_the_validation_its_read_passes_fails_the_boot_naming_the_namespace() {
+    let Err(refused) = HeadlessApp::builder()
+        .module::<DemoModule>()
+        .provide(DemoConfig {
+            url: String::new(),
+            max_connections: 0,
+        })
+        .build_headless()
+        .await
+    else {
+        panic!("a seed no read would accept boots");
+    };
+    let config = refused
+        .downcast_ref::<ConfigError>()
+        .unwrap_or_else(|| panic!("not the config's refusal: {refused:#}"));
+    assert!(
+        matches!(config, ConfigError::Validation { namespace, .. } if namespace == "demoapp"),
+        "{refused:#}"
+    );
+}
+
+/// A driver's own suite builds by hand, so a seed passes there the checks it
+/// passes in an app's boot.
+#[test]
+fn a_seed_outside_the_validation_its_read_passes_is_refused_by_a_container_built_by_hand() {
+    let Err(ContainerError::SeedRefused(refused)) = Container::builder()
+        .provide(DemoConfig {
+            url: String::new(),
+            max_connections: 0,
+        })
+        .import::<DemoModule>()
+        .build()
+    else {
+        panic!("a seed no read would accept builds by hand");
+    };
+    let config = refused
+        .downcast_ref::<ConfigError>()
+        .unwrap_or_else(|| panic!("not the config's refusal: {refused:#}"));
+    assert!(
+        matches!(config, ConfigError::Validation { namespace, .. } if namespace == "demoapp"),
+        "{refused:#}"
+    );
+}
+
+static PROBE_BUILT: AtomicBool = AtomicBool::new(false);
+
+struct Probe;
+
+/// A factory reading the seeded `HttpConfig`, as a pool reads its own.
+struct ProbeSetup;
+
+impl DynamicModule for ProbeSetup {
+    fn module() -> TypeId {
+        TypeId::of::<Self>()
+    }
+
+    fn collect(&self, builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature::<Unnamed, HttpConfig>(builder)
+            .provide_factory_after::<Probe, (HttpConfig,), _, _>(|_| async {
+                PROBE_BUILT.store(true, Ordering::SeqCst);
+                Ok(Probe)
+            })
+    }
+}
+
+fn probe() -> ProbeSetup {
+    ProbeSetup
+}
+
+#[module(imports = [probe()])]
+struct ProbeModule;
+
+#[tokio::test]
+async fn a_seed_past_a_bound_fails_the_boot_before_any_factory_reads_it() {
+    let Err(refused) = HeadlessApp::builder()
+        .module::<ProbeModule>()
+        .provide(HttpConfig {
+            shutdown_timeout: Duration::MAX,
+            ..HttpConfig::default()
+        })
+        .build_headless()
+        .await
+    else {
+        panic!("a seed past its bound boots");
+    };
+    assert!(
+        refused.to_string().contains("HttpConfig::shutdown_timeout"),
+        "{refused:#}"
+    );
+    assert!(
+        !PROBE_BUILT.load(Ordering::SeqCst),
+        "the factory reading the seed never ran"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn a_valid_seed_is_kept_as_seeded_whatever_the_environment_says() {
+    let mut seen: Option<String> = None;
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(var_name("demoapp", "URL"), "postgres://from-deployment/app");
+        seen = Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(async {
+                    let app = HeadlessApp::builder()
+                        .module::<DemoModule>()
+                        .provide(DemoConfig {
+                            url: "postgres://seeded/app".into(),
+                            max_connections: 3,
+                        })
+                        .build_headless()
+                        .await
+                        .expect("a valid seed boots");
+                    app.container()
+                        .get::<DemoService>()
+                        .unwrap()
+                        .url()
+                        .to_owned()
+                }),
+        );
+        Ok(())
+    });
+    assert_eq!(seen.as_deref(), Some("postgres://seeded/app"));
 }

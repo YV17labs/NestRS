@@ -1,188 +1,102 @@
 //! [`McpIdentity`] — who an MCP endpoint says it is.
 //!
-//! # Two declarations, two owners, no overlap
-//!
-//! An MCP endpoint is **one server** to every client that speaks to it: the
-//! protocol carries exactly one `serverInfo` and one `instructions` per
-//! endpoint, on `initialize` and on `server/discover` alike. That is not a
-//! nestrs opinion — it is what the spec's `DiscoverResult` holds, what the
-//! TypeScript SDK constructs (`new McpServer({ name, version })`, tools
-//! registered onto it), and what FastMCP means when a parent server keeps its
-//! own name and mounts children into it.
-//!
-//! So one endpoint answers with one identity, and the two halves of it are owned
-//! by whoever can actually know them:
-//!
-//! * **The app says who it is, and how its server is used** — `name`, `version`,
-//!   the branding a client shows beside them, and the `instructions` a client
-//!   may fold into the model's system prompt. All of it travels once, through
-//!   [`McpOptions::server`](crate::McpOptions::server). The version has to come
-//!   from there: `env!("CARGO_PKG_VERSION")` written in a shared feature library
-//!   is the library's version, not the deployment's. So do the instructions:
-//!   they describe **the server**, not a feature, and on a shared endpoint no
-//!   single host can see the whole.
-//! * **A host says which endpoint stands apart** — a `name`/`title` on `#[mcp]`,
-//!   when one endpoint should not be reported as the app's default. That is a
-//!   fact about the mount, so it is declared where the mount is. It is also the
-//!   whole of what a host may declare: `#[mcp(version = …)]` and
-//!   `#[mcp(instructions = …)]` are compile errors, because both describe the
-//!   server rather than the mount.
-//!
-//! Neither can shadow the other by accident: a host's fields override the app's
-//! per field, and two hosts sharing one path may not both declare — that fails
-//! boot naming them, because the answer would otherwise depend on
-//! `imports = [..]` order.
-//!
-//! **Per-tool prose is a different field entirely.** `instructions` is the
-//! server's — how to use it at all — and `#[tool(description = "…")]` is each
-//! tool's, which is what the model reads when it picks one. Writing tool
-//! specifics into `instructions` duplicates a description that is already
-//! carried where the model expects it.
-//!
-//! # What a declaration replaces, and what it never touches
-//!
-//! Identity is **declared**; capabilities are **observed**. A declaration
-//! replaces `serverInfo`, and `instructions` when it writes any. Everything else
-//! stays a fact about the hosts and is still merged from them — capabilities are
-//! the union of what they serve, protocol versions the intersection of what they
-//! implement. A declaration can never claim a capability no host provides.
-//!
-//! Undeclared instructions are **joined** from the hosts rather than dropped, so
-//! a shared endpoint reads as the sum of its features until someone frames it.
-//!
-//! ```no_run
-//! use nest_rs_core::module;
-//! use nest_rs_mcp::{McpIdentity, McpModule, McpOptions};
-//!
-//! #[module(imports = [
-//!     McpModule::for_root(McpOptions {
-//!         server: Some(
-//!             McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))
-//!                 .instructions("Every result is scoped to the caller's token."),
-//!         ),
-//!         ..Default::default()
-//!     }),
-//! ])]
-//! struct AppModule;
-//! ```
+//! An endpoint reports one `serverInfo` and one `instructions`. Its name,
+//! version and description default to the binary's ([`AppIdentity`]); the app
+//! declares the rest, or overrides them, through
+//! [`McpModule::for_root`](crate::McpModule::for_root); a host may refine only
+//! `name` and `title` for its endpoint, and two hosts declaring on one path fail
+//! the boot. Capabilities are never declared, only observed from the hosts.
 
+use std::sync::LazyLock;
+
+use nest_rs_core::AppIdentity;
 use rmcp::model::{Icon, Implementation};
 
-/// What an app, or one `#[mcp]` host, says about the server behind an endpoint.
+/// What an app, or one `#[mcp]` host, says about the server behind an endpoint,
+/// over the binary's name, version and description. An app sets it one way, in a
+/// struct literal over [`Default`], so a new field stays a minor as a config's
+/// does; a host refines the fields its `#[mcp]` attribute writes.
 ///
-/// Built two ways, and the constructor says which owner it came from:
-/// [`new`](Self::new) for the app's own `serverInfo` (both halves mandatory —
-/// the protocol carries both, and a version defaulted from the *framework's*
-/// build environment would name nest-rs where the deployment meant its own app),
-/// and the `#[mcp]` attribute for a host's per-endpoint refinement, which fills
-/// only the fields it writes.
+/// In a process no `#[nest_rs::main]` started there is no binary behind it, so
+/// the boot refuses a `name` with no `version` and any field but `instructions`
+/// with no `name`.
+///
+/// ```
+/// use nest_rs_mcp::McpIdentity;
+///
+/// let identity = McpIdentity {
+///     title: Some("Acme assistant".into()),
+///     ..Default::default()
+/// };
+/// assert_eq!(identity.name, None, "the binary's");
+/// ```
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpIdentity {
-    name: Option<String>,
-    version: Option<String>,
-    title: Option<String>,
-    description: Option<String>,
-    website_url: Option<String>,
-    icons: Option<Vec<Icon>>,
-    instructions: Option<String>,
+    /// The `serverInfo` name every endpoint reports; `None` is the binary's. A
+    /// name set here needs a [`version`](Self::version) or a binary behind it.
+    pub name: Option<String>,
+    /// The `serverInfo` version; `None` is the binary's. A version set here needs
+    /// a [`name`](Self::name) or a binary behind it.
+    pub version: Option<String>,
+    /// Display name for a human-facing client list, when it should differ from
+    /// the machine `name`.
+    pub title: Option<String>,
+    /// One line about what the server is, for a client's server list; `None` is
+    /// the binary's.
+    pub description: Option<String>,
+    /// Homepage or documentation URL a client can offer the user.
+    pub website_url: Option<String>,
+    /// Icons a client may show beside the server.
+    pub icons: Option<Vec<Icon>>,
+    /// How to use this server, which a client may fold into its system prompt;
+    /// what each tool does belongs to its own `#[tool(description = "…")]`.
+    ///
+    /// Declared, it replaces whatever the hosts wrote through
+    /// `ServerHandler::get_info`; left out, theirs are joined.
+    pub instructions: Option<String>,
 }
 
 impl McpIdentity {
-    /// The app's own `serverInfo`: what every endpoint it exposes reports unless
-    /// a host overrides it.
-    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
-        Self {
-            name: Some(name.into()),
-            version: Some(version.into()),
-            ..Self::default()
-        }
-    }
-
-    /// Display name for a human-facing client list, when it should differ from
-    /// the machine `name`.
-    pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.title = Some(title.into());
-        self
-    }
-
-    /// One line about what the server is, for a client's server list.
-    pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    /// Homepage or documentation URL a client can offer the user.
-    pub fn website_url(mut self, url: impl Into<String>) -> Self {
-        self.website_url = Some(url.into());
-        self
-    }
-
-    /// Icons a client may show beside the server.
-    pub fn icons(mut self, icons: impl IntoIterator<Item = Icon>) -> Self {
-        self.icons = Some(icons.into_iter().collect());
-        self
-    }
-
-    /// How to use this server — the one part of the declaration a model acts
-    /// on, which a client may fold into its system prompt.
-    ///
-    /// Declared here and nowhere else, because it describes **the server**: on
-    /// an endpoint several features share, no single host can see the whole, and
-    /// a paragraph assembled from the halves is one nobody wrote. Keep it
-    /// general — what a caller must know to use the surface at all. What each
-    /// tool *does* belongs to its own `#[tool(description = "…")]`, which is
-    /// where the model reads it when choosing between them.
-    ///
-    /// Declared, it replaces whatever the hosts wrote through
-    /// `ServerHandler::get_info`; left out, theirs are joined rather than
-    /// dropped.
-    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
-        self.instructions = Some(instructions.into());
-        self
-    }
-
-    /// What the `#[mcp]` attribute declares — both fields optional, because a
-    /// host refines the app's identity rather than restating it.
-    ///
-    /// The pair is the whole of what a host can honestly say: *which endpoint
-    /// stands apart*. `version` is not among them and `#[mcp(version = …)]` is a
-    /// compile error, because a feature library knows neither the binary's
-    /// version nor, on a shared endpoint, the whole surface — so the version
-    /// arrives from the app, through [`new`](Self::new), or from nowhere.
-    ///
-    /// **Internal ABI** — named by the `#[mcp]` expansion, lockstep with this
-    /// crate; never called by hand.
-    #[doc(hidden)]
-    pub fn declared(name: Option<&str>, title: Option<&str>) -> Self {
-        Self {
-            name: name.map(Into::into),
-            title: title.map(Into::into),
-            ..Self::default()
-        }
-    }
-
-    /// Whether this declaration states anything at all — an `#[mcp]` host that
-    /// wrote no identity argument declares nothing and must not count as a
-    /// claimant on its path.
-    pub fn is_empty(&self) -> bool {
+    /// Whether this declaration states anything at all; an argumentless `#[mcp]`
+    /// host is no claimant on its path.
+    pub(crate) fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
 
 /// One endpoint's identity, after a host's declaration has been laid over the
-/// app's. What the mount reports and what the boot checks judge.
+/// app's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResolvedIdentity {
     info: Option<Implementation>,
     instructions: Option<String>,
+    /// The binary's own, for an endpoint neither a declaration nor a host named.
+    binary: Option<Implementation>,
 }
 
 impl ResolvedIdentity {
-    /// The `serverInfo` the endpoint reports, or `None` when nobody named it —
-    /// in which case the endpoint falls back to its hosts (reported at boot by
-    /// `registry::check_identity`).
+    /// The `serverInfo` declared for the endpoint, or `None` when no host and
+    /// not the app named it — in which case it reports what
+    /// [`server_info`](Self::server_info) settles (`registry::check_identity`
+    /// reports it at boot).
     pub fn implementation(&self) -> Option<&Implementation> {
         self.info.as_ref()
+    }
+
+    /// The `serverInfo` the endpoint reports over `hosts_own`, its first host's
+    /// own: the declared one, else the host's unless it is the SDK's default,
+    /// else the binary's.
+    pub fn server_info(&self, hosts_own: Implementation) -> Implementation {
+        match (&self.info, &self.binary) {
+            (Some(declared), _) => declared.clone(),
+            (None, Some(binary)) if hosts_own == *SDK_DEFAULT => binary.clone(),
+            (None, _) => hosts_own,
+        }
+    }
+
+    /// Whether the endpoint reports the binary's identity where no host named it.
+    pub(crate) fn names_the_unnamed(&self) -> bool {
+        self.binary.is_some()
     }
 
     /// The instructions declared for this endpoint. `None` leaves the hosts'
@@ -197,17 +111,14 @@ impl ResolvedIdentity {
     }
 }
 
-/// Lay `host`'s declaration over the app's `server`, field by field.
-///
-/// The one way this can fail is a name with no version behind it: a host that
-/// renames its endpoint in an app that never named itself. Reporting it is the
-/// point — the alternative is an endpoint introducing itself at the *SDK's*
-/// version, which reads as a working server and is not one. A host cannot close
-/// that gap itself: `version` is the app's word, so the remedy the message
-/// names is the app's one declaration.
+/// Lay `host`'s declaration over the app's `server`, and both over `binary`'s
+/// name, version and description, field by field; a name with no version behind
+/// it is refused, never reported at the SDK's version, and a field with no name
+/// behind it is refused, never dropped.
 pub(crate) fn resolve(
     host: Option<&McpIdentity>,
     app: Option<&McpIdentity>,
+    binary: Option<&AppIdentity>,
 ) -> Result<ResolvedIdentity, IdentityError> {
     let pick = |get: fn(&McpIdentity) -> Option<&str>| {
         host.and_then(get)
@@ -215,13 +126,27 @@ pub(crate) fn resolve(
             .map(str::to_owned)
     };
 
-    let name = pick(|id| id.name.as_deref());
-    let version = pick(|id| id.version.as_deref());
+    // The binary fills a declaration's gaps; one naming nothing — instructions
+    // alone, or nothing at all — leaves the hosts' own name standing.
+    let names = |id: &McpIdentity| {
+        id.name.is_some()
+            || id.version.is_some()
+            || id.title.is_some()
+            || id.description.is_some()
+            || id.website_url.is_some()
+            || id.icons.is_some()
+    };
+    let declared = host.is_some_and(names) || app.is_some_and(names);
+    let filler = binary.filter(|_| declared);
+
+    let name = pick(|id| id.name.as_deref()).or_else(|| filler.map(|b| b.name.clone()));
+    let version = pick(|id| id.version.as_deref()).or_else(|| filler.map(|b| b.version.clone()));
     let info = match (name, version) {
         (Some(name), Some(version)) => {
             let mut info = Implementation::new(name, version);
             info.title = pick(|id| id.title.as_deref());
-            info.description = pick(|id| id.description.as_deref());
+            info.description = pick(|id| id.description.as_deref())
+                .or_else(|| filler.and_then(|b| b.description.clone()));
             info.website_url = pick(|id| id.website_url.as_deref());
             info.icons = host
                 .and_then(|id| id.icons.clone())
@@ -229,34 +154,80 @@ pub(crate) fn resolve(
             Some(info)
         }
         (Some(name), None) => return Err(IdentityError::NameWithoutVersion(name)),
+        (None, _) if declared => return Err(IdentityError::FieldWithoutName),
         (None, _) => None,
     };
 
     Ok(ResolvedIdentity {
         info,
         instructions: pick(|id| id.instructions.as_deref()),
+        binary: binary.map(|binary| {
+            let mut info = Implementation::new(binary.name.clone(), binary.version.clone());
+            info.description = binary.description.clone();
+            info
+        }),
     })
 }
 
-/// The one way [`resolve`] fails: a name nothing supplies a version for.
+/// What rmcp reports for a server nobody named, read off its own constructor
+/// rather than a literal, once: every `initialize` compares against it.
+static SDK_DEFAULT: LazyLock<Implementation> = LazyLock::new(|| {
+    rmcp::model::ServerConfig::new(rmcp::model::ServerCapabilities::default()).server_info
+});
+
+/// [`SDK_DEFAULT`], owned.
+pub(crate) fn sdk_default() -> Implementation {
+    SDK_DEFAULT.clone()
+}
+
+/// How an app names its endpoint, as a literal a reader pastes.
+pub(crate) const NAME_THE_APP: &str = "McpModule::for_root(McpIdentity { name: Some(\"…\".into()), \
+     version: Some(\"…\".into()), ..Default::default() })";
+
+/// How [`resolve`] fails: a declaration no binary completes.
 #[derive(Debug)]
 pub(crate) enum IdentityError {
+    /// A name nothing supplies a version for.
     NameWithoutVersion(String),
+    /// A version, title, description, website or icons nothing supplies a name for.
+    FieldWithoutName,
 }
 
 impl IdentityError {
-    /// The boot message, with the remedy spelled out at the seam that fixes it.
-    pub(crate) fn report(&self, path: &str, host: &str) -> String {
-        let Self::NameWithoutVersion(name) = self;
-        format!(
-            "MCP host {host} names the endpoint at {path:?} {name:?} but nothing supplies a \
-             version — an endpoint reports both, and the version is the app's to declare, \
-             since a feature library knows neither the binary's version nor, on a shared \
-             endpoint, the whole surface. Name the app once with \
-             McpModule::for_root(McpOptions {{ server: \
-             Some(McpIdentity::new(\"{name}\", env!(\"CARGO_PKG_VERSION\"))), ..Default::default() \
-             }})",
-        )
+    /// The boot message, with the remedy spelled out at the seam that fixes it;
+    /// `name_stated_by` is the host a refused name came from, `None` the app.
+    pub(crate) fn report(&self, path: &str, name_stated_by: Option<&str>) -> String {
+        const NO_BINARY: &str = "a feature library does not know it and no #[nest_rs::main] \
+                                 captured one in this process";
+        match self {
+            Self::NameWithoutVersion(name) => {
+                let who = name_stated_by.map_or_else(
+                    || "The app's McpIdentity".to_owned(),
+                    |host| format!("MCP host {host}"),
+                );
+                format!(
+                    "{who} names the endpoint at {path:?} {name:?} but nothing supplies a version \
+                     — an endpoint reports both, and the version is the binary's: {NO_BINARY}. \
+                     Start it from #[nest_rs::main], or name the app once with {NAME_THE_APP}",
+                )
+            }
+            Self::FieldWithoutName => format!(
+                "the MCP identity declared for the endpoint at {path:?} states a version, a \
+                 title, a description, a website or icons but nothing supplies a name — an \
+                 endpoint reports one, and it is the binary's: {NO_BINARY}. Start it from \
+                 #[nest_rs::main], or name the app once with {NAME_THE_APP}",
+            ),
+        }
+    }
+}
+
+/// What the `#[mcp]` attribute declares; the version arrives from the binary,
+/// or from the app's [`McpIdentity`].
+pub fn declared_identity(name: Option<&str>, title: Option<&str>) -> McpIdentity {
+    McpIdentity {
+        name: name.map(Into::into),
+        title: title.map(Into::into),
+        ..McpIdentity::default()
     }
 }
 
@@ -265,14 +236,18 @@ mod tests {
     use super::*;
 
     fn app() -> McpIdentity {
-        McpIdentity::new("assistant", "1.2.3")
-            .title("Assistant")
-            .instructions("Every result is scoped to the caller's token.")
+        McpIdentity {
+            name: Some("assistant".into()),
+            version: Some("1.2.3".into()),
+            title: Some("Assistant".into()),
+            instructions: Some("Every result is scoped to the caller's token.".into()),
+            ..McpIdentity::default()
+        }
     }
 
     #[test]
     fn the_app_identity_is_what_an_undeclaring_host_reports() {
-        let resolved = resolve(None, Some(&app())).expect("no error");
+        let resolved = resolve(None, Some(&app()), None).expect("no error");
         let info = resolved.implementation().expect("named by the app");
         assert_eq!(info.name, "assistant");
         assert_eq!(info.version, "1.2.3");
@@ -284,12 +259,10 @@ mod tests {
         );
     }
 
-    /// The point of the overlay: a host renames its own endpoint without having
-    /// to restate — or be able to know — the app's version.
     #[test]
     fn a_host_overrides_per_field_and_inherits_the_rest() {
-        let host = McpIdentity::declared(Some("assistant-posts"), None);
-        let resolved = resolve(Some(&host), Some(&app())).expect("no error");
+        let host = declared_identity(Some("assistant-posts"), None);
+        let resolved = resolve(Some(&host), Some(&app()), None).expect("no error");
         let info = resolved.implementation().expect("named");
 
         assert_eq!(info.name, "assistant-posts", "the host's name wins");
@@ -307,13 +280,10 @@ mod tests {
         );
     }
 
-    /// Both halves of what a host may declare, laid over the app at once: the
-    /// two remaining fields override independently, and the version — which
-    /// `#[mcp]` has no argument for — still arrives from the app.
     #[test]
     fn a_host_declaring_both_of_its_fields_still_inherits_the_version() {
-        let host = McpIdentity::declared(Some("assistant-posts"), Some("Posts"));
-        let resolved = resolve(Some(&host), Some(&app())).expect("no error");
+        let host = declared_identity(Some("assistant-posts"), Some("Posts"));
+        let resolved = resolve(Some(&host), Some(&app()), None).expect("no error");
         let info = resolved.implementation().expect("named");
 
         assert_eq!(info.name, "assistant-posts");
@@ -330,18 +300,19 @@ mod tests {
 
     #[test]
     fn nobody_naming_the_server_resolves_to_nothing_rather_than_a_guess() {
-        let resolved = resolve(None, None).expect("no error");
+        let resolved = resolve(None, None, None).expect("no error");
         assert!(!resolved.is_declared());
         assert!(resolved.implementation().is_none());
     }
 
-    /// An app may say how its server is used without renaming anything — the
-    /// common case, since one app usually exposes one endpoint.
     #[test]
     fn instructions_alone_declare_without_naming() {
-        let app = McpIdentity::default().instructions("Ask before writing.");
+        let app = McpIdentity {
+            instructions: Some("Ask before writing.".into()),
+            ..McpIdentity::default()
+        };
         assert!(!app.is_empty());
-        let resolved = resolve(None, Some(&app)).expect("no error");
+        let resolved = resolve(None, Some(&app), None).expect("no error");
         assert!(resolved.is_declared());
         assert!(
             resolved.implementation().is_none(),
@@ -352,9 +323,9 @@ mod tests {
 
     #[test]
     fn a_name_no_version_backs_is_a_boot_error_naming_the_remedy() {
-        let host = McpIdentity::declared(Some("orphan"), None);
-        let err = resolve(Some(&host), None).expect_err("rejected");
-        let message = err.report("/mcp/posts", "PostsTool");
+        let host = declared_identity(Some("orphan"), None);
+        let err = resolve(Some(&host), None, None).expect_err("rejected");
+        let message = err.report("/mcp/posts", Some("PostsTool"));
 
         assert!(message.contains("PostsTool"), "names the host: {message}");
         assert!(message.contains("/mcp/posts"), "names the path: {message}");
@@ -370,8 +341,196 @@ mod tests {
     }
 
     #[test]
+    fn a_name_the_app_stated_blames_the_app_not_a_host() {
+        let app = McpIdentity {
+            name: Some("assistant".into()),
+            ..McpIdentity::default()
+        };
+        let err = resolve(None, Some(&app), None).expect_err("no version behind it");
+        let message = err.report("/mcp", None);
+
+        assert!(message.contains("The app's McpIdentity"), "{message}");
+        assert!(message.contains("\"assistant\""), "{message}");
+        assert!(message.contains(NAME_THE_APP), "{message}");
+        assert!(!message.contains("MCP host"), "{message}");
+    }
+
+    /// With no binary, a declaration naming no server has nothing to hang on: it
+    /// is refused rather than dropped, `instructions` alone excepted.
+    #[test]
+    fn a_field_no_name_backs_is_a_boot_error_rather_than_dropped() {
+        for app in [
+            McpIdentity {
+                version: Some("1.2.3".into()),
+                ..McpIdentity::default()
+            },
+            McpIdentity {
+                title: Some("Assistant".into()),
+                ..McpIdentity::default()
+            },
+            McpIdentity {
+                description: Some("Reads posts.".into()),
+                ..McpIdentity::default()
+            },
+            McpIdentity {
+                website_url: Some("https://example.com".into()),
+                ..McpIdentity::default()
+            },
+            McpIdentity {
+                icons: Some(Vec::new()),
+                ..McpIdentity::default()
+            },
+        ] {
+            let err = resolve(None, Some(&app), None).expect_err("no name behind it");
+            let message = err.report("/mcp", None);
+            assert!(message.contains("\"/mcp\""), "names the path: {message}");
+            assert!(message.contains(NAME_THE_APP), "{message}");
+        }
+
+        let host = declared_identity(None, Some("Posts"));
+        let err = resolve(Some(&host), None, None).expect_err("no name behind the host's title");
+        assert!(err.report("/mcp", Some("PostsTool")).contains(NAME_THE_APP));
+
+        let filled = McpIdentity {
+            version: Some("1.2.3".into()),
+            ..McpIdentity::default()
+        };
+        let resolved = resolve(None, Some(&filled), Some(&binary())).expect("the binary names it");
+        let info = resolved.implementation().expect("named");
+        assert_eq!(
+            (info.name.as_str(), info.version.as_str()),
+            ("assistant-bin", "1.2.3"),
+        );
+    }
+
+    /// What the boot and the compile error hand out, as a literal a reader pastes.
+    #[test]
+    fn the_remedy_compiles_as_printed() {
+        let identity = McpIdentity {
+            name: Some("…".into()),
+            version: Some("…".into()),
+            ..Default::default()
+        };
+        assert!(identity.name.is_some() && identity.version.is_some());
+        assert!(NAME_THE_APP.contains(
+            r#"McpIdentity { name: Some("…".into()), version: Some("…".into()), ..Default::default() }"#
+        ));
+    }
+
+    fn binary() -> AppIdentity {
+        nest_rs_core::__private::package_identity("assistant-bin", "7.0.0", "The demo's tools")
+    }
+
+    #[test]
+    fn the_binary_names_an_endpoint_neither_a_declaration_nor_a_host_named() {
+        let resolved = resolve(None, None, Some(&binary())).expect("no error");
+        assert!(resolved.implementation().is_none(), "nothing was declared");
+
+        let info = resolved.server_info(sdk_default());
+        assert_eq!(info.name, "assistant-bin");
+        assert_eq!(info.version, "7.0.0");
+        assert_eq!(info.description.as_deref(), Some("The demo's tools"));
+
+        let named = Implementation::new("self-named", "1.0.0");
+        assert_eq!(
+            resolved.server_info(named.clone()),
+            named,
+            "a host that named itself keeps its name over the binary's",
+        );
+
+        let unnamed = resolve(None, None, None).expect("no error");
+        assert_eq!(unnamed.server_info(sdk_default()), sdk_default());
+    }
+
+    #[test]
+    fn instructions_alone_leave_the_naming_to_the_hosts_and_the_binary() {
+        let app = McpIdentity {
+            instructions: Some("Ask before writing.".into()),
+            ..McpIdentity::default()
+        };
+        let resolved = resolve(None, Some(&app), Some(&binary())).expect("no error");
+        assert!(resolved.implementation().is_none());
+        assert_eq!(resolved.server_info(sdk_default()).name, "assistant-bin");
+    }
+
+    #[test]
+    fn the_app_and_a_host_refine_the_binarys_identity_per_field() {
+        let app = McpIdentity {
+            title: Some("Assistant".into()),
+            instructions: Some("Ask before writing.".into()),
+            ..McpIdentity::default()
+        };
+        let resolved = resolve(None, Some(&app), Some(&binary())).expect("no error");
+        let info = resolved.implementation().expect("named");
+        assert_eq!(
+            info.name, "assistant-bin",
+            "the app left the name the binary's"
+        );
+        assert_eq!(info.version, "7.0.0");
+        assert_eq!(info.title.as_deref(), Some("Assistant"));
+
+        let host = declared_identity(Some("assistant-posts"), None);
+        let resolved = resolve(Some(&host), Some(&app), Some(&binary())).expect("no error");
+        let info = resolved.implementation().expect("named");
+        assert_eq!(info.name, "assistant-posts", "the host's name wins");
+        assert_eq!(info.version, "7.0.0", "on the binary's version");
+
+        let renamed = resolve(None, Some(&self::app()), Some(&binary())).expect("no error");
+        let info = renamed.implementation().expect("named");
+        assert_eq!(
+            (info.name.as_str(), info.version.as_str()),
+            ("assistant", "1.2.3"),
+            "the app's name and version override both",
+        );
+    }
+
+    #[test]
+    fn a_host_name_stands_on_the_binarys_version() {
+        let host = declared_identity(Some("orphan"), None);
+        let resolved = resolve(Some(&host), None, Some(&binary())).expect("the binary backs it");
+        assert_eq!(
+            resolved.implementation().map(|info| info.version.as_str()),
+            Some("7.0.0")
+        );
+    }
+
+    #[test]
     fn an_argumentless_mcp_host_declares_nothing() {
-        assert!(McpIdentity::declared(None, None).is_empty());
-        assert!(!McpIdentity::new("a", "1").is_empty());
+        assert!(declared_identity(None, None).is_empty());
+        let named = McpIdentity {
+            name: Some("a".into()),
+            ..McpIdentity::default()
+        };
+        assert!(!named.is_empty());
+    }
+
+    /// A field added to [`McpIdentity`] fails to compile here until listed: list
+    /// it, never write `..`.
+    macro_rules! every_field {
+        ($($field:ident),+ $(,)?) => {{
+            let McpIdentity { $($field: _),+ } = McpIdentity::default();
+            [$(stringify!($field)),+]
+        }};
+    }
+
+    /// Each field owes `#[mcp(<field> = …)]` an answer, never the bare unknown-key sentence.
+    #[test]
+    fn every_identity_field_has_an_answer_at_the_host() {
+        let fields = every_field!(
+            name,
+            version,
+            title,
+            description,
+            website_url,
+            icons,
+            instructions,
+        );
+        for field in fields {
+            assert!(
+                nest_rs_codegen::__private::mcp_answers(field),
+                "`McpIdentity::{field}` has no answer in `#[mcp]`'s grammar — give it a \
+                 row in nest_rs_codegen's SERVER_FIELDS naming the seam that takes it",
+            );
+        }
     }
 }

@@ -1,22 +1,13 @@
-//! Behavioural guard for the pinned async-graphql registry API (see the
-//! `nest-rs-graphql` crate `//!` doc). The compile-time canary in
-//! `src/resolver.rs` catches shape changes to `MetaType::Object`; this test
-//! catches drift the compiler cannot see — e.g. a change to
-//! `remove_unused_types` that leaks member object types into the SDL, or a
-//! change in how sorted SDL export renders.
-//!
-//! It composes a two-resolver schema (a query-only resolver and one carrying
-//! both a query and a mutation) and asserts the emitted SDL byte-for-byte
-//! against the committed snapshot below. A diff here after an async-graphql
-//! bump is the review signal: intended ⇒ update the snapshot; unexpected ⇒
-//! regression.
+//! Behavioural guard for the pinned async-graphql registry API: the drift the
+//! compile-time canary in `src/resolver.rs` cannot see (`remove_unused_types`,
+//! sorted SDL export), asserted byte-for-byte against the committed snapshot.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_graphql::SimpleObject;
+use nest_rs_config::Surface;
 use nest_rs_core::module;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_testing::TestApp;
 
 #[derive(SimpleObject)]
@@ -64,10 +55,8 @@ struct AlphaModule;
 #[module(providers = [BetaResolver])]
 struct BetaModule;
 
-/// Per-process temp file the boot-time `emit_sdl` writes to. `render_sdl` is
-/// `pub(crate)`, so the SDL is captured through the same production path an app
-/// uses (`NESTRS_GRAPHQL__EMIT_SDL`) rather than by reaching into crate
-/// internals.
+/// Per-process temp file the boot-time `emit` writes to: `render_sdl` is
+/// `pub(crate)`, so the SDL is captured through the production path.
 fn snapshot_path(stem: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "nest_rs_graphql_{stem}_{}.graphql",
@@ -77,8 +66,8 @@ fn snapshot_path(stem: &str) -> PathBuf {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit_sdl: true,
-        schema_path: snapshot_path("merged"),
+        emit: Surface::Open,
+        emit_path: snapshot_path("merged"),
         ..GraphqlConfig::default()
     }),
     AlphaModule,
@@ -87,9 +76,7 @@ fn snapshot_path(stem: &str) -> PathBuf {
 struct SnapshotApp;
 
 /// The committed SDL (tab-indented, as `render_sdl` emits it). Regenerate
-/// deliberately — never blindly — via the bump procedure in the crate `//!`
-/// doc. Fields, arguments, and enum items are sorted by `render_sdl`, so the
-/// only churn a legitimate change produces is the change itself.
+/// deliberately, via the bump procedure in the crate `//!` doc.
 const EXPECTED_SDL: &str = "\
 type Mutation {\n\
 \tbump(by: Int!): Int!\n\
@@ -125,12 +112,11 @@ async fn merged_schema_sdl_matches_committed_snapshot() {
 
     let _app = TestApp::builder()
         .module::<SnapshotApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the two-resolver schema boots and emits SDL");
 
-    let sdl = std::fs::read_to_string(&path).expect("emit_sdl wrote the schema file at boot");
+    let sdl = std::fs::read_to_string(&path).expect("emit wrote the schema file at boot");
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(
@@ -140,17 +126,9 @@ async fn merged_schema_sdl_matches_committed_snapshot() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// What the emit says when it cannot write. `emit_sdl` is a *dev* convenience —
-// the committed `schema.graphql` refreshed as a side effect of a run — so a
-// failed write must never stop a boot that otherwise serves fine. Which leaves
-// the event as the only signal, and a developer whose schema silently stopped
-// refreshing has nothing else to go on: the app answers queries at the new
-// shape while the committed SDL, and every client generated from it, stay at
-// the old one.
+// A failed `emit` write never stops the boot, so its event is the only signal.
 
-/// A path under a directory that does not exist, so `std::fs::write` fails with
-/// `NotFound` rather than on a permission the test would have to arrange.
+/// A path under a directory that does not exist, so `std::fs::write` fails.
 fn unwritable_path() -> PathBuf {
     std::env::temp_dir()
         .join(format!("nest_rs_graphql_absent_{}", std::process::id()))
@@ -159,8 +137,8 @@ fn unwritable_path() -> PathBuf {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit_sdl: true,
-        schema_path: unwritable_path(),
+        emit: Surface::Open,
+        emit_path: unwritable_path(),
         ..GraphqlConfig::default()
     }),
     AlphaModule,
@@ -173,7 +151,6 @@ async fn an_sdl_emit_that_cannot_write_warns_and_still_serves() {
 
     let app = TestApp::builder()
         .module::<UnwritableSdlApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("a failed SDL write is a dev-loop annoyance, never a boot failure");
@@ -208,11 +185,7 @@ async fn an_sdl_emit_that_cannot_write_warns_and_still_serves() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// The federated branch of `render_sdl`. `SDLExportOptions::federation()` is
-// taken only when `GraphqlConfig::federation` is on, and the app above is not a
-// subgraph — so the *committed* SDL of a federated app, which is the artefact a
-// router's composition reads, had no test at all.
+// The federated branch of `render_sdl`, taken only when `GraphqlConfig::federation` is on.
 
 #[derive(SimpleObject)]
 struct Gadget {
@@ -246,17 +219,17 @@ impl GadgetResolver {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        emit_sdl: true,
-        schema_path: snapshot_path("subgraph"),
+        emit: Surface::Open,
+        emit_path: snapshot_path("subgraph"),
         federation: true,
+        federation_sdl: Surface::Open,
         ..GraphqlConfig::default()
     }),
 ])]
 struct SubgraphSnapshotApp;
 
-/// The committed **subgraph** form: `@key` on the federated type, and the two
-/// fields a router calls (`_service` / `_entities`) stripped, as the Apollo spec
-/// asks of an exported subgraph schema.
+/// The committed **subgraph** form: `@key` on the federated type, `_service` /
+/// `_entities` stripped.
 const EXPECTED_SUBGRAPH_SDL: &str = "\
 type Gadget @key(fields: \"id\") {\n\
 \tid: Int!\n\
@@ -289,12 +262,11 @@ async fn subgraph_sdl_matches_committed_snapshot() {
     let app = TestApp::builder()
         .module::<SubgraphSnapshotApp>()
         .module::<GadgetModule>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("a subgraph boots and emits its SDL");
 
-    let sdl = std::fs::read_to_string(&path).expect("emit_sdl wrote the schema file at boot");
+    let sdl = std::fs::read_to_string(&path).expect("emit wrote the schema file at boot");
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(
@@ -303,9 +275,7 @@ async fn subgraph_sdl_matches_committed_snapshot() {
          composition reads, so review the diff before updating the constant",
     );
 
-    // And it is the same schema `_service` publishes, bar the newline the file
-    // ends with — the two are rendered from one registry through two option
-    // sets, and a reader has to be able to trust that.
+    // The same schema `_service` publishes, bar the file's trailing newline.
     let resp = app
         .http()
         .post("/graphql")
@@ -325,3 +295,64 @@ async fn subgraph_sdl_matches_committed_snapshot() {
 
 #[module(providers = [GadgetResolver])]
 struct GadgetModule;
+
+// A relative `emit_path` is the app crate's, the one `#[nest_rs_core::main]`
+// expanded in, whatever directory the process runs from.
+
+/// Relative and per-process: no directory is named until the boot resolves it.
+fn relative_emit_path() -> PathBuf {
+    PathBuf::from(format!(
+        "nest_rs_graphql_relative_{}.graphql",
+        std::process::id()
+    ))
+}
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        emit: Surface::Open,
+        emit_path: relative_emit_path(),
+        ..GraphqlConfig::default()
+    }),
+    AlphaModule,
+])]
+struct RelativeEmitApp;
+
+/// Removes its file when dropped, so a failed run leaves none in the crate.
+struct Removed(PathBuf);
+
+impl Drop for Removed {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[nest_rs_core::main]
+async fn boot_emitting_relatively() {
+    TestApp::builder()
+        .module::<RelativeEmitApp>()
+        .build()
+        .await
+        .expect("the schema boots and emits its SDL");
+}
+
+#[test]
+fn a_relative_emit_path_lands_in_the_crate_main_expanded_in() {
+    let elsewhere =
+        std::env::temp_dir().join(format!("nest_rs_graphql_cwd_{}", std::process::id()));
+    std::fs::create_dir_all(&elsewhere).expect("a working directory of its own");
+    std::env::set_current_dir(&elsewhere).expect("the process runs from it");
+    let landed = Removed(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_emit_path()));
+
+    boot_emitting_relatively();
+    // `main`'s panic hook outlives it, reporting to a console nothing drains.
+    drop(std::panic::take_hook());
+
+    let sdl = std::fs::read_to_string(&landed.0)
+        .expect("the SDL lands beside the manifest of the crate `main` expanded in");
+    assert!(sdl.contains("widget(id: Int!): Widget!"), "{sdl}");
+    assert!(
+        !elsewhere.join(relative_emit_path()).exists(),
+        "never under the working directory",
+    );
+    let _ = std::fs::remove_dir_all(&elsewhere);
+}

@@ -2,23 +2,22 @@
 name = "api"
 version.workspace = true
 edition.workspace = true
+description = "Demo API built with nestrs"
 publish = false
 
 [dependencies]
 nest-rs.workspace = true
 features.workspace = true
-poem.workspace = true
-tokio.workspace = true
 anyhow.workspace = true
 uuid.workspace = true
 sea-orm.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-nest-rs.workspace = true
-# Enables `features::testing` (dev keypair, org id, token minting) for e2e.
+tokio.workspace = true
+nest-rs = { workspace = true, features = ["testing"] }
+# Enables `features::testing`, the helpers the demo's suites share, for e2e.
 features = { workspace = true, features = ["test-support"] }
-poem = { workspace = true, features = ["test"] }
 migrations = { workspace = true }
 # The audio-storage e2e boots a worker to drain the `audio` queue and talks to
 # real RustFS directly: `nest-rs-storage` builds the client that ensures the
@@ -29,6 +28,8 @@ reqwest = { workspace = true }
 # with no connection to upgrade.
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
+# `LogCapture::events_at` reads a `tracing::Level`.
+tracing = { workspace = true }
 
 [lints]
 workspace = true

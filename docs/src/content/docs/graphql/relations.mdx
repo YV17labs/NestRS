@@ -1,12 +1,9 @@
 ---
 title: Relations resolve themselves
 description: Declare a SeaORM relation on an exposed entity and the GraphQL field, the loader, and the auth scope appear with it.
-tier: basics
 sidebar:
   order: 5
 ---
-
-import { Aside } from '@astrojs/starlight/components';
 
 Declaring a SeaORM relation on an exposed entity — and marking the
 relation field `#[expose]` — is the **whole
@@ -21,7 +18,7 @@ relation cannot leak across orgs.
 ## The declaration
 
 ```rust title="crates/features/src/users/entity.rs"
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
 
 #[expose(name = "User", service = super::service::UsersService, graphql)]
@@ -90,17 +87,20 @@ The schema you get:
 
 ```graphql title="the SDL it produces"
 type User {
-    id: ID!
-    orgId: ID!
+    id: String!
     name: String!
+    """
+    Field-level authorization applies: reads `null` where the caller's ability withholds it.
+    """
     org: Org             # belongs_to side — PK loader on OrgsService
+    orgId: String!
 }
 
 type Org {
-    id: ID!
+    id: String!
     name: String!
     # has_many side — FK loader on UsersService, paged
-    users(first: Int, after: String): UserConnection!
+    users(after: String, first: Int): UserConnection!
 }
 ```
 
@@ -108,7 +108,9 @@ The `has_many` side is a **Relay connection**, not a list: `edges { cursor node 
 plus `pageInfo`, with the child's own primary key as the cursor — the same keyset
 `Repo::page` uses everywhere else. `first` defaults to 20 and is clamped to
 `1..=100` by `clamp_page_size`, so a relation over millions of rows is walked a
-page at a time.
+page at a time. Pass `endCursor` back as `after` to read the next page; an
+`after` no page issued is an `INVALID_ARGUMENT` field error naming `after`,
+never the first page.
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/graphql -d \
@@ -154,117 +156,57 @@ transport — see [Repo and executor](/database/repo-and-executor/).
 This is the killer property: turning a per-row leak into a wire-level
 omission needs no controller code and no manual `if` in the resolver.
 
+The batch decides the rows and the caller's grants their columns: each row it answers
+is a wire row judged for the caller whose request runs the batch, as a root field's
+is, so under a `.fields([Id, Name])` grant on `User`, `post.author { id name }`
+answers and `post.author { email }` reads `null`, the column declared
+`#[expose(nullable)]` as a grant withholding it needs
+([Response masking](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds)).
+
 ## What fails if you get it wrong
 
-A batch runs on its **own task** — that is what a DataLoader is — and a fresh
-task starts with empty task-locals, so the ambient executor and ability the
-request installed are gone. `LoaderScope` is what carries them across, bound as
-`LoaderScope as dyn GraphqlBatchContext` in a reachable module (`nestrs g
-graphql` writes it into `authz/graphql/`).
+A batch runs on its **own task** — that is what a DataLoader is — and carries
+what its request carries: the executor `SeaOrmDatabaseModule` installs around
+`/graphql`, as the pool, and the ability the endpoint's guards attach.
+There is nothing to bind for it.
 
-Without it, `Repo` finds no ambient executor and **every relation field fails
-before a single statement reaches the database** — the operation answers
-`database error` on each relation path, scalars resolve normally, and the query
-log stays empty. Schema build names the gap up front so the symptom is not the
-only clue:
+Two wiring mistakes stop the boot, each naming the line to add:
 
-```text frame="terminal"
- WARN nest_rs::graphql: dataloaders seeded with no batch context loaders=4
-      hint="list `LoaderScope as dyn GraphqlBatchContext` in a reachable module …"
-```
+- **`SeaOrmDatabaseModule` not imported.** The service a GraphQL-exposed
+  entity names (`#[expose(service = S, graphql)]`) hosts loaders that run
+  `Repo`, which needs the unit of work the binding provides, so the app is
+  refused at boot:
 
-The failure itself is logged too — `error` on `nest_rs::orm`, naming the entity
-and every binding that installs an executor — because the wire form of
-`ServiceError::Db` is the constant `database error` and carries nothing an
-operator can act on.
+  ```text frame="terminal"
+  unmet dependency: `UsersService` (in module `UsersModule`) depends on `dyn UnitOfWork`, which no module this app imports provides. Import exactly one unit-of-work binding: `nest_rs::seaorm::SeaOrmDatabaseModule` runs every edge's units of work over SeaORM's executor.
+  ```
+
+- **The target's module not imported.** A relation the schema serves reads a
+  loader of the target entity's service; when the app does not reach that
+  service, the schema build refuses, naming the field, the entity declaring
+  it and the module to import — `` `User.org` (declared on
+  `features::users::entities::user::Entity`) reads a loader of
+  `features::orgs::service::OrgsService`: import `OrgsModule` into the module
+  serving `User` ``. A relation on an object the schema does not serve is no
+  defect of this app: its loader is only counted, once, at `warn`
+  (`dataloaders linked but unreachable`).
+
+Without those guards there is no ability, and `Repo` denies every row,
+saying so at `warn` on `nest_rs::orm`.
 
 ## Fanout-aware complexity
 
-With async-graphql's default `1 + child_complexity` formula, a relation
-field barely moves the score even when it resolves a hundred rows. The
-macro adds the honest estimate for you — the page the client actually
-asked for, times the cost of each row:
-
-```rust title="from the macro expansion"
-#[graphql(complexity = "first.unwrap_or(20) as usize * child_complexity")]
-```
-
-So `posts(first: 5)` costs a twentieth of `posts(first: 100)`, and a
-three-level chain left at the default page size scores `20³`. That is a
-direct consequence of the field taking its page size: while the relation
-returned an unparameterised list there was nothing to multiply by but a
-guess.
-
-`BelongsTo` keeps the additive default (one parent row, dropping to
-zero when the ambient `Ability` denies it). The two relation kinds
-therefore use **asymmetric base scoring** — multiplicative for
-`HasMany`, additive for `BelongsTo` — which is the point: pages are
-the cost driver. Override per field with `#[expose(complexity = …)]`,
-which may now name `first` — full details in
-[Query limits](/graphql/query-limits/#override-on-the-field).
+A relation's field scores what it resolves: a `HasMany` its page times each row,
+a `BelongsTo` the additive default. [Field complexity](/graphql/field-complexity/)
+is the formula, and `#[expose(complexity = …)]` its
+[override](/graphql/field-complexity/#override-on-the-field).
 
 ## Opt out: leave a single relation unexposed
 
-Leaving a relation field unexposed (no `#[expose]`) keeps auto-emission
-off for that field only. The relation stays declared at the ORM level
-(SeaORM still knows about it), and you can write a hand-rolled
-`#[field_resolver]` if you need a shape the auto-emitted one does not
-give you — a filtered or sorted subset, extra edge fields, a projection.
-Cursor pagination is **not** on that list any more: the auto-emitted
-field already is a connection.
-
-```rust title="crates/features/src/orgs/entity.rs"
-#[expose(name = "Org", service = …, graphql)]
-#[sea_orm::model]
-pub struct Model {
-    #[expose]
-    pub id: Uuid,
-    #[expose]
-    pub name: String,
-
-    // No #[expose] => not auto-resolved; own it with a #[field_resolver].
-    #[sea_orm(has_many)]
-    pub users: HasMany<crate::users::Entity>,
-}
-```
-
-<Aside type="caution">
-**Opting out is per-field.** Leaving one relation unexposed lets a
-`#[field_resolver]` own that field, but every *other* `#[expose]`-emitted
-relation on the same `User` / `Org` type still lives in the auto-emitted
-`#[ComplexObject]`. If you need custom logic on a type that already has
-auto-resolved relations, the single-`ComplexObject` rule applies — see
-[Field resolvers](/graphql/field-resolvers/).
-</Aside>
-
-## A custom shape: a filtered relation
-
-When the unexposed relation opens the slot, write the replacement on the resolver:
-
-```rust title="crates/features/src/orgs/graphql/resolver.rs"
-use async_graphql::{Context, Result};
-use nest_rs::graphql::{operations, resolver};
-
-use crate::orgs::Org;
-use crate::users::User;
-
-#[resolver]
-pub struct OrgsResolver {
-    #[inject]
-    users: Arc<crate::users::UsersService>,
-}
-
-#[operations]
-impl OrgsResolver {
-    #[field_resolver]
-    async fn admins(&self, _ctx: &Context<'_>, parent: &Org) -> Result<Vec<User>> {
-        Ok(self.users.admins_in_org(parent.id).await?)
-    }
-}
-```
-
-The filter, the service method, and the `User` wire DTO all stay where
-they belong — the resolver only translates between the two.
+Leaving a relation field unexposed (no `#[expose]`) keeps auto-emission off for
+that field alone, and a `#[field_resolver]` owns it in the shape you need —
+[Field resolvers](/graphql/field-resolvers/#own-a-relation-yourself) shows the
+opt-out and a filtered replacement.
 
 ## Two foreign keys to one parent
 
@@ -302,7 +244,7 @@ bidirectional or multi-hop relations.
 Bidirectional and multi-hop graphs (`org ↔ membership ↔ user`) are resolved
 explicitly rather than guessed. Composite primary keys are refused at compile
 time (not a cryptic `E0119`). See
-`crates/nest-rs-resource-macros/src/relations.rs` for the diagnostics.
+`crates/nest-rs-seaorm-macros/src/relations.rs` for the diagnostics.
 
 ## Going further
 

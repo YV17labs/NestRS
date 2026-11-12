@@ -1,7 +1,6 @@
 ---
 title: Entities
 description: "The entity is the wire contract. One #[expose]d SeaORM model emits the DTO, inputs, JSON schema, relation loaders, and lifecycle — opt-in, fail-secure."
-tier: basics
 sidebar:
   order: 2
 ---
@@ -24,19 +23,21 @@ later migration adds never leaks by omission.
 
 Building your first entity? Start with the
 [tutorial walkthrough](/tutorial/entity/) — it grows a minimal `Post`
-step by step. This page is the **reference**: every header flag, every
-field attribute, relations, validation, lifecycle, and the columns we
-recommend on every entity.
+step by step. This page is the **reference**: every header flag and every
+field attribute. The inputs and their validation are on
+[Entity inputs](/database/inputs/), the lifecycle columns on
+[Lifecycle columns](/database/lifecycle/), and relations on
+[Relations and computed fields](/database/relations/).
 
 ## Anatomy
 
-The reference entity lives at `crates/features/src/posts/entity.rs`.
+The demo's reference entity lives at `crates/features/src/posts/entities/post.rs`,
+whose folder holds a second entity; a feature with one keeps it in `entity.rs`, as below.
 Copy it before inventing a second shape.
 
 ```rust title="crates/features/src/posts/entity.rs"
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[expose(
     name = "Post",
@@ -47,10 +48,7 @@ use serde::{Deserialize, Serialize};
 )]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "post",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "post")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
@@ -81,7 +79,17 @@ pub struct Model {
 types and the `#[sea_orm(...)]` attributes — `#[expose]` only **reads**
 them and decides what crosses the wire. The two decorators compose:
 `#[sea_orm::model]` builds the `Entity`, `Column`, `ActiveModel`, and
-`Relation` machinery; `#[expose]` builds the transport surface on top.
+`Relation` machinery; `#[expose]` builds the transport surface on top. The
+`Model` crosses no wire: `#[expose]` writes the wire type, judged on the whole
+row where it is built, and refuses a `Serialize`, `Deserialize` or
+`JsonSchema` on the row, derived or written by hand, and with the `graphql`
+feature a `SimpleObject` or `InputObject` too, so it serializes nowhere but as
+`Post`, and a hidden column has no way onto a wire. A route, a message, a
+GraphQL field, a tool or a resource answering any `Model` — one no `#[expose]`
+decorates included, whatever it derives, inside a `Json`, a `Vec`, an `Option`
+or a stream — fails to compile at its type, ``a row crosses no wire``. What
+stays yours is a body serializing a row by hand: `serde_json::to_value(&row)`, a
+push, a DTO holding the row in a field.
 For everything about columns, types, relations, and migrations, the
 [official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
 is the source of truth.
@@ -93,41 +101,12 @@ a set of bare flags.
 
 | Flag | Kind | Effect |
 |---|---|---|
-| `name = "Post"` | **required** | The wire DTO / GraphQL object / OpenAPI schema name. |
+| `name = "Post"` | **required** | The wire DTO / GraphQL object / OpenAPI schema name. The entity names it as `<Entity as Exposed>::Wire`, which is what a `#[crud]` operation answers; only `#[expose]` implements `Exposed`. |
 | `service = …` | path | The service that owns the entity. Required as soon as the entity exposes a relation or another feature needs its PK loader — it's where the macro emits the loaders. |
 | `graphql` | flag | Emit the GraphQL object + input objects, and auto-resolve exposed relations through dataloaders. An exposed relation **without** `graphql` is a compile error. |
-| `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and `updated_at` on every save. Requires both columns. |
-| `soft_delete` | flag | Emit `impl SoftDeletable` so deletes set `deleted_at` and reads filter tombstoned rows. Requires a `deleted_at: Option<…>` column. |
+| `timestamps` | flag | Emit an `ActiveModelBehavior` that stamps `created_at` on insert and, when the entity has one, `updated_at` on every save. Requires `created_at`: an append-only entity has no `updated_at`. |
+| `soft_delete` | flag | Deletes set `deleted_at`, and every `Repo` read hides a tombstoned row. Requires a `deleted_at: Option<…>` column. |
 | `complex` | flag | Force `#[graphql(complex)]` on the wire DTO. Auto-enabled when `graphql` is set and the entity has auto-resolved relations — you rarely set it by hand. |
-
-## Recommended standard columns
-
-Every product entity in this repo (`org`, `user`, `post`) carries the
-same four columns. Follow the convention unless you have a reason not
-to:
-
-| Column | Type | Role |
-|---|---|---|
-| `id` | `Uuid` | Primary key, `auto_increment = false`. The create path seeds it with `Uuid::now_v7()` when the input omits it — time-ordered, index-friendly. |
-| `created_at` | `DateTimeWithTimeZone` | Stamped once on insert by `timestamps`. Read-only on the wire. |
-| `updated_at` | `DateTimeWithTimeZone` | Stamped on every save by `timestamps`. Read-only on the wire. |
-| `deleted_at` | `Option<DateTimeWithTimeZone>` | The soft-delete tombstone. **Left unexposed** — it's server-side state, never a wire field. |
-
-```rust title="crates/features/src/posts/entity.rs"
-#[sea_orm(primary_key, auto_increment = false)]
-#[expose]
-pub id: Uuid,
-// …
-#[expose]
-pub created_at: DateTimeWithTimeZone,
-#[expose]
-pub updated_at: DateTimeWithTimeZone,
-pub deleted_at: Option<DateTimeWithTimeZone>,   // no #[expose] — hidden
-```
-
-`id`, `created_at`, and `updated_at` are exposed **read-only** (bare
-`#[expose]`, no `input(...)`) — the client reads them, never writes
-them. `deleted_at` stays off the wire entirely.
 
 ## Read side — exposure is opt-in
 
@@ -152,28 +131,49 @@ response. Because exposure is opt-in, they stay off the wire by
 default, and a column a future migration adds never leaks until someone
 deliberately exposes it.
 
+The wire is not the only place a secret prints: the `Model` and the
+`ActiveModel` derive `Debug`, so a log line can print a row.
+Type a secret column as `nest_rs::core::Secret` — its `Debug` and its
+serialization both say `<redacted>`, and the column stores and reads its
+value's own type:
+
+```rust title="crates/features/src/users/entities/user.rs (from the demo, abridged)"
+use nest_rs::core::Secret;
+// …
+#[derive(Clone, Debug, DeriveEntityModel)]
+// …
+pub struct Model {
+    // …
+    pub password_hash: Option<Secret<String>>,
+    // …
+}
+```
+
+The service that verifies the hash reads it with `expose_secret()`, and
+`#[expose]` refuses a `Secret` column at compile time: a secret never crosses
+the wire.
+
 <Aside type="caution">
-Response masking reconstructs the full row from the wire body to apply
-`Ability::mask`, which needs a default for every unexposed column. The
-macro provides one for the trivial scalar types (`String`, `Option`,
-`bool`, numbers). A hidden column of a type it can't default — `Uuid`,
-a timestamp, `Decimal`, a custom enum — needs a hand-written
-`impl WireModelDefaults`, or the crate fails to **compile**, naming the
-missing impl. A column an ability rule predicates on is therefore best left
-**exposed**.
-See [Response masking](/security/authorization/response-masking/).
+A wire row is judged on its whole row where `From<&Model>` builds it, hidden
+columns included, so a rule reading one decides it. A column a grant may
+withhold is declared `#[expose(nullable)]`, or is an `Option` already: its wire
+field reads `null` for a caller the grant withholds it from. A grant on `Read`
+leaving out any other column fails when the ability builds, naming it.
+See [Response masking](/security/authorization/response-masking/#what-a-grant-may-withhold--exposenullable).
 </Aside>
 
 ### Enum columns
 
 An exposed column whose type is your own enum passes through to the wire
 **verbatim**, so the enum is what has to carry the wire traits.
-`#[wire_enum]` is the enum mode of `#[expose]` and emits all of them —
-`Serialize`, `Deserialize`, `JsonSchema`, and under `graphql`
+`#[wire_enum]`, beside `#[input]` and `#[output]` in `nest_rs::core`, emits all
+of them — `Serialize`, `Deserialize`, `JsonSchema`, and under `graphql`
 `async_graphql::Enum`, plus the `Clone`/`Copy`/`Eq` shape those require:
 
 ```rust title="crates/features/src/posts/entities/post.rs"
-use nest_rs::resource::{expose, wire_enum};
+use nest_rs::core::wire_enum;
+use nest_rs::seaorm::expose;
+use sea_orm::entity::prelude::*;
 
 #[wire_enum(graphql)]
 #[derive(EnumIter, DeriveActiveEnum)]
@@ -189,9 +189,9 @@ pub enum PostStatus {
 
 Each of those derives expands against the **call site's** prelude, so
 hand-writing them put `schemars` and `async-graphql` in your manifest for
-code you never wrote. The decorator routes them back through
-`nest-rs-resource` with a `crate = ` override, so your manifest names
-neither.
+code you never wrote. The decorator routes them back through the framework
+with a `crate = ` override, so your manifest names neither. Its `graphql` key
+needs the `graphql` feature, and a build without it says so.
 
 It deliberately emits **nothing from SeaORM**: `EnumIter`,
 `DeriveActiveEnum`, `#[sea_orm(rs_type, db_type)]` and the per-variant
@@ -200,143 +200,9 @@ decision, not the wire's. Your own `#[serde(rename_all = …)]` and
 `#[derive(Default)]` sit beside it untouched. Drop `graphql` for an enum
 that only crosses HTTP.
 
-## Write side — inputs and validation
-
-`input(create)` / `input(update)` place a field in the generated
-`Create<Name>` / `Update<Name>` structs. These entity-derived inputs are
-**bare** — no `Dto` or `Input` suffix — because one struct serves the
-service (`type Create`), the REST body, and the GraphQL input at once, so no
-single boundary suffix fits. `validate(...)` attaches a
-[`validator`](https://docs.rs/validator) rule, re-emitted verbatim onto the
-input field:
-
-```rust title="crates/features/src/posts/entity.rs"
-#[expose(input(create, update), validate(length(min = 1)))]
-pub title: String,
-
-#[sea_orm(unique)]
-#[expose(input(create, update), validate(email))]
-pub email: String,
-```
-
-The input structs derive `Validate`. Validation runs at the HTTP edge
-when the handler binds the body through `Valid<Json<CreatePost>>` —
-the service never sees an invalid input. The full rule set
-(`length`, `email`, `range`, `url`, custom validators, …) is the
-`validator` crate's; see its docs for the catalogue.
-
-A **relation** field cannot carry `input(...)` — only scalar columns
-are writable. Set the foreign-key column (`org_id`) as the input, not
-the relation (`org`).
-
-## Relations
-
-A SeaORM `belongs_to` / `has_many` field, typed `HasOne<E>` /
-`HasMany<E>` and marked `#[expose]`, becomes a GraphQL field
-**auto-resolved by a dataloader** — no `#[field_resolver]` to write:
-
-```rust title="crates/features/src/users/entity.rs"
-#[sea_orm(belongs_to, from = "org_id", to = "id")]
-#[expose]
-pub org: HasOne<crate::orgs::Entity>,
-
-#[sea_orm(has_many)]
-#[expose]
-pub posts: HasMany<crate::posts::Entity>,
-```
-
-This needs `graphql` **and** `service` on the header. The macro emits
-the PK loader (`<Service>ById`) and, per `belongs_to`, the FK loader
-(`<Service>By<FkCol>`) on the owning side's service, plus the
-`PkLoadable` / `RelatedTo<Parent, Via>` impls that let the inverse side
-reach the loader without naming the other service. The `has_many` side
-is a paged connection (`first` / `after`), one page **per parent**.
-Every batch goes through `Repo::scoped(Action::Read)`, so the ambient
-ability filters relation reads row-level, exactly as on any other query.
-Drop `#[expose]` on a single relation to opt that one field out, and add
-`#[expose(via = "author_id")]` when the child reaches this parent through
-more than one foreign key.
-
-See [GraphQL relations](/graphql/relations/) and
-[Dataloaders](/database/dataloaders/) for the full mechanics, and
-[Query limits](/graphql/query-limits/) for the per-relation complexity
-cost the macro attaches.
-
-## Virtual and computed fields
-
-There is no `#[expose]` "virtual column" attribute — `#[expose]` only
-surfaces real SeaORM columns and relations. For a value computed at
-query time (a derived total, a formatted label, a filtered subset of a
-relation), leave the source unexposed and write a
-`#[field_resolver]` on the resolver instead. Cost it with
-`#[expose(complexity = …)]` on an exposed field, or
-`#[graphql(complexity = …)]` directly on a hand-rolled resolver.
-
-SeaORM itself offers two lower-level mechanisms underneath, neither of
-which `#[expose]` reads — wire them through a `#[field_resolver]` (or a
-hand-shaped HTTP response) if you want them on the wire:
-
-- **A non-persisted field on the `Model`** — `#[sea_orm(ignore)]` keeps
-  a field on the struct but out of the table and every query (set to
-  `Default::default()` on load). Useful for transient state carried on
-  the model.
-- **A value computed by the database** — a `DerivePartialModel` with
-  `#[sea_orm(from_expr = "…")]` selects a SQL expression into a result
-  struct; a plain method on `impl Model` covers values computed in Rust.
-
-See the [official SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/)
-for both.
-
-<Aside type="caution">
-async-graphql allows at most **one** `#[ComplexObject]` per wire type.
-An auto-resolved relation already occupies it, so a custom
-`#[field_resolver]` cannot live next to an auto-resolved relation on
-the same entity — pick one source of `ComplexObject` fields per entity.
-</Aside>
-
-## Lifecycle behaviour
-
-`timestamps` and `soft_delete` are independent flags that emit
-SeaORM-level behaviour:
-
-- **`timestamps`** emits `ActiveModelBehavior::before_save`, stamping
-  `created_at` on insert and `updated_at` on every save with
-  `chrono::Utc::now().fixed_offset()`.
-- **`soft_delete`** emits `impl SoftDeletable for Entity` (declaring
-  the `deleted_at` column). This is only **half** the wiring: the entity
-  flag makes the column addressable, but the service must also override
-  `soft_delete_column()` to return it (default `None` ⇒ hard delete). With
-  both halves in place, `CrudService` deletes by setting the tombstone and
-  ANDs `deleted_at IS NULL` onto every read so a soft-deleted row is
-  invisible — in lists, by-id loads, and relation batches alike. See
-  [CRUD](/database/crud/#soft-delete-and-timestamps) for the service side.
-
-<Aside type="caution">
-SeaORM requires exactly **one** `ActiveModelBehavior` per entity. The
-macro emits it for you when `timestamps` is set — do not also write
-your own, or the impls collide. With **no** `timestamps`, supply the
-empty `impl ActiveModelBehavior for ActiveModel {}` yourself.
-</Aside>
-
-## The migration
-
-`#[expose]` builds the wire surface; it does **not** create the table.
-The columns it reads must exist in a migration — including the
-lifecycle columns, with their database-side defaults:
-
-```rust title="crates/migrations/src/m20260101_000001_create_post.rs"
-.col(ColumnDef::new(Post::CreatedAt)
-    .timestamp_with_time_zone().not_null()
-    .default(Expr::current_timestamp()))
-.col(ColumnDef::new(Post::UpdatedAt)
-    .timestamp_with_time_zone().not_null()
-    .default(Expr::current_timestamp()))
-.col(ColumnDef::new(Post::DeletedAt)
-    .timestamp_with_time_zone().null())
-```
-
-See [Migrations](/database/migrations/) for writing and running them
-(`nestrs run db up`).
+An enum a **hidden** column holds never crosses a wire, so it takes no
+`#[wire_enum]`: SeaORM's derives are its own, as the `users` exemplar's `role`
+shows.
 
 ## Field attribute reference
 
@@ -346,6 +212,8 @@ See [Migrations](/database/migrations/) for writing and running them
 | `#[expose(input(create, update))]` | scalar column | Adds to wire + the named input(s). |
 | `#[expose(validate(…))]` | input column | Attaches a `validator` rule to the input field. |
 | `#[expose(complexity = …)]` | exposed field / relation | Overrides the GraphQL complexity cost (literal or expression string). |
+| `#[expose(default = …)]` | a column the create input does not carry | The value every insert through `Repo` leaving the column unset stores. |
+| `#[expose(nullable)]` | an exposed column of a type with no null | A grant on `Read` may withhold it: its wire field is an `Option`, nullable in every edge's schema, its key always written. |
 | `#[expose]` on `HasOne`/`HasMany` | relation | Auto-resolved GraphQL field (needs header `graphql` + `service`). |
 | `#[expose(via = "…")]` | `HasMany` | Names which of the child's foreign keys the relation follows — required when it has two to this parent. |
 | `#[wire_enum]` / `#[wire_enum(graphql)]` | a column's enum type | Emits the wire derives (serde, schemars, async-graphql `Enum`) routed through the framework. |
@@ -357,6 +225,6 @@ See [Migrations](/database/migrations/) for writing and running them
 - [CRUD](/database/crud/) — `#[crud]` generates the endpoints over the
   entity's service.
 - [Response masking](/security/authorization/response-masking/) — what
-  unexposed columns and `WireModelDefaults` are for.
+  unexposed columns and their placeholders are for.
 - [SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/) — the
   reference for the columns, relations and migrations under `#[expose]`.

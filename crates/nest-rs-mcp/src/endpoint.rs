@@ -1,216 +1,574 @@
-//! The poem endpoint that serves an MCP handler over streamable HTTP.
+//! The endpoint that serves an MCP handler over streamable HTTP.
 
 use std::sync::Arc;
 
-use nest_rs_core::{Container, Correlation, current_request_scope};
-use poem::endpoint::TowerCompatExt;
-use poem::{Endpoint, IntoEndpoint, Request, Response, Result, Route};
+use nest_rs_config::Namespaced as _;
+use nest_rs_core::{Container, Correlation, Posture, Problem, code, current_request_scope};
+use nest_rs_http::__private::{CanonicalHost, framework_sentence};
+use nest_rs_http::ResponseError as _;
+use nest_rs_http::{
+    Body, BoxEndpoint, DetachedWork, Endpoint, HeaderValue, Method, Request, Response, Result,
+    StatusCode, header, normalize_error_response,
+};
 use rmcp::ServerHandler;
+use rmcp::model::{ClientJsonRpcMessage, ClientRequest, JsonRpcError};
+use rmcp::transport::common::http_header::HEADER_SESSION_ID;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
-use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::session::store::SessionStore;
 
+use crate::McpError;
+use crate::ambient::McpAmbient;
 use crate::config::McpConfig;
-use crate::context::{McpAmbient, McpToolContext};
-use crate::guard::{FallbackMcpGuard, McpOperationGuard};
-use crate::guards::deny_all;
-use crate::propagate::PropagatingHandler;
+use crate::error::{
+    SESSION_NOT_FOUND, classed_method_not_found, is_transport_message, said_by_code,
+    transport_sentence, unread_message,
+};
+use crate::ping::Pings;
+use crate::propagate::{OperationUnits, PropagatingHandler, RequestChains, ServedPath};
+use crate::registry::MountIndex;
+use crate::sessions::{BoundedSessions, Principal, Refused, ReportedStore, say_no_subject};
+use nest_rs_database::UnitOfWork;
 
-/// The operation guard an MCP mount runs, in preference order: the app's
-/// registered `dyn McpOperationGuard` (the authz bridge), else the global guard
-/// pool through the seeded [`FallbackMcpGuard`], else deny-all.
-///
-/// This is the order [`McpMount::from_container`] resolves with, and the MCP
-/// twin of what `ContextEndpoint::new` does for `/graphql`. Keeping deny-all as
-/// the tail means the fallback only ever widens what `use_guards_global` opted
-/// into — an app with no guards at all still gets a closed tool surface.
-pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGuard> {
-    let (guard, mode) = match container.get_dyn::<dyn McpOperationGuard>() {
-        Some(guard) => (guard, "operation_guard"),
-        None => match container.get::<FallbackMcpGuard>() {
-            Some(fallback) => ((fallback.0)(container), "global_guard_pool"),
-            // `deny_all` says the fail-closed posture itself, at `warn`.
-            None => return deny_all(),
-        },
-    };
-    tracing::debug!(target: crate::TARGET, mode, "mcp operations gated");
-    guard
+/// The wait, in seconds, a client refused a session is told to take before
+/// trying again.
+const SESSION_RETRY_AFTER_SECS: u32 = 5;
+
+// rmcp 3.9 quotes what a client sent at every level, `error` included: the
+// session id a client named, when the session store fails to load it. The
+// mount's sessions and store say its failure lines instead (`sessions.rs`).
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::LibraryClamp::new("rmcp", tracing::level_filters::LevelFilter::OFF)
 }
 
-/// Everything one `#[mcp]` mount needs beyond the handler itself: who gates an
-/// operation, what ambient state is re-installed around it, and how the
-/// streamable-HTTP server is configured.
-///
-/// Assembled once per mount. [`from_container`](Self::from_container) is what
-/// the `#[mcp]` macro emits — the resolution order lives here, in the crate,
-/// rather than inside a macro expansion, so it is readable and testable.
+/// Everything one `#[mcp]` mount needs beyond the handler itself: the chains
+/// each operation runs, its unit of work, and how the streamable-HTTP server is
+/// configured. The transport checks the request's origin and runs its guards
+/// in front of it, so an endpoint built from one serves whoever reaches it.
 pub struct McpMount {
-    guard: Arc<dyn McpOperationGuard>,
-    context: Option<Arc<dyn McpToolContext>>,
+    chains: RequestChains,
+    unit_of_work: Option<Arc<dyn UnitOfWork>>,
     config: McpConfig,
     session_store: Option<Arc<dyn SessionStore>>,
+    /// Told and stopped by the HTTP transport; a hand-built [`endpoint`]'s is never
+    /// told, so its operations end only with their clients' cancellations.
+    detached: DetachedWork,
+    /// What the path's hosts declare, read at mount; a hand-built
+    /// [`endpoint`]'s handler is asked through `get_tool`.
+    index: Option<Arc<MountIndex>>,
+    /// Who the endpoint serves, which decides what its sessions are bound to.
+    posture: Posture,
+    /// The path the mount is served at, as its `mounted` lines name it; a
+    /// hand-built [`endpoint`]'s lines name none.
+    served_at: Option<Arc<ServedPath>>,
 }
 
 impl McpMount {
-    /// Fail closed: an MCP endpoint mounted without an explicit
-    /// [`McpOperationGuard`] denies every request rather than serving the tool
-    /// surface unauthenticated.
-    pub fn deny_all() -> Self {
+    /// A mount on [`McpConfig::default`], with no app's layers and no unit of
+    /// work: a hand-built endpoint's, in a test. It is gated, as an app's
+    /// endpoint is until the app opens it, so a caller naming no subject
+    /// opens no session.
+    pub fn new() -> Self {
         Self {
-            guard: deny_all(),
-            context: None,
+            chains: RequestChains::Bare,
+            unit_of_work: None,
             config: McpConfig::default(),
             session_store: None,
+            detached: DetachedWork::new(),
+            index: None,
+            posture: Posture::Gated,
+            served_at: None,
+        }
+    }
+
+    /// [`new`](Self::new), opened as `McpAccess::Public` opens an app's
+    /// endpoint: no guard runs in front of it, so its sessions
+    /// are the anonymous caller's.
+    pub fn public() -> Self {
+        Self {
+            posture: Posture::Public,
+            ..Self::new()
         }
     }
 
     /// Resolve the whole mount from the app's container:
     ///
-    /// * the operation guard, per [`resolve_operation_guard`];
-    /// * the registered `dyn McpToolContext` (the ORM/authz bridge), if any —
-    ///   without one a `Repo`-backed handler still fails **closed**;
-    /// * [`McpConfig`], if `McpModule` was imported, else its defaults;
+    /// * the chains every operation's own site runs, which the boot's wiring
+    ///   step composed;
+    /// * the bound `dyn UnitOfWork` each request operation runs its unit of work
+    ///   through — without one a `Repo`-backed handler fails **closed**;
+    /// * [`McpConfig`], which a listed host's `McpModule` resolves, else its
+    ///   defaults, its host allowlist admitting the host a module names the
+    ///   deployment by (`OAuthResourceModule`'s resource) unless the list was
+    ///   emptied;
     /// * a registered `dyn SessionStore` (rmcp 3.x cross-instance session
-    ///   recovery), if the app provides one.
-    pub fn from_container(container: &Container) -> Self {
-        let config = container
+    ///   recovery), if the app provides one;
+    /// * the access the app declared, `McpAccess`.
+    pub(crate) fn from_container(container: &Container) -> Self {
+        let mut config = container
             .get::<McpConfig>()
-            .map(|cfg| (*cfg).clone())
-            .unwrap_or_default();
+            .map_or_default(|cfg| (*cfg).clone());
+        // An emptied list is an opening the deployment wrote: never closed here.
+        if let Some(host) = container.get::<CanonicalHost>()
+            && !config.allowed_hosts.is_empty()
+            && !config
+                .allowed_hosts
+                .iter()
+                .any(|allowed| allowed == host.as_str())
+        {
+            config.allowed_hosts.push(host.as_str().to_owned());
+        }
 
         if config.allowed_hosts.is_empty() {
-            // Not a style nit: an empty allowlist turns off rmcp's DNS-rebinding
-            // defence, and this is the event an incident query looks for.
+            // An empty allowlist turns off rmcp's DNS-rebinding defence.
             tracing::warn!(
                 target: crate::TARGET,
                 reason = "host_validation_disabled",
                 "mcp host allowlist is empty — inbound Host headers are not validated",
             );
         } else {
-            // rmcp warns when it *rejects* a Host, but its message cannot name
-            // the remedy: it knows the allowlist, not that this framework feeds
-            // it from `NESTRS_MCP__ALLOWED_HOSTS`. Recording the effective list
-            // at mount is what turns that rejection from "why is my deployment
-            // answering 403?" into one grep. Deliberately not a `warn`: the
-            // loopback default is correct for the local server it protects, and
-            // an alarm on every dev run is an alarm nobody reads.
+            // `debug`: the loopback default is right for a dev run, and each
+            // refusal is said at `warn` (`host_refused`).
             tracing::debug!(
                 target: crate::TARGET,
-                allowed_hosts = ?config.allowed_hosts,
+                allowed_hosts = config.allowed_hosts.join(","),
                 hint = %format!(
                     "a Host outside this list is refused with 403; set {} to this \
                      deployment's own hostnames",
-                    nest_rs_config::var_name("mcp", "ALLOWED_HOSTS"),
+                    McpConfig::ALLOWED_HOSTS.var(McpConfig::NAMESPACE),
                 ),
                 "mcp host allowlist resolved",
             );
         }
 
+        let chains = match crate::operation::REQUEST.chains(container) {
+            Ok(chains) => RequestChains::Composed(chains),
+            Err(refused) => {
+                tracing::error!(
+                    target: crate::TARGET,
+                    error = %nest_rs_core::error_message(refused.as_ref()),
+                    "the mount's operations did not compose; every operation is refused",
+                );
+                RequestChains::Refused
+            }
+        };
+
         Self {
-            guard: resolve_operation_guard(container),
-            context: container.get_dyn::<dyn McpToolContext>(),
+            chains,
+            unit_of_work: container.get_dyn::<dyn UnitOfWork>(),
             config,
             session_store: container.get_dyn::<dyn SessionStore>(),
+            detached: DetachedWork::new(),
+            index: None,
+            posture: crate::module::posture(container),
+            served_at: None,
         }
     }
 
-    /// Replace the operation guard — `AllowAllMcpGuard` for a deliberately
-    /// public endpoint, or a test double.
-    pub fn with_guard(mut self, guard: Arc<dyn McpOperationGuard>) -> Self {
-        self.guard = guard;
+    /// Run this mount's operations as `work`, which the HTTP transport stops
+    /// when it stops serving — what the `#[mcp]` registration declares on its
+    /// [`HttpEndpointMeta`](nest_rs_http::HttpEndpointMeta).
+    pub(crate) fn stopped_with(mut self, work: DetachedWork) -> Self {
+        self.detached = work;
+        self
+    }
+
+    /// Name a tool an operation calls through `index`, what the mount read
+    /// its hosts declare.
+    pub(crate) fn declaring(mut self, index: Arc<MountIndex>) -> Self {
+        self.index = Some(index);
+        self
+    }
+
+    /// Name the mount by `path` on every line its operations file, as its
+    /// `mounted` lines do.
+    pub(crate) fn served_at(mut self, path: Arc<str>) -> Self {
+        self.served_at = Some(Arc::new(ServedPath(path)));
         self
     }
 }
 
-/// Mount `factory`'s handler as a poem endpoint, gated and wrapped per `mount`.
+impl Default for McpMount {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Mount `factory`'s handler as an endpoint, wrapped per `mount`; the
+/// transport runs the request's origin check and guards in front of it.
 ///
 /// `factory` runs on every new MCP session, so per-session state stays fresh.
-pub fn endpoint<F, H>(mount: McpMount, factory: F) -> impl IntoEndpoint
+pub fn endpoint<F, H>(mount: McpMount, factory: F) -> BoxEndpoint
 where
     F: Fn() -> H + Send + Sync + 'static,
     H: ServerHandler + Send + 'static,
 {
     let McpMount {
-        guard,
-        context,
+        chains,
+        unit_of_work,
         config,
         session_store,
+        detached,
+        index,
+        posture,
+        served_at,
     } = mount;
 
-    let handler_context = context.clone();
-    let handler_guard = guard.clone();
+    let pings = Pings::new(
+        config.ping_interval,
+        config.ping_timeout,
+        served_at.as_ref().map(|served| Arc::clone(&served.0)),
+    );
+    let units = OperationUnits::new(
+        unit_of_work,
+        detached.clone(),
+        config.operation_timeout,
+        index,
+        chains,
+    )
+    .served_at(served_at);
 
-    let mut server_config = config.to_server_config();
-    server_config.session_store = session_store;
+    let session_store = session_store.map(|store| Arc::new(ReportedStore::new(store, posture)));
+    let sessions = Arc::new(BoundedSessions::new(
+        config.to_session_config(),
+        config.max_concurrent_sessions,
+        posture,
+        session_store.clone(),
+        config.session_idle_timeout,
+        pings,
+    ));
+
+    // The stop, not the signal: rmcp ends every stream on this token, a POST's
+    // answer included. A stateful session's operations miss it; the handler stops those.
+    let mut server_config = config
+        .to_server_config()
+        .with_cancellation_token(detached.cancellation_token());
+    server_config.session_store = session_store.map(|store| store as Arc<dyn SessionStore>);
 
     let service = StreamableHttpService::new(
-        move || {
-            Ok(PropagatingHandler::new(
-                factory(),
-                handler_guard.clone(),
-                handler_context.clone(),
-            ))
-        },
-        Arc::new(LocalSessionManager::default()),
+        move || Ok(PropagatingHandler::new(factory(), units.clone())),
+        sessions.clone(),
         server_config,
     );
-    let inner = service.compat();
-    Route::new().at(
-        "/",
-        GuardedEndpoint {
-            guard,
-            context,
-            inner,
+    BoxEndpoint::new(SessionEndpoint {
+        session_cap: SessionCap {
+            sessions,
+            legacy: config.legacy_session_mode,
+            max_request_body_bytes: config.max_request_body_bytes,
         },
+        service,
+    })
+}
+
+/// The streamable-HTTP service behind the session cap, each request carrying
+/// what its operations re-install on rmcp's own tasks.
+struct SessionEndpoint<H: ServerHandler> {
+    session_cap: SessionCap,
+    service: StreamableHttpService<PropagatingHandler<H>, BoundedSessions>,
+}
+
+/// rmcp's answer to a session it does not hold, word for word: what a request
+/// naming another principal's session reads too, so neither tells a client
+/// whether the other exists.
+fn unknown_session() -> Response {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(SESSION_NOT_FOUND)
+}
+
+/// Why a client whose credential names no subject is refused a session, in
+/// words that quote nothing it sent.
+const NO_SUBJECT: &str = "a session is bound to the subject of the credential that opens it, and \
+                          this credential names none";
+
+/// The answer to a session refused because the caller's principal names no
+/// subject: `403`, saying why, and no session id.
+fn no_subject() -> Response {
+    Problem::new(403, code::FORBIDDEN)
+        .with_detail(NO_SUBJECT)
+        .as_response()
+}
+
+/// What refuses an `initialize` before rmcp opens a session past the cap.
+struct SessionCap {
+    sessions: Arc<BoundedSessions>,
+    /// Off, rmcp opens no session at all.
+    legacy: bool,
+    /// What the body is read to, as rmcp would.
+    max_request_body_bytes: usize,
+}
+
+impl SessionCap {
+    /// The answer refusing `req`, when it would open a session past the cap —
+    /// the body read and handed back otherwise. A principal `correlation`
+    /// names that no session could be bound to is told why instead, never to
+    /// retry.
+    ///
+    /// Only a full mount reads the body, and only of a `POST` naming no session:
+    /// an `initialize` is the one message that opens a session, and a stateless
+    /// request is served at the cap. A creation racing past this check, or a
+    /// session restored from the app's store past the cap, is refused by
+    /// [`BoundedSessions`] itself, and answered [`refused`](Self::refused) too.
+    async fn refusal(&self, req: &mut Request, correlation: &Correlation) -> Option<Response> {
+        if !self.legacy
+            || req.method() != Method::POST
+            || req.headers().contains_key(HEADER_SESSION_ID)
+            || !self.sessions.is_full().await
+        {
+            return None;
+        }
+        let body = match req
+            .take_body()
+            .into_bytes_limit(self.max_request_body_bytes)
+            .await
+        {
+            Ok(body) => body,
+            Err(unread) => return Some(unread.as_response()),
+        };
+        if !opens_a_session(&body) {
+            req.set_body(body);
+            return None;
+        }
+        if !self.sessions.binds(&Principal::of(correlation)) {
+            say_no_subject();
+            return Some(no_subject());
+        }
+        self.sessions.say_full();
+        Some(Self::refused())
+    }
+
+    /// The answer to a session refused at the cap: `503`, and the wait the
+    /// client takes before it tries again.
+    fn refused() -> Response {
+        Problem::new(503, code::UNAVAILABLE)
+            .with_retry_after(SESSION_RETRY_AFTER_SECS)
+            .as_response()
+    }
+}
+
+/// The answer to a body rmcp could not read as a message, `refused`: input
+/// the server cannot accept, refused `400`, its error carrying no id, since
+/// none could be read.
+fn unread(refused: McpError) -> Response {
+    match serde_json::to_vec(&JsonRpcError::new(None, refused)) {
+        Ok(body) => Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .content_type(HeaderValue::from_static("application/json"))
+            .body(body),
+        // Unreachable: an error always serializes.
+        Err(_) => Problem::new(500, code::INTERNAL).as_response(),
+    }
+}
+
+/// The line of a request rmcp refused for its `Host`: rmcp's own quotes the
+/// `Host`, and is under its clamp.
+fn host_refused() {
+    tracing::warn!(
+        target: crate::TARGET,
+        reason = "host_not_allowed",
+        hint = %format!(
+            "set {} to this deployment's own hostnames",
+            McpConfig::ALLOWED_HOSTS.var(McpConfig::NAMESPACE),
+        ),
+        "mcp request refused: its Host is outside the allowlist",
+    );
+}
+
+/// rmcp's answer to a request its transport turns away, said by kind.
+///
+/// Several of rmcp's refusals quote what the request carried — a header's
+/// value, the method or name its body named — and its failures their cause.
+/// The status stays rmcp's; a JSON-RPC error keeps its id, code and data — a
+/// `-32601` carrying none takes the `NOT_FOUND` class — and says its code's
+/// words; any other body is the status's problem document.
+/// A refusal in one of rmcp's sentences quoting nothing the request carried
+/// keeps it: the message, or the problem's `detail`. The one status changed
+/// is rmcp's `415` for a body typed JSON it could not read as a message: the
+/// media type is right and the body is not, so it is input the server cannot
+/// accept, answered `400` with a JSON-RPC error no id could be read for (MCP's
+/// Streamable HTTP transport, *Sending Messages*).
+async fn said_by_kind(response: Response) -> Response {
+    if response.status().is_success() {
+        return response;
+    }
+    let (mut head, body) = response.into_parts();
+    let refusal = body.into_bytes().await.unwrap_or_else(|error| {
+        tracing::warn!(
+            target: crate::TARGET,
+            error = %nest_rs_core::error_message(&error),
+            "mcp transport refusal unreadable; answered by its status alone",
+        );
+        Default::default()
+    });
+    head.headers.remove(header::CONTENT_LENGTH);
+    let text = std::str::from_utf8(&refusal).ok();
+    if head.status == StatusCode::UNSUPPORTED_MEDIA_TYPE
+        && let Some(refused) = text.and_then(unread_message)
+    {
+        return unread(refused);
+    }
+    match jsonrpc_said_by_kind(&refusal, head.status) {
+        Some(answer) => Response::from_parts(head, Body::from(answer)),
+        None => {
+            head.headers.remove(header::CONTENT_TYPE);
+            let detail = text
+                .and_then(transport_sentence)
+                .map_or_else(Body::empty, |sentence| Body::from(sentence.to_owned()));
+            let refusal = Response::from_parts(head, detail);
+            normalize_error_response(framework_sentence(refusal)).await
+        }
+    }
+}
+
+/// `refusal` with its JSON-RPC error said by its code, when it is one: the
+/// code's words, else the status's reason phrase — rmcp's own message where
+/// it quotes nothing the request carried — and the `NOT_FOUND` class on a
+/// method rmcp's dispatch refused before any handler could class it.
+fn jsonrpc_said_by_kind(refusal: &[u8], status: StatusCode) -> Option<Vec<u8>> {
+    let mut answer: serde_json::Value = serde_json::from_slice(refusal).ok()?;
+    let slot = answer.get_mut("error")?;
+    let mut error: McpError = serde_json::from_value(slot.take()).ok()?;
+    if !is_transport_message(&error.message) {
+        let said = said_by_code(error.code)
+            .or_else(|| status.canonical_reason())
+            .unwrap_or("Error");
+        error.message = said.into();
+    }
+    *slot = serde_json::to_value(classed_method_not_found(error)).ok()?;
+    serde_json::to_vec(&answer).ok()
+}
+
+/// Whether `body` is an `initialize` request, as rmcp decodes it.
+fn opens_a_session(body: &[u8]) -> bool {
+    matches!(
+        serde_json::from_slice::<ClientJsonRpcMessage>(body),
+        Ok(ClientJsonRpcMessage::Request(request))
+            if matches!(request.request, ClientRequest::InitializeRequest(_))
     )
 }
 
-struct GuardedEndpoint<E> {
-    guard: Arc<dyn McpOperationGuard>,
-    context: Option<Arc<dyn McpToolContext>>,
-    inner: E,
+impl<H> Endpoint for SessionEndpoint<H>
+where
+    H: ServerHandler + Send + 'static,
+{
+    async fn call(&self, mut req: Request) -> Result<Response> {
+        // Read once: two reads would mint two ids for one operation.
+        let correlation = nest_rs_core::__private::current_correlation()
+            .unwrap_or_else(|| Correlation::minted(None));
+        if let Some(refused) = self.session_cap.refusal(&mut req, &correlation).await {
+            return Ok(refused);
+        }
+
+        // Past the request's guards, so what they and its layers made ambient
+        // is captured; rmcp forwards the extensions into every operation's
+        // `RequestContext`, on a task of its own which no ambient context
+        // reaches.
+        req.extensions_mut().insert(McpAmbient::capture());
+        let scope = current_request_scope();
+
+        // A `GET` is the session's standalone stream, with no end of its own.
+        let standalone = req.method() == Method::GET;
+
+        // Past the request's guards: the principal its session is bound to.
+        let caller = Principal::of(&correlation);
+        // Also installed here, for an operation rmcp resolves inline.
+        let (response, refused) = BoundedSessions::answering(
+            caller,
+            nest_rs_core::with_request_scope(
+                scope,
+                correlation,
+                self.service.handle(req.into_http()),
+            ),
+        )
+        .await;
+        let response = match refused {
+            Some(Refused::Full) => return Ok(SessionCap::refused()),
+            Some(Refused::NoSubject) => return Ok(no_subject()),
+            Some(Refused::Unknown) => unknown_session(),
+            None => Response::from(response),
+        };
+        // rmcp answers `403` to a `Host` outside the allowlist alone, the
+        // endpoint keeping its `Origin` check off.
+        if response.status() == StatusCode::FORBIDDEN {
+            host_refused();
+        }
+        let mut response = said_by_kind(response).await;
+        // Ended at the shutdown signal; a POST's stream ends with its answer.
+        if standalone && response.status().is_success() {
+            response
+                .extensions_mut()
+                .insert(nest_rs_http::OpenEndedBody);
+        }
+        Ok(response)
+    }
 }
 
-impl<E> Endpoint for GuardedEndpoint<E>
-where
-    E: Endpoint<Output = Response>,
-{
-    type Output = Response;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    async fn call(&self, mut req: Request) -> Result<Self::Output> {
-        self.guard.before(&mut req).await?;
+    /// A session refused for a principal naming no subject reads why, in a
+    /// sentence quoting nothing it sent, and carries no session.
+    #[tokio::test]
+    async fn a_principal_naming_no_subject_is_answered_why_and_no_session() {
+        let answer = no_subject();
 
-        // Capture ambient state here — post-guard, while the request scope and
-        // the ambient executor/ability are still reachable — and stash it in
-        // the request extensions. rmcp forwards those extensions (as
-        // `http::request::Parts`) into every operation's `RequestContext`, so
-        // `PropagatingHandler` can re-install them *inside* the spawned
-        // dispatch, where a task-local from this task would not reach.
-        let scope = current_request_scope();
-        // One read, one decision. Resolved twice, the two calls disagree on the
-        // path that has to mint — the extensions would carry one id and the
-        // inline install another, for the same operation.
-        let correlation = nest_rs_core::current_correlation().unwrap_or_else(Correlation::mint);
-        let captured = self.context.as_ref().map(|context| context.capture(&req));
-        // The guard captures for its own `around` the same way — post-`before`,
-        // so it sees the ability its chain just attached.
-        let guard_captured = self.guard.capture(&req);
-        req.extensions_mut().insert(McpAmbient {
-            scope: scope.clone(),
-            captured,
-            guard_captured,
-            // The interceptor band is the outermost wrap on the request, so the
-            // span current here is the request's own — the one an access log
-            // and an OTel export are keyed on. Disabled when nothing installed
-            // one, which is the free case rather than a special one.
-            span: tracing::Span::current(),
-            correlation: correlation.clone(),
+        assert_eq!(answer.status(), StatusCode::FORBIDDEN);
+        assert!(!answer.headers().contains_key(HEADER_SESSION_ID));
+        let body = answer.into_body().into_bytes().await.expect("a body");
+        let problem: serde_json::Value = serde_json::from_slice(&body).expect("a problem");
+        assert_eq!(problem["code"], code::FORBIDDEN.as_str(), "{problem}");
+        assert_eq!(problem["detail"], NO_SUBJECT, "{problem}");
+    }
+
+    #[test]
+    fn only_an_initialize_opens_a_session() {
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "client", "version": "0" },
+            },
         });
+        assert!(opens_a_session(initialize.to_string().as_bytes()));
 
-        // Also install it here, so an operation rmcp happens to resolve inline
-        // (rather than on a spawned task) is covered by the same seam. Already
-        // ambient from the HTTP edge — re-installing the same id keeps an inline
-        // (non-spawned) rmcp resolution on the same footing as a spawned one.
-        nest_rs_core::with_request_scope(scope, correlation, self.inner.call(req)).await
+        let listed = serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+        assert!(!opens_a_session(listed.to_string().as_bytes()));
+        let initialized =
+            serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        assert!(!opens_a_session(initialized.to_string().as_bytes()));
+        assert!(!opens_a_session(b"{ not json"));
+    }
+
+    /// rmcp quotes what a client sent at every level, so one `/mcp` denial
+    /// files the framework's line alone: rmcp's `response error` is a `warn`
+    /// on `rmcp::service`.
+    #[test]
+    fn rmcp_writes_nothing_unless_a_filter_names_it() {
+        use nest_rs_core::__written_under as written;
+
+        for directive in ["info", "debug", "trace"] {
+            assert!(!written!(directive, "rmcp::service", ERROR), "{directive}");
+            assert!(!written!(directive, "rmcp::service", WARN), "{directive}");
+            assert!(!written!(directive, "rmcp::service", INFO), "{directive}");
+            assert!(!written!(directive, "rmcp::service", DEBUG), "{directive}");
+            assert!(!written!(directive, "rmcp::service", TRACE), "{directive}");
+            assert!(
+                !written!(directive, "rmcp::service::server", WARN),
+                "{directive}"
+            );
+            assert!(
+                !written!(
+                    directive,
+                    "rmcp::transport::streamable_http_server::tower",
+                    WARN
+                ),
+                "{directive}"
+            );
+        }
+        assert!(written!("info,rmcp=warn", "rmcp::service", WARN));
+        assert!(!written!("info,rmcp=warn", "rmcp::service", INFO));
     }
 }

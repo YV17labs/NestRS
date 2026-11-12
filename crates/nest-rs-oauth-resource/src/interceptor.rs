@@ -1,119 +1,86 @@
-//! [`ResourceChallenge`] — stamps the OAuth challenge onto every refusal the
-//! process emits: the RFC 9728 discovery pointer on a `401`, and the RFC 6750
-//! `insufficient_scope` challenge on a `403` whose token was merely too narrow.
+//! [`ResourceChallenge`] — stamps the OAuth challenge onto every refusal an
+//! HTTP unit answers: the RFC 9728 discovery pointer on a `401`, and the RFC
+//! 6750 `insufficient_scope` challenge on a `403` whose token was merely too
+//! narrow.
 //!
-//! Both halves of the client's flow therefore have one writer. A client that
-//! holds no token learns where to get one; a client whose token is too narrow
-//! learns which scope to ask for — and neither answer can drift from the
-//! metadata document, because the same frozen value produces all three.
-//!
-//! **Why the transport edge and not `AuthError`.** A `401` leaves this process
-//! from more places than the framework's own error type: a guard denial rendered
-//! as `problem+json`, the MCP endpoint's deny-all fallback, rmcp's own transport
-//! refusals, a hand-written handler. The spec's MUST is about the response, not
-//! about who wrote it — so the challenge is attached where every response
-//! converges. One seam covers three of the four transports:
-//!
-//! - **HTTP** — the ordinary `401`.
-//! - **WS** — the upgrade is an HTTP `GET` carrying the real guards, so its
-//!   refusal is an ordinary `401` too.
-//! - **MCP** — `EdgePosture::Exempt` skips the guard chain, not this band; the
-//!   in-band operation guard writes a real `401`.
-//! - **GraphQL** — the odd one out, and deliberately: `/graphql` answers an
-//!   unauthenticated operation with `200 OK` + an `UNAUTHENTICATED` error frame,
-//!   so there is no `401` to enrich. A client discovers the authorization server
-//!   through the well-known document instead, which the spec offers as the
-//!   equal alternative to the header.
+//! It runs at the unit stage of every HTTP unit, where each `401` converges — a
+//! guard's denial, the MCP fallback, rmcp, a handler, what the router answers.
+//! GraphQL answers `200` + `UNAUTHENTICATED`, so a GraphQL client discovers
+//! through the well-known document instead.
 
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use nest_rs_core::Layer;
-use nest_rs_guards::{NoBearerChallenge, RequiredScopes};
-use nest_rs_http::challenge::BEARER;
-use nest_rs_http::interceptor;
-use nest_rs_interceptors::{Interceptor, Next};
-use poem::http::{HeaderValue, StatusCode, header};
-use poem::{Request, Response, Result};
+use nest_rs_core::operation_log::Unit;
+use nest_rs_core::{
+    Edge, Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor,
+};
+use nest_rs_guards::__private::is_scope_token;
+use nest_rs_guards::RequiredScopes;
+use nest_rs_http::challenge::{BEARER, INSUFFICIENT_SCOPE, NoBearerChallenge};
+use nest_rs_http::{HeaderValue, HttpView, Response, StatusCode, header};
 
 use crate::metadata::ProtectedResourceMetadata;
 
 /// Infra interceptor brought by
-/// [`OAuthResourceModule`](crate::OAuthResourceModule). Auto-mounted at
-/// the transport edge; never listed as a provider.
-#[interceptor]
+/// [`OAuthResourceModule`](crate::OAuthResourceModule), at the unit stage of
+/// every HTTP unit, around its guards.
+#[interceptor(stage = unit)]
 pub(crate) struct ResourceChallenge {
     #[inject]
     metadata: Arc<ProtectedResourceMetadata>,
 }
 
-impl Layer for ResourceChallenge {}
+impl Layer for ResourceChallenge {
+    fn serves(&self, unit: Unit) -> bool {
+        unit.edge() == Some(Edge::Http)
+    }
+}
 
 #[async_trait]
 impl Interceptor for ResourceChallenge {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        match next.run(req).await {
-            Ok(res) => Ok(self.stamp(res)),
-            // A `401` that is still an `Err` here (a handler's `?`, an
-            // extractor rejection) renders to the same bytes as one that was
-            // already `Ok` — it must carry the same challenge.
-            Err(err) => {
-                let res = self.stamp(err.into_response());
-                Err(poem::Error::from_response(res))
-            }
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        if let Some(response) = HttpView::of(cx)?.response_mut() {
+            self.stamp(response);
         }
+        outcome
     }
 }
 
 impl ResourceChallenge {
-    fn stamp(&self, mut res: Response) -> Response {
+    fn stamp(&self, res: &mut Response) {
         if res.status() == StatusCode::FORBIDDEN {
             return self.stamp_insufficient_scope(res);
         }
         if res.status() != StatusCode::UNAUTHORIZED {
-            return res;
+            return;
         }
         if res.extensions().get::<NoBearerChallenge>().is_some() {
-            return res;
+            return;
         }
-        // Never overwrite a challenge that already carries the pointer, and
-        // never touch a non-`Bearer` scheme (a `Basic` or `DPoP` challenge is
-        // someone else's contract). A bare `Bearer` — what the framework used
-        // to emit — is exactly what this replaces.
-        // A `Bearer` challenge the handler already wrote carries auth-params
-        // this layer cannot reconstruct — RFC 6750 §3.1's `error` code above
-        // all, which is what tells a client "refresh and retry" rather than
-        // "start discovery". So the pointer is **merged into** it rather than
-        // replacing it. Keying on "is it exactly the bare word `Bearer`" was
-        // the bug this replaces: it made a challenge richer than the default
-        // lose its pointer the moment the framework started emitting one.
+        // Never touch a non-`Bearer` scheme or a challenge already carrying the
+        // pointer; otherwise merge the pointer in, keeping RFC 6750 §3.1's `error`.
         let merged = match res.headers().get(header::WWW_AUTHENTICATE) {
-            // Nothing written yet — the guard-denial path, which renders a
-            // problem envelope. Build the full challenge here: the deployment
-            // pointer, plus the RFC 6750 §3.1 code the authentication guard
-            // recorded on the request when it rejected the credential.
+            // Nothing written yet (the guard-denial path): the full challenge,
+            // with the RFC 6750 §3.1 code the guard recorded on the request.
             None => Cow::Borrowed(self.metadata.challenge()),
             Some(existing) => {
                 let Ok(existing) = existing.to_str() else {
-                    return res;
+                    return;
                 };
                 let existing = existing.trim();
-                // A non-`Bearer` scheme is somebody else's contract — a `Basic`
-                // challenge from a token endpoint, say. Never touched.
                 let is_bearer = existing
                     .get(..BEARER.len())
                     .is_some_and(|scheme| scheme.eq_ignore_ascii_case(BEARER));
                 if !is_bearer || existing.contains("resource_metadata") {
-                    return res;
+                    return;
                 }
                 let params = existing[BEARER.len()..].trim_start().trim_end_matches(',');
                 if params.is_empty() {
                     Cow::Borrowed(self.metadata.challenge())
                 } else {
-                    // `challenge()` is itself `Bearer <params>`; splice this
-                    // response's own params in front of the deployment pointer
-                    // so the client reads both.
+                    // `challenge()` is `Bearer <params>`: this response's params go first.
                     let pointer = self.metadata.challenge()[BEARER.len()..].trim_start();
                     Cow::Owned(format!("{BEARER} {params}, {pointer}"))
                 }
@@ -123,37 +90,30 @@ impl ResourceChallenge {
             Ok(value) => {
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
             }
-            // Unreachable: every component was character-checked at boot.
-            // Logged rather than swallowed — a 401 without the pointer is a
-            // conformance failure, and silence would hide it.
+            // Unreachable: every component was character-checked at boot. The
+            // challenge stays out of the line: its pointer holds the resource's URI.
             Err(error) => tracing::error!(
                 target: crate::TARGET,
                 %error,
-                challenge = %merged,
                 "protected resource challenge is not a valid header value",
             ),
         }
-        res
     }
 
-    /// The `403` half of RFC 6750 §3.1: a token that verified but is too
-    /// narrow. Only a response carrying [`RequiredScopes`] qualifies — an
-    /// ordinary `403` (the caller may not do this at all, whatever token they
-    /// hold) gets no challenge, because telling that caller to go widen their
-    /// token is a instruction that cannot succeed.
-    fn stamp_insufficient_scope(&self, mut res: Response) -> Response {
+    /// The `403` half of RFC 6750 §3.1: a token that verified but is too narrow.
+    /// Only a response carrying [`RequiredScopes`] qualifies; an ordinary `403`
+    /// cannot be fixed by a wider token, so it gets no challenge.
+    fn stamp_insufficient_scope(&self, res: &mut Response) {
         let Some(required) = res.extensions().get::<RequiredScopes>() else {
-            return res;
+            return;
         };
         if required.is_empty() {
-            return res;
+            return;
         }
         let required = required.as_slice().to_vec();
 
-        // A scope the client is told to request but the document never
-        // advertises is a dead end: the client asks the authorization server
-        // for something discovery never named. This is the one place both
-        // halves are known, so it is where the drift is caught.
+        // A required scope the document never advertises is a dead end for the
+        // client; this is the one place both halves are known.
         let advertised = self.metadata.scopes_supported();
         if !advertised.is_empty() {
             let unadvertised: Vec<&str> = required
@@ -164,7 +124,7 @@ impl ResourceChallenge {
             if !unadvertised.is_empty() {
                 tracing::warn!(
                     target: crate::TARGET,
-                    scopes = ?unadvertised,
+                    scopes = unadvertised.join(" "),
                     reason = "scope_not_advertised",
                     "denied for a scope this resource does not advertise — a client following \
                      the metadata document cannot request it",
@@ -172,23 +132,45 @@ impl ResourceChallenge {
             }
         }
 
+        // The scopes are the rule's literals, never a client's value; the edge
+        // filed this line already where it stamped the step-up itself.
+        if !required.iter().all(|scope| is_scope_token(scope)) && !carries_step_up(res) {
+            tracing::warn!(
+                target: crate::TARGET,
+                scopes = required.join(" "),
+                "a required scope is not a scope-token; the challenge is sent without its scope \
+                 attribute",
+            );
+        }
         let challenge = self.metadata.insufficient_scope_challenge(&required);
         match HeaderValue::from_str(&challenge) {
             Ok(value) => {
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, value);
             }
-            // The resource and metadata URL were checked at boot, so only a
-            // scope carrying a quote or control character reaches here — which
-            // the config refuses too. Logged rather than swallowed.
+            // Unreachable: the boot checked the pointer, and a scope outside the
+            // grammar is left out. The challenge stays out of the line, as above.
             Err(error) => tracing::error!(
                 target: crate::TARGET,
                 %error,
-                challenge,
                 "insufficient-scope challenge is not a valid header value",
             ),
         }
-        res
     }
+}
+
+/// Whether `res` already carries RFC 6750 §3.1's `insufficient_scope` challenge.
+fn carries_step_up(res: &Response) -> bool {
+    let Some(Ok(existing)) = res
+        .headers()
+        .get(header::WWW_AUTHENTICATE)
+        .map(HeaderValue::to_str)
+    else {
+        return false;
+    };
+    existing
+        .get(..BEARER.len())
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case(BEARER))
+        && existing.contains(&format!(r#"error="{INSUFFICIENT_SCOPE}""#))
 }
 
 #[cfg(test)]
@@ -199,7 +181,7 @@ mod tests {
         challenge_advertising(res, Vec::new())
     }
 
-    fn challenge_advertising(res: Response, scopes_supported: Vec<String>) -> Option<String> {
+    fn challenge_advertising(mut res: Response, scopes_supported: Vec<String>) -> Option<String> {
         let metadata = ProtectedResourceMetadata::new(
             "https://api.example.com".into(),
             vec!["https://auth.example.com".into()],
@@ -207,12 +189,11 @@ mod tests {
             vec!["header".into()],
             Default::default(),
         );
-        let stamped = ResourceChallenge {
+        ResourceChallenge {
             metadata: Arc::new(metadata),
         }
-        .stamp(res);
-        stamped
-            .headers()
+        .stamp(&mut res);
+        res.headers()
             .get(header::WWW_AUTHENTICATE)
             .map(|v| v.to_str().expect("ascii").to_owned())
     }
@@ -236,8 +217,6 @@ mod tests {
 
     #[test]
     fn a_401_with_no_challenge_at_all_gets_one() {
-        // The guard-denial path renders `problem+json` and sets no challenge;
-        // it is the most common 401 in the framework.
         assert!(challenge_for(status(StatusCode::UNAUTHORIZED)).is_some());
     }
 
@@ -249,9 +228,6 @@ mod tests {
 
     #[test]
     fn a_scope_denial_names_the_error_and_the_missing_scope() {
-        // The step-up half of the flow: the token verified, so this is not a
-        // `401`, but the client can still fix it — by asking the authorization
-        // server for `posts:write`.
         let mut res = status(StatusCode::FORBIDDEN);
         res.extensions_mut()
             .insert(RequiredScopes::new(["posts:write"]));
@@ -270,11 +246,37 @@ mod tests {
         );
     }
 
+    /// A scope outside the grammar is said once: here for a `403` built by
+    /// hand, never again where the edge stamped the step-up and said it.
+    #[test]
+    fn a_scope_outside_the_grammar_is_said_where_no_edge_said_it() {
+        const LEFT_OUT: &str = "a required scope is not a scope-token; the challenge is sent \
+                                without its scope attribute";
+        let outside = || {
+            let mut res = status(StatusCode::FORBIDDEN);
+            res.extensions_mut()
+                .insert(RequiredScopes::new(["posts write"]));
+            res
+        };
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let hand_built = challenge_for(outside()).expect("a step-up challenge");
+        assert!(!hand_built.contains("scope=\""), "{hand_built}");
+
+        let mut stamped = outside();
+        stamped.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Bearer error=\"insufficient_scope\""),
+        );
+        let challenge = challenge_for(stamped).expect("a step-up challenge");
+        assert!(challenge.contains("resource_metadata="), "{challenge}");
+
+        let event = logs.expect_one(crate::TARGET, LEFT_OUT);
+        assert_eq!(event.level, "warn");
+    }
+
     #[test]
     fn an_ordinary_403_gets_no_challenge() {
-        // "You may not do this at all" is not fixable by a wider token, and
-        // telling that caller to go get one sends them somewhere that cannot
-        // help. Only a response carrying `RequiredScopes` is a scope denial.
         assert!(challenge_for(status(StatusCode::FORBIDDEN)).is_none());
 
         let mut empty = status(StatusCode::FORBIDDEN);
@@ -289,9 +291,6 @@ mod tests {
 
     #[test]
     fn a_scope_denial_does_not_disturb_the_401_path() {
-        // The two branches are keyed on status, so the 401 rules above (foreign
-        // scheme, richer challenge, opt-out) cannot be reached by a 403 and
-        // vice versa.
         let mut res = status(StatusCode::UNAUTHORIZED);
         res.extensions_mut()
             .insert(RequiredScopes::new(["posts:write"]));
@@ -304,9 +303,6 @@ mod tests {
 
     #[test]
     fn an_advertised_scope_and_an_unadvertised_one_both_reach_the_client() {
-        // The `warn` for the unadvertised case is the operator's signal, not
-        // the client's: the challenge is still the client's best next step, so
-        // it is emitted either way.
         let mut res = status(StatusCode::FORBIDDEN);
         res.extensions_mut()
             .insert(RequiredScopes::new(["posts:admin"]));
@@ -327,8 +323,6 @@ mod tests {
 
     #[test]
     fn a_richer_bearer_challenge_is_left_intact() {
-        // A handler that already spelled out `resource_metadata` (a step-up
-        // challenge, a different resource) knows more than this interceptor.
         let mut res = status(StatusCode::UNAUTHORIZED);
         res.headers_mut().insert(
             header::WWW_AUTHENTICATE,

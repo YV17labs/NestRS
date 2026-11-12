@@ -1,9 +1,7 @@
 //! `nestrs lint` — the naming rule, as the command a project's CI runs.
 //!
-//! The rule itself is unit-tested next to its own code; what these prove is the
-//! contract a CI depends on and a library test cannot see — that a clean tree
-//! exits zero, and that a slot-named file exits non-zero rather than merely
-//! printing.
+//! The rule is unit-tested beside its code; these prove the exit codes a CI
+//! depends on.
 
 use std::fs;
 use std::process::Command;
@@ -50,4 +48,23 @@ fn a_file_named_for_a_slot_fails_the_command() {
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(said.contains("principal"), "{said}");
     assert!(said.contains("DeskOperator"), "{said}");
+}
+
+/// A file the rule reads and Rust's parser refuses is a file it could not
+/// judge: the command fails, naming it where the parser stopped.
+#[test]
+fn a_file_that_does_not_parse_fails_the_command_naming_where() {
+    let dir = project(&[("connection.rs", "pub struct RedisConnection;\nfn half(\n")]);
+    let out = lint(&dir);
+
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.status.success(), "a file left unjudged passes: {said}");
+    assert!(
+        said.contains("crates/features/src/connection.rs:2:8"),
+        "the file, then the delimiter it left open: {said}"
+    );
 }

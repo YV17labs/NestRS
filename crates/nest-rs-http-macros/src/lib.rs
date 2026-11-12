@@ -1,263 +1,216 @@
-//! HTTP attribute macros, re-exported by `nest-rs-http`. Generated code uses
-//! absolute paths (`::nest_rs_http::*`, `::nest_rs_http::poem::*`, `::nest_rs_core::*`), so
-//! this crate has no dependency on its surface crate — they resolve at the
-//! call site.
+//! HTTP attribute macros, re-exported by `nest-rs-http`; the generated paths
+//! (`::nest_rs_http::*`, `::nest_rs_core::*`) resolve at the call site.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
 mod attr;
 mod controller;
 mod crud;
-mod interceptor;
 mod response;
 mod routes;
+mod trusted_proxy;
 
-/// `#[controller(path = "/health")]` — paired with `#[routes]` on the impl
-/// block. Generates `from_container(&Container) -> Self` and a `pub const PATH`.
+/// Generates `pub const PATH`, `pub const VERSIONS` (empty when unversioned)
+/// and a hidden constructor the boot builds the controller with.
 ///
-/// Class-level `#[use_guards(...)]` / `#[use_filters(...)]` /
-/// `#[use_interceptors(...)]` placed *below* `#[controller]` apply to every
-/// route the controller mounts; they stack *outside* any per-route binding
-/// (first listed outermost). An optional `version = "1"` enables URI versioning
-/// — see `version_path`.
-///
-/// The `Discoverable` impl is emitted by `#[routes]` (which owns the route
-/// table), not here.
+/// Class-level `#[use_guards(...)]` / `#[use_interceptors(...)]` /
+/// `#[use_exception_filters(...)]` placed *below* `#[controller]` apply to
+/// every route the controller mounts; they run *outside* any per-route binding
+/// (first listed outermost), a controller's exception filters after the
+/// route's own. A `#[meta(EXPR)]` below it is read by every route,
+/// unless the route declares a value of the same type. An optional
+/// `version = "1"` enables URI versioning.
+/// The `Discoverable` impl is emitted by `#[routes]`.
 ///
 /// # Expands to
 ///
-/// An inherent `impl` carrying the path/version consts, `from_container`, and
-/// hidden helper fns `#[routes]` reads (injected keys + the per-family
-/// controller-level layer specs). Illustrative sketch:
-///
-/// ```text
-/// struct UsersController { /* … */ }                 // the item, unchanged
-///
-/// impl UsersController {
-///     pub const PATH: &'static str = "/users";
-///     pub const VERSION: Option<&'static str> = Some("1");   // from `version = "1"`
-///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* … */ }
-///
-///     // read by `#[routes]` for the access graph + per-route layer pools:
-///     #[doc(hidden)] fn __nestrs_injected() -> Vec<TypeId> { /* #[inject] + layer keys */ }
-///     #[doc(hidden)] fn __nestrs_controller_guard_specs()  -> Vec<ScopedGuardSpec>  { /* … */ }
-///     #[doc(hidden)] fn __nestrs_controller_interceptor_specs() -> Vec<…> { /* … */ }
-///     #[doc(hidden)] fn __nestrs_controller_filter_specs() -> Vec<…> { /* … */ }
-///     #[doc(hidden)] fn __nestrs_controller_pipe_specs()   -> Vec<…> { /* … */ }
-///     #[doc(hidden)] fn __nestrs_controller_exception_filter_specs() -> Vec<…> { /* … */ }
-/// }
-/// ```
+/// The item unchanged, plus an inherent `impl` carrying the consts, a hidden
+/// constructor and the `#[doc(hidden)]` helpers `#[routes]` reads.
 #[proc_macro_attribute]
 pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(controller::controller(args, input).into()).into()
 }
 
-/// Mark a struct as a **global** HTTP interceptor. Behaves like `#[injectable]`
-/// for construction and additionally emits a `Discoverable` impl attaching an
-/// `HttpEndpointWrap`; the HTTP transport reads those metas at boot. The
-/// struct must implement `nest_rs_interceptors::Interceptor`. An optional
-/// `priority = <int>` orders the wrap among the endpoint wraps (defaults to the
-/// interceptor band).
-///
-/// # Expands to
-///
-/// Like `#[injectable]`, but `register` attaches an `HttpEndpointWrap` meta
-/// instead of providing the value — so the type is mounted automatically, not
-/// resolved as a provider. Illustrative sketch:
-///
-/// ```ignore
-/// struct TracingInterceptor { /* … */ }              // the item, unchanged
-///
-/// impl TracingInterceptor { fn from_container(c: &Container) -> Self { /* … */ } }
-///
-/// impl ::nest_rs_core::Discoverable for TracingInterceptor {
-///     // dependencies / dependency_names / optional_dependencies / injected — as #[injectable]
-///     fn register(b: ContainerBuilder) -> ContainerBuilder {
-///         let arc: Arc<dyn ::nest_rs_interceptors::Interceptor> =
-///             Arc::new(Self::from_container(&b.snapshot()));
-///         b.attach_meta::<Self, ::nest_rs_http::HttpEndpointWrap>(
-///             HttpEndpointWrap::with_priority(PRIORITY, move |_c, ep| /* wrap ep with arc */),
-///         )
-///     }
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(interceptor::interceptor(args, input).into()).into()
-}
-
-/// Bind controller methods to HTTP routes. Applied to an `impl` block
-/// belonging to a `#[controller]`-marked struct. Each method tagged with
-/// `#[get("/path")]`, `#[post]`, `#[put]`, `#[delete]`, or `#[patch]` is wired
-/// as a poem handler.
+/// Applied to an `impl` block belonging to a `#[controller]`-marked struct.
+/// Each method tagged with `#[get("/path")]`, `#[post]`, `#[put]`,
+/// `#[delete]`, or `#[patch]` is wired as a route of the HTTP vocabulary:
+/// every parameter a `nest_rs_http::FromRequest`, the return an
+/// `IntoResponse` or a `Result` of one whose error is either a
+/// `nest_rs_core::ToProblem` error — answered with the problem it describes,
+/// or the opaque `500` when it describes none — or an error converting into
+/// an `HttpError`. The error is read by its type, whatever the route's other
+/// decorators: a response decorator shapes a success alone, and an `#[sse]`
+/// route's `Result<SseStream, E>` opens the stream or answers the same way.
 ///
 /// Per-method attributes (all consumed; no imports needed):
 ///
-/// - `#[authorize(Action, Entity)]` — the route's authz posture, uniform with
-///   `#[resolver]`'s. Desugars to the `nest_rs_authz::http::Authorize<A, E>`
-///   extractor as the handler's first parameter: class gate before the body,
-///   automatic response masking after it. Mutually exclusive with `#[public]`.
+/// - `#[authorize(Action, Entity)]` — the route's authz posture: the class
+///   gate `nest_rs_authz::http::Authorize<A, E>` declares
+///   (`nest_rs_authz::class_gate`), run right after the guards and before any
+///   interceptor or filter the route declares, and its reads under the caller's
+///   ability, each wire row the handler answers judged for that caller.
+///   Mutually exclusive with `#[public]`. `#[authorize(Action, bind = Service)]`
+///   also loads the subject its path's one parameter names — the
+///   controller's path included — into an `Authorized<Action, E>` parameter;
+///   an entity written beside `bind` is the service's.
 /// - `#[public]` — the route is reachable anonymously; global guards still run
-///   and read the marker.
+///   and read the marker, and it reads nothing a grant guards.
+/// - `#[public(Action, Subject)]` — the same opening with `#[authorize]`'s
+///   arguments, `bind` included: the class gate and the reads, on the ability the
+///   caller has (`define_visitor`'s for a visitor, `define`'s for a valid token).
 /// - `#[use_guards(...)]` — container-resolved guards, first listed outermost.
-/// - `#[use_filters(...)]` — container-resolved error-mapping filters; they
-///   wrap *inside* the guards, so a denial short-circuits before them.
-/// - `#[use_exception_filters(...)]` — container-resolved typed catches, tried
-///   innermost of the response families.
-/// - `#[use_interceptors(...)]` — container-resolved interceptors.
+/// - `#[use_exception_filters(...)]` — container-resolved
+///   `nest_rs_core::ExceptionFilter`s, tried before the controller's and the
+///   app's on a failure of the handler stage; a guard's refusal reaches none.
+/// - `#[use_interceptors(...)]` — container-resolved `nest_rs_core::Interceptor`s,
+///   after the guards and the class gate, inside the app's and the
+///   controller's.
 /// - `#[meta(EXPR)]` (repeatable) — typed metadata read back by a guard with
-///   `nest_rs_http::Reflector` (value type: `Clone + Send + Sync + 'static`).
-/// - `#[api(summary, description, tags(...))]` — OpenAPI facets.
+///   `nest_rs_http::Reflector`, over a value of the same type the controller
+///   declares (value type: `Send + Sync + 'static`; evaluated once per process,
+///   on the first read, so an expression reading runtime state reads it once).
+/// - `#[api(summary, description, tags(...), response, multipart,
+///   response_content_type, error(...), deprecated)]` — OpenAPI facets;
+///   `deprecated = "YYYY-MM-DD"` also stamps the `Deprecation` header (RFC 9745)
+///   on every answer. Rust's own `#[deprecated]` on a handler is refused.
 ///
-/// The macro also reads each handler's signature and records the schema of any
-/// `Json<T>` request body / response into the route's `HttpRouteMeta` (`T:
-/// nest_rs_http::schemars::JsonSchema`); raw `Response`/`String` returns carry
-/// no schema.
-///
-/// Emits `nest_rs_http::Controller` (mount entry point) and
-/// `nest_rs_core::Discoverable` (attaches the route table + mount closure).
+/// The schema of a `Json<T>` request body is recorded into the route's
+/// `HttpRouteMeta` (`T: nest_rs_http::schemars::JsonSchema`), and so is the
+/// response's, read off the return type by its type — a `Json<T>`, bare,
+/// inside a `Created` or a `Paginated`, inside a `Result`, an alias included,
+/// or a typed answer naming its own body; raw `Response`/`String` returns
+/// carry no schema unless `#[api(response = T)]` names one. The request's
+/// parameters and body, unlike its answer, are read off the extractor's
+/// spelling — `Json<T>`, `Form<T>`, `Query<T>`, `Header<T>`, `Path<…>`,
+/// `Multipart`, bare or inside `Piped` — so one behind an alias or a renamed
+/// import still extracts but is left out of the document; an extractor
+/// reading a body of its own type documents it by that type.
 ///
 /// # Expands to
 ///
-/// The impl block (verb/layer/response attrs stripped), one `#[poem::handler]`
-/// wrapper per route, `impl Controller` (builds the sub-`Route`, folding each
-/// route's guard/pipe/filter/interceptor pools via `RouteShaper` +
-/// `wrap_route_*`), and `impl Discoverable` whose `register` attaches an
-/// `HttpControllerMeta` (the route table). Illustrative sketch:
-///
-/// ```ignore
-/// impl UsersController { /* methods, verb attrs removed */ }
-///
-/// #[::nest_rs_http::poem::handler]
-/// // One module-level type per verb, qualified by the controller so two
-/// // controllers in one file (a v1/v2 pair) never share a symbol.
-/// async fn __nestrs_route_UsersController_list(Data(ctrl): Data<&Arc<UsersController>> /* extractors */)
-///     -> /* return type or ::nest_rs_http::poem::Result<Response> when response shapers apply */
-/// { ctrl.list(/* forwarded args */).await }
-///
-/// impl ::nest_rs_http::Controller for UsersController {
-///     fn mount(c: &Container, route: ::nest_rs_http::poem::Route) -> ::nest_rs_http::poem::Route {
-///         let ctrl = Arc::new(Self::from_container(c));
-///         let sub = ::nest_rs_http::poem::Route::new()
-///             .at("/", ::nest_rs_http::poem::get(/* RouteShaper-wrapped __nestrs_route_list */))   // per path
-///             .data(ctrl);
-///         route.nest(version_path(Self::VERSION, Self::PATH).as_str(), sub)
-///     }
-/// }
-///
-/// impl ::nest_rs_core::Discoverable for UsersController {
-///     fn injected() -> Vec<TypeId> { /* #[inject] + every per-route layer key */ }
-///     fn register(b: ContainerBuilder) -> ContainerBuilder {
-///         b.attach_meta::<Self, ::nest_rs_http::HttpControllerMeta>(
-///             HttpControllerMeta::new(tag, Self::PATH, Self::VERSION, vec![/* HttpRouteMeta… */], mount),
-///         )
-///     }
-/// }
-/// ```
+/// The impl block (verb/layer/response attrs stripped), one wrapper reading
+/// the handler's parameters off the request it borrows and one `static`
+/// pipeline site per route, and `impl nest_rs_core::Discoverable` attaching
+/// the `HttpControllerMeta` route table the transport mounts — its mount
+/// registering each route on the transport's `HttpRoutes`, its site's chains
+/// composed against the container — and declaring, per parameter type, the
+/// provider an extractor resolves per request (`Scoped<T>`, the service an
+/// `#[authorize(A, bind = S)]` loads through),
+/// which the boot's access graph checks.
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(routes::routes(args, input).into()).into()
+    ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {
+        routes::routes(args.into(), input).into()
+    })
+    .into()
 }
 
-/// Generate standard REST operations (list/get/create/update/delete) on a
-/// `#[controller]` impl block, re-emitting under `#[routes]`. Grammar:
-/// `#[crud(entity = …::Entity, output = Dto, create = CreateDto,
-/// update = UpdateDto, ops = [list, get, ...], paginate = cursor|none)]`.
+/// Grammar: `#[crud(service = UsersService, ops = [list, get, ...], paginate =
+/// cursor|none, api(get(summary = "…", description = "…"), ...))]`, where
+/// `service` names the entity's `CrudService`, which the controller injects.
 ///
-/// `ops` selects which operations to generate; omit it for all five
-/// (back-compatible). A write op is generated only when the resource genuinely
-/// offers it: `create`/`update` require their input type **and** that the
-/// service implements `Creatable`/`Updatable`; `delete` requires `Deletable`.
-/// Listing `ops = [create]` without `create = <Type>` is a compile error, not a
-/// silently dropped (or no-op) route — so a resource never exposes a write it
-/// does not have.
+/// Every type a generated route names is read off that service: the entity
+/// off `CrudService::Entity`, the create and update bodies off
+/// `Creatable::Create` and `Updatable::Update`, and the answer off the
+/// entity's `#[expose]`d wire type (`Exposed::Wire`). Each route reaches the
+/// service through the controller's `#[inject]` field of its type, which
+/// `#[controller]` declares by type, so the block may name its host through an
+/// alias, an import or another module, and a service the controller does not
+/// inject is refused once, at the block.
+///
+/// `api` gives a generated route the OpenAPI text a hand-written one carries in
+/// `#[api]`; an operation it does not name keeps its default summary, worded
+/// off the controller's name (`UsersController` → `List User`).
+///
+/// `ops` selects which operations to generate; omit it for all five. A write
+/// op reads the service's trait — `create` `Creatable`, `update`
+/// `Updatable`, `delete` `Deletable` — so one the service does not offer is
+/// refused naming the trait to implement or the op to drop.
 ///
 /// The generated list is **keyset-paginated by default** (`?first=&after=`,
-/// next cursor echoed in `x-next-cursor`, body a plain maskable array);
+/// the next page linked by `Link: <…>; rel="next"`, body a plain array of wire rows);
 /// `paginate = none` opts out into the full collection, backstopped by
 /// `CrudService::list`'s hard cap.
 ///
 /// Guards are declared once on the controller (`#[use_guards(...)]` on the
-/// struct) — every generated route inherits them. A hand-written
+/// struct) and every generated route inherits them. A hand-written
 /// `list`/`get`/`create`/`update`/`delete` method overrides its generated
-/// counterpart.
+/// counterpart, and `api(<op>(…))` or `paginate` beside it is refused, since
+/// nothing generated reads it. The generated `get`, `update` and `delete` read
+/// the id from their route's one path parameter, so a controller whose path
+/// names one of its own refuses them at compile time.
 ///
 /// # Expands to
 ///
-/// The missing CRUD methods are synthesized onto the impl block (each
-/// delegating to `CrudService` and carrying its own verb + `#[api]` attrs),
-/// then the whole block is re-emitted under `#[routes]` — so the final shape is
-/// `#[routes]`'s (see its docs). Also emits a hidden per-controller error-map
-/// fn. Illustrative sketch:
-///
-/// ```ignore
-/// #[::nest_rs_http::routes]
-/// impl UsersController {
-///     #[get("/")]   #[api(summary = "List Users", tags("User"))]
-///     async fn list(&self, _authz: Authorize<Read, Entity>, page: Query<PageParams>) -> Result<Response> {
-///         // `_authz` is what `#[authorize(Read, Entity)]` desugars to on a
-///         // hand-written route; `#[crud]` emits it directly.
-///         let p = CrudService::page(&*self.svc, page.limit(), page.after_uuid())
-///             .await.map_err(::nest_rs_seaorm::crud_error)?;
-///         // Json(Vec<Dto>) + `x-next-cursor` header when p.next_cursor is Some
-///     }
-///     // get → CrudService::access(Read, id); create/update/delete per `ops`,
-///     // each guarded by Authorize<Action, Entity> and mapping Access::{Denied=>403,Missing=>404}
-///     // … plus any hand-written methods (which override the generated ones)
-/// }
-/// // `crud_error` maps the write failure to 409/403/404, logging an
-/// // unexpected `DbErr` and shipping an empty-bodied 500.
-/// ```
+/// A hidden alias per type the generated methods name, read off the service,
+/// and a hidden function reaching it through the controller's field;
+/// the missing CRUD methods synthesized onto the impl block (each delegating
+/// to `CrudService` behind `#[authorize(Action, Entity)]`, with its own verb
+/// and `#[api]` attrs — the create answering `Created<Json<T>>`, the cursor
+/// list `Paginated<Json<Vec<T>>>`), the whole block re-emitted under
+/// `#[routes]`. A write
+/// failure maps to 409/403/404; any other `RepoError` is logged and answers an
+/// empty-bodied 500.
 #[proc_macro_attribute]
 pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(crud::entry(args, input).into()).into()
+    ::nest_rs_codegen::__private::reroot_as("`#[crud]`", crud::entry(args, input).into()).into()
 }
 
-/// `#[http_code(N)]` — override the response status (`100..=999`). Passthrough
-/// marker consumed by `#[routes]`. Mutually exclusive with `#[redirect]`.
+/// `#[http_code(N)]` — override the response status (`100..=999`). A marker
+/// consumed by `#[routes]`, written bare or path-qualified. Mutually exclusive
+/// with `#[redirect]`.
 ///
 /// # Expands to
 ///
-/// Nothing on its own — the attribute entry returns the item unchanged. The
-/// real effect lives in `#[routes]`, which drains the marker and wraps the
-/// handler's success path so the emitted wrapper sets the status:
-/// `__response.set_status(StatusCode::from_u16(N)?)` (the `Err` path keeps its
-/// own status).
+/// On its own, a compile error: a marker reaching this entry sits outside a
+/// `#[routes]` impl or under an alias. Under `#[routes]`, the handler's success
+/// path sets the status; the `Err` path keeps its own.
 #[proc_macro_attribute]
-pub fn http_code(args: TokenStream, item: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
+pub fn http_code(_args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(response::unread("http_code", item).into()).into()
 }
 
 /// `#[response_header("name", "value")]` — append a header to the response.
-/// Stacks with `#[http_code]` and `#[redirect]`; repeatable. Passthrough
-/// marker consumed by `#[routes]`.
+/// Stacks with `#[http_code]` and `#[redirect]`; repeatable. A marker consumed
+/// by `#[routes]`, written bare or path-qualified.
 ///
 /// # Expands to
 ///
-/// Nothing on its own — returns the item unchanged. `#[routes]` drains the
-/// marker and emits a header write on the handler's success path:
-/// `__response.headers_mut().insert(HeaderName::from_static("name"),
-/// HeaderValue::from_static("value"))` — `set-cookie` uses `.append()` so it
-/// stacks instead of overriding.
+/// On its own, a compile error naming `#[routes]`. Under `#[routes]`, a header
+/// insert on the handler's success path; `set-cookie` appends instead.
 #[proc_macro_attribute]
-pub fn response_header(args: TokenStream, item: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
+pub fn response_header(_args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(response::unread("response_header", item).into()).into()
 }
 
 /// `#[redirect("url"[, code])]` — discard the handler's payload and return a
 /// redirect. Status defaults to `307` and must be in `300..=399`. Mutually
 /// exclusive with `#[http_code]`. The decorated method's body must be empty
-/// — `#[routes]` does not call it. Passthrough marker consumed by `#[routes]`.
+/// — `#[routes]` does not call it. A marker consumed by `#[routes]`, written
+/// bare or path-qualified.
 ///
 /// # Expands to
 ///
-/// Nothing on its own — returns the item unchanged. `#[routes]` drains the
-/// marker and replaces the handler body entirely (the user method is never
-/// called): it builds a redirect response, e.g.
-/// `Response::builder().status(StatusCode::from_u16(307)?).header(LOCATION,
-/// "url").finish()`, then applies any stacked `#[response_header]`.
+/// On its own, a compile error naming `#[routes]`. Under `#[routes]`, a handler
+/// that never calls the method and answers the redirect, with any stacked
+/// `#[response_header]` applied.
 #[proc_macro_attribute]
-pub fn redirect(args: TokenStream, item: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
+pub fn redirect(_args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(response::unread("redirect", item).into()).into()
+}
+
+/// `trusted_proxy!("10.42.0.0/16")` — a `TrustedProxy` from a literal, an
+/// address or a CIDR range, checked as the program compiles.
+///
+/// # Expands to
+///
+/// A block evaluating a constant `TrustedProxy`, so an entry the type refuses —
+/// neither form, a `/0`, a prefix past its address, bits set past the prefix —
+/// is a compile error in the words the boot would have used. Anything but a
+/// string literal is a compile error naming `.parse()?`.
+#[proc_macro]
+pub fn trusted_proxy(input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(trusted_proxy::expand(input.into())).into()
 }

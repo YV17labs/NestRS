@@ -1,7 +1,6 @@
 ---
 title: The .env cascade
 description: Which .env files are loaded, in what order, and how the active Environment selects them.
-tier: basics
 sidebar:
   order: 2
 ---
@@ -9,12 +8,12 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 The framework loads a small cascade of `.env` files once at boot, before
-any `Config::from_env` runs. The cascade follows dotenv-flow conventions:
+any config is read. The cascade follows dotenv-flow conventions:
 most specific wins, real process env wins over every file, and tests stay
 hermetic.
 
 The cascade is parsed once per process into an in-crate map, and every
-[`ConfigService`](/configuration/#configservice-api) reader consults it under
+[`ConfigService`](/configuration/variables/#configservice-api) reader consults it under
 the real process environment. Nothing in the running app mutates `std::env` —
 `set_var` is unsound against a concurrent read on another thread, so config
 resolution stays side-effect-free by design.
@@ -40,17 +39,62 @@ second pass.
 | `.env` | committed | Non-secret defaults shared across environments |
 
 A value **pinned in code** (`Module::for_root(cfg)`) slots in between: below the
-real process env, above every file. The reasoning and the full chain live with
-[the dual-path rule](/configuration/#the-dual-path-rule).
+real process env, above every file — and it takes its whole namespace off the
+files, so the boot names each key a file sets there that it no longer reads.
+The reasoning and the full chain live with
+[the dual-path rule](/configuration/pinning/#the-dual-path-rule).
 
 The convention: anything ending in `.local` is gitignored, everything
 else is committed.
 
+## An app's own files
+
+A workspace starts every binary from its root, so the files above are shared:
+every app reads them. What tells one app apart — its port, the audience it
+requires, a signing key only the issuer may hold — goes in that app's own
+directory, beside its `Cargo.toml` (`apps/<app>/` in the workspace
+`nestrs new` scaffolds). Under a declared `development` or `test` profile,
+its four files are read whole over the root's, the order Nx gives a project's
+files over its workspace's:
+
+```
+real env  >  apps/<app>/.env.<environment>.local  >  apps/<app>/.env.local
+          >  apps/<app>/.env.<environment>  >  apps/<app>/.env
+          >  .env.<environment>.local  >  .env.local  >  .env.<environment>  >  .env
+```
+
+```bash title="apps/api/.env"
+NESTRS_HTTP__PORT=3002
+NESTRS_AUTHN__AUDIENCE=http://localhost:3002
+```
+
+So an app's committed `.env` outranks the root's `.env.local`: to change one
+app's key on your machine, write it in that app's own `.env.local`. Its
+`.env.local` stays unread under `test`, as the root's does, and `<PREFIX>_ENV`
+and `NESTRS_ENV_PREFIX` are refused in its files as in the root's.
+
+A deployed profile — `staging`, `production`, or none declared — reads the
+root's files alone. A deployment's binary runs far from the directory it was
+built in, so it names its own port and audience on the process, as
+[the demo's chart](/publish/) does. The directory is the one
+`#[nest_rs::main]` captures where it expands; the test harness reads the
+package under test the same way, and `nestrs doctor -p apps/<app>` reports
+what that app reads.
+
+The root is the directory the process starts in, so a process started in
+`apps/auth/` reads that directory's `.env` under every profile. A committed
+credential therefore sits in `.env.development` and `.env.test`, which no
+deployed profile reads from any directory: that is where the demo's `auth` holds
+its fixtures.
+
 ## The active environment
 
 The `<environment>` segment is the variant of `Environment`, read from
-the reserved `NESTRS_ENV` variable. This is the one framework variable
-**outside** the `NESTRS_<DOMAIN>__<KEY>` scheme — it selects which `.env`
+the reserved `<PREFIX>_ENV` variable. It sits **outside** the
+`<PREFIX>_<DOMAIN>__<KEY>` scheme, as the kernel's
+[console settings](/configuration/telemetry-variables/#logging--rust_log-and-prefix_log_),
+`<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION`, do — the three are
+read before any config exists. `<PREFIX>_ENV` selects which `.env`
 files to load, so it must come from the real process environment, not a
 `.env` file. Writing it into one is a **boot error** naming the fix, the
 same refusal `NESTRS_ENV_PREFIX` gets: the value arrives after the
@@ -67,15 +111,28 @@ pub enum Environment {
 }
 ```
 
-| `NESTRS_ENV` | Variant |
+| `<PREFIX>_ENV` | Variant |
 |--------------|---------|
-| unset, anything unrecognized | `Development` |
+| `development` / `dev` | `Development` |
 | `test` | `Test` |
 | `staging` / `stage` | `Staging` |
-| `production` / `prod` | `Production` |
+| `production` / `prod`, unset, anything unrecognized | `Production` |
 
-The default is `Development`. Tests default to `Test` (the test harness
-sets it before any builder runs).
+The default is `Production`. A process that declares nothing reads
+`.env.production`, never `.env.development`, and arms no development
+convenience: the OpenAPI documentation, GraphQL's playground and
+introspection and Server-Timing stay closed, no committed artifact is
+rewritten, storage refuses plain HTTP, and the console writes JSON. No
+profile names a database, a Redis or a store, nor the credentials to reach
+them: the profile's `.env` file does — `nestrs new` writes `compose.yml`'s
+services into `.env.development` and `.env.test` — and a deployment names its
+own. An app that reads any config — every app importing a module that owns
+one — says so once at boot, at `info` on
+`nest_rs::config` — `no environment declared; running as production` — and an
+unrecognized value is said once on stderr, by the variable's name.
+`nestrs run dev` declares `development` on the process; a run outside it, an
+IDE's included, declares it the same way. Tests default to `Test` (the test
+harness sets it before any builder runs).
 
 ### Test mode is hermetic
 
@@ -91,42 +148,36 @@ loads — that's where shared test defaults belong.
 .env              ← loaded
 ```
 
-If a test sets `NESTRS_ENV` to something else explicitly (CI asserting
+If a test sets `<PREFIX>_ENV` to something else explicitly (CI asserting
 prod behavior, for instance), the cascade follows that.
 
 ## When the load happens
 
-Exactly once per process, on the first call that needs it:
+Exactly once per process, before your `main` runs:
 
-- **The default `EnvSource`** parses it on its first `get` — so the first
-  config read of the boot, in the factory phase. A
+- **`#[nest_rs::main]`** parses it **and merges it into `std::env`**
+  (set-if-absent, so the real environment still wins) before it builds the
+  runtime, while the process still has one thread. Everything `main` does
+  therefore sees the cascade, including the many consumers that only know
+  `std::env::var`: `RUST_LOG` / `<PREFIX>_LOG_FORMAT` /
+  `<PREFIX>_LOG_SOURCE_LOCATION` in `.env.development` reach the logging setup,
+  which reads the process environment long before a `ConfigService` exists, and
+  `OTEL_*` reaches the OpenTelemetry SDK. Your `main` writes no line for it.
+- **The default `EnvSource`** reads that same parse. A
   [custom `ConfigSource`](/configuration/sources/) never does; it supplies its
   own values.
-- **`ConfigModule::for_root()`** does *not* parse it. Its collect reads
-  `NESTRS_ENV` from the real environment and registers the resulting
-  `Arc<Environment>`, which is what decides *which* files a later parse
-  reads.
-- **`Environment::init()`** parses it **and merges it into `std::env`**
-  (set-if-absent, so the real environment still wins). Everything the
-  scaffolded `main` does afterwards therefore sees the cascade, including the
-  many consumers that only know `std::env::var`.
-
-That last one is why the scaffold calls it on line one of `main`:
-
-```rust title="apps/blog/src/main.rs"
-let _environment = Environment::init();
-```
-
-Without it, `NESTRS_LOG` / `NESTRS_LOG_FORMAT` / `NESTRS_LOG_SOURCE_LOCATION`
-in `.env.development` would be inert — the logging setup reads the process
-environment directly, long before a `ConfigService` exists. The same goes for
-any binary of yours that reads `std::env::var` at startup.
+- **The first config the boot loads** does *not* parse it. It reads
+  `<PREFIX>_ENV` from the real environment and registers the resulting
+  `Arc<Environment>`, which is what decides *which* files the parse read — and
+  files the `info` line above when the process declared none.
 
 <Aside type="caution">
-`Environment::init()` writes to the process environment, and `std::env::set_var`
-is unsound if it races a read on another thread. Call it at the top of `main`,
-before the runtime spawns anything — never from a task. A tool that only needs a
-database connection can skip it entirely and use
+A binary that does not run on `#[nest_rs::main]` calls
+`nest_rs::config::load_cascade(dir, environment)` itself, as its first line —
+it reads `dir`'s files alone, no app's own:
+`std::env::set_var` is unsound if it races a read on another thread, so it
+belongs before any runtime or thread exists — never in a task. A tool that only
+needs a database connection can skip it and use
 [`nest_rs::seaorm::connect_from_env()`](/database/migrations/#run-them), which
 routes through `ConfigService` and writes nothing.
 </Aside>
@@ -141,31 +192,32 @@ Inside the cascade and in real env vars, every configurable field
 follows the same scheme:
 
 ```
-NESTRS_<NAMESPACE>__<KEY>
+<PREFIX>_<NAMESPACE>__<KEY>
 ```
 
-- `NESTRS_` — fixed prefix.
+- `<PREFIX>_` — the deployment's prefix: `NESTRS` unless the process sets
+  `NESTRS_ENV_PREFIX`, which renames every variable
+  ([your own prefix](/configuration/variables/#your-own-prefix)).
 - `<NAMESPACE>` — the namespace from `#[config(namespace = "…")]`,
   uppercased.
 - `__` — a double underscore separator (single underscores are reserved
   for word boundaries inside keys).
-- `<KEY>` — the field name, uppercased. The macro doesn't enforce a
-  specific casing — `from_env` calls `env.get("…")` with whatever string
-  you write.
+- `<KEY>` — the field name, uppercased: `#[config]` reads each field under
+  its own name, and a duration's key adds its unit (`_SECS`, `_MS`) through
+  its bounds.
 
-Examples:
+Examples, under the default prefix:
 
 ```text
 NESTRS_SEAORM__URL
 NESTRS_SEAORM__MAX_CONNECTIONS
-NESTRS_ISSUER__CLIENTS
+NESTRS_OAUTH__SERVER__CLIENTS
 NESTRS_HTTP__PORT
 ```
 
-A feature reads only **its own** namespace from `from_env`. To borrow a
-sibling variable (rare — see *own > borrowed > code default* on the
-[index](/configuration/)), call `env_var("NESTRS_<OTHER>__<KEY>")`
-directly.
+A feature reads only **its own** namespace. To borrow a
+sibling variable, which is rare, call `env_var(&var_name("<other>", "<KEY>"))`
+directly: `var_name` spells it under the deployment's prefix.
 
 ## Quoting rules inside `.env` files
 
@@ -184,7 +236,11 @@ RAW='a\nb'   # value is the four characters: a, backslash, n, b
 
 Lines starting with `#` are comments. Empty lines are skipped. An
 `export ` prefix is tolerated for shell compatibility. Empty keys and
-lines without `=` are silently dropped.
+lines without `=` are dropped and counted: the cascade loads before any
+subscriber exists, so one line on stderr names the file and how many it
+skipped, never what they held — `nestrs: skipped malformed .env lines
+path=./.env.local skipped=2`. A file that exists but cannot be read is
+skipped and said the same way.
 
 The double-quoted escape set exists for one reason: PEM keys fit on a
 single line with `\n` instead of literal newlines.
@@ -202,6 +258,6 @@ that pulls from Vault, K8s, or AWS Parameter Store.
 - [Alternative sources](/configuration/sources/) — replace `EnvSource`
   with Vault or a K8s ConfigMap.
 - [Overriding in tests](/configuration/testing/) — seed pinned values,
-  use `figment::Jail` for environment isolation.
-- [Env-var reference](/configuration/env-reference/) — every `NESTRS_*`
+  unit-test a config on a map of variables.
+- [Env-var reference](/configuration/env-reference/) — every `<PREFIX>_*`
   variable, by namespace.

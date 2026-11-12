@@ -1,41 +1,229 @@
 ---
 title: MCP configuration
-description: McpConfig and its NESTRS_MCP__* keys, plus how a failing operation answers a language model without leaking.
+description: "McpConfig and its `<PREFIX>_MCP__*` keys: the operation timeout, the sessions an endpoint holds and the principal each belongs to, and the host allowlist."
 sidebar:
   order: 5
 ---
 
 `McpConfig` carries the streamable-HTTP options, dual-path like every
-`nest-rs-*` config: `NESTRS_MCP__*` env vars over an optional pinned base.
-Importing `McpModule` is what resolves it; without the import every mount runs
-on the defaults.
+`nest-rs-*` config: `<PREFIX>_MCP__*` env vars over an optional pinned base.
+The bare `McpModule` an `#[mcp]` host brings resolves it, so an app reads it
+wherever it serves a tool; the root's `for_root` pins a base those variables
+overlay.
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/assistant/src/module.rs"
 #[module(imports = [
-    HttpModule::for_root(None),
-    McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+    McpModule::for_root(McpConfig {
+        allowed_hosts: vec!["mcp.example.com".into()],
+        ..Default::default()
+    }),
 ])]
 pub struct AssistantModule;
 ```
 
-Pinning options *and* declaring the app's identity is the same one call — an `McpConfig`
-converts into an `McpOptions` whose `server` is empty, so write the whole value
-out when you need both:
+Pinning options *and* declaring the app's identity is the same one call: the
+declaration first, the config last, as a tuple —
 
-```rust title="apps/api/src/module.rs"
-McpModule::for_root(McpOptions {
-    config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
-    server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
-}),
+```rust title="apps/assistant/src/module.rs"
+McpModule::for_root((
+    McpIdentity { title: Some("Acme assistant".into()), ..Default::default() },
+    McpConfig {
+        allowed_hosts: vec!["mcp.example.com".into()],
+        ..Default::default()
+    },
+)),
 ```
+
+— and `McpAccess::Public`, when the app opens the endpoint, leads the tuple:
+`(McpAccess::Public, identity, config)`.
 
 | Variable | Default | What it controls |
 |---|---|---|
-| `NESTRS_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
-| `NESTRS_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
-| `NESTRS_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
-| `NESTRS_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
-| `NESTRS_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
+| `<PREFIX>_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
+| `<PREFIX>_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
+| `<PREFIX>_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
+| `<PREFIX>_MCP__SSE_KEEP_ALIVE_SECS` | `15` | Keep-alive interval on an event stream; `0` ⇒ none |
+| `<PREFIX>_MCP__SSE_RETRY_SECS` | `3` | `retry:` advertised on an event stream's priming event, a session's streams included; `0` ⇒ none |
+| `<PREFIX>_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming; from `1` to `1073741824` (a gibibyte) |
+| `<PREFIX>_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
+| `<PREFIX>_MCP__OPERATION_TIMEOUT_SECS` | `20` | How long one operation may run; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_MCP__MAX_CONCURRENT_SESSIONS` | `1024` | Live sessions one endpoint holds; from `1` to `1048576` |
+| `<PREFIX>_MCP__SESSION_IDLE_TIMEOUT_SECS` | `300` | How long a session may go unused before it is closed; whole seconds from `1` to `3600`, never off |
+| `<PREFIX>_MCP__PING_INTERVAL_SECS` | `20` | How long a session's client holding its stream may send nothing before it is sent MCP's `ping` on that stream; whole seconds from `1` to `3600`, `0` ⇒ none |
+| `<PREFIX>_MCP__PING_TIMEOUT_SECS` | `20` | How long that `ping` waits for anything back before the session is closed; whole seconds from `1` to `3600`, never off |
+
+The keep-alive is a comment no client answers: it keeps an idle stream through a
+proxy, but tells the server nothing of its client. A session's stream — the
+`GET` a client holds to hear what the server pushes — asks instead: once the
+client has sent nothing for `ping_interval`, the server writes MCP's own `ping`
+request on that stream, which every client answers as it reads (the
+specification's *Ping* utility), and any message from the client counts, so a
+client that talks is never asked. One that sends nothing back within
+`ping_timeout` is taken for gone: its session closes, its streams end, its next
+request is answered `404`, its place frees — five seconds later when a call still
+runs on it, which rmcp then cancels — and one `warn` on `nest_rs::mcp` — `mcp
+session closed: the client sent nothing back within the ping timeout` — names
+the mount by `host` and `path`. A client that vanished holding its stream is so released within 40
+seconds of its last message. The wait is timed apart from the stream, so a stream
+the transport can no longer write holds nothing past it either: a client that
+stopped reading while the server pushed, or vanished with the kernel's send
+buffer full toward it, is never asked, and its session closes all the same. A
+ping and its answer are no use of the session: the idle timeout counts neither.
+With the pings off, nothing asks: a client gone while holding its stream keeps
+its session for as long as the transport still writes the server's messages to
+it, then for its idle timeout.
+
+A session holding no stream has no channel to ask through, so nothing asks it:
+its idle timeout bounds it. That timeout counts the session's use — any message
+from its client but a ping's answer, and any of the server's a stream carries to
+it — and is held while a call waits on its answer, on its stream or on one its
+client resumes with `Last-Event-ID`, so a tool that outlasts it is still
+answered. What the server writes to a session no stream carries is no use:
+the session idles out as one nobody writes to. A stateless
+`2026-07-28` request, a `subscriptions/listen` among them, opens no session and
+has no channel for an answer either: a client gone without a close holds its stream until a write to
+it fails, once the kernel nearest it gives up retransmitting the keep-alive —
+about fifteen minutes on Linux. A WebSocket is pinged the same way, with its own
+frame ([WebSockets](/websockets/socket-lifecycle/#what-bounds-a-socket)).
+
+## The operation timeout
+
+The HTTP request timeout bounds a response's head, and most MCP operations
+answer theirs at once: a session's request, and a stateless one from a client
+older than `2026-07-28`, get an event stream that carries the result whenever
+the operation ends. So every operation but `subscriptions/listen`, which has
+no end of its own, runs under `operation_timeout` too. Past it the operation
+is dropped and its unit of work rolled back, and the client is answered a
+JSON-RPC internal error:
+
+```json
+{"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"the operation was not answered in time","data":{"code":"UNAVAILABLE","reason":"timeout"}}}
+```
+
+The `mcp.operation` line files `error`, and one `warn` on `nest_rs::mcp`
+names the method, the operation and the timeout with `reason="timeout"`. The
+default is the HTTP request timeout's, inside the 20-second shutdown window;
+a timeout past `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS`, or `0`, is said once
+per endpoint at boot. A tool that legitimately runs longer raises the timeout
+and the window together.
+
+## Sessions
+
+A client older than `2026-07-28` opens a session with `initialize` and names
+it on every later request with `Mcp-Session-Id`. The session outlives the
+connection that opened it, holding a worker task and its channels, so the
+transport's connection cap never counts it. Each endpoint counts its own:
+past `max_concurrent_sessions`, an `initialize` is answered `503` with
+`Retry-After: 5` and a problem document whose `code` is `UNAVAILABLE`, and
+one `warn` on `nest_rs::mcp` — `mcp session refused: the mount holds its
+maximum` — names `max_concurrent_sessions`. The calls of a session already
+open are served as before.
+
+```http
+HTTP/1.1 503 Service Unavailable
+content-type: application/problem+json
+retry-after: 5
+
+{"type":"about:blank","title":"Service Unavailable","status":503,"code":"UNAVAILABLE"}
+```
+
+A place comes back when a session closes: its client sends `DELETE` with its
+id, or it goes `session_idle_timeout` unused. An idle session's
+next request is answered `404`, and its client opens a new one. A
+`2026-07-28` request is served statelessly and opens no session, so the cap
+never refuses it; with `<PREFIX>_MCP__LEGACY_SESSION_MODE=false`, no session
+opens at all. A session restored from a `SessionStore` takes a place like
+one opened here, and past the cap it is refused the same way. A request that
+names the same session while another request restores it waits for that
+restore, and when the cap refuses it, rmcp answers the waiting request `404`
+rather than the cap's `503`: its client opens a new session, which the cap
+then refuses `503`.
+
+An idle session costs about 110 KiB, so the default cap holds about 110 MiB
+at most. Two `initialize`s racing for the last place both pass the check in
+front of rmcp; the session manager then refuses the second, and its client
+reads the same `503` and the same `warn` on `nest_rs::mcp`. The wait for the
+`initialize` itself is 60 seconds, set in code so an rmcp release cannot
+move it.
+
+### A session on another instance
+
+nestrs ships no store, so a session lives in the instance that opened it:
+another instance, or this one once restarted, answers its next request `404`,
+and its client opens a new one. For sessions to survive across instances,
+register your own `dyn SessionStore`, rmcp's trait at
+`nest_rs::mcp::rmcp::transport::streamable_http_server::session::store::SessionStore`,
+over a backend the instances share: `providers = [YourStore as dyn SessionStore]`
+in a module the app imports.
+
+### A session belongs to the principal that opened it
+
+Every request is authenticated by its own bearer, and the session is never the
+credential. On top of that, a session is bound to the principal its
+`initialize` was served for: the subject and the tenant your authentication
+guard read off the verified credential — what its `PrincipalIdentity` returns
+from `actor_id` and `tenant_id`. A later request naming the session — a
+`POST`, the standalone `GET` stream, a resume with `Last-Event-ID`, a
+`DELETE` — is served only when its own credential resolves to that same
+principal. Any other caller reads exactly what a session the endpoint does not
+hold answers, so a session id never tells it whether someone else's session
+exists:
+
+```http
+HTTP/1.1 404 Not Found
+content-type: application/problem+json
+
+{"type":"about:blank","title":"Not Found","status":404,"detail":"Not Found: Session not found","code":"NOT_FOUND"}
+```
+
+One `warn` on `nest_rs::mcp`, `mcp session refused: another principal opened
+it`, names the `call` that refused the request, never the session or its
+owner. A `DELETE` of a session the endpoint does not hold, closed or never
+opened, is answered `404` too.
+
+The binding travels with a session restored from a `SessionStore`: the
+endpoint keeps the principal beside the client's handshake, under the `_meta`
+key `dev.nestrs/principal`, and checks it before another instance restores the
+session. A session stored by an earlier release, without that key, is refused
+to every caller, said at `warn` as `mcp session refused: stored without its
+principal`, and its client opens a new one.
+
+A session needs something unique to its principal to be bound to, and on a
+gated endpoint that is the subject. A tenant is shared by every machine client
+acting within it, so a principal your guards admit with no `actor_id` opens no
+session — two of them would each be served the other's. Its `initialize` is
+answered `403`, with no session id:
+
+```http
+HTTP/1.1 403 Forbidden
+content-type: application/problem+json
+
+{"type":"about:blank","title":"Forbidden","status":403,"detail":"a session is bound to the subject of the credential that opens it, and this credential names none","code":"FORBIDDEN"}
+```
+
+One `warn` on `nest_rs::mcp`, `mcp session refused: its principal names no
+subject`, carries a `hint` and never the credential or its tenant. A
+conformant access token always names its subject — RFC 9068 §2.2 requires
+`sub`, the client's own id when it acts on its own behalf — so return it from
+`actor_id` ([Writing a strategy](/security/authentication/writing-a-strategy/#the-actor-and-the-tenant)).
+A client that has none still calls statelessly, on protocol `2026-07-28`,
+which opens no session; in a suite, `nest_rs::testing::mcp::call_tool_statelessly`
+calls a tool that way.
+
+A public endpoint (`McpModule::for_root(McpAccess::Public)`) runs no guard at
+its request, so it authenticates no one: its sessions all belong to the
+anonymous principal, and the session id is their only key. That principal
+names no subject, so a gated endpoint reading the same `SessionStore` — yours
+once you close the endpoint, or another app's sharing the store — refuses
+those sessions to every caller, said at `warn` as `mcp session refused: stored
+for a principal naming no subject`, and their clients open new ones.
+
+A task lives in the host its session built, and every session builds its own
+hosts, so a task id reaches its task only through the session that started it.
+A `TaskManager` a host shares across sessions — held by a provider it injects —
+is your own state, and its `tasks/*` methods decide who may reach each task. A
+stateless `2026-07-28` request builds its hosts afresh, so a task outlives it only
+in a provider's `TaskManager`, whose methods must then check the caller.
 
 ## The host allowlist
 
@@ -45,50 +233,37 @@ attacker's origin can point its own hostname at `127.0.0.1` and POST to a
 locally running MCP server — which would otherwise answer with the user's
 tools and data. Name your hostnames; do not empty the list.
 
+A server that is an OAuth protected resource names itself once: under
+[`OAuthResourceModule`](/mcp/authorization/#telling-a-client-how-to-authenticate),
+the host its `<PREFIX>_OAUTH__RESOURCE__RESOURCE` names is admitted beside the
+list — `mcp.example.com` for `https://mcp.example.com/mcp`, on any port — so the
+canonical URI clients ask a token for is also the one host they reach it by. An
+emptied list stays empty: the resource never turns the check back on behind a
+deliberate opening.
+
 The default looks strict for a public deployment, and that is the point:
 DNS rebinding only reaches a host the victim's browser can resolve to but the
 attacker cannot call directly — loopback and the local network. The vulnerable
 server is the developer's local one, which is exactly the one that configures
 nothing. A default of "off" would disarm the control in the only case the
-attack works. A refused `Host` is logged with the offending value; the
-effective allowlist is logged at `debug` when the endpoint mounts
-(`target: nest_rs::mcp`).
+attack works. A refused `Host` is said at `warn`, `reason="host_not_allowed"`,
+naming `<PREFIX>_MCP__ALLOWED_HOSTS` and never the value the client sent; the
+effective allowlist is logged at `debug` when the endpoint mounts (both on
+`nest_rs::mcp`).
 
-The browser `Origin` half is **not** an MCP setting. It is the HTTP transport's
-CORS policy, `NESTRS_HTTP__CORS_ORIGINS`, and `/mcp` inherits it: the CORS layer
-wraps the whole route tree, and a disallowed `Origin` gets `403` on every
-method, not just the preflight. One knob, and it covers `/graphql` and `/ws`
-too.
-
-## Error handling
-
-`McpError` (re-exported as `nest_rs::mcp::McpError`, alias for rmcp's
-`ErrorData`) gives the model a structured failure with a JSON-RPC error code.
-Six constructors cover the common cases:
-
-| Constructor | When |
-|---|---|
-| `McpError::invalid_params(msg, data)` | The tool input was syntactically valid JSON but semantically wrong — range, missing required field, mutual exclusion |
-| `McpError::invalid_request(msg, data)` | The whole request shape was off |
-| `McpError::parse_error(msg, data)` | The JSON itself couldn't be parsed |
-| `McpError::method_not_found::<MethodName>()` | The client asked for a tool that doesn't exist on this server |
-| `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
-| `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
-
-A typical adapter for a domain error:
-
-```rust title="crates/features/src/weather/mcp/tool.rs"
-fn internal<E: std::fmt::Display>(e: E) -> McpError {
-    McpError::internal_error(e.to_string(), None)
-}
-```
-
-The `data` field accepts any JSON value — attach structured diagnostics there
-when the model would benefit from them (e.g. the validator's per-field errors).
-Anything beyond these six codes flows through `internal_error` — there is no
-custom-code constructor.
+The browser `Origin` half is **not** an MCP setting. The MCP transport says a
+server validates `Origin` on every incoming connection, and `/mcp` does, CORS
+on or off. With no CORS policy, a browser request from the server's own origin
+is served; any other gets `403`, with a `warn` on `nest_rs::mcp` that says
+why by kind and names the settings that would admit it, never the origin sent
+or the `Host` it was compared to. Once
+`<PREFIX>_HTTP__CORS_ORIGINS` is set, only the origins it lists are served —
+the server's own included, when it serves the page — and the CORS layer's
+`403` files its one `warn` on `nest_rs::http`. One knob, and it covers the
+WebSocket and GraphQL sockets too — see [CORS](/http/cors/#cors).
 
 ## Going further
 
 - [MCP](/mcp/) — the server these options configure.
+- [MCP errors](/mcp/errors/) — how a failing operation talks to a model.
 - [Configuration](/configuration/) — the dual-path rule every module follows.

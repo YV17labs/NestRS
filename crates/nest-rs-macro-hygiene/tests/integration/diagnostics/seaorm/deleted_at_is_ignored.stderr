@@ -1,0 +1,5 @@
+error: `#[expose(..., soft_delete)]` stamps `deleted_at`, so it must be a column, not a relation or an `ignore`d field
+  --> tests/integration/diagnostics/seaorm/deleted_at_is_ignored.rs:15:9
+   |
+15 |     pub deleted_at: Option<DateTimeWithTimeZone>,
+   |         ^^^^^^^^^^

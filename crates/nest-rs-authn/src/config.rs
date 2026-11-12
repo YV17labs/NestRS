@@ -1,56 +1,115 @@
-//! [`JwtConfig`] — env-driven JWT key material.
+//! [`AuthnConfig`] — env-driven JWT key material.
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Namespaced, config, var_name};
+use nest_rs_config::{
+    Bound, ClientTls, ConfigService, DurationBounds, Field, Floor, Namespaced, config,
+    endpoint_shown,
+};
+use nest_rs_core::Secret;
 
-use crate::JwtOptions;
+use crate::algorithm::{Family, algorithms_of};
 use crate::error::AuthError;
-// Single source of truth: the min-secret rule is enforced in `JwtService::new`;
-// the config path checks it too only to surface an env-var-named message.
-use crate::service::HS256_MIN_SECRET_BYTES;
+use crate::service::one_of;
+use crate::{Algorithm, JwtKey, JwtOptions};
 
-// No `Debug`: secrets must not leak through a derived format.
+/// The token lifetime's range, and why.
+const EXPIRES_IN: DurationBounds = DurationBounds::secs(
+    Floor::Units(Bound::new(
+        1,
+        "a token that expires as it is minted is refused by every verifier, so every \
+         sign-in would succeed and hand out nothing usable",
+    )),
+    Bound::new(
+        30 * 24 * 60 * 60,
+        "an access token is a bearer credential until it expires and nothing revokes it \
+         sooner, so a lifetime past thirty days is a unit slip or a credential that never \
+         ends — a long session is a refresh flow, not a long token",
+    ),
+);
+
+/// The clock-skew leeway's range, and why.
+const LEEWAY: DurationBounds = DurationBounds::secs(
+    Floor::Units(Bound::new(0, "no leeway is a leeway")),
+    Bound::new(
+        5 * 60,
+        "RFC 7519 §4.1.4 allows \"no more than a few minutes\" for clock skew, and every \
+         second past it is a second an expired token still verifies",
+    ),
+);
+
 /// Env-driven JWT key material (namespace `authn`). The combination of keys
 /// present selects the signing mode; see [`into_options`](Self::into_options).
-/// No `Debug` derive: secrets must not leak through a format.
+///
+/// `Debug` shows `jwks_uri` through [`endpoint_shown`]: its userinfo or query
+/// may carry the issuer's credential.
 #[config(namespace = "authn")]
-#[derive(Clone, Default)]
-pub struct JwtConfig {
-    /// HS256 shared secret (key `SECRET`). Present ⇒ symmetric mode;
-    /// must be ≥ 32 bytes. A verifier holding it can also mint tokens.
-    pub secret: Option<String>,
-    /// EdDSA signing key, PEM (key `PRIVATE_KEY`). Set only on the app
-    /// that issues tokens; requires `public_key` alongside it.
-    pub private_key: Option<String>,
-    /// EdDSA verification key, PEM (key `PUBLIC_KEY`). A resource
-    /// server holds only this — it can verify but not sign.
+#[derive(Clone)]
+pub struct AuthnConfig {
+    /// HS256 shared secret (key `SECRET`); must be ≥ 32 bytes. A verifier
+    /// holding it can also mint tokens. Refused beside either EdDSA key.
+    pub secret: Option<Secret<String>>,
+    /// EdDSA signing key, PEM (key `PRIVATE_KEY`, or a path in
+    /// `PRIVATE_KEY_FILE`). Set only on the app that issues tokens, beside the
+    /// `public_key` of its own pair.
+    #[config(with = pem_text)]
+    pub private_key: Option<Secret<String>>,
+    /// EdDSA verification key, PEM (key `PUBLIC_KEY`, or a path in
+    /// `PUBLIC_KEY_FILE`). A resource server holds only this — it can verify
+    /// but not sign.
+    #[config(with = pem_text)]
     pub public_key: Option<String>,
-    /// Clock skew leeway in seconds (key `LEEWAY_SECS`, default 30).
-    pub leeway_secs: Option<u64>,
-    /// Expected `aud` claim (key `AUDIENCE`). Set ⇒ the claim is **mandatory**
-    /// and must name this service.
+    /// The URI of the JWK Set (RFC 7517 §5) an external issuer publishes its
+    /// keys at (key `JWKS_URI`), `https` only — the `jwks_uri` of its RFC 8414
+    /// or OpenID Connect metadata. Verify-only, and refused beside `secret`,
+    /// `private_key` or `public_key`.
+    pub jwks_uri: Option<String>,
+    /// The algorithms a token may be signed with (key `ALGORITHMS`,
+    /// comma-separated, `RS256,EdDSA`). Unset, a secret is HS256, a PEM key
+    /// EdDSA, and a JWK Set every asymmetric algorithm; a secret or a PEM key
+    /// takes exactly one.
+    #[config(with = algorithms)]
+    pub algorithms: Option<Vec<Algorithm>>,
+    /// What the JWK Set endpoint's certificate must chain to — the system's
+    /// authorities unless `<PREFIX>_AUTHN__TLS_CA_CERT` names others — and the
+    /// certificate presented to an issuer that requires one
+    /// (`<PREFIX>_AUTHN__TLS_CERT` and `TLS_KEY`). Refused without `jwks_uri`,
+    /// which is the only connection it could serve.
+    pub tls: ClientTls,
+    /// Clock skew leeway (key `LEEWAY_SECS`, whole seconds; default 30), at
+    /// most 300 — RFC 7519 §4.1.4's "a few minutes".
+    #[config(bounds = LEEWAY)]
+    pub leeway: Duration,
+    /// The `aud` this app requires of every token it verifies (key
+    /// `AUDIENCE`), and the one a token it mints for itself carries — a token
+    /// it mints for another resource names that resource instead
+    /// ([`JwtService::sign_for`](crate::JwtService::sign_for)).
     ///
-    /// **Omitting it is not omitting the check.** RFC 7519 §4.1.3 obliges a
-    /// verifier to reject a token that *carries* an `aud` it is not named in,
-    /// and that clause binds a service naming no audience of its own too — so
-    /// an unconfigured verifier accepts a token with no `aud` and refuses one
-    /// minted for a sibling service by the same issuer. What configuring it
-    /// adds is the *other* direction: a token omitting `aud` entirely then
-    /// fails closed as well. The opt-out is
-    /// [`allow_any_audience`](Self::allow_any_audience), and only that.
+    /// Required: RFC 9068 §2.2 has every access token carry an `aud` and §4 a
+    /// resource server refuse one naming another or none, so unset or blank,
+    /// the boot refuses. Under `OAuthResourceModule`, unset is the resource it
+    /// serves. The opt-out is [`allow_any_audience`](Self::allow_any_audience),
+    /// and only that.
     pub audience: Option<String>,
-    /// Expected `iss` claim (key `ISSUER`). Omitted ⇒ no issuer check.
+    /// The `iss` every token this app mints carries and every token it
+    /// verifies must name (key `ISSUER`). Required, as RFC 9068 §2.2 and §4
+    /// have every access token carry it and a resource server check it: unset
+    /// or blank, the boot refuses — but under `OAuthResourceModule`, where a
+    /// token's `iss` must be one of its authorization servers and a set one
+    /// must be among them, and unset, the app mints no access token.
     pub issuer: Option<String>,
-    /// Token lifetime in seconds (key `EXPIRES_IN_SECS`, default 3600).
-    pub expires_in_secs: Option<u64>,
+    /// Token lifetime (key `EXPIRES_IN_SECS`, whole seconds; default an hour),
+    /// at least 1 second and at most thirty days.
+    #[config(bounds = EXPIRES_IN)]
+    pub expires_in: Duration,
     /// Opt out of RFC 7519 §4.1.3 (key `ALLOW_ANY_AUDIENCE`, default `false`):
     /// accept a token whose `aud` names a service this one is not.
     ///
-    /// Named, explicit and off by default, because the behaviour it restores is
-    /// the confused deputy — any app the issuer mints for becomes a credential
-    /// for this one. It is refused beside [`audience`](Self::audience), which
-    /// declares the opposite, and it reports itself at `warn` once per boot.
+    /// Restores the confused deputy, so it is refused beside
+    /// [`audience`](Self::audience) and beside `OAuthResourceModule`, and
+    /// reports itself at `warn` once per boot. It stands in for the audience
+    /// the boot requires, so the app mints no token for itself, only for a
+    /// resource it names ([`JwtService::sign_for`](crate::JwtService::sign_for)).
     pub allow_any_audience: bool,
     /// RFC 9068 explicit typing — stamp `typ: at+jwt` when minting and refuse a
     /// token typed anything else when verifying. Defaults to **on**: §4 states
@@ -58,96 +117,260 @@ pub struct JwtConfig {
     /// OpenID Connect ID Token being spent as an access token.
     ///
     /// Turn it off only to verify tokens from an issuer that predates the
-    /// profile and mints a plain `typ: JWT`.
-    pub explicit_typing: Option<bool>,
+    /// profile and mints a plain `typ: JWT`. Key `EXPLICIT_TYPING`.
+    pub explicit_typing: bool,
 }
 
-impl Config for JwtConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            secret: env.get("SECRET").or(base.secret),
-            private_key: env.get("PRIVATE_KEY").or(base.private_key),
-            public_key: env.get("PUBLIC_KEY").or(base.public_key),
-            leeway_secs: env.parse("LEEWAY_SECS")?.or(base.leeway_secs),
-            audience: env.get("AUDIENCE").or(base.audience),
-            issuer: env.get("ISSUER").or(base.issuer),
-            expires_in_secs: env.parse("EXPIRES_IN_SECS")?.or(base.expires_in_secs),
-            allow_any_audience: env.flag("ALLOW_ANY_AUDIENCE", base.allow_any_audience)?,
-            explicit_typing: match env
-                .flag("EXPLICIT_TYPING", base.explicit_typing.unwrap_or(true))?
-            {
-                // Round-trip through the base so an unset variable stays
-                // "unstated" rather than becoming a pinned `true`.
-                v if base.explicit_typing.is_none() && v => None,
-                v => Some(v),
-            },
-        })
+impl Default for AuthnConfig {
+    fn default() -> Self {
+        Self {
+            secret: None,
+            private_key: None,
+            public_key: None,
+            jwks_uri: None,
+            algorithms: None,
+            tls: ClientTls::default(),
+            leeway: JwtOptions::DEFAULT_LEEWAY,
+            audience: None,
+            issuer: None,
+            expires_in: JwtOptions::DEFAULT_EXPIRES_IN,
+            allow_any_audience: false,
+            explicit_typing: true,
+        }
     }
 }
 
-impl JwtConfig {
-    /// Infer signing mode from the keys present. Fails the boot when no usable combination exists.
+impl std::fmt::Debug for AuthnConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            secret,
+            private_key,
+            public_key,
+            jwks_uri,
+            algorithms,
+            tls,
+            leeway,
+            audience,
+            issuer,
+            expires_in,
+            allow_any_audience,
+            explicit_typing,
+        } = self;
+        f.debug_struct("AuthnConfig")
+            .field("secret", secret)
+            .field("private_key", private_key)
+            .field("public_key", public_key)
+            .field("jwks_uri", &jwks_uri.as_deref().map(endpoint_shown))
+            .field("algorithms", algorithms)
+            .field("tls", tls)
+            .field("leeway", leeway)
+            .field("audience", audience)
+            .field("issuer", issuer)
+            .field("expires_in", expires_in)
+            .field("allow_any_audience", allow_any_audience)
+            .field("explicit_typing", explicit_typing)
+            .finish()
+    }
+}
+
+/// EdDSA key material for `key` — inline, or read from the file `<KEY>_FILE`
+/// names — as the text the JWT library parses, over `base`.
+fn pem_text<T: From<String>>(
+    env: &ConfigService,
+    field: Field,
+    base: Option<T>,
+) -> nest_rs_config::Result<Option<T>> {
+    let Some(pem) = env.material(field.key())? else {
+        return Ok(base);
+    };
+    match std::str::from_utf8(&pem.value.bytes) {
+        Ok(text) => Ok(Some(T::from(text.to_owned()))),
+        Err(_) => Err(pem.refuse("is not PEM text: it holds bytes that are not UTF-8")),
+    }
+}
+
+/// The `ALGORITHMS` list, each name read as RFC 7518 spells it — case and all,
+/// since a JOSE `alg` is case-sensitive. A name it does not know, `none`
+/// included, fails the boot; whether the list fits the key is
+/// [`JwtService::new`](crate::JwtService::new)'s to judge.
+fn algorithms(
+    env: &ConfigService,
+    field: Field,
+    base: Option<Vec<Algorithm>>,
+) -> nest_rs_config::Result<Option<Vec<Algorithm>>> {
+    let Some(setting) = env.setting(field.key())? else {
+        return Ok(base);
+    };
+    let known = || one_of(algorithms_of(Family::ALL));
+    setting
+        .value
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .enumerate()
+        .map(|(index, name)| {
+            // The parser's error says no more than that the name is unknown.
+            name.parse::<Algorithm>().ok().ok_or_else(|| {
+                setting.refuse(format_args!(
+                    "entry {} of the list names an algorithm this verifier does not run: use {}",
+                    index + 1,
+                    known()
+                ))
+            })
+        })
+        .collect::<nest_rs_config::Result<Vec<_>>>()
+        .map(Some)
+}
+
+/// A PEM key's setting, every way it can be given: which spelling supplied a
+/// field is unknown once an [`AuthnConfig`] is judged. A sentence continuing
+/// past it sets it off with commas.
+pub(crate) fn spellings(field: Field) -> String {
+    format!(
+        "{}, or `{}` in an AuthnConfig or JwtOptions built in code",
+        field.spellings(AuthnConfig::NAMESPACE),
+        bare(field),
+    )
+}
+
+/// `field`'s name alone: a sentence naming it speaks of two types, so it names
+/// neither path.
+fn bare(field: Field) -> &'static str {
+    let path = field.path();
+    path.rsplit("::").next().unwrap_or(path)
+}
+
+/// The secret's setting, every way it can be given, `_FILE` spelling included.
+pub(crate) fn secret_setting() -> String {
+    spellings(AuthnConfig::SECRET)
+}
+
+/// The JWK Set URI's setting, every way it can be given.
+pub(crate) fn jwks_uri_setting() -> String {
+    spellings(AuthnConfig::JWKS_URI)
+}
+
+/// The accepted algorithms' setting, every way it can be given.
+pub(crate) fn algorithms_setting() -> String {
+    spellings(AuthnConfig::ALGORITHMS)
+}
+
+/// The JWK Set endpoint's TLS settings, every way they can be given.
+pub(crate) fn tls_setting() -> String {
+    format!(
+        "{}, {} and {}, or `{}` in an AuthnConfig or JwtOptions built in code",
+        nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_CA_CERT"),
+        nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_CERT"),
+        nest_rs_config::spellings(AuthnConfig::NAMESPACE, "TLS_KEY"),
+        bare(AuthnConfig::TLS),
+    )
+}
+
+/// The key a secret, a private key and a public key make, or why they make
+/// none — every combination named, the order of the arms deciding nothing.
+fn static_key(
+    secret: Option<Secret<String>>,
+    private: Option<Secret<String>>,
+    public: Option<String>,
+) -> Result<JwtKey, AuthError> {
+    match (secret, private, public) {
+        (Some(secret), None, None) => Ok(JwtKey::Hmac(secret)),
+        (Some(_), private @ Some(_), public) | (Some(_), private @ None, public @ Some(_)) => {
+            let keys = [
+                private
+                    .as_ref()
+                    .map(|_| spellings(AuthnConfig::PRIVATE_KEY)),
+                public.as_ref().map(|_| spellings(AuthnConfig::PUBLIC_KEY)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(", and ");
+            Err(AuthError::failed(format!(
+                "{}, is set beside {keys}. An HS256 secret and EdDSA keys are two signing modes, \
+                 and nothing says which is meant — remove the secret from wherever it was set \
+                 to use EdDSA, or the keys to use HS256",
+                secret_setting(),
+            )))
+        }
+        (None, private, Some(public)) => Ok(JwtKey::Pem {
+            private_pem: private,
+            public_pem: public,
+        }),
+        (None, Some(_), None) => Err(AuthError::failed(format!(
+            "{}, is set without {}",
+            spellings(AuthnConfig::PRIVATE_KEY),
+            spellings(AuthnConfig::PUBLIC_KEY),
+        ))),
+        (None, None, None) => Err(AuthError::failed(format!(
+            "no JWT key configured: set {} for HS256, {} for EdDSA, or {} for an external \
+             issuer's keys — or the same field in an AuthnConfig or JwtOptions built in code",
+            AuthnConfig::SECRET.spellings(AuthnConfig::NAMESPACE),
+            AuthnConfig::PUBLIC_KEY.spellings(AuthnConfig::NAMESPACE),
+            AuthnConfig::JWKS_URI.spellings(AuthnConfig::NAMESPACE),
+        ))),
+    }
+}
+
+impl AuthnConfig {
+    /// Infer signing mode from the keys present. Fails the boot when no usable
+    /// combination exists.
+    ///
+    /// A pair signs and verifies EdDSA, a public key alone verifies it, a secret
+    /// alone signs and verifies HS256, a JWK Set URI alone verifies an external
+    /// issuer's tokens. Refused: a JWK Set URI beside a secret or a key, an
+    /// authority without a JWK Set URI, a secret beside either key, a private
+    /// key without its public key, nothing set. Whether each value is usable is
+    /// [`JwtService::new`](crate::JwtService::new)'s to judge.
     pub fn into_options(self) -> Result<JwtOptions, AuthError> {
-        let leeway = Duration::from_secs(self.leeway_secs.unwrap_or(30));
-        let audience = self.audience;
-        let mut options = match (
-            self.secret.as_ref(),
-            self.private_key.as_ref(),
-            self.public_key.as_ref(),
-        ) {
-            (Some(secret), Some(private), Some(public)) if !secret.trim().is_empty() => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    secret_present = true,
-                    eddsa_present = true,
-                    secret_var = %var_name(Self::NAMESPACE, "SECRET"),
-                    "ignoring the shared secret in favour of EdDSA keys"
-                );
-                JwtOptions::eddsa(private.clone(), public.clone())
+        let key = match self.jwks_uri {
+            Some(uri) => {
+                let beside = [
+                    self.secret.as_ref().map(|_| secret_setting()),
+                    self.private_key
+                        .as_ref()
+                        .map(|_| spellings(AuthnConfig::PRIVATE_KEY)),
+                    self.public_key
+                        .as_ref()
+                        .map(|_| spellings(AuthnConfig::PUBLIC_KEY)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+                if !beside.is_empty() {
+                    return Err(AuthError::failed(format!(
+                        "{}, is set beside {}. An external issuer's JWK Set and a key of this \
+                         deployment's own are two key sources, and nothing says which is meant \
+                         — remove the static key from wherever it was set to verify against the \
+                         JWK Set, or the JWK Set URI to keep the static key",
+                        jwks_uri_setting(),
+                        beside.join(", and "),
+                    )));
+                }
+                JwtKey::Jwks { uri, tls: self.tls }
             }
-            (Some(secret), _, _) if secret.trim().is_empty() => {
-                return Err(AuthError::Failed(format!(
-                    "{} must not be empty",
-                    var_name(Self::NAMESPACE, "SECRET"),
-                )));
-            }
-            // HS256 derives its security from the secret's entropy. A short
-            // secret is brute-forceable, so refuse anything under 256 bits
-            // (32 bytes) at boot rather than minting forgeable tokens.
-            (Some(secret), _, _) if secret.len() < HS256_MIN_SECRET_BYTES => {
-                return Err(AuthError::Failed(format!(
-                    "{} must be at least {HS256_MIN_SECRET_BYTES} bytes for HS256",
-                    var_name(Self::NAMESPACE, "SECRET"),
-                )));
-            }
-            (Some(secret), _, _) => JwtOptions::new(secret.clone()),
-            (None, Some(private), Some(public)) => {
-                JwtOptions::eddsa(private.clone(), public.clone())
-            }
-            (None, None, Some(public)) => JwtOptions::eddsa_verify(public.clone()),
-            (None, Some(_), None) => {
-                return Err(AuthError::Failed(format!(
-                    "{} is set without {}",
-                    var_name(Self::NAMESPACE, "PRIVATE_KEY"),
-                    var_name(Self::NAMESPACE, "PUBLIC_KEY"),
-                )));
-            }
-            (None, None, None) => {
-                return Err(AuthError::Failed(format!(
-                    "no JWT key configured: set {} (HS256) or {} (EdDSA)",
-                    var_name(Self::NAMESPACE, "SECRET"),
-                    var_name(Self::NAMESPACE, "PUBLIC_KEY"),
-                )));
+            None => {
+                if !self.tls.is_empty() {
+                    return Err(AuthError::failed(format!(
+                        "TLS material — {} — is set without {}: it is what the JWK Set \
+                         endpoint's connection trusts and presents, and no JWK Set is fetched",
+                        tls_setting(),
+                        jwks_uri_setting(),
+                    )));
+                }
+                static_key(self.secret, self.private_key, self.public_key)?
             }
         };
-        options.leeway = leeway;
-        options.audience = audience;
+        let mut options = JwtOptions::with_key(key);
+        if let Some(algorithms) = self.algorithms {
+            options.algorithms = algorithms;
+        }
+        options.leeway = self.leeway;
+        options.audience = self.audience;
         options.issuer = self.issuer;
         options.allow_any_audience = self.allow_any_audience;
-        options.explicit_typing = self.explicit_typing.unwrap_or(true);
-        if let Some(secs) = self.expires_in_secs {
-            options.expires_in = Duration::from_secs(secs);
-        }
+        options.explicit_typing = self.explicit_typing;
+        options.expires_in = self.expires_in;
         Ok(options)
     }
 }

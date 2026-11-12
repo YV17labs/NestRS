@@ -1,0 +1,5 @@
+error: #[config] field `window_secs` names a unit: a duration is a `Duration` named for what it bounds, `window`, read through `#[config(bounds = …)]`, whose key carries the unit
+ --> tests/integration/diagnostics/config/config_field_names_a_unit.rs:9:5
+  |
+9 |     window_secs: u64,
+  |     ^^^^^^^^^^^

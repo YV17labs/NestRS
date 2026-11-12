@@ -3,11 +3,14 @@
 _default:
     @just --list
 
+# Formatting and clippy over the nestrs SUT, warnings refused
+lint:
+    cd sut/nestrs && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings
+
 # Build every SUT (release / production build).
 build:
-    cd sut/nestrs && cargo build --release
-    cd sut/nestjs-express && npm ci && npm run build
-    cd sut/nestjs-fastify && npm ci && npm run build
+    cd sut/nestrs && cargo build --release --locked
+    cd sut/nestjs-node && npm ci && npm run build
 
 # Boot each SUT, check it against the contract golden files, stop it.
 conformance:

@@ -1,0 +1,5 @@
+error: #[config] `count` is gone: a count is read through its range, `#[config(bounds = RANGE)]` with a `CountBounds`, on an `Option<usize>` where `None` is no limit, `0` from the environment
+ --> tests/integration/diagnostics/config/config_count_is_gone.rs:8:14
+  |
+8 |     #[config(count)]
+  |              ^^^^^

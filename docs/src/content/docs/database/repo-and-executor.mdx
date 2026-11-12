@@ -1,19 +1,19 @@
 ---
 title: Repo and executor
 description: Repo is the only DB gateway a service uses; the ambient executor is what makes transactions and row-level filtering transparent.
-tier: basics
 sidebar:
   order: 4
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-Two pieces carry the data layer's transparency: the ambient `Executor`
+Two pieces carry the data layer's transparency: the ambient executor
 installed per request (or per job), and the `Repo<E>` handle every service
 uses to reach it. They are built on
-[SeaORM](https://www.sea-ql.org/SeaORM/) — `Executor` implements SeaORM's
-`ConnectionTrait`, so any SeaORM query runs through it unchanged — and on
-the seam from [`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database),
+[SeaORM](https://www.sea-ql.org/SeaORM/) — a query `Repo` hands you narrows
+through its own methods, in SeaORM's vocabulary: conditions, column orders and
+limits — and on the seam from
+[`nest-rs-database`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database),
 which is what keeps the same seam open to a non-SeaORM driver.
 
 The invariant: **every data access goes through a service, and a service
@@ -29,107 +29,181 @@ safe route, a transaction on a mutation. No connection parameter, no
 transaction object to thread through the call stack.
 
 `Repo<E>` is generic over the entity. Every method runs against the ambient
-executor, every read carries the ambient ability filter:
+executor, every read carries the ambient ability filter, and every read and
+update of an entity declared `soft_delete` leaves its deleted rows out:
 
 ```rust title="nest_rs::seaorm::Repo"
-Repo::<Posts>::conn()?;                    // raw handle for a custom query
 Repo::<Posts>::all().await?;               // every readable row
 Repo::<Posts>::find_by_id(id).await?;      // None if absent OR out of scope
-Repo::<Posts>::scoped(Action::Read);       // Select<E> pre-filtered, chain freely
-Repo::<Posts>::update(active).await?;      // DbErr::RecordNotUpdated if out of scope
-Repo::<Posts>::delete(model).await?;       // 0 rows if out of scope
+Repo::<Posts>::scoped(Action::Read);       // RepoSelect<E> pre-filtered, chain freely
+Repo::<Posts>::with_tombstones(Action::Read);  // the same, deleted rows kept
+Repo::<Posts>::update(active).await?;      // RepoError::NotFound if out of scope or deleted;
+                                           // RepoError::Forbidden naming a column `.fields` withholds
+Repo::<Posts>::delete(model).await?;       // 0 rows if out of scope; purges a deleted row too
+Repo::<Posts>::can(Action::Update, &model).await?;  // the instance check, in SQL
 Repo::<Posts>::page(first, after, Condition::all()).await?;  // keyset page — see Pagination
 ```
 
 A by-id write (`update`, `delete`) ANDs `condition_for(Update|Delete)` with
 the primary key, so a caller cannot mutate a row outside its scope even
-with a leaked id. The macro-generated `CrudService::access(action, id)`
-loads unscoped so a denied-but-existing row surfaces as `Access::Denied`
-(distinct from `Access::Missing`) — the gateway route-model binding goes
-through.
+with a leaked id. An `update` under a grant whose `.fields` narrows it holds what it
+sets to that list, in the same statement
+([What a write may set](/security/authorization/field-grants/#what-a-write-may-set)). An `update`
+that sets nothing has no statement to carry that condition, so it reads its row back under it
+instead, and answers as any other. `can` asks the same question without writing: one
+query on the primary key under the action's condition, which decides a
+relational rule the model alone cannot show.
+`CrudService::access(action, id)` loads unscoped so a denied-but-existing
+row surfaces as `Access::Denied` (distinct from `Access::Missing`) — the
+gateway route-model binding goes through.
+
+The deleted rows are left out after the ability's condition, for every
+action but `Create` and `Delete`: `Repo::delete` is the hard purge, so it
+reaches a tombstone, and `Repo::can(Delete, …)` answers for it; a create
+checks its fresh row against the ability alone, so importing a row already
+deleted is no denial. `Repo::unscoped` and
+`unscoped_by_id` hide them too — they drop the ability, not the deletion,
+so a deleted account cannot sign in. `Repo::with_tombstones` is the one
+read that keeps them, for an administrator's view or a retention job. It
+reads only: no `Repo` write brings a deleted row back yet — `Repo::restore`
+is planned for 7.x.
+
+### A custom query
+
+`scoped` returns a `RepoSelect<E>`, a query the ability already filters. It
+narrows through its own methods — `filter`, `order_by`, `order_by_asc`,
+`order_by_desc`, `order_by_with_nulls`, `limit`, `offset` and `apply_if`, each
+in SeaORM's vocabulary, with no trait to import — and runs on the ambient
+executor through `all`, `one`, `count` or `exists`:
+
+```rust title="crates/features/src/posts/service.rs"
+let row = Repo::<Posts>::scoped(Action::Read)
+    .filter(Column::Title.eq(name))
+    .one()
+    .await?;
+```
+
+A `RepoSelect` implements none of SeaORM's builder traits, so what runs is the
+statement `Repo` filtered, and the compiler says so: `.query()`,
+`.into_query()`, `.select_only()`, `.column_as()`, `.join()` and the rest answer
+`E0599`. Each of those traits hands out the statement as a `&mut`, and a trait's
+method cannot be sealed, so a statement replaced, cleared or `union`ed through
+one would run past the filter, and `select_only` with `expr_as` would move a
+hidden column into an exposed one's slot. An order key is a column of the entity
+for the same reason. A related row comes through its own service's loader, under
+its own filter.
+
+`Repo` hands out no connection. What sets part of the filter aside goes through a
+method named for it — `unscoped`, `unscoped_by_id`, `insert_unscoped` and
+`insert_unscoped_or_existing` drop the ability, `with_tombstones` keeps the deleted
+rows — whose rustdoc states the bar its caller must clear, so auditing the escapes is one search per name.
+Outside a unit of work, every `Repo` call returns an
+error naming the bindings that install one — a service called with no ambient
+executor is a wiring bug, not a silent miss.
+
+A condition written as raw SQL is held where it lands:
+[Raw SQL in a filter](/database/raw-sql/).
 
 ## Under the hood: the ambient executor
 
-`Executor` is a SeaORM connection — the pool or the request's transaction —
-installed in a `tokio::task_local!` for the duration of the handler. Three
-variants:
+The ambient executor is a SeaORM connection — the pool or the request's
+transaction — installed in the request's ambient context for the duration of
+the handler. It takes one of three shapes:
 
-```rust title="nest_rs::seaorm::Executor"
-pub enum Executor {
-    Pool(DatabaseConnection),
-    Txn(Arc<DatabaseTransaction>),
-    Lazy(Arc<LazyTransaction>),
-}
-```
+- **The pool**, where nothing asks for a transaction: a safe route, a GraphQL
+  query, `transactional = false`.
+- **A lazy transaction**, the one the framework installs wherever work may
+  write. It defers `BEGIN` to the first data-layer touch, so a request a guard
+  denies — or one that never queries — costs no round-trip at all.
+- **A savepoint**, what an [atomic block](/database/transactions/#atomic-blocks)
+  runs on inside a transaction.
 
-`Lazy` is the one the framework installs wherever work may write: it defers
-`BEGIN` to the first data-layer touch, so a request a guard denies — or one
-that never queries — costs no round-trip at all. `Txn` is the eager handle,
-for a transaction something already opened.
-
-`Repo::<E>::conn()` reads the task-local back. Outside the scope it returns
-an error naming the `DbContext` interceptor — a service called with no
-ambient executor is a wiring bug, not a silent miss.
-
-```rust title="crates/features/src/posts/service.rs"
-let conn = Repo::<Posts>::conn()?;
-let row = Posts::find().filter(Column::Title.eq(name)).one(&conn).await?;
-```
+None of the three is yours to name: the unit of work installs the handle,
+`Repo` reads it, and nothing public hands one out or takes one in.
+A test runs a service in a unit of the app's own binding instead —
+`app.unit(ability, || svc.list())` as a request granted `ability`,
+`app.system_unit(|| svc.purge())` as a job ([E2E tests](/testing/e2e/#a-service-in-a-unit)).
 
 Three scopes coexist:
 
-| Scope    | Installed by                | What it carries                       |
-|----------|-----------------------------|---------------------------------------|
-| Request  | `DbContext` interceptor     | Pool on safe routes, txn on mutations |
-| Job      | `WorkerDbContext` (workers) | One transaction per attempt (or pool) |
-| Unscoped | nothing                     | `Repo::conn()` errors                 |
+| Scope    | Installed by                                          | What it carries                       |
+|----------|-------------------------------------------------------|---------------------------------------|
+| Request  | an HTTP request, a GraphQL operation, a WS message or hook, an MCP operation | Pool on safe routes and queries, txn otherwise |
+| Job      | a queue attempt, a scheduled tick, a lifecycle hook   | One transaction per attempt (or pool) |
+| Unscoped | nothing                                               | every `Repo` call errors              |
+
+Every edge installs it the same way: it runs each unit of work through
+`nest_rs::database::run_unit`, over the `SeaOrmUnitOfWork` that
+`SeaOrmDatabaseModule` binds as `dyn UnitOfWork`. Your modules list no data
+context of their own.
 
 `current_executor_scope()` distinguishes Request from Job — `Repo` uses it
-to fail closed when a request runs with no ambient ability, while a worker
-runs unscoped (no caller ⇒ no scope to apply). See
-[Security](/security/) for the ability half.
+to fail closed when a request runs with no ambient ability, while a job — a
+worker's attempt, a tick, a lifecycle hook — runs unscoped (no caller ⇒ no
+scope to apply). Only the unit an edge opens chooses its scope, and never one
+wider than the unit it opens in: a job unit opened inside a request runs under
+the request's scope, and so does work a job captured and a request re-enters.
+No public function installs an executor of its own, so feature code cannot take
+a request's reads out of its scope. See [Security](/security/) for the ability
+half.
 
-An anonymous caller is a request, not a job: on a `#[public]` route the
-ability guard still installs one, built from `define_visitor`, and `Repo`
-filters by it like any other. Nothing here treats "no login" as "no filter"
+An anonymous caller is a request, not a job: on a unit naming its read with
+`#[public(Read, Entity)]` the ability guard still installs one, built from
+`define_visitor`, and `Repo` filters by it like any other; a bare `#[public]`
+reads nothing a grant guards. Nothing here treats "no login" as "no filter"
 — see [Public reads](/security/authorization/public-reads/).
 
-## The DbContext interceptor
+### Where a unit continues
 
-`DbContext` is auto-registered when you import `SeaOrmDatabaseModule`. It wraps
-every HTTP request *outside* the route's guards so guards and handlers
-resolve the same ambient executor through `Repo`:
+Some work a unit starts runs after the future that started it: a streaming
+body polled once the handler returned, a DataLoader batch on a task of its
+own, work held for the commit. Each runs on the **pool** — a pool unit of the
+binding that opened it — never on the unit's transaction — a body is polled after the commit,
+a batch serves the whole request, held work runs once the transaction is
+gone — and under the caller's ability. A task you hand to `TaskContext`
+carries the ability but **no executor**: it may outlive the unit, so a write
+in it has to open a unit of its own, and a `Repo` call there fails closed.
+
+## Every HTTP request is a unit of work
+
+Import `SeaOrmDatabaseModule` and the HTTP edge runs every request as one unit
+of work through the binding it provides, *outside* the route's guards, so
+guards and handlers resolve the same ambient executor through `Repo`:
 
 ```text
 HTTP request
   ↓
-DbContext              ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
-                       ──→ installs Executor::Lazy (POST/PUT/PATCH/DELETE)
+unit of work          ──→ installs the pool (GET/HEAD/OPTIONS/TRACE)
+                      ──→ installs a lazy transaction (POST/PUT/PATCH/DELETE)
   ↓
 guards (AuthnGuard, AbilityGuard, ...)
   ↓
-handler
+interceptors, handler
   ↓
-DbContext (response)   ──→ commit on 2xx/3xx, rollback otherwise
+unit of work (outcome) ──→ commit on success, rollback on any failure
 ```
+
+A request to `/graphql` or `/mcp` runs on the pool whatever its method: each
+operation it carries is a unit of its own
+([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 
 A safe method gets the pool, no transaction overhead. A mutating method
 opens a `DatabaseTransaction`, runs the handler against it, and commits
-or rolls back based on the response status:
+or rolls back on the unit's outcome:
 
 | Outcome                  | Decision  |
 |--------------------------|-----------|
 | `Ok(2xx)` or `Ok(3xx)`   | commit    |
 | `Ok(4xx)` or `Ok(5xx)`   | rollback  |
-| `Err(_)` from the handler| rollback  |
+| `Err(_)` from the handler, whatever an exception filter answered | rollback |
 
 A failed mutation never half-persists. See
-[Transactions](/database/transactions/) for the conflict-retry knobs and where
-each boundary sits.
+[Transactions](/database/transactions/) for where each boundary sits, and
+[Serialization conflicts](/database/conflicts/) for the conflict-retry knobs.
 
 <Aside type="caution">
 **Fail-closed on escape.** If a handler `tokio::spawn`s a task that captures
-the executor, the interceptor's `Arc::try_unwrap` on the transaction handle
+the executor, the unit's `Arc::try_unwrap` on the transaction handle
 fails — it cannot commit a handle a spawned task still holds. An otherwise
 successful response is rejected as `500` (rolled back) rather than reported
 as committed while the spawned task races a stale snapshot. The lesson:
@@ -139,115 +213,30 @@ work after the request, enqueue a job.
 
 ## Workers — same Repo, one transaction per attempt
 
-Queue processors and cron jobs run outside any HTTP request — no method to
-classify, no response to inspect. `SeaOrmDatabaseModule` binds a
-`WorkerDbContext` to `dyn JobContext`, which the worker transport
-(`#[scheduled]`, `#[processor]`) runs around every job:
-
-```text
-job
-  ↓
-WorkerDbContext   ──→ installs Executor::Lazy, settled on the job's Ok/Err
-  ↓
-processor body
-```
-
-**A job attempt is atomic by default.** The transaction is lazy — a job
-that never touches the database never opens one — and it commits when the
-job returns `Ok`, rolls back otherwise. That is what makes a **retry**
-safe: a job that failed halfway left nothing behind for the second attempt
-to write again.
-
-**Atomic per attempt is not the same as idempotent per job**, and the
-difference is the queue's, not the transaction's. A backend that delivers
-at least once — which is what a durable queue is — can redeliver a job
-whose attempt *committed*, if the worker died between the commit and the
-acknowledgement. The transaction guarantees you never see half an
-attempt's writes; it cannot promise the body runs once. A job whose
-re-execution would be harmful wants an idempotency key regardless of this
-setting.
-
-**And a retry only happens where it could help.** A job whose body succeeded
-but whose transaction could not be settled is a failed attempt — but *whether
-to re-attempt it* is read from what the database said, never assumed — and
-where it said it. A **statement** inside the attempt that failed on a
-serialization conflict or a deadlock (`40001`, `40P01`), on a pool that never
-handed out a connection, or on one the server closed (`08…`, `57P0…`) is
-retryable: nothing is durable before `COMMIT`, so the framework knows the
-attempt wrote nothing. At the **commit** the reading flips: a constraint checked
-at `COMMIT` fails identically every time, and a commit whose outcome is
-**unknown** — the connection lost mid-`COMMIT` — may have
-landed. Neither of the last two is replayed: a retry re-runs the whole body,
-including every side effect that is not the database's, and the framework only
-promises "nothing left to repeat" for a transaction it knows rolled back. Both
-abort straight to the dead-letter queue, where the failure is visible, instead
-of burning the budget in silence.
-
-A **schedule** has no retry budget and no dead-letter, so `#[every]` /
-`#[cron]` / `#[after]` report the failure at `error` on `nest_rs::schedule`
-and fire again at the next occurrence — the classification is logged rather
-than acted on, because there is nothing there for it to decide.
-
-No caller means no ambient ability, which means `Repo` reads and writes are
-**unscoped** — correct for system work with no principal to scope to. A job
-that needs scoping wraps its body in `with_ability(...)` explicitly.
-
-### The opt-out, and when it is right
-
-`transactional = false` runs the job on the pool, where every statement
-commits on its own:
-
-```rust title="crates/features/src/audio/queue/processor.rs"
-#[process(queue = AudioQueue, retries = 3, transactional = false)]
-async fn transcode(&self, job: TranscodeCommand) -> anyhow::Result<()> { /* ... */ }
-```
-
-The key is the same word on all four job decorators — `#[process]`,
-`#[every]`, `#[cron]`, `#[after]`.
-
-Reach for it when the job **brackets long work that is not the
-database's**: read a row, spend minutes transcoding, write the result. The
-default would hold a pooled connection across the middle. Such a job owns
-its own consistency, and an **idempotency key** is what makes its retry
-safe — the transaction never was.
-
-A job that wants a *narrower* unit than the attempt has one sanctioned
-answer today: `transactional = false`, plus its own idempotency. The ambient
-executor is not a `TransactionTrait`, so there is no supported way to nest a
-second unit inside the attempt — and `retry_on_conflict` around the ambient
-executor would replay into the transaction the conflict already aborted.
-Both are for a *programmatic* boundary in a service, not for a job body (see
-[Transactions](/database/transactions/)).
+Queue processors and cron jobs reach `Repo` the same way, one transaction per
+attempt: [Job transactions](/database/job-transactions/).
 
 ## The contextless-path exception
 
-A truly contextless path — a shutdown hook that runs after every transport
-has closed, a one-shot CLI command bootstrapped outside `App::run` — has
-no task-local to read. That is the one documented `Repo` bypass: inject
-an `Arc<DatabaseConnection>` and call SeaORM directly.
-
-```rust title="crates/features/src/users/service.rs"
-#[hooks]
-impl UsersService {
-    #[on_application_shutdown]
-    async fn report(&self) -> anyhow::Result<()> {
-        let count = Users::find().count(self.db.as_ref()).await?;
-        tracing::info!(count, "users present at shutdown");
-        Ok(())
-    }
-}
-```
-
-`self.db` is an `Arc<DatabaseConnection>` injected on the service —
-unscoped, no ability filter applies, no transaction. This is the **only**
-documented bypass; if you find yourself reaching for it in a request
-handler, something else is wrong.
+Every unit of work has an executor: a request, a message, an operation, a
+job, a tick, a listener call, and a [lifecycle
+hook](/fundamentals/lifecycle/#a-hook-is-a-unit-of-work), which reaches `Repo`
+through its service like any handler. A truly contextless path has none: a
+one-shot command run between `init()` and `close()`
+([running without serving](/fundamentals/app-state/#running-without-serving)),
+which calls a provider outside every unit. That and the programmatic transaction
+[`retry_on_conflict`](/database/conflicts/#the-working-retry-primitive) re-opens are the
+documented `Repo` bypasses: inject an `Arc<DatabaseConnection>` and call SeaORM directly —
+unscoped, with no ability filter and no transaction. If you find yourself
+reaching for it in a request handler or a hook, something else is wrong.
 
 ## Going further
 
-- [Transactions](/database/transactions/) — auto-commit, conflict
-  observation, the retry primitive.
+- [Transactions](/database/transactions/) — auto-commit, what waits for the
+  commit, atomic blocks.
+- [Serialization conflicts](/database/conflicts/) — conflict observation, the
+  retry primitive.
 - [Row-level filtering](/security/authorization/row-level-filtering/) —
   the ability condition `Repo::scoped` joins in.
 - [Writing a driver](/database/writing-a-driver/) — implementing
-  `Executor` for a non-SeaORM store on the same seam.
+  the port's `Executor` for a non-SeaORM store on the same seam.

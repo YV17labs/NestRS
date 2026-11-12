@@ -1,0 +1,5 @@
+error: #[mcp] `path` is not a mount path: it is mounted at one literal address, so it holds no parameter, no brace, and no `:`, `*` or `<`
+ --> tests/integration/diagnostics/mcp/mcp_path_is_not_literal.rs:6:14
+  |
+6 | #[mcp(path = "/tools/:tenant")]
+  |              ^^^^^^^^^^^^^^^^

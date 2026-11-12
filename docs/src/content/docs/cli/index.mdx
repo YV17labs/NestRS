@@ -1,6 +1,9 @@
 ---
 title: CLI
-description: Install the nestrs binary, scaffold projects, generate features, and verify your toolchain.
+description: Install the nestrs binary, scaffold a workspace or an app, run its tasks and build it — and where each other command is.
+sidebar:
+  label: Overview
+  order: 1
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
@@ -27,11 +30,11 @@ nestrs version
 A binary, so it is the one thing that does not come through the `nest-rs`
 umbrella — there is no `--features cli`.
 
-Requires **Rust 1.97+** (edition 2024). That single install is all you need: the
+Requires **Rust 1.100+** (edition 2024). That single install is all you need: the
 first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
 toolchain it drives — `just`, `bacon`, `cargo-nextest`, `cargo-llvm-cov` — once.
 Run **`nestrs doctor`** after install to check the Rust toolchain and list
-optional `NESTRS_*` environment variables.
+optional `<PREFIX>_*` environment variables.
 
 ## Layout detection
 
@@ -43,10 +46,10 @@ current directory (or `-o` path) and reads that manifest.
 | Where you run | Command | Result |
 |---|---|---|
 | Outside a nestrs workspace | `nestrs new hello` | Monorepo at `./hello/` + `apps/hello/` on port **3000** |
-| Inside a nestrs workspace | `nestrs new blog` | Thin app at `apps/blog/` — **next free port** in `module.rs` |
+| Inside a nestrs workspace | `nestrs new blog` | Thin app at `apps/blog/` — **next free port** in `apps/blog/.env` |
 
-If `apps/blog/` already exists, the CLI stops with **`app blog already
-exists`** — it does not overwrite.
+If `apps/blog/` already exists, the CLI stops with ``app `blog` already exists at
+<path>``: it does not overwrite.
 
 <Aside type="note">
   No extra config file to maintain. Cargo's workspace manifest is the single
@@ -76,9 +79,11 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
   - compose.yml
   - .env
   - .env.development
+  - .env.test
   - .env.example
   - .gitignore
   - rust-toolchain.toml
+  - clippy.toml
   - README.md
   - AGENTS.md the conventions every coding agent reads
   - CLAUDE.md imports AGENTS.md
@@ -94,6 +99,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
     - seed/ the `seed` binary
   - apps/
     - hello/
+      - .env the port
       - src/
         - lib.rs
         - main.rs
@@ -103,7 +109,7 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
         - e2e/main.rs
 </FileTree>
 
-The `e2e` suite is scaffolded **empty**. It has to exist: `nestrs run test unit`
+The `e2e` suite is scaffolded **empty**. It has to exist: `nestrs run test integration`
 filters on `not binary(e2e)` and `nestrs run test e2e` on `binary(e2e)`, and
 nextest rejects a filterset naming a binary the workspace does not have.
 
@@ -111,12 +117,12 @@ nextest rejects a filterset naming a binary the workspace does not have.
 
 ```bash
 nestrs new blog
-nestrs g resource posts
+nestrs g resource posts title:string body:text --app blog
 ```
 
 
 **`rust-toolchain.toml`** is what makes every recipe run on a project minutes
-old. It pins Rust 1.97 as the toolchain `channel`, plus three components, each
+old. It pins Rust 1.100 as the toolchain `channel`, plus three components, each
 because a recipe shells out to it:
 
 - **`clippy` and `rustfmt`** are what `nestrs run lint` runs. Undeclared, they
@@ -130,6 +136,12 @@ because a recipe shells out to it:
 
 Rustup is what reads that file. On a toolchain installed any other way it is
 inert — point `LLVM_COV` and `LLVM_PROFDATA` at your own binaries instead.
+
+**`clippy.toml`** names raw SQL (`Expr::cust` and every other call writing text
+unescaped) in `nestrs run lint`, where it is written: no type tells it from a
+condition, and `Repo` refuses a fragment that would read past the ability's filter only
+when the query runs ([Raw SQL in a filter](/database/raw-sql/)).
+`crates/migrations` holds an empty one of its own, which lets a migration write raw DDL.
 
 ### One starter, no template flag
 
@@ -147,13 +159,29 @@ someone looking at a browser — so there is no routeless variant to pick. Delet
 the feature once you have a real one; `nestrs new blog` refuses if a `blog`
 feature already exists, rather than overwriting it.
 
-Ports: the CLI scans existing `apps/*/src/module.rs` and pins the next free one
-in code (same pattern as `auth` → 3001, `api` → 3002, …). Workspace `.env` files
-do **not** set `NESTRS_HTTP__PORT` — ports live in each app's `module.rs`:
+Ports: the CLI reads the port each existing app listens on — from its `.env`, a
+port pinned in its root, or the default when its root names a module or host
+serving HTTP — and writes the next free one into the new app's own `.env` (same
+pattern as `auth` → 3001, `api` → 3002, …). A root reaching its host through a
+module whose name says no edge counts as not listening, so two apps can land on
+one port; the second to start fails its boot at the listen, naming the address.
+The workspace's root `.env` files do **not** set
+`<PREFIX>_HTTP__PORT`, and no `module.rs` pins it — a pin would take the app's
+whole HTTP namespace off the `.env` cascade:
 
-```rust title="apps/api/src/module.rs"
-HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
+```bash title="apps/api/.env" frame="terminal"
+NESTRS_HTTP__PORT=3002
+NESTRS_AUTHN__ISSUER=http://localhost:3002
+NESTRS_AUTHN__AUDIENCE=http://localhost:3002
 ```
+
+Beside the port, the app's origin is the issuer and the audience of the tokens
+it mints and verifies once it authenticates — `JwtService` does not start
+without them ([JWT](/security/authentication/jwt/)) — and the lines sit unread
+until then. An app's own files are read over the root's under the
+`development` and `test` profiles
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)); a
+deployment sets all three on the process.
 
 Optional: **`--check`** runs `cargo check` after generation.
 
@@ -180,10 +208,10 @@ door. It forwards the recipe and its arguments verbatim to
 scaffolder wrote:
 
 ```bash
-nestrs run dev          # watch mode (rebuild + restart on save)
-nestrs run test unit         # unit + integration
-nestrs run db up        # apply migrations
-nestrs run              # list the available recipes
+nestrs run dev               # watch mode (rebuild + restart on save)
+nestrs run test integration  # in process, no database
+nestrs run db up             # apply migrations
+nestrs run                   # list the available recipes
 ```
 
 The recipes are yours to edit. Add your own to the `Justfile` and they run the
@@ -199,8 +227,10 @@ then fails with the manual install command instead of fetching anything.
 ## Build
 
 Release binaries land in `target/release/`. **`nestrs run start`** compiles and
-starts the server; use **`nestrs run build`** when you only need the artifact
-(Docker, CI, or copying the binary elsewhere).
+starts the server under the production profile, so it reads no
+`.env.development`: the database and queue URLs are the deployment's to set.
+Use **`nestrs run build`** when you only need the artifact (Docker, CI, or
+copying the binary elsewhere).
 
 ```bash
 nestrs run build              # default app (hello)
@@ -209,221 +239,6 @@ nestrs run build --all          # every app in the workspace
 nestrs run start hello        # build + run in release
 ```
 
-## Generate features and adapters
-
-Generators scaffold under `crates/features/src/<name>/`, register
-`pub mod …` in `crates/features/src/lib.rs`, and — when you run them from inside
-an app — wire the edge module into that app's `module.rs`. Every command takes
-**`--dry-run`** (print what would change, write nothing) and a **`-p`** path
-override (default: auto-discover from the current directory). Re-running a
-generator is safe: it refuses to overwrite an existing feature or adapter, and
-the wiring edits are idempotent.
-
-A **port** is the transport-agnostic core (service + module). An **adapter**
-bolts one transport onto a port. A **resource** is a DB-backed CRUD port plus its
-HTTP adapter in one shot.
-
-```bash
-# Port only (service + module, no transport)
-nestrs g feature posts
-
-# DB-backed CRUD: #[expose] entity + CrudService + guarded #[crud] controller.
-# Bootstraps the auth adapter below when the workspace has none — its routes
-# name AuthnGuard/AuthzGuard, so they would not compile without it.
-nestrs g resource posts
-
-# One #[expose] entity in an existing feature — no controller, no auth
-# bootstrap. The name after the slash is the entity's own when the feature's
-# singular is not it.
-nestrs g entity posts             # → Post, in posts/entity.rs
-nestrs g entity posts/comment     # → Comment
-
-# The app's authn/authz adapter — Claims, AuthnGuard, AuthzAbility, AuthzGuard.
-# Run it *before* the first `g resource`, or not at all: it refuses when
-# `crates/features/src/authz/` already exists.
-nestrs g auth
-
-# A SeaORM migration, registered in lib.rs and migrator.rs
-nestrs g migration create_posts
-
-# Bolt a transport onto an existing port
-nestrs g http posts        # controller
-nestrs g graphql posts     # resolver
-nestrs g ws posts          # gateway
-nestrs g queue posts       # processor
-nestrs g schedule posts    # scheduled tasks
-nestrs g mcp posts         # MCP tool
-```
-
-`g graphql`, `g ws` and `g mcp` also write that transport's **authz bridge**
-under `crates/features/src/authz/` when the workspace has a policy to enforce,
-and wire it into the app. It is not optional wiring: `/graphql` and `/mcp` gate
-in band, per operation, so without the bridge `/mcp` denies every call and
-`/graphql` runs operations with no ability installed. A gateway's bridge carries
-the socket data context that scopes its rows.
-
-<Aside type="note">
-Generated entities default to wire-only `#[expose]` (no GraphQL tokens) — see
-[HTTP-only resources](/database/#http-only-resources). `nestrs g graphql` on a
-resource port adds the `graphql` flag and the crate features that flag needs, so
-the entity becomes a GraphQL object at the moment something asks for one.
-</Aside>
-
-Each adapter delegates to the port's service, so a freshly-generated port plus
-any adapter compiles immediately — the handler is the seam you fill in. The
-generator prints the import line and the app-level module each transport needs
-(`HttpModule`, `GraphqlModule`, `ScheduleModule`, …).
-
-When the cursor isn't inside an app, wire the edge module by hand:
-
-```rust title="apps/api/src/module.rs"
-use features::posts::PostsHttpModule;
-use nest_rs::core::module;
-
-#[module(imports = [
-    // …
-    PostsHttpModule,
-])]
-pub struct ApiModule;
-```
-
-### Why `g resource` is guarded
-
-`g resource` emits the `#[crud]` + `#[use_guards(AuthnGuard, AuthzGuard)]` form,
-and scaffolds the `g auth` adapter when the workspace has none. That is not
-hardening you can defer: `Repo` filters every read by the caller's ambient
-[`Ability`](/security/authorization/), which only the ability guard installs, so
-an unguarded DB-backed controller mounts its routes and then serves nothing.
-
-A generated resource therefore answers **401** without a token and **403** until
-[`AuthzAbility`](/security/authorization/) grants a rule for its entity — the two
-lines the generator prints. A resource meant to be readable without a login is
-the same slice with one route marked `#[public]` and a rule in
-`define_visitor`; see [Public reads](/security/authorization/public-reads/).
-Before inventing a second layout, open
-[`crates/features/src/orgs/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/orgs)
-side by side with what the generator emitted.
-
-### Where `g entity` puts the file
-
-A module keeps its entities in one of two shapes, and the generator reads
-which one you are in rather than asking. A feature with no entity yet gets
-the lone `posts/entity.rs`. A feature already keeping several in
-`posts/entities/` gets one more file there, named for the singular —
-`comment.rs` beside `post.rs`.
-
-Growing from the first shape into the second is the one thing it refuses. Moving
-`entity.rs` into `entities/` deepens every `super::` path the file carries — and
-SeaORM's relation form spells those inside string literals, where a rewrite would
-either miss them or damage them silently. So the generator prints the four
-mechanical steps and leaves the move to you; re-run it afterwards.
-
-The entity it writes names **no service**. `#[expose(service = …)]` points at the
-one [`CrudService`](/database/crud/) whose `Entity` is this entity, `g entity`
-writes no service, and a plain `g feature` port's service is not one — so the
-link is yours to add, and the printed next steps spell the line. Reach for
-`g resource` instead when you want the entity, the service and the guarded
-controller together.
-
-### `g graphql` over a resource carries the same guarantee
-
-The GraphQL adapter for a resource port is the `#[crud]` resolver behind the
-same two guards, and it comes with the per-operation bridge it is enforced
-through: `crates/features/src/authz/graphql/` plus the `AuthzGraphqlModule`
-import in the adapter's `module.rs`. That folder is not optional decoration —
-`/graphql` runs no guard at the HTTP edge, so the bridge is the only thing that
-authenticates the caller and installs the ability the resolvers read. Over a
-plain `g feature` port there are no rows to guard, so the resolver stays the
-`#[public]` stand-in and nothing else is generated.
-
-## Doctor
-
-```bash
-nestrs doctor
-```
-
-Checks:
-
-- `rustc` ≥ 1.97 and `cargo` on `PATH`
-- whether the current directory sits inside a nestrs workspace
-- optional env vars (`NESTRS_SEAORM__URL`, `NESTRS_REDIS__URL`, …)
-
-Use it after install and before running DB- or Redis-backed apps.
-
-## Lint
-
-```bash
-nestrs lint
-```
-
-Doctor asks whether the machine is right; lint asks whether the code is. It
-runs the one naming rule of your project's `AGENTS.md` that a path cannot
-derive: **a file's stem against the types it declares**.
-
-One shape is refused, and only one — a stem that reaches *nothing* the file
-declares:
-
-```
-nestrs lint
-
-  crates/features/src/desks/principal.rs
-    `principal` reaches none of `DeskOperator`
-    name the file from the type, or split it — a stem that reaches nothing
-    is a slot, and a slot fills
-```
-
-That file was named for a *slot* — "who acts", "what we pass around" — rather
-than for a subject. A slot has no admission test, so the next type about that
-slot lands there too; it is a `shared/` folder at the scale of a file. And it
-is invisible from outside, because both names read perfectly well alone and
-only the pair is wrong.
-
-Everything short of that passes. The word may come from the folder rather than the file —
-`throttler/store.rs` holding `RedisThrottler`. An inflection is the same
-word (`scope.rs` holding `Scoped`), and so is an abbreviation (`context.rs`
-holding `Ctx`). And a file whose principal export is a function is a
-namespace that owes no pairing at all: `queue/consume.rs` exporting
-`consume::attempt`.
-Files a table already names — `service.rs`, `controller.rs`, `registry.rs` —
-are named by that table and are not this rule's business.
-
-It exits non-zero on a finding, so it belongs in CI: the scaffolded `lint`
-recipe already runs it, and `nestrs run lint` is the front door.
-
-The framework holds itself to it through the same code, from its own
-conformance suite — a rule shipped and not met is the failure that matters.
-
-## Version, about, info, and update
-
-```bash
-nestrs version
-# → NestRS x.y.z
-
-nestrs about
-# → version, tagline, docs, repository, license, author
-
-nestrs info
-# → layout, name, root, framework pin, apps, features, env prefix, toolchain
-
-nestrs update
-# → checks crates.io; skips when already on the latest version
-
-nestrs update --force
-# → cargo install --force nest-rs-cli (reinstall even at the same version)
-```
-
-`about` is the framework — the same lines on every machine. `info` is the tree in
-front of you: which layout you are standing in, the apps and features it holds,
-the `nest-rs` version its manifests pin, and which app a generator would wire
-into. It reports the root relative to where you ran it, and outside a project it
-says so rather than failing.
-
-Contributors inside the monorepo clone:
-
-```bash
-nestrs update --from-path
-# → cargo install --locked --path crates/nest-rs-cli --force
-```
 
 ## Command reference
 
@@ -438,85 +253,27 @@ nestrs update --from-path
 | `nestrs info` | Report the project the current directory sits in |
 | `nestrs update` | Install latest CLI from crates.io when a newer version exists |
 | `nestrs update --force` | Reinstall from crates.io even when already on the latest version |
-| `nestrs update --from-path` | Reinstall from monorepo `crates/nest-rs-cli` |
 | `nestrs g feature <name>` | Transport-agnostic port in `crates/features/src/` |
-| `nestrs g resource <name>` | DB-backed CRUD port + guarded HTTP adapter (deps auto-added) |
+| `nestrs g resource <name> [<column>:<type>[:nullable]…]` | DB-backed CRUD port + guarded HTTP adapter, its table's migration and round trip (deps auto-added) |
 | `nestrs g entity <feature>[/<name>]` | One `#[expose]` entity in an existing feature |
 | `nestrs g auth` | The app's authn/authz adapter — one per workspace |
-| `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs` |
-| `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp <name>` | Add one transport adapter to a port |
+| `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs`, its columns an entity's for `create_<table>`; `nestrs_outbox` registers the framework's own |
+| `nestrs run [<recipe> [args…]]` | Run a project task through `just`; bare, list the recipes |
+| `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp\|events <name>` | Add one transport adapter to a port |
 
-Every generator accepts **`--dry-run`** and **`-p <path>`**.
+Every generator accepts **`--dry-run`** and **`-p <path>`**; the ones that wire
+an app (`resource`, `auth` and the adapters) also take **`--app <name>`**.
 Aliases: **`nestrs g`** = **`nestrs generate`**.
 **All of them require a workspace**, which is what `nestrs new` writes.
 
-## Move an existing crate into a workspace
-
-Bringing a crate you already have — a small service, a prototype — under
-`crates/features/` is a handful of file relocations. There is no `nestrs
-migrate` for it: doing it by hand keeps you in control of the app boundary you
-are introducing.
-
-The one thing to know before you start: **`nestrs new <workspace>` already
-writes a `hello` feature and a `hello` app** — the starter that proves the
-workspace runs. Move the incoming crate in under its **own** name. `mv` does
-not warn about overwriting, and `nestrs new` initialises no git repository, so
-a collision has nothing to recover from.
-
-```bash frame="terminal"
-# 1. Scaffold the workspace beside the crate you are moving.
-nestrs new acme && cd acme
-
-# 2. Give the incoming crate its own feature folder, with the adapter
-#    sub-folder the workspace layout uses.
-mkdir -p crates/features/src/posts/http
-
-# 3. Move the port and the adapter into their conventional homes. `main.rs`
-#    stays behind: apps/hello/src/main.rs already exists and is the same six
-#    lines.
-mv ../posts/src/service.rs    crates/features/src/posts/
-mv ../posts/src/module.rs     crates/features/src/posts/
-mv ../posts/src/controller.rs crates/features/src/posts/http/
-```
-
-Then the edits a move cannot do:
-
-1. **`crates/features/src/lib.rs`** — add `pub mod posts;`.
-2. **`crates/features/src/posts/mod.rs`** (new) — the folder index:
-   `mod service; mod module; pub mod http;` plus the `pub use` lines.
-   A single crate needs none, because `main.rs` declares its modules.
-3. **`crates/features/src/posts/http/mod.rs`** (new) — `mod controller; mod
-   module;` plus its `pub use` lines, and a `http/module.rs` holding
-   `#[module(imports = [PostsModule], providers = [PostsController])]`.
-4. **`crates/features/src/posts/module.rs`** — drop `HttpModule::for_root(…)`
-   and the controller from `providers`. In a workspace the transport is the
-   **app's** decision, and the port module provides only the service:
-   `#[module(providers = [PostsService])]`.
-5. **Imports** — `crate::service::PostsService` becomes
-   `crate::posts::PostsService`; the app's `module.rs` adds
-   `features::posts::PostsHttpModule` to its imports.
-
-Both halves of step 4 fail loudly if skipped. Leaving `HttpModule::for_root(…)`
-in the moved module attaches a **second** HTTP transport — a duplicated
-`attached module-contributed transport` line at boot. And a moved controller
-still declaring `#[controller(path = "/")]` collides with the starter one:
-
-```text frame="terminal"
-Error: duplicate controller prefix "/": HelloController and PostsController
-both mount there — a controller prefix is its exclusive namespace; give each
-one a distinct path
-```
-
-Give the moved controller its own prefix, or delete the starter `hello` feature
-and app once yours is serving.
-
-`crates/migrations/` and `crates/seed/` come from `nestrs new`, so the database
-verbs and `g migration` work from the first `nestrs run db up`. From here
-every generator is available: `nestrs g http <feature>` and its siblings wire
-themselves into the app whose directory you are standing in.
+Each generator is told on [Generators](/cli/generators/); `doctor`, `lint`,
+`info` and `update` on [Doctor, lint and info](/cli/diagnostics/).
 
 ## Going further
 
+- [Generators](/cli/generators/) — what each `nestrs g` writes and wires, and
+  why every generated unit is guarded.
 - [Getting started](/getting-started/) — first run after `nestrs new`.
-- [Tutorial](/tutorial/) — build `posts` in `apps/blog/`, HTTP only.
-- [Fundamentals / Modules](/fundamentals/modules/) — how root modules compose features.
+- [Tutorial](/tutorial/) — build `posts` in `apps/blog/`, over HTTP and then GraphQL.
+- [Move an existing crate](/cli/existing-crate/) — bring a crate you already
+  have under `crates/features/`.

@@ -1,0 +1,119 @@
+---
+title: Running a tick
+description: "What bounds and surrounds one scheduled run — its deadline, the layers around it, its transaction and trace, and the five seconds it gets at shutdown."
+---
+
+A [scheduled method](/schedule/) runs as a tick: one unit of work per
+occurrence, with a deadline of its own, the app's layers around it, a
+transaction per run and a trace of its own.
+
+## How long a run lasts
+
+A replica runs one occurrence of a job at a time, so a tick waiting on a call
+that never answers would skip every later occurrence for as long as the process
+lives. A run therefore lasts at most **ten minutes** unless its trigger says
+otherwise — `timeout` takes a whole number of `ms`, `s`, `m` or `h`, up to
+`"24h"`, on `#[every]`, `#[cron]` and `#[after]` alike. It bounds the method's
+body: past it, the run is cut where it waits, what it wrote in its transaction
+is rolled back, and the next occurrence fires as usual. The run is reported
+failed, naming the deadline:
+
+```text frame="terminal"
+ERROR nest_rs::schedule: scheduled job failed host="AudioTasks" method="heartbeat" error=the attempt did not end within its 600s timeout, and was cut — the `timeout` key on its job decorator sets it retryable=true trace_id=… span_id=…
+```
+
+A run whose body returned in time is never cut while it commits. One whose
+commit did not answer within the driver's bound is reported failed with
+`retryable=false`: what it wrote may have landed.
+
+`#[process]` takes the same key, with the same default and ceiling — see
+[How long an attempt runs](/queue/long-running-jobs/#how-long-an-attempt-runs).
+
+## Layers around a tick
+
+A tick runs through the same pipeline as a job: the app's interceptors and
+exception filters, then those a `#[scheduled]` block and its trigger bind
+(`#[use_interceptors]`, `#[use_exception_filters]`), then the method. A layer
+reads the tick through `ScheduleView` — its `job()`, as `key = "…"` spells it,
+the `occurrence()` a job firing once claimed, and its `replicas()` — and the
+deadline through `cx.deadline()`. An interceptor returning `Ok(tick.skip())`
+settles the tick without running it, and the next occurrence fires as usual.
+
+A tick has no retry, so a failure is reported, never acted on. One a filter
+answers with `tick.skip()`, or with a client's `Problem` (a `4xx`), is one the
+app expected: it is said at `warn` as `scheduled job failed; a layer answered
+it` rather than at `error`. A `5xx` problem is still the server's failure,
+logged at `error` like one no filter caught. Either way the tick's transaction
+rolls back. A job attached by hand as a
+`CronJobMeta` binds no layer of its own; the app's run around it all the same.
+
+## At shutdown
+
+**A tick still running at shutdown gets five seconds.** No tick starts once
+the app is asked to stop; one already running is developer code on the way
+down, as a shutdown hook is, so it gets what a hook gets —
+`Scheduler::SHUTDOWN_TIMEOUT`, the hooks' five-second budget, spent *before*
+the hooks so no tick runs through the cleanup it may depend on. Still running
+then, it is stopped where it waits, files its `schedule.tick` line with
+`outcome="cancelled"`, and is named in one `warn`; what it had not done stays
+undone. A task that needs longer pushes a [queue](/queue/) job, which a worker
+drains within a window of its own. See [the way down](/fundamentals/shutdown/#the-way-down).
+
+## Its trace
+
+Every tick opens its own `schedule.tick` span, so the lines your task
+writes are already correlated: a **fresh** `trace_id` each time (a clock
+has nothing upstream to continue) and no `actor_id` (nobody is being
+served). See [Correlation](/fundamentals/correlation/).
+
+## The ambient data context
+
+A scheduled method has **no caller** — system work, intentionally. So **no
+ability** is installed and `Repo` reads are unscoped, which is correct for
+work with no principal to scope to.
+
+The executor is a **transaction per attempt**: it opens on the job's first
+`Repo` call, commits when the method returns `Ok` and rolls back otherwise,
+so a tick that failed halfway leaves nothing behind for the next one. Add
+`transactional = false` to the trigger — `#[every("30s", transactional =
+false)]`, and the same word on `#[cron]`, `#[after]` and `#[process]` — to
+run on the pool instead, which is right for a tick that brackets long work
+that is not the database's. See
+[Repo and the executor](/database/repo-and-executor/).
+
+The demo's purge is that shape. Its tick only calls the service, and the service
+reaches the rows through `Repo` as any request would:
+
+```rust title="crates/features/src/notifications/service.rs (from the demo, abridged)"
+pub async fn purge_expired(&self) -> Result<u64, ServiceError> {
+    let cutoff = chrono::Utc::now().fixed_offset() - RETENTION;
+    let expired = Repo::<Notifications>::scoped(Action::Delete)
+        .filter(entity::Column::CreatedAt.lt(cutoff))
+        .limit(PURGE_BATCH)
+        .all()
+        .await?;
+    let mut purged = 0;
+    for model in expired {
+        purged += Repo::<Notifications>::delete(model).await?.rows_affected;
+    }
+    // …
+    Ok(purged)
+}
+```
+
+On the tick, `scoped(Action::Delete)` adds no filter of its own, because a job
+has no principal to scope to, so the query takes the first thousand expired
+rows; called from a request that carries no ability, the same method selects
+nothing, and each `Repo::delete` is filtered again. The deletes share the tick's
+transaction, so a batch lands whole or not at all, and what a batch leaves waits
+for the next hour.
+Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbing.
+
+## Going further
+
+- [Schedule](/schedule/) — declare a job, its trigger and the adapter that
+  runs it.
+- [Firing once across replicas](/schedule/once/) — one replica per occurrence,
+  claimed through the occurrence lock.
+- [Repo and the executor](/database/repo-and-executor/) — the transaction a
+  tick's `Repo` calls run in.

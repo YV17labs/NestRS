@@ -1,0 +1,5 @@
+error: #[gateway] `namespace` takes a marker type path, e.g. `namespace = ChatNs`
+ --> tests/integration/diagnostics/ws/gateway_namespace_is_not_a_path.rs:7:37
+  |
+7 | #[gateway(path = "/ws", namespace = "chat")]
+  |                                     ^^^^^^

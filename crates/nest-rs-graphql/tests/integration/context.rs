@@ -1,45 +1,48 @@
-//! Per-request context bridge: a value an HTTP guard attaches to the request
-//! reaches a GraphQL resolver — end-to-end through the harness.
+//! Per-request context bridge: a value an HTTP guard attaches to the
+//! `/graphql` request reaches a GraphQL resolver — end-to-end through the
+//! harness.
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
 use nest_rs_graphql::async_graphql::Context;
 use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, SeedLifetime, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::async_trait;
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
 use nest_rs_testing::TestApp;
-use poem::Request;
 
 #[derive(Clone)]
 struct RequestTag(String);
 
-#[injectable]
-#[derive(Default)]
-struct TagGuard;
+impl AmbientValue for RequestTag {}
 
-impl Layer for TagGuard {}
+#[injectable]
+#[derive(Default, Layer)]
+struct TagGuard;
 
 #[async_trait]
 impl Guard for TagGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        req.extensions_mut().insert(RequestTag("hello".into()));
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(RequestTag("hello".into()));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for TagGuard {}
+impl GuardFor<nest_rs_http::HttpView> for TagGuard {}
 
 #[resolver]
 struct TagResolver;
 
-nest_rs_graphql::inventory::submit! {
-    GraphqlContextSeed {
-        lifetime: SeedLifetime::Connection,
-        owner_type_id: || Some(std::any::TypeId::of::<TagResolver>()),
-        seed: |req, _container, gql| match req.extensions().get::<RequestTag>() {
-            Some(tag) => gql.data(tag.clone()),
+nest_rs_core::inventory::submit! {
+    GraphqlContextSeed::new(
+        Some(std::any::TypeId::of::<TagResolver>),
+        SeedLifetime::Connection,
+        |_req, _container, gql| match nest_rs_core::ambient::<RequestTag>() {
+            Some(tag) => gql.data(RequestTag::clone(&tag)),
             None => gql,
         },
-    }
+    )
 }
 
 #[operations]
@@ -53,14 +56,16 @@ impl TagResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [TagGuard, TagResolver])]
+#[module(imports = [GraphqlModule], providers = [TagGuard, TagResolver])]
 struct GraphqlTestModule;
 
+#[module(imports = [GraphqlTestModule], providers = [GlobalGuards<(TagGuard,)>])]
+struct ResolverReadsAPerRequestValueAGuardAttachedApp;
+
 #[tokio::test]
-async fn resolver_reads_a_per_request_value_bridged_from_the_poem_request() {
+async fn resolver_reads_a_per_request_value_a_guard_attached() {
     let app = TestApp::builder()
-        .module::<GraphqlTestModule>()
-        .use_guards_global([guard::<TagGuard>()])
+        .module::<ResolverReadsAPerRequestValueAGuardAttachedApp>()
         .build()
         .await
         .expect("the schema boots and mounts at /graphql");
@@ -84,20 +89,14 @@ async fn resolver_reads_a_per_request_value_bridged_from_the_poem_request() {
     assert_eq!(tag, "hello");
 }
 
-/// A schema with no operation guard and no global pool is an **unguarded**
-/// schema, and the boot says so once.
-///
-/// It is a warn rather than a refusal because an app with no authn posture at
-/// all is a legitimate shape — a public read API, a demo. What makes the line
-/// load-bearing is the shape next door: an app that *meant* to import its authz
-/// bridge and did not gets a schema that answers every operation, with no
-/// status code, no error frame and no failing test to notice it. This is the
-/// GraphQL twin of the MCP deny-all announcement, and the two differ on purpose
-/// — MCP fails closed, GraphQL falls open, so only one of them can afford to be
-/// quiet, and it is not this one.
+/// A schema with no guard at its request — no global pool, no endpoint guards —
+/// is **unguarded**, and the boot says so once — a warn, since a public read
+/// API is a legitimate shape.
 mod an_unguarded_schema_announces_itself {
     use nest_rs_core::module;
-    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_core::target::LAYERS;
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+    use nest_rs_http::__private::NO_GUARD_REMEDY;
     use nest_rs_testing::{LogCapture, TestApp};
 
     #[resolver]
@@ -112,17 +111,41 @@ mod an_unguarded_schema_announces_itself {
         }
     }
 
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [OpenResolver])]
+    #[module(imports = [GraphqlModule], providers = [OpenResolver])]
     struct OpenModule;
 
     #[tokio::test]
-    async fn at_warn_naming_the_mode() {
+    async fn at_warn_saying_what_runs_and_what_to_write() {
         let logs = LogCapture::install();
         let app = TestApp::for_module::<OpenModule>()
             .await
             .expect("an unguarded schema boots — that is the point");
 
-        // It really is open: the operation answers with no credential at all.
+        assert_unguarded(&app, &logs).await;
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(GraphqlConfig {
+            path: "/gql".into(),
+            ..GraphqlConfig::default()
+        })],
+        providers = [OpenResolver],
+    )]
+    struct MovedModule;
+
+    /// The line says where the surface is served, wherever a deployment moves it.
+    #[tokio::test]
+    async fn at_the_path_it_is_served() {
+        let logs = LogCapture::install();
+        let _app = TestApp::for_module::<MovedModule>()
+            .await
+            .expect("an unguarded schema boots");
+
+        let event = logs.expect_one(LAYERS, "no guard at the request");
+        assert_eq!(event.field("path").as_deref(), Some("/gql"));
+    }
+
+    async fn assert_unguarded(app: &TestApp, logs: &LogCapture) {
         let resp = app
             .http()
             .post("/graphql")
@@ -131,26 +154,20 @@ mod an_unguarded_schema_announces_itself {
             .await;
         resp.assert_status_is_ok();
 
-        let event = logs
-            .find(
-                "nest_rs::graphql",
-                "no operation guard registered — graphql operations run unguarded",
-            )
-            .into_iter()
-            .next()
-            .expect("the boot announces an unguarded schema");
+        let event = logs.expect_one(LAYERS, "no guard at the request");
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("mode").as_deref(), Some("unguarded"));
+        assert_eq!(event.field("surface").as_deref(), Some("graphql"));
+        assert_eq!(event.field("path").as_deref(), Some("/graphql"));
+        assert_eq!(
+            event.field("then").as_deref(),
+            Some("each unit decides alone")
+        );
+        assert_eq!(event.field("hint").as_deref(), Some(NO_GUARD_REMEDY));
     }
 }
 
-/// A `#[resolver]` no module lists is **silently filtered** from the schema.
-///
-/// Module-gating is what makes per-app subsets work, so this is correct
-/// behaviour — and indistinguishable from a resolver whose queries were never
-/// written. The app boots, the schema is smaller than the author thinks, and
-/// the first sign is a client's `Unknown field` days later. The warn carries
-/// the remedy because the fix is one line in a `#[module(providers = [...])]`.
+/// A `#[resolver]` no module lists is filtered from the schema, and the boot
+/// warns with the remedy.
 mod a_resolver_no_module_lists {
     use nest_rs_core::module;
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
@@ -180,11 +197,9 @@ mod a_resolver_no_module_lists {
         }
     }
 
-    // `OrphanResolver` is deliberately absent from `providers`.
-    #[module(imports = [GraphqlModule::for_root(None)], providers = [ListedResolver])]
+    #[module(imports = [GraphqlModule], providers = [ListedResolver])]
     struct PartialModule;
 
-    // The same hole, under an app that asked for it to be fatal.
     #[module(
         imports = [GraphqlModule::for_root(GraphqlConfig {
             strict_resolver_membership: true,
@@ -201,7 +216,6 @@ mod a_resolver_no_module_lists {
             .await
             .expect("an app with an unlisted resolver still boots");
 
-        // The schema really is missing it — that is what the warn is about.
         let resp = app
             .http()
             .post("/graphql")
@@ -214,15 +228,14 @@ mod a_resolver_no_module_lists {
             "the query is rejected by name: {body}",
         );
 
-        // `inventory` is link-time, so every resolver in this test binary is a
-        // candidate; what matters is that ours is named.
+        // Link-time: every resolver in this test binary is a candidate.
         let reported = logs.find(
             nest_rs_graphql::TARGET,
             "unreachable resolver skipped from the GraphQL schema",
         );
         let ours = reported
             .iter()
-            .find(|event| event.field("resolver").as_deref() == Some("OrphanResolver"))
+            .find(|event| event.field("host").as_deref() == Some("OrphanResolver"))
             .unwrap_or_else(|| panic!("the unlisted resolver is named: {reported:#?}"));
         assert_eq!(ours.level, "warn");
         assert!(
@@ -233,13 +246,11 @@ mod a_resolver_no_module_lists {
         assert!(
             !reported
                 .iter()
-                .any(|event| event.field("resolver").as_deref() == Some("ListedResolver")),
+                .any(|event| event.field("host").as_deref() == Some("ListedResolver")),
             "a listed resolver is never reported: {reported:#?}",
         );
     }
 
-    /// `strict_resolver_membership` promotes that warn to a boot failure, for an
-    /// app where a forgotten `providers` entry must not reach a deployment.
     #[tokio::test]
     async fn is_a_boot_failure_when_the_app_asked_for_one() {
         let err = TestApp::for_module::<StrictModule>()
@@ -258,98 +269,580 @@ mod a_resolver_no_module_lists {
     }
 }
 
-// --- an operation guard that never runs the operation -------------------------
-//
-// `GraphqlOperationGuard::around` is handed the operation as a future and owes
-// it exactly one thing: drive it. An app bridge that returns early — an
-// `if denied { return }` written without awaiting the inner future — leaves the
-// endpoint with nothing to answer with.
-//
-// The failure that matters is the *quiet* one: without this line the endpoint
-// serves an empty `200`, which a GraphQL client reads as a response carrying
-// neither `data` nor `errors`. Every operation on that deployment silently
-// answers nothing, and the app's own logs say a request came in and succeeded.
+/// A body that is JSON but not a GraphQL request — `variables` as a string.
+#[tokio::test]
+async fn a_body_that_is_not_a_graphql_request_is_answered_with_an_error_entry_and_no_value() {
+    let app = TestApp::builder()
+        .module::<GraphqlTestModule>()
+        .build()
+        .await
+        .expect("boots");
 
-mod an_operation_guard_that_never_runs_the_operation {
-    use nest_rs_core::{injectable, module};
-    use nest_rs_graphql::async_graphql::Result as GqlResult;
-    use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-    use nest_rs_testing::{LogCapture, TestApp};
-    use poem::{Request, Response};
+    let resp = app
+        .http()
+        .post("/graphql")
+        .header("content-type", "application/json")
+        .body(r#"{"query":"{ tag }","variables":"sk_live_secret"}"#)
+        .send()
+        .await;
 
-    /// Returns without ever polling `inner`, so the operation never executes.
-    #[injectable]
-    #[derive(Default)]
-    struct NeverRunsTheOperation;
-
-    impl GraphqlOperationGuard for NeverRunsTheOperation {
-        fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
-            Box::pin(async move { Ok(()) })
-        }
-
-        fn around<'a>(&'a self, _req: &'a Request, _inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
-            // `inner` is dropped rather than awaited.
-            Box::pin(async {})
-        }
-    }
-
-    #[resolver]
-    struct EchoResolver;
-
-    #[operations]
-    impl EchoResolver {
-        #[query]
-        #[public]
-        async fn echo(&self) -> GqlResult<String> {
-            Ok("echoed".into())
-        }
-    }
-
-    #[module(
-        imports = [GraphqlModule::for_root(None)],
-        providers = [EchoResolver, NeverRunsTheOperation as dyn GraphqlOperationGuard],
-    )]
-    struct BrokenBridgeModule;
-
-    #[tokio::test]
-    async fn is_reported_rather_than_answered_with_nothing() {
-        let logs = LogCapture::install();
-        let app = TestApp::for_module::<BrokenBridgeModule>()
-            .await
-            .expect("a bridge that misbehaves at runtime still boots");
-
-        let resp = app
-            .http()
-            .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ echo }" }))
-            .send()
-            .await;
-        // The status is the whole failure this branch exists to prevent: the
-        // comment above calls it "an empty 200", and a body assertion alone
-        // cannot tell an empty 200 from an empty 500. Asserted first, because
-        // it is the half a reader would otherwise have to take on trust.
-        resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
-        let body = resp
+    resp.assert_status(nest_rs_http::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = serde_json::from_str(
+        &resp
             .0
             .into_body()
             .into_string()
             .await
-            .expect("a response body");
-        assert!(
-            !body.contains("echoed"),
-            "the operation really did not run: {body}",
-        );
+            .expect("a response body"),
+    )
+    .expect("a GraphQL response is JSON");
+    let message = body["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an `errors` entry with a message: {body}"));
+    assert!(
+        message.starts_with(
+            "the body is not a GraphQL request: the JSON body at `variables`: invalid type: a \
+             string, expected"
+        ),
+        "the decode failure is said, and where: {message}",
+    );
+    assert!(!message.contains("sk_live"), "without the value: {message}");
+    assert_eq!(
+        body["errors"][0]["extensions"],
+        serde_json::json!({ "code": "INVALID_ARGUMENT" }),
+        "the class HTTP's 400 names for a body that does not decode: {body}",
+    );
+    assert!(body.get("data").is_none(), "nothing executed: {body}");
+}
 
-        let event = logs.expect_one(
-            "nest_rs::graphql",
-            "the guarded operation produced no response",
-        );
-        assert_eq!(event.level, "error");
+/// A multipart request whose `map` part is not a map of files: serde's sentence
+/// would quote the part.
+#[tokio::test]
+async fn a_multipart_part_that_does_not_decode_is_answered_without_its_value() {
+    let app = TestApp::builder()
+        .module::<GraphqlTestModule>()
+        .build()
+        .await
+        .expect("boots");
+    let body = "--nestrs\r\n\
+        content-disposition: form-data; name=\"operations\"\r\n\r\n\
+        {\"query\":\"{ tag }\"}\r\n\
+        --nestrs\r\n\
+        content-disposition: form-data; name=\"map\"\r\n\r\n\
+        {\"0\":\"sk_live_secret\"}\r\n\
+        --nestrs--\r\n";
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .header("content-type", "multipart/form-data; boundary=nestrs")
+        .body(body)
+        .send()
+        .await;
+
+    resp.assert_status(nest_rs_http::StatusCode::BAD_REQUEST);
+    let body = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a response body");
+    assert!(!body.contains("sk_live"), "{body}");
+    assert!(
+        body.contains("the `map` part: invalid type: a string"),
+        "{body}"
+    );
+}
+
+#[module(
+    imports = [GraphqlModule],
+    providers = [crate::RequestStoreDown, TagResolver],
+)]
+struct RequestStoreDownModule;
+
+#[module(
+    imports = [RequestStoreDownModule],
+    providers = [GlobalGuards<(crate::RequestStoreDown,)>],
+)]
+struct ARequestDenialKeepingItsCauseFilesTheChainApp;
+
+/// A pooled guard that cannot evaluate the `/graphql` request files what failed
+/// on the request's denial line, and the client reads the condition alone.
+#[tokio::test]
+async fn a_request_denial_keeping_its_cause_files_the_chain() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::builder()
+        .module::<ARequestDenialKeepingItsCauseFilesTheChainApp>()
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ tag }" }))
+        .send()
+        .await;
+
+    resp.assert_status(nest_rs_http::StatusCode::SERVICE_UNAVAILABLE);
+    let body = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a response body");
+    assert!(
+        !body.contains("refused"),
+        "the cause stays on the server: {body}"
+    );
+    let event = logs.expect_one("nest_rs::layers", "guard denied the request");
+    assert_eq!(event.field("status").as_deref(), Some("503"));
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some(crate::STORE_DOWN_CHAIN)
+    );
+}
+
+/// The guards at the `/graphql` request read nestrs's request and attach what
+/// they read, a seed forwards it into the operation's context, and a refusal is
+/// the edge's problem document, its reason the `detail`.
+mod the_endpoint_guards_speak_the_request_vocabulary {
+    use nest_rs_core::async_trait;
+    use nest_rs_core::{AmbientValue, Container, Layer, UnitContext, injectable, module};
+    use nest_rs_graphql::async_graphql::{Context, Request as GqlRequest, Result as GqlResult};
+    use nest_rs_graphql::{
+        GraphqlContextSeed, GraphqlModule, GraphqlView, SeedLifetime, operations, resolver,
+    };
+    use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_http::{EndpointGuards, HttpView, Request};
+    use nest_rs_testing::TestApp;
+
+    #[derive(Clone)]
+    struct Tenant(String);
+
+    impl AmbientValue for Tenant {}
+
+    /// Admits a request naming its tenant, attaching it; refuses one that names
+    /// none.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct TenantGate;
+
+    #[async_trait]
+    impl Guard for TenantGate {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let Some(tenant) = HttpView::of(cx)?
+                .request()
+                .header("x-tenant")
+                .map(str::to_owned)
+            else {
+                return Err(Denial::forbidden("name a tenant"));
+            };
+            cx.attach(Tenant(tenant));
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for TenantGate {}
+
+    /// Forwards what the gate attached.
+    fn forward_tenant(_req: &Request, _container: &Container, gql: GqlRequest) -> GqlRequest {
+        match nest_rs_core::ambient::<Tenant>() {
+            Some(tenant) => gql.data((*tenant).clone()),
+            None => gql,
+        }
+    }
+
+    nest_rs_core::inventory::submit! {
+        GraphqlContextSeed::new(
+            Some(std::any::TypeId::of::<TenantResolver>),
+            SeedLifetime::Request,
+            forward_tenant,
+        )
+    }
+
+    #[resolver]
+    struct TenantResolver;
+
+    #[operations]
+    impl TenantResolver {
+        #[query]
+        #[public]
+        async fn tenant(&self, ctx: &Context<'_>) -> GqlResult<String> {
+            Ok(ctx.data::<Tenant>()?.0.clone())
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [TenantResolver, TenantGate, EndpointGuards<GraphqlView, (TenantGate,)>],
+    )]
+    struct TenantModule;
+
+    #[tokio::test]
+    async fn a_seed_forwards_what_the_endpoint_guards_attached() {
+        let app = TestApp::for_module::<TenantModule>().await.expect("boots");
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .header("x-tenant", "acme")
+            .body_json(&serde_json::json!({ "query": "{ tenant }" }))
+            .send()
+            .await;
+
+        resp.assert_json(serde_json::json!({ "data": { "tenant": "acme" } }))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_guards_refusal_is_the_edges_problem_document() {
+        let app = TestApp::for_module::<TenantModule>().await.expect("boots");
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ tenant }" }))
+            .send()
+            .await;
+
+        resp.assert_status(nest_rs_http::StatusCode::FORBIDDEN);
+        resp.json()
+            .await
+            .value()
+            .object()
+            .get("detail")
+            .assert_string("name a tenant");
+    }
+}
+
+/// What the POST answers on the wire, as 6.x answered it through
+/// async-graphql-poem 7.2.1: JSON, `200` whatever `errors` holds,
+/// `cache-control` from the schema's hints only when every operation
+/// succeeded, then every header a resolver set.
+mod the_answer_on_the_wire {
+    use nest_rs_core::module;
+    use nest_rs_graphql::async_graphql::{self, Context, Upload};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+    use nest_rs_http::{HttpConfig, HttpModule, StatusCode, header};
+    use nest_rs_testing::{TestApp, TestForm, TestFormField, TestResponse};
+    use serde_json::json;
+
+    #[derive(async_graphql::SimpleObject)]
+    #[graphql(cache_control(max_age = 60))]
+    struct Cached {
+        value: i32,
+    }
+
+    #[resolver]
+    struct WireResolver;
+
+    #[operations]
+    impl WireResolver {
+        #[query]
+        #[public]
+        async fn cached(&self) -> Cached {
+            Cached { value: 1 }
+        }
+
+        #[query]
+        #[public]
+        async fn tagged(&self, ctx: &Context<'_>) -> i32 {
+            ctx.append_http_header("x-graphql-tag", "first");
+            ctx.append_http_header("x-graphql-tag", "second");
+            2
+        }
+
+        #[query]
+        #[public]
+        async fn refused(&self) -> async_graphql::Result<i32> {
+            Err(async_graphql::Error::new("refused on purpose"))
+        }
+
+        #[mutation]
+        #[public]
+        async fn upload_size(
+            &self,
+            ctx: &Context<'_>,
+            file: Upload,
+        ) -> async_graphql::Result<usize> {
+            let upload = file
+                .value(ctx)
+                .map_err(|unread| async_graphql::Error::new(unread.to_string()))?;
+            Ok(upload.content.len())
+        }
+    }
+
+    /// The cap the multipart tests send under and over.
+    const CAP: usize = 4096;
+
+    #[module(
+        imports = [
+            HttpModule::for_root(HttpConfig { max_body_bytes: CAP, ..HttpConfig::default() }),
+            GraphqlModule::for_root(GraphqlConfig { max_batch_size: 2, ..GraphqlConfig::default() }),
+        ],
+        providers = [WireResolver],
+    )]
+    struct WireModule;
+
+    async fn boot() -> TestApp {
+        TestApp::for_module::<WireModule>().await.expect("boots")
+    }
+
+    /// The tags in the order sent, which `assert_header_all` does not check.
+    fn tags(resp: &TestResponse) -> Vec<&str> {
+        resp.0
+            .headers()
+            .get_all("x-graphql-tag")
+            .iter()
+            .map(|value| value.to_str().expect("a visible header"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_response_header_set_matches_6x() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!({ "query": "{ cached { value } tagged }" }))
+            .send()
+            .await;
+
+        resp.assert_status_is_ok();
+        let mut names: Vec<&str> = resp.0.headers().keys().map(|name| name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, SIX_X_HEADER_SET);
+        resp.assert_header_all(header::CONTENT_TYPE, ["application/json; charset=utf-8"]);
+        resp.assert_header_all(header::CACHE_CONTROL, ["max-age=60"]);
         assert_eq!(
-            event.field("reason").as_deref(),
-            Some("no_response"),
-            "{:?}",
-            event.fields,
+            tags(&resp),
+            ["first", "second"],
+            "every value a resolver appended, in order",
         );
+        resp.assert_json(json!({ "data": { "cached": { "value": 1 }, "tagged": 2 } }))
+            .await;
+    }
+
+    /// The header names a POST answering `cached` and `tagged` carried in 6.x.
+    const SIX_X_HEADER_SET: [&str; 9] = [
+        "cache-control",
+        "content-type",
+        "cross-origin-opener-policy",
+        "cross-origin-resource-policy",
+        "referrer-policy",
+        "traceresponse",
+        "x-content-type-options",
+        "x-frame-options",
+        "x-graphql-tag",
+    ];
+
+    #[tokio::test]
+    async fn an_answer_holding_errors_is_200_and_carries_no_cache_control() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!({ "query": "{ cached { value } refused }" }))
+            .send()
+            .await;
+
+        resp.assert_status_is_ok();
+        resp.assert_header_is_not_exist(header::CACHE_CONTROL);
+        let body: serde_json::Value = resp.json().await.value().deserialize();
+        assert_eq!(body["errors"][0]["message"], "refused on purpose", "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_batch_answers_each_operation_in_order_with_every_header_set() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!([{ "query": "{ tagged }" }, { "query": "{ refused }" }]))
+            .send()
+            .await;
+
+        resp.assert_status_is_ok();
+        resp.assert_header_is_not_exist(header::CACHE_CONTROL);
+        assert_eq!(tags(&resp), ["first", "second"]);
+        let body: serde_json::Value = resp.json().await.value().deserialize();
+        assert_eq!(body[0], json!({ "data": { "tagged": 2 } }), "{body}");
+        assert_eq!(
+            body[1]["errors"][0]["message"], "refused on purpose",
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_batch_past_its_size_is_413_and_executes_nothing() {
+        let app = boot().await;
+        let operation = json!({ "query": "{ tagged }" });
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!([operation, operation, operation]))
+            .send()
+            .await;
+
+        resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+        resp.assert_content_type("application/problem+json");
+        resp.assert_header_is_not_exist("x-graphql-tag");
+        let problem: serde_json::Value = resp.json().await.value().deserialize();
+        assert_eq!(problem["code"], "CONTENT_TOO_LARGE", "{problem}");
+    }
+
+    /// The GraphQL multipart request specification's three parts: the
+    /// operation, the map of files onto its variables, and the file.
+    fn upload_of(bytes: usize) -> TestForm {
+        TestForm::new()
+            .text(
+                "operations",
+                json!({
+                    "query": "mutation ($file: Upload!) { uploadSize(file: $file) }",
+                    "variables": { "file": null },
+                })
+                .to_string(),
+            )
+            .text("map", json!({ "0": ["variables.file"] }).to_string())
+            .field(
+                TestFormField::bytes(vec![7_u8; bytes])
+                    .name("0")
+                    .filename("notes.txt"),
+            )
+    }
+
+    #[tokio::test]
+    async fn a_multipart_upload_under_the_cap_reaches_its_resolver() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .multipart(upload_of(1024))
+            .send()
+            .await;
+
+        resp.assert_status_is_ok();
+        resp.assert_json(json!({ "data": { "uploadSize": 1024 } }))
+            .await;
+    }
+
+    /// A refusal of the multipart reader keeps its fixed sentence.
+    #[tokio::test]
+    async fn a_multipart_request_without_its_map_is_refused_naming_the_part() {
+        let app = boot().await;
+        let form = TestForm::new().text("operations", json!({ "query": "{ tagged }" }).to_string());
+
+        let resp = app.http().post("/graphql").multipart(form).send().await;
+
+        resp.assert_status(StatusCode::BAD_REQUEST);
+        resp.assert_content_type("application/json");
+        resp.assert_json(json!({
+            "errors": [{
+                "message": "the body is not a GraphQL request: Missing \"map\" part",
+                "extensions": { "code": "INVALID_ARGUMENT" },
+            }],
+        }))
+        .await;
+    }
+
+    /// [`upload_of`]'s three parts, delimited by `nestrs`, the file `abc`.
+    const UPLOAD: &str = "--nestrs\r\n\
+        content-disposition: form-data; name=\"operations\"\r\n\r\n\
+        {\"query\":\"mutation ($file: Upload!) { uploadSize(file: $file) }\",\"variables\":{\"file\":null}}\r\n\
+        --nestrs\r\n\
+        content-disposition: form-data; name=\"map\"\r\n\r\n\
+        {\"0\":[\"variables.file\"]}\r\n\
+        --nestrs\r\n\
+        content-disposition: form-data; name=\"0\"; filename=\"notes.txt\"\r\n\r\n\
+        abc\r\n\
+        --nestrs--\r\n";
+
+    /// RFC 9110 §5.6.6 admits whitespace around each `;`, an empty parameter
+    /// and a name in any case, which mime 0.3 refused: the edge reads the
+    /// boundary off its own parse of the type, as the `Multipart` extractor does.
+    #[tokio::test]
+    async fn a_multipart_upload_reads_its_boundary_as_rfc_9110_admits_the_type() {
+        let app = boot().await;
+        for content_type in [
+            "multipart/form-data ; boundary=nestrs",
+            "multipart/form-data;\tBoundary=nestrs",
+            "multipart/form-data; boundary=nestrs;;",
+            "multipart/form-data; boundary=\"nestrs\"",
+        ] {
+            let resp = app
+                .http()
+                .post("/graphql")
+                .header("content-type", content_type)
+                .body(UPLOAD)
+                .send()
+                .await;
+
+            resp.assert_status_is_ok();
+            resp.assert_json(json!({ "data": { "uploadSize": 3 } }))
+                .await;
+        }
+    }
+
+    /// A type naming its boundary twice, which two readers could each take
+    /// otherwise, or one whose parameters do not parse, is refused said by kind,
+    /// never as a part that does not decode.
+    #[tokio::test]
+    async fn a_multipart_type_the_rfcs_do_not_admit_is_refused_said_by_kind() {
+        let app = boot().await;
+        for (content_type, said) in [
+            (
+                "multipart/form-data; boundary=nestrs; boundary=other",
+                "its type names more than one boundary",
+            ),
+            (
+                "multipart/form-data; boundary=\"nestrs",
+                "its type does not parse",
+            ),
+            ("multipart/form-data", "its type names no boundary"),
+        ] {
+            let resp = app
+                .http()
+                .post("/graphql")
+                .header("content-type", content_type)
+                .body(UPLOAD)
+                .send()
+                .await;
+
+            resp.assert_status(StatusCode::BAD_REQUEST);
+            resp.assert_json(json!({
+                "errors": [{
+                    "message": format!(
+                        "the body is not a GraphQL request: the multipart body is malformed: {said}"
+                    ),
+                    "extensions": { "code": "INVALID_ARGUMENT" },
+                }],
+            }))
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_multipart_upload_over_the_cap_is_413() {
+        let app = boot().await;
+
+        let resp = app
+            .http()
+            .post("/graphql")
+            .multipart(upload_of(CAP * 16))
+            .send()
+            .await;
+        resp.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+        let problem: serde_json::Value = resp.json().await.value().deserialize();
+        assert_eq!(problem["code"], "CONTENT_TOO_LARGE", "{problem}");
     }
 }

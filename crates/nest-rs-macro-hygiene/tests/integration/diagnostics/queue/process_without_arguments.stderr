@@ -1,0 +1,5 @@
+error: #[process] requires `queue` — write `queue = AudioQueue` (the `#[queue]` marker type the method drains)
+  --> tests/integration/diagnostics/queue/process_without_arguments.rs:14:5
+   |
+14 |     #[process]
+   |     ^^^^^^^^^^

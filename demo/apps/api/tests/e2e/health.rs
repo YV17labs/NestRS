@@ -2,7 +2,7 @@ use crate::*;
 
 #[tokio::test]
 async fn health_live_probe_is_ok() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .get("/health/live")
         .send()
@@ -11,22 +11,32 @@ async fn health_live_probe_is_ok() {
 }
 
 #[tokio::test]
-async fn health_ready_probe_reports_db_indicator_up() {
-    let (_db, app) = boot().await;
-    app.init()
-        .await
-        .expect("lifecycle init wires the indicator registry");
+async fn health_ready_probe_reports_every_resource_the_app_opens_up() {
+    let app = boot().await;
     let resp = app.http().get("/health/ready").send().await;
     resp.assert_status_is_ok();
     let body = resp.json().await;
     let body = body.value().object();
     assert_eq!(body.get("status").string(), "up");
-    assert!(
-        body.get("info").object().get_opt("db").is_some(),
-        "ready probe info bucket carries the `db` indicator",
-    );
+    for resource in ["seaorm", "redis", "redis:transcodes", "storage"] {
+        assert_eq!(
+            body.get("info")
+                .object()
+                .get(resource)
+                .object()
+                .get("status")
+                .string(),
+            "up",
+            "ready probe info bucket carries `{resource}`",
+        );
+    }
     assert!(
         body.get("error").object().is_empty(),
-        "ready probe error bucket is empty against a live database",
+        "ready probe error bucket is empty against live services",
     );
+}
+
+#[tokio::test]
+async fn a_probe_reads_no_credential() {
+    features::testing::assert_a_probe_reads_no_credential(&boot().await).await;
 }

@@ -24,9 +24,11 @@ bench/
 2. **Each SUT is idiomatic for *its* framework** — written the way its
    own docs and CLI scaffold teach, defaults untouched. The comparison
    is "framework as taught vs framework as taught", not "tuned vs naive".
-3. **Compare against the opponent's best case.** NestJS runs both
-   `express` and `fastify` variants; future providers follow the same
-   pattern (e.g. `laravel-fpm` / `laravel-octane`).
+3. **Compare against the opponent's best case.** NestJS runs on its
+   `NodeAdapter` (`@nestjs/platform-node`, straight on `node:http`), the
+   adapter its own docs recommend since 12.3 and measure ahead of Express
+   and Fastify; a future provider enters on its own fastest documented
+   option.
 4. **A number without its environment is not a result.** Every result
    embeds the machine fingerprint (CPU, kernel, toolchains, resolved
    dependency versions) and the exact protocol parameters.
@@ -47,8 +49,10 @@ per-core efficiency is what's measured. Defaults are the quick local
 protocol (10 s warmup, 3×15 s, 64 connections); published runs follow
 [RUNBOOK.md](RUNBOOK.md) — long protocol, both regimes, dedicated host.
 
-Reported per provider: RPS, p50/p90/p99/p99.9 latency, RSS idle/loaded,
-cold start (spawn → first 200). Raw oha JSON is kept beside the report.
+Reported per provider and tier: RPS, p50/p90/p99/p99.9 latency, RSS idle and
+loaded after each tier, cold start (spawn → first 200). The tiers are the
+contract's T0–T5 and the variants a provider declares (`t1-h2c`, `t1-quiet`,
+`t5-compressed`). Raw oha JSON is kept beside the report.
 
 ## Adding a provider
 
@@ -61,8 +65,10 @@ cold start (spawn → first 200). Raw oha JSON is kept beside the report.
    build = "composer install --no-dev && ..."
    start = "php artisan octane:start --port=3130"
    ```
-2. Implement the contract idiomatically (routes, DI, service — as the
-   framework's own docs teach) and pass `just conformance`.
+2. Start from the framework's own CLI scaffold, kept whole, and implement
+   the contract idiomatically (routes, DI, service — with the CLI's
+   generators where it has them, as its own docs teach). Pass
+   `just conformance`.
 3. Add a `Dockerfile` for containerized runs.
 
 That is the whole interface — the harness globs `sut/*/provider.toml`.

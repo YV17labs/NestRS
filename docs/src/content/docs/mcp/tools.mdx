@@ -1,0 +1,129 @@
+---
+title: MCP tools
+description: "Several #[tool] methods on one server sharing their dependencies, and typed inputs refused before the body runs, in words a model can correct."
+sidebar:
+  order: 1.5
+---
+
+A server's tools are the methods of its `#[tools]` block. Each is a callable
+the model discovers, and each reads typed arguments the endpoint checks before
+its body runs.
+
+## Multiple tools on one server
+
+Each `#[tool]` method becomes its own callable. Share state through `&self` —
+`#[inject]` once, every tool reuses it.
+
+```rust title="crates/features/src/posts/mcp/tool.rs"
+#[mcp(path = "/mcp/posts")]
+#[derive(Clone)]
+pub struct PostsTool {
+    #[inject]
+    svc: Arc<PostsService>,
+}
+
+#[tools]
+impl PostsTool {
+    #[tool(description = "List the titles of the latest published posts.")]
+    #[public(Read, post::Entity)]
+    async fn latest_titles(
+        &self,
+        Parameters(p): Parameters<LatestParams>,
+    ) -> Result<String, ServiceError> {
+        let titles = self.svc.latest_titles(p.limit).await?;
+        Ok(titles.join("\n"))
+    }
+
+    #[tool(description = "Return a published post's summary, found by its slug.")]
+    #[public(Read, post::Entity)]
+    async fn post_summary(
+        &self,
+        Parameters(p): Parameters<SlugParams>,
+    ) -> Result<String, ServiceError> {
+        let post = self.svc.by_slug(&p.slug).await?;
+        Ok(post.summary())
+    }
+}
+```
+
+The client now sees two tools — `latest_titles` and `post_summary` — both
+sharing the injected `PostsService`. The `description` is what the model
+reads to decide when to call each. Each names what it reads, which
+[`define_visitor`](/security/authorization/public-reads/) grants; a bare `#[public]`
+would read nothing. Each answers a `String` it wrote rather than a row, so what
+it copies out of a row is its own line.
+
+## A validated tool
+
+Tool inputs are deserialized to a typed struct, so the schema the client reads
+is already typed. Arguments that do not decode are refused before the body runs
+as a tool error the model can correct — ``failed to deserialize parameters:
+argument `limit`: invalid type: a string, expected u8`` — naming the
+argument, the kind of value found and what was expected, and never the value,
+which would otherwise land in the model's transcript. `Parameters` is the
+framework's own for that reason, with rmcp's shape and schema. A prompt's
+arguments are refused in the same words, as JSON-RPC's `invalid_params` under
+`data: { "code": "INVALID_ARGUMENT" }`.
+
+A tool error is a failed call all the same, whether rmcp answered it for
+arguments that do not decode or the tool returned `CallToolResult::error`
+itself: its unit of work rolls back, its `mcp.operation` line files
+`outcome="error"`, and its span carries `error.type` `tool_error`, the class
+OpenTelemetry's MCP conventions give a result with `isError: true`.
+
+For extra checks beyond shape — ranges, enums, mutual exclusion — add
+`validate(...)` attributes: `#[input]` already carries the `validator` derive,
+so no extra import and no extra manifest line.
+
+```rust title="crates/features/src/posts/dtos/search_posts_dto.rs"
+use nest_rs::core::input;
+
+#[derive(Debug)]
+#[input]
+pub struct SearchPostsDto {
+    #[validate(length(min = 1, max = 100))]
+    pub query: String,
+
+    #[validate(range(min = 1, max = 50))]
+    pub limit: u8,
+}
+```
+
+The rules run before the body, with nothing to wrap — the same check every
+edge runs on what it decodes, as [Pipes](/fundamentals/pipes/#validation-at-the-edge)
+describes:
+
+```rust title="crates/features/src/posts/mcp/tool.rs (abridged)"
+#[tool(description = "Search the published posts' titles, most recent first.")]
+#[public(Read, post::Entity)]
+async fn search_posts(
+    &self,
+    Parameters(params): Parameters<SearchPostsDto>,
+) -> Result<String, ServiceError> {
+    let titles = self.svc
+        .search_titles(&params.query, params.limit)
+        .await?;
+
+    Ok(titles.join("\n"))
+}
+```
+
+`JsonSchema` derives the schema sent to the client from `SearchPostsDto`, and a
+rejection answers
+`invalid_params` carrying its class and the field errors under `errors`, which
+is the one MCP error a model can act on:
+
+```json
+{"code":-32602,"message":"validation failed",
+ "data":{"code":"INVALID_ARGUMENT","errors":{"query":[{"code":"length"}]}}}
+```
+
+`Parameters<Piped<P>>` runs any [pipe](/fundamentals/pipes/) over the
+arguments when they need transforming, once they passed their rules.
+
+## Going further
+
+- [MCP](/mcp/) — the first tool, and the layers around every operation.
+- [MCP errors](/mcp/errors/) — what a failing tool answers the model.
+- [Pipes](/fundamentals/pipes/) — transforming arguments once they pass their
+  rules.

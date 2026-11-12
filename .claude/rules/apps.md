@@ -9,98 +9,95 @@ paths:
 
 # Apps — pure composition
 
-`demo/apps/<name>/` is **`main.rs` + `module.rs` only, by default**.
-Not `examples/`, not `services/`.
+**An app's `src/` is `main.rs`, `module.rs` and `lib.rs`.**
 
-`main` holds only `App::builder().module::<AppModule>()` (+ transports),
-plus the imperative global-layer seams `request-layers.md` sanctions
-(`use_guards_global` / `use_*_global`) — declaring the transport-wide
-pool *is* composition, not business logic. `module.rs` is the canonical
-composition — the app lists the edges it serves.
+- **`module.rs`** is the canonical composition: one `<App>Module` listing the
+  edges the app serves and, in its `providers`, the app-wide layer pools
+  (`edges.md`, *Request layers*): what no feature decides, an audit interceptor,
+  or a guard no host binds, an API key or an IP allow-list. A feature's guards
+  are its host's, so a feature stays covered in an app with no pool, and a pool
+  never repeats them.
+- **`lib.rs`** declares `mod module;` and re-exports `<App>Module` — and the
+  types its e2e suite configures it with — so the suite boots the composition
+  the binary runs, its pools included. No logic.
+- **`main.rs`** builds the app — `App::builder().module::<AppModule>()` — and
+  holds `OpenTelemetry::init()` (`container.md`, the one `for_root`
+  exception), nothing else: the same lines in every app.
 
-## The exemplars
+No `services/`, no `examples/`, and never an edge folder under the app's
+`src/`: an adapter there could only be named for the app, and the app's name
+stops at `<App>Module` (`architecture.md`).
+
+## The apps
 
 | App | Serves |
 |---|---|
-| `api` | REST + GraphQL + DB + authz — **the reference app** |
+| `api` | REST, GraphQL, the database and authz — **the reference app** |
 | `live` | WebSockets |
-| `auth` | token issuer (signs; `api` only verifies) |
+| `auth` | the token issuer (it signs; `api` only verifies) |
 | `assistant` | MCP |
-| `worker` | queue |
+| `worker` | the queue, and the one-replica notifications purge |
 
-Simple hello/blog layouts are CLI-scaffolded only — see the docs, not
-hosted in this repo.
+The starter layout is scaffolded by the CLI and documented on the site, never
+hosted here.
 
-## The app-local feature exception
+## App-local features are the exception
 
-A feature folder under `apps/<x>/` is the **exception**, not the norm:
-glue handler over several features, or a deployment-specific route. Use
-it only when *this app's exposure decides something the feature can't
-generalize*; otherwise it belongs in `demo/crates/features/`.
+A feature folder under `apps/<x>/` is allowed only when **this app's exposure
+decides something the feature cannot generalize** — glue over several features,
+or a deployment-specific route. It may then flatten (handler, `service.rs`,
+`module.rs` at the folder root, no port/adapter split). Business logic another
+app could serve belongs in `demo/crates/features/` whatever its size; code
+being small or single-transport today is never the reason. The demo holds no
+app-local feature.
 
-Such an app-local feature **may flatten** — handler + `service.rs` +
-`module.rs` at the folder root, no port/adapter split. The hexagonal
-split is mandatory only in `crates/features/`, where a slice must serve
-many apps and transports; an app-local single-transport slice that only
-this binary uses keeps the lighter layout.
+## Several deployable apps
 
-**The repo holds none, and that is the point.** `live/chat/` and
-`live/notify/` sat here until the test was applied to them rather than
-recited: a chat slice and a notification push surface are business
-logic, and business logic that another app could serve belongs in the
-feature library whatever its size. Both became feature edges —
-`chat/ws/` and `notifications/ws/` — and `apps/live` went back to being
-`main.rs` + `module.rs`, like every other app. Reach for the exception
-when the *exposure* is what the app decides, never when the code is
-merely small or currently single-transport.
-
-## Multiple deployable apps
-
-Splitting apps by responsibility is **a goal** (not microservices
-sprawl), under two conditions:
-
-1. **Share code through crates** — never copy-paste; product logic lives
-   in `demo/crates/features/`.
-2. **Keep coupling loose** — a self-contained token + a shared DB, never
-   chatty RPC. `apps/auth` and `apps/api` share `crates/features` and the
-   DB; they never call each other.
+Splitting apps by responsibility is a goal, under two conditions: **code is
+shared through crates**, never copied — product logic lives in
+`demo/crates/features/` — and **coupling stays loose**: a self-contained token
+and a shared database, never RPC (`CLAUDE.md`, hard "no").
 
 ## Running the product
 
-`cd demo` and drive it as its own repo. **`nestrs run` is the single
-front door** — it forwards to `just`.
+`cd demo` and drive it as its own repo; `nestrs run <recipe>` forwards to
+`just`, whose recipes are `demo/Justfile`, `db.just` and `test.just`. The
+`.env` cascade, the `Dockerfile` — built with the parent directory as context,
+so it reaches `../crates` — and a separate `Cargo.lock` and `target/` all live
+under `demo/`; what one app alone reads, its port first, sits in its own
+`apps/<app>/.env`, a committed credential in its `.env.development` and `.env.test`
+(`container.md`), never pinned in its `module.rs`. The root workspace's `Justfile` holds the framework's checks (`just lint`,
+`just test`, `just ci`) and never drives `demo/`.
 
-```
-nestrs run dev [app]      # watch mode (default: api)
-nestrs run start [app]    # release
-nestrs run build [app]    # release build; --all for the workspace
-nestrs run lint           # clippy -D warnings + fmt --check
-nestrs run check          # fast type-check
-nestrs run db <recipe>    # up|down|fresh|status|seed|reset
-nestrs run test <kind>    # unit|e2e|cov|doc — bare `test` lists them
-```
+## Transports and output
 
-The `.env` cascade, `Justfile` / `db.just` / `test.just`, the `Dockerfile`
-(built with the parent as context so it can reach `../crates`), and a
-separate `Cargo.lock` / `target/` all live under `demo/`. The root
-`.cargo/config.toml` (mold linker) is inherited hierarchically — **not
-duplicated**.
+A transport is activated by the module that serves on it: the adapters the
+root imports bring theirs, and the root names one only to pin it
+(`HttpModule::for_root(cfg)`), never through a `.transport(…)` call
+(`edges.md`, *Surface decisions*). The root imports the stacks and backend
+bindings it chooses, bare (`SeaOrmDatabaseModule`, `RedisQueueModule`,
+`OpenApiModule`, …), and never a module an edge or a binding it lists already
+imports — a feature's guards, its authn or authz port, the throttler its
+controller binds, the resource a binding runs on: whoever runs on a module
+imports it, where the access graph checks it, and the root names one only to
+pin it (`RedisModule::for_root(cfg)`), to swap what it binds, or for a guard its
+own `GlobalGuards` lists. A module's
+settings are set through its variables, or pinned through its `for_root`
+(`architecture.md`, *Configuration*).
 
-**Note the asymmetry:** the root framework workspace has **no
-`Justfile`** — verify it with bare `cargo` (see *Definition of done* in
-`CLAUDE.md`).
+**A deployed app exports OTLP**: `main` holds the `OpenTelemetry::init()`
+guard, the whole wiring — no module to import, nothing for a suite to call;
+the service is named after the binary, and where it exports is the
+deployment's `OTEL_*`. `App::run` refuses an OTLP endpoint while the kernel's
+console is all the process logs through (`UnservedExportError`), so a `main`
+that forgot the line fails its first deploy rather than exporting nothing.
+`OpenTelemetryModule` is imported by each module whose provider injects
+`Metrics`, and nowhere else: its `register` installs them ungated, so that
+import is what registers it first. The console reads `RUST_LOG` and follows the declared profile —
+text under development and test, JSON otherwise (`nest_rs_core::logging`).
 
-## Transports
-
-Every `HttpConfig` field is settable via `NESTRS_HTTP__*` env **and** the
-pinned struct — the framework-wide **dual-path config rule**, which
-applies to every `nest-rs-*` module.
-
-An app activates a transport by importing its module
-(`HttpModule::for_root(...)`, `RedisModule::for_root(...)`,
-`OpenApiModule`, `OpenTelemetryModule`, …). There is no public
-`.transport(...)` seam.
-
-**Production output is OTLP, not stdout** — `nest-rs-opentelemetry` ships
-the appender; the app opts in via `OpenTelemetryModule`. Dev
-pretty-printing only under a `dev` profile.
+**A GraphQL app commits its SDL** (`apps/<app>/schema.graphql`), and an
+OpenAPI one its document (`apps/<app>/openapi.json`), each regenerated as a
+side effect of a development run — the profile arms the emit, and its path is
+the app crate's — there is no standalone generator. Each is pinned to what the
+app serves by a test in the app's e2e suite.

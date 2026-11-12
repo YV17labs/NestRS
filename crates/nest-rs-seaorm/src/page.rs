@@ -1,12 +1,9 @@
-//! Keyset (cursor) pagination over the primary key.
-//!
-//! Keyset beats offset for a feed: O(1) on the index, stable under concurrent
-//! inserts. With UUID-v7 keys (time-ordered), paging by the key is also
-//! chronological with no extra sort column.
-
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::Hash;
+use std::str::FromStr;
 
+use nest_rs_pipes::PipeError;
 use sea_orm::prelude::Uuid;
 use sea_orm::sea_query::{
     Asterisk, Condition, Expr, ExprTrait, Order, Query, Value, ValueType, WindowStatement,
@@ -18,74 +15,177 @@ use sea_orm::{
 
 use nest_rs_authz::Action;
 
+use crate::contained::{contained, refused};
+use crate::error::RepoError;
 use crate::repo::{Repo, scope_for};
 
 /// One keyset page. `next_cursor` is the last row's primary key, present only
 /// when [`has_more`](Page::has_more).
-///
-/// `Clone` because an auto-resolved relation's page is a dataloader value, and
-/// async-graphql hands one batch result to every caller waiting on it.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Page<M> {
     /// The rows on this page, ascending by primary key.
     pub items: Vec<M>,
     /// Cursor to pass as `after` for the next page — the last row's key, set
     /// only when [`has_more`](Self::has_more).
-    pub next_cursor: Option<Uuid>,
+    pub next_cursor: Option<PageCursor>,
     /// Whether a further page exists (an extra row was over-fetched).
     pub has_more: bool,
 }
 
-/// Clamp the requested page size to the `1..=100` window — the same bound
-/// [`PageParams::limit`] applies, kept here so callers passing a `u64` (e.g.
-/// the GraphQL pagination input) reuse one source of truth.
+impl<M> Page<M> {
+    /// The page holding `items`, its next page starting after `next_cursor`
+    /// when `has_more` — as a service hands on a page whose rows it mapped.
+    ///
+    /// ```
+    /// use nest_rs_seaorm::Page;
+    ///
+    /// let rows = Page::new(vec![1, 2], None, false);
+    /// let shown = Page::new(
+    ///     rows.items.iter().map(|id| format!("post {id}")).collect(),
+    ///     rows.next_cursor,
+    ///     rows.has_more,
+    /// );
+    /// assert_eq!(shown.items, ["post 1", "post 2"]);
+    /// ```
+    pub fn new(items: Vec<M>, next_cursor: Option<PageCursor>, has_more: bool) -> Self {
+        Self {
+            items,
+            next_cursor,
+            has_more,
+        }
+    }
+}
+
+/// Why a cursor no page issued is refused, never the value a client sent: each
+/// edge says it after where it read the cursor, as it places a value its type
+/// refused.
+const NOT_A_CURSOR: &str = "not a cursor this endpoint issued";
+
+/// Where a keyset page starts: the last key of the page before.
+///
+/// Its text is the key's own — a UUID's hyphenated form — so a client passes
+/// back what a page gave it, and reads any spelling of that UUID back the same.
+/// Any other text is refused saying it is not a cursor this endpoint issued,
+/// never the text; the reader says where it read it.
+///
+/// ```
+/// use nest_rs_seaorm::PageCursor;
+///
+/// let cursor: PageCursor = "0195b4a6-4c1c-7d3e-8f00-000000000001".parse()?;
+/// assert_eq!(cursor.to_string(), "0195b4a6-4c1c-7d3e-8f00-000000000001");
+/// assert!("not-a-cursor".parse::<PageCursor>().is_err());
+/// # Ok::<(), nest_rs_pipes::PipeError>(())
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PageCursor(Uuid);
+
+impl PageCursor {
+    /// The key the page starts after.
+    pub(crate) fn key(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl From<Uuid> for PageCursor {
+    fn from(key: Uuid) -> Self {
+        Self(key)
+    }
+}
+
+impl fmt::Display for PageCursor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0.hyphenated(), f)
+    }
+}
+
+impl FromStr for PageCursor {
+    type Err = PipeError;
+
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the refusal says what the text is not, never a parser's internals"
+    )]
+    fn from_str(text: &str) -> Result<Self, PipeError> {
+        Uuid::parse_str(text)
+            .map(Self)
+            .map_err(|_| PipeError::new(NOT_A_CURSOR))
+    }
+}
+
+impl serde::Serialize for PageCursor {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// The cursor an `after` argument names: `None` when it is absent or empty,
+/// the refusal when it is not a cursor.
+pub(crate) fn parse_after(after: Option<&str>) -> Result<Option<PageCursor>, PipeError> {
+    match after {
+        None | Some("") => Ok(None),
+        Some(text) => text.parse().map(Some),
+    }
+}
+
+/// An `after` argument read at the GraphQL edge, a `#[crud]` list's or a
+/// relation's: its refusal is the `INVALID_ARGUMENT` field error a malformed
+/// id answers there, naming the argument as async-graphql names one its type
+/// refused.
+#[cfg(feature = "graphql")]
+pub fn graphql_page_cursor(after: Option<&str>) -> async_graphql::Result<Option<PageCursor>> {
+    parse_after(after).map_err(|refused| {
+        nest_rs_graphql::problem_error(
+            &nest_rs_core::Problem::new(400, nest_rs_core::code::INVALID_ARGUMENT).with_detail(
+                format!(
+                    r#"Invalid value for argument "after", {}"#,
+                    refused.message()
+                ),
+            ),
+        )
+    })
+}
+
+/// Clamp the requested page size to the `1..=100` window [`PageParams::limit`]
+/// applies.
 pub fn clamp_page_size(first: u64) -> u64 {
     first.clamp(1, 100)
 }
 
 /// The page size a caller who asked for none gets — on the `?first=` query, on
-/// a `#[crud]` list operation, and on an auto-resolved relation. One constant so
-/// "how many rows does an unparameterised page return" has one answer whichever
-/// surface asked.
+/// a `#[crud]` list operation, and on an auto-resolved relation.
 pub const DEFAULT_PAGE_SIZE: u64 = 20;
 
 /// Hard backstop on `CrudService::list`: no unpaginated read returns more
-/// rows than this, ever — a capped result logs a `warn` naming the entity.
-/// Deliberately far above `clamp_page_size`'s window: the cap is a safety
-/// net for "small, finite collection" callers, not a page size. A collection
-/// that can grow past it must paginate (`CrudService::page`).
+/// rows than this — a capped result logs a `warn` naming the entity. A
+/// collection that can grow past it must paginate (`CrudService::page`).
 pub const LIST_CAP: u64 = 1_000;
 
-/// SQL alias for the per-parent rank a relation page ranks its rows by, and for
-/// the subquery that carries it. Prefixed so neither can collide with a real
-/// column of the entity being paged.
+/// Prefixed so neither alias can collide with a column of the paged entity.
 const RANK_ALIAS: &str = "__nest_rs_rank";
 const RANKED_ALIAS: &str = "__nest_rs_ranked";
 
 /// Wrap an already-scoped child select so each parent keeps only its own first
 /// `limit + 1` rows: rank within the partition, then filter on the rank.
-///
-/// The query-shape half of [`Repo::relation_pages`], extracted so the SQL it
-/// emits is assertable without a database — the rest of that method is bucketing
-/// rows a real query returned, and a wrong `PARTITION BY` would still return
-/// plausible-looking rows.
 fn rank_per_parent<E: EntityTrait>(
     scoped: sea_orm::Select<E>,
     fk: E::Column,
     pk: E::Column,
     limit: u64,
-    after: Option<Uuid>,
+    after: Option<PageCursor>,
 ) -> sea_orm::sea_query::SelectStatement {
     let scoped = match after {
-        Some(after) => scoped.filter(pk.gt(after)),
+        Some(after) => scoped.filter(pk.gt(after.key())),
         None => scoped,
     };
-    // Unqualified column refs: the window sits over a single-table select, so
-    // `fk`/`pk` are unambiguous — and qualifying them would have to reproduce
-    // whatever table reference SeaORM chose.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a constant holding no value: a window function sea-query has no typed call for"
+    )]
+    let row_number = Expr::cust("ROW_NUMBER()");
     let mut ranked = scoped.into_query();
     ranked.expr_window_as(
-        Expr::cust("ROW_NUMBER()"),
+        row_number,
         WindowStatement::partition_by(fk)
             .order_by(pk, Order::Asc)
             .take(),
@@ -97,57 +197,71 @@ fn rank_per_parent<E: EntityTrait>(
         .column(Asterisk)
         .from_subquery(ranked, RANKED_ALIAS)
         .and_where(Expr::col(RANK_ALIAS).lte(limit + 1))
-        // Deterministic per parent: the caller buckets rows in arrival order,
-        // and `has_more` / `next_cursor` read the last one.
+        // The caller buckets rows in arrival order and reads the last one.
         .order_by(fk, Order::Asc)
         .order_by(pk, Order::Asc);
     windowed
 }
 
-/// `(items, has_more)` from a `limit + 1` cursor fetch. Truncates `items` to
-/// `limit` when an extra row was returned. The pure-data half of `Repo::page`,
-/// extracted so its boundary behaviour is unit-testable without a DB.
-pub fn split_overfetched<M>(mut items: Vec<M>, limit: u64) -> (Vec<M>, bool) {
+/// `(items, has_more)` from a `limit + 1` cursor fetch, truncated to `limit`.
+pub(crate) fn split_overfetched<M>(mut items: Vec<M>, limit: u64) -> (Vec<M>, bool) {
     let has_more = items.len() as u64 > limit;
     items.truncate(limit as usize);
     (items, has_more)
 }
 
 /// `next_cursor` from a finished page: the last row's primary key when there
-/// is more to fetch, else `None`. Splits a closure-heavy `if`-`else` out of
-/// `Repo::page` so the cursor-selection branches are testable as pure logic.
+/// is more to fetch, else `None`.
 pub(crate) fn next_cursor_from<M>(
     items: &[M],
     has_more: bool,
     pk: impl FnMut(&M) -> Option<Uuid>,
-) -> Option<Uuid> {
+) -> Option<PageCursor> {
     if has_more {
-        items.last().and_then(pk)
+        items.last().and_then(pk).map(PageCursor::from)
     } else {
         None
     }
 }
 
-/// The `?first=&after=` cursor query. An unparsable `after` is ignored — paging
-/// from the start, never an error.
+/// The `?first=&after=` cursor query. An `after` no page issued is refused,
+/// never read as the first page.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[non_exhaustive]
 pub struct PageParams {
     /// Requested page size; defaults to 20 and is clamped to `1..=100`.
     pub first: Option<u64>,
-    /// Opaque cursor from a prior page's `next_cursor`; unparsable ⇒ from start.
+    /// The cursor a prior page's `next` link carries, passed back as given;
+    /// absent or empty for the first page, refused when no page issued it.
     pub after: Option<String>,
 }
 
 impl PageParams {
+    /// The query asking `first` rows after `after`, as a request spells it.
+    ///
+    /// ```
+    /// use nest_rs_seaorm::PageParams;
+    ///
+    /// let params = PageParams::new(Some(500), None);
+    /// assert_eq!(params.limit(), 100);
+    /// assert!(params.cursor()?.is_none());
+    /// # Ok::<(), nest_rs_pipes::PipeError>(())
+    /// ```
+    pub fn new(first: Option<u64>, after: Option<String>) -> Self {
+        Self { first, after }
+    }
+
     /// Page size, defaulting to 20 and clamped to `1..=100`.
     pub fn limit(&self) -> u64 {
         clamp_page_size(self.first.unwrap_or(DEFAULT_PAGE_SIZE))
     }
 
-    /// The `after` cursor parsed as a primary key, or `None` when absent or
-    /// malformed — an unparsable cursor pages from the start rather than erroring.
-    pub fn after_uuid(&self) -> Option<Uuid> {
-        self.after.as_deref().and_then(|s| Uuid::parse_str(s).ok())
+    /// The page's start: `None` when `after` is absent or empty, the refusal
+    /// when it is not a cursor a page issued, naming the query parameter.
+    pub fn cursor(&self) -> Result<Option<PageCursor>, PipeError> {
+        parse_after(self.after.as_deref()).map_err(|refused| {
+            PipeError::new(format!("query parameter `after`: {}", refused.message()))
+        })
     }
 }
 
@@ -158,12 +272,15 @@ where
 {
     /// A keyset page of readable rows, ascending by primary key, starting after
     /// `after`. Fetches one extra row to decide `has_more` and `next_cursor`.
-    /// `extra` is ANDed onto the ability scope (e.g. `deleted_at IS NULL`).
+    /// `extra` is ANDed onto the scope (e.g. a tenant predicate) as one operand,
+    /// refused before any statement as [`RepoSelect::filter`](crate::RepoSelect::filter)
+    /// refuses a condition.
     pub async fn page(
         first: u64,
-        after: Option<Uuid>,
+        after: Option<PageCursor>,
         extra: Condition,
-    ) -> Result<Page<E::Model>, DbErr> {
+    ) -> Result<Page<E::Model>, RepoError> {
+        let extra = operand::<E>(extra)?;
         let conn = Self::conn()?;
         let limit = clamp_page_size(first);
 
@@ -174,7 +291,7 @@ where
             .filter(extra)
             .cursor_by(pk_col);
         if let Some(after) = after {
-            cursor.after(after);
+            cursor.after(after.key());
         }
         cursor.first(limit + 1);
 
@@ -191,16 +308,13 @@ where
         })
     }
 
-    /// The column keyset pagination pages by.
-    ///
-    /// SeaORM permits primary-key-less entities (views, raw tables), so this is
-    /// a typed `DbErr` naming the entity rather than a panic on a query hot
-    /// path — the layer's contract is "never panic, return `DbErr`".
+    /// The column keyset pagination pages by; a `DbErr` for an entity with no
+    /// primary key, which SeaORM permits (views, raw tables).
     fn keyset_column() -> Result<E::Column, DbErr> {
         let Some(pk) = E::PrimaryKey::iter().next() else {
-            let entity = std::any::type_name::<E>();
+            let entity = E::default().table_name();
             tracing::error!(
-                target: crate::TARGET,
+                target: crate::target::ORM,
                 entity,
                 "entity has no primary-key column — keyset pagination requires one",
             );
@@ -213,24 +327,12 @@ where
 
     /// **One keyset page per parent**, for every key in `keys`, in a single
     /// round trip. The read-side primitive an auto-resolved `has_many` relation
-    /// is built on; `extra` is ANDed onto the ability scope exactly as in
-    /// [`page`](Self::page) (e.g. `deleted_at IS NULL`).
+    /// is built on; `extra` is ANDed onto the scope exactly as in
+    /// [`page`](Self::page) (e.g. a tenant predicate).
     ///
-    /// Every key gets an entry, so "no children" and "not asked for" stay
-    /// distinguishable at the call site — an absent parent is a bug, an empty
-    /// [`Page`] is an answer.
-    ///
-    /// # Why this is not `WHERE fk IN (keys) LIMIT n`
-    ///
-    /// It cannot be. A single `LIMIT` bounds the *result set*, not each
-    /// parent's slice of it, so `cap × keys` rows ordered by the foreign key
-    /// are consumed by whichever parents sort first and the rest read as `[]` —
-    /// indistinguishable from having no children. That was a silent wrong
-    /// answer, and no amount of over-fetching fixes it: the row a starved
-    /// parent needs may be arbitrarily far down.
-    ///
-    /// So the limit is applied **per partition**, by ranking rows within each
-    /// parent and keeping the first `limit + 1`:
+    /// Every key gets an entry, empty when it has no children. The limit is
+    /// applied **per partition** — a single `LIMIT` would starve the parents
+    /// sorting last:
     ///
     /// ```sql
     /// SELECT * FROM (
@@ -241,23 +343,14 @@ where
     /// WHERE rank <= limit + 1
     /// ```
     ///
-    /// The extra row per parent is what decides
-    /// [`has_more`](Page::has_more), the same over-fetch
-    /// [`page`](Self::page) uses.
-    ///
-    /// `ROW_NUMBER() OVER (PARTITION BY …)` is SQL:2003 and is implemented by
-    /// every backend SeaORM supports at a currently-maintained version
-    /// (PostgreSQL — the backend this workspace builds against — MySQL 8,
-    /// MariaDB 10.2, SQLite 3.25). The inner query is still built by
-    /// [`scoped`](Repo::scoped), so the ability filter is applied by the same
-    /// code path as every other read; only the ranking wrapper is hand-built.
+    /// `ROW_NUMBER() OVER` needs MySQL 8, MariaDB 10.2 or SQLite 3.25.
     pub async fn relation_pages<K>(
         fk: E::Column,
         keys: &[K],
         first: u64,
-        after: Option<Uuid>,
+        after: Option<PageCursor>,
         extra: Condition,
-    ) -> Result<HashMap<K, Page<E::Model>>, DbErr>
+    ) -> Result<HashMap<K, Page<E::Model>>, RepoError>
     where
         K: Clone + Eq + Hash + Into<Value> + ValueType + Send + Sync,
     {
@@ -278,6 +371,7 @@ where
             return Ok(pages);
         }
 
+        let extra = operand::<E>(extra)?;
         let conn = Self::conn()?;
         let limit = clamp_page_size(first);
         let pk_col = Self::keyset_column()?;
@@ -293,6 +387,7 @@ where
 
         for row in rows {
             let value = ModelTrait::get(&row, fk);
+            #[expect(clippy::map_err_ignore, reason = "K::Error is any type, with no Display bound to carry")]
             let key = K::try_from(value).map_err(|_| {
                 DbErr::Custom(format!(
                     "relation page: foreign key `{}` on `{}` did not read back as the batch key type",
@@ -300,13 +395,12 @@ where
                     std::any::type_name::<E>(),
                 ))
             })?;
-            // A row whose key is not in the batch cannot happen (the `IN` list
-            // is the batch), but dropping it is still wrong to do silently.
             let Some(page) = pages.get_mut(&key) else {
                 return Err(DbErr::Custom(format!(
                     "relation page: `{}` returned a row outside the requested key set",
                     std::any::type_name::<E>(),
-                )));
+                ))
+                .into());
             };
             page.items.push(row);
         }
@@ -324,40 +418,41 @@ where
     }
 }
 
+/// `extra` as the one operand [`RepoSelect::filter`](crate::RepoSelect::filter) makes
+/// of a condition, or its refusal.
+fn operand<E: EntityTrait>(extra: Condition) -> Result<Condition, DbErr> {
+    let operand = contained(extra).map_err(refused::<E>)?;
+    Ok(Condition::all().add_option(operand))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::__private::SeaOrmExecutor;
 
-    // A minimal child entity, so the relation-page query shape can be asserted
-    // as SQL text. The bug this guards is invisible in a row count: a `LIMIT`
-    // on the result set instead of a rank per partition returns exactly as many
-    // plausible rows, just the wrong ones.
     mod child {
         use sea_orm::entity::prelude::*;
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "child")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key, auto_increment = false)]
             pub id: Uuid,
             pub parent_id: Uuid,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
 
-    // An entity with no primary key at all. SeaORM permits one — a view, or a
-    // table mapped for reads — and `DeriveEntityModel` cannot express it, so
-    // the pieces are written out. That is also why the check exists: nothing
-    // upstream refuses this shape, so the refusal has to be ours.
+    // `DeriveEntityModel` cannot express a keyless entity, so it is written out.
     mod keyless {
         use sea_orm::entity::prelude::*;
 
         #[derive(Copy, Clone, Default, Debug, DeriveEntity)]
-        pub struct Entity;
+        pub(super) struct Entity;
 
         impl EntityName for Entity {
             fn table_name(&self) -> &'static str {
@@ -366,12 +461,12 @@ mod tests {
         }
 
         #[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel)]
-        pub struct Model {
+        pub(super) struct Model {
             pub label: String,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
-        pub enum Column {
+        pub(super) enum Column {
             Label,
         }
 
@@ -385,9 +480,8 @@ mod tests {
             }
         }
 
-        /// The whole point: no variants, so `PrimaryKey::iter()` is empty.
         #[derive(Copy, Clone, Debug, EnumIter)]
-        pub enum PrimaryKey {}
+        pub(super) enum PrimaryKey {}
 
         impl sea_orm::Iden for PrimaryKey {
             fn unquoted(&self) -> &str {
@@ -422,19 +516,13 @@ mod tests {
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
 
     #[test]
     fn an_entity_with_no_primary_key_is_refused_by_name_rather_than_panicking() {
-        // `keyset_column` sits on a query hot path, where the layer's contract
-        // is "never panic, return `DbErr`" — so an `iter().next().unwrap()`
-        // here would take down the request rather than fail it. Both halves of
-        // the answer matter: the typed error the caller propagates, and the
-        // event that names *which* entity, since the error surfaces far from
-        // the `#[crud]` or relation field that asked.
         let logs = nest_rs_testing::LogCapture::install();
 
         let err = Repo::<keyless::Entity>::keyset_column()
@@ -446,12 +534,13 @@ mod tests {
         );
 
         let event = logs.expect_one(
-            crate::TARGET,
+            crate::target::ORM,
             "entity has no primary-key column — keyset pagination requires one",
         );
         assert_eq!(event.level, "error");
-        assert!(
-            event.field("entity").is_some_and(|e| e.contains("keyless")),
+        assert_eq!(
+            event.field("entity").as_deref(),
+            Some("keyless"),
             "the event names the entity, got {:?}",
             event.fields,
         );
@@ -459,8 +548,6 @@ mod tests {
 
     #[test]
     fn an_entity_with_a_primary_key_pages_by_it() {
-        // The other direction: every entity a nestrs app writes has one, so a
-        // check reading the wrong thing would refuse all of them.
         assert_eq!(
             Repo::<child::Entity>::keyset_column()
                 .expect("a keyed entity pages")
@@ -469,7 +556,7 @@ mod tests {
         );
     }
 
-    fn relation_sql(limit: u64, after: Option<Uuid>) -> String {
+    fn relation_sql(limit: u64, after: Option<PageCursor>) -> String {
         use sea_orm::sea_query::PostgresQueryBuilder;
 
         rank_per_parent(
@@ -480,6 +567,33 @@ mod tests {
             after,
         )
         .to_string(PostgresQueryBuilder)
+    }
+
+    /// What `extra` holds goes through the check a select's `filter` makes, on a page
+    /// and on a relation's batch alike: one leaving its operand sends nothing.
+    #[tokio::test]
+    #[expect(clippy::disallowed_methods, reason = "the fragment under test")]
+    async fn a_page_refuses_an_extra_condition_leaving_its_operand_before_any_statement() {
+        let pool = SeaOrmExecutor::Pool(sea_orm::DatabaseConnection::default()).into();
+        let widening = || Condition::all().add(Expr::cust("1 = 1) OR (1 = 1"));
+        let refused =
+            |answer: &RepoError| answer.to_string().contains("refused before any statement");
+
+        let (page, pages) = nest_rs_database::__private::with_job_executor(pool, async {
+            let page = Repo::<child::Entity>::page(10, None, widening()).await;
+            let pages = Repo::<child::Entity>::relation_pages(
+                child::Column::ParentId,
+                &[Uuid::nil()],
+                10,
+                None,
+                widening(),
+            )
+            .await;
+            (page.map(drop), pages.map(drop))
+        })
+        .await;
+        assert!(page.as_ref().is_err_and(refused), "{page:?}");
+        assert!(pages.as_ref().is_err_and(refused), "{pages:?}");
     }
 
     #[test]
@@ -493,8 +607,6 @@ mod tests {
 
     #[test]
     fn relation_pages_keeps_one_row_beyond_the_page_to_decide_has_more() {
-        // `limit + 1`: the same over-fetch `Repo::page` uses, which is what
-        // makes `has_more` an observation rather than a guess.
         assert!(
             relation_sql(2, None).contains(r#""__nest_rs_rank" <= 3"#),
             "{}",
@@ -513,10 +625,9 @@ mod tests {
 
     #[test]
     fn relation_pages_applies_the_cursor_inside_the_ranking() {
-        // `pk > after` must be *inside* the ranked subquery: applied outside, a
-        // parent's rank would count rows the caller already has, so page 2
-        // would come back short.
-        let after = Uuid::now_v7();
+        // Applied outside, a parent's rank would count rows the caller already
+        // has, and page 2 would come back short.
+        let after = PageCursor::from(Uuid::now_v7());
         let sql = relation_sql(2, Some(after));
         let (inner, outer) = sql
             .split_once(r#") AS "__nest_rs_ranked""#)
@@ -553,23 +664,78 @@ mod tests {
     }
 
     #[test]
-    fn after_uuid_returns_none_for_garbage() {
-        // An unparseable cursor must page from the start, not fail the request.
-        assert!(params(None, Some("not-a-uuid")).after_uuid().is_none());
-        assert!(params(None, Some("")).after_uuid().is_none());
+    fn a_cursor_no_page_issued_is_refused_naming_after_never_the_value() {
+        for sent in [
+            "zzz",
+            "0195b4a6-4c1c-7d3e-8f00",
+            "0195b4a6-4c1c-7d3e-8f00-00000000000g",
+        ] {
+            let refused = params(None, Some(sent))
+                .cursor()
+                .expect_err("a cursor no page issued is refused");
+            assert_eq!(
+                refused.message(),
+                "query parameter `after`: not a cursor this endpoint issued",
+                "said where the query carried it, as a value its type refused is",
+            );
+            assert!(
+                refused.details().is_none(),
+                "one value, not a form: {refused}"
+            );
+            let parsed = sent
+                .parse::<PageCursor>()
+                .expect_err("a cursor no page issued is refused");
+            assert_eq!(
+                parsed.message(),
+                "not a cursor this endpoint issued",
+                "the type says why; whoever read it says where",
+            );
+        }
     }
 
     #[test]
-    fn after_uuid_round_trips_a_v7() {
-        let uuid = Uuid::now_v7();
-        let parsed = params(None, Some(&uuid.to_string())).after_uuid();
-        assert_eq!(parsed, Some(uuid));
+    fn an_absent_or_empty_cursor_is_the_first_page() {
+        assert_eq!(params(None, None).cursor().expect("absent"), None);
+        assert_eq!(params(None, Some("")).cursor().expect("empty"), None);
+    }
+
+    #[test]
+    fn a_cursor_round_trips_through_its_text() {
+        let cursor = PageCursor::from(Uuid::now_v7());
+        let text = cursor.to_string();
+        assert_eq!(text, cursor.key().hyphenated().to_string());
+        assert_eq!(text.parse::<PageCursor>().expect("its own text"), cursor);
+        assert_eq!(
+            params(None, Some(&text)).cursor().expect("a page's cursor"),
+            Some(cursor),
+        );
+    }
+
+    #[test]
+    fn a_cursor_reads_every_spelling_of_its_key() {
+        let cursor = PageCursor::from(Uuid::now_v7());
+        let key = cursor.key();
+        for spelling in [
+            key.simple().to_string(),
+            key.braced().to_string(),
+            key.urn().to_string(),
+            key.hyphenated().to_string().to_uppercase(),
+        ] {
+            assert_eq!(spelling.parse::<PageCursor>().expect(&spelling), cursor);
+        }
+    }
+
+    #[test]
+    fn a_cursor_serializes_as_its_text() {
+        let cursor = PageCursor::from(Uuid::now_v7());
+        assert_eq!(
+            serde_json::to_value(&cursor).expect("a cursor serializes"),
+            serde_json::Value::String(cursor.to_string()),
+        );
     }
 
     #[test]
     fn clamp_page_size_matches_params_window() {
-        // `clamp_page_size` is the single source of truth shared with
-        // `PageParams::limit`; a divergence would silently widen the bound.
         assert_eq!(clamp_page_size(0), 1);
         assert_eq!(clamp_page_size(1), 1);
         assert_eq!(clamp_page_size(20), 20);
@@ -577,9 +743,6 @@ mod tests {
         assert_eq!(clamp_page_size(u64::MAX), 100);
     }
 
-    // `split_overfetched` is the boundary between the DB fetch and the
-    // page shape: fewer than `limit + 1` rows ⇒ this is the last page; the
-    // extra row signals "more to come" and is dropped from the visible items.
     #[test]
     fn split_overfetched_under_limit_has_no_more() {
         let (items, more) = split_overfetched(vec![1, 2, 3], 5);
@@ -612,31 +775,10 @@ mod tests {
     }
 
     #[test]
-    fn page_struct_fields_are_publicly_constructible() {
-        // `Page` is a plain public data carrier — every field reachable so
-        // a helper outside the crate (e.g. a custom paginator) can build one.
-        let cursor = Uuid::now_v7();
-        let page = Page {
-            items: vec!["a", "b"],
-            next_cursor: Some(cursor),
-            has_more: true,
-        };
-        assert_eq!(page.items.len(), 2);
-        assert_eq!(page.next_cursor, Some(cursor));
-        assert!(page.has_more);
-    }
-
-    // `next_cursor_from` is the cursor-selection branch lifted out of
-    // `Repo::page`: a non-last page yields the last row's pk, a terminal
-    // page yields `None`. The bug we are pinning here is the symmetrical
-    // shape — `has_more = true` with an empty `items` returns `None`
-    // (not a panic from `last()`), and `has_more = false` skips the pk
-    // closure entirely (no extra DB-side work on a terminal page).
-    #[test]
     fn next_cursor_from_returns_last_pk_when_more_to_fetch() {
         let cursor = Uuid::now_v7();
         let next = next_cursor_from(&[1, 2, 3], true, |_| Some(cursor));
-        assert_eq!(next, Some(cursor));
+        assert_eq!(next, Some(PageCursor::from(cursor)));
     }
 
     #[test]
@@ -652,45 +794,34 @@ mod tests {
 
     #[test]
     fn next_cursor_from_handles_a_pk_extractor_returning_none() {
-        // Defensive: the production extractor `ValueType::try_from` can
-        // fail in theory (a type mismatch between Uuid and the column).
-        // The page must surface `None`, not crash.
         let next = next_cursor_from(&[1, 2, 3], true, |_| None);
         assert_eq!(next, None);
     }
 
     #[test]
     fn next_cursor_from_on_empty_with_has_more_is_none() {
-        // Pathological: `has_more` true with no items. `items.last()` is
-        // `None`, so the cursor is `None` — never a panic from indexing.
         let next = next_cursor_from::<i32>(&[], true, |_| Some(Uuid::now_v7()));
         assert_eq!(next, None);
     }
 
     #[test]
     fn next_cursor_from_passes_the_last_item_to_the_pk_closure() {
-        // Pinning the per-item input the closure receives: only the LAST
-        // item — a regression that paged from the first would shift the
-        // entire stream by one window.
         let cursor = Uuid::now_v7();
         let mut seen = None;
         let next = next_cursor_from(&[10, 20, 30], true, |m| {
             seen = Some(*m);
             Some(cursor)
         });
-        assert_eq!(next, Some(cursor));
+        assert_eq!(next, Some(PageCursor::from(cursor)));
         assert_eq!(seen, Some(30), "the closure receives the LAST item");
     }
 
     #[test]
     fn page_params_derives_clone_and_debug() {
-        // The HTTP query extractor relies on `Clone` (echo back in logs) and
-        // `Debug` (request-context dump). A regression on either turns the
-        // extractor into a compile error far from this file.
         let p = params(Some(10), Some("not-a-uuid"));
         let cloned = p.clone();
         assert_eq!(cloned.first, Some(10));
         assert_eq!(cloned.after.as_deref(), Some("not-a-uuid"));
-        let _ = format!("{p:?}");
+        assert!(format!("{p:?}").contains("not-a-uuid"));
     }
 }

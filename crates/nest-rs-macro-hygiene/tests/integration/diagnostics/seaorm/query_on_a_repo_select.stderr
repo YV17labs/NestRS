@@ -1,0 +1,5 @@
+error[E0599]: no method named `query` found for struct `RepoSelect<E>` in the current scope
+  --> tests/integration/diagnostics/seaorm/query_on_a_repo_select.rs:23:13
+   |
+23 |     *select.query() = Entity::find().into_query();
+   |             ^^^^^ method not found in `RepoSelect<Entity>`

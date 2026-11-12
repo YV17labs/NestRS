@@ -1,4 +1,4 @@
-use anyhow::Result;
+use nest_rs::seaorm::RepoError;
 use sea_orm::sea_query::{OnConflict, Query};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DeriveIden};
 use uuid::Uuid;
@@ -43,7 +43,7 @@ enum Post {
     Body,
 }
 
-pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
+pub async fn seed(db: &DatabaseConnection) -> Result<u64, RepoError> {
     let mut inserted = 0;
     for (id, org_id, author_id, title, body) in DEMO {
         let stmt = Query::insert()

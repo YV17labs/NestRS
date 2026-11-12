@@ -1,0 +1,29 @@
+error: #[redirect] `url` takes the target as a string literal, e.g. `#[redirect("/login")]` or `#[redirect("/login", 301)]`
+  --> tests/integration/diagnostics/http/redirect_value_refused.rs:15:16
+   |
+15 |     #[redirect(login)]
+   |                ^^^^^
+
+error: #[redirect] `url` takes the target as a string literal, e.g. `#[redirect("/login")]` or `#[redirect("/login", 301)]`
+  --> tests/integration/diagnostics/http/redirect_value_refused.rs:26:5
+   |
+26 |     #[redirect]
+   |     ^^^^^^^^^^^
+
+error: #[redirect] `url`: byte 0x20 is not printable ASCII — the URL is sent as the `Location` header, so percent-encode it (RFC 3986)
+  --> tests/integration/diagnostics/http/redirect_value_refused.rs:37:16
+   |
+37 |     #[redirect("/log in")]
+   |                ^^^^^^^^^
+
+error: #[redirect] `status` takes a redirect status from 300 to 399, e.g. `#[redirect("/login", 301)]`
+  --> tests/integration/diagnostics/http/redirect_value_refused.rs:48:26
+   |
+48 |     #[redirect("/login", 200)]
+   |                          ^^^
+
+error: #[redirect] `status` takes a redirect status from 300 to 399, e.g. `#[redirect("/login", 301)]`
+  --> tests/integration/diagnostics/http/redirect_value_refused.rs:59:26
+   |
+59 |     #[redirect("/login", "301")]
+   |                          ^^^^^

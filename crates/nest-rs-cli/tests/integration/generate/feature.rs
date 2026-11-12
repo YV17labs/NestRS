@@ -25,11 +25,8 @@ fn generate_feature_creates_port_and_wires_lib() {
     assert!(lib.contains("pub mod posts;"));
 }
 
-/// R12 C-1: the printed next steps sent the reader to
-/// `crates/features/src/users/` — a path relative to *their* workspace, where it
-/// does not exist. It names the `users/` exemplar in the framework's `demo/`, so
-/// it has to be the URL the scaffolded README already cites, not a bare path a
-/// reader will `ls` and not find.
+/// The printed next steps name the `users/` exemplar by the URL the scaffolded
+/// README cites, not a path missing from the reader's workspace.
 fn assert_reference_resolves_where_the_reader_is(stdout: &str) {
     let line = stdout
         .lines()

@@ -1,65 +1,60 @@
-//! `#[entity]` — the operation role a router reaches, and the layers it owes.
-//!
-//! `_entities` is a `Query`-root field the router calls with **references** —
-//! `{__typename, <key fields>}` — for types the client never named. That makes
-//! it the one operation whose access posture is invisible from the document a
-//! client reads, so what is asserted here is that it is an operation like any
-//! other: the guard chain runs on it, its `#[authorize]`/`#[public]` posture
-//! runs on it, and the `@key` the router matches on comes from its own
-//! arguments.
+//! `#[entity]` — the operation role a router reaches, and the layers it owes:
+//! the guard chain and posture run on `_entities`, and the `@key` comes from the
+//! resolver's own arguments.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_graphql::{Result, SimpleObject};
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::{
-    GraphqlConfig, GraphqlModule, GraphqlOperationContext, operations, resolver,
-};
-use nest_rs_guards::{Denial, GraphqlGuard, Guard, GuardSpecs, async_trait, guard};
-use nest_rs_http::poem::http::StatusCode;
+use nest_rs_core::{Layer, async_trait, injectable, module};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_http::StatusCode;
 use nest_rs_testing::TestApp;
 
-/// A schema configured as a subgraph, which every `#[entity]` below needs — the
-/// boot refuses one without it.
+use crate::in_profile;
+
+/// A schema configured as a subgraph, which every `#[entity]` below needs.
 fn subgraph() -> nest_rs_graphql::GraphqlSetup {
     capped(None)
 }
 
-/// The federated type. `id` is what the entity resolver takes, so `id` is the
-/// `@key` — inferred from the resolver's arguments, never declared twice.
+/// The federated type; `id`, the entity resolver's argument, is its `@key`.
 #[derive(SimpleObject)]
 struct Widget {
     id: i32,
     label: String,
 }
 
-/// Refuses every operation it is bound to, so "the chain runs on `_entities`"
-/// is observable rather than assumed.
+/// Refuses every operation it is bound to.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Closed;
-
-impl Layer for Closed {}
 
 #[async_trait]
 impl Guard for Closed {
-    async fn check_graphql(
+    async fn check_http(
         &self,
-        _op: &GraphqlOperationContext<'_>,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("not for this router"))
     }
 }
 
-impl GraphqlGuard for Closed {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for Closed {}
 
 #[resolver]
 struct WidgetsResolver;
 
 #[operations]
 impl WidgetsResolver {
-    /// An ordinary query, so the schema has a root field of its own beside the
-    /// two the federation spec adds.
+    /// An ordinary query beside the two federation fields.
     #[query]
     #[public]
     async fn widget(&self, id: i32) -> Widget {
@@ -80,11 +75,32 @@ impl WidgetsResolver {
     }
 }
 
+/// A second federated type, resolved by a synchronous entity method.
+#[derive(SimpleObject)]
+struct Sprocket {
+    id: i32,
+}
+
+#[resolver]
+struct SprocketsResolver;
+
+#[operations]
+impl SprocketsResolver {
+    /// `fn`, not `async fn`, and a bare return: the emitted entity resolver is
+    /// `async` and answers a `Result`.
+    #[entity]
+    #[public]
+    fn find_sprocket_by_id(&self, id: i32) -> Sprocket {
+        Sprocket { id }
+    }
+}
+
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig {
     federation: true,
-    disable_introspection: false,
+    federation_sdl: nest_rs_config::Surface::Open,
+    introspection: nest_rs_config::Surface::Open,
     ..GraphqlConfig::default()
-})], providers = [WidgetsResolver])]
+})], providers = [WidgetsResolver, SprocketsResolver])]
 struct FederatedModule;
 
 #[resolver]
@@ -99,8 +115,7 @@ impl GatedResolver {
         Ok("pong".into())
     }
 
-    /// Same posture as the one above, and a resolver-scope guard on top: what
-    /// the router reaches is gated exactly like what a client reaches.
+    /// Same posture, plus a resolver-scope guard.
     #[entity]
     #[public]
     async fn find_widget_by_id(&self, id: i32) -> Result<Widget> {
@@ -124,9 +139,7 @@ fn representation(id: i32) -> serde_json::Value {
     serde_json::json!({ "__typename": "Widget", "id": id })
 }
 
-/// POST one GraphQL body and read the response as plain JSON. Every request in
-/// this module goes through here, so an assertion about the transport is made
-/// once rather than per test.
+/// POST one GraphQL body and read the response as plain JSON.
 async fn post_graphql(app: &TestApp, body: serde_json::Value) -> serde_json::Value {
     let resp = app.http().post("/graphql").body_json(&body).send().await;
     resp.assert_status(StatusCode::OK);
@@ -176,6 +189,56 @@ async fn an_entity_resolver_answers_a_reference_the_client_never_named() {
     assert_eq!(entity["id"], 7, "carrying the key it was resolved by");
 }
 
+/// An `#[entity]` and the `_entities` field that reaches it each file their own
+/// line, naming their host: `kind` is GraphQL's operation type on both, and the
+/// federation field dispatches to no method of its own.
+#[tokio::test]
+async fn an_entity_and_its_federation_field_each_name_their_unit() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<FederatedModule>()
+        .await
+        .expect("a federated schema boots");
+
+    entities(&app, 7).await;
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::FIELD.name(),
+    );
+    let said = |host: &str| {
+        lines
+            .iter()
+            .find(|line| line.field("host").as_deref() == Some(host))
+            .unwrap_or_else(|| panic!("a line of {host}: {lines:#?}"))
+    };
+    let entity = said("WidgetsResolver");
+    assert_eq!(entity.field("kind").as_deref(), Some("query"));
+    assert_eq!(entity.field("method").as_deref(), Some("find_widget_by_id"));
+    assert_eq!(entity.field("field").as_deref(), Some("findWidgetById"));
+    let federation = said("FederationExtension");
+    assert_eq!(federation.field("kind").as_deref(), Some("query"));
+    assert_eq!(federation.field("method"), None);
+    assert_eq!(federation.field("field").as_deref(), Some("_entities"));
+}
+
+#[tokio::test]
+async fn a_synchronous_entity_resolver_answers_a_reference() {
+    let app = TestApp::for_module::<FederatedModule>()
+        .await
+        .expect("a federated schema boots");
+
+    let body = post_graphql(
+        &app,
+        serde_json::json!({
+            "query": "query($reps: [_Any!]!) { _entities(representations: $reps) { ... on Sprocket { id } } }",
+            "variables": { "reps": [{ "__typename": "Sprocket", "id": 4 }] },
+        }),
+    )
+    .await;
+    assert!(body["errors"].is_null(), "{body}");
+    assert_eq!(body["data"]["_entities"][0]["id"], 4, "{body}");
+}
+
 #[tokio::test]
 async fn the_key_a_router_matches_on_is_the_entity_resolvers_own_argument() {
     let app = TestApp::for_module::<FederatedModule>()
@@ -196,9 +259,7 @@ async fn the_key_a_router_matches_on_is_the_entity_resolvers_own_argument() {
     );
 }
 
-/// The resolver-scope half, declared **only** there: `GatedModule` carries
-/// `#[use_guards(Closed)]` on the resolver and the app registers no global pool,
-/// so what refuses the reference can only be the operation's own chain.
+/// The guard is declared **only** at resolver scope, with no global pool.
 #[tokio::test]
 async fn a_resolver_scope_guard_runs_on_a_reference_the_same_as_on_a_query() {
     let app = TestApp::for_module::<GatedModule>()
@@ -224,17 +285,13 @@ async fn a_resolver_scope_guard_runs_on_a_reference_the_same_as_on_a_query() {
     );
 }
 
-/// The other half, and the one that used to have nowhere to run: the guard is
-/// declared **only** in the app-wide pool, and the resolver it would gate has no
-/// `#[use_guards]` of its own. `_entities` is resolved by async-graphql's
-/// `QueryRoot`, above the merged root, so the pool reaches it through the schema
-/// extension or not at all.
+/// The guard is declared **only** in the app-wide pool: `_entities` is resolved
+/// above the merged root, so the pool reaches it through the schema extension.
 #[tokio::test]
 async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::builder()
-        .module::<PooledModule>()
-        .use_guards_global([guard::<Closed>()])
+        .module::<ClosedPoolModule>()
         .build()
         .await
         .expect("a federated schema under a global pool boots");
@@ -251,35 +308,27 @@ async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
          resolved the reference never ran: {body}",
     );
 
-    // `_entities` answers `200 OK` with an error frame like every GraphQL
-    // refusal, so nothing about this reaches an HTTP-level alert. And unlike an
-    // ordinary operation, a federation field belongs to no provider — the
-    // `route` label is the one thing a reader would otherwise have to infer,
-    // which is why this site carries its own event rather than reusing the
-    // operation one.
+    // A federation field belongs to no provider, so this site carries its own
+    // message, naming the field it addresses.
     let event = logs.expect_one("nest_rs::layers", "guard denied the federation field");
     assert_eq!(event.level, "warn");
-    assert_eq!(
-        event.field("route").as_deref(),
-        Some("POST /graphql (federation)"),
-    );
+    assert_eq!(event.field("unit").as_deref(), Some("graphql.field"));
+    assert_eq!(event.field("kind").as_deref(), Some("query"));
     assert_eq!(event.field("field").as_deref(), Some("_entities"));
-    assert!(
-        event.field("guard").is_some_and(|g| g.contains("Closed")),
+    assert_eq!(
+        event.field("guard").as_deref(),
+        Some("Closed"),
         "the event names the guard that refused, got {:?}",
         event.fields,
     );
 }
 
-/// `_service` publishes the endpoint's whole SDL, is not covered by
-/// `disable_introspection`, and was outside the guard chain entirely: an app
-/// whose posture is written in `check_graphql` guards handed its schema to
-/// anyone who could reach `/graphql`.
+/// `_service` publishes the whole SDL and is not covered by
+/// `introspection`.
 #[tokio::test]
 async fn a_pooled_guard_refuses_the_subgraph_sdl() {
     let app = TestApp::builder()
-        .module::<PooledModule>()
-        .use_guards_global([guard::<Closed>()])
+        .module::<ClosedPoolModule>()
         .build()
         .await
         .expect("a federated schema under a global pool boots");
@@ -307,15 +356,15 @@ async fn a_pooled_guard_refuses_the_subgraph_sdl() {
     );
 }
 
-/// A pooled guard runs **once per operation**, and `_entities` is one operation
-/// however many references the router packs into it. Before the gate existed the
-/// chain ran inside each member body — so the multiplier on every pooled check
-/// was a number the caller chose.
+#[module(imports = [CountedModule], providers = [GlobalGuards<(Counting,)>])]
+struct APooledGuardChecksAnEntitiesOperationExactlyOnceApp;
+
+/// A pooled guard runs **once per operation**, however many references
+/// `_entities` carries.
 #[tokio::test]
 async fn a_pooled_guard_checks_an_entities_operation_exactly_once() {
     let app = TestApp::builder()
-        .module::<CountedModule>()
-        .use_guards_global([guard::<Counting>()])
+        .module::<APooledGuardChecksAnEntitiesOperationExactlyOnceApp>()
         .build()
         .await
         .expect("a federated schema under a counting pool boots");
@@ -345,8 +394,7 @@ async fn a_pooled_guard_checks_an_entities_operation_exactly_once() {
     );
 }
 
-/// The entity body of [`PooledResolver`], counted so "refused before a member
-/// answered" is observable rather than inferred from the absence of a label.
+/// The entity body of [`PooledResolver`], counted.
 static UNGUARDED_ENTITY_RUNS: AtomicUsize = AtomicUsize::new(0);
 
 #[resolver]
@@ -354,8 +402,7 @@ struct PooledResolver;
 
 #[operations]
 impl PooledResolver {
-    /// An ordinary operation beside the entity, so a test can compare what the
-    /// pool does to each.
+    /// An ordinary operation beside the entity.
     #[query]
     #[public]
     async fn widget(&self, id: i32) -> Result<Widget> {
@@ -379,29 +426,68 @@ impl PooledResolver {
 #[module(imports = [subgraph()], providers = [PooledResolver, Closed])]
 struct PooledModule;
 
+#[module(imports = [PooledModule], providers = [GlobalGuards<(Closed,)>])]
+struct ClosedPoolModule;
+
+#[module(imports = [subgraph()], providers = [PooledResolver, crate::FieldStoreDown])]
+struct StoreDownPooledModule;
+
+#[module(imports = [StoreDownPooledModule], providers = [GlobalGuards<(crate::FieldStoreDown,)>])]
+struct AFederationDenialKeepingItsCauseFilesTheChainApp;
+
+/// A pooled guard that cannot evaluate `_service` files what failed on the
+/// federation field's denial line, and the client reads the condition alone.
+#[tokio::test]
+async fn a_federation_denial_keeping_its_cause_files_the_chain() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::builder()
+        .module::<AFederationDenialKeepingItsCauseFilesTheChainApp>()
+        .build()
+        .await
+        .expect("a federated schema under a global pool boots");
+
+    let body = post_graphql(&app, serde_json::json!({ "query": "{ _service { sdl } }" })).await;
+    assert_eq!(
+        body["errors"][0]["message"],
+        nest_rs_core::UNAVAILABLE_CLIENT_MESSAGE,
+        "{body}",
+    );
+    assert!(!body.to_string().contains("refused"), "{body}");
+    let event = logs.expect_one("nest_rs::layers", "guard denied the federation field");
+    assert_eq!(event.field("field").as_deref(), Some("_service"));
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some(crate::STORE_DOWN_CHAIN)
+    );
+}
+
 /// How many operations [`Counting`] was asked about.
 static COUNTED_CHECKS: AtomicUsize = AtomicUsize::new(0);
 
-/// Admits everything and counts — the multiplier is the assertion, not the
-/// verdict.
+/// Admits everything and counts.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct Counting;
-
-impl Layer for Counting {}
 
 #[async_trait]
 impl Guard for Counting {
-    async fn check_graphql(
+    async fn check_http(
         &self,
-        _op: &GraphqlOperationContext<'_>,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
         COUNTED_CHECKS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
-impl GraphqlGuard for Counting {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for Counting {}
 
 #[resolver]
 struct CountedResolver;
@@ -421,18 +507,90 @@ impl CountedResolver {
 #[module(imports = [subgraph()], providers = [CountedResolver, Counting])]
 struct CountedModule;
 
-/// An entity resolver *is* the federation surface — async-graphql serves
-/// `_service` and `_entities` the moment one exists, whatever the builder was
-/// told. So `federation: false` beside an `#[entity]` is a schema that publishes
-/// its own SDL while claiming not to be a subgraph, and the boot refuses it
-/// rather than letting the flag read as a comment.
+#[module(imports = [GraphqlModule::for_root(GraphqlConfig {
+    federation: true,
+    ..GraphqlConfig::default()
+})], providers = [WidgetsResolver])]
+struct UnguardedSubgraphModule;
+
+#[module(
+    imports = [GraphqlModule::for_root(GraphqlConfig {
+        federation: true,
+        ..GraphqlConfig::default()
+    })],
+    providers = [WidgetsResolver, Closed, GlobalGuards<(Closed,)>],
+)]
+struct UnidentifyingSubgraphModule;
+
+/// `_service` answers the whole SDL, and no posture stands behind it: a subgraph
+/// whose guards identify no caller would serve it to whoever reaches `/graphql`, so
+/// it refuses the boot naming the guard to add and the one opening.
+#[tokio::test]
+async fn a_subgraph_whose_guards_identify_no_caller_refuses_the_boot() {
+    for refused in [
+        TestApp::for_module::<UnguardedSubgraphModule>().await.err(),
+        TestApp::for_module::<UnidentifyingSubgraphModule>()
+            .await
+            .err(),
+    ] {
+        let message = format!("{:#}", refused.expect("an SDL open to anyone is refused"));
+        for named in [
+            "_service",
+            "federation_sdl: Surface::Open",
+            &nest_rs_config::var_name("graphql", "FEDERATION_SDL"),
+            "GlobalGuards",
+            "EndpointGuards",
+        ] {
+            assert!(message.contains(named), "names {named}: {message}");
+        }
+    }
+}
+
+#[module(imports = [GraphqlModule::for_root(GraphqlConfig {
+    federation: true,
+    federation_sdl: nest_rs_config::Surface::ByProfile,
+    ..GraphqlConfig::default()
+})], providers = [WidgetsResolver])]
+struct DevelopmentSubgraphModule;
+
+/// The SDL opened in the configuration, a subgraph only its router reaches boots,
+/// and serves it to a caller nothing identified; `ByProfile` opens it under a
+/// development or test profile alone, and an opening taking effect in a deployment
+/// is said at `warn`.
+#[test]
+fn an_opened_sdl_boots_a_subgraph_whose_guards_identify_no_caller() {
+    for (profile, boots) in [("development", true), ("test", true), ("production", false)] {
+        let booted = in_profile(profile, || async {
+            TestApp::for_module::<DevelopmentSubgraphModule>()
+                .await
+                .is_ok()
+        });
+        assert_eq!(booted, boots, "{profile}");
+    }
+    let logs = nest_rs_testing::LogCapture::install();
+    let sdl = in_profile("production", || async {
+        let app = TestApp::for_module::<FederatedModule>()
+            .await
+            .expect("an SDL opened in code boots in a deployment");
+        service_sdl(&app).await
+    });
+    assert!(sdl.contains("@key"), "{sdl}");
+    let said = logs.expect_one(
+        "nest_rs::graphql",
+        "GraphQL subgraph SDL is served to callers no guard identified outside a dev profile",
+    );
+    assert_eq!(said.field("environment").as_deref(), Some("production"));
+}
+
+/// async-graphql serves `_service` and `_entities` the moment an entity
+/// resolver exists, so `federation: false` beside one fails the boot.
 #[tokio::test]
 async fn an_entity_without_the_subgraph_flag_fails_the_boot() {
     let err = TestApp::for_module::<UnflaggedModule>()
         .await
         .err()
         .expect("declaring an entity while claiming not to be a subgraph is refused");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("UnflaggedResolver") && message.contains("#[entity]"),
@@ -459,20 +617,18 @@ impl UnflaggedResolver {
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [UnflaggedResolver])]
+#[module(imports = [GraphqlModule], providers = [UnflaggedResolver])]
 struct UnflaggedModule;
 
-/// Two `#[entity]` resolvers for one type is the duplicate-operation defect in
-/// the form the field-name check cannot see: an entity claims a **type**, so
-/// there is no clashing SDL field, only a doubled `@key` — and the router
-/// reaches whichever linked first, posture included.
+/// Two `#[entity]` resolvers for one type: no clashing SDL field, only a
+/// doubled `@key`.
 #[tokio::test]
 async fn two_entity_resolvers_for_one_type_fail_the_boot() {
     let err = TestApp::for_module::<ContestedModule>()
         .await
         .err()
         .expect("two resolvers keying one type is a duplicate, not a merge");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("entity \"Widget\" keyed by"),
@@ -517,19 +673,14 @@ impl SecondWidgetResolver {
 #[module(imports = [subgraph()], providers = [FirstWidgetResolver, SecondWidgetResolver])]
 struct ContestedModule;
 
-/// The same duplicate written the way it is easiest to write: **one** resolver
-/// with two `#[entity]` methods for one type. A check that diffed keys per
-/// registration could never see it — one resolver is one registration, so both
-/// claims land inside a single pass — and what decided which body the router
-/// reached, posture included, was the order the two methods happened to appear
-/// in.
+/// The same duplicate on **one** resolver: both claims land in a single pass.
 #[tokio::test]
 async fn two_entity_methods_on_one_resolver_fail_the_boot_too() {
     let err = TestApp::for_module::<SelfContestedModule>()
         .await
         .err()
         .expect("one resolver claiming a key twice is still a duplicate");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("entity \"Widget\" keyed by \"id\""),
@@ -568,11 +719,7 @@ impl SelfContestedResolver {
 #[module(imports = [subgraph()], providers = [SelfContestedResolver])]
 struct SelfContestedModule;
 
-/// The other half, and the one a type-keyed check refused by mistake: Apollo
-/// lets a type carry several `@key`s, and async-graphql matches a reference
-/// against the **shape**. Two resolvers keying one type by different fields are
-/// therefore both reachable, and refusing them would be inventing a rule the
-/// spec does not have.
+/// Apollo lets a type carry several `@key`s: disjoint shapes are both reachable.
 #[tokio::test]
 async fn two_keys_of_different_shapes_on_one_type_are_not_a_duplicate() {
     let app = TestApp::for_module::<MultiKeyModule>()
@@ -634,19 +781,15 @@ impl WidgetBySlugResolver {
 #[module(imports = [subgraph()], providers = [WidgetByIdResolver, WidgetBySlugResolver])]
 struct MultiKeyModule;
 
-/// Two `@key` shapes that **overlap** — one a subset of the other — are the
-/// duplicate the shape check used to wave through. A reference carrying
-/// `{id, tenant}` satisfies both matchers, `_entities` answers from whichever
-/// member linked first, and what actually decided the posture was link order:
-/// the guarded resolver was unreachable by *any* representation while the
-/// public one answered for its type.
+/// Two `@key` shapes that **overlap** — one a subset of the other — are
+/// refused: a reference carrying both satisfies both matchers.
 #[tokio::test]
 async fn two_resolvers_whose_key_shapes_overlap_fail_the_boot() {
     let err = TestApp::for_module::<OverlappingKeysModule>()
         .await
         .err()
         .expect("two resolvers whose key shapes overlap cannot both be reachable");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains(r#"entity "Gizmo" keyed by "id""#)
@@ -703,23 +846,15 @@ impl GizmoNarrowResolver {
 #[module(imports = [subgraph()], providers = [GizmoBroadResolver, GizmoNarrowResolver, Closed])]
 struct OverlappingKeysModule;
 
-/// The same two shapes on **one** resolver, which the first round of this
-/// refusal deliberately spared — and should not have.
-///
-/// The exemption rested on "async-graphql orders a single `#[Object]`'s entity
-/// matchers by key arity, so the more specific claim wins". Upstream sorts on
-/// `args.len()`, not key arity, so a key with a non-key argument beside it
-/// outranks a longer key without one; and at equal arity the sort is stable, so a
-/// permutation of one compound key is decided by declaration order. Neither
-/// ordering is anything a developer declared, and what it decides is which
-/// `#[authorize]` answers. So the rule is the same at both scopes.
+/// The same two shapes on **one** resolver: async-graphql sorts its matchers by
+/// `args.len()`, not key arity, so the rule is the same at both scopes.
 #[tokio::test]
 async fn two_overlapping_keys_on_one_resolver_fail_the_boot_too() {
     let err = TestApp::for_module::<OneResolverTwoKeysModule>()
         .await
         .err()
         .expect("one resolver may not claim two overlapping shapes either");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains(r#"entity "Gadget" keyed by "id""#)
@@ -732,17 +867,14 @@ async fn two_overlapping_keys_on_one_resolver_fail_the_boot_too() {
     );
 }
 
-/// A permutation of one compound key: the same field **set**, a different
-/// string. The exact-shape check compares strings and cannot see it; the overlap
-/// check compares sets and does. Left standing it is dead code the SDL still
-/// advertises as a second `@key`.
+/// A permutation of one compound key: the same field **set**, a different string.
 #[tokio::test]
 async fn a_permuted_compound_key_is_the_same_claim_twice() {
     let err = TestApp::for_module::<PermutedKeyModule>()
         .await
         .err()
         .expect("one field set claimed twice is one claim too many");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains(r#"entity "Doodad" keyed by"#)
@@ -788,10 +920,8 @@ impl PermutedKeyResolver {
 #[module(imports = [subgraph()], providers = [PermutedKeyResolver])]
 struct PermutedKeyModule;
 
-/// The shape the refusal must **not** catch, and the one a whitespace split got
-/// wrong: Apollo's key syntax nests, so `"org { id }"` selects one top-level
-/// field named `org`. Split naïvely it looked like `{org, {, id, }}`, of which
-/// `{id}` reads as a subset — refusing a pair that shares no field at all.
+/// Apollo's key syntax nests: `"org { id }"` selects one top-level field, so
+/// it shares no field with `"id"`.
 #[tokio::test]
 async fn a_nested_key_selection_is_one_top_level_field() {
     use nest_rs_graphql::async_graphql::InputObject;
@@ -882,17 +1012,14 @@ impl GadgetResolver {
 struct OneResolverTwoKeysModule;
 
 /// An `#[entity]` whose resolved type is not a GraphQL **object** keys nothing:
-/// `Registry::add_keys` returns silently for a list, a scalar or a union, so the
-/// method compiled, booted, published no `@key`, and was unreachable — and with
-/// no key anywhere the schema also looked like a schema with no entity, which
-/// disarmed the `federation` refusal that reads the same pass.
+/// `Registry::add_keys` returns silently for a list, a scalar or a union.
 #[tokio::test]
 async fn an_entity_that_resolves_to_a_list_fails_the_boot() {
     let err = TestApp::for_module::<ListEntityModule>()
         .await
         .err()
         .expect("an `#[entity]` async-graphql keys nothing on is refused");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("ListEntityResolver::find_widgets_by_id"),
@@ -922,16 +1049,15 @@ impl ListEntityResolver {
 #[module(imports = [subgraph()], providers = [ListEntityResolver])]
 struct ListEntityModule;
 
-/// The same refusal for a scalar, which is the shape that reaches the registry
-/// as a type that *exists* — `Int` is registered, just not as an object — so the
-/// check cannot be "is the name in the registry", only "did it come back keyed".
+/// A scalar *is* registered, just not as an object, so the check is "did it
+/// come back keyed".
 #[tokio::test]
 async fn an_entity_that_resolves_to_a_scalar_fails_the_boot() {
     let err = TestApp::for_module::<ScalarEntityModule>()
         .await
         .err()
         .expect("an `#[entity]` resolving to a scalar is refused");
-    let message = err.to_string();
+    let message = format!("{err:#}");
 
     assert!(
         message.contains("ScalarEntityResolver::find_count_by_id") && message.contains("Int"),
@@ -954,9 +1080,7 @@ impl ScalarEntityResolver {
 #[module(imports = [subgraph()], providers = [ScalarEntityResolver])]
 struct ScalarEntityModule;
 
-/// The legal shape the refusal must not catch: a reference that may resolve to
-/// nothing. `Option<T>` reports `T`'s own type name, so it keys exactly as the
-/// bare object does.
+/// `Option<T>` reports `T`'s own type name, so it keys as the bare object does.
 #[tokio::test]
 async fn an_entity_returning_an_optional_object_still_keys() {
     let app = TestApp::for_module::<OptionalEntityModule>()
@@ -988,15 +1112,10 @@ impl OptionalEntityResolver {
 #[module(imports = [subgraph()], providers = [OptionalEntityResolver])]
 struct OptionalEntityModule;
 
-// ---------------------------------------------------------------------------
 // The `_entities` fan-out, and what async-graphql does with a batch it cannot
-// fully resolve. The second half is **upstream** behaviour, frozen here so a
-// version bump that changes it is seen rather than shipped.
+// fully resolve — **upstream** behaviour, frozen so a version bump shows it.
 
-/// `max_depth` and `max_complexity` score the document's *shape* and
-/// `max_batch_size` counts *operations*; none of them sees the length of the
-/// `representations` list, which is the one number a caller picks and the
-/// framework multiplies by an entity body, a posture gate and a mask.
+/// No other limit sees the length of the `representations` list.
 #[tokio::test]
 async fn a_reference_list_over_the_ceiling_is_refused_naming_it() {
     let app = TestApp::for_module::<CappedModule>()
@@ -1027,14 +1146,9 @@ async fn a_reference_list_over_the_ceiling_is_refused_naming_it() {
     );
 }
 
-/// `0` is the unlimited sentinel, the same spelling every other ceiling in the
-/// framework carries — and it means that **pinned in code** as well as read from
-/// the environment. `ConfigService::count` only ever sees the variable, so a
-/// `Some(0)` written in a `GraphqlConfig` reached the comparison as a ceiling of
-/// zero and refused every reference, naming `0` as the remedy the developer had
-/// already written.
+/// `None` pinned in code is unlimited, as `0` is from the environment.
 #[tokio::test]
-async fn a_ceiling_of_zero_is_unlimited() {
+async fn a_ceiling_of_none_is_unlimited() {
     let app = TestApp::for_module::<UncappedModule>()
         .await
         .expect("a subgraph with the ceiling disabled boots");
@@ -1047,8 +1161,7 @@ async fn a_ceiling_of_zero_is_unlimited() {
     );
 }
 
-/// The env var drives the field — the dual-path rule, checked on the value the
-/// endpoint actually serves rather than on the config struct alone.
+/// The env var drives the field, checked on the value the endpoint serves.
 #[test]
 fn the_env_var_drives_the_ceiling() {
     use nest_rs_config::{Config, ConfigService};
@@ -1071,6 +1184,7 @@ fn the_env_var_drives_the_ceiling() {
 fn capped(max: Option<usize>) -> nest_rs_graphql::GraphqlSetup {
     GraphqlModule::for_root(GraphqlConfig {
         federation: true,
+        federation_sdl: nest_rs_config::Surface::Open,
         max_representations: max,
         ..GraphqlConfig::default()
     })
@@ -1118,15 +1232,35 @@ impl UncappedResolver {
     }
 }
 
-#[module(imports = [capped(Some(0))], providers = [UncappedResolver])]
+#[module(imports = [capped(None)], providers = [UncappedResolver])]
 struct UncappedModule;
 
-/// **Upstream behaviour, frozen deliberately.** async-graphql resolves the
-/// batch with `try_join_all` and turns a reference no member matched into a
-/// `ServerError`, so one bad reference discards the whole response — including
-/// the entities that did resolve. Not this framework's code and not something to
-/// patch around; asserted so an async-graphql bump that changes it shows up as a
-/// failing test rather than as a changed contract nobody noticed.
+/// The ceiling reads `request.variables`, which hold a variable's default only
+/// because the operation's read fills it in before the schema runs: a list a
+/// document carries as its own default walked past the ceiling otherwise.
+#[tokio::test]
+async fn a_variables_default_counts_against_the_representations_ceiling() {
+    let app = TestApp::for_module::<CappedModule>()
+        .await
+        .expect("a subgraph boots");
+    let references =
+        Vec::from_fn(10, |id| format!(r#"{{ __typename: "Widget", id: {id} }}"#)).join(", ");
+    let query = format!(
+        "query($reps: [_Any!]! = [{references}]) {{ \
+         _entities(representations: $reps) {{ ... on Widget {{ id }} }} }}"
+    );
+    let body = post_graphql(&app, serde_json::json!({ "query": query })).await;
+    assert!(body["data"].is_null(), "{body}");
+    let message = body["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("carries 10 `_entities` representations")
+            && message.contains("ceiling of 3"),
+        "{body}"
+    );
+}
+
+/// **Upstream behaviour, frozen.** async-graphql resolves the batch with
+/// `try_join_all`, so one unmatched reference discards the whole response.
 #[tokio::test]
 async fn one_unresolvable_reference_discards_the_whole_batch() {
     let app = TestApp::for_module::<UncappedModule>()
@@ -1150,10 +1284,8 @@ async fn one_unresolvable_reference_discards_the_whole_batch() {
     assert_eq!(body["errors"][0]["message"], "Entity not found.");
 }
 
-/// The same sentence for four different causes, three of which are **input**
-/// errors rather than a failed lookup. Also upstream, also frozen: a client
-/// cannot tell a malformed reference from an absent one, which is worth knowing
-/// before reading a router's logs.
+/// **Upstream, frozen**: one sentence for four causes, three of them input
+/// errors.
 #[tokio::test]
 async fn a_malformed_reference_is_reported_as_a_missing_one() {
     let app = TestApp::for_module::<UncappedModule>()
@@ -1192,11 +1324,8 @@ async fn a_malformed_reference_is_reported_as_a_missing_one() {
     );
 }
 
-/// The contrast, and it is **correct**: a resolver that answers `Ok(None)`
-/// produces a `null` element with no error, so refused / absent / unreadable are
-/// indistinguishable from outside. That is the non-oracle the posture rules ask
-/// for on a field addressed by key, and it must not be "improved" into a
-/// distinguishing message.
+/// A resolver answering `Ok(None)` produces a `null` element with no error:
+/// the non-oracle the posture rules ask for, not to be "improved".
 #[tokio::test]
 async fn a_reference_that_resolves_to_nothing_is_a_null_without_an_error() {
     let app = TestApp::for_module::<MissingEntityModule>()
@@ -1229,23 +1358,15 @@ impl MissingEntityResolver {
 #[module(imports = [subgraph()], providers = [MissingEntityResolver])]
 struct MissingEntityModule;
 
-// ---------------------------------------------------------------------------
-// What the audit of the gate found, and what now holds it. Each of the three
-// below was a real regression the first round shipped.
-
-/// **The gate and the entity site's subtraction must agree.** `GuardSpecs` — the
-/// pool — is a public provider an app can seed without `use_guards_global`, and
-/// only `use_guards_global` seeds the `FederationGate`. An entity site that
-/// subtracted the pool unconditionally turned that composition from gated into
-/// open: `{ ping }` refused, `_entities` answered.
+/// **The gate and the entity site's subtraction must agree**: both read the
+/// pool the app's root declares.
 #[tokio::test]
-async fn a_pool_seeded_without_the_gate_still_reaches_an_entity() {
+async fn the_declared_pool_reaches_an_entity_as_it_reaches_an_ordinary_operation() {
     let app = TestApp::builder()
-        .module::<PooledModule>()
-        .provide(GuardSpecs(vec![guard::<Closed>()]))
+        .module::<ClosedPoolModule>()
         .build()
         .await
-        .expect("a pool seeded directly boots");
+        .expect("a pooled subgraph boots");
 
     let ordinary = app
         .http()
@@ -1273,16 +1394,15 @@ async fn a_pool_seeded_without_the_gate_still_reaches_an_entity() {
     );
 }
 
-/// **A guard declared at both scopes runs once, not once per representation.**
-/// Emptying the global bucket left `compose_chain`'s `TypeId` dedup nothing to
-/// collapse the resolver-scope copy against, so the gate's one run was *added*
-/// to a per-representation one. That is `demo`'s own shape: a global pool plus
-/// `#[use_guards]` on the resolver.
+#[module(imports = [DoublyDeclaredModule], providers = [GlobalGuards<(Counting,)>])]
+struct AGuardDeclaredAtBothScopesChecksAnEntitiesOperationOnceApp;
+
+/// **A guard declared at both scopes runs once, not once per representation**
+/// — `demo`'s own shape: a global pool plus `#[use_guards]` on the resolver.
 #[tokio::test]
 async fn a_guard_declared_at_both_scopes_checks_an_entities_operation_once() {
     let app = TestApp::builder()
-        .module::<DoublyDeclaredModule>()
-        .use_guards_global([guard::<Counting>()])
+        .module::<AGuardDeclaredAtBothScopesChecksAnEntitiesOperationOnceApp>()
         .build()
         .await
         .expect("a resolver re-declaring a pooled guard boots");
@@ -1330,22 +1450,18 @@ impl DoublyDeclaredResolver {
 #[module(imports = [subgraph()], providers = [DoublyDeclaredResolver, Counting])]
 struct DoublyDeclaredModule;
 
-/// **The ceiling bounds the operation, not the field.** `_entities` may be
-/// aliased without limit, so a per-field count left the fan-out exactly where it
-/// was — five hundred aliases each at the ceiling resolved fifty thousand
-/// references and raised nothing.
+/// **The ceiling bounds the operation, not the field**: `_entities` may be
+/// aliased without limit.
 #[tokio::test]
 async fn aliased_entity_calls_are_counted_together() {
     let app = TestApp::for_module::<CappedModule>()
         .await
         .expect("a subgraph with a pinned ceiling boots");
 
-    let aliases = (0..3)
-        .map(|index| {
-            format!("a{index}: _entities(representations: $reps) {{ ... on Widget {{ label }} }}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let aliases = Vec::from_fn(3, |index| {
+        format!("a{index}: _entities(representations: $reps) {{ ... on Widget {{ label }} }}")
+    })
+    .join("\n");
     let resp = app
         .http()
         .post("/graphql")
@@ -1370,8 +1486,7 @@ async fn aliased_entity_calls_are_counted_together() {
     );
 }
 
-/// The other half of that fix: the ceiling is charged to the operation the
-/// request **selected**, not to every operation the document happens to carry.
+/// The ceiling is charged to the operation the request **selected**.
 #[tokio::test]
 async fn an_unselected_operation_does_not_trip_the_ceiling() {
     let app = TestApp::for_module::<CappedModule>()
@@ -1398,4 +1513,207 @@ async fn an_unselected_operation_does_not_trip_the_ceiling() {
         body["data"]["widget"]["id"], 1,
         "the selected operation runs; the ceiling belongs to the one that does: {body}",
     );
+}
+
+/// async-graphql serves `_service` and `_entities` from a key alone, whatever
+/// `federation` says, and a key can come from an object an operation returns:
+/// such a schema is refused outside a subgraph, and a pool runs in front of
+/// the federation fields wherever they are served.
+mod keyed_outside_a_subgraph {
+    use std::any::TypeId;
+
+    use async_graphql::{Executor, Object, Request};
+    use nest_rs_core::{Container, Discoverable, module};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+    use nest_rs_guards::GlobalGuards;
+    use nest_rs_testing::TestApp;
+
+    use super::{Closed, Widget};
+
+    /// An object keying [`Widget`] with async-graphql's own attribute, which
+    /// `#[operations]` never reads.
+    struct Catalog;
+
+    #[Object]
+    impl Catalog {
+        async fn name(&self) -> &'static str {
+            "catalog"
+        }
+
+        #[graphql(entity)]
+        async fn find_widget_by_id(&self, id: i32) -> Widget {
+            Widget {
+                id,
+                label: "keyed by hand".into(),
+            }
+        }
+    }
+
+    #[resolver]
+    struct CatalogResolver;
+
+    #[operations]
+    impl CatalogResolver {
+        #[query]
+        #[public]
+        async fn catalog(&self) -> Catalog {
+            Catalog
+        }
+    }
+
+    #[module(providers = [CatalogResolver, Closed])]
+    struct CatalogProviders;
+
+    #[module(imports = [GraphqlModule, CatalogProviders])]
+    struct CatalogModule;
+
+    #[tokio::test]
+    async fn a_schema_keyed_by_a_returned_object_fails_the_boot_outside_a_subgraph() {
+        let err = TestApp::for_module::<CatalogModule>()
+            .await
+            .err()
+            .expect("a keyed schema outside a subgraph is refused");
+        let message = format!("{err:#}");
+
+        assert!(
+            message.contains("CatalogResolver") && message.contains("#[graphql(entity)]"),
+            "the boot error names the resolver whose types key an entity: {message}",
+        );
+        assert!(message.contains("federation"), "and the flag: {message}");
+    }
+
+    /// Built by hand, so no wiring step refuses the keyed schema first.
+    #[tokio::test]
+    async fn a_pool_refuses_the_sdl_of_a_schema_keyed_outside_a_subgraph() {
+        let builder = Container::builder()
+            .provide(GraphqlConfig::default())
+            .provide(nest_rs_http::HttpConfig::default())
+            .import::<CatalogProviders>()
+            .provide(nest_rs_core::__private::reachable_providers([
+                TypeId::of::<CatalogResolver>(),
+            ]));
+        let container = GlobalGuards::<(Closed,)>::register(builder)
+            .build()
+            .expect("the container builds");
+        let schema =
+            nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default())
+                .expect("the seeded set gates the schema");
+
+        let sdl = schema.execute(Request::new("{ _service { sdl } }")).await;
+
+        let body = serde_json::to_value(&sdl).expect("a response serializes");
+        assert!(
+            !body.to_string().contains("@key"),
+            "`_service` publishes no SDL past the pool: {body}",
+        );
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "FORBIDDEN",
+            "{body}"
+        );
+    }
+}
+
+/// A federation field is a `graphql.field` unit of role `federation`, inside
+/// the app's interceptors and exception filters.
+mod around_the_federation_fields {
+    use std::sync::Mutex;
+
+    use nest_rs_core::{
+        Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
+        injectable, module,
+    };
+    use nest_rs_core::{async_trait, code};
+    use nest_rs_graphql::{FieldRole, GraphqlView};
+    use nest_rs_testing::TestApp;
+
+    use super::{FederatedModule, entities_for, service_sdl};
+
+    static SEEN: Mutex<Vec<(&'static str, &'static str, FieldRole)>> = Mutex::new(Vec::new());
+
+    /// Records the unit, field and role of each unit it runs around.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Recorder;
+
+    #[async_trait]
+    impl Interceptor for Recorder {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            let seen = cx
+                .switch_to::<GraphqlView>()
+                .map(|view| (cx.unit().name(), view.field(), view.role()));
+            if let Some(seen) = seen {
+                SEEN.lock().unwrap().push(seen);
+            }
+            next.run(cx).await
+        }
+    }
+
+    /// Answers every failure it is offered as a conflict.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct EveryFailure;
+
+    #[async_trait]
+    impl ExceptionFilter for EveryFailure {
+        type Exception = dyn std::error::Error + Send + Sync;
+
+        async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+            Caught::Problem(Problem::new(409, code::CONFLICT))
+        }
+    }
+
+    #[module(imports = [FederatedModule], providers = [Recorder, EveryFailure])]
+    struct LayeredModule;
+
+    #[module(
+        imports = [LayeredModule],
+        providers = [nest_rs_core::GlobalInterceptors<(Recorder,)>],
+    )]
+    struct TheAppsInterceptorRunsAroundTheSdlFieldAsAFederationUnitApp;
+
+    #[tokio::test]
+    async fn the_apps_interceptor_runs_around_the_sdl_field_as_a_federation_unit() {
+        SEEN.lock().unwrap().clear();
+        let app = TestApp::builder()
+            .module::<TheAppsInterceptorRunsAroundTheSdlFieldAsAFederationUnitApp>()
+            .build()
+            .await
+            .expect("boots");
+
+        let sdl = service_sdl(&app).await;
+
+        assert!(sdl.contains("@key"), "{sdl}");
+        assert_eq!(
+            *SEEN.lock().unwrap(),
+            [("graphql.field", "_service", FieldRole::Federation)],
+        );
+    }
+
+    #[module(
+        imports = [LayeredModule],
+        providers = [nest_rs_core::GlobalExceptionFilters<(EveryFailure,)>],
+    )]
+    struct TheAppsExceptionFilterAnswersAFailedEntitiesFieldApp;
+
+    /// `Entity not found.` is async-graphql's own answer, met before any
+    /// entity body: only the federation field's site can see it fail.
+    #[tokio::test]
+    async fn the_apps_exception_filter_answers_a_failed_entities_field() {
+        let app = TestApp::builder()
+            .module::<TheAppsExceptionFilterAnswersAFailedEntitiesFieldApp>()
+            .build()
+            .await
+            .expect("boots");
+
+        let body = entities_for(
+            &app,
+            vec![serde_json::json!({ "__typename": "NotAType", "id": 1 })],
+        )
+        .await;
+
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "CONFLICT",
+            "{body}"
+        );
+    }
 }

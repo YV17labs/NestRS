@@ -5,7 +5,11 @@
 <p align="center">
   <strong>The Rust framework for modular, scalable backends.</strong><br>
   You write the business logic; the framework carries the rest — modules, decorators and dependency injection over a native core.<br>
-  <sub>~25× less memory · ~23× faster cold starts · ×4 the throughput of NestJS, core for core — measured on a byte-identical contract, <a href="bench/">reproducible from the repo</a>.</sub>
+  <sub>~17× less memory · ~20× faster cold starts · ×2 the throughput of NestJS 12 on node:http, its fastest adapter, on a guarded route, core for core — byte-identical contract, <a href="bench/">harness in the repo</a>.</sub>
+</p>
+
+<p align="center">
+  <strong>7.0 is the foundation the next versions build on</strong>: one way to declare each concern, one contract on every edge, a boot that refuses what would fail later — and no 7.x release breaks what you build on it. <a href="https://nestrs.dev/whats-new/">What's new in 7.0 →</a>
 </p>
 
 <p align="center">
@@ -34,8 +38,7 @@ pub struct OrgsController {
     svc: Arc<OrgsService>,
 }
 
-#[crud(service = svc, entity = OrgEntity, output = Org,
-       create = CreateOrg, update = UpdateOrg)]
+#[crud(service = OrgsService)]
 impl OrgsController {}
 ```
 
@@ -51,19 +54,39 @@ protocol, not `tools/call` alone: scope, ability and transaction reach
 `prompts/get`, `resources/read`, completion and the `tasks/*` trio, so a
 `Repo`-backed prompt is row-filtered exactly like a controller.
 
-The numbers behind the tagline — against the same hello-world service in
-NestJS 11, idiomatic on both sides, byte-identical HTTP contract,
-conformance-gated: NestRS runs in **~25× less memory** (single-digit MB
-against ~200 MB), cold-starts **~23× faster** (milliseconds against near half
-a second), and — core for core, each server pinned to a single CPU — serves
-**×4.2 the throughput of NestJS on Express** (its default) — **×2.5 its best
-case, Fastify** — with **p99 latency cut to a third**. Scaling out changes nothing:
-Node adds ~200 MB of process per core; one NestRS binary takes every core in
-a single single-digit-MB process.
-Where the Express service needs three boxes, one NestRS binary carries the
-load. Those figures come from a **4-core / 8 GB Docker VM** — virtualized,
-so they are a floor, not a ceiling. The harness lives in [`bench/`](bench/) —
-`cd bench && just bench` reproduces every figure on your own hardware.
+**The architecture is a modular monolith, deployed per workload** — the goal
+Google's Service Weaver set: the development velocity of a monolith, with the
+scalability of microservices. Your domain lives once, in a shared crate, cut
+into modules whose boundaries are checked at boot; each binary — the API, the
+worker, the WebSocket server — is a thin composition root importing only the
+edges it serves, and one binary importing them all is a plain monolith. The
+binaries share the code and the database, hand work over through the queue,
+and each scales on its own signal, with no generated RPC between them.
+[The architecture, drawn →](https://nestrs.dev/why/#a-modular-monolith-deployed-per-workload)
+
+The numbers behind the tagline, measured 2026-11-11 on NestRS 7.0 against the
+same service in **NestJS 12.4 on `node:http`** — its `NodeAdapter`, which NestJS
+recommends and measures ahead of Express and Fastify, so the slower adapters are
+not raced — idiomatic on both sides, byte-identical HTTP contract,
+conformance-gated, each server pinned to one core:
+
+| One core each | NestRS 7.0 | NestJS 12.4 · node:http | |
+|---|---|---|---|
+| Hello world, JSON through DI | ~201k req/s · p99 0.43 ms | ~154k req/s · p99 0.81 ms | ×1.3 |
+| Guarded route (guard + interceptor) | ~183k req/s · p99 0.46 ms | ~93k req/s · p99 1.32 ms | ×2.0 |
+| JSON request body | ~196k req/s · p99 0.46 ms | ~94k req/s · p99 1.31 ms | ×2.1 |
+| Streamed body | ~173k req/s · p99 0.53 ms | ~44k req/s · p99 6.75 ms | ×4.0 |
+| Memory idle | 6 MB | 103 MB | ×17 |
+| Cold start → first 200 | ~10 ms | ~220 ms | ×22 |
+
+On a bare hello world the gap is a third; as soon as the framework does a
+framework's work — a guard, an interceptor, a request body, a stream — it is ×2
+to ×4, with a tail two to thirteen times shorter. Given four cores, one NestRS
+process takes them all (×1.8 to ×3.5), where Node runs one ~100 MB process per
+core. Measured on a 14-core Apple-silicon host in a Linux VM, so a floor, not a
+ceiling; the [benchmarks page](https://nestrs.dev/benchmarks/) has every tier and
+the protocol, the harness lives in [`bench/`](bench/), and `cd bench && just
+bench` runs it on your own hardware.
 
 Try it on your machine:
 
@@ -97,7 +120,7 @@ off — a headless worker compiles no HTTP stack. Each has a reference section o
 | **Transports** | HTTP controllers with versioning, extractors, uploads, streaming · OpenAPI 3 + Swagger UI from the route table · GraphQL with dataloaders, subscriptions and federation · WebSocket gateways · MCP tools, prompts and resources |
 | **Data** | SeaORM entities, `Repo`, ambient transactions, pagination, migrations, seeding · S3-compatible object storage |
 | **Security** | JWT on EdDSA keys, OAuth2 with PKCE, Argon2id passwords, social login · abilities, row-level filtering, per-field masking, one policy across every transport |
-| **Background work** | Redis-backed queues with retries, cron schedules, a typed in-process event bus |
+| **Background work** | Valkey-backed queues with retries, cron schedules, a typed in-process event bus |
 | **Platform** | Typed config with an `.env` cascade · liveness/readiness/startup probes · rate limiting · OpenTelemetry logs, traces, metrics · `Server-Timing` |
 | **Tooling** | The `nestrs` CLI — scaffold, generate a feature or an adapter, run, migrate · an in-process test harness booting the real DI graph |
 
@@ -105,36 +128,30 @@ off — a headless worker compiles no HTTP stack. Each has a reference section o
 
 Claims a clone of this repository lets you check:
 
-- **66 decorators**, one per integration contract, each expanding to plain Rust
+- **75 decorators**, one per integration contract, each expanding to plain Rust
   you can print with `cargo expand` — the index is on
   [nestrs.dev/decorators](https://nestrs.dev/decorators/).
 - **1,800+ tests** across the framework workspace, with the end-to-end suites
-  running against live Postgres, Redis and S3 rather than mocks — the dev
+  running against live Postgres, Valkey and S3 rather than mocks — the dev
   container brings all three up before you get a shell.
-- **Conformance joins** — the families the framework declares (decorator pairs,
-  `for_root` seams, the `warn`-level events that record a denial) are derived
-  from the source and joined against the suites covering them, so a member no
-  test names fails the suite ([`crates/nest-rs-conformance/`](crates/nest-rs-conformance/)).
-- **Documentation gated against the code** — 120+ pages, and a linter reading
-  the framework's own source for config key tables, trait signatures, version
-  pins and the imports a snippet needs to compile
-  ([`docs/scripts/lint-docs.mjs`](docs/scripts/lint-docs.mjs)).
+- **Rules held by the toolchain** — types that make the wrong code
+  unwritable, `clippy.toml`'s resolved-path lints, and behaviour tests; what
+  none of them can hold is review's.
 
 ## Stability
 
-**NestRS is stable and ready for production.** The public API is frozen for the
-current major: breaking changes wait for the next one. Every `nest-rs-*` crate
-publishes at the same version in lockstep, so one NestRS version names exactly
-one compatible resolution — down to the third-party crates that surface in your
-own signatures (`poem`, `sea-orm`, `async-graphql`, `rmcp`, `schemars`), whose
-majors are tied to the NestRS major and frozen for the whole line.
+**NestRS is stable and ready for production.** No 7.x release breaks what you
+build on — your code, your configuration, the names your log filters and
+alerts match — and the [semver policy](https://nestrs.dev/semver/) says
+exactly what that covers. Every `nest-rs-*` crate publishes at the same version
+in lockstep, so one NestRS version names exactly one compatible resolution —
+down to the third-party libraries you write in your own code (`sea-orm`,
+`async-graphql`, `rmcp`, `validator`, `schemars`), whose majors move only with
+a NestRS major.
 
-Coming from the previous major? [`CHANGELOG.md`](CHANGELOG.md) lists what moved:
-an edge is now **two** decorators — `#[resolver]` / `#[mcp]` on the struct,
-`#[operations]` / `#[tools]` on the impl; a guard bound where its check never
-runs no longer compiles; `McpModule::for_root` takes one value; a WebSocket
-message declares its posture; and an auto-resolved HasMany relation is a Relay
-`Connection` rather than a capped `Vec`.
+Coming from 6.x? [Upgrading from 6.x](https://nestrs.dev/upgrading/) is the
+order that moves a 6.1 project to 7.0, and [`changelog/7.0.md`](changelog/7.0.md)
+lists every change with its reason.
 
 ## Documentation
 
@@ -143,14 +160,14 @@ tutorial, [why NestRS](https://nestrs.dev/why/), the
 [axum comparison](https://nestrs.dev/why-not-axum/), and one section per
 capability crate.
 
-**Contributing to the framework?** This README is your entry point. For design
-rules and conventions, read [`CLAUDE.md`](CLAUDE.md) and
+**Contributing to the framework?** This README is your entry point. For the
+layout and conventions, read [`CLAUDE.md`](CLAUDE.md) and
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Contributing
 
 Anyone who can clone the repo can iterate on the framework — the dev container
-brings up Rust, Postgres and Redis in one step.
+brings up Rust, Postgres and Valkey in one step.
 
 ### Get the dev container running
 
@@ -161,8 +178,8 @@ brings up Rust, Postgres and Redis in one step.
 3. `cd demo && nestrs run dev api` — the main Publish API on `http://localhost:3002` (run `nestrs run db up` first).
 
 The container provisions the Rust toolchain and dev tooling (`just`, `bacon`,
-`cargo-nextest`, …), and brings up **Postgres** and **Redis** beside it with
-`NESTRS_SEAORM__URL` / `NESTRS_REDIS__URL` already pointed at them. `nestrs run dev`
+`cargo-nextest`, …), and brings up **Postgres** and **Valkey** beside it with
+`<PREFIX>_SEAORM__URL` / `<PREFIX>_REDIS__URL` already pointed at them. `nestrs run dev`
 runs under `bacon` — every save triggers an incremental rebuild and a restart.
 The runnable apps live in their own workspace under [`demo/`](demo/) — `cd demo`
 first; that directory is where `nestrs run`, the `.env` cascade, and the

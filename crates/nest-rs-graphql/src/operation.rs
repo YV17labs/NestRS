@@ -1,227 +1,753 @@
-//! What one GraphQL operation *is*, for the layers that run around it.
-//!
-//! A `#[query]` body is handed async-graphql's `Context`, which carries the
-//! selected field and every scope of request data. The two **federation** root
-//! fields are handed nothing of the sort: `_service` and `_entities` are
-//! resolved by async-graphql's own `QueryRoot`, *above* the merged root this
-//! crate builds, and the only place a framework can stand in front of them is an
-//! [`Extension`](async_graphql::extensions::Extension) — which async-graphql
-//! hands an [`ExtensionContext`], never a `Context`, with no public constructor
-//! to bridge the two.
-//!
-//! [`GraphqlOperationContext`] is that bridge, and it is why `check_graphql`
-//! takes it rather than a bare `Context`: **one declaration, both sites**. What
-//! a guard reads on either is the same — the request-scoped data a
-//! [`GraphqlContextSeed`](crate::GraphqlContextSeed) forwarded, the container,
-//! the field's name. What only the field site can offer — the selection set, the
-//! arguments, `look_ahead` — is behind [`context`](GraphqlOperationContext::context),
-//! which answers `None` on a federation field rather than pretending.
+//! What runs one GraphQL field a resolver declares: the [`Site`] its decorator
+//! declares, whose chains each container composes once, dispatched through
+//! the pipeline — a root field as a unit of its own, a field resolver inside
+//! the root field that produced its parent.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context as TaskContext, Poll, ready};
 
-use async_graphql::extensions::ExtensionContext;
-use async_graphql::{Context, Result};
+use async_graphql::parser::types::OperationType;
+use async_graphql::{Context, Error as GraphqlError};
+use futures_util::TryFutureExt as _;
+use futures_util::future::BoxFuture;
+use nest_rs_core::__private::{
+    GlobalLayers, GuardStage, ResolvedLayer, Site, Tail, dispatch, new_unit_context,
+    report_unresolved, settled,
+};
+use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
+use nest_rs_core::{
+    Container, Failure, Handler, Outcome, Posture, Problem, ServedAddress, UnitContext,
+    UnresolvedLayerError,
+};
+use nest_rs_core::{anyhow, code};
+use nest_rs_guards::__private::{
+    GlobalBucket, GuardSpec, NeededPrincipal, RefusalMark, SiteChainSources, carried_stage_idle,
+    check_guards, compose_site_chain, validate_carried_unit,
+};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::__private::carried_request_chain;
 use tracing::Instrument;
 
-/// One GraphQL operation, as a [`Guard`](https://docs.rs/nest-rs-guards) sees
-/// it — the GraphQL analog of the [`McpOperationContext`] a `check_mcp` takes
-/// and the `(client, event, data)` a `check_ws_message` takes.
-///
-/// [`McpOperationContext`]: https://docs.rs/nest-rs-mcp
-pub struct GraphqlOperationContext<'a> {
-    site: Site<'a>,
+use crate::error::{AnsweredError, FieldFailure, Reply, answer, rendered};
+use crate::field_spellings::spelled_by_schema;
+use crate::view::{FieldRole, GraphqlView};
+
+/// Which GraphQL site a field is — what decides whether its guard stage folds
+/// the app-wide pool, and the role its field plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GraphqlSite {
+    /// A `#[query]` / `#[mutation]` / `#[subscription]`: the app-wide pool runs
+    /// here, each pooled guard's `check`, which the `/graphql` request's
+    /// `check_http` never stands in for.
+    Operation,
+    /// A `#[field_resolver]`: its resolver's and method's guards run, the pool
+    /// does not — the root field of the same request already ran it, and
+    /// folding it again would run it once per parent.
+    Field,
+    /// An `#[entity]`, reached only through `_entities`, whose federation site
+    /// runs the pool once per field; folding it here would run it once per
+    /// representation.
+    Entity,
+    /// `_service` or `_entities`, which no resolver declares: `_entities`' whole
+    /// chain is the pool, `_service`'s adds what else its request ran that
+    /// identifies a caller.
+    Federation,
 }
 
-/// The two places async-graphql lets a check run, and everything that differs
-/// between them.
-enum Site<'a> {
-    /// A resolver field — `#[query]`, `#[mutation]`, `#[entity]`,
-    /// `#[field_resolver]`. Emitted inline by `#[operations]`.
-    Field(&'a Context<'a>),
-    /// A federation root field, from the schema extension. It belongs to no
-    /// resolver — the router calls it on the schema itself — so the name is a
-    /// literal rather than something read off a selected field.
-    Federation {
-        ctx: &'a ExtensionContext<'a>,
-        field: &'static str,
-    },
-}
-
-impl<'a> GraphqlOperationContext<'a> {
-    /// The operation a resolver field is about to run.
-    pub fn field(ctx: &'a Context<'a>) -> Self {
-        Self {
-            site: Site::Field(ctx),
-        }
-    }
-
-    /// The operation a federation root field is about to run.
+impl GraphqlSite {
+    /// Whether this site's guard stage folds the app-wide pool.
     ///
-    /// Framework-emitted: the two names are async-graphql's, not an app's.
-    #[doc(hidden)]
-    pub fn federation(ctx: &'a ExtensionContext<'a>, field: &'static str) -> Self {
-        Self {
-            site: Site::Federation { ctx, field },
+    /// An entity skips it only where the federation site runs it: a global
+    /// pool can be absent, and skipping then would leave nothing to skip.
+    fn bucket(self, container: &Container) -> GlobalBucket {
+        match self {
+            Self::Operation | Self::Federation => GlobalBucket::Fold,
+            Self::Field => GlobalBucket::Skip,
+            Self::Entity if crate::federation::gate_runs(container) => GlobalBucket::Skip,
+            Self::Entity => GlobalBucket::Fold,
         }
     }
 
-    /// The field being resolved, as the client wrote it in the document.
-    pub fn name(&self) -> &str {
-        match &self.site {
-            Site::Field(ctx) => ctx.item.node.name.node.as_str(),
-            Site::Federation { field, .. } => field,
-        }
-    }
-
-    /// The full async-graphql context, when this operation has one.
-    ///
-    /// `None` on a federation root field — see the module docs. A guard reaching
-    /// for arguments or a selection set there is asking a question the site
-    /// cannot answer, and gets to decide what that means rather than being
-    /// handed a fabricated context.
-    pub fn context(&self) -> Option<&'a Context<'a>> {
-        match &self.site {
-            Site::Field(ctx) => Some(ctx),
-            Site::Federation { .. } => None,
-        }
-    }
-
-    /// Request- or schema-scoped data, or `None`.
-    pub fn data_opt<D: Any + Send + Sync>(&self) -> Option<&'a D> {
-        match &self.site {
-            Site::Field(ctx) => ctx.data_opt::<D>(),
-            Site::Federation { ctx, .. } => ctx.data_opt::<D>(),
-        }
-    }
-
-    /// Request- or schema-scoped data, or an error naming the missing type.
-    pub fn data<D: Any + Send + Sync>(&self) -> Result<&'a D> {
-        match &self.site {
-            Site::Field(ctx) => ctx.data::<D>(),
-            Site::Federation { ctx, .. } => ctx.data::<D>(),
-        }
-    }
-
-    /// Request- or schema-scoped data. Panics when absent — for data the
-    /// framework guarantees, like the [`Container`](nest_rs_core::Container).
-    pub fn data_unchecked<D: Any + Send + Sync>(&self) -> &'a D {
-        match &self.site {
-            Site::Field(ctx) => ctx.data_unchecked::<D>(),
-            Site::Federation { ctx, .. } => ctx.data_unchecked::<D>(),
+    /// The role this site's field plays.
+    fn role(self) -> FieldRole {
+        match self {
+            Self::Operation => FieldRole::RootField,
+            Self::Field => FieldRole::Nested,
+            Self::Entity => FieldRole::Entity,
+            Self::Federation => FieldRole::Federation,
         }
     }
 }
 
-/// Run one dispatched GraphQL field as its own unit of work.
+/// What a root field folds of the app-wide layers: the exception filters and
+/// the handler stage's interceptors, never the unit stage its `/graphql`
+/// request already ran. A `#[field_resolver]`, no unit at all, folds none
+/// ([`GlobalLayers::NONE`]).
+pub const ROOT_FIELD: GlobalLayers = GlobalLayers {
+    unit_stage: false,
+    exception_filters: true,
+    handler_stage: true,
+};
+
+/// The guards one field's site declares, as `#[operations]` collects them.
+pub struct FieldGuards {
+    /// `#[use_guards]` on the resolver.
+    pub host: Vec<GuardSpec>,
+    /// `#[use_guards]` beside the method, `#[force_guards]` included.
+    pub method: Vec<GuardSpec>,
+    /// `#[force_guards]`: the guards the method re-runs.
+    pub force: Vec<TypeId>,
+    /// Which site the field is.
+    pub site: GraphqlSite,
+    /// The field as a chain's log line and a refusal name it
+    /// (`query listUsers`, `UsersResolver.posts`).
+    pub label: &'static str,
+    /// The posture names no subject, so the ability is withheld from the field's
+    /// reads.
+    pub withheld: bool,
+    /// The posture declares a class gate, which reads the ability a guard attached.
+    pub class_gated: bool,
+    /// What the field's `Ambient<T>` parameters read, by type.
+    pub ambient: Vec<TypeId>,
+}
+
+/// The guard stage of the field `declared` describes, whose handler is
+/// `handler`: the app-wide pool where the site folds it, the resolver's guards
+/// and the method's, each once, each running its `check` on the field — `None`
+/// when it runs none, needs no principal and has nothing to withhold.
 ///
-/// Framework-emitted: `#[operations]` wraps every `#[query]`, `#[mutation]`,
-/// `#[entity]` and `#[field_resolver]` body in this, so a resolver author writes
-/// nothing. It is one seam rather than four because the four differ only in the
-/// `role` they pass — bolting the line onto whichever role asked for it is the
-/// defect the family rule names.
+/// A `#[public]` field, or a `#[field_resolver]`, which takes its root's posture,
+/// reading as an `Ambient<P>` the principal a guard of its chain or its request
+/// produces refuses a caller they admitted without it.
+pub fn field_guard_stage(
+    container: &Container,
+    handler: &Handler,
+    declared: FieldGuards,
+) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
+    let FieldGuards {
+        host,
+        method,
+        force,
+        site,
+        label,
+        withheld,
+        class_gated,
+        ambient,
+    } = declared;
+    let sources = SiteChainSources {
+        provider: host,
+        method,
+        force,
+    };
+    let chain = compose_site_chain(container, label, sources, site.bucket(container))?;
+    let request_chain = || {
+        carried_request_chain::<GraphqlView>(container, label)
+            .map_err(|unresolved| unresolved.to_string())
+    };
+    validate_carried_unit(
+        label,
+        handler.posture(),
+        class_gated,
+        false,
+        &chain,
+        request_chain,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let public = handler.posture() == Posture::Public || site == GraphqlSite::Field;
+    let needed = NeededPrincipal::carried(public, &ambient, &chain, request_chain)
+        .map_err(anyhow::Error::msg)?;
+    if needed.is_none()
+        && carried_stage_idle(&chain, withheld, request_chain).map_err(anyhow::Error::msg)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(FieldGuardStage {
+        guards: chain,
+        needed,
+        denied: DENIED_OPERATION,
+        withheld,
+    })))
+}
+
+/// One field's guards, as the pipeline runs a site's guard stage: each one's
+/// [`check`](Guard::check) on the field, read through [`GraphqlView`].
+pub(crate) struct FieldGuardStage {
+    guards: Vec<ResolvedLayer<dyn Guard>>,
+    needed: Option<NeededPrincipal>,
+    denied: &'static str,
+    withheld: bool,
+}
+
+/// The line a guard's denial of a resolver's field is filed as.
+pub(crate) const DENIED_OPERATION: &str = "guard denied the operation";
+
+/// The line a guard's denial of a federation root field is filed as.
+pub(crate) const DENIED_FEDERATION_FIELD: &str = "guard denied the federation field";
+
+impl FieldGuardStage {
+    /// The stage running `guards`, filing a denial as `denied`, or `None` when
+    /// there are none.
+    pub(crate) fn of(
+        guards: Vec<ResolvedLayer<dyn Guard>>,
+        denied: &'static str,
+    ) -> Option<Arc<dyn GuardStage>> {
+        (!guards.is_empty()).then(|| {
+            Arc::new(Self {
+                guards,
+                needed: None,
+                denied,
+                withheld: false,
+            }) as Arc<dyn GuardStage>
+        })
+    }
+}
+
+impl GuardStage for FieldGuardStage {
+    fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
+        Box::pin(async move {
+            check_guards(&self.guards, self.needed.as_ref(), None, self.withheld, cx)
+                .await
+                .map_err(|refused| {
+                    let Some(view) = cx.switch_to::<GraphqlView>() else {
+                        return Failure::from(refused.into_denial(self.denied, cx));
+                    };
+                    let fact = |said: String| view.first_filed(format!("{} {said}", view.field()));
+                    let denial = refused.into_denial_once(self.denied, cx, fact);
+                    Failure::from(denial)
+                })
+        })
+    }
+}
+
+/// Where the field `ctx` resolves is served, as its lines name it: under the
+/// operation it runs in, by the name `site` declares it under, or by the schema's
+/// where it names no site, as a relation `#[expose]` emits.
+pub fn served_field<'c>(ctx: &'c Context<'_>, site: Option<&'static Site>) -> ServedAddress<'c> {
+    ServedAddress::field(
+        operation_label(ctx.query_env.operation.node.ty),
+        site.map_or_else(|| field_name(ctx), |site| site.handler().address()),
+    )
+}
+
+/// The field `ctx` resolves, as the client wrote it in the document (`listUsers`,
+/// never an alias).
+pub fn field_name<'a>(ctx: &'a Context<'_>) -> &'a str {
+    ctx.item.node.name.node.as_str()
+}
+
+/// Run one dispatched root field as its own unit of work — `#[operations]`
+/// wraps every `#[query]`, `#[mutation]` and `#[entity]` in this — through
+/// `site`'s chains, the rest of the field being `tail`: its argument pipes and the
+/// call.
 ///
-/// # Why this exists at all
-///
-/// A GraphQL document arrives as one `POST /graphql`, so until this ran, every
-/// query and mutation in a deployment was the same line — `POST /graphql 200` —
-/// and which field was slow, which one failed, and which one the caller was
-/// refused at were all unanswerable from the console. The HTTP request is the
-/// *transport's* unit; the field is this edge's, and this crate is the only
-/// place that boundary is visible. MCP is the same shape and already did it:
-/// an HTTP self-mount that dispatches in band files its own operation line
-/// **in addition to** the request's.
-///
-/// A subscription is deliberately not here — see [`crate::unit`].
-///
-/// # What it carries, and what it does not
-///
-/// `role` and `operation`, flat, plus the family's `outcome` and `duration_ms`.
-/// `operation` is the field name **as the client wrote it in the document**,
-/// read through [`GraphqlOperationContext::name`] rather than from the Rust
-/// method's ident: async-graphql renames `list_users` to `listUsers` on the
-/// wire, and a line naming the ident cannot be joined against a capture of the
-/// request that produced it.
-///
-/// No `outcome = panic`: a resolver that unwinds never reaches this line, and
-/// async-graphql owns the catch. Reporting one would be a claim this seam
-/// cannot make.
-#[doc(hidden)]
-pub async fn run_operation<T, F>(
-    role: &'static str,
-    operation: &str,
-    succeeded: impl FnOnce(&T) -> bool,
-    fut: F,
-) -> T
+/// The line names the field as its `mounted` line does, by `host`, `method`,
+/// `kind` and `field` (`listUsers`, not `list_users`). It files `ok`
+/// or `error` on return, `cancelled` when dropped first, and `panic` when it
+/// unwinds — caught only to be named, then resumed. A sibling torn down by
+/// that unwind files `cancelled`: one panic is one `panic` line.
+pub fn run_field<'a, T, F, Fut>(
+    site: &'static Site,
+    ctx: &'a Context<'_>,
+    kind: GraphqlSite,
+    tail: F,
+) -> impl Future<Output = Result<T, GraphqlError>> + Send + 'a
 where
-    F: std::future::Future<Output = T>,
+    T: Send + 'a,
+    F: FnOnce() -> Fut + Send + 'a,
+    Fut: Future<Output = Result<T, FieldFailure>> + Send + 'a,
 {
-    // A child of the request that carried the document: same trace, a fresh
-    // span, the request's as its parent — the shape `mcp.operation` and
-    // `ws.message` already have. Minted outright only where nothing carried it,
-    // which off a request task is the honest answer rather than a missing id.
-    let correlation = match nest_rs_core::current_correlation() {
+    let operation = ctx.query_env.operation.node.ty;
+    crate::root_fields::note_root(ctx, site);
+    let role = match kind {
+        GraphqlSite::Entity => "entity",
+        _ => operation_label(operation),
+    };
+    let unit = FieldUnit::new(
+        site,
+        ctx.data_unchecked::<Container>(),
+        operation,
+        kind.role(),
+        Some(site),
+    );
+    in_field_unit(
+        site.handler(),
+        operation,
+        role,
+        field_name(ctx),
+        unit.run(tail)
+            .map_err(move |error| spelled_by_schema(ctx, error)),
+    )
+}
+
+/// `unit`, the root field `handler` declares, playing `role` under the name
+/// `field` in an `operation`, as a `graphql.field` unit of its own: its span,
+/// its line, its correlation and the request's scope, its panic named then
+/// resumed.
+pub(crate) fn in_field_unit<'a, F, T, E>(
+    handler: &'static Handler,
+    operation: OperationType,
+    role: &'static str,
+    field: &'a str,
+    unit: F,
+) -> impl Future<Output = Result<T, E>> + Send + 'a
+where
+    E: AnsweredError,
+    F: Future<Output = Result<T, E>> + Send + 'a,
+{
+    let correlation = match nest_rs_core::__private::current_correlation() {
         Some(request) => request.child(),
-        None => nest_rs_core::Correlation::mint(),
+        None => nest_rs_core::Correlation::minted(None),
     };
     let span = nest_rs_core::operation_span!(
-        target: crate::TARGET,
-        kind: nest_rs_core::operation_log::kind::SERVER,
-        crate::unit::OPERATION,
+        crate::unit::FIELD,
         &correlation,
-        // Dotted and conventions-shaped on the span, flat on the line — the
-        // split `nest_rs_core::operation_log` states.
-        //
-        // **Two deviations from OpenTelemetry's GraphQL server conventions, and
-        // they are stated rather than silent.** That semconv defines
-        // `graphql.operation.name`, `graphql.operation.type` (an enum of
-        // `query` / `mutation` / `subscription`) and `graphql.document`.
-        //
-        // `graphql.operation.role` is not `graphql.operation.type` renamed: it
-        // carries a **superset** — `entity` and `field_resolver` besides the
-        // three — because this framework dispatches at the *field*, and a
-        // federation `#[entity]` is a unit of work the specification has no word
-        // for. Recording that superset under the conventions' key would answer
-        // an enum with a value outside it, which is worse for a backend than a
-        // key it does not know.
-        //
-        // `graphql.field.name` is the field, not the operation: the conventions'
-        // `operation.name` is the *document's* name, which is the caller's
-        // label for a batch of fields and is often absent. What names this unit
-        // is the field it resolves, and there is no conventions key for it.
-        //
-        // `graphql.document` is deliberately absent: it is the caller's query
-        // text, which carries their literals.
+        // Not OTel's `graphql.operation.type`: `role` adds `entity` to its enum.
+        // `graphql.document` is omitted: it carries the caller's literals.
         graphql.operation.role = role,
-        graphql.field.name = operation,
+        graphql.field.name = field,
     );
-    let started = std::time::Instant::now();
-    // The request's own scope, under this unit's correlation: a field resolves
-    // against the request that asked for it — its providers, its executor, its
-    // ability — while its events and its line name the field rather than the
-    // whole document.
-    nest_rs_core::with_request_scope(
+    let line = FiledOnce::new(
+        FieldLine {
+            handler,
+            kind: operation_label(operation),
+            correlation: correlation.clone(),
+            span: span.clone(),
+            started: std::time::Instant::now(),
+        },
+        Unwinding::Shared,
+    );
+    // Combinators, never an `async fn` taking the field's future: a debug
+    // build would hold every copy of it on the stack polling it
+    // (rust-lang/rust#62958).
+    let contained = nest_rs_core::with_request_scope(
         nest_rs_core::current_request_scope(),
         correlation,
-        async move {
-            let out = fut.await;
-            // Filed inside the scope, so it carries this unit's ids without
-            // being handed them — the shape `nest_rs_schedule`'s tick uses.
-            tracing::info!(
-                name: crate::unit::OPERATION,
-                target: nest_rs_core::operation_log::TARGET,
-                message = crate::unit::OPERATION,
-                role = role,
-                operation = operation,
-                outcome = if succeeded(&out) {
-                    nest_rs_core::operation_log::OK
-                } else {
-                    nest_rs_core::operation_log::ERROR
-                },
-                duration_ms = nest_rs_core::operation_log::duration_ms(started),
-            );
-            out
-        },
-    )
+        nest_rs_core::panic::contain(unit),
+    );
+    Filed {
+        line: Some(line),
+        unit: contained,
+    }
     .instrument(span)
-    .await
+}
+
+/// Run a field that is no unit of its own — a `#[field_resolver]` call, a
+/// `#[subscription]`'s opening — through `site`'s chains, inside the unit that
+/// carries it: no line, no span.
+pub fn run_nested<'a, T, F, Fut>(
+    site: &'static Site,
+    ctx: &'a Context<'_>,
+    kind: GraphqlSite,
+    tail: F,
+) -> impl Future<Output = Result<T, GraphqlError>> + Send + 'a
+where
+    T: Send + 'a,
+    F: FnOnce() -> Fut + Send + 'a,
+    Fut: Future<Output = Result<T, FieldFailure>> + Send + 'a,
+{
+    let operation = ctx.query_env.operation.node.ty;
+    if kind == GraphqlSite::Operation {
+        // A subscription's opening: its items resolve under it.
+        crate::root_fields::note_root(ctx, site);
+    }
+    let mut unit = FieldUnit::new(
+        site,
+        ctx.data_unchecked::<Container>(),
+        operation,
+        kind.role(),
+        crate::root_fields::root_site(ctx),
+    );
+    // Run once per parent: what it files repeating is one line per operation.
+    unit.view = unit.view.filing_into(
+        ctx.data_opt::<Arc<crate::filed_facts::FiledFacts>>()
+            .cloned(),
+    );
+    unit.run(tail)
+        .map_err(move |error| spelled_by_schema(ctx, error))
+}
+
+/// The operation type as a field's line names its role.
+pub(crate) fn operation_label(operation: OperationType) -> &'static str {
+    match operation {
+        OperationType::Query => "query",
+        OperationType::Mutation => "mutation",
+        OperationType::Subscription => "subscription",
+    }
+}
+
+/// One field to dispatch: its site, the container its chains are composed
+/// against, the view its layers read, and the root field its failure's line
+/// names.
+pub(crate) struct FieldUnit<'a> {
+    site: &'static Site,
+    container: &'a Container,
+    view: GraphqlView,
+    at: ServedAddress<'static>,
+}
+
+impl<'a> FieldUnit<'a> {
+    /// The field `site` declares, in an `operation`, playing `role`, its
+    /// failure's line naming `root`, the root field it runs under: its own site
+    /// for a root field.
+    pub(crate) fn new(
+        site: &'static Site,
+        container: &'a Container,
+        operation: OperationType,
+        role: FieldRole,
+        root: Option<&'static Site>,
+    ) -> Self {
+        let mut at = ServedAddress::default();
+        at.kind = Some(operation_label(operation));
+        at.field = root.map(|root| root.handler().address());
+        Self {
+            site,
+            container,
+            view: GraphqlView::new(site.handler().address(), operation, role),
+            at,
+        }
+    }
+
+    /// The field through its site's chains, the rest of it `tail`, answered
+    /// by the edge's one rule.
+    pub(crate) async fn run<T, F, Fut>(self, tail: F) -> Result<T, GraphqlError>
+    where
+        T: Send,
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = Result<T, FieldFailure>> + Send,
+    {
+        let handler = self.site.handler();
+        let chains = match self.site.chains(self.container) {
+            Ok(chains) => chains,
+            Err(refused) => return Err(refused_site(handler, &refused)),
+        };
+        let mut slot = None;
+        let outcome = {
+            let mut view = self.view;
+            let mut tail = FieldTail {
+                run: Some(tail),
+                slot: &mut slot,
+            };
+            let mut cx = new_unit_context(handler, &mut view, None, None);
+            dispatch(&mut cx, &chains, &mut tail).await
+        };
+        answered(handler, outcome, slot, self.at)
+    }
+}
+
+/// What a site whose chains did not compose answers: the opaque answer, its
+/// cause filed — the layer and the site when a declared layer did not resolve.
+/// No field runs without a layer its site declares.
+fn refused_site(handler: &Handler, refused: &anyhow::Error) -> GraphqlError {
+    match refused.downcast_ref::<UnresolvedLayerError>() {
+        Some(unresolved) => report_unresolved(unresolved),
+        None => tracing::error!(
+            target: nest_rs_core::target::LAYERS,
+            site = handler.address(),
+            error = %nest_rs_core::error_message(refused.as_ref()),
+            "a GraphQL field's layers did not compose; it is refused",
+        ),
+    }
+    rendered(&Problem::new(500, code::INTERNAL))
+}
+
+/// What the field `handler` declares came to, as the client reads it: the
+/// value its tail wrote, or its failure answered by the edge's one rule, the
+/// chain that answer keeps filed naming the root field `at`.
+fn answered<T>(
+    handler: &Handler,
+    outcome: Outcome,
+    slot: Option<Result<T, Box<Reply>>>,
+    at: ServedAddress<'_>,
+) -> Result<T, GraphqlError> {
+    let failure = match outcome {
+        Ok(_) => {
+            return match slot {
+                Some(Ok(value)) => Ok(value),
+                Some(Err(reply)) => Err(reply.filed_at(at)),
+                None => {
+                    tracing::error!(
+                        target: crate::TARGET,
+                        site = handler.address(),
+                        "a field settled without a value; it is refused",
+                    );
+                    Err(rendered(&Problem::new(500, code::INTERNAL)))
+                }
+            };
+        }
+        Err(failure) => failure,
+    };
+    if failure.find::<Denial>().is_some()
+        && let Some(mark) = nest_rs_core::ambient::<RefusalMark>()
+    {
+        mark.mark();
+    }
+    Err(answer(&failure, slot.and_then(Result::err)).filed_at(at))
+}
+
+/// A field's tail as the pipeline runs it: `run`, its value written into the
+/// field's own slot; a failure carrying an answer only its type could say
+/// goes out answered, which the exception filters still see.
+struct FieldTail<'s, T, F> {
+    run: Option<F>,
+    slot: &'s mut Option<Result<T, Box<Reply>>>,
+}
+
+impl<T, F, Fut> Tail for FieldTail<'_, T, F>
+where
+    T: Send,
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = Result<T, FieldFailure>> + Send,
+{
+    fn call(&mut self, _cx: &mut UnitContext<'_>) -> impl Future<Output = Outcome> + Send {
+        let run = self.run.take();
+        let slot = &mut *self.slot;
+        async move {
+            let Some(run) = run else {
+                unreachable!("a unit runs its tail once");
+            };
+            match run().await {
+                Ok(value) => {
+                    *slot = Some(Ok(value));
+                    Ok(settled())
+                }
+                Err(FieldFailure {
+                    failure,
+                    reply: Some(reply),
+                }) => {
+                    *slot = Some(Err(reply));
+                    Err(failure.answered(settled()))
+                }
+                Err(FieldFailure {
+                    failure,
+                    reply: None,
+                }) => Err(failure),
+            }
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// A root field's unit with its line, filed once it ends: `ok` or `error`
+    /// by what it answered, `panic` when it unwound — the unwind then resumed.
+    struct Filed<F> {
+        line: Option<FiledOnce<FieldLine>>,
+        #[pin]
+        unit: F,
+    }
+}
+
+impl<T, E, F> Future for Filed<F>
+where
+    E: AnsweredError,
+    F: Future<Output = Result<Result<T, E>, Box<dyn Any + Send>>>,
+{
+    type Output = Result<T, E>;
+
+    fn poll(self: Pin<&mut Self>, task: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let ended = ready!(this.unit.poll(task));
+        let line = this.line.take();
+        match ended {
+            Ok(answered) => {
+                if let Some(line) = line {
+                    FieldLine::answered(line, &answered);
+                }
+                Poll::Ready(answered)
+            }
+            Err(unwound) => {
+                if let Some(line) = line {
+                    line.file(nest_rs_core::operation_log::PANIC);
+                }
+                std::panic::resume_unwind(unwound)
+            }
+        }
+    }
+}
+
+/// One root field's `graphql.field` line, `cancelled` when dropped first.
+///
+/// The correlation is held: a `Drop` runs while the future is torn down, not
+/// reliably inside the scope that future installed.
+struct FieldLine {
+    handler: &'static Handler,
+    kind: &'static str,
+    correlation: nest_rs_core::Correlation,
+    span: tracing::Span,
+    started: std::time::Instant,
+}
+
+impl FieldLine {
+    /// File what the field answered: `ok`, or `error`, which its span records
+    /// unless its caller's request earned it, as an HTTP `4xx` fails nothing on
+    /// the server's span.
+    fn answered<T, E: AnsweredError>(mut line: FiledOnce<Self>, answered: &Result<T, E>) {
+        if answered
+            .as_ref()
+            .is_err_and(|error| !error.failed_the_server())
+        {
+            line.span = tracing::Span::none();
+        }
+        line.file(if answered.is_ok() {
+            nest_rs_core::operation_log::OK
+        } else {
+            nest_rs_core::operation_log::ERROR
+        });
+    }
+}
+
+impl Line for FieldLine {
+    fn file(&mut self, outcome: &'static str) {
+        nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
+            nest_rs_core::operation_line!(
+                crate::unit::FIELD,
+                span: &self.span,
+                outcome: outcome,
+                started: self.started,
+                host = self.handler.host_name(),
+                // A federation field dispatches to no method of its own.
+                method = Some(self.handler.method()).filter(|method| !method.is_empty()),
+                kind = self.kind,
+                field = self.handler.address(),
+            );
+        });
+    }
+}
+
+/// A `#[subscription]`'s answer, accepted only when it is a value — a stream.
+/// async-graphql's subscription derive reads a fallible return by its spelling,
+/// so a `Result` under another name is refused here.
+#[diagnostic::on_unimplemented(
+    message = "a `#[subscription]` answers a stream, and this one returns a `Result` spelled \
+               another way",
+    label = "a `Result` under another name",
+    note = "write it `Result<impl Stream<Item = T>, E>`: async-graphql reads a fallible return by \
+            its spelling — `Result` or `FieldResult` — and takes any other for the stream itself"
+)]
+pub trait IsStreamReturn {}
+
+impl IsStreamReturn for nest_rs_core::__private::ValueAnswer {}
+
+/// Accept a `#[subscription]`'s answer — see [`IsStreamReturn`].
+pub fn answers_a_stream<K: IsStreamReturn>(_: K) {}
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_core::__private::{
+        HandlerDeclaration, MetaLevels, SiteDeclaration, SiteLayers, declare_handler, declare_site,
+    };
+    use nest_rs_core::Posture;
+
+    use super::*;
+
+    struct Fields;
+
+    static FIELD: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::FIELD,
+        host: TypeId::of::<Fields>(),
+        host_name: "Fields",
+        method: "field",
+        address: "field",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    static SITE: Site = declare_site(
+        &FIELD,
+        SiteDeclaration {
+            layers: SiteLayers::default,
+            global: ROOT_FIELD,
+            guard_stage: None,
+            class_gate: None,
+        },
+    );
+
+    /// With no guard at the field or at the `/graphql` request, nothing can have
+    /// attached what a bare `#[public]` withholds, so it keeps no stage.
+    #[test]
+    fn a_field_with_nothing_to_withhold_pays_for_no_stage() {
+        let stage = field_guard_stage(
+            &Container::default(),
+            &FIELD,
+            FieldGuards {
+                host: Vec::new(),
+                method: Vec::new(),
+                force: Vec::new(),
+                site: GraphqlSite::Operation,
+                label: "query field",
+                withheld: true,
+                class_gated: false,
+                ambient: Vec::new(),
+            },
+        )
+        .expect("no guard to resolve");
+        assert!(stage.is_none());
+    }
+
+    /// What a field's site adds to the future of a tail holding `N` bytes:
+    /// every stage between the wrapper and the developer's method.
+    fn added_by_the_site<const N: usize>(container: &Container) -> usize {
+        let unit = FieldUnit {
+            site: &SITE,
+            container,
+            view: GraphqlView::new("field", OperationType::Query, FieldRole::RootField),
+            at: ServedAddress::default(),
+        };
+        let holding = || async {
+            let held = [0u8; N];
+            tokio::task::yield_now().await;
+            Ok::<_, FieldFailure>(held.len())
+        };
+        let tail = size_of_val(&holding());
+        size_of_val(&unit.run(holding)) - tail
+    }
+
+    /// A debug build reserves every copy of a future a frame holds on the
+    /// thread polling it: a site copying its tail's would multiply the stack
+    /// a field needs by the stages it runs.
+    #[test]
+    fn a_fields_site_holds_its_tails_future_once() {
+        let container = Container::default();
+        let light = added_by_the_site::<1024>(&container);
+        let heavy = added_by_the_site::<16384>(&container);
+        assert_eq!(
+            light, heavy,
+            "a field's site copies its tail's future: it adds {light} bytes to a 1 KiB one, \
+             {heavy} to a 16 KiB one",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_field_answers_the_value_its_tail_wrote() {
+        let container = Container::default();
+        let unit = FieldUnit {
+            site: &SITE,
+            container: &container,
+            view: GraphqlView::new("field", OperationType::Query, FieldRole::RootField),
+            at: ServedAddress::default(),
+        };
+        let answered = unit.run(|| async { Ok::<_, FieldFailure>(7) }).await;
+        assert_eq!(answered.ok(), Some(7));
+    }
+
+    #[test]
+    fn a_field_settled_without_a_value_is_refused_naming_its_site() {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        let answer = answered::<i32>(&FIELD, Ok(settled()), None, ServedAddress::default());
+
+        assert!(answer.is_err());
+        let line = logs.expect_one(
+            crate::TARGET,
+            "a field settled without a value; it is refused",
+        );
+        assert!(
+            line.field("site").is_some_and(|site| site == "field"),
+            "{:?}",
+            line.fields,
+        );
+    }
 }

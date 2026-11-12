@@ -1,4 +1,4 @@
 mod module;
 
-pub use features::oauth::{IssuerConfig, RegisteredClient};
+pub use features::sign_in::{ClientPayload, SignInConfig};
 pub use module::AuthModule;

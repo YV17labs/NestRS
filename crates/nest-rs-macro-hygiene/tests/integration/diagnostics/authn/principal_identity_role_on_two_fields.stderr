@@ -1,0 +1,17 @@
+error: #[principal] takes at most one `actor` — a principal names one subject
+  --> tests/integration/diagnostics/authn/principal_identity_role_on_two_fields.rs:11:17
+   |
+11 |     #[principal(actor)]
+   |                 ^^^^^
+
+error: #[principal] takes at most one `tenant` — a principal acts within one tenant
+  --> tests/integration/diagnostics/authn/principal_identity_role_on_two_fields.rs:17:32
+   |
+17 |     #[principal(actor, tenant, tenant)]
+   |                                ^^^^^^
+
+error: `#[principal]` is written twice here — it declares once, and a second copy would be read by nothing. Keep one, with everything it says
+  --> tests/integration/diagnostics/authn/principal_identity_role_on_two_fields.rs:24:5
+   |
+24 |     #[principal(tenant)]
+   |     ^^^^^^^^^^^^^^^^^^^^

@@ -1,7 +1,6 @@
 ---
 title: Federation
 description: "Serve this schema as an Apollo subgraph: an entity resolved by reference, gated like every other operation, behind a router and not on the internet."
-tier: all-options
 sidebar:
   order: 9
 ---
@@ -19,8 +18,8 @@ impl PostsResolver {
     #[entity]
     #[authorize(Read, PostEntity)]
     async fn find_post_by_id(&self, id: Uuid) -> Result<Option<Post>> {
-        match self.svc.access(Action::Read, id).await? {
-            Access::Found(post) => Ok(Some(Post::from(post))),
+        match self.svc.access(Action::Read, id).await.opaque()? {
+            Access::Found(post) => Ok(Some(Post::from(&post))),
             Access::Denied | Access::Missing => Ok(None),
         }
     }
@@ -46,16 +45,13 @@ It is therefore a `#[query]` in every respect that matters:
 
 | Layer | On an `#[entity]` |
 |---|---|
-| Guard chain | runs — resolver-scope and method-scope, `GraphqlGuard`-attested |
+| Guard chain | runs — resolver-scope and method-scope, each declaring `GuardFor<GraphqlView>` |
 | Access posture | **mandatory** — `#[authorize(Action, Entity)]` or `#[public]`, no posture ⇒ compile error |
-| Argument pipes | run — `Valid<T>` / `Piped<P, T>` on the key arguments |
-| Response mask | runs — the entity is masked against the caller's ability like any other row |
+| Argument rules and pipes | run — the key arguments' rules, then a `Piped<P>` on any of them |
+| Wire rows | judged — the entity's row is judged for the caller's ability like any other row |
 
-Six things it refuses that a `#[query]` does not, each a named compile error:
+Four things it refuses that a `#[query]` does not, each a named compile error:
 
-- a **`Result` return** is required — the guard chain is only emitted where a
-  denial has somewhere to go, and a chain compiled out here is invisible in the
-  schema and on the wire;
 - **`bind = Service`** is refused — it answers `NOT_FOUND` for an absent row and
   `FORBIDDEN` for a withheld one, which by key is an existence oracle; load the
   row in the body and answer `None` for both;
@@ -65,8 +61,10 @@ Six things it refuses that a `#[query]` does not, each a named compile error:
   *first* one on a method, and the decorator has to emit `#[graphql(entity)]`
   there, so yours would silently take its place and the method would quietly stop
   being an entity resolver;
-- the method must be **`async`**;
 - and it must take **at least one argument**, since the arguments are the key.
+
+The method itself may be a plain `fn` or an `async fn`: the resolver
+async-graphql awaits is the one the decorator emits, which is always `async`.
 
 Two more are decided at **boot**, because only the built schema holds the
 fact. An `#[entity]` whose resolved type carries no `@key` — a list, a
@@ -83,27 +81,31 @@ role specifically.
 
 `#[entity]` is a role, not a modifier: it cannot be combined with `#[mutation]`
 or `#[subscription]`, because `_entities` lives on the `Query` root and no
-other root has it. Writing both is a compile error naming both.
+other root has it. Writing both is a compile error naming both. The reverse
+holds too: async-graphql's own `#[graphql(entity)]` beside `#[query]`,
+`#[mutation]`, `#[subscription]` or `#[field_resolver]` is a compile error, since
+it would key a type with none of what an `#[entity]` owes.
 
 ## Turning it on
 
-```rust title="crates/features/src/graphql/module.rs"
+```rust title="apps/api/src/module.rs"
 GraphqlModule::for_root(GraphqlConfig {
     federation: true,
     ..GraphqlConfig::default()
 })
 ```
 
-or `NESTRS_GRAPHQL__FEDERATION=true` — the same dual path every module config
+or `<PREFIX>_GRAPHQL__FEDERATION=true` — the same dual path every module config
 has. Default **off**.
 
-**The flag does not switch the federation surface on — the `#[entity]` does.**
-async-graphql serves `_service` and `_entities` the moment one resolver has
-registered its keys, whatever the flag says. So the two are declared together or
-not at all: an `#[entity]` with `federation: false` **fails the boot**, naming
-the resolver. Without that check the flag would be a comment, and an app that
-added one entity would publish its own SDL while its config said it was not a
-subgraph.
+**The flag does not switch the federation surface on — a key does.**
+async-graphql serves `_service` and `_entities` the moment a type in the schema
+is keyed, whatever the flag says. So the two are declared together or not at
+all: a keyed schema with `federation: false` **fails the boot**, naming the
+resolver whose types key it — an `#[entity]`, or an object an operation returns
+that carries async-graphql's own `#[graphql(entity)]`. Without that check the
+flag would be a comment, and an app that added one entity would publish its own
+SDL while its config said it was not a subgraph.
 
 What the flag itself decides:
 
@@ -114,6 +116,26 @@ What the flag itself decides:
 - **The directives are declared even with no entity yet**, so `_service` answers
   for a subgraph that has not written its first key. (`_entities` does not exist
   until one does — there would be nothing for it to return.)
+- **A guard identifying the router is owed.** `_service` answers the whole SDL and no
+  posture stands behind it, so a subgraph whose `/graphql` request runs no guard of
+  `GuardPhase::Authentication` or `Authorization` — in `GlobalGuards` or an
+  `EndpointGuards<GraphqlView, …>` — **fails the boot**, naming the guard to add and the
+  one opening below.
+
+A subgraph only its router reaches, on a private network, opens its SDL in one line:
+
+```rust title="apps/api/src/module.rs"
+GraphqlModule::for_root(GraphqlConfig {
+    federation: true,
+    federation_sdl: Surface::Open,
+    ..GraphqlConfig::default()
+})
+```
+
+or `<PREFIX>_GRAPHQL__FEDERATION_SDL=true`, said at `warn` at each boot outside a
+development or test profile. `Surface::ByProfile` opens it under one of those alone,
+for a router run beside the subgraph in development. Where a guard identifies the
+caller, it decides whatever this says.
 
 One key shape, one entity resolver: two claims on the same shape **fail the
 boot**, naming both. An entity is addressed by `@key` rather than by name, so
@@ -150,30 +172,78 @@ overlaps `@key(fields: "id")`.
 
 `_entities` and `_service` are resolved by async-graphql's own `Query` root,
 *above* the merged root this framework composes — so the chain `#[operations]`
-emits inside a resolver body is not where they are gated. **The app-wide guard
-pool runs in front of both**, once per field, through a schema extension
-`GraphqlModule` installs. A `use_guards_global([AuthnGuard])` therefore refuses
-`_service` and `_entities` exactly as it refuses a `#[query]`, with the same
-native GraphQL error frame.
+emits inside a resolver body is not where they are gated. **Guards run in front of
+both**, once per field, through a schema extension `GraphqlModule` installs on a
+subgraph and wherever the app lists a pool: on `_entities` the app-wide pool, and on
+`_service` that pool and each guard of its `EndpointGuards` that identifies or authorizes
+a caller. Each field is a `graphql.field` unit of role `federation`, inside the app's
+exception filters and interceptors. `/graphql` admits an anonymous request, so this is where one
+is refused: a `GlobalGuards<(AuthnGuard,)>` answers `_service` and `_entities` as it
+answers a gated `#[query]`, `UNAUTHENTICATED` in the same native GraphQL error frame,
+and a router presents the token a caller would. An `AuthzGuard` with no `AuthnGuard`
+beside it refuses them too, a visitor's ability having no posture to answer to there.
 
-Two consequences worth reading twice:
+Five consequences worth reading twice:
 
-- **The pool is the whole chain there, because a federation field belongs to no
-  resolver.** The router calls it on the schema, so there is no `#[use_guards]`
-  scope to compose and no posture to read. An `#[entity]`'s own `#[use_guards]`
-  and `#[authorize]`/`#[public]` still run in its body, per reference.
+- **The pool is the whole chain on `_entities`, because a federation field belongs to
+  no resolver.** The router calls it on the schema, so there is no `#[use_guards]`
+  scope to compose and no posture to read. An `#[entity]`'s own `#[use_guards]` and
+  `#[authorize]`/`#[public]` still run in its body, per reference, and a pooled
+  `AuthnGuard` reaches none of them for an anonymous caller, its `#[public]` included.
+- **`EndpointGuards` alone leave `_entities` to each `#[entity]`.** Its posture is
+  mandatory, so what one opens is a line you read; `_service` has none, and refuses.
+- **A guard of your own decides in its `check`.** One admitting the anonymous
+  `/graphql` request reads `Posture::Gated`, the posture of both fields, to refuse them.
+- **A guard `EndpointGuards` lists that reads the request decides in `check_http`.**
+  `GuardPhase::Authentication` or `Authorization` puts its `check` on `_service`, a unit
+  holding no HTTP request, so one reading the request there answers `INTERNAL` to every
+  caller, a router with a valid key included, and its `error` line says this edit. A guard
+  identifying no one, a rate limit, decided at the request and is not asked again.
 - **A pooled guard runs once per `_entities` operation, not once per
   representation.** The gate runs it at the field; the `#[entity]` bodies
   reached through it compose everything *except* the pool, precisely so the
   multiplier on a pooled check is not a number the caller picks.
 
+A router's API key is that shape: the decision reads the request, and the units it
+carries are admitted in one visible line.
+
+```rust title="crates/features/src/api_key/guard.rs"
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, GuardPhase};
+use nest_rs::http::HttpView;
+
+#[injectable]
+#[derive(Layer)]
+pub struct RequireApiKey;
+
+#[async_trait]
+impl Guard for RequireApiKey {
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authentication
+    }
+
+    async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        match HttpView::of(cx)?.request().header("x-api-key") {
+            Some(key) if known(key) => Ok(()),
+            _ => Err(Denial::unauthorized("an unknown API key")),
+        }
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for RequireApiKey {}
+```
+
 <Aside type="danger" title="A subgraph sits behind a router, not on the internet">
-**`_service` is not covered by `NESTRS_GRAPHQL__DISABLE_INTROSPECTION`** — that
-switch gates `__schema`, and `_service`'s field is unconditionally visible. A
-subgraph with no guards therefore publishes its own SDL to anyone who can reach
-it, introspection disabled or not. Guards close that (above); the network is
-still the outer answer — serve a subgraph where the router is, and let the
-router be the thing clients reach.
+**`_service` is not covered by `<PREFIX>_GRAPHQL__INTROSPECTION`** — that
+switch gates `__schema`, and `_service`'s field is unconditionally visible. So a
+subgraph boots only with a guard identifying its router, or with `federation_sdl`
+opened (above), which publishes its SDL to anyone who can reach it, introspection on or
+off. The network is still the outer answer — serve a subgraph where the router is, and
+let the router be the thing clients reach.
 
 That is why federation is opt-in and why the demo app in this repo leaves it
 off: it is a standalone API on a public address with no router in front of it,
@@ -192,6 +262,6 @@ no dependency to do the router's work.
 - [Queries and mutations](/graphql/queries-mutations/) — the operation shape an
   `#[entity]` follows in every respect but how it is reached.
 - [Authorization](/security/authorization/) — what the mandatory posture gates
-  and masks.
-- [Configuration](/graphql/configuration/) — the rest of the `NESTRS_GRAPHQL__*`
+  and reads.
+- [Configuration](/graphql/configuration/) — the rest of the `<PREFIX>_GRAPHQL__*`
   surface, including the introspection switch this one is not covered by.

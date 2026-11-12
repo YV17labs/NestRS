@@ -14,10 +14,11 @@ finished booting?* The probes ship as routes on the
 `GET /health/live`, `GET /health/ready`, `GET /health/startup` —
 each returning `200` and a JSON body when every indicator passes,
 `503` with the same shape and `error` populated when any indicator
-fails. Routing rides on [`poem`](https://crates.io/crates/poem) (the
-same engine `HttpModule` mounts), and discovery uses
-[`inventory`](https://crates.io/crates/inventory) gated by the access
-graph.
+fails. Discovery uses [`inventory`](https://crates.io/crates/inventory)
+gated by the access graph, beside the check the module opening each resource
+attaches — the database's, each Redis instance's, the object store's — so
+every resource the app or its features open is probed with no import of its
+own.
 
 ## Install
 
@@ -32,7 +33,7 @@ Every `#[readiness]` / `#[liveness]` / `#[startup]` method returns
 
 ## Wire it in
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 
@@ -53,7 +54,8 @@ $ curl -s http://localhost:3000/health/startup
 
 With no indicators registered every probe reports `up` with empty
 buckets — the right answer for a first boot, since there is nothing yet
-to be unhealthy. Register indicators to make the probes speak for your
+to be unhealthy. An app that opens the database, a Valkey or the object store
+reads each under its own key at once; write indicators for your other
 dependencies: see [Indicators](/health/indicators/) for the
 framework-shipped ones and how to write your own.
 
@@ -71,6 +73,14 @@ liveness during boot); a temporarily overloaded app fails `ready` (so
 traffic drains) without flagging `live` (the process is fine — do not
 restart it).
 
+`ready` does not turn a replica away on its way down: it answers until the
+listener closes at the shutdown signal. Taking a replica out of rotation before
+it stops listening is the platform's — see
+[leaving the load balancer first](/fundamentals/shutdown/#leaving-the-load-balancer-first).
+
+`/health/*` are `#[public]` routes, so a pool's `AuthnGuard` runs on them, and a
+probe carrying a credential answers `503` during a strategy outage; send none.
+
 ## The JSON shape
 
 Every probe returns the same body. `info` holds the up indicators,
@@ -82,12 +92,12 @@ $ curl -s http://localhost:3000/health/ready | jq
 {
   "status": "up",
   "info": {
-    "db":       { "name": "db",       "status": "up" },
+    "seaorm":   { "name": "seaorm",   "status": "up" },
     "upstream": { "name": "upstream", "status": "up" }
   },
   "error": {},
   "details": {
-    "db":       { "name": "db",       "status": "up" },
+    "seaorm":   { "name": "seaorm",   "status": "up" },
     "upstream": { "name": "upstream", "status": "up" }
   }
 }
@@ -107,7 +117,7 @@ $ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/health/ready
 $ curl -s http://localhost:3000/health/ready | jq
 {
   "status": "down",
-  "info": { "db": { "name": "db", "status": "up" } },
+  "info": { "seaorm": { "name": "seaorm", "status": "up" } },
   "error": {
     "upstream": {
       "name": "upstream",
@@ -115,7 +125,7 @@ $ curl -s http://localhost:3000/health/ready | jq
       "error": "check failed"
     }
   },
-  "details": { "db": { /* ... */ }, "upstream": { /* ... */ } }
+  "details": { "seaorm": { /* ... */ }, "upstream": { /* ... */ } }
 }
 ```
 
@@ -130,7 +140,7 @@ logs without walking a list, and a vocabulary (`status`, `info`,
 
 ## Configuration
 
-Two ceilings bound a probe response, read from `NESTRS_HEALTH__*` or
+Two ceilings bound a probe response, read from `<PREFIX>_HEALTH__*` or
 pinned through `HealthModule::for_root` — dual-path, like every other
 module's config. The kubelet's `timeoutSeconds` defaults to **1**, and a
 probe that has not answered by then is scored a *failure*; on a liveness
@@ -142,23 +152,25 @@ probe, that is a restart.
 | `PROBE_DEADLINE_MS` | ceiling on the **whole** response, whatever the indicator count; what answered is reported, the rest are `down` — default `900` |
 
 Milliseconds, not seconds: the only interval that matters here is one
-*inside* the orchestrator's second. `0` is refused at boot on both — an
-unbounded probe is what these fields exist to prevent, and a zero one
-fails every poll.
+*inside* the orchestrator's second. `0` is refused at boot on both, from the
+environment or pinned in code — an unbounded probe is what these fields exist
+to prevent, and a zero one fails every poll.
 
 Indicators run **concurrently**, so a probe costs the slowest check
 rather than their sum, and adding a fifth indicator does not move the
 response's worst case.
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use std::time::Duration;
+
 use nest_rs::core::module;
 use nest_rs::health::{HealthConfig, HealthModule};
 
 #[module(imports = [
-    HealthModule::for_root(
-        HealthConfig::default().with_probe_deadline(Duration::from_millis(400)),
-    ),
+    HealthModule::for_root(HealthConfig {
+        probe_deadline: Duration::from_millis(400),
+        ..Default::default()
+    }),
 ])]
 pub struct ApiModule;
 ```
@@ -166,7 +178,7 @@ pub struct ApiModule;
 <Aside type="caution">
 **The probe paths follow `global_prefix`.** A probe path is a contract
 with your orchestrator, but the routes are ordinary controller routes:
-under `NESTRS_HTTP__GLOBAL_PREFIX=/api/v1` the kubelet must call
+under `<PREFIX>_HTTP__GLOBAL_PREFIX=/api/v1` the kubelet must call
 `GET /api/v1/health/live`, and a manifest written from the unqualified
 path gets a `404` — which reads as a failed probe. A prefixed app logs
 one `warn` at boot naming the exact paths its probes answer on; point the
@@ -179,7 +191,7 @@ manifest at those.
   framework-shipped ones, writing a custom one with `#[indicators]`.
 - [Discovery](/health/discovery/) — how module-gating decides which
   indicators run in a given binary.
-- [Database / Health](/database/health/) — `SeaOrmHealthModule`,
-  the first framework-shipped indicator.
+- [Database / Health](/database/health/) — the pool's indicator,
+  which the module opening the pool attaches.
 - [HTTP](/http/) — the transport `HealthModule` mounts on; same
   `#[controller]` shape under the hood.

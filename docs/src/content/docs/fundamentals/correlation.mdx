@@ -1,7 +1,6 @@
 ---
 title: Correlation
 description: "Every unit of work runs under a W3C trace the framework starts for you — read it anywhere, and follow one request across a stream, a socket and a queue."
-tier: all-options
 sidebar:
   order: 11
 ---
@@ -14,13 +13,13 @@ framework carries — a handler, a service under it, the data layer — and it i
 already on every event you log.
 
 ```rust title="crates/features/src/posts/service.rs"
-impl PostService {
-    pub async fn publish(&self, id: Uuid) -> Result<Post, ServiceError> {
-        let post = self.repo.publish(id).await?;
+impl PostsService {
+    pub async fn publish(&self, active: ActiveModel) -> Result<Post, ServiceError> {
+        let published = Repo::<Posts>::update(active).await?;
         // No id is named here, and none should be: the line carries `trace_id`,
         // `span_id` and `actor_id` already.
-        tracing::info!(target: "features::posts", %id, "post published");
-        Ok(post)
+        tracing::debug!(target: crate::posts::TARGET, id = %published.id, "post published");
+        Ok(Post::from(&published))
     }
 }
 ```
@@ -65,7 +64,7 @@ Whoever **accepts** the work decides, and there are two answers: continue one
 that arrived with the work, or start one.
 
 An inbound `traceparent` is continued **only from a peer in
-`NESTRS_HTTP__TRUSTED_PROXIES`** — the same list `X-Forwarded-For` is weighed
+`<PREFIX>_HTTP__TRUSTED_PROXIES`** — the same list `X-Forwarded-For` is weighed
 against. From anyone else the trace is *restarted*, which is what the
 specification defines a front gate to do. Without that gate a public client could
 file its requests into a trace of its choosing and set the `sampled` flag on
@@ -73,8 +72,9 @@ traffic it generates.
 
 So a deployment behind a proxy that already traces sets that variable, or its
 inbound traces stop at your edge. Nothing is lost either way: the caller's
-claimed `traceparent` is recorded on the span as
-`http.request.header.traceparent`, so you can still join against it.
+claimed `traceparent`, once it parses, is recorded on the span as
+`http.request.header.traceparent`, so you can still join against it. One that
+does not parse is the caller's free text, and is not recorded.
 
 What the caller reads back is the trace this service **actually used**:
 
@@ -85,8 +85,11 @@ traceresponse: 00-01a011c406fb7433abbf3a3ddf952fa5-7f15c145ffbe7ed8-03
 <Aside type="note" title="Why not `X-Request-Id`">
 It is a de-facto convention, never a standard, and OpenTelemetry's semantic
 conventions treat it as a *captured header* rather than an identity. Behind a
-trusted peer it is recorded as `http.request.header.x-request-id`, so you can
-join your logs to nginx's — it never decides what a request is called.
+trusted peer it is recorded as `http.request.header.x-request-id` when it has
+the shape a proxy mints — a UUID, or 16 to 64 hex digits, as nginx's
+`$request_id` is — so you can join your logs to nginx's. Any other value is a
+word a client could have written through the proxy, and is not recorded. It
+never decides what a request is called.
 </Aside>
 
 ## `actor_id` is an audit identity
@@ -112,17 +115,21 @@ matters at every edge, and the one that surprises people is the first:
 | Where | What you get |
 |---|---|
 | inside an `#[sse]` stream, or any streaming body | the request that opened it, for as long as it streams |
+| a DataLoader batch | the request whose field triggered it, on a task of its own |
+| a task handed to `TaskContext::carry` | the unit that spawned it, however long it runs |
 | a WebSocket message | its own span, the connection's trace, the actor from the upgrade |
 | a `#[on_connect]` / `#[on_disconnect]` hook | a unit of work too — `ws.connect`, `ws.disconnect`, under the upgrade's trace |
 | a GraphQL subscription | the trace of the upgrade that opened the socket |
 | an MCP operation | the trace of the HTTP request it arrived on |
 | a queue job, in another process | the producer's trace, as a **child** of the enqueue |
 | a scheduled tick | a fresh trace of its own — nothing upstream to continue |
-| an `#[on_event]` listener | the span of whatever emitted the event — dispatch is inline, not a unit of work of its own |
+| an `#[on_event]` listener | its own span, `events.dispatch`, a **child** of whatever emitted the event — same trace, same actor |
 
 A queue crosses a *process*, so the context travels in the job envelope rather
-than in a task-local. A payload that carries none — a legacy producer, a foreign
-system — starts a trace instead of being refused.
+than in the ambient context a unit carries in process. A payload that carries none — a legacy producer, a foreign
+system — starts a trace instead of being refused. The envelope carries the
+actor beside the trace, and any W3C `baggage` the job came with, which every
+push the job makes carries on unread.
 
 ## Calling another service
 
@@ -163,6 +170,7 @@ that caused them.
 
 - [OpenTelemetry](/opentelemetry/) — exporting these traces, sampling, and
   joining other systems' telemetry.
-- [Logs](/opentelemetry/logs/) — the access log and the structured-field rules.
+- [Logs](/opentelemetry/logs/) — the structured-field rules; the access log is on
+  [the operation log](/opentelemetry/operation-log/#access-log).
 - [Authentication](/security/authentication/) — declaring the `actor_id` your
   principal reports.

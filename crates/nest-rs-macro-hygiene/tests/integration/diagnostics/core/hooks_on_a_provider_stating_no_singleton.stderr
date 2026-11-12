@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `#[hooks]` runs on a provider built once for the app, and `Hand` states `ProviderResidency::SINGLETON = false`: move these methods to a plain `#[injectable]` provider
+  --> tests/integration/diagnostics/core/hooks_on_a_provider_stating_no_singleton.rs:13:1
+   |
+13 | #[hooks]
+   | ^^^^^^^^ evaluation of `_` failed here

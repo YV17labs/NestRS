@@ -1,0 +1,23 @@
+error: #[expose]: `Model` derives `Serialize`, which writes every column, hidden ones included, onto a wire — a reply answers `Post` (`Json(Post::from(&model))`): drop the derive
+  --> tests/integration/diagnostics/seaorm/serde_on_the_model.rs:11:58
+   |
+11 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+   |                                                          ^^^^^^^^^^^^^^^^
+
+error: #[expose]: `Model` derives `Deserialize`, which reads every column, hidden ones included, off a body no input validates — a write takes `CreatePost` or `UpdatePost`, the inputs `#[expose(input(create, update))]` declares: drop the derive
+  --> tests/integration/diagnostics/seaorm/serde_on_the_model.rs:11:76
+   |
+11 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
+   |                                                                            ^^^^^^^^^^^^^^^^^^
+
+error: #[expose]: `Model` derives `Serialize`, which writes every column, hidden ones included, onto a wire — a reply answers `Org` (`Json(Org::from(&model))`): drop the derive
+  --> tests/integration/diagnostics/seaorm/serde_on_the_model.rs:37:39
+   |
+37 |         model_attrs(derive(PartialEq, serde::Serialize)),
+   |                                       ^^^^^^^^^^^^^^^^
+
+error: #[expose]: `ModelEx` derives `Serialize`, which writes every column, hidden ones included, onto a wire — a reply answers `Org` (`Json(Org::from(&model))`): drop the derive
+  --> tests/integration/diagnostics/seaorm/serde_on_the_model.rs:38:31
+   |
+38 |         model_ex_attrs(derive(serde::Serialize))
+   |                               ^^^^^^^^^^^^^^^^

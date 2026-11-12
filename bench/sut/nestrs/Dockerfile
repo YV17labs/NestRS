@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.100
 
 FROM rust:${RUST_VERSION}-slim-trixie AS builder
 WORKDIR /repo
+COPY Cargo.toml ./
 COPY crates crates
 COPY bench/sut/nestrs bench/sut/nestrs
 WORKDIR /repo/bench/sut/nestrs
-RUN cargo build --release
+RUN cargo build --release --locked
 
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 COPY --from=builder /repo/bench/sut/nestrs/target/release/sut-nestrs /usr/local/bin/app

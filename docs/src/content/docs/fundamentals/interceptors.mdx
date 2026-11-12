@@ -1,106 +1,107 @@
 ---
 title: Interceptors
-description: Wrap handler execution — install ambient state, observe, transform the response, in a single intercept(req, next) call.
-tier: basics
+description: Wrap a unit of work — observe it, decorate its reply, or answer in its place — in a single intercept(cx, next) call.
 sidebar:
   order: 8
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-An interceptor wraps the handler. It sees the request before the handler
-runs, holds the response after, and in between calls `next.run(req)` to
-delegate to whatever sits inside it (another interceptor, eventually the
-handler). One call, both sides of the boundary.
+An interceptor wraps a unit: an HTTP request a route serves, a GraphQL
+field, a WebSocket message, an MCP tool call, a job's attempt, a tick, a
+listener call. It sees the unit before the handler runs, holds the outcome
+after, and in between calls `next.run(cx)` to run whatever sits inside it —
+another interceptor, and eventually the handler. One call, both sides of the
+boundary.
 
-`Interceptor` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait shipped by
-[`nest-rs-interceptors`](https://crates.io/crates/nest-rs-interceptors).
-The continuation builds on [`poem`](https://crates.io/crates/poem)'s endpoint
-chain. One method, one transport:
+`Interceptor` is a [`Layer`](/fundamentals/request-lifecycle/) sub-trait in
+`nest_rs::core`, edge-neutral: it reads the unit through its
+[execution context](/fundamentals/execution-context/), the same `UnitContext`
+a guard reads, and reaches an edge's own view — the HTTP request and reply
+through `HttpView::of(cx)` — when it needs one.
 
-```rust title="nest_rs::interceptors::Interceptor"
+```rust title="nest_rs::core::Interceptor"
 #[async_trait]
 pub trait Interceptor: Layer {
-    /// HTTP entry. Per-route, runs once per request.
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response>;
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome;
 }
 ```
 
+`Outcome` says whether the unit ran or was answered, and only running the rest
+of the unit or answering it mints one: an interceptor that does neither does
+not compile. `next.run(cx)` consumes `next`, so the rest of the unit runs once.
+
 <Aside type="caution">
-**HTTP only.** Per-resolver (GraphQL) and per-message (WS) wrapping are not
-offered — a reserved seam for them was removed rather than shipped unwired.
-For GraphQL, the equivalent hook is the operation guard's `around`; for WS, the
-socket context's per-dispatch wrap. A `wrap_graphql` / `wrap_ws` method on an
-`Interceptor` impl is an `E0407` (`method is not a member of trait`).
+**Every edge runs them: HTTP routes, [GraphQL fields](/fundamentals/interceptors-beyond-http/#around-a-graphql-field),
+[WebSocket messages](/websockets/messages/#interceptors-filters-and-pipes),
+[MCP operations](/mcp/#layers-around-an-operation),
+[jobs](/queue/processors/#layers-around-a-job),
+[ticks](/schedule/ticks/#layers-around-a-tick) and
+[listener calls](/events/dispatch/#layers-around-a-listener-call).** A
+WebSocket `#[on_connect]` / `#[on_disconnect]` hook runs none yet:
+`#[use_interceptors]` on one is a compile error, and the app's global
+interceptors do not reach it.
 </Aside>
 
 Same vocabulary as a guard, different shape:
 
-- A **guard** runs *before* the handler and returns yes/no.
-- An **interceptor** runs *around* the handler — it can install ambient
-  state for the handler's duration, add response headers, time the call,
-  retry, transform the body.
-
-It is the seam where the database transaction lives, where response
-masking lives, where tracing spans wrap a request.
+- A **guard** runs *before* the handler and admits or refuses.
+- An **interceptor** runs *around* it — it can time the call, add response
+  headers, read what was answered, or answer in the handler's place.
 
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs --features interceptors
+cargo add nest-rs
 ```
 
-The `http` feature turns this on, and `http` is a default — name it explicitly only in a headless app built with `default-features = false`, where no transport implies it.
+The trait, `#[interceptor]` and the specs live in `nest_rs::core`, which every
+build has: no feature turns them on.
 
 ## A minimal interceptor
 
-`async_trait` comes from `nest-rs-interceptors` (and `nest-rs-filters` /
-`nest-rs-exception-filters` for their traits). That re-export is **load-bearing, not ergonomic**. `poem::async_trait` does
-not exist in poem 3, so there is no alternative spelling to fall back on.
-The unresolved import then cascades into a confusing `E0195: lifetime
-parameters or bounds on method 'intercept' do not match the trait
-declaration` — the un-expanded `async fn` no longer matches the
-`#[async_trait]`-declared trait. A crate mid-upgrade can also depend
-on `async-trait = "0.1"` directly and `use async_trait::async_trait;` — both
-spellings must resolve to the same 0.1 macro.
-
 ```rust title="apps/api/src/interceptor.rs"
-use nest_rs::core::{Layer, injectable};
-use nest_rs::interceptors::{Interceptor, Next, async_trait};
-use nest_rs::http::poem::{Request, Response, Result};
+use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};
+use nest_rs::http::{HeaderValue, HttpView};
 
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct Tracer;
-
-impl Layer for Tracer {}
 
 #[async_trait]
 impl Interceptor for Tracer {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        let mut resp = next.run(req).await?;
-        resp.headers_mut()
-            .insert("x-trace", "hit".parse().unwrap());
-        Ok(resp)
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        if let Some(resp) = HttpView::of(cx).ok().and_then(HttpView::response_mut) {
+            resp.headers_mut().insert("x-trace", HeaderValue::from_static("hit"));
+        }
+        outcome
     }
 }
 ```
 
-A plain `#[injectable]` provider that implements `Interceptor`. Listed
-in a module's `providers = [...]`, then bound globally, per controller,
-or per handler.
+A plain `#[injectable]` provider that implements `Interceptor`, bound for the
+whole app, per controller or per handler: a module's `providers = [...]` lists it,
+unless [the app's list](#the-apps-list-globalinterceptors) alone names it and
+registers it. `#[derive(Layer)]` writes the `Layer` impl every interceptor
+extends; `#[layer(priority = -10)]` beside it orders the interceptor ahead of
+its stage's others within one scope.
+
+`async_trait` comes from `nest_rs::core`, as it does for guards: the trait is
+declared under `#[async_trait]`, and an `async fn` written without the same
+macro no longer matches it (`E0195`).
 
 ## The three scopes
 
-| Scope | Binding | Resolved by |
-|-------|---------|-------------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs::interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level `HttpEndpointWrap` wrap + the per-route shaper |
-| **Controller / Resolver / Gateway** | `#[use_interceptors(Tracer)]` on the struct | The container, at mount |
-| **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
+| Scope | Binding | Runs |
+|-------|---------|------|
+| **Global** | `GlobalInterceptors<(Tracer,)>` in the providers of the module the app boots | around every unit's handler — a route, a field, a message, a tool call, a job, a tick, a listener call — after its guards |
+| **Host** | `#[use_interceptors(Tracer)]` on the controller, resolver, gateway, MCP host or worker block | around each of its handlers |
+| **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb | around that handler |
 
 ```rust title="crates/features/src/api/http/controller.rs"
 #[controller(path = "/api")]
-#[use_interceptors(Tracer)]                        // controller scope
+#[use_interceptors(Tracer)]
 pub struct ApiController {
     #[inject] svc: Arc<ApiService>,
 }
@@ -108,92 +109,154 @@ pub struct ApiController {
 #[routes]
 impl ApiController {
     #[get("/cache")]
-    #[use_interceptors(CacheControl)]              // handler scope
+    #[use_interceptors(CacheControl)]
     async fn cached(&self) -> Json<Snapshot> { /* ... */ }
 }
 ```
 
-Multiple interceptors in one attribute run outermost-first: the first
-listed sees the request before the second, and its response wraps the
-second's.
+Several interceptors in one attribute run outermost-first: the first listed
+sees the unit before the second, and its outcome wraps the second's. The app's
+global list runs outside the controller's, which runs outside the handler's.
 
 ## TypeId dedup — redeclaration is free
 
-Like every other [`Layer`](/fundamentals/request-lifecycle/), an `Interceptor` declared
-globally and redeclared on the controller or method runs **exactly
-once** per request — the transport-level `HttpEndpointWrap` wrap
-carries the single execution, the inner wraps are skipped at mount
-time. The full rationale and the cross-transport wiring details live
-on the guards page; the same rules apply here.
-
-See [Guards / Declare on the provider](/fundamentals/guards/#declare-on-the-provider)
+Like every other [`Layer`](/fundamentals/request-lifecycle/), an `Interceptor`
+declared globally and redeclared on the controller or method runs **exactly
+once** per unit, at the broadest scope that declares it. See
+[Guards / Declare on the provider](/fundamentals/guard-scopes/#declare-on-the-provider)
 for the worked example and the defense-in-depth argument.
 
-## Auto-discovered global interceptors
+## The app's list: `GlobalInterceptors`
 
-For infrastructure that *must* wrap everything, write `#[interceptor]`
-instead of `#[injectable] + impl Interceptor`. The framework discovers
-it, builds it, and folds it around the assembled route tree in
-registration order — no `#[use_interceptors]` needed anywhere.
+An interceptor around every handler is the app's to choose, so the module the
+app boots is the one place that says so: `GlobalInterceptors<(…)>` in its
+`providers`, the first listed outermost. The pool registers what it lists unless
+the app already does, so an interceptor is written once, and the module it sits
+in may list it or not. The demo's API audits every write it admits that way:
 
-```rust title="crates/nest-rs-seaorm/src/http/interceptor.rs (abridged)"
-#[interceptor(priority = -10)]
-pub struct DbContext {
-    #[inject]
-    db: Arc<DatabaseConnection>,
+```rust title="crates/features/src/audit/http/interceptor.rs (from the demo, abridged)"
+#[injectable]
+pub struct AuditInterceptor;
+
+impl Layer for AuditInterceptor {
+    fn serves(&self, unit: Unit) -> bool {
+        unit.edge() == Some(Edge::Http)
+    }
 }
 
-impl Layer for DbContext {}
-
 #[async_trait]
-impl Interceptor for DbContext {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> Result<Response> {
-        if is_safe(req.method()) {
-            return with_request_executor(Executor::Pool(self.db.clone()), next.run(req)).await;
-        }
-        let txn = Arc::new(self.db.begin().await?);
-        let result = with_request_executor(Executor::Txn(txn.clone()), next.run(req)).await;
-        commit_or_rollback(txn, &result).await?;
-        result
+impl Interceptor for AuditInterceptor {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        // …
+        outcome
     }
 }
 ```
 
-That's the entire transactional boundary. Import `SeaOrmDatabaseModule`, the
-interceptor is auto-mounted, and every handler runs inside a transaction
-on a mutating verb, on the pool on a safe verb. No `#[use_interceptors]`
-on any controller.
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
+#[module(
+    imports = [
+        // …
+        AuditHttpModule,
+        // …
+    ],
+    providers = [GlobalInterceptors<(AuditInterceptor,)>],
+)]
+pub struct ApiModule;
+```
 
-## Where interceptors run in the chain
+`serves` is read once, as the app-wide list is composed for a site: a unit of
+another edge never runs it. What the interceptor injects is held to the imports
+of the module the app boots, and one the pool cannot build, or that is not a
+singleton, fails the boot naming it, as does a pool a module the app imports
+declares, or a second one. A singleton provider of yours injecting the interceptor
+needs it listed in a module's `providers`: a pool registers what it alone lists once
+every module is built, and the boot says so.
 
-Interceptors are pooled by `TypeId` and run **once per request**: a global interceptor folds at the transport edge (band 90, before auth — it sees 404s and denials); a scoped one wraps the handler inside the guards. Infra `#[interceptor]`s (`DbContext`, tracing) auto-mount off the pool at a fixed band. The full ordering across all five families is on [the request lifecycle](/fundamentals/request-lifecycle/#nesting-order).
+A bare `#[interceptor]` does not compile, and its refusal names this list:
+importing a feature's module never adds a layer around every handler of your app.
+
+## The unit stage: `#[interceptor(stage = unit)]`
+
+Every interceptor above runs **after** the guards and the posture's class
+gate: a caching interceptor can never answer a caller the route refuses. The
+one opening is an interceptor its module declares at the unit stage, around
+the guards, which importing that module brings to every unit, with no line in
+the module the app boots — it is how a capability such as `Server-Timing` needs
+nothing but its import:
+
+```rust title="crates/features/src/timing/interceptor.rs"
+use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, interceptor};
+
+#[interceptor(stage = unit)]
+#[derive(Layer)]
+pub struct Timing;
+
+#[async_trait]
+impl Interceptor for Timing {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        next.run(cx).await
+    }
+}
+```
+
+It runs on every HTTP unit — a route, a self-mount's request (`/graphql`,
+`/mcp`, a gateway's upgrade, the OpenAPI document) and what the router answers
+itself (a `404`, a `405`) — on every WebSocket message, one no handler reads
+among them, once around every operation an `/mcp` request carries, and around every job's attempt, tick and
+listener call; it observes what the guards refused. It is the
+place for what must see every answer: `Server-Timing` and the RFC 9728
+challenge `nest-rs-oauth-resource` adds to a `401` sit there. Writing
+`stage = unit` is the visible line that opens it; an app-listed global
+interceptor never runs before the access decision.
+
+## Around a GraphQL field
+
+Each root field of a GraphQL operation is a unit of its own, `graphql.field`,
+and the app's, the resolver's and the field's own interceptors run around it as
+around a route: [Interceptors beyond HTTP](/fundamentals/interceptors-beyond-http/#around-a-graphql-field).
+
+## What an interceptor cannot change
+
+The data unit of work wraps the whole pipeline, guards included, and commits
+on the unit's own outcome. An interceptor changes what the client reads,
+never whether the unit failed: once the rest of the unit failed, an `Ok` an
+interceptor returns stays a failure — answered with its reply, the original
+error kept, one `warn` naming the interceptor — so a failed request still
+rolls its writes back.
 
 ## Common things an interceptor does
 
-- **Install ambient state** for the handler's duration (transactions,
-  tracing spans, authorization ability). The trace and the `actor_id` are
-  not on that list — the transport installs those before any interceptor
-  runs, see [Correlation](/fundamentals/correlation/).
-- **Transform the response** — add headers (`Server-Timing`,
-  `X-Cache-Status`), compress, paginate.
+- **Decorate the reply** — headers (`Server-Timing`, `X-Cache-Status`), read
+  through `HttpView::of(cx)?.response_mut()` once `next.run(cx)` returned. The
+  request is still there beside it, its head and extensions whole: only its
+  body is gone once the handler read it.
 - **Time the call** — measure latency by route, emit a metric.
-- **Mask the body** — `nest-rs-authz`'s `Authorize` shaper is technically
-  a "shaper" (inside the interceptors), but the pattern is the same: see
-  the response, decide what to send.
+- **Answer instead** — a cache answers through `HttpView::of(cx)?.respond(..)`
+  and returns its `Settled` without running the rest of the unit. A GraphQL
+  field has no reply an interceptor writes: its value is typed, so it fails
+  the field or runs it. An MCP operation has no reply an interceptor writes
+  either.
+- **Audit** — record what the unit answered, as the demo's posts controller
+  does.
 
-The pattern: capture what you need from `req`, `await next.run(req)` to
-get the response, decide what to do with it.
+The trace, the `actor_id` and the request scope are not on that list: the edge
+installs them before any layer runs, see
+[Correlation](/fundamentals/correlation/).
 
 ## Reference
 
 - [`posts/http/interceptor.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/posts/http/interceptor.rs)
-  in the demo — a structured audit interceptor on the posts controller.
+  in the demo — an audit interceptor on the posts controller.
 
 ## Going further
 
-- [Guards](/fundamentals/guards/) — the sibling layer, runs after
-  interceptors install their state.
-- [Database / transactions](/database/) — `DbContext` end to end.
-- [Security / response masking](/security/) — the `Authorize` shaper
-  composes with this seam.
-- [HTTP / controllers](/http/controllers/) — per-route bindings.
+- [The request lifecycle](/fundamentals/request-lifecycle/) — where each stage
+  runs.
+- [Guards](/fundamentals/guards/) — the stage the handler-stage interceptors
+  run after.
+- [Error handling](/fundamentals/exception-filters/) — answering a failure
+  rather than wrapping a unit.
+- [Database / transactions](/database/transactions/) — the unit of work around
+  every stage.

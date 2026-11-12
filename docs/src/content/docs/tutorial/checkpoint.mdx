@@ -17,17 +17,18 @@ sees the same rows with `email` gone, and a cross-tenant read returns
 
 ## Run the reference workspace
 
-The tutorial `blog` app has no auth yet — that is deliberate. To live the
-payoff now, drive the reference [`api`](/publish/) app over `users` and
-`orgs`. It already wires the guards, the ability, and the masker you
-build by hand later in
-[Authenticate and authorize](/tutorial/security/).
+Your `blog` already carries the two guards `nestrs g resource` wrote, behind
+a policy that grants nothing yet — that is deliberate. To live the payoff now,
+drive the reference [`api`](/publish/) app over `users` and `orgs`. It wires
+the same guards over a real policy, and the wire rows that policy judges — what
+[Authenticate and authorize](/tutorial/authorization/) reads, before you narrow
+your own.
 
 <Steps>
 
 1. Clone the reference repo and open it in the devcontainer — VS Code
-   offers **Reopen in Container**, which brings up Postgres and Redis
-   beside the workspace and installs the `nestrs` CLI. The demo commits
+   offers **Reopen in Container**, which brings up Postgres, Valkey and
+   RustFS beside the workspace and installs the `nestrs` CLI. The demo commits
    its whole configuration, dev keypair included, so there is nothing
    to prime before the first run.
 
@@ -38,9 +39,9 @@ build by hand later in
    ```
 
    Without VS Code, start the same services from the repo's compose
-   file (`docker compose -f .devcontainer/docker-compose.yml up -d
-   postgres redis rustfs`) and point `NESTRS_SEAORM__URL` /
-   `NESTRS_REDIS__URL` at `localhost` in a git-ignored
+   file (`docker compose -f .devcontainer/compose/base.yml up -d
+   postgres valkey-standalone rustfs`) and point `<PREFIX>_SEAORM__URL` /
+   `<PREFIX>_REDIS__URL` at `localhost` in a git-ignored
    `demo/.env.local`.
 
 2. Load the demo tenants and start both apps.
@@ -104,21 +105,23 @@ authorization code in the controller. The row-level `.when(...)`
 condition scoped both listings to the caller's org; the field-level
 `.fields([...])` grant dropped `email` for the member; and the by-id bind
 turned a cross-tenant load into a `403`. The `UsersController` that
-produced all three is the same thin CRUD shape you are about to write for
+produced all three is the same thin CRUD shape `nestrs g resource` wrote for
 `posts` — it never reads the tenant or the role.
 
-You build this yourself — the guards, the `AuthzAbility`, the `Bind`
-extractor — in [Authenticate and authorize](/tutorial/security/), once
-your `posts` feature persists and is tested.
+Your `blog` has the same pieces already: the guards on `PostsController`,
+which [Expose over HTTP](/tutorial/http/) reads, and an `AuthzAbility` you
+grant its first rule there. [Authenticate and authorize](/tutorial/authorization/)
+reads how `api`'s policy scopes rows and masks fields, and [Secure your
+posts](/tutorial/security/) narrows yours, once your `posts` persists and is
+tested.
 
 <Aside type="note">
 Living this needs the Publish repo (`auth` + `api` + seeded Postgres).
-Your own `blog` picks up the same two guards on the next page, but with a
-single blanket rule — conditions, field grants and cross-tenant denial are what
-you add later. The point here is to see the destination before you build toward
+Your own `blog` gets its first rule on the next page, a single blanket one —
+conditions, field grants and cross-tenant denial are what you add later. The point here is to see the destination before you build toward
 it.
 </Aside>
 
 ## Going further
 
-- [Expose over HTTP](/tutorial/http/) — the next step: back in `blog`, write the service and mount the CRUD routes.
+- [Expose over HTTP](/tutorial/http/) — the next step: back in `blog`, read the service and the controller the generator wrote, and grant the policy's first rule.

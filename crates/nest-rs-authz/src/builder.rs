@@ -2,16 +2,23 @@
 //! `ab.can(Action::Read, users::Entity).when(|p| …).fields([…])`.
 //!
 //! A [`RuleSpec`] commits on drop — the rule is finalized by ending the
-//! statement, with no terminal call to forget.
+//! statement, with no terminal call to forget. Its kind, [`Can`] or [`Cannot`],
+//! decides what it takes: a denial narrows rows alone, whatever the token.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use nest_rs_guards::Scope;
+use sea_orm::sea_query::Condition;
 use sea_orm::{EntityTrait, IdenStatic};
 
-use crate::ability::{Ability, FieldSet, MalformedRuleError, Rule};
+use crate::ability::{Ability, FieldSet, Rule, When};
 use crate::action::Action;
+use crate::contained::Uncontained;
+use crate::error::{Defect, MalformedRuleError};
 use crate::predicate::{Predicate, PredicateBuilder};
+use crate::{RowSubject, Subject};
 
 /// Accumulates rules into an [`Ability`]. Handed to
 /// [`AbilityFactory::define`](crate::AbilityFactory::define); each
@@ -20,10 +27,8 @@ use crate::predicate::{Predicate, PredicateBuilder};
 #[derive(Default)]
 pub struct AbilityBuilder {
     ability: Ability,
-    /// Rules whose relation predicate was rejected (the [`Predicate::Deny`]
-    /// sentinel). Collected as rules commit so [`build`](Self::build) can fail
-    /// the construction instead of letting a malformed denial silently go
-    /// fail-open. Empty in the overwhelmingly common valid case.
+    /// Rules refused as malformed, so [`build`](Self::build) fails rather than a
+    /// malformed denial going fail-open.
     malformed: Vec<MalformedRuleError>,
     /// What the actor's credential was granted, or `None` when the credential
     /// is not scope-aware. See [`with_granted_scopes`](Self::with_granted_scopes).
@@ -37,65 +42,82 @@ impl AbilityBuilder {
     }
 
     /// Seed the OAuth scopes the actor's credential carries, which decides
-    /// which [`requires_scope`](RuleSpec::requires_scope) rules materialize.
+    /// which [`requires_scope`](RuleSpec::requires_scope) grants materialize.
     ///
     /// `None` — the default — means the credential is not scope-aware (a
-    /// session, an mTLS identity, a test actor), and every scoped rule applies
-    /// in full. `Some` means it is, and a rule requiring a scope the list does
+    /// session, an mTLS identity, a test actor), and every scoped grant applies
+    /// in full. `Some` means it is, and a grant requiring a scope the list does
     /// not carry is **withheld**: not added, and remembered so the refusal can
-    /// name it.
+    /// name it. A denial takes no scope, so it holds whatever the list carries.
     ///
     /// The ability guard calls this with the request's
     /// `nest_rs_guards::GrantedScopes::shared()`; an app writing an
-    /// `AbilityFactory` never does. Shared rather than owned because the guard
-    /// runs on every authenticated request and the list is already allocated —
-    /// and because this crate's engine must not depend on the transport
-    /// bindings' `nest-rs-guards`.
+    /// `AbilityFactory` never does.
     pub fn with_granted_scopes(mut self, scopes: Option<Arc<[String]>>) -> Self {
         self.granted_scopes = scopes;
         self
     }
 
-    /// The scopes `required` names that this actor's credential does not carry.
-    /// Empty when nothing is required, or when the credential is not
-    /// scope-aware.
-    ///
-    /// The comparison is an exact string match, which is what RFC 6749 §3.3
-    /// defines: scopes are opaque tokens, so `posts:*` is a value a deployment
-    /// may mint but never a pattern this framework expands.
-    fn missing_from_grant(&self, required: &[String]) -> Vec<String> {
+    /// The scopes `required` names that this actor's credential does not carry,
+    /// compared exactly (RFC 6749 §3.3: scopes are opaque tokens, never patterns).
+    fn missing_from_grant(&self, required: &[Scope]) -> Vec<String> {
         let Some(granted) = &self.granted_scopes else {
             return Vec::new();
         };
         required
             .iter()
-            .filter(|scope| !granted.contains(scope))
-            .cloned()
+            .copied()
+            .filter(|&scope| !granted.iter().any(|carried| *carried == scope))
+            .map(String::from)
             .collect()
     }
 
-    /// Begin a grant. Narrow with [`when`](RuleSpec::when) / [`fields`](RuleSpec::fields).
-    pub fn can<E>(&mut self, action: Action, _subject: E) -> RuleSpec<'_, E>
-    where
-        E: EntityTrait,
-        E::Column: Send + Sync + 'static,
-    {
+    /// Begin a grant on `subject`: an entity, narrowed with
+    /// [`when`](RuleSpec::when) / [`fields`](RuleSpec::fields), or a subject
+    /// `#[subject]` declares, which no table holds and the grant covers whole.
+    pub fn can<S: Subject>(&mut self, action: Action, _subject: S) -> RuleSpec<'_, S> {
         RuleSpec::new(self, action, false)
     }
 
-    /// Begin a denial — a matching denial overrides a matching grant.
-    pub fn cannot<E>(&mut self, action: Action, _subject: E) -> RuleSpec<'_, E>
-    where
-        E: EntityTrait,
-        E::Column: Send + Sync + 'static,
-    {
+    /// Begin a denial — a matching denial overrides a matching grant, and one
+    /// no [`when`](RuleSpec::when) narrows matches every row, so the class gate
+    /// refuses the action outright.
+    ///
+    /// An entity's alone: a denial narrows the rows a grant reaches, and a
+    /// subject no table holds has none — a grant not written is its denial.
+    ///
+    /// A denial holds whatever the token carries and hides rows, never
+    /// columns: it takes neither `requires_scope` nor `fields`.
+    ///
+    /// ```compile_fail,E0599
+    /// # use nest_rs_authz::{AbilityBuilder, Action};
+    /// # mod post {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #     #[sea_orm(table_name = "posts")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// # const POSTS_ADMIN: nest_rs_guards::Scope = nest_rs_guards::Scope::new("posts:admin");
+    /// # let mut ab = AbilityBuilder::new();
+    /// ab.cannot(Action::Delete, post::Entity).requires_scope(POSTS_ADMIN);
+    /// ```
+    pub fn cannot<E: RowSubject>(
+        &mut self,
+        action: Action,
+        _subject: E,
+    ) -> RuleSpec<'_, E, Cannot> {
         RuleSpec::new(self, action, true)
     }
 
-    /// Finalize the rule set. Fails with [`MalformedRuleError`] if any rule's
-    /// relation predicate was rejected as malformed — a misconfiguration that,
-    /// on the denial side, would otherwise combine fail-*open*. A valid rule set
-    /// (the common case) always succeeds.
+    /// Finalize the rule set. Fails with [`MalformedRuleError`] if any rule was
+    /// refused: a relation predicate rejected as malformed, or a text its condition
+    /// writes that would not stay where the scope writes it.
     pub fn build(mut self) -> Result<Ability, MalformedRuleError> {
         match self.malformed.drain(..).next() {
             Some(err) => Err(err),
@@ -105,12 +127,7 @@ impl AbilityBuilder {
 
     /// [`build`](Self::build) for the **anonymous** caller: the rule set is
     /// identical, but the result answers `true` to
-    /// [`Ability::is_visitor`](crate::Ability::is_visitor). The ability guard
-    /// calls this on its
-    /// [`define_visitor`](crate::AbilityFactory::define_visitor) branch, which
-    /// is what lets a transport that admits anonymous callers at the edge
-    /// (GraphQL) still refuse an operation whose declared posture is
-    /// `#[authorize(...)]` rather than `#[public]`.
+    /// [`Ability::is_visitor`](crate::Ability::is_visitor).
     pub fn build_visitor(self) -> Result<Ability, MalformedRuleError> {
         self.build().map(|mut ability| {
             ability.mark_visitor();
@@ -119,138 +136,272 @@ impl AbilityBuilder {
     }
 }
 
-/// One in-progress rule. Commits on drop — binding to a variable defers the
-/// commit, and the builder cannot be reused while a spec is still alive.
-pub struct RuleSpec<'a, E>
-where
-    E: EntityTrait,
-    E::Column: Send + Sync + 'static,
-{
+/// The kind of rule [`AbilityBuilder::can`] opens: a grant, which a scope may
+/// withhold and a field list may narrow.
+#[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "uninhabited: a type-level marker no value ever takes"
+)]
+pub enum Can {}
+
+/// The kind of rule [`AbilityBuilder::cannot`] opens: a denial, which narrows
+/// rows alone and holds whatever the token carries.
+#[derive(Debug)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "uninhabited: a type-level marker no value ever takes"
+)]
+pub enum Cannot {}
+
+/// One in-progress rule on subject `S`, a grant ([`Can`]) or a denial
+/// ([`Cannot`]). Commits on drop — binding to a variable defers the commit,
+/// and the builder cannot be reused while a spec is still alive.
+pub struct RuleSpec<'a, S: Subject, K = Can> {
     builder: &'a mut AbilityBuilder,
     action: Action,
     inverted: bool,
-    predicate: Predicate<E>,
-    fields: FieldSet,
-    required_scopes: Vec<String>,
+    /// The predicate [`when`](Self::when) narrowed the rule's rows to, `None`
+    /// while the rule holds for every row.
+    rows: Option<Arc<dyn ErasedPredicate>>,
+    /// The columns [`fields`](RuleSpec::fields) narrowed a grant to; named
+    /// apart from that method, or a call on a denial would read as reaching a
+    /// private field.
+    columns: FieldSet,
+    required_scopes: Vec<Scope>,
+    kind: PhantomData<fn() -> (S, K)>,
 }
 
-impl<'a, E> RuleSpec<'a, E>
+/// A [`when`](RuleSpec::when) predicate with its entity erased, so a rule on
+/// any [`Subject`] carries one; lowered to SQL only when its rule materializes.
+trait ErasedPredicate: Any + Send + Sync {
+    /// Whether it is the `Deny` a rejected relation leaves.
+    fn is_deny(&self) -> bool;
+
+    /// Whether it holds for every row by its shape, so it narrows nothing.
+    fn is_always(&self) -> bool;
+
+    /// Why a text it writes would not stay where the scope writes it, if one would not.
+    fn uncontained(&self) -> Option<Uncontained>;
+
+    fn condition(&self) -> Condition;
+}
+
+impl<E> ErasedPredicate for Predicate<E>
 where
     E: EntityTrait,
     E::Column: Send + Sync + 'static,
 {
+    fn is_deny(&self) -> bool {
+        matches!(self, Predicate::Deny)
+    }
+
+    fn is_always(&self) -> bool {
+        self.holds_for_every_row()
+    }
+
+    fn uncontained(&self) -> Option<Uncontained> {
+        Predicate::uncontained(self)
+    }
+
+    fn condition(&self) -> Condition {
+        self.to_condition()
+    }
+}
+
+impl<'a, S: Subject, K> RuleSpec<'a, S, K> {
     fn new(builder: &'a mut AbilityBuilder, action: Action, inverted: bool) -> Self {
         Self {
             builder,
             action,
             inverted,
-            predicate: Predicate::Always,
-            fields: FieldSet::All,
+            rows: None,
+            columns: FieldSet::All,
             required_scopes: Vec::new(),
+            kind: PhantomData,
         }
     }
+}
 
-    /// `.when(|p| p.eq(users::Column::OrgId, actor.org_id))`.
-    pub fn when(mut self, build: impl FnOnce(PredicateBuilder<E>) -> Predicate<E>) -> Self {
-        self.predicate = build(PredicateBuilder::new());
-        self
-    }
-
-    /// Restrict the rule to these columns — the response masker keeps only
-    /// these fields. Without this, every field is permitted.
-    pub fn fields(mut self, columns: impl IntoIterator<Item = E::Column>) -> Self {
-        self.fields = FieldSet::Only(columns.into_iter().map(|c| c.as_str()).collect());
-        self
-    }
-
-    /// Gate this rule behind an OAuth scope: it materializes only when the
-    /// caller's credential carries `scope`.
+impl<S: Subject> RuleSpec<'_, S> {
+    /// Gate this grant behind an OAuth scope: it materializes only when the
+    /// caller's credential carries `scope`, one the app declares once as a
+    /// [`Scope`] constant, which its protected resource advertises too.
     ///
-    /// ```rust,ignore
+    /// ```
+    /// # use std::any::TypeId;
+    /// # use std::sync::Arc;
+    /// # use nest_rs_authz::{AbilityBuilder, Action};
+    /// use nest_rs_guards::Scope;
+    /// # mod post {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #     #[sea_orm(table_name = "posts")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub org_id: i32,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// # struct Actor {
+    /// #     org_id: i32,
+    /// # }
+    /// # let actor = Actor { org_id: 7 };
+    /// # let granted: Arc<[String]> = Arc::from(["profile".to_owned()]);
+    /// # let mut ab = AbilityBuilder::new().with_granted_scopes(Some(granted));
+    /// const POSTS_READ: Scope = Scope::new("posts:read");
+    ///
     /// ab.can(Action::Read, post::Entity)
     ///     .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-    ///     .requires_scope("posts:read");
+    ///     .requires_scope(POSTS_READ);
+    /// # let ability = ab.build()?;
+    ///
+    /// let posts = TypeId::of::<post::Entity>();
+    /// assert!(!ability.can_class(Action::Read, posts));
+    /// assert_eq!(ability.missing_scopes(Action::Read, posts), ["posts:read"]);
+    /// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
     /// ```
     ///
-    /// One declaration, three effects, and **no second decision site**: the
-    /// rule is withheld when the scope is absent (so the gate, the query filter
-    /// and the mask all refuse together, as they already do for a rule that was
-    /// never written), the refusal remembers `scope` so the transport can
-    /// answer `insufficient_scope` naming it, and the scope stays readable
-    /// beside the permission it conditions rather than in a parallel table.
-    /// The decision is still the guard's — this only says what the credential
-    /// must carry for the rule to exist.
-    ///
     /// Call it more than once to require **all** of the named scopes; a caller
-    /// missing any one of them loses the rule, and the refusal names the ones
+    /// missing any one of them loses the grant, and the refusal names the ones
     /// they lack. Scopes are opaque tokens compared exactly (RFC 6749 §3.3),
     /// never patterns.
     ///
     /// A credential that is not scope-aware — no
     /// [`PrincipalIdentity::scopes`](https://docs.rs/nest-rs-authn) — is not
-    /// gated by this at all, so adding it to a rule never breaks an app that
-    /// authenticates by session.
-    pub fn requires_scope(mut self, scope: impl Into<String>) -> Self {
-        self.required_scopes.push(scope.into());
+    /// gated by this at all.
+    ///
+    /// A string is no scope, so a rule cannot require one no declaration
+    /// holds:
+    ///
+    /// ```compile_fail,E0308
+    /// # use nest_rs_authz::{AbilityBuilder, Action, subject};
+    /// # #[subject]
+    /// # struct Exporting;
+    /// # let mut ab = AbilityBuilder::new();
+    /// ab.can(Action::Manage, Exporting).requires_scope("reports:export");
+    /// ```
+    pub fn requires_scope(mut self, scope: Scope) -> Self {
+        self.required_scopes.push(scope);
         self
     }
 }
 
-impl<'a, E> Drop for RuleSpec<'a, E>
-where
-    E: EntityTrait,
-    E::Column: Send + Sync + 'static,
-{
+// Bounded per method, never per impl: a capability calling one is refused
+// with `RowSubject`'s sentence, where an unmet impl bound reads as no method.
+impl<S: Subject, K> RuleSpec<'_, S, K> {
+    /// `.when(|p| p.eq(users::Column::OrgId, actor.org_id))`: the rule holds
+    /// for the rows the predicate matches alone.
+    pub fn when(mut self, build: impl FnOnce(PredicateBuilder<S>) -> Predicate<S>) -> Self
+    where
+        S: RowSubject,
+    {
+        self.rows = Some(Arc::new(build(PredicateBuilder::new())));
+        self
+    }
+}
+
+impl<S: Subject> RuleSpec<'_, S> {
+    /// Restrict the grant to these columns, named by their `Column`, whatever the
+    /// database or the wire calls them. Without this, every column is permitted.
+    ///
+    /// On a grant a reply reads, `Read` or `Manage`, a wire row built under it holds
+    /// only these, and every other reads `null`: so a column it leaves out must be
+    /// one its wire type can answer null, an `Option` or a column `#[expose(nullable)]`
+    /// declares, or the build fails naming it ([`MalformedRuleError`]). On one a write
+    /// reads, `Update`, `Create` or `Manage`, they are what the write may set: `Repo`
+    /// and `Creatable` refuse any other by name, sending nothing, and read neither
+    /// the key, which addresses the row and is `when`'s to hold, nor what a hook, a
+    /// pin or a default fills
+    /// ([`condition_for_columns`](crate::Ability::condition_for_columns)).
+    pub fn fields<C: IdenStatic>(mut self, columns: impl IntoIterator<Item = C>) -> Self
+    where
+        S: RowSubject<__Column = C>,
+    {
+        self.columns = FieldSet::Only(columns.into_iter().map(|c| c.as_str()).collect());
+        if matches!(self.action, Action::Read | Action::Manage)
+            && let Some((column, field)) =
+                crate::judged::unanswerable(TypeId::of::<S>(), &self.columns)
+        {
+            self.malformed(Defect::Unanswerable { column, field });
+        }
+        self
+    }
+}
+
+impl<S: Subject, K> RuleSpec<'_, S, K> {
+    /// Remember this rule as refused for `defect`, so the build fails.
+    fn malformed(&mut self, defect: Defect) {
+        self.builder.malformed.push(MalformedRuleError {
+            action: self.action,
+            subject: std::any::type_name::<S>(),
+            kind: if self.inverted { "denial" } else { "grant" },
+            defect,
+        });
+    }
+}
+
+impl<S: Subject, K> Drop for RuleSpec<'_, S, K> {
     fn drop(&mut self) {
-        // A `Deny` predicate only ever comes from a rejected `related(...)`; a
-        // denial that carries it is the fail-open case, a grant the silent one.
-        // Record it so `build` fails naming the rule, before it can be consumed.
-        //
-        // Checked before the scope gate below, and deliberately: a malformed
-        // rule is a developer error, and whether it surfaces must not depend on
-        // which token the caller happened to present.
-        if matches!(self.predicate, Predicate::Deny) {
-            self.builder.malformed.push(MalformedRuleError {
-                action: self.action,
-                subject: std::any::type_name::<E>(),
-                kind: if self.inverted { "denial" } else { "grant" },
-            });
+        // A `Deny` predicate only comes from a rejected `related(...)`. Checked
+        // before the scope gate, so a developer error surfaces whatever the token.
+        if self.rows.as_deref().is_some_and(|rows| rows.is_deny()) {
+            self.malformed(Defect::Relation);
+        }
+        // No parenthesis of its own holds the rule in the scope, beside its denials
+        // and the tombstone's: a text leaving its place there reaches past them.
+        if let Some(why) = self.rows.as_deref().and_then(|rows| rows.uncontained()) {
+            tracing::error!(
+                target: crate::TARGET,
+                action = self.action.as_str(),
+                subject = S::__line_name(),
+                reason = why.as_str(),
+                "invalid ability rule — its condition's text would not stay where the scope puts it",
+            );
+            self.malformed(Defect::Uncontained(why));
         }
 
-        let missing = self.builder.missing_from_grant(&self.required_scopes);
-        if !missing.is_empty() {
-            // A grant the credential cannot reach is remembered so the refusal
-            // can name the scope, then dropped. A *denial* it cannot reach is
-            // dropped silently: `cannot(...)` narrows, so withholding one would
-            // let a narrower token see more than a wider one — and there is
-            // nothing for the client to go ask for either way.
-            if !self.inverted {
+        // A grant alone is withheld, and remembered so the refusal can name the
+        // scope: a denial withheld for a narrower token would widen it.
+        if !self.inverted {
+            let missing = self.builder.missing_from_grant(&self.required_scopes);
+            if !missing.is_empty() {
                 tracing::debug!(
                     target: crate::TARGET,
-                    action = ?self.action,
-                    subject = std::any::type_name::<E>(),
-                    scopes = ?missing,
+                    action = self.action.as_str(),
+                    subject = S::__line_name(),
+                    scopes = missing.join(" "),
                     reason = "missing_scope",
                     "rule withheld",
                 );
                 self.builder
                     .ability
-                    .withhold(self.action, TypeId::of::<E>(), missing);
+                    .withhold(self.action, TypeId::of::<S>(), missing);
+                return;
             }
-            return;
         }
 
-        let condition = self.predicate.to_condition();
-        let predicate = std::mem::take(&mut self.predicate);
-        let fields = std::mem::take(&mut self.fields);
+        // A `when` holding for every row is a rule no `when` narrows, so the
+        // class gate reads a denial of that shape as the outright one it is.
+        self.rows.take_if(|rows| rows.is_always());
+        let condition = match self.rows.as_deref() {
+            Some(rows) => rows.condition(),
+            None => Condition::all(),
+        };
         self.builder.ability.add_rule(
             self.action,
-            TypeId::of::<E>(),
+            TypeId::of::<S>(),
             Rule {
                 inverted: self.inverted,
                 condition,
-                predicate: Box::new(predicate),
-                fields,
+                when: self
+                    .rows
+                    .take()
+                    .map(|rows| When::Predicate(rows as Arc<dyn Any + Send + Sync>)),
+                fields: std::mem::take(&mut self.columns),
             },
         );
     }
@@ -265,14 +416,14 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "widgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub org_id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -290,7 +441,7 @@ mod tests {
     fn ability_with(granted: Option<Arc<[String]>>) -> Ability {
         let mut ab = AbilityBuilder::new().with_granted_scopes(granted);
         ab.can(Action::Read, widget::Entity)
-            .requires_scope("widgets:read");
+            .requires_scope(Scope::new("widgets:read"));
         ab.build().expect("a valid rule set")
     }
 
@@ -319,9 +470,7 @@ mod tests {
 
     #[test]
     fn a_scope_is_an_opaque_token_never_a_wildcard() {
-        // RFC 6749 §3.3 — `widgets:*` is a value a deployment may mint, and it
-        // matches the rule requiring exactly it and nothing else. Expanding it
-        // would silently widen every credential that carries one.
+        // RFC 6749 §3.3: `widgets:*` is a value, never a pattern.
         let ability = ability_with(Some(scopes(["widgets:*"])));
         assert!(!ability.can_class(Action::Read, subject()));
         assert_eq!(
@@ -332,8 +481,6 @@ mod tests {
 
     #[test]
     fn a_credential_that_is_not_scope_aware_is_never_gated() {
-        // The session/mTLS/test case, and the reason adding `requires_scope` to
-        // a rule cannot break an app that does not use OAuth at all.
         let ability = ability_with(None);
         assert!(ability.can_class(Action::Read, subject()));
         assert!(ability.missing_scopes(Action::Read, subject()).is_empty());
@@ -354,8 +501,8 @@ mod tests {
     fn every_named_scope_is_required_and_only_the_missing_ones_are_reported() {
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes(["widgets:read"])));
         ab.can(Action::Manage, widget::Entity)
-            .requires_scope("widgets:read")
-            .requires_scope("widgets:write");
+            .requires_scope(Scope::new("widgets:read"))
+            .requires_scope(Scope::new("widgets:write"));
         let ability = ab.build().expect("a valid rule set");
 
         assert!(
@@ -371,13 +518,10 @@ mod tests {
 
     #[test]
     fn a_withheld_rule_beside_a_granted_one_is_not_a_denial() {
-        // The case `missing_scopes` must never be read as a check of its own:
-        // the narrow token still reaches the subject by the unscoped rule, so
-        // the gate allows and there is nothing to ask for.
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
         ab.can(Action::Read, widget::Entity);
         ab.can(Action::Read, widget::Entity)
-            .requires_scope("widgets:admin");
+            .requires_scope(Scope::new("widgets:admin"));
         let ability = ab.build().expect("a valid rule set");
 
         assert!(ability.can_class(Action::Read, subject()));
@@ -385,12 +529,9 @@ mod tests {
 
     #[test]
     fn a_scope_withheld_on_the_manage_wildcard_answers_a_read_refusal() {
-        // `rules_for` widens `Read` to `Manage` on the grant side; the reason
-        // for a refusal has to widen the same way or the client is told
-        // nothing.
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
         ab.can(Action::Manage, widget::Entity)
-            .requires_scope("widgets:write");
+            .requires_scope(Scope::new("widgets:write"));
         let ability = ab.build().expect("a valid rule set");
 
         assert!(!ability.can_class(Action::Read, subject()));
@@ -400,21 +541,46 @@ mod tests {
         );
     }
 
+    /// Two grants, either sufficient: the refusal names one set — every scope
+    /// of it needed, and enough — the action's own grant before the wildcard's,
+    /// so a client asking for it never asks for more than it needs.
     #[test]
-    fn a_withheld_denial_is_dropped_without_being_advertised() {
-        // A `cannot` narrows. Withholding one would let a *narrower* token see
-        // more than a wider one, and there is nothing for the client to request
-        // either way — so it is dropped silently, never reported as missing.
+    fn of_two_sufficient_grants_the_refusal_names_the_narrowest_alone() {
         let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
-        ab.can(Action::Read, widget::Entity);
-        ab.cannot(Action::Read, widget::Entity)
-            .requires_scope("widgets:admin");
+        ab.can(Action::Manage, widget::Entity)
+            .requires_scope(Scope::new("widgets:write"));
+        ab.can(Action::Read, widget::Entity)
+            .requires_scope(Scope::new("widgets:read"));
+        ab.can(Action::Read, widget::Entity)
+            .requires_scope(Scope::new("widgets:audit"));
         let ability = ab.build().expect("a valid rule set");
 
-        assert!(ability.can_class(Action::Read, subject()));
+        assert!(!ability.can_class(Action::Read, subject()));
+        assert_eq!(
+            ability.missing_scopes(Action::Read, subject()),
+            ["widgets:read"],
+            "one grant's scopes, never the union of every grant's",
+        );
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, subject()),
+            ["widgets:write"],
+        );
+    }
+
+    #[test]
+    fn a_denial_holds_for_a_token_carrying_no_scope() {
+        let mut ab = AbilityBuilder::new().with_granted_scopes(Some(scopes([])));
+        ab.can(Action::Read, widget::Entity);
+        ab.cannot(Action::Read, widget::Entity);
+        let ability = ab.build().expect("a valid rule set");
+
+        assert!(
+            !ability.can_class(Action::Read, subject()),
+            "a token asking fewer scopes never escapes a denial",
+        );
         assert!(
             ability.missing_scopes(Action::Read, subject()).is_empty(),
-            "a withheld denial is not something a client can go fix",
+            "no scope lifts a denial, so none is advertised",
         );
     }
 

@@ -1,25 +1,27 @@
-//! `#[controller]` + `#[routes]` + the response shapers — the HTTP handler
-//! surface, witnessed through the umbrella alone.
-//!
-//! Two things are proved here that nothing else in the workspace proves:
-//!
-//! 1. **Path hygiene.** `#[routes]` emits its own `Endpoint` impl rather than
-//!    wrapping poem's `#[handler]`, so every path it names is routed through
-//!    `::nest_rs_http::poem::…`. A controller crate therefore declares no
-//!    `poem` line — this module compiles with `nest-rs` and nothing else.
-//! 2. **Identifier hygiene (HTTP-M1).** The wrapper's own locals sit on
-//!    `Span::mixed_site()`, so `Json(body)` — the destructure
-//!    `/http/extractors/` teaches — cannot mask the `RequestBody` the
-//!    extractor after it reads. The behavioural half of that regression lives
-//!    in `nest-rs-http/tests/integration/controller.rs`; the half that belongs
-//!    here is that it holds through the umbrella's own re-export chain.
+//! `#[controller]` + `#[routes]` + the response shapers, through the umbrella
+//! alone: no HTTP library's line, and the wrapper's `Span::mixed_site()` locals
+//! cannot be masked by a `Json(body)` destructure; and every layer a
+//! controller and its routes bind.
 
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable, input};
+use nest_rs::guards::{Denial, Guard, GuardFor};
 use nest_rs::http::futures_util::stream;
-use nest_rs::http::poem::web::{Json, Multipart, Path};
-use nest_rs::http::{ClientIp, Header, SseEvent, SseStream, controller, input, routes};
+use nest_rs::http::{ClientIp, Header, HttpView, SseEvent, SseStream, controller, routes};
+use nest_rs::http::{Json, Multipart, Path};
+use nest_rs::pipes::GlobalPipe;
+use nest_rs::pipes::validator::ValidationError;
+
+/// A custom rule, naming `validator`'s error through the framework alone.
+fn not_blank(name: &str) -> Result<(), ValidationError> {
+    if name.trim().is_empty() {
+        return Err(ValidationError::new("blank"));
+    }
+    Ok(())
+}
 
 #[input]
 pub struct HygienePayload {
+    #[validate(custom(function = "not_blank"))]
     pub name: String,
 }
 
@@ -34,23 +36,27 @@ pub struct HygieneForm {
     pub file: String,
 }
 
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
 #[controller(path = "/hygiene")]
+#[meta(HygieneLimit(100))]
+#[use_interceptors(crate::pipeline::HygieneCache)]
 pub struct HygieneController;
 
 #[routes]
 impl HygieneController {
-    /// A body parameter under the wrapper's own local name, followed by an
-    /// extractor that reads the request — the exact ordering the collision
-    /// used to break.
+    /// A body parameter under the wrapper's own local name, then an extractor
+    /// that reads the request.
     #[post("/echo")]
     #[public]
+    #[meta(HygieneLimit(10))]
     async fn echo(&self, Json(body): Json<HygienePayload>, ip: ClientIp) -> String {
         format!("{} {}", body.name, ip.ip)
     }
 
-    /// The same, under a response shaper: the shaper re-forwards every
-    /// parameter through a second emission path.
-    #[get("/probe/:req")]
+    /// The same, under a response shaper's second emission path.
+    #[get("/probe/{req}")]
     #[public]
     #[http_code(201)]
     #[response_header("x-hygiene", "ok")]
@@ -58,19 +64,15 @@ impl HygieneController {
         req
     }
 
-    /// The third response attribute, and the one whose expansion is not a
-    /// passthrough: `#[routes]` drains the marker and writes the whole handler
-    /// body, so the paths in *that* emission are the ones under test here —
-    /// its two siblings above prove nothing about it.
+    /// `#[redirect]` is not a passthrough: `#[routes]` writes the whole
+    /// handler body, a distinct emission.
     #[get("/moved")]
     #[public]
     #[redirect("/probe/moved", 308)]
     async fn moved(&self) {}
 
-    /// The OpenAPI facets that are *types* rather than strings: a `Header<T>`
-    /// payload and an `#[api(multipart = T)]` form both make the expansion emit
-    /// a `schema_of::<T>` and a `RequestBodyMeta`, so both are paths a
-    /// controller crate would otherwise have to declare a crate for.
+    /// `Header<T>` and `#[api(multipart = T)]` emit a `schema_of::<T>` and a
+    /// `RequestBodyMeta`.
     #[post("/upload")]
     #[public]
     #[api(
@@ -83,22 +85,92 @@ impl HygieneController {
         headers.into_inner().marker.unwrap_or_default()
     }
 
-    /// `#[sse]`, whose expansion resolves a `SseSettings` at mount and wraps
-    /// the handler's stream with the connection ceiling armed. The event type,
-    /// the returned `SseStream` and the combinators that build one all arrive
-    /// through the umbrella — a controller that streams declares neither
-    /// `futures-util` nor `poem`.
+    /// `#[sse]`: a streaming controller declares neither `futures-util` nor
+    /// an HTTP library.
     #[sse("/events")]
     #[public]
     async fn events(&self) -> SseStream {
         SseStream::new(stream::iter([SseEvent::message("tick")]))
     }
+
+    /// A route's own interceptor and exception filter: its site's layers.
+    #[get("/sync")]
+    #[public]
+    #[use_interceptors(crate::pipeline::HygieneAudit)]
+    #[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+    fn sync(&self) -> String {
+        "sync".into()
+    }
+
+    /// `#[api(deprecated)]` and `#[api(error)]`: a deprecation wrapper and a
+    /// declared schema.
+    #[get("/legacy")]
+    #[public]
+    #[api(deprecated = "2026-10-08", error(503 = HygieneHeaders))]
+    fn legacy(&self) -> String {
+        "legacy".into()
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[get("/count")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn count(&self) -> String {
+        "0".into()
+    }
+
+    /// What a caller with no credential reads, named.
+    #[cfg(feature = "seaorm")]
+    #[get("/public-count")]
+    #[public(nest_rs::authz::Read, crate::entity::Entity)]
+    fn public_count(&self) -> String {
+        "0".into()
+    }
+
+    /// The same opening on a capability, which gates alone, on a stream too.
+    #[cfg(feature = "authz")]
+    #[get("/exports/open")]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export(&self) -> String {
+        "open".into()
+    }
+
+    #[cfg(feature = "authz")]
+    #[sse("/exports/open/progress")]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export_progress(&self) -> SseStream {
+        SseStream::new(stream::iter([SseEvent::message("open")]))
+    }
+
+    /// A gate-only posture, on a route and on a stream alike.
+    #[cfg(feature = "authz")]
+    #[post("/exports")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export(&self) -> String {
+        "queued".into()
+    }
+
+    #[cfg(feature = "authz")]
+    #[sse("/exports/progress")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export_progress(&self) -> SseStream {
+        SseStream::new(stream::iter([SseEvent::message("done")]))
+    }
+
+    /// A route compiled out takes its endpoint, mount, document entry and
+    /// guard with it; the paths below do not exist.
+    #[cfg(any())]
+    #[get("/sync")]
+    #[use_guards(crate::does_not_exist::Guard)]
+    async fn compiled_out(
+        &self,
+        body: crate::does_not_exist::Body,
+    ) -> crate::does_not_exist::Reply {
+        crate::does_not_exist::answer(body)
+    }
 }
 
-/// The versioned mount, whose expansion is a different shape again: the routes
-/// mount inside a loop over `VERSIONS`, and `#[version]` emits a `const`
-/// assertion calling `versions_declare`. Both are framework paths a controller
-/// crate would otherwise have to name a crate for.
+/// The versioned mount: a loop over `VERSIONS` and `#[version]`'s `const`
+/// assertion are distinct emissions.
 #[controller(path = "/hygiene-versioned", version = ["1", "2"])]
 pub struct HygieneVersionedController;
 
@@ -115,5 +187,61 @@ impl HygieneVersionedController {
     #[version("2")]
     async fn create(&self) -> String {
         "created".into()
+    }
+
+    /// A versioned mount arm is one statement holding braces: the `authz`
+    /// check stays under the route's `#[cfg]`, so `http` alone builds.
+    #[cfg(feature = "seaorm")]
+    #[get("/count")]
+    #[version("2")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn count(&self) -> String {
+        "0".into()
+    }
+}
+
+/// Checks each request it is bound on.
+#[injectable]
+#[derive(Layer)]
+pub struct HygieneRouteGuard;
+
+#[async_trait]
+impl Guard for HygieneRouteGuard {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for HygieneRouteGuard {}
+
+/// Reads a body and changes nothing: the pipe a controller and a route bind.
+#[injectable]
+#[derive(Layer)]
+pub struct HygieneBodyPipe;
+
+impl GlobalPipe for HygieneBodyPipe {}
+
+/// A guard, a pipe and an exception filter on the struct, and each route's
+/// own beside them.
+#[controller(path = "/hygiene-layered")]
+#[use_guards(HygieneRouteGuard)]
+#[use_pipes(HygieneBodyPipe)]
+#[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+pub struct HygieneLayeredController;
+
+#[routes]
+impl HygieneLayeredController {
+    #[post("/checked")]
+    #[use_guards(HygieneRouteGuard)]
+    #[use_pipes(HygieneBodyPipe)]
+    async fn checked(&self, Json(body): Json<HygienePayload>) -> String {
+        body.name
+    }
+
+    /// The struct's guard re-run on this route alone.
+    #[get("/again")]
+    #[force_guards(HygieneRouteGuard)]
+    fn again(&self) -> String {
+        "again".into()
     }
 }

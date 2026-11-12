@@ -1,0 +1,5 @@
+error: #[resource] `template` names `{id}`, which no parameter of `note` takes — add `id: T`, where `T: FromStr` reads it off the URI
+  --> tests/integration/diagnostics/mcp/resource_variable_no_parameter_takes.rs:13:27
+   |
+13 |     #[resource(template = "note://{id}")]
+   |                           ^^^^^^^^^^^^^

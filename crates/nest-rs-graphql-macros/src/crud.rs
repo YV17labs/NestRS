@@ -1,17 +1,8 @@
 //! `#[crud]` — synthesise the standard resolver operations the developer did
-//! not hand-write, then re-emit under `#[operations]`. Every operation
-//! delegates to the entity's [`CrudService`] — never `Repo` directly.
-//! Override by writing the matching method.
-//!
-//! Each generated operation declares its posture with the same
-//! `#[authorize(Action, Entity)]` a hand-written one would — `#[operations]`
-//! emits the class gate and the response mask from it, so generated and
-//! hand-written operations share one mechanism. The by-id operations
-//! (`get`/`update`/`delete`) still row-gate through [`CrudService::access`];
-//! the class gate in front of it is observably equivalent for any caller with
-//! at least one grant (`Ability::can_class` counts row-scoped rules) and
-//! rejects zero-grant callers one step earlier.
+//! not hand-write, each delegating to the entity's `CrudService` and typed off
+//! it, then re-emit under `#[operations]`.
 
+use nest_rs_codegen::__private::pair;
 use std::collections::HashSet;
 
 use proc_macro::TokenStream;
@@ -19,12 +10,13 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, parse_quote};
 
-use nest_rs_codegen::{Paginate, parse_crud_args, singular_of};
+use nest_rs_codegen::__private::{
+    CHECKED_BY_CRUD, CrudOp, CrudTypes, Paginate, cfg_attrs, impl_self_ident, parse_crud_args,
+    resolver_singular, unit_of_work_required,
+};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
-    // The generated spelling of the impl half, so it answers a wrong shape
-    // through the edge's one pair constant, exactly as `#[operations]` does.
-    let item = match crate::resolver::GRAPHQL_PAIR.parse_operations(input.into()) {
+    let item = match pair::GRAPHQL.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -36,8 +28,16 @@ pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
 
 fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let cfg = parse_crud_args(args)?;
-    let ops = cfg.generated_ops()?;
-
+    if let Some(written) = cfg.api_written() {
+        return Err(syn::Error::new(
+            written,
+            format!(
+                "{} documents the generated routes' OpenAPI operations, and a resolver serves \
+                 none — write the operation by hand, with its doc comment as its description",
+                nest_rs_codegen::__private::site("crud", Some("api")),
+            ),
+        ));
+    }
     let existing: HashSet<String> = item
         .items
         .iter()
@@ -47,71 +47,37 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         })
         .collect();
 
-    let service = &cfg.service;
-    let entity = &cfg.entity;
-    let output = &cfg.output;
-    let singular = singular_of(output);
-    let list_op = format_ident!("{}s", singular);
-    let get_op = format_ident!("{}", singular);
-    let create_op = format_ident!("create_{}", singular);
-    let update_op = format_ident!("update_{}", singular);
-    let delete_op = format_ident!("delete_{}", singular);
+    let host = impl_self_ident(&item.self_ty, "#[crud]")?;
+    let singular = resolver_singular(&host);
+    let ops = cfg.generated_ops(&existing, |op| op.resolver_method(&singular))?;
+    let CrudTypes {
+        service,
+        entity,
+        output,
+        create,
+        update,
+        aliases,
+    } = cfg.types(&host, &item.self_ty, ops);
+    let list_op = format_ident!("{}", CrudOp::List.resolver_method(&singular));
+    let get_op = format_ident!("{}", CrudOp::Get.resolver_method(&singular));
+    let create_op = format_ident!("{}", CrudOp::Create.resolver_method(&singular));
+    let update_op = format_ident!("{}", CrudOp::Update.resolver_method(&singular));
+    let delete_op = format_ident!("{}", CrudOp::Delete.resolver_method(&singular));
 
-    // Validation half of route-model binding (bad format/version => GraphQL
-    // error before any load); the load + authz half is the service's `access`.
-    // Through `parse_v7`, the same refusal a hand-written `bind` gives: both
-    // malformed branches answer `INVALID_ARGUMENT`, where mapping the parse
-    // failure to its `Display` leaked the `uuid` crate's internal string.
     let parse_id: TokenStream2 = quote! {
         let __id = ::nest_rs_seaorm::graphql::parse_v7(&id)?;
     };
-    // Through `service_error`, so a `ServiceError::Validation` carries its
-    // field errors under `extensions.errors` — the same member the HTTP twin
-    // puts on the RFC 9457 envelope. Stringifying it named nothing a client
-    // could branch on, and rebuilt the message from `validator`'s `Debug`
-    // payload.
-    // Every call below yields a `DbErr`, whose `Display` is already the opaque
-    // wire string. Structured field errors come from `validate_input` (a
-    // `PipeError`), which runs before any of them.
-    let gql_err: TokenStream2 = quote! {
-        |__e| ::nest_rs_graphql::async_graphql::Error::new(::std::string::ToString::to_string(&__e))
+    let crud_error: TokenStream2 = quote! {
+        ::nest_rs_seaorm::__private::graphql_crud_error
     };
     let forbidden: TokenStream2 = quote! {
-        ::nest_rs_graphql::async_graphql::Error::new("forbidden")
-    };
-    // Global validation: create/update inputs run `validator::Validate` before
-    // the service write — the NestJS `ValidationPipe` analog. `ValidateProbe`
-    // no-ops when the input type carries no rules (compile-time dispatch), so
-    // this is free for inputs without `#[validate]`. Runs before the DB load so
-    // a malformed input never reaches the service.
-    // The rejection goes through `pipe_error`, not the generic `gql_err`: a
-    // stringified `PipeError` is the constant `"validation failed"`, which
-    // leaves a GraphQL client unable to tell *which* field was wrong while the
-    // HTTP twin names them all.
-    let validate_input: TokenStream2 = quote! {
-        {
-            use ::nest_rs_graphql::MaybeValidateFallback as _;
-            ::nest_rs_graphql::ValidateProbe(&input)
-                .maybe_validate()
-                .map_err(|__e| ::nest_rs_graphql::pipe_error(&__e))?;
-        }
+        ::nest_rs_authz::graphql::forbidden()
     };
 
     let mut generated: Vec<ImplItem> = Vec::new();
 
-    if ops.list && !existing.contains(&list_op.to_string()) {
+    if ops.list {
         let list_method: ImplItem = match cfg.paginate {
-            // Keyset pagination (the default): `first` capped by
-            // `clamp_page_size`, `after` = the last item's id (UUID-v7 keys
-            // are time-ordered, so the cursor is just the previous page's
-            // last `id`). The body stays a plain `Vec` so the automatic
-            // response mask applies unchanged.
-            //
-            // A caller who names no `first` gets `DEFAULT_PAGE_SIZE` — the
-            // constant, by path, not the number. `?first=` on the HTTP twin
-            // reads it through `PageParams::limit` and an auto-resolved
-            // relation reads it directly, so "how many rows does an
-            // unparameterised page return" has one answer on every surface.
             Paginate::Cursor => parse_quote! {
                 #[query]
                 #[authorize(::nest_rs_authz::Read, #entity)]
@@ -120,11 +86,11 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     first: ::core::option::Option<u64>,
                     after: ::core::option::Option<::std::string::String>,
                 ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
-                    let __after = after
-                        .as_deref()
-                        .and_then(|__s| ::nest_rs_resource::uuid::Uuid::parse_str(__s).ok());
+                    let __after = ::nest_rs_seaorm::__private::graphql_page_cursor(
+                        ::core::option::Option::as_deref(&after),
+                    )?;
                     let __page = ::nest_rs_seaorm::CrudService::page(
-                        &*self.#service,
+                        #service(self),
                         ::core::option::Option::unwrap_or(
                             first,
                             ::nest_rs_seaorm::DEFAULT_PAGE_SIZE,
@@ -132,31 +98,29 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         __after,
                     )
                     .await
-                    .map_err(#gql_err)?;
+                    .map_err(#crud_error)?;
                     ::core::result::Result::Ok(
-                        __page.items.iter().map(#output::from).collect(),
+                        __page.items.iter().map(<#output>::from).collect(),
                     )
                 }
             },
-            // Explicit opt-out (`paginate = none`): the full ability-scoped
-            // collection, still backstopped by `CrudService::list`'s hard cap.
             Paginate::None => parse_quote! {
                 #[query]
                 #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn #list_op(
                     &self,
                 ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
-                    let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
+                    let __rows = ::nest_rs_seaorm::CrudService::list(#service(self))
                         .await
-                        .map_err(#gql_err)?;
-                    ::core::result::Result::Ok(__rows.iter().map(#output::from).collect())
+                        .map_err(#crud_error)?;
+                    ::core::result::Result::Ok(__rows.iter().map(<#output>::from).collect())
                 }
             },
         };
         generated.push(list_method);
     }
 
-    if ops.get && !existing.contains(&get_op.to_string()) {
+    if ops.get {
         generated.push(parse_quote! {
             #[query]
             #[authorize(::nest_rs_authz::Read, #entity)]
@@ -166,15 +130,15 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 #parse_id
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Read,
                     __id,
                 )
                 .await
-                .map_err(#gql_err)?
+                .map_err(#crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => ::core::result::Result::Ok(
-                        ::core::option::Option::Some(#output::from(&__m)),
+                        ::core::option::Option::Some(<#output>::from(&__m)),
                     ),
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
                     ::nest_rs_seaorm::Access::Missing => {
@@ -185,9 +149,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
 
-    if let Some(create) = ops.create
-        && !existing.contains(&create_op.to_string())
-    {
+    if ops.create {
         generated.push(parse_quote! {
             #[mutation]
             #[authorize(::nest_rs_authz::Create, #entity)]
@@ -195,18 +157,17 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 &self,
                 input: #create,
             ) -> ::nest_rs_graphql::async_graphql::Result<#output> {
-                #validate_input
-                let __row = ::nest_rs_seaorm::Creatable::create(&*self.#service, input)
+                let __row = ::nest_rs_seaorm::Creatable::create(#service(self), input)
                     .await
-                    .map_err(#gql_err)?;
-                ::core::result::Result::Ok(#output::from(&__row))
+                    .map_err(::nest_rs_seaorm::__private::graphql_crud_write_error::<#entity>(
+                        <#create as ::nest_rs_seaorm::CreateModel<#entity>>::field_for,
+                    ))?;
+                ::core::result::Result::Ok(<#output>::from(&__row))
             }
         });
     }
 
-    if let Some(update) = ops.update
-        && !existing.contains(&update_op.to_string())
-    {
+    if ops.update {
         generated.push(parse_quote! {
             #[mutation]
             #[authorize(::nest_rs_authz::Update, #entity)]
@@ -216,25 +177,26 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 input: #update,
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 #parse_id
-                #validate_input
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Update,
                     __id,
                 )
                 .await
-                .map_err(#gql_err)?
+                .map_err(#crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         let __row = ::nest_rs_seaorm::Updatable::update(
-                            &*self.#service,
+                            #service(self),
                             __m,
                             input,
                         )
                         .await
-                        .map_err(#gql_err)?;
+                        .map_err(::nest_rs_seaorm::__private::graphql_crud_write_error::<#entity>(
+                            <#update as ::nest_rs_seaorm::UpdateModel<#entity>>::field_for,
+                        ))?;
                         ::core::result::Result::Ok(::core::option::Option::Some(
-                            #output::from(&__row),
+                            <#output>::from(&__row),
                         ))
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
@@ -246,7 +208,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
         });
     }
 
-    if ops.delete && !existing.contains(&delete_op.to_string()) {
+    if ops.delete {
         generated.push(parse_quote! {
             #[mutation]
             #[authorize(::nest_rs_authz::Delete, #entity)]
@@ -256,17 +218,17 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ) -> ::nest_rs_graphql::async_graphql::Result<bool> {
                 #parse_id
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Delete,
                     __id,
                 )
                 .await
-                .map_err(#gql_err)?
+                .map_err(#crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
+                        ::nest_rs_seaorm::Deletable::delete(#service(self), __m)
                             .await
-                            .map_err(#gql_err)?;
+                            .map_err(#crud_error)?;
                         ::core::result::Result::Ok(true)
                     }
                     ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(#forbidden),
@@ -278,10 +240,16 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     generated.append(&mut item.items);
     item.items = generated;
+    let unit_of_work = unit_of_work_required(&item.self_ty, &cfg_attrs(&item.attrs));
 
+    let checked = proc_macro2::Ident::new(CHECKED_BY_CRUD, proc_macro2::Span::call_site());
     Ok(quote! {
-        #[::nest_rs_graphql::operations]
+        #aliases
+
+        #[::nest_rs_graphql::operations(#checked)]
         #item
+
+        #unit_of_work
     })
 }
 
@@ -292,46 +260,87 @@ mod tests {
 
     use super::*;
 
-    // A `create` op listed without its `create = <Input>` type is a hard macro
-    // error — a write op is never silently dropped or exposed as a no-op
-    // mutation on the wire. (GraphQL analog of the same gate the HTTP `#[crud]`
-    // already tests.)
-    #[test]
-    fn create_op_without_input_type_fails_to_expand() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let err = crud(
-            quote! { service = svc, entity = E, output = Thing, ops = [create] },
-            item,
-        )
-        .expect_err("create without an input type must fail to expand");
-        assert!(err.to_string().contains("create"), "names the op: {}", err);
+    fn generated(args: TokenStream2, item: ItemImpl) -> syn::Result<String> {
+        crud(args, item).map(|tokens| tokens.to_string())
     }
 
-    // The same gate for `update`.
     #[test]
-    fn update_op_without_input_type_fails_to_expand() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let err = crud(
-            quote! { service = svc, entity = E, output = Thing, ops = [update] },
-            item,
-        )
-        .expect_err("update without an input type must fail to expand");
-        assert!(err.to_string().contains("update"), "names the op: {}", err);
+    fn the_service_alone_names_every_operation_off_the_resolvers_resource() {
+        let item: ItemImpl = parse_quote! { impl ThingsResolver {} };
+        let out = generated(quote! { service = ThingsService }, item).expect("expands");
+        for op in [
+            "fn things",
+            "fn thing",
+            "fn create_thing",
+            "fn update_thing",
+            "fn delete_thing",
+        ] {
+            assert!(out.contains(op), "{op}: {out}");
+        }
+        assert!(
+            out.contains("input : __NestrsCrudThingsResolverCreate"),
+            "the create input is the service's: {out}"
+        );
+        assert!(
+            out.contains("Result < __NestrsCrudThingsResolverOutput >"),
+            "the answer is the entity's wire type: {out}"
+        );
     }
 
-    // The valid form — a write op paired with its input type — expands and
-    // emits the operation.
     #[test]
-    fn create_op_with_input_type_expands() {
-        let item: ItemImpl = parse_quote! { impl Things {} };
-        let out = crud(
-            quote! {
-                service = svc, entity = E, output = Thing, ops = [create], create = CreateThing
-            },
+    fn a_host_named_in_the_singular_still_lists_in_the_plural() {
+        let item: ItemImpl = parse_quote! { impl ThingResolver {} };
+        let out = generated(quote! { service = ThingsService, ops = [list, get] }, item)
+            .expect("expands");
+        assert!(
+            out.contains("fn things") && out.contains("fn thing ("),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_paginate_for_an_excluded_list_fails_to_expand() {
+        let item: ItemImpl = parse_quote! { impl ThingsResolver {} };
+        let err = generated(
+            quote! { service = ThingsService, ops = [get], paginate = none },
             item,
         )
-        .expect("create paired with its input type expands")
-        .to_string();
-        assert!(out.contains("create_thing"), "emits the create op: {out}");
+        .expect_err("a `paginate` for an excluded `list` must fail to expand");
+        assert!(
+            err.to_string()
+                .contains("`paginate` configures the `list` op"),
+            "names the key and the op: {err}",
+        );
+    }
+
+    #[test]
+    fn a_paginate_beside_a_hand_written_list_fails_to_expand() {
+        let item: ItemImpl = parse_quote! {
+            impl ThingsResolver {
+                async fn things(&self) -> Vec<Thing> { Vec::new() }
+            }
+        };
+        let err = generated(quote! { service = ThingsService, paginate = none }, item)
+            .expect_err("a `paginate` beside a hand-written list must fail to expand");
+        assert_eq!(
+            err.to_string(),
+            "#[crud] `paginate` configures the `list` op, which this block writes by hand as \
+             `fn things` — drop `paginate = …`: the method bounds its own list",
+        );
+    }
+
+    #[test]
+    fn an_op_the_block_writes_is_not_generated_nor_its_input_named() {
+        let item: ItemImpl = parse_quote! {
+            impl ThingsResolver {
+                async fn create_thing(&self) -> bool { true }
+            }
+        };
+        let out = generated(quote! { service = ThingsService }, item).expect("expands");
+        assert!(
+            !out.contains("type __NestrsCrudThingsResolverCreate"),
+            "{out}"
+        );
+        assert!(out.contains("fn update_thing"), "{out}");
     }
 }

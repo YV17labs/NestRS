@@ -4,21 +4,19 @@
 #[non_exhaustive]
 pub enum OpenTelemetryError {
     /// Subscriber setup failed — e.g. a global subscriber was already installed.
-    /// Carries the underlying message.
     #[error("OpenTelemetry init failed: {0}")]
     Init(String),
-    /// A set-but-unparseable log filter (`NESTRS_LOG`, or a
-    /// `with_log_filter` builder value) aborts boot naming the bad directive
-    /// rather than silently degrading to `info` — framework config contract:
-    /// set-but-unparseable is an error, never a fallback.
-    #[error("invalid log filter {value:?}: {source}")]
-    InvalidLogFilter {
-        /// The offending directive string, echoed back so the operator can see
-        /// exactly what failed to parse.
-        value: String,
-        /// The underlying `EnvFilter` parse error.
-        source: tracing_subscriber::filter::ParseError,
-    },
+    /// A setting was refused, named and never quoted: an `OTEL_*` variable or a
+    /// field set in code that does not parse or is outside its range, an
+    /// endpoint OTLP/HTTP cannot speak to, a file a certificate variable names
+    /// that cannot be read, or TLS material that cannot be used.
+    #[error(transparent)]
+    Config(#[from] nest_rs_config::ConfigError),
+    /// A console setting does not parse — `RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
+    /// `<PREFIX>_LOG_SOURCE_LOCATION`, or `OpenTelemetryConfig::log_filter` set
+    /// in code — named, never quoted.
+    #[error(transparent)]
+    LogSettings(#[from] nest_rs_core::logging::LogSettingsError),
     /// Building the OTLP exporter pipeline failed (bad endpoint, transport
     /// error). Only present under the `otlp` feature.
     #[cfg(feature = "otlp")]

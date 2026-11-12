@@ -4,25 +4,17 @@ use syn::Ident;
 
 /// `AudioProcessor` → `audio_processor`, `HTTPServer` → `http_server`.
 ///
-/// Camel/Pascal → snake, and **a run of capitals is one word**: a `_` goes in
-/// before an uppercase letter only where a word actually begins — after a
-/// lowercase or a digit, or at the last capital of a run that a lowercase
-/// follows. Splitting on every capital instead turned `APIKey` into
-/// `a_p_i_key`, which reads as nothing.
+/// Camel/Pascal → snake, and **a run of capitals is one word**.
 ///
-/// Shared, not copied. Its outputs are Rust identifiers inside macro
-/// expansions (`#[processor]`, `#[listeners]`, `#[mcp]` all build one with
-/// `format_ident!`) **and** the controller half of an OpenAPI `operationId`,
-/// which a client generator turns into a method name — the one output a
-/// developer reads. A second implementation would eventually disagree with
-/// this one about a name that reaches both.
+/// `OAuth` → `o_auth`: a single capital before a capitalised word cannot be told
+/// from a one-letter prefix; spell the type `Oauth`, as Rust spells `Uuid`.
 ///
-/// One shape no general rule can resolve: a **single** capital followed by a
-/// capitalised word, `OAuth` → `o_auth`. Nothing distinguishes it from `XRay`
-/// or a genuine one-letter prefix without a dictionary, and a heuristic for it
-/// would fire on names it has no business touching. Rust's own convention is
-/// the answer — acronyms count as one word (`Uuid`, not `UUID`), so the type
-/// is spelled `Oauth`.
+/// ```
+/// use nest_rs_codegen::snake_case;
+///
+/// assert_eq!(snake_case("InvoiceAuditor"), "invoice_auditor");
+/// assert_eq!(snake_case("HTTPServer"), "http_server");
+/// ```
 pub fn snake_case(camel: &str) -> String {
     let chars: Vec<char> = camel.chars().collect();
     let mut out = String::with_capacity(camel.len() + 4);
@@ -41,8 +33,13 @@ pub fn snake_case(camel: &str) -> String {
     out
 }
 
-/// `org_id` → `OrgId`. Matches SeaORM's `Column` enum naming and the
-/// `<Service>By<Method>` loader struct convention from `#[dataloader]`.
+/// `org_id` → `OrgId`, keeping the identifier's span: the `<Service>By<Method>`
+/// loader struct convention from `#[dataloader]`.
+///
+/// ```
+/// let method: syn::Ident = syn::parse_quote!(by_org_id);
+/// assert_eq!(nest_rs_codegen::pascal_case(&method), "ByOrgId");
+/// ```
 pub fn pascal_case(ident: &Ident) -> Ident {
     let mut out = String::new();
     let mut upper = true;
@@ -59,9 +56,96 @@ pub fn pascal_case(ident: &Ident) -> Ident {
     Ident::new(&out, ident.span())
 }
 
+/// A method name as a GraphQL schema serves it — a port of `Inflector`'s
+/// `to_camel_case`, async-graphql's default (a new word after a digit too):
+/// `get_2fa` is `get2Fa`, `userID` stays `userID`. Held against the derive by a test.
+pub fn camel_case(name: &str) -> String {
+    let trimmed = name.trim_end_matches(|c: char| !c.is_alphanumeric());
+    let mut camel = String::with_capacity(trimmed.len());
+    let mut new_word = false;
+    let mut last = ' ';
+    let mut started = false;
+    for c in trimmed.chars() {
+        if !c.is_alphanumeric() {
+            new_word |= started;
+        } else if c.is_numeric() {
+            started = true;
+            new_word = true;
+            camel.push(c);
+        } else if new_word || (last.is_lowercase() && c.is_uppercase()) {
+            started = true;
+            new_word = false;
+            camel.push(c.to_ascii_uppercase());
+        } else {
+            started = true;
+            last = c;
+            camel.push(c.to_ascii_lowercase());
+        }
+    }
+    camel
+}
+
+/// Naive English singularization over the last word of a PascalCase name:
+/// `Users` → `User`, `Categories` → `Category`, `Statuses` → `Status`; a word
+/// already singular passes through. `#[crud]` reads a host's resource by it,
+/// and `nestrs g` names an entity by its own copy, which links no framework
+/// crate: a test there holds the two alike.
+pub fn singular(pascal: &str) -> String {
+    let lower = pascal.to_lowercase();
+    if let Some(stem) = pascal.get(..pascal.len().saturating_sub(3))
+        && lower.ends_with("ies")
+    {
+        return format!("{stem}y");
+    }
+    for suffix in ["ses", "xes", "zes", "ches", "shes"] {
+        if lower.ends_with(suffix) {
+            return pascal[..pascal.len() - 2].to_owned();
+        }
+    }
+    if lower.ends_with("ss") {
+        return pascal.to_owned();
+    }
+    pascal.trim_suffix('s').to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plural_reads_as_its_singular_and_a_singular_as_itself() {
+        for (plural, singular) in [
+            ("Users", "User"),
+            ("Categories", "Category"),
+            ("Statuses", "Status"),
+            ("Boxes", "Box"),
+            ("Address", "Address"),
+            ("Post", "Post"),
+            ("BlogPosts", "BlogPost"),
+            ("", ""),
+        ] {
+            assert_eq!(super::singular(plural), singular, "{plural}");
+        }
+    }
+
+    #[test]
+    fn a_method_name_is_camel_cased_as_async_graphql_does() {
+        for (method, served) in [
+            ("user_count", "userCount"),
+            ("get_2fa", "get2Fa"),
+            ("a_1b", "a1B"),
+            ("a1_b", "a1B"),
+            ("page_2_items", "page2Items"),
+            ("v2_api", "v2Api"),
+            ("userID", "userID"),
+            ("user_id", "userId"),
+            ("_leading", "leading"),
+            ("trailing_", "trailing"),
+            ("x", "x"),
+        ] {
+            assert_eq!(camel_case(method), served, "{method}");
+        }
+    }
 
     #[test]
     fn a_run_of_capitals_is_one_word() {
@@ -69,7 +153,6 @@ mod tests {
         assert_eq!(snake_case("HTTPServer"), "http_server");
         assert_eq!(snake_case("APIKey"), "api_key");
         assert_eq!(snake_case("IOHandler"), "io_handler");
-        // A run that ends the name has no word after it to begin.
         assert_eq!(snake_case("ParseHTTP"), "parse_http");
         assert_eq!(snake_case("HTTP"), "http");
     }
@@ -84,20 +167,11 @@ mod tests {
 
     #[test]
     fn two_spellings_of_one_acronym_now_reduce_to_one_token() {
-        // A consequence worth stating rather than discovering: reading a run of
-        // capitals as one word makes `HTTPServer` and `HttpServer` the same
-        // token, where splitting on every capital kept them apart. Both feed
-        // `format_ident!`, so a crate declaring both as processors gets a
-        // duplicate-definition compile error — loud, and at the second
-        // declaration. Nothing silent turns on it.
         assert_eq!(snake_case("HTTPServer"), snake_case("HttpServer"));
     }
 
     #[test]
     fn a_single_leading_capital_is_the_shape_no_rule_resolves() {
-        // `OAuth` is `O` + `Auth`, and nothing but a dictionary says so — the
-        // same input shape as a genuine one-letter prefix. Documented rather
-        // than special-cased: Rust's own convention spells the type `Oauth`.
         assert_eq!(snake_case("OAuth"), "o_auth");
         assert_eq!(snake_case("Oauth"), "oauth");
     }

@@ -1,0 +1,17 @@
+error[E0277]: `#[process]` takes `std::string::String`, and its queue's job is `DemoCommand`
+  --> tests/integration/diagnostics/queue/process_job_type_is_the_queues.rs:24:23
+   |
+24 |     #[process(queue = DemoQueue)]
+   |                       ^^^^^^^^^ this queue's job is `DemoCommand`
+   |
+help: the trait `nest_rs::queue::__private::IsJob<std::string::String>` is not implemented for `DemoCommand`
+  --> tests/integration/diagnostics/queue/process_job_type_is_the_queues.rs:11:1
+   |
+11 | struct DemoCommand {
+   | ^^^^^^^^^^^^^^^^^^
+   = note: a `#[process]` method's argument is the job of the queue it names: take `DemoCommand`, or name the queue whose job is `std::string::String`
+note: required by a bound in `__nestrs_assert_queue_job`
+  --> tests/integration/diagnostics/queue/process_job_type_is_the_queues.rs:24:23
+   |
+24 |     #[process(queue = DemoQueue)]
+   |                       ^^^^^^^^^ required by this bound in `__nestrs_assert_queue_job`

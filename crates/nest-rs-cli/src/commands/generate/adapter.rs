@@ -1,43 +1,51 @@
-//! `nestrs g http|graphql|ws|queue|schedule|mcp <feature>` — bolt one
+//! `nestrs g http|graphql|ws|queue|schedule|mcp|events <feature>` — bolt one
 //! transport adapter onto an existing port. One uniform generator parameterised
-//! by [`Transport`]: it picks the right templates, ensures the transport's
-//! crates, wires the feature `mod.rs`, and (inside an app) the app's imports.
+//! by [`Transport`]: it picks the right templates, imports an event's bus into
+//! the port, ensures the transport's crates, wires the feature `mod.rs`, and
+//! (inside an app) the app's imports.
 //!
-//! Two things vary with the **port**, not the transport: a `g resource` port
-//! exposes a `CrudService` rather than the `count()` stand-in `g feature`
-//! writes, and a DB-backed adapter is only reachable behind the app's guards.
-//! So a GraphQL adapter over a resource takes the `#[crud]` template and comes
-//! with the `authz/graphql/` bridge its module imports — the GraphQL twin of
-//! what `g resource` already does for HTTP. GraphQL, WS and MCP each get their
-//! own bridge under `authz/` ([`auth::bridge_for`]) whenever the workspace has
-//! a policy to enforce.
+//! A `g resource` port exposes a `CrudService` rather than `g feature`'s
+//! `count()` stand-in, and its rows are reachable only behind the app's guards:
+//! GraphQL and HTTP over one take the `#[crud]` template, and each transport
+//! gets its `authz/` adapter ([`auth::authz_for`]) whenever the workspace has a
+//! policy to enforce. An HTTP controller and a WebSocket gateway bind the guards
+//! over either port shape, and a GraphQL operation and an MCP tool gate on the
+//! port's subject — its entity, or a `#[subject]` written beside the service
+//! for a port with none — so no generated operation is open by default: the
+//! workspace gets its auth adapter first when it has none.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::auth;
 use super::cargo::{
     adapter_deps, app_host_deps, auth_deps, ensure_features_deps, ensure_workspace_deps,
     graphql_port_deps,
 };
-use super::support::{finish, wire_into_app};
+use super::migration::{OUTBOX_MIGRATION, queue_framework_entry};
+use super::port::{CrudPort, Port};
+use super::support::{Import, Wiring, data_layer, finish, wire_into_app, wiring_lines};
 use crate::commands::resolve_start;
-use crate::context::{Context, NestrsWorkspace};
-use crate::error::{CliError, CliResult};
+use crate::context::Context;
+use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::{Names, Transport, command_file};
 use crate::scaffold::{
-    Renderer, Scaffold, ensure_expose_graphql, ensure_lines, ensure_module_imports,
+    Renderer, Scaffold, Transform, declares_expose, ensure_expose_graphql, ensure_lines,
+    ensure_module_imports, rel,
 };
 use crate::templates::adapter;
 
-pub struct AdapterOptions {
+pub(crate) struct AdapterOptions {
     pub name: String,
     pub path: Option<PathBuf>,
+    /// The app to wire into (`--app`).
+    pub app: Option<String>,
     pub dry_run: bool,
 }
 
-pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
+pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
+    let target = ctx.target_app(opts.app.as_deref())?;
 
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
@@ -58,33 +66,34 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     }
 
     let tmodule = names.module_for(transport);
-    // A CRUD port's service has no `count()`, and its rows are only reachable
-    // behind an ability — both decide the handler this adapter renders, and
-    // (for GraphQL and HTTP) which template it takes.
     let is_graphql = transport == Transport::Graphql;
-    let crud_port = is_crud_port(&ws, &names.snake);
-    let mut r = Renderer::new(&names)
-        .with("handler", names.handler_for(transport))
-        .with("handler_mod", transport.handler_mod())
-        .with("tmodule", tmodule.clone());
-    for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
-        r = r.with(key, value);
+    let port = Port::read(&feature_root, &names)?;
+    let crud_port = port.crud.is_some();
+    // What an operation's posture names: the port's entity, or the capability
+    // a port with none declares, written once by the first adapter gating on it.
+    let gated_operation = matches!(transport, Transport::Graphql | Transport::Mcp);
+    // Named for its kind, never its type: a port named by its own singular would
+    // hold `blog/blog.rs`, a module of its own name.
+    let subject_file = feature_root.join("subject.rs");
+    let writes_subject = gated_operation && !port.has_entity && !subject_file.exists();
+    let mut r = adapter_renderer(&names, transport, crud_port, port.has_entity);
+    if let Some(crud) = &port.crud {
+        r = r.with("service", crud.service.clone());
     }
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
+    // A `#[crud]` handler runs every call in a unit of work, so the app gets the
+    // data layer beside it, as `g resource` writes it: an app without is refused at
+    // boot.
+    let needs_unit_of_work = crud_port && matches!(transport, Transport::Http | Transport::Graphql);
     let mut s = Scaffold::new();
     s.create(dir.join(transport.handler_file()), r.render(handler_tmpl));
 
-    // Only the two `#[crud]` templates render a *guarded* handler, and a guarded
-    // handler is enforced through its transport's authz bridge — so those two
-    // import it in the adapter's `module.rs`, through the same wiring transform
-    // an app's composition site takes rather than a second module template.
-    // Without it the access graph fails the boot on the guards the generated
-    // `#[crud]` block names. The module's name comes from the bridge table, so
-    // it is spelled once.
+    // Every transport with an authz adapter scaffolds a guarded handler, which
+    // imports that adapter, or the access graph fails the boot on the guards it
+    // names.
     let mut module_rs = r.render(module_tmpl);
-    let guarded_handler = crud_port && matches!(transport, Transport::Graphql | Transport::Http);
-    if guarded_handler
-        && let Some(b) = auth::bridge_for(transport)
+    let guarded = auth::authz_for(transport);
+    if let Some(b) = guarded
         && let Some(wired) = ensure_module_imports(&[(b.feature_path, b.module)])(&module_rs)
     {
         module_rs = wired;
@@ -92,49 +101,35 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     s.create(dir.join("module.rs"), module_rs);
     s.create(dir.join("mod.rs"), r.render(adapter::MOD));
 
-    // The transport's authz bridge: scaffolded whenever this workspace has a
-    // policy to enforce (or is getting one now, because a CRUD resolver names
-    // the guards). `/graphql` and `/mcp` gate in band, per operation — without
-    // these providers `/graphql` falls back to a chain that installs no
-    // ability, and `/mcp` is deny-all. A WS gateway needs the socket data
-    // context that scopes its rows.
-    //
-    // Generating them is the whole point: the `g mcp` next step names
-    // `features::authz::mcp`, and the generated gateway's SECURITY comment
-    // names `AuthzWsModule`. Both used to be instructions pointing at modules
-    // no generator wrote, leaving the repo's own demo as the only source.
-    let scaffolded_auth = is_graphql && crud_port && !auth::exists(&ws);
-    let bridge = auth::bridge_for(transport).filter(|b| {
+    // The transport's authz adapter, whenever the workspace has a policy to enforce:
+    // without it `/graphql` installs no ability and `/mcp` is deny-all.
+    let scaffolded_auth = guarded.is_some() && !auth::exists(&ws);
+    let authz = guarded.filter(|b| {
         !b.written_by_g_auth && (scaffolded_auth || auth::exists(&ws)) && !b.exists(&ws)
     });
-    let decls = bridge.map(auth::AuthzBridge::decls).unwrap_or_default();
-    if let Some(bridge) = bridge {
-        bridge.queue(&mut s, &ws);
+    let decls = authz.map_or_default(auth::AuthzAdapter::decls);
+    if let Some(authz) = authz {
+        authz.queue(&mut s, &ws);
     }
+    let mut bootstrapped = None;
     if scaffolded_auth {
-        // The index lines ride in `authz/mod.rs`'s contents: this run creates
-        // the file, so there is nothing on disk for an `edit` to resolve
-        // against. (Scaffolding auth implies scaffolding its bridge — an
-        // `authz/<transport>` cannot exist when `authz` does not.)
-        auth::queue(&mut s, &ws, decls);
-    } else if bridge.is_some() {
+        // This run creates `authz/mod.rs`, so its index lines ride in its contents:
+        // there is nothing on disk for an `edit` to resolve against.
+        bootstrapped = Some(auth::queue(&mut s, &ws, decls)?);
+    } else if authz.is_some() {
         s.edit(ws.features_root().join("authz/mod.rs"), ensure_lines(decls));
     }
 
-    // The queue payload and its `QueueName` marker are a producer↔worker
-    // contract, so they live at the *port* (`command.rs`), not in the
-    // consumer-side `queue/` adapter — the generated `processor.rs` imports
-    // both. Re-exporting the marker is what keeps the typed `push_to::<Q>`
-    // reachable: left inside the private `queue::processor` module it is
-    // invisible even to the feature's own service, and the untyped
-    // `push(name, job)` escape hatch becomes the only way to enqueue. Lines
-    // wiring it into the feature `mod.rs` are folded into the single edit
-    // below (one edit per file).
     let mut port_lines = Vec::new();
+    if writes_subject {
+        s.create(subject_file, r.render(crate::templates::feature::SUBJECT));
+        port_lines.push("mod subject;".to_string());
+        port_lines.push(format!("pub use subject::{};", names.entity()));
+    }
+    // The payload and its `#[queue]` marker are a producer↔worker contract, so
+    // they live at the port; re-exporting the marker keeps the typed
+    // `push(Q, job, ..)` reachable from outside the private `queue::processor`.
     if transport == Transport::Queue {
-        // Single payload today, so `command_file` yields `command.rs`; routing
-        // through it keeps the port-object placement rule in one place for when
-        // the multi-payload (`commands/<stem>_command.rs`) form gains a caller.
         s.create(
             feature_root.join(command_file(&opts.name, 1)),
             r.render(adapter::QUEUE_COMMAND),
@@ -143,71 +138,89 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         port_lines.push(format!(
             "pub use command::{{{}, {}}};",
             names.command(),
-            names.queue_name()
+            names.queue()
         ));
     }
-
-    // Ensure the transport's crates — plus the bridge's, and the auth
-    // adapter's when this run bootstrapped it. One list, one edit per manifest.
-    let mut deps = adapter_deps(transport);
-    if let Some(bridge) = bridge {
-        deps.extend(bridge.deps);
+    // An event is a published fact, so it too is port vocabulary, with no plural
+    // folder: `events/` is the edge. Its bus is the port's import, since the
+    // service emitting the event injects it.
+    if transport == Transport::Events {
+        s.create(
+            feature_root.join("event.rs"),
+            r.render(adapter::EVENTS_EVENT),
+        );
+        port_lines.push("mod event;".to_string());
+        port_lines.push(format!("pub use event::{};", names.event()));
+        s.edit(
+            feature_root.join("module.rs"),
+            ensure_module_imports(&[("nest_rs::events::EventsModule", "EventsModule")]),
+        );
     }
-    // The port's entity has to *be* a GraphQL object before a resolver can
-    // return it: `#[expose(graphql)]` is what derives one. A port that keeps
-    // its entities elsewhere than the generated `entity.rs` is left alone —
-    // an `edit` on a path that does not exist fails the whole transaction.
-    if is_graphql && crud_port {
+
+    let mut deps = adapter_deps(transport);
+    if let Some(authz) = authz {
+        deps.extend(authz.deps);
+    }
+    let mut unflagged = None;
+    if is_graphql && let Some(crud) = &port.crud {
         deps.extend(graphql_port_deps());
-        let entity = feature_root.join("entity.rs");
-        if entity.is_file() {
-            s.edit(entity, ensure_expose_graphql());
-        }
+        unflagged = flag_entity(&mut s, crud, &ws.root)?;
     }
     if scaffolded_auth {
         deps.extend(auth_deps());
     }
-    if !deps.is_empty() {
-        s.edit(
+    // A queue beside the workspace's database arms the outbox, whose table the
+    // framework's migration creates.
+    let mut workspace_deps = deps.clone();
+    let outbox = transport == Transport::Queue
+        && queue_framework_entry(&mut s, &ws, &OUTBOX_MIGRATION, &mut workspace_deps)?;
+    if !workspace_deps.is_empty() {
+        s.edit_manifest(
             ws.root.join("Cargo.toml"),
-            ensure_workspace_deps(deps.clone()),
+            ensure_workspace_deps(workspace_deps),
         );
-        s.edit(ws.features_cargo(), ensure_features_deps(deps));
+    }
+    if !deps.is_empty() {
+        s.edit_manifest(ws.features_cargo(), ensure_features_deps(deps));
     }
     if scaffolded_auth {
         s.edit(ws.features_lib(), ensure_lines(auth::lib_decls()));
     }
 
-    // Wire the feature's `mod.rs` to expose the adapter (and, for queue, the
-    // port `Command` created above) — one edit, since each `s.edit` re-reads
-    // the file from disk.
+    // One edit per file: each `s.edit` re-reads the file from disk. A handler
+    // that logs names its feature's target, declared here when the port has none.
     port_lines.push(format!("pub mod {};", transport.folder()));
     port_lines.push(format!("pub use {}::{};", transport.folder(), tmodule));
-    s.edit(feature_root.join("mod.rs"), ensure_lines(port_lines));
+    let log_target = transport
+        .logs()
+        .then(|| r.render(crate::templates::feature::TARGET));
+    s.edit(
+        feature_root.join("mod.rs"),
+        ensure_target_and_lines(log_target, port_lines),
+    );
 
-    // Wire the adapter module into the current app, when the cursor is in one —
-    // together with the authz roots this run created, so the composition site
-    // stays the inventory of what the app serves.
-    let use_path = format!("features::{}::{}", names.snake, tmodule);
-    let mut imports = vec![(use_path.as_str(), tmodule.as_str())];
-    if let Some(b) = bridge {
-        imports.push((b.app_path, b.module));
+    // The edge, and what it runs on that the app's root chooses: the data layer
+    // under a `#[crud]` handler, a queue's backend, the token route of the auth
+    // adapter this run wrote.
+    let edge = Import::new(format!("features::{}::{}", names.snake, tmodule));
+    let mut beside = Vec::new();
+    if needs_unit_of_work {
+        beside.push(data_layer());
+    }
+    if transport == Transport::Queue {
+        beside.push(queue_backend());
     }
     if scaffolded_auth {
-        imports.extend(auth::app_imports());
+        beside.push(auth::app_import());
     }
-    let wired_app = wire_into_app(&ctx, &mut s, &imports, None);
-    // The app crate needs the crate that owns the transport's root module —
-    // the one the printed next step tells the reader to import. Editing the
-    // app's `module.rs` while leaving its `Cargo.toml` alone made that step
-    // fail with `E0433: failed to resolve: use of undeclared crate`.
-    if wired_app.is_some()
-        && let Some(app) = ctx.current_app.as_ref()
+    let wiring = wire_into_app(&target, &mut s, &edge, &beside)?;
+    // The app crate needs the crate owning the binding it now names, or its
+    // build fails with `E0433`.
+    let host_deps = app_host_deps(transport);
+    if let Wiring::Wired { root, .. } = &wiring
+        && !host_deps.is_empty()
     {
-        s.edit(
-            app.join("Cargo.toml"),
-            ensure_features_deps(app_host_deps(transport)),
-        );
+        s.edit_manifest(root.join("Cargo.toml"), ensure_features_deps(host_deps));
     }
 
     finish(
@@ -216,112 +229,209 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         &ws.root,
         &format!("the {} adapter for `{}`", transport.folder(), names.snake),
     )?;
+    let grant = gated_operation.then(|| {
+        if is_graphql && crud_port {
+            Grant::EveryAction(r.render("crate::{{snake}}::Entity"))
+        } else {
+            Grant::Read(r.render("{{granted}}"))
+        }
+    });
     print_next_steps(
-        &ctx,
         transport,
         &names,
-        &tmodule,
-        wired_app.is_some(),
-        bridge,
+        Placed {
+            wiring: &wiring,
+            edge: &edge,
+            beside: &beside,
+        },
+        authz,
+        grant,
+        unflagged.as_deref(),
     );
+    if outbox {
+        println!(
+            "  The outbox's migration (`{}`) is registered in crates/migrations: its \
+             table keeps a job pushed inside a transaction until the commit. Apply it \
+             with `nestrs run db up`.",
+            OUTBOX_MIGRATION.name()
+        );
+    }
+    if let Some(secrets) = &bootstrapped {
+        auth::print_bootstrapped(secrets);
+    }
     Ok(())
 }
 
-/// Whether the port's service implements `CrudService` — the contract that
-/// decides which methods an adapter may call. Read from the source rather than
-/// inferred from the folder shape: what breaks the scaffold is the service's
-/// API, so that is what is asked.
-fn is_crud_port(ws: &NestrsWorkspace, snake: &str) -> bool {
-    std::fs::read_to_string(ws.feature_root(snake).join("service.rs"))
-        .is_ok_and(|src| src.contains("impl CrudService for"))
+/// Queue `#[expose(graphql)]`, which makes the entity `crud` names a GraphQL object;
+/// when it cannot take it, what the next step says of why: an `edit` on a missing
+/// path would fail the whole transaction, and one finding no attribute writes nothing.
+fn flag_entity(s: &mut Scaffold, crud: &CrudPort, base: &Path) -> CliResult<Option<String>> {
+    let source = match &crud.entity {
+        Some(entity) => read_if_exists(entity)?,
+        None => None,
+    };
+    let (Some(entity), Some(source)) = (&crud.entity, source) else {
+        return Ok(Some(format!(
+            "{} names an entity this run could not follow to its file",
+            rel(&crud.file, base)
+        )));
+    };
+    if !declares_expose(&source) {
+        return Ok(Some(format!(
+            "{} holds no `#[expose(...)]` for this run to flag",
+            rel(entity, base)
+        )));
+    }
+    s.edit(entity, ensure_expose_graphql());
+    Ok(None)
+}
+
+/// What an adapter for `transport` over `names`' port is written with: the
+/// port's names, the transport's, the handler a `CrudService` port takes, and
+/// what its operation is gated on — the port's entity, or, over a port with
+/// none, the `#[subject]` written beside its service.
+pub(crate) fn adapter_renderer(
+    names: &Names,
+    transport: Transport,
+    crud_port: bool,
+    port_entity: bool,
+) -> Renderer {
+    let mut r = Renderer::new(names)
+        .with("handler", names.handler_for(transport))
+        .with("handler_mod", transport.handler_mod())
+        .with("tmodule", names.module_for(transport));
+    for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
+        r = r.with(key, value);
+    }
+    if port_entity {
+        let note = if transport == Transport::Mcp {
+            [adapter::GATED_ON_ENTITY, adapter::ROWS_AS_JSON].join("\n")
+        } else {
+            adapter::GATED_ON_ENTITY.to_owned()
+        };
+        r.with("subject", "{{entity}}Entity")
+            .with("subject_use", "Entity as {{entity}}Entity")
+            .with("granted", "crate::{{snake}}::Entity")
+            .with("posture_note", note)
+    } else {
+        r.with("subject", "{{entity}}")
+            .with("subject_use", "{{entity}}")
+            .with("granted", "crate::{{snake}}::{{entity}}")
+            .with("posture_note", adapter::GATED_ON_SUBJECT)
+    }
+}
+
+/// `target` above everything in a port's `mod.rs` that declares none, then
+/// `lines` in place — one transform, since the file takes one edit.
+fn ensure_target_and_lines(target: Option<String>, lines: Vec<String>) -> Transform {
+    let lines = ensure_lines(lines);
+    Box::new(move |current: &str| {
+        let declared = current
+            .lines()
+            .any(|line| line.trim_start().starts_with("pub const TARGET:"));
+        let targeted = target
+            .as_ref()
+            .filter(|_| !declared)
+            .map(|target| format!("{target}\n{current}"));
+        let base = targeted.as_deref().unwrap_or(current);
+        lines(base).or(targeted)
+    })
 }
 
 /// The handler skeleton, and the `module.rs` that serves it.
 ///
-/// Every transport whose default skeleton calls the `g feature` service's
-/// `count()` needs a CRUD twin: a `g resource` port's `CrudService` has no such
-/// method, so the shared skeleton produced a workspace that did not compile —
-/// against the CLI page's own "a freshly-generated port plus any adapter
-/// compiles immediately" guarantee. GraphQL's twin is the full `#[crud]`
-/// resolver; the rest are handler-shaped stubs, because their reads need an
-/// ambient ability a skeleton must not fabricate.
+/// A `g resource` port's `CrudService` has no `count()`, so each transport has
+/// a CRUD twin: GraphQL and HTTP the guarded `#[crud]` shape, the rest stubs,
+/// since their reads need an ambient ability a skeleton must not fabricate.
 pub(crate) fn templates_for(transport: Transport, crud_port: bool) -> (&'static str, &'static str) {
     match (transport, crud_port) {
-        // A CRUD port's service is a `CrudService`: no `count()`, and its rows
-        // are only reachable behind an ability. GraphQL and HTTP get the real
-        // guarded shape; the rest are handler-shaped stubs, because their reads
-        // need an ambient ability a skeleton must not fabricate.
         (Transport::Graphql, true) => (adapter::GRAPHQL_RESOLVER_CRUD, adapter::MODULE),
         (Transport::Http, true) => (crate::templates::resource::HTTP_CONTROLLER, adapter::MODULE),
-        // The rest render one template either way — the handler that differs
-        // arrives as `crud_vars`.
+        // The rest render one template either way; the differing handler arrives as
+        // `crud_vars`.
         (Transport::Queue, _) => (adapter::QUEUE_PROCESSOR, adapter::MODULE),
         (Transport::Http, false) => (adapter::HTTP_CONTROLLER, adapter::MODULE),
         (Transport::Graphql, false) => (adapter::GRAPHQL_RESOLVER, adapter::MODULE),
-        (Transport::Ws, _) => (adapter::WS_GATEWAY, adapter::WS_MODULE),
+        (Transport::Ws, _) => (adapter::WS_GATEWAY, adapter::MODULE),
         (Transport::Schedule, _) => (adapter::SCHEDULE_TASKS, adapter::MODULE),
         (Transport::Mcp, _) => (adapter::MCP_TOOL, adapter::MODULE),
+        (Transport::Events, _) => (adapter::EVENTS_LISTENER, adapter::MODULE),
     }
 }
 
-/// The app-level root module each transport needs to actually serve the adapter.
-fn host_module(transport: Transport) -> &'static str {
-    match transport {
-        Transport::Http | Transport::Ws => "HttpModule",
-        Transport::Graphql => "GraphqlModule",
-        Transport::Queue => "RedisModule::for_root(None) + RedisWorkerModule::for_root(None)",
-        Transport::Schedule => "ScheduleModule",
-        Transport::Mcp => "HttpModule",
-    }
+/// What an app binds at its root to run a queue adapter's jobs: the backend
+/// is the composition's choice, so no adapter imports it, and the generator
+/// writes it into the root that binds none. It imports the connection it runs on.
+fn queue_backend() -> Import {
+    Import::new("nest_rs::redis::RedisQueueModule")
+}
+
+/// What a generated GraphQL or MCP adapter waits for in `authz/ability.rs`,
+/// its subject named by the path that resolves there.
+enum Grant {
+    /// The one operation of a single-operation template, under `Read`.
+    Read(String),
+    /// The `#[crud]` resolver's operations, each under its own action.
+    EveryAction(String),
+}
+
+/// Where the adapter went: the wiring, the edge, and what was written or is to
+/// be written beside it.
+struct Placed<'a> {
+    wiring: &'a Wiring,
+    edge: &'a Import,
+    beside: &'a [Import],
 }
 
 fn print_next_steps(
-    ctx: &Context,
     transport: Transport,
     names: &Names,
-    tmodule: &str,
-    wired: bool,
-    bridge: Option<&'static auth::AuthzBridge>,
+    placed: Placed<'_>,
+    authz: Option<&'static auth::AuthzAdapter>,
+    grant: Option<Grant>,
+    unflagged: Option<&str>,
 ) {
     println!();
     println!("Next steps:");
-    if wired {
-        println!("  {tmodule} is wired into the current app.");
+    for line in wiring_lines(placed.wiring, placed.edge, placed.beside) {
+        println!("  {line}");
+    }
+    if transport == Transport::Queue {
         println!(
-            "  Make sure the app imports {} so the adapter is served.",
-            host_module(transport)
-        );
-    } else if ctx.current_app.is_some() {
-        println!(
-            "  Import `features::{}::{}` in this app (needs {}).",
-            names.snake,
-            tmodule,
-            host_module(transport)
-        );
-    } else {
-        println!(
-            "  Import `features::{}::{}` in an app that has {}.",
-            names.snake,
-            tmodule,
-            host_module(transport)
+            "  Push from a provider injecting Arc<nest_rs::queue::Jobs>: \
+             `jobs.push({}, job)`. The app that pushes imports \
+             nest_rs::redis::RedisQueueModule.",
+            names.queue()
         );
     }
-    if matches!(transport, Transport::Mcp) && bridge.is_none() {
+    match grant {
+        Some(Grant::Read(subject)) => println!(
+            "  The operation is gated on `{subject}`: it answers FORBIDDEN until \
+             AuthzAbility grants it in crates/features/src/authz/ability.rs, \
+             `ab.can(nest_rs::authz::Action::Read, {subject});`."
+        ),
+        Some(Grant::EveryAction(entity)) => println!(
+            "  Each operation #[crud] writes is gated on `{entity}` under its own action: \
+             each answers FORBIDDEN until AuthzAbility grants that action in \
+             crates/features/src/authz/ability.rs, and \
+             `ab.can(nest_rs::authz::Action::Manage, {entity});` grants them all."
+        ),
+        None => {}
+    }
+    if let Some(why) = unflagged {
         println!(
-            "  Security: the MCP endpoint denies all requests until you bind an \
-             McpOperationGuard. Run `nestrs g auth`, then `nestrs g mcp` again — it \
-             writes the AuthzMcpModule that authenticates callers and installs the \
-             ambient Ability."
+            "  {why}: add `#[expose(graphql)]` to the entity, which the `#[crud]` resolver \
+             needs."
         );
     }
-    if let Some(bridge) = bridge {
+    if let Some(authz) = authz {
         println!();
         println!(
             "Also created the {} authz adapter (crates/features/src/authz/{}/):",
             transport.folder(),
-            bridge.dir,
+            authz.dir,
         );
-        for line in bridge.rationale {
+        for line in authz.rationale {
             println!("  {line}");
         }
     }

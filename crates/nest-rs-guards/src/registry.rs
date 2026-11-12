@@ -1,90 +1,118 @@
-//! Layer registration — typed specs the builder uses to seed the global
-//! layer chain into the container. Each transport's shaper resolves them
-//! against the live container at configure time.
-//!
-//! `GuardSpec` and `PipeSpec` are [`LayerSpec`](nest_rs_core::LayerSpec)
-//! aliases — the shared shape and its `resolve` method live in `nest-rs-core`;
-//! only the typed constructor and the erased trait differ per family.
+//! Guard registration — [`GlobalGuards`], the app-wide pool a root module
+//! declares, and the scoped specs a decorator declares at its site. Each edge
+//! resolves them against the live container when it composes a site.
 
 use std::any::TypeId;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use nest_rs_core::__private::{
+    GlobalLayer, ResolvedLayer, compose_chain, global_pool_declared, resolve_global_layers,
+};
 use nest_rs_core::{Container, LayerSpec};
-use nest_rs_pipes::GlobalPipe;
 
 use crate::Guard;
 
-/// One entry in the `use_guards_global` list. Created by [`guard::<T>()`](guard);
-/// resolved against the live container at configure time.
+/// One guard declaration: one [`GlobalGuards`] lists, or one a decorator emits
+/// for its `#[use_guards]`; resolved against the live container when a site is
+/// composed.
 pub type GuardSpec = LayerSpec<dyn Guard>;
 
-/// Construct a [`GuardSpec`] for the given guard type.
-///
-/// Use inside `App::builder().use_guards_global([...])` to declare which
-/// guards run on every request across all transports.
-///
-/// ```rust,ignore
-/// App::builder()
-///     .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
-///     .module::<AppModule>()
-/// ```
+/// Construct a [`GuardSpec`] for the given guard type — what a guard list
+/// (`GlobalGuards`, `EndpointGuards`) declares for each guard it names.
 pub fn guard<G: Guard + 'static>() -> GuardSpec {
     LayerSpec::new(TypeId::of::<G>(), std::any::type_name::<G>(), |c| {
         c.get::<G>().map(|arc| arc as Arc<dyn Guard>)
     })
 }
 
-/// One entry in the `use_pipes_global` list — same shape as [`GuardSpec`].
-pub type PipeSpec = LayerSpec<dyn GlobalPipe>;
-
-/// Construct a [`PipeSpec`] for the given pipe type.
+/// The guards every unit of every edge runs first, in the order listed —
+/// authentication before authorization — declared once, in the providers of
+/// the module the app boots, so the binary and its test suites run the same
+/// pool. A module the app imports listing it fails the boot, as does a second
+/// declaration or a pool out of phase order. Each entry is a provider,
+/// registered here unless the app already registers it, so what it injects is
+/// held to the root's imports.
 ///
-/// ```rust,ignore
-/// App::builder()
-///     .use_pipes_global([pipe::<StripUnknownFields>()])
-///     .module::<AppModule>()
+/// The pool takes no capability bound: it runs whichever entry a site calls,
+/// `check_http` at a route or a request stage and `check` at an in-band unit.
+///
 /// ```
-pub fn pipe<P: GlobalPipe + 'static>() -> PipeSpec {
-    LayerSpec::new(TypeId::of::<P>(), std::any::type_name::<P>(), |c| {
-        c.get::<P>().map(|arc| arc as Arc<dyn GlobalPipe>)
-    })
+/// # use nest_rs_core::{App, Layer, UnitContext, async_trait, injectable, module};
+/// # use nest_rs_guards::{Denial, GlobalGuards, Guard};
+/// # #[injectable]
+/// # #[derive(Default, Layer)]
+/// # struct RequireApiKey;
+/// # #[async_trait]
+/// # impl Guard for RequireApiKey {
+/// #     async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+/// #         Ok(())
+/// #     }
+/// # }
+/// #[module(providers = [GlobalGuards<(RequireApiKey,)>])]
+/// struct AppModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> nest_rs_core::anyhow::Result<()> {
+///
+/// let app = App::builder().module::<AppModule>().build().await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct GlobalGuards<G: GlobalGuardList>(PhantomData<fn() -> G>);
+
+/// A tuple of guards — `(RequireApiKey,)` to eight of them — run in the order
+/// written. Sealed: only tuples are lists.
+pub trait GlobalGuardList: listed::Listed + 'static {
+    /// Each guard's spec, in order.
+    #[doc(hidden)]
+    fn __specs() -> Vec<GuardSpec>;
+
+    /// Each entry, as the provider a pool registers where nothing else did.
+    #[doc(hidden)]
+    fn __providers() -> Vec<nest_rs_core::__private::PooledProvider>;
 }
 
-/// The unresolved `Vec<GuardSpec>` seeded into the container by
-/// `AppBuilder::use_guards_global(...)`. Each transport reads it at
-/// configure time and resolves against the live container.
-pub struct GuardSpecs(pub Vec<GuardSpec>);
+mod listed {
+    pub trait Listed {}
+}
 
-impl nest_rs_core::layer_chain::GlobalSpecs for GuardSpecs {
-    type Layer = dyn Guard;
-    fn specs(&self) -> &[GuardSpec] {
-        &self.0
+nest_rs_core::__global_layer_pool! {
+    pool: GlobalGuards,
+    list: GlobalGuardList,
+    sealed: listed::Listed,
+    layer: dyn Guard,
+    each: Guard => guard,
+}
+
+impl GlobalLayer for dyn Guard {
+    const KIND: &'static str = "guard";
+    const POOL: &'static str = "GlobalGuards";
+
+    fn check(container: &Container) -> Result<(), String> {
+        crate::validate::boot_validate_guards(container, &[], "the global guard chain")
     }
 }
 
-impl GuardSpecs {
-    /// Resolve every spec into the composed global chain — deduped and
-    /// priority-ordered through the same `compose_chain` as every other
-    /// Layer System site. For the single-site consumers that execute the
-    /// global pool on their own (the self-mount edge wrap, the GraphQL
-    /// fallback operation guard); the per-route shaper builds its own
-    /// bucket because it composes against controller / method scopes too.
-    pub fn resolve_chain(
-        &self,
-        container: &Container,
-        label: &str,
-    ) -> Vec<nest_rs_core::ResolvedLayer<dyn Guard>> {
-        let global = nest_rs_core::layer_chain::resolve_global_layers::<Self>(container);
-        nest_rs_core::compose_chain(global, Vec::new(), Vec::new(), &[], label)
-    }
+/// Whether the app declares a global guard pool listing any guard.
+pub fn global_guards_active(container: &Container) -> bool {
+    global_pool_declared::<dyn Guard>(container)
 }
 
-/// The unresolved `Vec<PipeSpec>` seeded by `AppBuilder::use_pipes_global`.
-pub struct PipeSpecs(pub Vec<PipeSpec>);
+/// The global guard pool resolved into `LayerSite::Global` entries — the one
+/// resolution every site composes from, so their dedup inputs cannot drift.
+pub fn resolve_global_guards(container: &Container) -> Vec<ResolvedLayer<dyn Guard>> {
+    resolve_global_layers::<dyn Guard>(container)
+}
 
-impl nest_rs_core::layer_chain::GlobalSpecs for PipeSpecs {
-    type Layer = dyn GlobalPipe;
-    fn specs(&self) -> &[PipeSpec] {
-        &self.0
-    }
+/// The global pool composed on its own — deduped and priority-ordered through
+/// the same `compose_chain` as every other site — for the endpoints that run it
+/// at their request (a self-mount's edge, `/graphql`, `/mcp`).
+pub fn resolve_global_chain(container: &Container, label: &str) -> Vec<ResolvedLayer<dyn Guard>> {
+    compose_chain(
+        resolve_global_guards(container),
+        Vec::new(),
+        Vec::new(),
+        &[],
+        label,
+    )
 }

@@ -1,19 +1,24 @@
-//! Typed [`ExceptionFilter`] dispatch across the three Layer-System scopes
-//! (global, controller, method), TypeId dedup, fallthrough when a filter
-//! does not match, and a clean separation from the unconditional
-//! [`Filter`](nest_rs_filters::Filter).
+//! Exception filters on the HTTP pipeline: typed dispatch at the three scopes
+//! (global, controller, method), the closest scope first, `TypeId` dedup,
+//! fallthrough when a filter does not match, a catch-all shaping what the
+//! router answers itself and a self-mount's own error, the request's head
+//! read after the handler ran, a failed unit staying failed however a filter
+//! answered it, and its chain filed once by the status the client got.
 
+use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use async_trait::async_trait;
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_exception_filters::{ExceptionFilter, exception_filter};
-use nest_rs_http::{controller, routes};
-use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
+use nest_rs_core::code;
+use nest_rs_core::{
+    Caught, ExceptionFilter, GlobalExceptionFilters, Interceptor, Layer, Next, Outcome, Problem,
+    UnitContext, async_trait, injectable, interceptor, module,
+};
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
+use nest_rs_http::{
+    HeaderName, HeaderValue, HttpView, IntoResponse, ProblemDetails, StatusCode, controller, routes,
+};
+use nest_rs_testing::{LogCapture, TestApp};
 use tokio::sync::Mutex;
-
-// --- shared observable state -------------------------------------------------
 
 static DOMAIN_CATCH_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static GATE: Mutex<()> = Mutex::const_new(());
@@ -26,52 +31,69 @@ fn catches() -> usize {
     DOMAIN_CATCH_COUNTER.load(Ordering::SeqCst)
 }
 
-// --- typed errors ------------------------------------------------------------
-
 #[derive(Debug, thiserror::Error)]
 #[error("domain failure: {0}")]
-pub struct DomainError(pub String);
+pub(crate) struct DomainError(pub String);
 
 #[derive(Debug, thiserror::Error)]
 #[error("infrastructure failure: {0}")]
-pub struct InfraError(pub String);
+pub(crate) struct InfraError(pub String);
 
-/// R12 L-2. Every handler above raises its error by hand
-/// (`poem::Error::new(DomainError(…), status)`), which is the one shape that
-/// needs no `ResponseError` — so the suite proved dispatch while never touching
-/// the requirement a reader meets first. `/fundamentals/exception-filters/`
-/// shipped 2.0.0 defining `DomainError` with neither this impl nor a handler,
-/// and the natural `Result<_, DomainError>` return failed to compile with an
-/// `E0277` on `IntoResult` that names neither. The status here is the
-/// **default**; the filter replaces it, and
-/// [`raising_the_error_the_ordinary_way_reaches_the_filter`] pins both halves.
-impl poem::error::ResponseError for DomainError {
-    fn status(&self) -> StatusCode {
-        StatusCode::INTERNAL_SERVER_ERROR
+/// What lets a route return `Result<_, DomainError>`: it says no problem, so
+/// its **default**, the opaque `500`, is what a filter replaces.
+impl nest_rs_core::ToProblem for DomainError {
+    fn to_problem(&self) -> Option<Problem> {
+        None
     }
 }
 
-// --- the filter under test ---------------------------------------------------
+/// Answer the unit with the `status` problem saying `detail`, through its
+/// view.
+fn answer(cx: &mut UnitContext<'_>, status: StatusCode, detail: String) -> Caught {
+    let problem = ProblemDetails::from_status(status).with_detail(detail);
+    match HttpView::of(cx) {
+        Ok(view) => Caught::Answered(view.respond(problem.into_response())),
+        Err(_) => Caught::Declined,
+    }
+}
+
+/// The `detail` the answer's problem says.
+async fn detail(resp: nest_rs_testing::TestResponse) -> String {
+    let body: serde_json::Value = resp.json().await.value().deserialize();
+    body["detail"].as_str().unwrap_or_default().to_owned()
+}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DomainErrorFilter;
-
-impl Layer for DomainErrorFilter {}
 
 #[async_trait]
 impl ExceptionFilter for DomainErrorFilter {
     type Exception = DomainError;
 
-    async fn catch(&self, err: DomainError) -> poem::Response {
+    async fn catch(&self, err: &DomainError, cx: &mut UnitContext<'_>) -> Caught {
         DOMAIN_CATCH_COUNTER.fetch_add(1, Ordering::SeqCst);
-        poem::Response::builder()
-            .status(StatusCode::UNPROCESSABLE_ENTITY)
-            .body(format!("caught: {err}"))
+        answer(
+            cx,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("caught: {err}"),
+        )
     }
 }
 
-// --- controllers, one per scope variant --------------------------------------
+/// Every failure, whatever its error: a crate-wide envelope.
+#[injectable]
+#[derive(Default, Layer)]
+struct CatchAll;
+
+#[async_trait]
+impl ExceptionFilter for CatchAll {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        answer(cx, StatusCode::IM_A_TEAPOT, "shaped".to_owned())
+    }
+}
 
 #[controller(path = "/global")]
 struct GlobalScope;
@@ -79,16 +101,18 @@ struct GlobalScope;
 #[routes]
 impl GlobalScope {
     #[get("/domain")]
-    async fn fail_domain_global(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    #[public]
+    async fn fail_domain_global(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("bad input".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
     }
 
     #[get("/infra")]
-    async fn fail_infra_global(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    #[public]
+    async fn fail_infra_global(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             InfraError("db down".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -102,8 +126,9 @@ struct ControllerScope;
 #[routes]
 impl ControllerScope {
     #[get("/domain")]
-    async fn fail_domain_ctrl(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    #[public]
+    async fn fail_domain_ctrl(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("at controller scope".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -116,9 +141,10 @@ struct MethodScope;
 #[routes]
 impl MethodScope {
     #[get("/domain")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
-    async fn fail_domain_method(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_domain_method(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("at method scope".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -131,9 +157,10 @@ struct DupGlobalMethod;
 #[routes]
 impl DupGlobalMethod {
     #[get("/domain")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
-    async fn fail_domain_dup(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_domain_dup(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("dup".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
@@ -147,51 +174,80 @@ struct DupCtrlMethod;
 #[routes]
 impl DupCtrlMethod {
     #[get("/domain")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
-    async fn fail_domain_ctrl_method(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::new(
+    async fn fail_domain_ctrl_method(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
             DomainError("dup".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
         ))
     }
 }
 
-/// The page's own shape: `Result<T, DomainError>` straight out of the handler,
-/// no hand-built `poem::Error`. This is what the reader writes, so it is what
-/// the suite has to compile — the `?`/`Err` path only exists because
-/// `DomainError` implements `ResponseError`.
+/// `Result<T, DomainError>` straight out of the handler, no hand-built
+/// `HttpError`.
 #[controller(path = "/ordinary")]
 struct OrdinaryRaise;
 
 #[routes]
 impl OrdinaryRaise {
     #[get("/filtered")]
+    #[public]
     #[use_exception_filters(DomainErrorFilter)]
     async fn filtered(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("boom".into()))
     }
 
-    /// The same error with no filter bound — it renders from its own
-    /// `ResponseError` status. The filter replaces that default; it does not
-    /// create it, and the page now says so.
     #[get("/unfiltered")]
+    #[public]
     async fn unfiltered(&self) -> Result<&'static str, DomainError> {
         Err(DomainError("boom".into()))
     }
 }
 
+/// A catch-all on the controller, a typed filter on one route.
+#[controller(path = "/closest")]
+#[use_exception_filters(CatchAll)]
+struct ClosestScope;
+
+#[routes]
+impl ClosestScope {
+    #[get("/typed")]
+    #[public]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn typed(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("closest".into()))
+    }
+
+    #[get("/other")]
+    #[public]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn other(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
+            InfraError("not the route's".into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    }
+}
+
 #[module(providers = [
     DomainErrorFilter,
+    CatchAll,
     GlobalScope,
     ControllerScope,
     MethodScope,
     DupGlobalMethod,
     DupCtrlMethod,
     OrdinaryRaise,
+    ClosestScope,
 ])]
 struct ExceptionFiltersModule;
 
-// --- tests -------------------------------------------------------------------
+#[module(
+    imports = [ExceptionFiltersModule],
+    providers = [GlobalExceptionFilters<(DomainErrorFilter,)>],
+)]
+struct ExceptionFiltersApp;
 
 #[tokio::test]
 async fn exception_filter_at_global_scope_catches_typed_error() {
@@ -199,8 +255,7 @@ async fn exception_filter_at_global_scope_catches_typed_error() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<ExceptionFiltersModule>()
-        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .module::<ExceptionFiltersApp>()
         .build()
         .await
         .expect("boots");
@@ -249,11 +304,9 @@ async fn raising_the_error_the_ordinary_way_reaches_the_filter() {
 
     let filtered = app.http().get("/ordinary/filtered").send().await;
     filtered.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
-    filtered.assert_text("caught: domain failure: boom").await;
+    assert_eq!(detail(filtered).await, "caught: domain failure: boom");
     assert_eq!(catches(), 1);
 
-    // Unbind the filter and the same handler answers from the exception's own
-    // `ResponseError` status — the two halves the page has to keep distinct.
     let unfiltered = app.http().get("/ordinary/unfiltered").send().await;
     unfiltered.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(catches(), 1, "the unfiltered route reaches no filter");
@@ -265,8 +318,7 @@ async fn unmatched_error_falls_through_to_default_handler() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<ExceptionFiltersModule>()
-        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .module::<ExceptionFiltersApp>()
         .build()
         .await
         .expect("boots");
@@ -282,8 +334,7 @@ async fn same_filter_global_and_method_runs_once() {
     reset_counter();
 
     let app = TestApp::builder()
-        .module::<ExceptionFiltersModule>()
-        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .module::<ExceptionFiltersApp>()
         .build()
         .await
         .expect("boots");
@@ -302,12 +353,8 @@ async fn same_filter_at_all_three_scopes_catches_once() {
     let _gate = GATE.lock().await;
     reset_counter();
 
-    // Global + controller + method — every scope of the exception-filter
-    // pool executes at the route site (typed catches sit closest to the
-    // handler); the dedup still collapses the three declarations to one.
     let app = TestApp::builder()
-        .module::<ExceptionFiltersModule>()
-        .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
+        .module::<ExceptionFiltersApp>()
         .build()
         .await
         .expect("boots");
@@ -319,4 +366,409 @@ async fn same_filter_at_all_three_scopes_catches_once() {
         1,
         "global + controller + method declaration still catches exactly once",
     );
+}
+
+#[tokio::test]
+async fn a_typed_filter_at_the_route_answers_before_a_catch_all_on_its_controller() {
+    let _gate = GATE.lock().await;
+    reset_counter();
+
+    let app = TestApp::for_module::<ExceptionFiltersModule>()
+        .await
+        .expect("boots");
+
+    let typed = app.http().get("/closest/typed").send().await;
+    typed.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(catches(), 1);
+
+    let other = app.http().get("/closest/other").send().await;
+    other.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(detail(other).await, "shaped");
+    assert_eq!(catches(), 1, "the route's typed filter declined it");
+}
+
+/// Stamps every answer of the unit stage it runs at.
+#[interceptor(stage = unit)]
+#[derive(Default, Layer)]
+struct Observed;
+
+#[async_trait]
+impl Interceptor for Observed {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        let failed = outcome.is_err();
+        if let Some(response) = HttpView::of(cx)?.response_mut() {
+            response.headers_mut().insert(
+                HeaderName::from_static("x-observed"),
+                HeaderValue::from_static(if failed { "failed" } else { "ok" }),
+            );
+        }
+        outcome
+    }
+}
+
+#[module(providers = [CatchAll, Observed])]
+struct ObservedModule;
+
+#[module(imports = [ObservedModule], providers = [GlobalExceptionFilters<(CatchAll,)>])]
+struct A404IsShapedByAGlobalCatchAllAndObservedAtTheUnitStageApp;
+
+#[tokio::test]
+async fn a_404_is_shaped_by_a_global_catch_all_and_observed_at_the_unit_stage() {
+    let app = TestApp::builder()
+        .module::<A404IsShapedByAGlobalCatchAllAndObservedAtTheUnitStageApp>()
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app.http().get("/nowhere").send().await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    resp.assert_header("x-observed", "failed");
+    assert_eq!(detail(resp).await, "shaped");
+}
+
+#[resolver]
+struct PingResolver;
+
+#[operations]
+impl PingResolver {
+    #[query]
+    #[public]
+    async fn ping(&self) -> i32 {
+        0
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(nest_rs_graphql::GraphqlConfig {
+        max_batch_size: 1,
+        ..Default::default()
+    })],
+    providers = [CatchAll, EchoesAccept, PingResolver],
+)]
+struct GraphqlBatchModule;
+
+#[module(imports = [GraphqlBatchModule], providers = [GlobalExceptionFilters<(CatchAll,)>])]
+struct AGlobalCatchAllShapesASelfMountsOwnHttpErrorApp;
+
+#[tokio::test]
+async fn a_global_catch_all_shapes_a_self_mounts_own_http_error() {
+    let app = TestApp::builder()
+        .module::<AGlobalCatchAllShapesASelfMountsOwnHttpErrorApp>()
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = oversized_batch(&app, "application/json").await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(detail(resp).await, "shaped");
+}
+
+/// The oversized batch `/graphql` refuses itself, sent accepting `accept`.
+async fn oversized_batch(app: &TestApp, accept: &str) -> nest_rs_testing::TestResponse {
+    let one = serde_json::json!({ "query": "{ ping }" });
+    app.http()
+        .post("/graphql")
+        .header("accept", accept)
+        .body_json(&serde_json::json!([one, one]))
+        .send()
+        .await
+}
+
+/// Every failure answered `418`, its problem saying the `Accept` the request
+/// sent: a filter negotiating what it answers.
+#[injectable]
+#[derive(Default, Layer)]
+struct EchoesAccept;
+
+#[async_trait]
+impl ExceptionFilter for EchoesAccept {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        let Ok(view) = HttpView::of(cx) else {
+            return Caught::Declined;
+        };
+        let accept = view.request().header("accept").unwrap_or("-").to_owned();
+        answer(cx, StatusCode::IM_A_TEAPOT, accept)
+    }
+}
+
+#[controller(path = "/head")]
+struct HeadController;
+
+#[routes]
+impl HeadController {
+    #[get("/")]
+    #[public]
+    #[use_exception_filters(EchoesAccept)]
+    async fn conflict(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(StatusCode::CONFLICT))
+    }
+}
+
+#[module(providers = [EchoesAccept, HeadController])]
+struct HeadModule;
+
+#[module(imports = [HeadModule], providers = [GlobalExceptionFilters<(EchoesAccept,)>])]
+struct AFilterReadsTheRequestsHeadOnARouteAndOnWhatTheRouterAnswersApp;
+
+#[tokio::test]
+async fn a_filter_reads_the_requests_head_on_a_route_and_on_what_the_router_answers() {
+    let app = TestApp::builder()
+        .module::<AFilterReadsTheRequestsHeadOnARouteAndOnWhatTheRouterAnswersApp>()
+        .build()
+        .await
+        .expect("boots");
+
+    for path in ["/head", "/nowhere"] {
+        let resp = app
+            .http()
+            .get(path)
+            .header("accept", "application/vnd.ledger+json")
+            .send()
+            .await;
+        resp.assert_status(StatusCode::IM_A_TEAPOT);
+        assert_eq!(
+            detail(resp).await,
+            "application/vnd.ledger+json",
+            "{path}: the head stays readable once the tail answered",
+        );
+    }
+}
+
+#[module(imports = [GraphqlBatchModule], providers = [GlobalExceptionFilters<(EchoesAccept,)>])]
+struct AGlobalFilterReadsTheHeadOfARequestASelfMountAnsweredApp;
+
+#[tokio::test]
+async fn a_global_filter_reads_the_head_of_a_request_a_self_mount_answered() {
+    let app = TestApp::builder()
+        .module::<AGlobalFilterReadsTheHeadOfARequestASelfMountAnsweredApp>()
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = oversized_batch(&app, "application/graphql-response+json").await;
+    resp.assert_status(StatusCode::IM_A_TEAPOT);
+    assert_eq!(detail(resp).await, "application/graphql-response+json");
+}
+
+/// Every failure answered as the `503` problem.
+#[injectable]
+#[derive(Default, Layer)]
+struct AsUnavailable;
+
+#[async_trait]
+impl ExceptionFilter for AsUnavailable {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        Caught::Problem(Problem::new(503, code::UNAVAILABLE))
+    }
+}
+
+/// Every failure answered with a `500` the filter writes itself.
+#[injectable]
+#[derive(Default, Layer)]
+struct AsItsOwn500;
+
+#[async_trait]
+impl ExceptionFilter for AsItsOwn500 {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        answer(cx, StatusCode::INTERNAL_SERVER_ERROR, "its own".to_owned())
+    }
+}
+
+#[controller(path = "/filed")]
+struct FiledController;
+
+#[routes]
+impl FiledController {
+    #[get("/as-a-4xx")]
+    #[public]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn as_a_4xx(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::new(
+            DomainError("mapped".into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    }
+
+    #[get("/as-a-503")]
+    #[public]
+    #[use_exception_filters(AsUnavailable)]
+    async fn as_a_503(&self) -> anyhow::Result<&'static str> {
+        Err(anyhow::anyhow!("db down"))
+    }
+
+    #[get("/as-its-own-500")]
+    #[public]
+    #[use_exception_filters(AsItsOwn500)]
+    async fn as_its_own_500(&self) -> anyhow::Result<&'static str> {
+        Err(anyhow::anyhow!("db down"))
+    }
+
+    #[get("/unfiltered")]
+    #[public]
+    async fn unfiltered(&self) -> anyhow::Result<&'static str> {
+        Err(anyhow::anyhow!("db down"))
+    }
+
+    #[get("/typed/as-a-4xx")]
+    #[public]
+    #[use_exception_filters(DomainErrorFilter)]
+    async fn typed_as_a_4xx(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("db down".into()))
+    }
+
+    #[get("/typed/as-a-503")]
+    #[public]
+    #[use_exception_filters(AsUnavailable)]
+    async fn typed_as_a_503(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("db down".into()))
+    }
+
+    #[get("/typed/as-its-own-500")]
+    #[public]
+    #[use_exception_filters(AsItsOwn500)]
+    async fn typed_as_its_own_500(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("db down".into()))
+    }
+
+    #[get("/typed/unfiltered")]
+    #[public]
+    async fn typed_unfiltered(&self) -> Result<&'static str, DomainError> {
+        Err(DomainError("db down".into()))
+    }
+}
+
+#[module(providers = [DomainErrorFilter, AsUnavailable, AsItsOwn500, FiledController])]
+struct FiledModule;
+
+/// Each chain the edge filed for a failed request: its level, its message
+/// and the chain it said.
+fn filed(logs: &LogCapture) -> Vec<(String, String, Option<String>)> {
+    logs.events()
+        .into_iter()
+        .filter(|event| event.target == "nest_rs::http")
+        .filter(|event| event.message == "request failed" || event.message == "request unavailable")
+        .map(|event| {
+            let error = event.field("error");
+            (event.level, event.message, error)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_failure_a_filter_answers_with_a_4xx_files_no_chain() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<FiledModule>().await.expect("boots");
+
+    app.http()
+        .get("/filed/as-a-4xx")
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        filed(&logs),
+        [],
+        "the client was answered a 4xx: nothing withheld"
+    );
+}
+
+#[tokio::test]
+async fn a_failure_answered_with_a_5xx_files_its_chain_once_by_the_status_sent() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<FiledModule>().await.expect("boots");
+
+    app.http()
+        .get("/filed/as-a-503")
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        filed(&logs),
+        [(
+            "warn".to_owned(),
+            "request unavailable".to_owned(),
+            Some("db down".to_owned())
+        )],
+        "a filter's 503 problem: the chain once, at warn",
+    );
+
+    let logs = LogCapture::install();
+    app.http()
+        .get("/filed/as-its-own-500")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        filed(&logs),
+        [(
+            "error".to_owned(),
+            "request failed".to_owned(),
+            Some("db down".to_owned())
+        )],
+        "a filter's own 500: the chain once, at error",
+    );
+
+    let logs = LogCapture::install();
+    app.http()
+        .get("/filed/unfiltered")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        filed(&logs),
+        [(
+            "error".to_owned(),
+            "request failed".to_owned(),
+            Some("db down".to_owned())
+        )],
+        "no filter: the edge's opaque 500, the chain once",
+    );
+}
+
+/// A handler's own `ResponseError` answering a `5xx` is filed as any other
+/// failure: once, by the status the client was finally sent, whoever answered
+/// it — nothing when a filter answered a `4xx`.
+#[tokio::test]
+async fn a_typed_failure_is_filed_once_by_the_status_sent_whoever_answered_it() {
+    let app = TestApp::for_module::<FiledModule>().await.expect("boots");
+    let line = |level: &str, message: &str| {
+        vec![(
+            level.to_owned(),
+            message.to_owned(),
+            Some("domain failure: db down".to_owned()),
+        )]
+    };
+
+    for (path, status, expected) in [
+        (
+            "/filed/typed/as-a-4xx",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            vec![],
+        ),
+        (
+            "/filed/typed/as-a-503",
+            StatusCode::SERVICE_UNAVAILABLE,
+            line("warn", "request unavailable"),
+        ),
+        (
+            "/filed/typed/as-its-own-500",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            line("error", "request failed"),
+        ),
+        (
+            "/filed/typed/unfiltered",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            line("error", "request failed"),
+        ),
+    ] {
+        let logs = LogCapture::install();
+        app.http().get(path).send().await.assert_status(status);
+        assert_eq!(filed(&logs), expected, "{path}");
+    }
 }

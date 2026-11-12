@@ -1,0 +1,12 @@
+error[E0277]: `HandWritten` is no loader `#[dataloader]` generated, so the boot cannot check that the app reaches what it batches through
+  --> tests/integration/diagnostics/graphql/field_resolver_reading_a_hand_written_loader.rs:40:62
+   |
+40 |     async fn label(&self, parent: &Note, labels: &DataLoader<HandWritten>) -> String {
+   |                                                              ^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `nest_rs::seaorm::__private::LoaderOwner` is not implemented for `HandWritten`
+  --> tests/integration/diagnostics/graphql/field_resolver_reading_a_hand_written_loader.rs:11:1
+   |
+11 | struct HandWritten;
+   | ^^^^^^^^^^^^^^^^^^
+   = note: write the batch as a method of a `#[dataloader]` impl block, and name the loader it generates, `{Owner}{PascalMethod}`

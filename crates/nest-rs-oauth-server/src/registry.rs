@@ -1,73 +1,169 @@
 //! The OAuth2 `client_credentials` grant: authenticating a registered machine
 //! client against a static registry, in constant time.
-//!
-//! The framework owns the credential check and the principal shape; the app
-//! supplies the per-client payload `P` (a tenant id, a role set, …) — nest-rs
-//! never names it. Pairs with the Authorization Code flow in
-//! `nest-rs-oauth-client`: this is the machine-to-machine grant, that is the
-//! user-delegated one — and they are opposite ends of the same wire, which is
-//! why they no longer share a module word.
 
-use subtle::ConstantTimeEq;
+use aws_lc_rs::constant_time::verify_slices_are_equal;
 
 use nest_rs_authn::AuthError;
 use nest_rs_authn::PrincipalIdentity;
+use nest_rs_core::{AmbientValue, Secret};
+
+use crate::TokenError;
+use crate::error::refused;
 
 /// A machine client permitted to use the `client_credentials` grant, as loaded
 /// from configuration. Generic over the principal payload `P` the app attaches
 /// (deserialized from the `payload` field next to the credentials).
 ///
-/// [`Debug`] is hand-written and **redacts `client_secret`** — a registry is
-/// exactly the kind of value that ends up in a `{:?}` of an app config, and the
-/// sibling secret holders in this crate (`OAuthClientConfig`, `JwtConfig`) drop `Debug` entirely for the same reason.
-#[derive(Clone, serde::Deserialize)]
+/// Its secret is the crate's to compare, never a field to read.
+///
+/// ```compile_fail,E0616
+/// # fn read(client: &nest_rs_oauth_server::RegisteredClient<()>) {
+/// let _secret = &client.client_secret;
+/// # }
+/// ```
+#[derive(Clone, Debug, serde::Deserialize)]
+#[non_exhaustive]
 pub struct RegisteredClient<P> {
     /// The client's public identifier, matched in constant time.
     pub client_id: String,
     /// The client's shared secret, matched in constant time.
-    pub client_secret: String,
+    pub(crate) client_secret: Secret<String>,
     /// Scopes granted to this client, copied onto the authenticated principal.
     pub scopes: Vec<String>,
+    /// The resources (RFC 8707) a token minted for this client may name as
+    /// its audience, copied onto the authenticated principal; the one a
+    /// request naming none is minted for when it lists exactly one.
+    pub resources: Vec<String>,
     /// App-defined per-client data (tenant id, role set, …) carried onto the
     /// principal — nest-rs never inspects it.
     pub payload: P,
 }
 
-impl<P: std::fmt::Debug> std::fmt::Debug for RegisteredClient<P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegisteredClient")
-            .field("client_id", &self.client_id)
-            .field("client_secret", &"<redacted>")
-            .field("scopes", &self.scopes)
-            .field("payload", &self.payload)
-            .finish()
+impl<P> RegisteredClient<P> {
+    /// The client `client_id`, authenticated by `client_secret`, granted
+    /// `scopes`, minted tokens for `resources` alone and carrying `payload` —
+    /// as a registry pinned in code lists it.
+    pub fn new(
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+        resources: impl IntoIterator<Item = impl Into<String>>,
+        payload: P,
+    ) -> Self {
+        Self {
+            client_id: client_id.into(),
+            client_secret: Secret::new(client_secret.into()),
+            scopes: scopes.into_iter().map(Into::into).collect(),
+            resources: resources.into_iter().map(Into::into).collect(),
+            payload,
+        }
     }
 }
 
-/// The principal established by authenticating a [`RegisteredClient`]. A machine
-/// actor with no per-user identity, so [`PrincipalIdentity::actor_id`] is `None`
-/// — the `payload` carries whatever the app logs and authorizes on.
+/// The principal established by authenticating a [`RegisteredClient`] at the
+/// token endpoint (RFC 6749 §2.3.1). A client acting on its own behalf is its
+/// own subject (RFC 9068 §2.2), so [`PrincipalIdentity::actor_id`] is its
+/// `client_id`: the audit names it, and the access token an app issues it names
+/// it as its `sub`. The `payload` carries whatever else the app logs and
+/// authorizes on.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AuthenticatedClient<P> {
-    /// The matched client's app-defined payload — what the app logs and
-    /// authorizes on.
-    pub payload: P,
+    /// The matched client's public identifier (RFC 6749 §2.2).
+    pub client_id: String,
     /// The matched client's granted scopes — reported verbatim as this
     /// principal's [`PrincipalIdentity::scopes`].
     pub scopes: Vec<String>,
+    /// The resources (RFC 8707) the matched client is registered for — what
+    /// [`audience_for`](Self::audience_for) chooses among.
+    pub resources: Vec<String>,
+    /// The matched client's app-defined payload — what the app logs and
+    /// authorizes on.
+    pub payload: P,
 }
 
-impl<P> PrincipalIdentity for AuthenticatedClient<P> {
-    fn actor_id(&self) -> Option<String> {
-        None
+impl<P> AuthenticatedClient<P> {
+    /// The client `client_id`, authenticated, granted `scopes`, registered for
+    /// `resources` and carrying `payload` — as [`authenticate_against_registry`]
+    /// answers it.
+    pub fn new(
+        client_id: impl Into<String>,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+        resources: impl IntoIterator<Item = impl Into<String>>,
+        payload: P,
+    ) -> Self {
+        Self {
+            client_id: client_id.into(),
+            scopes: scopes.into_iter().map(Into::into).collect(),
+            resources: resources.into_iter().map(Into::into).collect(),
+            payload,
+        }
     }
 
-    /// `Some`, always — this is the framework's own OAuth credential, so it is
-    /// scope-aware by construction and an empty registry entry means *delegated
-    /// nothing*, never *scope does not apply here*. Inheriting the `None`
-    /// default conflated the two, and that is the fail-open reading: a client
-    /// registered for `posts:read` satisfied every `.requires_scope(…)` rule in
-    /// the policy, including the ones the registry never granted.
+    /// The scope of the token this client's request is answered with, read
+    /// off its §3.3 `scope` ([`AccessTokenRequest::scope`](crate::AccessTokenRequest::scope)),
+    /// under one strict rule: none requested is the client's whole registered
+    /// scope; a request naming a scope the client is not registered for is
+    /// refused whole with §5.2's [`TokenError::InvalidScope`], never narrowed in
+    /// silence; a scope named twice is granted once. The token response states
+    /// what this returns ([`with_scope`](crate::AccessTokenResponse::with_scope)),
+    /// as §3.3 asks whenever it differs from the request.
+    ///
+    /// Each refusal files one `warn` on [`TARGET`](crate::TARGET) naming its
+    /// reason, never the scope asked for; the client is the line's
+    /// `actor_id`, the request's.
+    pub fn scope_for(&self, requested: &[String]) -> Result<Vec<String>, TokenError> {
+        if requested.is_empty() {
+            return Ok(self.scopes.clone());
+        }
+        let mut granted = Vec::with_capacity(requested.len());
+        for scope in requested {
+            if !self.scopes.contains(scope) {
+                return Err(refused(TokenError::InvalidScope));
+            }
+            if !granted.contains(scope) {
+                granted.push(scope.clone());
+            }
+        }
+        Ok(granted)
+    }
+
+    /// The audience of the token this client's request is answered with, read
+    /// off its RFC 8707 §2 `resource` parameters
+    /// ([`AccessTokenRequest::resource`](crate::AccessTokenRequest::resource)):
+    /// the one it names, when it is registered for it exactly; when it names
+    /// none, the one resource it is registered for. Anything else is
+    /// [`TokenError::InvalidTarget`] — an unregistered resource, none among
+    /// several, and two at once, since a token naming two audiences is a
+    /// deputy of each at the other.
+    ///
+    /// Each refusal files one `warn` on [`TARGET`](crate::TARGET) naming its
+    /// reason, never the resource asked for; the client is the line's
+    /// `actor_id`, the request's.
+    pub fn audience_for(&self, requested: &[String]) -> Result<&str, TokenError> {
+        let wanted = match (requested, self.resources.as_slice()) {
+            ([], [only]) => only,
+            ([one], _) => one,
+            _ => return Err(refused(TokenError::InvalidTarget)),
+        };
+        self.resources
+            .iter()
+            .find(|registered| *registered == wanted)
+            .map(String::as_str)
+            .ok_or_else(|| refused(TokenError::InvalidTarget))
+    }
+}
+
+impl<P: Send + Sync + 'static> AmbientValue for AuthenticatedClient<P> {}
+
+impl<P> PrincipalIdentity for AuthenticatedClient<P> {
+    /// The client's own id: the subject of what it does for itself.
+    fn actor_id(&self) -> Option<String> {
+        Some(self.client_id.clone())
+    }
+
+    /// `Some`, always: an empty entry means *delegated nothing*, where `None` would
+    /// read as not scope-aware and pass every scope rule.
     fn scopes(&self) -> Option<&[String]> {
         Some(&self.scopes)
     }
@@ -75,7 +171,7 @@ impl<P> PrincipalIdentity for AuthenticatedClient<P> {
 
 /// Authenticate a `client_id` + `client_secret` pair against a static registry,
 /// returning the matching principal. Both comparisons run in **constant time**
-/// (`subtle`) and every entry is visited, so neither a valid `client_id` nor a
+/// (AWS-LC's `CRYPTO_memcmp`) and every entry is visited, so neither a valid `client_id` nor a
 /// secret prefix is observable through a timing side-channel. Returns
 /// [`AuthError::Failed`] with an opaque message when no entry matches.
 pub fn authenticate_against_registry<P: Clone>(
@@ -85,19 +181,23 @@ pub fn authenticate_against_registry<P: Clone>(
 ) -> Result<AuthenticatedClient<P>, AuthError> {
     let mut matched: Option<&RegisteredClient<P>> = None;
     for client in clients {
-        let id_ok = client.client_id.as_bytes().ct_eq(client_id.as_bytes());
-        let secret_ok = client
-            .client_secret
-            .as_bytes()
-            .ct_eq(client_secret.as_bytes());
-        if bool::from(id_ok & secret_ok) && matched.is_none() {
+        let id_ok =
+            verify_slices_are_equal(client.client_id.as_bytes(), client_id.as_bytes()).is_ok();
+        let secret_ok = verify_slices_are_equal(
+            client.client_secret.expose_secret().as_bytes(),
+            client_secret.as_bytes(),
+        )
+        .is_ok();
+        if id_ok & secret_ok && matched.is_none() {
             matched = Some(client);
         }
     }
-    let client = matched.ok_or_else(|| AuthError::Failed("invalid client credentials".into()))?;
+    let client = matched.ok_or_else(|| AuthError::failed("invalid client credentials"))?;
     Ok(AuthenticatedClient {
-        payload: client.payload.clone(),
+        client_id: client.client_id.clone(),
         scopes: client.scopes.clone(),
+        resources: client.resources.clone(),
+        payload: client.payload.clone(),
     })
 }
 
@@ -105,13 +205,132 @@ pub fn authenticate_against_registry<P: Clone>(
 mod tests {
     use super::*;
 
+    const API: &str = "https://api.example.com";
+    const MCP: &str = "https://mcp.example.com/mcp";
+
     fn client(id: &str, secret: &str, scopes: &[&str]) -> RegisteredClient<u32> {
-        RegisteredClient {
-            client_id: id.into(),
-            client_secret: secret.into(),
-            scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
-            payload: 7,
+        RegisteredClient::new(id, secret, scopes.iter().copied(), [API], 7)
+    }
+
+    fn registered_for(resources: &[&str]) -> AuthenticatedClient<u32> {
+        AuthenticatedClient::new("ci", ["read"], resources.iter().copied(), 7)
+    }
+
+    fn requested(resources: &[&str]) -> Vec<String> {
+        resources
+            .iter()
+            .map(|&resource| resource.to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_requested_resource_the_client_is_registered_for_is_the_audience() {
+        let client = registered_for(&[API, MCP]);
+        assert_eq!(client.audience_for(&requested(&[MCP])).unwrap(), MCP);
+        assert_eq!(client.audience_for(&requested(&[API])).unwrap(), API);
+    }
+
+    /// RFC 8707 §2: an omitted `resource` may be "a predefined default
+    /// resource value" — the one a client registered for a single resource
+    /// names; registered for several, nothing says which.
+    #[test]
+    fn an_omitted_resource_is_the_one_registered_or_refused_among_several() {
+        assert_eq!(
+            registered_for(&[API]).audience_for(&[]).unwrap(),
+            API,
+            "the one resource registered"
+        );
+        assert!(matches!(
+            registered_for(&[API, MCP]).audience_for(&[]),
+            Err(TokenError::InvalidTarget)
+        ));
+    }
+
+    /// One token, one audience: a token for two resources is a deputy of each
+    /// at the other, so RFC 8707 §2's `invalid_target` refuses the
+    /// combination.
+    #[test]
+    fn a_resource_outside_the_registration_or_two_at_once_is_an_invalid_target() {
+        let client = registered_for(&[API, MCP]);
+        for resource in [
+            requested(&["https://billing.example.com"]),
+            requested(&["https://api.example.com/"]),
+            requested(&[API, MCP]),
+            requested(&[API, API]),
+        ] {
+            assert!(
+                matches!(
+                    client.audience_for(&resource),
+                    Err(TokenError::InvalidTarget)
+                ),
+                "{resource:?}"
+            );
         }
+        assert!(matches!(
+            registered_for(&[]).audience_for(&[]),
+            Err(TokenError::InvalidTarget)
+        ));
+    }
+
+    fn registered_scopes(scopes: &[&str]) -> AuthenticatedClient<u32> {
+        AuthenticatedClient::new("ci", scopes.iter().copied(), [API], 7)
+    }
+
+    /// §3.3: a request naming no scope is granted the registered default,
+    /// here the client's whole registration.
+    #[test]
+    fn no_scope_requested_is_the_whole_registered_scope() {
+        let client = registered_scopes(&["posts:read", "posts:write"]);
+        assert_eq!(
+            client.scope_for(&[]).unwrap(),
+            ["posts:read", "posts:write"]
+        );
+        assert_eq!(
+            registered_scopes(&[]).scope_for(&[]).unwrap(),
+            Vec::<String>::new(),
+            "a client registered for none is delegated none",
+        );
+    }
+
+    #[test]
+    fn a_registered_subset_is_granted_in_the_order_asked_and_each_scope_once() {
+        let client = registered_scopes(&["posts:read", "posts:write"]);
+        assert_eq!(
+            client
+                .scope_for(&requested(&["posts:write", "posts:read"]))
+                .unwrap(),
+            ["posts:write", "posts:read"]
+        );
+        assert_eq!(
+            client
+                .scope_for(&requested(&["posts:read", "posts:read"]))
+                .unwrap(),
+            ["posts:read"]
+        );
+    }
+
+    /// §5.2's `invalid_scope`: the request is refused whole, never narrowed to
+    /// what the client is registered for.
+    #[test]
+    fn a_scope_outside_the_registration_refuses_the_whole_request() {
+        let client = registered_scopes(&["posts:read"]);
+        for asked in [
+            requested(&["posts:read", "admin"]),
+            requested(&["Posts:read"]),
+            requested(&["posts:read\tadmin"]),
+        ] {
+            assert!(
+                matches!(client.scope_for(&asked), Err(TokenError::InvalidScope)),
+                "{asked:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_registry_hands_the_client_its_resources() {
+        let registry = [client("ci", "s3cret", &["read"])];
+        let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
+        assert_eq!(auth.resources, [API]);
     }
 
     #[test]
@@ -128,6 +347,7 @@ mod tests {
     fn authenticates_a_matching_pair_and_returns_the_payload() {
         let registry = [client("ci", "s3cret", &["read"])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").expect("auth");
+        assert_eq!(auth.client_id, "ci");
         assert_eq!(auth.payload, 7);
         assert_eq!(auth.scopes, vec!["read".to_string()]);
     }
@@ -136,20 +356,39 @@ mod tests {
     fn rejects_a_wrong_secret_with_an_opaque_error() {
         let registry = [client("ci", "s3cret", &["read"])];
         let err = authenticate_against_registry(&registry, "ci", "wrong").expect_err("rejected");
-        assert!(matches!(err, AuthError::Failed(_)));
-        assert!(err.to_string().contains("invalid client credentials"));
-    }
-
-    #[test]
-    fn rejects_an_unknown_client_id() {
-        let registry = [client("ci", "s3cret", &["read"])];
-        assert!(authenticate_against_registry(&registry, "ghost", "s3cret").is_err());
+        assert!(matches!(err, AuthError::Failed { .. }));
+        assert_eq!(
+            nest_rs_core::error_message(&err),
+            "authentication failed: invalid client credentials"
+        );
     }
 
     #[test]
     fn rejects_an_empty_registry() {
         let registry: [RegisteredClient<u32>; 0] = [];
         assert!(authenticate_against_registry(&registry, "any", "any").is_err());
+    }
+
+    #[test]
+    fn a_credential_matches_only_byte_for_byte_whatever_its_length() {
+        let registry = [client("ci", "s3cret", &["read"])];
+        for (id, secret, matches) in [
+            ("ci", "s3cret", true),
+            ("ci", "s3creT", false),
+            ("ci", "s3cre", false),
+            ("ci", "s3crets", false),
+            ("ci", "", false),
+            ("cI", "s3cret", false),
+            ("c", "s3cret", false),
+            ("cii", "s3cret", false),
+            ("ghost", "s3cret", false),
+        ] {
+            assert_eq!(
+                authenticate_against_registry(&registry, id, secret).is_ok(),
+                matches,
+                "{id:?} / {secret:?}"
+            );
+        }
     }
 
     #[test]
@@ -163,18 +402,14 @@ mod tests {
     }
 
     #[test]
-    fn machine_principal_has_no_actor_id() {
+    fn a_machine_principal_is_its_own_subject() {
         let registry = [client("ci", "s3cret", &["read"])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
-        assert_eq!(auth.actor_id(), None);
+        assert_eq!(auth.actor_id().as_deref(), Some("ci"));
     }
 
     #[test]
     fn machine_principal_reports_the_scopes_the_registry_granted() {
-        // The one thing `AuthnGuard` publishes as `GrantedScopes`. Returning the
-        // trait's `None` default here said "not scope-aware", which withholds
-        // nothing — so a client registered for `read` alone passed a rule
-        // requiring `write`.
         let registry = [client("ci", "s3cret", &["read"])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
         assert_eq!(auth.scopes(), Some(["read".to_string()].as_slice()));
@@ -182,8 +417,6 @@ mod tests {
 
     #[test]
     fn a_client_granted_nothing_is_delegated_nothing_not_unrestricted() {
-        // `Some(&[])` and `None` are the two answers this trait separates, and
-        // this registry entry is the one that must not read as the second.
         let registry = [client("ci", "s3cret", &[])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
         assert_eq!(

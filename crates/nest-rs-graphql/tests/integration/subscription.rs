@@ -1,38 +1,33 @@
-//! `#[subscription]`: the third discovered root, the graphql-ws mount, and the
+//! `#[subscription]`: the third discovered root, the graphql-ws mount, the
+//! schema composed for a graphql-ws driver of a test's own, and the
 //! socket-lifetime ceiling that bounds it.
 //!
-//! The composition witness is `a_subscriber_receives_the_items_the_resolver_emits`:
-//! it boots the documented wiring through [`TestApp`], subscribes, emits, and
-//! asserts what the subscriber received — executed, not merely compiled.
-//! Posture *per item* is `nest-rs-authz`'s witness
-//! (`tests/integration/graphql/mask.rs`), where the entity fixtures live.
+//! Posture *per item* is tested in `nest-rs-authz`'s
+//! `tests/integration/judged.rs`, where the entity fixtures live.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_graphql::SimpleObject;
-/// async-graphql's own `futures_util` re-export, reached through the framework
-/// so this test declares no stream crate of its own — the same rooting rule the
-/// decorators follow.
+use async_graphql::futures_util::StreamExt as _;
+/// async-graphql's own `futures_util` re-export, reached through the framework.
 use async_graphql::futures_util::stream as futures_stream;
-use nest_rs_core::module;
+use nest_rs_config::Surface;
+use nest_rs_core::{Scoped, module};
 use nest_rs_graphql::async_graphql;
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
-use nest_rs_http::HttpTransport;
 use nest_rs_pipes::{Piped, Trim};
 use nest_rs_testing::{LogCapture, TestApp};
 use tokio::sync::broadcast;
 
-/// The event both subscribers read. One source, so a difference in what two
-/// callers receive can only come from the posture.
+/// The event both subscribers read.
 #[derive(Clone, Debug, SimpleObject)]
 struct Tick {
     seq: i32,
 }
 
-/// Capacity is 8 rather than 1: a broadcast channel drops for a *lagging*
-/// receiver, and a test that raced the lag path would fail for a reason that has
-/// nothing to do with what it asserts.
+/// Capacity 8, not 1: a broadcast channel drops for a *lagging* receiver.
 #[nest_rs_core::injectable]
 struct TickResolverState {
     tx: broadcast::Sender<Tick>,
@@ -44,6 +39,37 @@ impl Default for TickResolverState {
             tx: broadcast::channel(8).0,
         }
     }
+}
+
+/// Hands out one stamp to each request scope that asks.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct StampCounter {
+    next: AtomicI32,
+}
+
+/// Request-scoped: the stamp of the scope that built it, read back as often as
+/// it is asked.
+#[nest_rs_core::injectable(scope = request)]
+struct SocketStamp {
+    #[inject]
+    counter: Arc<StampCounter>,
+    stamp: OnceLock<i32>,
+}
+
+impl SocketStamp {
+    fn id(&self) -> i32 {
+        *self
+            .stamp
+            .get_or_init(|| self.counter.next.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+/// The stamp of the request scope the running code resolves through.
+fn current_stamp() -> Option<i32> {
+    nest_rs_core::current_request_scope()
+        .and_then(|scope| scope.get::<SocketStamp>())
+        .map(|stamp| stamp.id())
 }
 
 #[resolver]
@@ -72,37 +98,47 @@ impl TickResolver {
         })
     }
 
-    /// A per-argument pipe on a subscription: the wire exposes `label`, the pipe
-    /// runs once at subscribe, and the stream carries the transformed value.
+    /// A synchronous subscription; the method the expansion emits is `async`.
+    #[subscription]
+    #[public]
+    fn counted(&self) -> impl futures_stream::Stream<Item = i32> {
+        futures_stream::iter([1, 2])
+    }
+
+    /// A per-argument pipe on a subscription, run once at subscribe.
     #[subscription]
     #[public]
     async fn labelled_ticks(
         &self,
-        label: Piped<Trim, String>,
+        label: Piped<Trim>,
     ) -> Result<impl futures_stream::Stream<Item = String>, async_graphql::Error> {
         Ok(futures_stream::iter([label.into_inner()]))
     }
 
-    /// Reaches for a request-scoped provider, which a socket deliberately does
-    /// not carry — the operation must say so rather than resolve one.
+    #[query]
+    #[public]
+    async fn socket_stamp(&self, stamp: Scoped<SocketStamp>) -> i32 {
+        stamp.id()
+    }
+
+    /// The stamp of the scope the subscription opened in, then the stamp its
+    /// stream reads, when polled, off the scope it runs under.
     #[subscription]
     #[public]
-    async fn scoped_ticks(
-        &self,
-        ctx: &async_graphql::Context<'_>,
-    ) -> Result<impl futures_stream::Stream<Item = i32>, async_graphql::Error> {
-        let scoped = nest_rs_graphql::Scoped::<TickResolverState>::from_context(ctx)?;
-        let count = scoped.tx.receiver_count() as i32;
-        Ok(futures_stream::iter([count]))
+    async fn stamps(&self, stamp: Scoped<SocketStamp>) -> impl futures_stream::Stream<Item = i32> {
+        futures_stream::iter([stamp.id()]).chain(futures_stream::once(async {
+            current_stamp().unwrap_or(-1)
+        }))
     }
 }
 
-#[module(providers = [TickResolverState, TickResolver])]
+#[module(providers = [TickResolverState, StampCounter, SocketStamp, TickResolver])]
 struct TickModule;
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        disable_introspection: false,
+        playground: Surface::Closed,
+        introspection: Surface::Open,
         ..GraphqlConfig::default()
     }),
     TickModule,
@@ -112,16 +148,13 @@ struct SubscriptionApp;
 async fn boot() -> TestApp {
     TestApp::builder()
         .module::<SubscriptionApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("a schema carrying a subscription boots and mounts at /graphql")
 }
 
-/// The composition witness. Boots the documented wiring, subscribes over the
-/// **graphql-ws protocol** the mount serves — `connection_init` →
-/// `connection_ack` → `subscribe` → `next` — emits, and asserts what the
-/// subscriber received.
+/// Subscribes over the graphql-ws protocol: `connection_init` →
+/// `connection_ack` → `subscribe` → `next`.
 #[tokio::test]
 async fn a_subscriber_receives_the_items_the_resolver_emits() {
     let app = boot().await;
@@ -134,91 +167,171 @@ async fn a_subscriber_receives_the_items_the_resolver_emits() {
     socket.connect().await;
     socket.subscribe("ticks", "subscription { ticks { seq } }");
 
-    // The stream registers its receiver on the first poll, which the driver
-    // makes while waiting for a message; emitting before that publishes into a
-    // channel nobody is listening on.
+    // The stream registers its receiver on the first poll; emitting before that
+    // publishes to nobody.
     let emitted = tokio::spawn({
         let state = Arc::clone(&state);
         async move {
-            while state.tx.receiver_count() == 0 {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
+            nest_rs_testing::wait_until(Duration::from_secs(2), || state.tx.receiver_count() > 0)
+                .await;
             state.tx.send(Tick { seq: 1 }).expect("a receiver is live");
             state.tx.send(Tick { seq: 2 }).expect("a receiver is live");
         }
     });
 
-    let first = socket.next_item("ticks").await.expect("the first item");
+    let (first, emitted) = tokio::join!(socket.next_item("ticks"), emitted);
+    emitted.expect("the emitter completes");
+    let first = first.expect("the first item");
     assert_eq!(first["data"]["ticks"]["seq"], 1, "{first}");
     let second = socket.next_item("ticks").await.expect("the second item");
     assert_eq!(second["data"]["ticks"]["seq"], 2, "{second}");
-
-    emitted.await.expect("the emitter completes");
 }
 
-/// A request-scoped provider is **not** the connection's. The upgrade's
-/// `RequestScope` stops at the upgrade, so a subscription reaching `Scoped<T>`
-/// is told the scope is absent rather than handed an instance built once, at
-/// connect, and shared by every operation for the socket's life.
 #[tokio::test]
-async fn a_subscription_does_not_inherit_the_upgrades_request_scope() {
+async fn a_synchronous_subscription_streams_like_an_async_one() {
     let app = boot().await;
     let mut socket = app.graphql_socket().open();
     socket.connect().await;
-    socket.subscribe("scoped", "subscription { scopedTicks }");
+    socket.subscribe("counted", "subscription { counted }");
 
-    let message = socket
-        .next_item("scoped")
-        .await
-        .expect("the operation answers");
-    let rendered = message.to_string();
-    assert!(
-        rendered.contains("request scope not installed"),
-        "the socket reports the scope as absent rather than resolving one: {rendered}",
-    );
+    let first = socket.next_item("counted").await.expect("the first item");
+    assert_eq!(first["data"]["counted"], 1, "{first}");
+    let second = socket.next_item("counted").await.expect("the second item");
+    assert_eq!(second["data"]["counted"], 2, "{second}");
 }
 
-/// A dropped item is the one thing on this path that leaves no trace on the
-/// wire — the stream simply skips it. So the trace has to be in the log, with
-/// enough on it to find the operation, or an operator debugging "my subscriber
-/// misses events" has nothing at all.
-#[test]
-fn a_withheld_item_is_reported_with_the_operation_that_withheld_it() {
-    let logs = LogCapture::install();
+/// A subscription opens one stream, of the one field its root names (GraphQL
+/// §5.2.3.1). What async-graphql would open otherwise — a stream per root field
+/// sharing the request's loaders, one per copy of a key, none for a fragment, and
+/// whatever a variable decides — is refused once validation passed, before any
+/// opening runs; a directive below the root field stays the client's.
+#[tokio::test]
+async fn a_subscription_whose_root_names_other_than_one_field_is_refused_before_it_opens() {
+    let app = boot().await;
+    let state = app
+        .container()
+        .get::<TickResolverState>()
+        .expect("the resolver's state is a provider of the booted app");
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    for (index, (document, said)) in [
+        (
+            "subscription { ticks { seq } counted }",
+            r#"the subscription selects "counted" beside "ticks" at its root"#,
+        ),
+        (
+            "subscription { ticks { seq } ticks { seq } }",
+            r#"the subscription selects "ticks" more than once at its root"#,
+        ),
+        (
+            "subscription { ...Ticks } fragment Ticks on Subscription { ticks { seq } }",
+            "the subscription selects its root field through a fragment",
+        ),
+        (
+            "subscription { ... on Subscription { ticks { seq } } }",
+            "the subscription selects its root field through a fragment",
+        ),
+        (
+            "subscription($all: Boolean = true) { ticks @include(if: $all) { seq } }",
+            r#"the subscription selects "ticks" under "@include" at its root"#,
+        ),
+        (
+            "subscription { ticks @skip(if: false) { seq } }",
+            r#"the subscription selects "ticks" under "@skip" at its root"#,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = index.to_string();
+        socket.subscribe(&id, document);
+        let item = socket.next_item(&id).await.expect("the operation answers");
+        assert_eq!(item["data"], serde_json::Value::Null, "{document}: {item}");
+        assert_eq!(item["errors"][0]["message"], said, "{document}: {item}");
+        let done = socket.next_item(&id).await.expect("the operation ends");
+        assert_eq!(done["type"], "complete", "{document}: {done}");
+    }
+    assert_eq!(state.tx.receiver_count(), 0, "no opening ran");
 
-    let kept = nest_rs_graphql::keep_masked_item("subscription ticks", Ok(Some(7)));
-    assert_eq!(kept, Some(7), "a granted item is pushed unchanged");
-
-    let refused: Option<i32> = nest_rs_graphql::keep_masked_item("subscription ticks", Ok(None));
-    assert!(refused.is_none(), "an item outside the grant is dropped");
-
-    let failed: Option<i32> = nest_rs_graphql::keep_masked_item(
-        "subscription ticks",
-        Err(async_graphql::Error::new("value did not reconcile")),
+    socket.subscribe("one", "subscription { counted }");
+    let item = socket.next_item("one").await.expect("the first item");
+    assert_eq!(item["data"]["counted"], 1, "{item}");
+    socket.subscribe(
+        "directed",
+        "subscription($all: Boolean = true) { ticks { seq @include(if: $all) } }",
     );
-    assert!(failed.is_none(), "a masking failure fails closed");
+    let emitted = async {
+        nest_rs_testing::wait_until(Duration::from_secs(2), || state.tx.receiver_count() > 0).await;
+        state.tx.send(Tick { seq: 3 }).expect("a receiver is live");
+    };
+    let (item, ()) = tokio::join!(socket.next_item("directed"), emitted);
+    let item = item.expect("the tick");
+    assert_eq!(item["data"]["ticks"]["seq"], 3, "{item}");
+}
 
-    let reported = logs.find("nest_rs::graphql", "subscription item withheld");
-    let reasons: Vec<String> = reported
-        .iter()
-        .filter_map(|event| event.field("reason"))
-        .collect();
+/// The stamp an operation on `socket` answers as `id`.
+async fn stamp_of(socket: &mut nest_rs_testing::graphql::GraphqlSocket, id: &str) -> i32 {
+    let item = socket.next_item(id).await.expect("the operation answers");
+    let field = item["data"]
+        .as_object()
+        .and_then(|data| data.values().next())
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or_else(|| panic!("a stamp, not a refusal: {item}"));
+    i32::try_from(field).expect("a stamp fits")
+}
+
+#[tokio::test]
+async fn a_subscription_resolves_a_request_scoped_parameter_and_polls_its_stream_in_that_scope() {
+    let app = boot().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("stamps", "subscription { stamps }");
+
+    let opened = stamp_of(&mut socket, "stamps").await;
+    let polled = stamp_of(&mut socket, "stamps").await;
+
     assert_eq!(
-        reasons,
-        vec!["not_granted", "mask_failed"],
-        "both drops are traceable, and they are told apart by `reason`",
-    );
-    assert!(
-        reported
-            .iter()
-            .all(|event| event.field("operation").as_deref() == Some("subscription ticks")),
-        "each names the operation that withheld the item",
+        opened, polled,
+        "the subscription's opening and its stream share one request scope",
     );
 }
 
-/// Per-argument pipes bind on a subscription exactly as on a query — the wire
-/// value goes in, the carrier reaches the body, and the pipe runs **once**, at
-/// subscribe, not per item.
+#[tokio::test]
+async fn each_operation_on_a_socket_runs_in_a_request_scope_of_its_own() {
+    let app = boot().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+
+    socket.subscribe("first", "{ socketStamp }");
+    let first = stamp_of(&mut socket, "first").await;
+    socket.subscribe("second", "{ socketStamp }");
+    let second = stamp_of(&mut socket, "second").await;
+    socket.subscribe("subscribed", "subscription { stamps }");
+    let subscribed = stamp_of(&mut socket, "subscribed").await;
+
+    assert_ne!(first, second, "two queries on one socket share no scope");
+    assert_ne!(first, subscribed, "a subscription shares no query's scope");
+    assert_ne!(second, subscribed, "a subscription shares no query's scope");
+}
+
+#[test]
+fn a_schema_composed_over_a_container_no_app_sealed_is_refused_naming_its_reader() {
+    let by_hand = nest_rs_core::Container::builder()
+        .build()
+        .expect("the container builds");
+
+    let Err(refused) =
+        nest_rs_graphql::__private::compose_schema(by_hand, &GraphqlConfig::default())
+    else {
+        panic!("the schema would serve every resolver linked into the binary");
+    };
+
+    let ungated = refused
+        .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+        .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+    assert_eq!(ungated.reader, "GraphQL resolver");
+}
+
 #[tokio::test]
 async fn a_pipe_binds_on_a_subscription_argument() {
     let app = boot().await;
@@ -236,9 +349,8 @@ async fn a_pipe_binds_on_a_subscription_argument() {
     );
 }
 
-/// A `#[public]` subscription is reachable — the posture's other half. (The
-/// unannotated one does not compile: see
-/// `tests/integration/diagnostics/subscription_without_posture.rs`.)
+/// The unannotated one does not compile: `nest-rs-macro-hygiene`'s
+/// `diagnostics/graphql/subscription_without_posture.rs`.
 #[tokio::test]
 async fn a_public_subscription_is_reachable() {
     let app = boot().await;
@@ -265,25 +377,19 @@ async fn a_public_subscription_is_reachable() {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        playground: true,
+        playground: Surface::Open,
         ..GraphqlConfig::default()
     }),
     TickModule,
 ])]
 struct PlaygroundApp;
 
-/// `GET <path>` serves two things, and the request decides which. This is the
-/// dispatcher's own seam: a browser gets the playground, an upgrade gets the
-/// socket — one URL, which is what every graphql-ws client assumes.
-///
-/// The completed handshake (`101`) cannot be asserted here: `TestClient` runs
-/// the endpoint in-process, where there is no connection to upgrade. That half
-/// is proven over a real socket by `demo/apps/api`'s e2e suite.
+/// The completed handshake (`101`) cannot be asserted in process; the real
+/// socket tests below and `demo/apps/api`'s e2e suite cover it.
 #[tokio::test]
 async fn an_upgrade_on_the_graphql_path_is_not_answered_by_the_playground() {
     let app = TestApp::builder()
         .module::<PlaygroundApp>()
-        .http(HttpTransport::new())
         .build()
         .await
         .expect("the playground app boots");
@@ -318,18 +424,15 @@ async fn an_upgrade_on_the_graphql_path_is_not_answered_by_the_playground() {
     );
 }
 
-/// With the playground off — the production default — the path serves POST and
-/// sockets only, so a bare GET is the wrong method rather than a missing route.
 #[tokio::test]
 async fn a_bare_get_without_the_playground_is_a_method_error() {
     let app = boot().await;
     let resp = app.http().get("/graphql").send().await;
-    resp.assert_status(poem::http::StatusCode::METHOD_NOT_ALLOWED);
+    resp.assert_status(nest_rs_http::StatusCode::METHOD_NOT_ALLOWED);
 }
 
-/// The ceiling is a security control, so its "off" spelling has to be the
-/// deliberate one. `0` disables it; unset keeps the 4-hour default — the same
-/// three cases `NESTRS_WS__MAX_CONNECTION_SECS` carries.
+/// `0` disables the ceiling; unset keeps the 4-hour default, as
+/// `<PREFIX>_WS__MAX_CONNECTION_SECS` does.
 #[test]
 fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
     use nest_rs_config::{Config, ConfigService};
@@ -350,4 +453,932 @@ fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
     let pinned = GraphqlConfig::from_env(&env, GraphqlConfig::default())
         .expect("a whole-second ceiling resolves");
     assert_eq!(pinned.max_connection, Some(Duration::from_secs(30)));
+}
+
+// Over a real upgrade: the close is the socket's, and the in-process driver has none.
+
+use nest_rs_testing::ws::{WsApp, WsFrame, WsRead, WsSocket, WsSocketBuilder};
+use nest_rs_ws::CloseCode;
+
+use crate::next_message;
+
+fn graphql_ws(app: &WsApp) -> WsSocketBuilder {
+    app.socket("/graphql")
+        .header("sec-websocket-protocol", "graphql-transport-ws")
+}
+
+/// `connection_init`, `connection_ack`, then `subscribe` as id `1`.
+async fn subscribe(socket: &mut WsSocket, query: &str) {
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(socket).await["type"], "connection_ack");
+    socket.send_text(subscribe_message("1", query)).await;
+}
+
+/// The `subscribe` message for `query` as operation `id`.
+fn subscribe_message(id: &str, query: &str) -> String {
+    serde_json::json!({ "id": id, "type": "subscribe", "payload": { "query": query } }).to_string()
+}
+
+/// Wait until the `ticks` stream has subscribed to its source.
+async fn running(state: &TickResolverState) {
+    for _ in 0..250 {
+        if state.tx.receiver_count() > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the subscription never started");
+}
+
+async fn ticks_app<M: nest_rs_core::Module + 'static>() -> (WsApp, Arc<TickResolverState>) {
+    let app = TestApp::builder()
+        .module::<M>()
+        .build_ws()
+        .await
+        .expect("a schema carrying a subscription boots on a real port");
+    let state = app
+        .container()
+        .get::<TickResolverState>()
+        .expect("the resolver's state is a provider of the booted app");
+    (app, state)
+}
+
+/// A frame that is not a graphql-ws message closes the socket `1002` with a
+/// fixed reason, within what a close frame carries: serde's sentence would
+/// quote the payload.
+#[tokio::test]
+async fn a_frame_that_does_not_decode_closes_the_socket_without_quoting_it() {
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+
+    socket
+        .send_text(r#"{"type":"subscribe","id":"1","payload":"sk_live_secret"}"#)
+        .await;
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(u16::from(code), 1002, "§7.4.1 1002: a protocol error");
+    assert!(!reason.contains("sk_live"), "{reason}");
+    assert!(reason.len() <= 123, "{}", reason.len());
+}
+
+/// Tokio's clock, paused and held still while the test waits on a real
+/// socket: it does not auto-advance while a blocking task runs (`time::pause`,
+/// *Preventing auto-advance*), so no timer fires whatever the machine's load.
+/// Held 60 s at most, so a wait that needed the clock to move meets its timers
+/// then and fails rather than hang; dropped, it lets the clock go.
+struct Frozen {
+    _thaw: std::sync::mpsc::Sender<()>,
+}
+
+impl Frozen {
+    fn clock() -> Self {
+        tokio::time::pause();
+        let (thaw, frozen) = std::sync::mpsc::channel::<()>();
+        tokio::task::spawn_blocking(move || frozen.recv_timeout(Duration::from_secs(60)));
+        Self { _thaw: thaw }
+    }
+}
+
+#[tokio::test]
+async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
+    let logs = LogCapture::install();
+    let (app, state) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+
+    let frozen = Frozen::clock();
+    let asked = tokio::time::Instant::now();
+    let stopping = tokio::spawn(app.shutdown());
+    let completed = next_message(&mut socket).await;
+    let (code, reason) = socket.expect_close().await;
+    stopping
+        .await
+        .expect("shutdown does not panic")
+        .expect("the transport stops cleanly");
+
+    assert_eq!(completed["type"], "complete", "{completed}");
+    assert_eq!(completed["id"], "1", "{completed}");
+    assert_eq!(
+        code,
+        CloseCode::Away,
+        "§7.4.1 1001: the server is going down"
+    );
+    assert!(
+        reason.contains("reconnect"),
+        "the peer is told what to do: {reason}"
+    );
+    assert_eq!(
+        asked.elapsed(),
+        Duration::ZERO,
+        "a socket with nothing in flight does not spend the window: the way down ran on a \
+         clock held still",
+    );
+    drop(frozen);
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "the server ended the socket, not its client",
+    );
+    let span = logs.expect_span(
+        nest_rs_graphql::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    crate::assert_span_records(&span, nest_rs_core::operation_log::CANCELLED);
+}
+
+/// The floor every connection ceiling is held to: a second.
+const CEILING: Duration = Duration::from_secs(1);
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        max_connection: Some(CEILING),
+        ..GraphqlConfig::default()
+    }),
+    TickModule,
+])]
+struct CeilingApp;
+
+#[tokio::test]
+async fn the_lifetime_ceiling_completes_the_subscriptions_and_closes_going_away() {
+    let logs = LogCapture::install();
+    let (app, state) = ticks_app::<CeilingApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+    // Paused time, while nothing reads: what the ceiling sends waits buffered.
+    tokio::time::pause();
+    tokio::time::sleep(CEILING + Duration::from_millis(1)).await;
+    tokio::time::resume();
+
+    let completed = next_message(&mut socket).await;
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(completed["type"], "complete", "{completed}");
+    assert_eq!(completed["id"], "1", "{completed}");
+    assert_eq!(code, CloseCode::Away);
+    assert!(reason.contains("re-upgrade"), "{reason}");
+    let closing = logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "closing subscription socket: max lifetime reached",
+    );
+    assert_eq!(closing.field("max_connection_ms").as_deref(), Some("1000"));
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[resolver]
+struct ExplodingResolver;
+
+#[operations]
+impl ExplodingResolver {
+    #[subscription]
+    #[public]
+    async fn exploding(&self) -> impl futures_stream::Stream<Item = i32> {
+        futures_stream::once(async { panic!("the subscription exploded") })
+    }
+}
+
+#[module(imports = [GraphqlModule, TickModule], providers = [ExplodingResolver])]
+struct ExplodingApp;
+
+#[tokio::test]
+async fn a_subscription_that_panics_files_panic_and_closes_with_internal_error() {
+    let logs = LogCapture::install();
+    let (app, _) = ticks_app::<ExplodingApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { exploding }").await;
+
+    let (code, _) = socket.expect_close().await;
+
+    assert_eq!(code, CloseCode::Error, "§7.4.1 1011");
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    let contained = logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "graphql subscription panicked; the socket is closed with an internal error",
+    );
+    assert_eq!(contained.level, "error");
+    assert!(
+        contained
+            .field(nest_rs_core::panic::FIELD)
+            .is_some_and(|panic| panic.contains("the subscription exploded")),
+        "{contained:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+static ANSWER_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[resolver]
+struct SlowAnswerResolver;
+
+#[operations]
+impl SlowAnswerResolver {
+    /// Takes long enough for shutdown to be asked for while it answers, and far
+    /// less than the window.
+    #[query]
+    #[public]
+    async fn slow_answer(&self) -> i32 {
+        ANSWER_STARTED.notify_one();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        42
+    }
+}
+
+#[module(imports = [GraphqlModule, TickModule], providers = [SlowAnswerResolver])]
+struct AnsweringApp;
+
+#[tokio::test]
+async fn a_query_answering_at_the_signal_is_answered_before_the_close() {
+    let (app, state) = ticks_app::<AnsweringApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+    socket
+        .send_text(
+            serde_json::json!({
+                "id": "2", "type": "subscribe", "payload": { "query": "{ slowAnswer }" },
+            })
+            .to_string(),
+        )
+        .await;
+    ANSWER_STARTED.notified().await;
+
+    let stopping = tokio::spawn(app.shutdown());
+    let mut seen = Vec::new();
+    let (code, _) = loop {
+        match socket.next_frame().await {
+            Some(WsFrame::Text(text)) => {
+                seen.push(serde_json::from_str::<serde_json::Value>(&text).expect("a message"));
+            }
+            Some(WsFrame::Close(Some(close))) => break close,
+            other => panic!("expected messages then a close, got {other:?} after {seen:?}"),
+        }
+    };
+    stopping
+        .await
+        .expect("shutdown does not panic")
+        .expect("the transport stops cleanly");
+
+    let of = |id: &str| -> Vec<&str> {
+        seen.iter()
+            .filter(|message| message["id"] == id)
+            .filter_map(|message| message["type"].as_str())
+            .collect()
+    };
+    assert_eq!(
+        of("1"),
+        ["complete"],
+        "the subscription is completed: {seen:?}"
+    );
+    assert_eq!(
+        of("2"),
+        ["next", "complete"],
+        "the query is answered: {seen:?}"
+    );
+    let answer = seen
+        .iter()
+        .find(|message| message["id"] == "2" && message["type"] == "next")
+        .expect("the answer");
+    assert_eq!(answer["payload"]["data"]["slowAnswer"], 42, "{answer}");
+    assert_eq!(code, CloseCode::Away);
+}
+
+#[resolver]
+struct FloodResolver;
+
+#[operations]
+impl FloodResolver {
+    #[query]
+    #[public]
+    async fn flood_size(&self) -> i32 {
+        64 * 1024
+    }
+
+    /// Emits as fast as it is written, more than any socket buffer holds.
+    #[subscription]
+    #[public]
+    async fn flood(&self) -> impl futures_stream::Stream<Item = String> {
+        futures_stream::repeat("x".repeat(64 * 1024))
+    }
+}
+
+/// The send deadline [`StallingApp`]'s transport is served under.
+const SEND_DEADLINE: Duration = Duration::from_secs(2);
+
+#[module(
+    imports = [
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+            send_timeout: SEND_DEADLINE,
+            ..nest_rs_http::HttpConfig::default()
+        }),
+        GraphqlModule,
+    ],
+    providers = [FloodResolver],
+)]
+struct StallingApp;
+
+/// A socket whose client stops reading while a subscription pushes is dropped
+/// at the send deadline, by the server: its line files `cancelled`.
+#[tokio::test]
+async fn a_socket_whose_client_stops_reading_is_dropped_at_the_send_deadline() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<StallingApp>()
+        .build_ws()
+        .await
+        .expect("a schema carrying a subscription boots on a real port");
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { flood }").await;
+    assert_eq!(
+        next_message(&mut socket).await["type"],
+        "next",
+        "the flood started"
+    );
+
+    tokio::time::pause();
+    tokio::time::sleep(3 * SEND_DEADLINE).await;
+    tokio::time::resume();
+    nest_rs_testing::wait_until(Duration::from_secs(5), || {
+        !logs
+            .find(
+                nest_rs_core::operation_log::TARGET,
+                nest_rs_graphql::unit::SUBSCRIPTION.name(),
+            )
+            .is_empty()
+    })
+    .await;
+
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "the server dropped the socket, not its client",
+    );
+    let stalled = logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "the peer took nothing within the send deadline; it is cut off",
+    );
+    assert_eq!(stalled.level, "warn");
+    assert_names_its_mount(&stalled);
+    app.shutdown().await.expect("the transport stops cleanly");
+    drop(socket);
+}
+
+/// Who the upgrade was for, read back by the operations its socket runs.
+#[derive(Debug)]
+struct Caller(&'static str);
+
+impl nest_rs_core::AmbientValue for Caller {}
+
+/// The stamp of the upgrade request's own scope, carried onto its socket.
+#[derive(Debug)]
+struct UpgradeStamp(Option<i32>);
+
+impl nest_rs_core::AmbientValue for UpgradeStamp {}
+
+/// Adds the caller around the upgrade request, at its unit stage, as a
+/// guard's attachment does, and the stamp of the upgrade's request scope.
+#[nest_rs_core::interceptor(stage = unit)]
+#[derive(Default, nest_rs_core::Layer)]
+struct CallerInterceptor;
+
+#[nest_rs_core::async_trait]
+impl nest_rs_core::Interceptor for CallerInterceptor {
+    async fn intercept(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+        next: nest_rs_core::Next<'_>,
+    ) -> nest_rs_core::Outcome {
+        cx.attach(Caller("alice"));
+        cx.attach(UpgradeStamp(current_stamp()));
+        next.run(cx).await
+    }
+}
+
+#[resolver]
+struct CallerResolver;
+
+#[operations]
+impl CallerResolver {
+    #[query]
+    #[public]
+    async fn caller_ping(&self) -> bool {
+        true
+    }
+
+    #[subscription]
+    #[public]
+    async fn caller(&self) -> impl futures_stream::Stream<Item = String> {
+        let caller = nest_rs_core::ambient::<Caller>().map_or("nobody", |caller| caller.0);
+        futures_stream::iter([caller.to_owned()])
+    }
+
+    /// The stamps of the upgrade's request scope and of the operation's.
+    #[subscription]
+    #[public]
+    async fn scopes(
+        &self,
+        stamp: Scoped<SocketStamp>,
+    ) -> impl futures_stream::Stream<Item = String> {
+        let upgrade = nest_rs_core::ambient::<UpgradeStamp>().and_then(|upgrade| upgrade.0);
+        futures_stream::iter([format!("{upgrade:?} {}", stamp.id())])
+    }
+}
+
+#[module(
+    imports = [GraphqlModule],
+    providers = [StampCounter, SocketStamp, CallerInterceptor, CallerResolver],
+)]
+struct CallerApp;
+
+#[tokio::test]
+async fn an_operation_on_the_socket_reads_what_its_upgrade_carried() {
+    let app = TestApp::builder()
+        .module::<CallerApp>()
+        .build_ws()
+        .await
+        .expect("the schema boots on a real port");
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { caller }").await;
+
+    let item = next_message(&mut socket).await;
+    assert_eq!(item["type"], "next", "{item}");
+    assert_eq!(item["payload"]["data"]["caller"], "alice", "{item}");
+}
+
+#[tokio::test]
+async fn an_operation_on_the_socket_runs_in_a_request_scope_of_its_own_never_its_upgrades() {
+    let app = TestApp::builder()
+        .module::<CallerApp>()
+        .build_ws()
+        .await
+        .expect("the schema boots on a real port");
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { scopes }").await;
+
+    let item = next_message(&mut socket).await;
+    assert_eq!(item["type"], "next", "{item}");
+    assert_eq!(
+        item["payload"]["data"]["scopes"], "Some(0) 1",
+        "the upgrade's request scope built stamp 0, the operation's its own: {item}",
+    );
+}
+
+/// A page on another site, which no CORS policy below lists.
+const ELSEWHERE: &str = "https://evil.example";
+
+/// The browser app a CORS policy lists.
+const LISTED: &str = "https://app.example";
+
+/// A page on another site and the `Host` its request names, both the client's
+/// to choose: each carries [`MARKER`], which no line may hold.
+const ELSEWHERE_MARKED: &str = "http://origin-marker.example";
+const HOST_MARKED: &str = "host-marker.example";
+const MARKER: &str = "marker";
+
+/// RFC 6455 §10.2: CORS never asks the browser about an upgrade, so a page on
+/// another site could open a socket under the visitor's cookies. The line says
+/// the refusal by kind, never the `Origin` sent or the `Host` it was compared to.
+#[tokio::test]
+async fn a_browser_upgrade_from_another_origin_is_refused_while_cors_is_off() {
+    let logs = LogCapture::install();
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+
+    let status = graphql_ws(&app)
+        .header("origin", ELSEWHERE_MARKED)
+        .header("host", HOST_MARKED)
+        .expect_refused()
+        .await;
+
+    assert_eq!(status, nest_rs_http::StatusCode::FORBIDDEN);
+    let refused = logs.expect_one(nest_rs_graphql::TARGET, "browser origin refused");
+    assert_eq!(refused.level, "warn");
+    for (field, value) in &refused.fields {
+        assert!(!value.contains(MARKER), "{field} = {value}");
+    }
+    assert_eq!(refused.field("reason").as_deref(), Some("host_differs"));
+    assert_eq!(refused.field("scheme").as_deref(), Some("http"));
+    assert_eq!(refused.field("trusted_proxy").as_deref(), Some("false"));
+    let hint = refused.field("hint").unwrap_or_default();
+    for setting in ["CORS_ORIGINS", "TRUSTED_PROXIES"] {
+        assert!(
+            hint.contains(&nest_rs_config::var_name("http", setting)),
+            "{hint}"
+        );
+    }
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[tokio::test]
+async fn an_upgrade_with_no_origin_or_its_own_is_served() {
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+
+    for origin in [None, Some(format!("http://{}", app.addr()))] {
+        let builder = graphql_ws(&app);
+        let builder = match origin {
+            Some(origin) => builder.header("origin", origin),
+            None => builder,
+        };
+        let mut socket = builder.connect().await;
+        socket.send_text(r#"{"type":"connection_init"}"#).await;
+        assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+    }
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(imports = [
+    nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+        cors: Some(nest_rs_http::HttpCors {
+            origins: vec![LISTED.to_owned()],
+            ..nest_rs_http::HttpCors::default()
+        }),
+        ..nest_rs_http::HttpConfig::default()
+    }),
+    GraphqlModule,
+    TickModule,
+])]
+struct ListedOriginApp;
+
+/// Once CORS is set, its layer answers first and admits what it lists alone.
+#[tokio::test]
+async fn once_cors_is_set_only_the_origins_it_lists_open_a_socket() {
+    let logs = LogCapture::install();
+    let (app, _) = ticks_app::<ListedOriginApp>().await;
+
+    let mut socket = graphql_ws(&app).header("origin", LISTED).connect().await;
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+    assert_eq!(
+        graphql_ws(&app)
+            .header("origin", ELSEWHERE)
+            .expect_refused()
+            .await,
+        nest_rs_http::StatusCode::FORBIDDEN,
+    );
+    assert_eq!(
+        graphql_ws(&app)
+            .header("origin", format!("http://{}", app.addr()))
+            .expect_refused()
+            .await,
+        nest_rs_http::StatusCode::FORBIDDEN,
+        "the server's own origin, unlisted",
+    );
+    logs.expect_none(nest_rs_graphql::TARGET, "browser origin refused");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// `Upgrade` is a list (RFC 9110 §7.8): the `GET` on the GraphQL path reads
+/// `websocket` anywhere in it as the handshake does, and so does the origin
+/// check.
+#[tokio::test]
+async fn an_upgrade_listing_websocket_among_others_is_origin_checked_and_served() {
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+
+    for listed in ["websocket, h2c", "h2c, WebSocket"] {
+        assert_eq!(
+            graphql_ws(&app)
+                .header("upgrade", listed)
+                .header("origin", ELSEWHERE)
+                .expect_refused()
+                .await,
+            nest_rs_http::StatusCode::FORBIDDEN,
+            "{listed}",
+        );
+        let mut socket = graphql_ws(&app).header("upgrade", listed).connect().await;
+        socket.send_text(r#"{"type":"connection_init"}"#).await;
+        assert_eq!(
+            next_message(&mut socket).await["type"],
+            "connection_ack",
+            "{listed}"
+        );
+    }
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// A `HEAD` carrying the graphql-ws handshake, which the route table serves
+/// through the `GET` entry: the handshake refuses it, and nothing switches.
+#[tokio::test]
+async fn a_head_carrying_the_handshake_opens_no_socket() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+    let mut stream = tokio::net::TcpStream::connect(app.addr())
+        .await
+        .expect("the transport listens");
+    stream
+        .write_all(
+            b"HEAD /graphql HTTP/1.1\r\nhost: localhost\r\nupgrade: websocket\r\n\
+              connection: Upgrade\r\nsec-websocket-version: 13\r\n\
+              sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+              sec-websocket-protocol: graphql-transport-ws\r\n\r\n",
+        )
+        .await
+        .expect("the handshake is sent");
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+            .await
+            .expect("answered")
+            .expect("the connection reads");
+        assert_eq!(read, 1, "the head ended early: {head:?}");
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).expect("an HTTP head");
+    assert!(head.starts_with("HTTP/1.1 400"), "{head}");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// The GraphQL path serves `POST` and `GET`: another method meets the route
+/// table's `405`, which names them.
+#[tokio::test]
+async fn another_method_on_the_graphql_path_answers_405_naming_the_served_ones() {
+    let app = boot().await;
+    let resp = app.http().put("/graphql").send().await;
+    resp.assert_status(nest_rs_http::StatusCode::METHOD_NOT_ALLOWED);
+    resp.assert_header(nest_rs_http::header::ALLOW, "POST, GET, HEAD");
+}
+
+/// A frame past the socket's message cap is never buffered whole: the protocol
+/// layer refuses it and the socket closes with RFC 6455 §7.4.1's 1009, as the
+/// WebSocket gateway's cap does, said at `warn` naming the mount as its `mounted
+/// endpoint` line does, the cap and the code, never the frame.
+#[tokio::test]
+async fn a_frame_past_the_message_cap_closes_1009_message_too_big() {
+    let logs = LogCapture::install();
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+
+    let marker = "sk_live_51HsecretTOKEN";
+    let padding = marker.repeat(8 * 1024);
+    socket
+        .send_text(
+            serde_json::json!({ "type": "connection_init", "payload": { "padding": padding } })
+                .to_string(),
+        )
+        .await;
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(code, CloseCode::Size, "{reason}");
+    assert!(!reason.is_empty());
+    app.shutdown().await.expect("the transport stops cleanly");
+    let read = logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "closing subscription socket: a message is past its cap",
+    );
+    assert_eq!(read.level, "warn", "a client refused, as a 413 is");
+    let cap = (64 * 1024).to_string();
+    for (field, value) in [
+        ("host", "GraphqlModule"),
+        ("path", "/graphql"),
+        ("close_code", "1009"),
+        ("max_message_bytes", cap.as_str()),
+    ] {
+        assert_eq!(
+            read.field(field).as_deref(),
+            Some(value),
+            "{field}: {:?}",
+            read.fields
+        );
+    }
+    let mounted = logs
+        .find(nest_rs_http::target::ROUTES, "mounted endpoint")
+        .into_iter()
+        .find(|line| line.field("host").as_deref() == Some("GraphqlModule"))
+        .expect("the endpoint mounted");
+    assert_eq!(
+        read.field("path"),
+        mounted.field("path"),
+        "it joins its mount"
+    );
+    assert!(
+        read.field("error")
+            .is_some_and(|error| error.contains("Space limit")),
+        "the operator's line names the size that did it: {:?}",
+        read.fields,
+    );
+    assert!(!logs.quotes(marker), "no line quotes the frame");
+}
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        connection_init_timeout: Duration::from_secs(1),
+        ..GraphqlConfig::default()
+    }),
+    TickModule,
+])]
+struct InitTimeoutApp;
+
+/// graphql-ws `PROTOCOL.md`, *ConnectionInit*: a socket that has not sent
+/// `connection_init` within the wait is closed `4408` — at the pinned second,
+/// neither before it nor at the 3 s default.
+#[tokio::test]
+async fn a_socket_that_sends_no_connection_init_is_closed_4408() {
+    let logs = LogCapture::install();
+    let (app, _) = ticks_app::<InitTimeoutApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+
+    tokio::time::pause();
+    socket.expect_silence(Duration::from_millis(999)).await;
+    // A paused clock can jump past the close before the client's socket is
+    // polled: the close is read on the real clock, well inside the 3 s default.
+    tokio::time::resume();
+    let read = socket.read_within(Duration::from_secs(1)).await;
+
+    let WsRead::Frame(WsFrame::Close(Some((code, reason)))) = read else {
+        panic!("no Close just past the pinned wait: {read:?}");
+    };
+    assert_eq!(u16::from(code), 4408);
+    assert_eq!(reason, "Connection initialisation timeout");
+    app.shutdown().await.expect("the transport stops cleanly");
+    assert_names_its_mount(&logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "closing subscription socket: no connection_init within the wait",
+    ));
+}
+
+/// graphql-ws `PROTOCOL.md`, *Subscribe*: an id already running closes the
+/// socket `4409`, rather than silently replacing the running operation.
+#[tokio::test]
+async fn a_reused_operation_id_closes_the_socket_4409_without_echoing_it() {
+    let logs = LogCapture::install();
+    let (app, state) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+
+    socket
+        .send_text(subscribe_message("1", "subscription { ticks { seq } }"))
+        .await;
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(u16::from(code), 4409);
+    assert!(!reason.contains('1'), "the id is not echoed: {reason}");
+    app.shutdown().await.expect("the transport stops cleanly");
+    assert_names_its_mount(&logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "closing subscription socket: a running operation's id was reused",
+    ));
+}
+
+/// A socket's line names the endpoint as its `mounted endpoint` line does: its
+/// host, and the path its upgrade matched.
+fn assert_names_its_mount(line: &nest_rs_testing::CapturedEvent) {
+    for (field, value) in [("host", "GraphqlModule"), ("path", "/graphql")] {
+        assert_eq!(
+            line.field(field).as_deref(),
+            Some(value),
+            "{field}: {line:#?}"
+        );
+    }
+}
+
+/// A socket the protocol refused earned it: its line files `error`, and its
+/// span records nothing, the server having failed nothing. The same holds for
+/// each refusal of the graphql-ws protocol, a client's own.
+#[tokio::test]
+async fn a_socket_the_protocol_refused_records_no_error_on_its_span() {
+    let logs = LogCapture::install();
+    let (app, state) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+
+    socket
+        .send_text(subscribe_message("1", "subscription { ticks { seq } }"))
+        .await;
+    socket.expect_close().await;
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+        "{line:#?}",
+    );
+    let span = logs.expect_span(
+        nest_rs_graphql::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    crate::assert_span_records_no_error(&span);
+}
+
+/// Both subprotocols async-graphql speaks are negotiated off
+/// `Sec-WebSocket-Protocol`, and each serves a subscription in its own
+/// wording: the client refuses an answer that echoes none it offered.
+#[tokio::test]
+async fn both_graphql_ws_subprotocols_are_negotiated_and_serve_a_subscription() {
+    let (app, _) = ticks_app::<SubscriptionApp>().await;
+    for (protocol, subscribe, item) in [
+        ("graphql-transport-ws", "subscribe", "next"),
+        ("graphql-ws", "start", "data"),
+    ] {
+        let mut socket = app
+            .socket("/graphql")
+            .header("sec-websocket-protocol", format!("unknown, {protocol}"))
+            .connect()
+            .await;
+        socket.send_text(r#"{"type":"connection_init"}"#).await;
+        assert_eq!(
+            next_message(&mut socket).await["type"],
+            "connection_ack",
+            "{protocol}"
+        );
+        socket
+            .send_text(
+                serde_json::json!({
+                    "id": "1",
+                    "type": subscribe,
+                    "payload": { "query": "subscription { counted }" },
+                })
+                .to_string(),
+            )
+            .await;
+        let first = next_message(&mut socket).await;
+        assert_eq!(first["type"], item, "{protocol}: {first}");
+        assert_eq!(
+            first["payload"]["data"]["counted"], 1,
+            "{protocol}: {first}"
+        );
+    }
+
+    let refused = app
+        .socket("/graphql")
+        .header("sec-websocket-protocol", "mqtt")
+        .expect_refused()
+        .await;
+    assert_eq!(
+        refused,
+        nest_rs_http::StatusCode::BAD_REQUEST,
+        "a handshake offering no graphql-ws subprotocol is refused"
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        max_socket_operations: Some(2),
+        ..GraphqlConfig::default()
+    }),
+    TickModule,
+])]
+struct OperationCapApp;
+
+#[tokio::test]
+async fn an_operation_past_the_socket_cap_is_answered_an_error_and_the_rest_keep_streaming() {
+    let (app, state) = ticks_app::<OperationCapApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(&mut socket).await["type"], "connection_ack");
+    for id in ["1", "2", "3"] {
+        socket
+            .send_text(subscribe_message(id, "subscription { ticks { seq } }"))
+            .await;
+    }
+
+    let refused = next_message(&mut socket).await;
+    assert_eq!(refused["type"], "error", "{refused}");
+    assert_eq!(refused["id"], "3", "{refused}");
+    assert_eq!(
+        refused["payload"][0]["message"], "too many operations on this socket",
+        "{refused}"
+    );
+    nest_rs_testing::wait_until(Duration::from_secs(5), || state.tx.receiver_count() == 2).await;
+    state
+        .tx
+        .send(Tick { seq: 7 })
+        .expect("two subscribers listen");
+    let mut streamed: Vec<String> = Vec::new();
+    for _ in 0..2 {
+        let item = next_message(&mut socket).await;
+        assert_eq!(item["type"], "next", "{item}");
+        streamed.push(item["id"].as_str().expect("an id").to_owned());
+    }
+    streamed.sort();
+    assert_eq!(streamed, ["1", "2"]);
+    assert_eq!(state.tx.receiver_count(), 2, "the third never ran");
+    app.shutdown().await.expect("the transport stops cleanly");
 }

@@ -1,0 +1,5 @@
+error: #[inject] takes no `key`: string-keyed injection was removed in 7.0, since two instances of one type are two types — inject the instance's type (`Arc<RedisConnection<Cache>>`), or wrap your own value in a newtype
+  --> tests/integration/diagnostics/core/inject_with_the_removed_key.rs:13:14
+   |
+13 |     #[inject(key = "cache")]
+   |              ^^^

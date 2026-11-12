@@ -1,7 +1,6 @@
 ---
 title: Split deployment
 description: A single signer issues tokens, every API verifies them — split the deployment, keep the keys asymmetric, never RPC across the boundary.
-tier: all-options
 sidebar:
   order: 5
 ---
@@ -32,9 +31,11 @@ mints. Same app, two standards, one deployment.
 The split is a deployment shape; the crates divide once more narrowly, one per
 RFC 6749 §1.1 role. Both halves need `authn` — `JwtService` signs and verifies,
 and that is the question preceding all four roles. Only the issuer needs
-`oauth-server`, which holds the §5.2 token-endpoint codes and the §2.3.1
-machine-client registry: neither is a credential verdict, and a resource server
-that compiled them would carry a token endpoint it never serves.
+`oauth-server`, which holds the §5.2 token-endpoint codes, the guard that
+authenticates a client there — over an authn `Strategy`, so the feature brings
+`authn` — and the §2.3.1 machine-client registry: none is a
+resource server's credential verdict, and a resource server that compiled them
+would carry a token endpoint it never serves.
 
 ```bash frame="terminal"
 # the issuer — signs tokens, so it serves a token endpoint
@@ -53,9 +54,10 @@ would never reach.
 cargo add nest-rs --features oauth-resource
 ```
 
-So `apps/auth` enables `authn`; `apps/api` enables `authn` **and**
-`oauth-resource`; a queue worker that only verifies a JWT enables `authn` alone
-and compiles no controller, no interceptor and no outbound HTTP client.
+So an issuer enables `oauth-server`, which brings `authn`; a discoverable resource
+server enables `oauth-resource`, which brings it too; and a queue worker that only
+verifies a JWT enables `authn` alone, and compiles no token endpoint and no discovery
+document. The demo enables them all at once, on its workspace's `nest-rs` line.
 
 ## The split
 
@@ -64,12 +66,12 @@ and compiles no controller, no interceptor and no outbound HTTP client.
 | JWT private key | Holds it | **Never sees it** |
 | JWT public key | Holds it | Holds it |
 | Token endpoints | `/token`, `/login`, OAuth callback | None |
-| Protected routes | None | `/users`, `/orgs`, `/graphql`, `/ws`, … |
+| Protected routes | None | `/users`, `/orgs`, `/posts`, `/graphql`, … |
 | Database | Yes (shared) | Yes (shared) |
 | Cross-app calls | None | None |
 
-The two binaries see the same `Claims` type via the shared
-`crates/features::authn` crate. The verifier deserializes a token
+The two binaries see the same `Claims` type through the shared
+`features::authn` module. The verifier deserializes a token
 the issuer signed; both speak the same struct, no schema drift
 possible.
 
@@ -97,74 +99,78 @@ export NESTRS_AUTHN__PUBLIC_KEY="$(cat jwt.pub)"
 # NESTRS_AUTHN__PRIVATE_KEY is unset — the boot picks `eddsa_verify`
 ```
 
-`JwtConfig::into_options` walks the three key env vars and chooses
+Each key also reads from a file: `<PREFIX>_AUTHN__PUBLIC_KEY_FILE=/run/secrets/jwt.pub`
+names the path instead of carrying the PEM, which is the form a mounted secret
+takes.
+
+`AuthnConfig::into_options` walks the four key fields and chooses
 verify-only mode when only the public key is set. `JwtService::sign`
-on a verify-only service returns `AuthError::Failed("this JwtService
-is verify-only — no signing key configured")` — even a buggy resource
+on a verify-only service returns `SignError`, whose chain says
+`this JwtService is verify-only — no signing key configured` — even a buggy resource
 server cannot mint a token.
 
 A misconfiguration (`PRIVATE_KEY` set, `PUBLIC_KEY` missing) fails the
-boot loudly with `"NESTRS_AUTHN__PRIVATE_KEY is set without
-NESTRS_AUTHN__PUBLIC_KEY"`.
+boot loudly with ``<PREFIX>_AUTHN__PRIVATE_KEY (or <PREFIX>_AUTHN__PRIVATE_KEY_FILE),
+or `private_key` in an AuthnConfig or JwtOptions built in code, is set without
+<PREFIX>_AUTHN__PUBLIC_KEY (or <PREFIX>_AUTHN__PUBLIC_KEY_FILE), or `public_key` in an
+AuthnConfig or JwtOptions built in code``,
+and so does a private key beside the public key of another pair. A
+`<PREFIX>_AUTHN__SECRET` left beside either key fails the boot as well, naming
+both — whether both come from the environment, from a `.env` file or from code,
+or the environment beside code; a config pinned in code stops `.env` being read
+for the namespace, and the boot names each key it shadows — so moving a service
+to EdDSA means removing its secret.
 
 ## Two `main` files, one feature set
 
 ```rust title="apps/auth/src/module.rs (from the demo)"
 #[module(
     imports = [
-        ConfigModule::for_root(),
-        OpenTelemetryModule,
-        SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        SeaOrmHealthModule,
-        ThrottlerModule::for_root(None),
         HealthModule,
-        HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
-        AuthnModule::for_root(None),
-        SocialModule,
-        OAuthHttpModule,
+        GithubSocialModule,
+        GoogleSocialModule,
+        SignInHttpModule,
     ],
 )]
 pub struct AuthModule;
 ```
 
-The issuer imports the OAuth flow controller (`OAuthHttpModule`) and
-the throttler. It does **not** import `UsersHttpModule` — the issuer
+The issuer imports the sign-in controller (`SignInHttpModule`) — the token
+endpoint, the password login and the social redirects — which imports the
+throttler its routes bind; its
+`SignInModule` imports the token signer (`nest_rs::authn::AuthnModule`) and
+registers the authorization server's clients through
+`OAuthServerModule::<ClientPayload>`. It does **not** import `UsersHttpModule` — the issuer
 mints tokens, not users.
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
 #[module(
     imports = [
-        ConfigModule::for_root(),
-        SeaOrmModule::for_root(None),
+        // …
         SeaOrmDatabaseModule,
+        // …
         HealthModule,
-        HttpModule::for_root(HttpConfig {
-            port: 3002,
-            compression: true,
-            ..Default::default()
-        }),
-        AuthnModule,
-        AuthzModule,
-        AuthzGraphqlModule,
+        // …
         OrgsHttpModule,
+        // …
         UsersHttpModule,
+        // …
     ],
+    // …
 )]
 pub struct ApiModule;
 ```
 
-The resource server imports the authz transports and every feature
-controller. With only the public key in env, its authn loads as
+The resource server imports every feature controller, and each imports the authz
+module its guards need. With only the public key in env, its authn loads as
 verify-only.
 
-The two lists import different modules, and the names say which.
-`apps/auth` takes `nest_rs::authn::AuthnModule` — the framework's, which
-provides `JwtService` and carries the config seam. `apps/api` takes
-`features::authn::AuthnModule` — the product's own, which wraps that one
-and adds the `Claims`-bound strategy and guard; it owns no configuration, so it
-has no seam. The `app_` prefix is what makes the pair readable without going
-back to the `use` line.
+Two modules share one name, and the path says which. `SignInModule` imports
+`nest_rs::authn::AuthnModule` — the framework's, which provides `JwtService` and
+carries the config seam. `features::authz::AuthzModule` imports
+`features::authn::AuthnModule` — the product's own, which wraps that one and adds
+the `Claims`-bound strategy and guard; it owns no configuration, so it has no seam.
 
 ## Why not RPC
 
@@ -201,7 +207,7 @@ A round-trip:
 ```bash
 TOKEN=$(curl -sX POST http://localhost:3001/login \
     -H 'Content-Type: application/json' \
-    -d '{"email":"ada@example.com","password":"hunter2"}' \
+    -d '{"email":"admin@acme.test","password":"publish-demo"}' \
     | jq -r .access_token)
 
 curl -s http://localhost:3002/users \
@@ -212,106 +218,59 @@ The bearer is signed by the issuer's private key; the API verifies
 with the public key. The API has no way to mint that token even if it
 wanted to.
 
+## Binding a token to its resource
+
+Every resource server trusting one issuer verifies with the same public key,
+so a signature alone says nothing about *which* server a token was minted for:
+a token stolen from, or sent by mistake to, one API would be accepted by every
+other. [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) closes it by
+naming the resource in the token request, and the issuer writes it into the
+token's `aud` — the one audience the resource server requires.
+
+Each half holds its own word of that contract. A resource server requires its
+own audience — `<PREFIX>_AUTHN__AUDIENCE`, its canonical URI — and the issuer
+it trusts, `<PREFIX>_AUTHN__ISSUER`; it does not start without either:
+
+```bash
+# apps/api, deployed
+NESTRS_AUTHN__AUDIENCE=https://api.example.com
+NESTRS_AUTHN__ISSUER=https://auth.example.com
+```
+
+The issuer mints each access token for the resource it was asked for, with
+`JwtService::sign_for(resource, &claims)` — never with its own audience, which
+is for the tokens it mints for itself, its OAuth transaction cookie among them.
+A machine client names the resource in the `resource` parameter of its token
+request, and gets a token only for a resource it is registered for
+(`AuthenticatedClient::audience_for`, which refuses anything else as RFC 8707's
+`invalid_target`); the demo's sign-in takes `resource` the same way, and a
+sign-in naming none is minted for the first resource the issuer serves:
+
+```bash
+TOKEN=$(curl -sX POST http://localhost:3001/login \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"admin@acme.test","password":"publish-demo","resource":"http://localhost:3003"}' \
+    | jq -r .access_token)
+```
+
+That token opens the assistant and every other resource server refuses it,
+because each app requires an audience of its own — which takes a configuration
+of each app's own. Deployed, a per-process environment is one: the demo's chart
+sets `AUTHN__AUDIENCE` to each app's origin and hands the signing key to `auth`
+alone. Run locally, each app's own `apps/<app>/.env` is
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)): the
+demo's api requires `http://localhost:3002`, the live app `:3004`, and the
+signing key sits in `auth`'s own `.env.development` and `.env.test` alone.
+
 ## Telling clients where the issuer is
 
-An OAuth client that has never met your API does not know which
-authorization server to ask. `OAuthResourceModule` answers that,
-the way [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) and
-the MCP authorization spec require: it serves
-`/.well-known/oauth-protected-resource`, and it stamps a pointer to
-that document onto every `401` the app emits.
-
-```rust title="apps/api/src/module.rs"
-#[module(imports = [
-    HttpModule::for_root(None),
-    AuthnModule::for_root(None),
-    OAuthResourceModule::for_root(None),
-])]
-pub struct ApiModule;
-```
-
-```bash
-NESTRS_OAUTH_RESOURCE__RESOURCE=https://api.example.com
-NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
-NESTRS_AUTHN__AUDIENCE=https://api.example.com
-NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED=users:read,users:write
-```
-
-Three optional members of the RFC 9728 document round out the deployment's
-description of itself. Each is omitted from the served JSON when unset, as
-§3.2 requires:
-
-| Env var | Document member | What it says |
-|---|---|---|
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_NAME` | `resource_name` | a human-readable name for this resource (§2 RECOMMENDs it) |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION` | `resource_documentation` | where a developer reads about it |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
-| `NESTRS_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
-
-§2 defines fourteen members and the framework serves eight. The other six are refused in writing on `ProtectedResourceMetadata`, each
-naming the fact that makes it impossible here: nothing signs a response, so
-no `jwks_uri`; no `cnf`-claim handling, so no DPoP binding; a `Strategy`
-never sees the TLS handshake, so no mTLS binding. `signed_metadata` is
-recorded as an owner question rather than a refusal — publishing one is
-possible, and only the validating half is missing.
-
-The discovery walk, from a client that knows only one URL:
-
-```bash
-curl -si https://api.example.com/users | grep -i www-authenticate
-# www-authenticate: Bearer resource_metadata="https://api.example.com/.well-known/oauth-protected-resource", scope="users:read users:write"
-
-curl -s https://api.example.com/.well-known/oauth-protected-resource
-# {"resource":"https://api.example.com","authorization_servers":["https://auth.example.com"], …}
-```
-
-The metadata route is declared `#[public]`, because a client cannot
-hold a token before it has read the document that says where to get
-one. Everything else stays closed.
-
-When `RESOURCE` carries a path — `https://api.example.com/mcp` — the
-document is published at the path-aware URL RFC 9728 §3.1 defines,
-`https://api.example.com/.well-known/oauth-protected-resource/mcp`, and
-that is what the challenge advertises. The unsuffixed URL stays served
-for the bare-origin case and for clients that skip the challenge; a tail
-that is not this resource's path answers `404` rather than claiming an
-identity the deployment does not have.
-
-### The second refusal: a token that is merely too narrow
-
-The `401` above is "you have no token". Its counterpart is "your token
-verified, but it was not delegated enough" — a `403` carrying the RFC
-6750 §3.1 challenge:
-
-```http
-HTTP/1.1 403 Forbidden
-WWW-Authenticate: Bearer error="insufficient_scope",
-  resource_metadata="https://api.example.com/.well-known/oauth-protected-resource",
-  scope="users:write"
-```
-
-Both are written by the same interceptor at the transport edge, so HTTP,
-WS and MCP get them identically and neither can drift from the metadata
-document. What raises the `403` is a scope-gated authorization rule —
-see [OAuth scopes](/security/authorization/scopes/). Make sure every
-scope your rules gate on appears in `SCOPES_SUPPORTED`, or you are
-telling clients to request something discovery never names.
-
-**`NESTRS_AUTHN__AUDIENCE` stops being optional.** On its own,
-`JwtConfig` treats it as a nice-to-have; under this module boot fails
-without it, naming the variable. The confused-deputy defence itself is
-not what the module adds — `JwtService` applies RFC 7519 §4.1.3 on every
-path, so a token minted *for another named service* is refused even by an
-app that pins no audience. What pinning adds is the token that carries no
-`aud` at all: without a pinned audience such a token is accepted, and a
-resource server cannot afford that. RFC 8707 makes the resource
-identifier *be* the audience — keep the two strings identical, and the
-framework warns at boot when they drift.
+`OAuthResourceModule` serves the RFC 9728 document naming the issuer, and
+points every `401` the app emits at it:
+[Protected resource metadata](/security/authentication/protected-resource-metadata/).
 
 ## Going further
 
-- [JWT](/security/authentication/jwt/) — `JwtConfig`, `JwtKey`,
+- [JWT](/security/authentication/jwt/) — `AuthnConfig`, `JwtKey`,
   EdDSA vs HS256.
 - [OAuth2](/security/authentication/oauth2/) — the flow the issuer
   exposes upstream.

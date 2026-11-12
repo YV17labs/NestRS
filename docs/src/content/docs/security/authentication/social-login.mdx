@@ -1,7 +1,6 @@
 ---
 title: Social login
-description: Open provider contract — one module import activates every configured provider, and a third party publishes their own through the same discovery seam.
-tier: all-options
+description: Open provider contract — each provider is one module import, active once its credentials are set, and a third party publishes its own through the same seam.
 sidebar:
   order: 6
 ---
@@ -10,10 +9,10 @@ import { Aside } from '@astrojs/starlight/components';
 
 Social login is an open provider contract. The framework ships the
 `SocialProvider` trait, an inventory-based registry, and first-party
-GitHub and Google providers. One import activates the registry; each
-provider turns on when its credentials are configured. A third party
-publishes a new provider as its own crate through the same seam — no
-fork, no framework change.
+GitHub and Google providers. `SocialModule` holds the registry; each
+provider is one more import, and turns on when its credentials are
+configured. A third party publishes a new provider as its own crate
+through the same seam — no fork, no framework change.
 
 ## Install
 
@@ -21,28 +20,31 @@ fork, no framework change.
 cargo add nest-rs --features social
 ```
 
-The `social` feature implies `authn`: the authorization-code machinery
+The `social` feature implies `oauth-client`, which implies `authn`: the authorization-code machinery
 `SocialModule` drives (`OAuthClient`, `TokenSet`) arrives with it.
 
 ```rust title="apps/auth/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::social::SocialModule;
+use nest_rs::social::{GithubSocialModule, GoogleSocialModule};
 
-#[module(imports = [SocialModule, OAuthHttpModule])]
+#[module(imports = [GithubSocialModule, GoogleSocialModule, SignInHttpModule])]
 pub struct AuthModule;
 ```
 
-`SocialModule` owns every registry entry, so it is the module gate — no
-`SocialModule`, no social login. Which providers come up inside that gate
-is a config decision, not a second import.
+`SocialModule` owns the registry, which each provider's module imports, and
+each provider's module opens that provider: a provider whose module the app does not import stays closed,
+whatever its credentials say. So every provider an app can log in with is
+a line in its composition root, and an opening is never a side effect of
+a dependency.
 
-`OAuthHttpModule` is **yours** — the two routes below are app code, for the
-reason [The request flow](#the-request-flow) explains.
+`SignInHttpModule` is **yours** — the two routes below are app code, for the
+reason [The request flow](#the-request-flow) explains, and what they run
+around the provider is the framework's.
 
 ## Wire it in
 
 Each provider reads its credentials from the dual-path config
-(`NESTRS_SOCIAL__<PROVIDER>__*` env **or** a provided struct). Only the
+(`<PREFIX>_SOCIAL__<PROVIDER>__*` env **or** a provided struct). Only the
 client id, secret, and redirect URL are deployment config — the
 auth/token/userinfo endpoints are provider constants, and scopes
 default to each provider's canonical login set.
@@ -57,31 +59,52 @@ NESTRS_SOCIAL__GOOGLE__CLIENT_SECRET=…
 NESTRS_SOCIAL__GOOGLE__REDIRECT_URL=https://auth.example/social/google/callback
 ```
 
-`NESTRS_SOCIAL__GITHUB__SCOPES` and `NESTRS_SOCIAL__GOOGLE__SCOPES` take a
+`<PREFIX>_SOCIAL__GITHUB__SCOPES` and `<PREFIX>_SOCIAL__GOOGLE__SCOPES` take a
 comma-separated list and default to each provider's canonical login set, so
-neither is deployment config until you need more than sign-in.
+neither is deployment config until you need more than sign-in. Each entry is one
+RFC 6749 §3.3 `scope-token`: `SCOPES="openid email"` is one entry holding a space,
+and fails the boot naming the variable — write `openid,email`.
 
-Three outcomes per provider, and no fourth:
+What a provider reads beyond the client's own parameters goes in
+`<PREFIX>_SOCIAL__<PROVIDER>__AUTHORIZATION_PARAMETERS`, a JSON object under the names
+the provider documents. Google issues a refresh token only to a request saying
+`access_type=offline`, and on a consent already given only with `prompt=consent`:
 
-| Config for `NESTRS_SOCIAL__<PROVIDER>__*` | Outcome |
+```bash
+NESTRS_SOCIAL__GOOGLE__AUTHORIZATION_PARAMETERS='{"access_type":"offline","prompt":"consent"}'
+NESTRS_SOCIAL__GITHUB__AUTHORIZATION_PARAMETERS='{"prompt":"select_account"}'
+```
+
+The client sends `response_type`, `client_id`, `redirect_uri`, `scope`, `state`,
+`code_challenge` and `code_challenge_method` itself, and reads the answer where
+`response_mode`, `request` and `request_uri` would move it, so naming one of those —
+or `nonce`, in any case — fails the boot, as does a parameter with no value or named
+twice. So does a credential of the client's, `client_secret`, `client_assertion` or
+`client_assertion_type`, and its PKCE `code_verifier`: those go to the token endpoint
+alone, never into the authorization URL every browser is redirected to. The refresh
+token reaches your `SocialSignIn` with the provider's access token.
+
+Three outcomes per imported provider, and no fourth:
+
+| Config for `<PREFIX>_SOCIAL__<PROVIDER>__*` | Outcome |
 |---|---|
 | Complete | active |
-| Absent entirely | inert — one boot `warn` naming the provider and its `NESTRS_SOCIAL__<PROVIDER>__*` namespace; the registry does not know the key, so your `:provider` route answers `404` |
+| Absent entirely | inert — one boot `warn` naming the provider and its `<PREFIX>_SOCIAL__<PROVIDER>__*` namespace; the registry does not know the key, so `/social/{provider}/authorize` answers `404` and its callback `401` |
 | Partial, or invalid | **boot fails**, naming the provider |
 
 Real credentials are a deployment's explicit intent, so a provider never
 activates by accident; and a half-configured login never starts serving
 silently.
 
-Note what you do **not** write: `SocialModule` takes no configuration. Each
-provider carries its own `#[config]`, and its registry entry names it — so
-discovering a provider is what loads its credentials. The module never learns
-which providers are linked, which is exactly why it has nothing to declare
-about them — the import at the top of this page is the whole wiring, whether
-one provider is linked or five.
+Note what you do **not** write: neither `SocialModule` nor a provider's
+module takes configuration. Each provider carries its own `#[config]`, and its
+registry entry names it — so opening a provider is what loads its credentials.
 
-Adding a provider is adding its crate to `Cargo.toml` and its credentials to
-the environment. No import changes, no list to keep in sync.
+Adding a provider is three lines: its crate in `Cargo.toml`, its module in
+your `imports`, its credentials in the environment. The import is not
+optional. A dependency line alone does not even link a crate no code names —
+the provider's registry entry would never exist, and nothing could tell
+you it is missing — and importing the module is what names it.
 
 A provider's credentials are deployment data — the client id, the secret and the
 redirect URL all differ between your laptop and production — so they have no
@@ -92,56 +115,130 @@ hard pin every other config uses.
 ## The request flow
 
 `nest-rs-social` ships **no routes**. A social provider is not a DI provider —
-it is reached only through `SocialRegistry`, which is what lets a third-party
-provider ship as two files with no module of its own. The flip side is that the
-two HTTP legs are **app code**: the path prefix, the throttle, the cookie name
-and what "resolve this profile to a local user" means are all yours.
+it is reached only through `SocialRegistry`, never injected by type. The
+two HTTP legs are **app code** for what only the app decides: the path
+prefix, the throttle, the resources a sign-in may ask for, and what "this
+profile is a user here" means. Everything RFC 6749 fixes is the framework's.
 
-Two legs, both dispatched by a `:provider` path segment:
+Two legs, both dispatched by a `{provider}` path segment:
 
-- `GET /social/:provider/authorize` — begins the redirect. A plain handler:
-  ask the registry for the provider, call `authorize`, return a `302` with the
-  PKCE/CSRF transaction in a signed, short-lived cookie. Unknown provider ⇒
-  `404`.
-- `GET /social/:provider/callback` — the redirect URI. A `Strategy` bound with
-  `#[use_guards(OAuthGuard)]` validates the `state` against the cookie,
-  exchanges the code, fetches the profile, resolves it to a local user, and
-  hands the handler a `Ctx<Caller>` to issue this app's token from. A forged
-  callback is a `401` denial — do **not** mark this route `#[public]`, or the
-  guard's denial is absorbed and the failure surfaces as a missing principal
-  instead.
+- `GET /social/{provider}/authorize` — begins the redirect. A plain handler
+  returns what `SocialRegistry::authorize(provider, jwt, resource)` answers, a
+  `SocialRedirect`: a `302` to the provider with the PKCE/CSRF transaction in
+  a signed, short-lived cookie, under `Cache-Control: no-store`, so no cache
+  keeps the response that set it. The transaction carries the
+  [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) `resource` the
+  sign-in asked for (`?resource=`), signed, so the callback mints for it. A
+  provider no imported module registers answers the `404` problem a route
+  that does not exist does. Which resources a sign-in may name is yours to
+  check before you ask.
+- `GET /social/{provider}/callback` — the redirect URI, guarded by
+  `AuthnGuard<SocialStrategy<S>>`. The strategy reads RFC 6749 §4.1.2's
+  response against the transaction cookie, exchanges the code, fetches the
+  profile, and hands it, with the provider's tokens, to your `SocialSignIn`,
+  which says who that profile is here; the handler reads the principal as `Ambient<…>` and issues this app's
+  token. A forged, expired or foreign transaction, or another `state`, is a
+  `401` before anything else in the response is read. A provider's own
+  refusal (§4.1.2.1's `error`: `access_denied` when the user cancelled),
+  once matched, is a `401` — `server_error` and `temporarily_unavailable` a
+  `503` — and the edge's `guard denied the request` on `nest_rs::authn` names
+  the registered code in its `error` chain; the response never does. Do
+  **not** mark this route `#[public]`, or the guard's denial is absorbed and
+  the failure surfaces as a missing principal instead.
 
-```rust title="crates/features/src/oauth/http/controller.rs (from the demo, abridged)"
-#[controller(path = "/")]
-pub struct OAuthController {
-    #[inject]
-    svc: Arc<OAuthService>,
-}
+Your part of the callback is one trait:
 
-#[routes]
-impl OAuthController {
-    #[get("/social/:provider/authorize")]
-    #[public]
-    async fn social_authorize(&self, provider: Path<String>) -> Result<Response> {
-        let authorization = self
-            .svc
-            .authorize(&provider)                       // → SocialRegistry
-            .ok_or_else(|| Error::from_status(StatusCode::NOT_FOUND))??;
-        Ok(redirect_with_transaction_cookie(authorization))
-    }
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+#[async_trait]
+impl SocialSignIn for SignInService {
+    type Principal = Caller;
 
-    #[get("/social/:provider/callback")]
-    #[use_guards(OAuthGuard)]
-    async fn social_callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
-        Ok(Json(self.svc.issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?))
+    async fn sign_in(
+        &self,
+        profile: SocialProfile,
+        _tokens: TokenSet,
+        resource: Option<&str>,
+    ) -> Result<Caller, AuthError> {
+        let user = self
+            .users_svc
+            .resolve_social_identity(&social_identity(profile), self.config.default_org_id)
+            .await?;
+        Ok(Caller {
+            user_id: user.id,
+            org_id: user.org_id,
+            roles: vec![role_from_db(user.role)],
+            resource: resource.map(str::to_owned),
+        })
     }
 }
 ```
 
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+pub fn authorize(
+    &self,
+    provider: &str,
+    resource: Option<&str>,
+) -> Result<SocialRedirect, TokenError> {
+    self.sign_in_audience(resource)?;
+    Ok(self
+        .providers
+        .authorize(provider, &self.jwt_svc, resource)?)
+}
+```
+
+```rust title="crates/features/src/sign_in/http/guard.rs (from the demo, abridged)"
+// …
+pub type SocialGuard = AuthnGuard<SocialStrategy<SignInService>>;
+```
+
+```rust title="crates/features/src/sign_in/http/controller.rs (from the demo, abridged)"
+#[controller(path = "/")]
+pub struct SignInController {
+    #[inject]
+    svc: Arc<SignInService>,
+}
+
+#[routes]
+impl SignInController {
+    // …
+    #[get("/social/{provider}/authorize")]
+    #[public]
+    #[use_guards(ThrottlerGuard)]
+    // … #[meta(…)], #[api(…)]
+    async fn social_authorize(
+        &self,
+        Piped(provider): Piped<Lowercase, Path<String>>,
+        query: Query<AuthorizeDto>,
+    ) -> Result<SocialRedirect> {
+        Ok(self.svc.authorize(&provider, query.0.resource.as_deref())?)
+    }
+
+    #[get("/social/{provider}/callback")]
+    #[use_guards(ThrottlerGuard, SocialGuard)]
+    // … #[meta(…)], #[api(…)]
+    async fn social_callback(&self, caller: Ambient<Caller>) -> Result<AccessTokenResponse> {
+        Ok(self.svc.issue(
+            caller.resource.as_deref(),
+            caller.user_id,
+            caller.org_id,
+            caller.roles.clone(),
+        )?)
+    }
+    // …
+}
+```
+
+The module listing the controller lists the strategy and its guard
+beside it, `SocialStrategy<SignInService>` and `SocialGuard`.
+
 Both legs run through the shared authorization-code flow — the same
 PKCE and stateless-CSRF machinery documented in
-[OAuth2](/security/authentication/oauth2/). A provider only supplies
-the piece that is genuinely provider-specific: how to read the profile.
+[OAuth2](/security/authentication/oauth2/), and the same
+[bounds](/security/authentication/oauth2-configuration/#every-provider-call-has-a-bound) on every
+call to the provider: a provider that stops answering fails the callback
+within seconds, naming the endpoint, rather than holding it. A provider
+only supplies the piece that is genuinely provider-specific: how to read
+the profile.
 
 <Aside type="note">
 Identity is keyed on the provider's stable `(provider, subject)` pair,
@@ -150,83 +247,35 @@ account. A verified email may link a new provider to an existing
 account; an unverified one never does.
 </Aside>
 
+GitHub's profile does not say whether its email is verified, so the GitHub
+provider reads the verified-emails endpoint too (the `user:email` scope).
+When that call fails — an outage, a revoked scope — the login goes on with
+the profile email, unverified, and says so once at `warn` on
+`nest_rs::social`, with `provider = "github"` and the call's error: a
+returning user on that fallback cannot reach their account until the
+lookup answers again.
+
 ## Write your own provider
 
-A provider is real code — the profile shape, and any provider quirk —
-behind a public trait, discovered at link time. Two files, three steps.
-
-**1. Implement the trait.** `authorize` and `exchange` default to the
-shared flow, so a standard provider writes only `profile`:
-
-```rust title="crates/features/src/social/provider.rs"
-impl SocialProvider for AcmeProvider {
-    fn key(&self) -> &'static str { "acme" }
-    fn client(&self) -> &OAuthClient { &self.client }
-
-    fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
-        Box::pin(async move {
-            let me: AcmeUser = self.client.fetch("https://api.acme.dev/me", &tokens.access_token).await?;
-            Ok(SocialProfile::new("acme", me.id.to_string())
-                .with_email(me.email, me.email_verified)
-                .with_name(me.name))
-        })
-    }
-}
-```
-
-A provider whose protocol deviates — a per-request signed client
-secret, or identity carried in the `TokenSet`'s id_token instead of a
-userinfo endpoint — overrides `exchange` too. The trait does not
-change.
-
-**2. Declare the config.** A `#[config]` type plus the one question the
-registry asks before it separates *inert* from *misconfigured*:
-
-```rust title="crates/features/src/social/config.rs"
-impl SocialProviderConfig for AcmeSocialConfig {
-    fn is_unconfigured(&self) -> bool {
-        self.client_id.is_empty()
-            && self.client_secret.is_empty()
-            && self.redirect_url.is_empty()
-    }
-}
-```
-
-Report `false` for a *partially* set config — that is what makes it fail
-`validate` and abort boot instead of vanishing.
-
-**3. Submit the registry entry.** `resolve_provider` is the standard
-`build`: a provided instance wins, then a provided config, then the
-environment.
-
-```rust title="crates/features/src/social/provider.rs"
-nest_rs::core::inventory::submit! {
-    SocialProviderEntry {
-        key: "acme",
-        provider_type_name: || std::any::type_name::<AcmeProvider>(),
-        config_namespace: AcmeSocialConfig::NAMESPACE,
-        build: |container| {
-            resolve_provider::<AcmeProvider, AcmeSocialConfig>(container, |config| {
-                let client = OAuthClient::new(config.oauth2_config())
-                    .map_err(|e| anyhow::anyhow!("invalid Acme OAuth2 client config: {e}"))?;
-                Ok(AcmeProvider::new(client))
-            })
-        },
-    }
-}
-```
-
-There is no module to write. A social provider is never `#[inject]`ed by
-type — it is reached through the registry as `Arc<dyn SocialProvider>` —
-so it has nothing for a module of its own to own. Adding the crate to
-`Cargo.toml` and setting `NESTRS_SOCIAL__ACME__*` is the whole wiring.
+A provider is real code behind a public trait, discovered at link time and
+opened by its module: [Writing a social provider](/security/authentication/writing-a-social-provider/)
+walks its three files.
 
 ## Configuration
 
-Per provider, under `NESTRS_SOCIAL__<PROVIDER>__`: `CLIENT_ID`,
+Per provider, under `<PREFIX>_SOCIAL__<PROVIDER>__`: `CLIENT_ID`,
 `CLIENT_SECRET`, `REDIRECT_URL`, and optional `SCOPES` (a comma list;
 defaults to the provider's login set). The secret is secret-shaped —
 keep it out of committed config.
+
+`REDIRECT_URL` is an `https` URL, or `http` on a loopback address
+(`http://localhost:3000/…`, RFC 8252 §7.3) in a declared development or
+test profile (`<PREFIX>_ENV`) alone; any other is refused at boot, naming
+`<PREFIX>_SOCIAL__<PROVIDER>__REDIRECT_URL` and the profile.
+The provider's own endpoints are `https`
+constants, verified against the system's authorities, and a custom
+provider's `fetch` refuses a URL that is not `https` — the call carries
+the user's access token.
 
 ## Going further
 
@@ -234,5 +283,6 @@ keep it out of committed config.
   authorization-code client every provider composes.
 - [Split deployment](/security/authentication/split-deployment/) —
   where the token this flow issues is verified.
-- [Providers](/fundamentals/providers/) — keyed injection, the tool for
-  static compile-time roles (distinct from the open provider set here).
+- [Instances](/fundamentals/instances/)
+  — instance markers, the tool for a closed set of static roles (distinct
+  from the open provider set here).

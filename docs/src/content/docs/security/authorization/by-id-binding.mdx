@@ -1,18 +1,20 @@
 ---
 title: Route model binding
-description: Bind<A, S> turns a path id into the loaded, authorized model — 404 when the row is absent, 403 when it exists but the caller cannot see it.
-tier: basics
+description: "#[authorize(A, bind = S)] turns a path id into the loaded, authorized model — 404 when the row is absent, 403 when it exists but the caller cannot see it."
 sidebar:
   order: 4
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-`Bind<A, S>` is the handler argument that turns `/users/:id` into a
-loaded, authorized model. It runs through the service's `access`
-method, which loads the row **under the caller's own grant** — one SQL
-lookup, filtered by the same condition a list query uses. Three outcomes,
-three HTTP statuses:
+`#[authorize(Action, bind = Service)]` turns `/posts/{id}` into a loaded,
+authorized model, handed to the handler's `Authorized<Action, E>`
+parameter. The attribute is the route's posture: it runs the class gate
+with the guards and opens the reads under the caller's ability, as
+`#[authorize(Action, Entity)]` does. The load then runs through the service's `access` method,
+which reads the row **under the caller's own grant** — one SQL lookup,
+filtered by the same condition a list query uses. Three outcomes, three
+HTTP statuses:
 
 - Row not in the database → `404 NOT FOUND`.
 - Row exists but the caller cannot see it → `403 FORBIDDEN`.
@@ -27,85 +29,101 @@ there".
 
 ## What it looks like
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo)"
-use nest_rs::authz::Read;
-use nest_rs::seaorm::Bind;
+```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
+use nest_rs::authz::Update;
+// …
+use nest_rs::seaorm::Authorized;
+// …
 
-#[get("/:id")]
-async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
-    Json(User::from(&*user))
-}
+    #[post("/{id}/publish")]
+    #[authorize(Update, bind = PostsService)]
+    #[use_guards(PostAuthorGuard)]
+    // …
+    async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>, PostError> {
+        Ok(Json(self.svc.publish(post.into_inner()).await?))
+    }
 ```
 
-`Bind` derefs to the entity's `Model`, so `&*user` is `&user::Model`.
-Take ownership with `user.into_inner()` when the handler moves it.
+`#[authorize(Update, bind = PostsService)]` reads as: "gate the caller for
+`Update` on posts, load the post the path's id names, authorize the caller
+for `Update` on that row, refuse with 404 or 403 otherwise". The action
+comes first and the **service** (not the entity) after `bind =`; the entity
+is `PostsService::Entity`, or written beside the action when you want it
+spelled out — the service's own: another one does not compile, since the
+gate and the wire row would read it while the load reads the service's. The service is what the framework calls `access` on.
 
-`Bind<Read, UsersService>` reads as: "load a user by id, authorize
-the caller for `Read` on it, refuse with 404 or 403 otherwise". The
-type parameters are the **action marker** first and the **service**
-(not the entity) second — the same order `#[authorize(Read,
-users::Entity)]` and the GraphQL `bind::<Read, UsersService>` use, so
-the action always leads. The service is what the framework calls
-`access` on; the entity comes from `S::Entity`.
+`Authorized<Update, PostEntity>` carries the row and nothing else: it
+derefs to the entity's `Model`, and `into_inner()` takes ownership. It is
+never a posture of its own — written without `bind = Service` beside it,
+it does not compile, and neither does a `bind` with no such parameter to
+fill. The id is the one parameter the route's path names, its
+controller's included: a bound route's whole path names it alone (`/{id}`,
+`/{id}/publish`, or `/summary` under `#[controller(path = "/posts/{id}")]`),
+and any other count does not compile.
+
+GraphQL takes the same attribute on a `#[query]` or `#[mutation]`: the
+operation's `Authorized<A, E>` parameter becomes an `id: String` argument
+on the schema (`id_arg = …` renames it), loaded the same way, a missing row
+answering `NOT_FOUND`.
+
+An MCP [`#[resource]`](/mcp/resources-and-prompts/#resources) takes it too, reading
+the id off its template's one variable. It has one answer for what cannot be read,
+so a denied row, a missing one and an id that is no v7 all answer *Resource not
+found*, and the body never runs. A WebSocket message and an MCP tool, prompt or
+listing name no id, and refuse the key.
 
 ## The four outcomes
 
-`Bind`'s extractor decides among four early returns before the
-handler ever runs:
+The load decides among three early returns, after the class gate and before
+the handler runs:
 
-| Path id | Ability | Row | Status |
-|--------|---------|-----|--------|
-| Not a UUID v7 | — | — | `400 BAD REQUEST` |
-| Valid | Missing (wiring bug) | — | `500 INTERNAL SERVER ERROR` |
-| Valid | Present | Absent in DB | `404 NOT FOUND` |
-| Valid | Present | Present, denied | `403 FORBIDDEN` |
-| Valid | Present | Present, allowed | Handler runs with `Bind` |
+| Path id | Row | Status |
+|--------|-----|--------|
+| Not a UUID v7 | — | `400 BAD REQUEST` |
+| Valid | Absent in DB | `404 NOT FOUND` |
+| Valid | Present, denied | `403 FORBIDDEN` |
+| Valid | Present, allowed | Handler runs with the row |
 
 The UUID v7 check is deliberate — the framework's id format is
 ordered, v7 only. A v4 id (or a malformed string) fails fast at the
 edge.
 
-A missing ability is a 500 because it means the controller was not
-mounted with `AbilityGuard` — a wiring bug, never a client error.
-The access graph catches the bad import tree at boot, but a route
-that uses `Bind` and forgets `#[use_guards(AuthnGuard, AuthzGuard)]`
-fails at request time with this 500.
+A bound route whose chain runs no `AbilityGuard` never boots, the refusal naming
+the route and the guard to bind: the class gate reads the ability that guard
+attaches. Neither does a bound route with no guard at all: a route no guard
+covers says `#[public]` or refuses the boot.
 
 ## How `access` decides
 
-`Bind<A, S>` calls `S::access(action, id)` from the service. The
+The load calls `S::access(action, id)` on the service. The
 default `CrudService::access` is (simplified):
 
-```rust title="(expanded by #[crud] — you don't write this)"
+```rust title="the default CrudService::access, simplified"
 async fn access(&self, action: Action, id: Uuid)
-    -> Result<Access<Model>, DbErr>
+    -> Result<Access<Model>, RepoError>
 {
-    let conn = Repo::<E>::conn()?;
     // Scoped load: the caller's own grant for `action`, in one lookup.
     if let Some(model) = Repo::<E>::unscoped_by_id(id)
-        .filter(scope_for::<E>(action))
-        .filter(live_read_filter())
-        .one(&conn).await?
+        .filter(ability_scope::<E>(action))
+        .one().await?
     {
         return Ok(Access::Found(model));
     }
     // Only now, and only to tell "forbidden" from "absent".
-    let exists = Repo::<E>::unscoped_by_id(id)
-        .filter(live_read_filter())
-        .one(&conn).await?
-        .is_some();
+    let exists = Repo::<E>::unscoped_by_id(id).exists().await?;
     if exists { Ok(Access::Denied) } else { Ok(Access::Missing) }
 }
 ```
 
-Two things to notice:
+A soft-deleted row is `Missing` for every action: both lookups hide it, as
+every `Repo` read does. Two things to notice:
 
 1. **The authorization is decided in SQL.** The scoped lookup filters the
-   primary key by `scope_for(action)` — the exact `condition_for` the list
+   primary key by the ability's `condition_for(action)` — the exact condition the list
    path joins, evaluated by the same database. One source of truth: the row
    a list query returns and the row `access` grants cannot diverge. It is
    also what makes
-   [relational rules](/security/authorization/policies/#relational-scoping)
+   [relational rules](/security/authorization/predicates/#relational-scoping)
    enforceable here — a `p.related` scope reaches through a join no
    in-memory check could evaluate without loading the parent.
 2. **The authorized path costs one lookup.** The second, unscoped one runs
@@ -126,43 +144,44 @@ pub enum Access<M> {
 }
 ```
 
-A handler that does not use `Bind` (a service that authorizes its
+A handler that binds no subject (a service that authorizes its
 own load, a worker job touching one row) returns `Access<M>` directly
 and maps it to a wire shape:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 match self.svc.access(Action::Read, id).await.map_err(ServiceError::from)? {
     Access::Found(user) => Ok(Json(User::from(&user))),
-    Access::Denied => Err(Forbidden),
-    Access::Missing => Err(NotFound),
+    Access::Denied => Err(HttpError::from_status(StatusCode::FORBIDDEN)),
+    Access::Missing => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
 }
 ```
 
-`Bind` does this mapping for the HTTP transport. The GraphQL
-analog (`nest_rs::seaorm::graphql::bind`) does the same for resolvers.
+`bind = Service` does this mapping on HTTP and on GraphQL alike.
 
 ## Updates and deletes — the by-id mutation path
 
-For mutating actions, `Bind<Update, S>` (or `Delete`) loads the row
-the caller is about to touch and refuses early if the policy says no:
+For mutating actions, `#[authorize(Update, bind = S)]` (or `Delete`)
+loads the row the caller is about to touch and refuses early if the policy
+says no:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-#[delete("/:id")]
-async fn delete(&self, user: Bind<Delete, UsersService>) -> StatusCode {
-    self.svc.delete_by_id(user.id).await?;
-    StatusCode::NO_CONTENT
+#[delete("/{id}")]
+#[http_code(204)]
+#[authorize(Delete, bind = UsersService)]
+async fn delete(&self, user: Authorized<Delete, UserEntity>) -> Result<()> {
+    self.svc.delete(user.into_inner()).await.map_err(ServiceError::from)?;
+    Ok(())
 }
 ```
 
 The combination of the load (`Action::Delete` checked against the
-loaded row) and the `Repo::scoped(Delete)` filter inside
-`delete_by_id` is **defense in depth**:
+loaded row) and the `scope_for(Delete)` filter inside
+`Deletable::delete` is **defense in depth**:
 
-- The `Bind` refuses the route if the policy denies.
-- Even if the handler were called anyway, `Repo::scoped(Delete)`
-  appends the ability's `condition_for(Delete)` to the `DELETE`
-  statement so a denied row deletes zero rows. The handler gets back
-  `RowsAffected::default()` and the row stands.
+- The bound load refuses the route if the policy denies.
+- Even if the handler were called anyway, `Repo::delete` appends the ability's
+  `condition_for(Delete)` to the `DELETE` statement so a denied row deletes zero rows.
+  The service answers `RepoError::NotFound` and the row stands.
 
 Two layers, same predicate, the second catches what the first
 missed.
@@ -180,31 +199,30 @@ content, draft media), collapse the 403 path into a 404 in your
 handler:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[get("/:id")]
-async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>, Error> {
+#[get("/{id}")]
+async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>> {
     match self.svc.access(Action::Read, id.0).await.map_err(ServiceError::from)? {
         Access::Found(post) => Ok(Json(Post::from(&post))),
-        Access::Denied | Access::Missing => Err(Error::from_status(NOT_FOUND)),
+        Access::Denied | Access::Missing => Err(HttpError::from_status(StatusCode::NOT_FOUND)),
     }
 }
 ```
 
-The default `Bind` extractor is opinionated; the underlying `access`
-is not.
+`bind = Service` is opinionated; the underlying `access` is not.
 
 <Aside type="caution">
-`Bind` requires `AuthnGuard` and `AuthzGuard` bound on the controller.
-The access graph catches the missing-import case at boot, but a
-**handler that uses `Bind` without binding `AbilityGuard`** at the
-route level returns 500 at request time. Pin every by-id route with a
-[negative-path test](/testing/negative-path/) — auth refused, cross-tenant
-denied, malformed id rejected.
+A bound route needs `AuthnGuard` and `AuthzGuard` bound on the controller.
+The boot refuses a route no guard covers and a route whose guards attach no
+ability — `AuthnGuard` without `AbilityGuard` — and the access graph a service
+no import reaches, but not a policy that grants too much. Pin every by-id route
+with a [negative-path test](/testing/negative-path/) — auth refused,
+cross-tenant denied, malformed id rejected.
 </Aside>
 
 ## Going further
 
 - [Row-level filtering](/security/authorization/row-level-filtering/)
-  — the layer underneath `Bind`'s by-id load.
+  — the layer underneath the bound by-id load.
 - [Response masking](/security/authorization/response-masking/) —
   the layer above, after the handler returns.
 - [Authorization](/security/authorization/) — engine overview.

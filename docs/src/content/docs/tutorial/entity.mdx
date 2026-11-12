@@ -1,108 +1,161 @@
 ---
 title: Declare the entity
-description: "A Post entity with SeaORM columns and #[expose] — wire DTO, input types, JSON schema, all from one declaration."
+description: "nestrs g resource writes the posts feature, its migration and its round trip from one column list; #[expose] derives the wire types from the Post entity."
 sidebar:
   order: 3
 ---
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
-You declare the shape of a post once — a SeaORM model decorated with
-`#[expose]` — and the macro emits the wire DTO, the create/update
-inputs, the validator wiring, and the JSON schema the HTTP transport
-reaches for. By the end of this page, `nestrs run check` passes on a new
-`posts` feature crate path.
+You generate the `posts` feature in one command that names a post's columns,
+and read the shape it declares — a SeaORM model decorated with `#[expose]` —
+from which the macro emits the wire DTO, the create/update inputs, the
+validator wiring and the JSON schema the HTTP transport reaches for. By the end
+of this page, `nestrs run check` passes on a `posts` feature whose `Post` has a
+title and a body.
 
-## Move into the features crate
+## Generate the feature
 
-The reference feature lives at `crates/features/src/posts/`. Create the
-same folder so the tutorial can extend it in place.
+From the workspace root:
 
-<FileTree>
-- crates/features/src/posts/
-  - mod.rs
-  - module.rs
-  - entity.rs
-  - service.rs
-</FileTree>
-
-The `posts` module ships under the workspace's `features` crate. Its
-dependencies ride versions pinned in the workspace root, so both manifests
-need an entry. Add the pins first — note the `nest-rs` line **gains** features
-rather than being replaced: `nestrs new` already put `http`, `seaorm` and
-`testing` there, and dropping either of the first two breaks the app you just
-scaffolded. `authn` rides along because a resource also gets the auth adapter
-its guards need.
-
-```toml title="Cargo.toml" {2}
-[workspace.dependencies]
-nest-rs = { version = "6.1", features = ["http", "seaorm", "testing", "authz", "authn"] }
-sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
-serde = { version = "1.0", features = ["derive"] }
-uuid = { version = "1.26", features = ["v7", "serde"] }
+```bash
+nestrs g resource posts title:string body:text --app blog
 ```
 
-`sea-orm` is already there — the `migrations` crate the workspace ships uses
-it. Then the feature crate:
+Each column after the name is `<name>:<type>`, the field grammar Rails' and
+Phoenix's generators share: a post has a `title`, a short string, and a
+`body`, a text of any length. The type is one of `string`, `text`, `integer`,
+`bigint`, `float`, `boolean`, `uuid`, `date` and `datetime`, and a third part,
+`:nullable`, lets a row leave the column empty. The key and the timestamps
+come without asking; named nothing, a resource gets one `name:string` column.
+
+Your workspace has two apps, `hello` and `blog`, so the generator is told
+which one serves the feature; run from inside `apps/blog/`, or in a workspace
+of one app, it would find it alone. It writes the feature, the table's
+migration and the round trip, and wires them, in one transaction — a step it
+cannot take leaves nothing half-written:
+
+<FileTree>
+- apps/blog/
+  - src/
+    - module.rs edited — the feature's HTTP adapter and what it runs on
+  - tests/
+    - e2e/
+      - main.rs edited — the suite's `boot` fixture
+      - posts.rs the round trip, which [Test it end to end](/tutorial/testing/) runs
+  - Cargo.toml edited — the suite's dev-dependencies
+- crates/features/src/
+  - authn/ the token side of the guards
+  - authz/ the policy side, `ability.rs`
+  - posts/
+    - entity.rs
+    - service.rs
+    - module.rs
+    - mod.rs
+    - http/
+      - controller.rs
+      - module.rs
+      - mod.rs
+  - lib.rs edited
+- crates/migrations/src/
+  - m20260609_000000_create_posts.rs the `post` table, which [Persist through Postgres](/tutorial/database/) applies
+  - lib.rs edited
+  - migrator.rs edited
+</FileTree>
+
+Four things arrived that you did not name. `authn/` and `authz/` are the
+**auth adapter**: the generated controller binds `AuthnGuard` and
+`AuthzGuard`, two types your workspace defines rather than the framework, and
+`nestrs g resource` writes them when the workspace has none — with a
+development-only `POST /auth/dev-token` route and an HS256 secret drawn into
+the git-ignored `.env.local` (and another, the suites', into `.env.test`).
+[Expose over HTTP](/tutorial/http/) reads them. The migration creates the
+table the entity declares, column for column. The test is the resource's round
+trip through `blog`, written now so the feature is never untested: it posts a
+value of each column and reads each back. And the edits to the manifests and
+to `blog`'s root, which the next pages read as they need them.
+
+The capabilities ride the workspace's one `nest-rs` line, which **gains**
+features rather than being replaced (`nestrs new` already put `http` and
+`seaorm` there):
+
+```toml title="Cargo.toml"
+[workspace.dependencies]
+nest-rs = { version = "7.0", features = ["http", "seaorm", "authz", "authn", "oauth-server"] }
+sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
+serde = { version = "1.0", features = ["derive"] }
+uuid = { version = "1.29", features = ["v7", "serde"] }
+```
 
 ```toml title="crates/features/Cargo.toml"
 [dependencies]
 nest-rs.workspace = true
-nest-rs.features = ["seaorm", "http", "authz", "authn"]
+nest-rs.features = ["seaorm", "authz", "http", "authn", "oauth-server"]
+anyhow.workspace = true
+tracing.workspace = true
 sea-orm = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
 ```
 
-Three third-party lines, and each is there because **your own** `entity.rs`
-writes it: `sea_orm::entity::prelude::*`, `serde` on the derive list SeaORM
-generates, `Uuid` as the primary-key type. The derives `#[expose]` emits —
-`schemars::JsonSchema`, `validator::Validate` — are routed back through the
-framework with a `crate = ` override, so neither appears here.
+Three third-party lines arrive beside the `anyhow` and `tracing` `nestrs new` wrote,
+and each is there because the feature's own source writes it: `sea_orm::entity::prelude::*`, `serde` on the claims the auth
+adapter derives, `Uuid` as the primary-key type. The entity itself derives no
+serde: what `#[expose]` emits — the wire type's `serde` and
+`schemars::JsonSchema`, `validator::Validate`, the judgement of each wire row it
+builds — is routed back through the framework with a `crate = `
+override, so none of it appears here.
 
-`nestrs g resource posts` writes both manifests for you — every line above
-verbatim, dotted keys included, alongside whatever else the workspace already
-needs.
+## The post's columns
 
-## The first cut
-
-A post has an id, a title, and a body. SeaORM owns the column types;
-`#[expose]` decides which columns cross the wire and which inputs the
-HTTP layer accepts. Exposure is opt-in — a field surfaces only when it
-carries `#[expose]`. No org column, no auth hooks — the tutorial keeps
-the domain small so you can focus on the entity → service → controller
-chain.
-
-The crate this page builds on top of is
-[**`nest-rs-resource`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-resource) —
-it provides the `#[expose]` macro and the `WireModelDefaults` trait the
-masking layer reads when a feature later adds authorization. SeaORM
-itself is the source of truth for entities, columns, and migrations.
+The entity carries the two columns you named, between the key and the
+timestamps. SeaORM owns the column types — a `text` column says so with
+`column_type`, since both are a `String` to Rust; `#[expose]` decides which
+columns cross the wire and which inputs the HTTP layer accepts. Exposure is
+opt-in — a field surfaces only when it carries `#[expose]`.
 
 ```rust title="crates/features/src/posts/entity.rs"
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
-#[expose(name = "Post", service = super::service::PostsService)]
+// `soft_delete` + `timestamps` match the three columns this table's migration
+// creates, and the `users/` exemplar. `soft_delete` makes DELETE stamp
+// `deleted_at` and hides a stamped row from every read; drop it for a resource
+// that should really erase rows. `timestamps` emits the `ActiveModelBehavior`,
+// so the resource must not also write an empty one.
+#[expose(
+    name = "Post",
+    service = super::service::PostsService,
+    soft_delete,
+    timestamps
+)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "post",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "post")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
     pub id: Uuid,
     #[expose(input(create, update), validate(length(min = 1)))]
     pub title: String,
+    #[sea_orm(column_type = "Text")]
     #[expose(input(create, update), validate(length(min = 1)))]
     pub body: String,
+    #[expose]
+    pub created_at: DateTimeWithTimeZone,
+    #[expose]
+    pub updated_at: DateTimeWithTimeZone,
+    pub deleted_at: Option<DateTimeWithTimeZone>,
 }
-
-impl ActiveModelBehavior for ActiveModel {}
 ```
+
+The crate this page builds on is
+[**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
+it provides the `#[expose]` macro, which also writes the wire type's conversion,
+judging each row for the caller once a feature adds authorization — so the
+`Model` takes no serde (`#[expose]` refuses one, derived or written by hand), and
+serializes nowhere but as `Post`. SeaORM itself
+is the source of truth for entities, columns, and migrations.
 
 ## What `#[expose]` decides
 
@@ -112,88 +165,86 @@ The decorator translates one declaration into every wire surface:
 |-----------|-----------|-------------------|
 | `Post` | The wire DTO — every `#[expose]`d column, no SeaORM internals and nothing left unexposed | HTTP responses, OpenAPI schema |
 | `CreatePost` | A struct holding fields marked `input(create)` | `POST /posts` body |
-| `UpdatePost` | A struct holding fields marked `input(update)` | `PATCH /posts/:id` body |
+| `UpdatePost` | A struct holding fields marked `input(update)` | `PUT /posts/{id}` body |
 
-`service = super::service::PostsService` tells the macro which service
-owns the entity. The path is required as soon as the entity declares an
-exposed relation or another feature needs the PK loader — `posts` has
-neither yet, but the attribute is already in place for when you add one.
+Its flags declare the behaviour the columns imply. `timestamps` stamps
+`created_at` on insert and `updated_at` on every write — it writes the
+entity's `ActiveModelBehavior`, so the file carries none of its own.
+`soft_delete` turns `DELETE` into a stamp on `deleted_at` and hides a stamped
+row from every read; drop it, and the column, for a resource whose rows are
+really erased. `service = super::service::PostsService` names the service
+that owns the entity, which an exposed relation or another feature's loader
+reaches it through.
 
 ## Read the field-level attributes
 
 Two patterns cover this entity; a third shows up when you copy
-[`users`](/tutorial/security/) in `api`.
+[`users`](/tutorial/authorization/) in `api`.
 
 | Attribute | Effect |
 |-----------|--------|
 | `#[expose]` | Bare — the field is read-only on the wire (appears in `Post`), but not in any input |
 | `#[expose(input(create, update), validate(length(min = 1)))]` | Field appears in `Post` (input implies read) and in `CreatePost` and `UpdatePost`, with the `validator` rule wired |
 | `#[expose(input(create))]` | Field appears in `Post` and only in `CreatePost` — common for fields that can be set but not edited |
-| *(no `#[expose]`)* | Field is hidden from `Post` and from every input — the masker fills it back in from defaults so `Ability::mask` sees the whole row |
+| *(no `#[expose]`)* | Field is hidden from `Post` and from every input — `deleted_at` here; the ability's rules still read it, since each row is judged on its whole `Model` |
 
-Leaving a field unexposed matters once a feature carries server-side
-columns — password hashes, tenant ids set from a JWT. Because exposure
-is opt-in, those columns stay off the wire by default;
-[`api`](/publish/) is where unexposed columns and masking become
-load-bearing.
+Exposure is opt-in, so a server-side column — a password hash, a tenant id set
+from a JWT — stays off the wire by default; [`api`](/publish/) is where
+unexposed columns and field grants become load-bearing.
 
 <Aside type="caution">
-An unexposed column whose type isn't trivial to default (a `Decimal`, a
-custom enum) needs a hand-written `impl WireModelDefaults` so the
-masker can still walk the row. The error message points at the missing
-impl when boot fails.
+A column a grant may hide from some callers is declared `#[expose(nullable)]`
+(or is an `Option` already): its wire field reads `null` where the grant
+withholds it. A grant on `Read` leaving out any other column fails when the
+ability builds, naming the column.
 </Aside>
 
 ## The mod entry
 
-The feature root re-exports what other modules import. Keep it small —
-this is the public surface.
+The feature root re-exports what other modules import, and nothing more —
+the entity's types, the port's module and service, and the one adapter an app
+imports. The controller stays private to its folder:
 
-```rust title="crates/features/src/posts/mod.rs (from the demo)"
+```rust title="crates/features/src/posts/mod.rs"
 mod entity;
 mod module;
+mod service;
+
+pub mod http;
 
 pub use entity::*;
 pub use module::PostsModule;
+pub use service::PostsService;
+
+pub use http::PostsHttpModule;
 ```
 
-`PostsService` doesn't exist yet; that's the next page. For now, keep
-`module.rs` and `service.rs` stubbed so the crate compiles.
-
-```rust title="crates/features/src/posts/module.rs (from the demo)"
-use nest_rs::core::module;
-
-#[module]
-pub struct PostsModule;
-```
-
-Leave `crates/features/src/posts/service.rs` empty — the next page fills it in.
-
-Wire the feature into the parent crate's `lib.rs`:
-
-```rust title="crates/features/src/lib.rs (from the demo)"
-pub mod posts;
-```
+It declares no log target: `posts` emits nothing yet. The day a file of the
+feature logs, `pub const TARGET: &str = "features::posts";` goes at the top,
+and every event names it.
 
 ## Check
 
 ```bash frame="terminal"
 $ nestrs run check
     Checking features v0.1.0
+    Checking blog v0.1.0
     Finished `dev` profile [unoptimized] target(s) in 1.42s
 ```
 
-The macro expanded, the entity compiled, and `Post` / `CreatePost`
-/ `UpdatePost` are now usable from the rest of the crate.
+The macro expanded and the entity compiled, so `Post`, `CreatePost` and `UpdatePost`
+are usable from the rest of the crate. `check` builds no test target: the generated test
+compiles when you run it on [Test it end to end](/tutorial/testing/).
 
 ## What you have now
 
-- A `Post` SeaORM entity with `id`, `title`, `body`.
+- A `posts` feature `nestrs g resource` wrote, wired into `blog`.
+- A `Post` SeaORM entity with `id`, `title`, `body` and the two timestamps,
+  and the migration creating its table.
 - An auto-generated `Post` wire DTO and `CreatePost` /
   `UpdatePost` input structs.
-- A `PostsModule` shell ready to declare its first provider.
 
 ## Going further
 
-- [See the security payoff](/tutorial/checkpoint/) — the next step: run the reference `api` and watch access control enforced before you build it.
+- [See the security payoff](/tutorial/checkpoint/) — the next step: run the reference `api` and watch access control enforced before you grant your own.
 - [Entities](/database/entities/) — the reference page for `#[expose]` columns and inputs.

@@ -1,0 +1,7 @@
+error: #[config] requires `namespace`, the stem of the file's path below `src/`: the crate's subject, then each folder, joined with `__`, a plural role folder and a product's container left out — `redis/src/queue/config.rs` reads `namespace = "redis__queue"`, `social/src/providers/github/config.rs` `namespace = "social__github"`, `features/src/sign_in/config.rs` `namespace = "sign_in"`
+ --> tests/integration/diagnostics/config/config_missing_namespace.rs:7:1
+  |
+7 | #[config]
+  | ^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `config` (in Nightly builds, run with -Z macro-backtrace for more info)

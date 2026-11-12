@@ -1,53 +1,171 @@
 use std::any::Any;
 use std::future::Future;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
 
-/// An ambient handle to a unit of database work, installed in the
-/// task-local for the lifetime of a request or a worker job.
+use futures_util::future::BoxFuture;
+use nest_rs_core::{AmbientValue, Continuation};
+
+use crate::atomic::AtomicBlock;
+use crate::error::OutboxError;
+use crate::outbox::OutboxRecord;
+use crate::unit::Bound;
+
+/// Work held until the ambient unit of work commits — what [`after_commit`]
+/// hands an [`Executor`] to keep.
+pub type Deferred = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// An ambient handle to a unit of database work, installed in the ambient
+/// context for the lifetime of a request or a worker job.
 ///
-/// The trait is **object-safe** so the engine can carry it as
-/// `Arc<dyn Executor>` without naming a concrete ORM. The concrete handle
-/// (a SeaORM `Executor` enum, a `sqlx::Pool`, a `diesel_async::Connection`,
-/// …) implements this trait; an ORM-specific `Repo` recovers the concrete
-/// type via [`Executor::as_any`] when it needs to issue a query.
-///
-/// Downcasting is the documented seam: this crate stays free of every
-/// candidate ORM's query API, and each `Repo` knows exactly which executor
-/// shape its `Module` installs. A downcast miss is a framework bug
-/// (mismatched `Module` + `Repo`); the contract is **log at `error` and
-/// degrade to `None`** — the `Repo` then fails the operation (no ambient
-/// executor), so the request errors loudly instead of panicking a worker
-/// thread or silently reading "no rows".
+/// An ORM-specific `Repo` recovers its concrete handle via
+/// [`Executor::as_any`]. A downcast miss (mismatched `Module` + `Repo`) is
+/// logged at `error` and treated as no ambient executor, so the operation fails
+/// rather than panicking or reading "no rows".
 pub trait Executor: Any + Send + Sync + 'static {
-    /// Downcast handle. Used by an ORM-specific `Repo` to recover its
-    /// concrete executor type from the ambient `Arc<dyn Executor>`.
+    /// Downcast handle, for an ORM-specific `Repo` to recover its concrete type.
     fn as_any(&self) -> &dyn Any;
 
     /// A handle on the same database **outside** this executor's transaction,
     /// or `None` when there is nothing to step out of (already a pool) or the
     /// ORM cannot produce one.
     ///
-    /// A transport that has *proven* an operation cannot write installs this
-    /// for the operation's duration, so the work runs without opening — and
-    /// without pinning a connection to — the request transaction. The one
-    /// caller today is the GraphQL endpoint: every operation arrives as a
-    /// POST, so the HTTP boundary hands even a pure query a transaction it
-    /// will never need.
-    ///
-    /// **Only ever pass work that cannot write.** A mutation on the returned
-    /// handle loses atomicity and rollback. The default `None` is therefore
-    /// the fail-closed answer: an ORM that ignores this keeps the request
-    /// executor it was given.
+    /// **Only ever pass work that cannot write**: a mutation on the returned
+    /// handle loses atomicity and rollback.
     fn non_transactional(&self) -> Option<Arc<dyn Executor>> {
+        None
+    }
+
+    /// Hold `work` until the transaction this executor's boundary settles has
+    /// committed, and drop it unrun when that transaction does not commit —
+    /// or hand it back, `Some(work)`, when this executor settles no transaction
+    /// the work could wait for, and the caller runs it at once.
+    ///
+    /// An executor that holds the work owes all of it: run after a commit (or a
+    /// boundary that opened none), dropped on every other outcome. The default
+    /// hands it back — right for a pool; a driver whose boundaries settle a
+    /// transaction overrides it.
+    ///
+    /// Held work runs where the boundary settles, so it runs under what the
+    /// unit carried where it was registered: the executor captures that here,
+    /// for a [`Commit`](Continuation::Commit)
+    /// ([`RequestContinuation::capture`](nest_rs_core::RequestContinuation::capture)),
+    /// and installs inside it its own handle outside the transaction, under the
+    /// [`current_executor_scope`] read here.
+    fn after_commit(&self, work: Deferred) -> Option<Deferred> {
+        Some(work)
+    }
+
+    /// Open an atomic block on this executor — a savepoint of its transaction,
+    /// or a transaction of its own on a pool — or `None` when the driver offers
+    /// none, and [`atomic`](fn@crate::atomic) answers
+    /// [`AtomicError::Unsupported`](crate::AtomicError::Unsupported). Opening
+    /// sends nothing: the block's first statement does.
+    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
+        None
+    }
+
+    /// Write `records` on the transaction this executor's unit holds, so they
+    /// commit or roll back with its writes — or `None` when it keeps no
+    /// outbox: a pool, a driver binding no [`OutboxStore`](crate::OutboxStore),
+    /// or one whose store no relay armed. The queue port then files the jobs at
+    /// once.
+    ///
+    /// `records` are built as they are read, each job sealed then: a handle
+    /// answering `None` reads none, so a push it files at once pays nothing
+    /// for them. A driver that writes reads them all before it answers, and
+    /// owes the rest: the records land in the store exactly when the unit
+    /// commits, the relay's [`written`](crate::OutboxStore::written) wakes once
+    /// it did, and a unit that never opened its transaction opens it, since
+    /// the write is a touch. A failed write fails the unit as a failed
+    /// statement does.
+    fn write_outbox(
+        &self,
+        records: &mut dyn Iterator<Item = OutboxRecord>,
+    ) -> Option<BoxFuture<'_, Result<(), OutboxError>>> {
+        let _unread = records;
+        None
+    }
+
+    /// Delete the record of job `id` on `queue` that no relay has filed yet, on
+    /// this executor's unit, answering whether there was one — or `None` when
+    /// the handle keeps no outbox. A record a relay is filing is waited for:
+    /// the removal answers once that relay settled, deleting the record it
+    /// left, or finding none once the backend holds the job.
+    fn remove_outbox<'a>(
+        &'a self,
+        queue: &'a str,
+        id: uuid::Uuid,
+    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
+        let _ = (queue, id);
+        None
+    }
+
+    /// [`remove_outbox`](Self::remove_outbox) for the record carrying the
+    /// unique key `key` on `queue`.
+    fn remove_outbox_unique<'a>(
+        &'a self,
+        queue: &'a str,
+        key: &'a str,
+    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
+        let _ = (queue, key);
         None
     }
 }
 
-/// Whether the ambient executor belongs to a request or a worker job. An
-/// ORM's `Repo` reads this back to fail closed when a request path lacks
-/// an ambient authorization context (a missing principal on a worker is
-/// expected — it's system work; on a request it's a bug).
+/// Run `work` once the ambient unit of work has committed — or at once, when
+/// no transaction is open that it could wait for. When the unit of work rolls
+/// back, `work` is dropped and never runs.
+///
+/// Run at once, `work` is awaited here, inside the caller's task-locals. The
+/// returned future resolves once `work` has either run or been handed to the
+/// boundary to hold.
+pub async fn after_commit<F>(work: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let work: Deferred = Box::pin(work);
+    let work = match current_executor() {
+        Some(executor) => match executor.after_commit(work) {
+            Some(work) => work,
+            None => return,
+        },
+        None => work,
+    };
+    work.await;
+}
+
+/// Whether the ambient executor belongs to a request or a worker job, which
+/// decides how a `Repo` treats a missing ambient ability.
+///
+/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm —
+/// and fails closed there, as a request does:
+///
+/// ```compile_fail,E0004
+/// use nest_rs_database::ExecutorScope;
+///
+/// fn unscoped(scope: ExecutorScope) -> bool {
+///     match scope {
+///         ExecutorScope::Request => false,
+///         ExecutorScope::Job => true,
+///     }
+/// }
+/// ```
+///
+/// The unit an edge opens through [`run_unit`](crate::run_unit) tags it, never
+/// wider than the unit it opens in — inside a request, a job unit runs under
+/// the request's scope, and so does a job's capture re-entered there — and no
+/// other public function does: feature code cannot take a request's reads out
+/// of its scope.
+///
+/// ```compile_fail,E0425
+/// # use std::sync::Arc;
+/// # fn handle() -> Arc<dyn nest_rs_database::Executor> { unimplemented!() }
+/// # async fn reads() {}
+/// let unscoped = nest_rs_database::with_job_executor(handle(), reads());
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExecutorScope {
     /// A user request — a missing ambient ability is a bug, so `Repo` fails closed.
     Request,
@@ -55,49 +173,216 @@ pub enum ExecutorScope {
     Job,
 }
 
-tokio::task_local! {
-    static EXECUTOR: Arc<dyn Executor>;
-    static EXECUTOR_SCOPE: ExecutorScope;
+impl ExecutorScope {
+    /// The word a line names this scope by.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Job => "job",
+        }
+    }
+}
+
+/// The executor a unit runs on, the scope it was installed under and the
+/// binding that opened it, as one value of the ambient context.
+struct AmbientExecutor {
+    executor: Handle,
+    scope: Option<ExecutorScope>,
+    bound: Option<Bound>,
+}
+
+/// The executor itself, or the pool a continuation opens on its first touch.
+enum Handle {
+    Installed(Arc<dyn Executor>),
+    /// A continuation of a bound unit: a [`Pool`](crate::TransactionPolicy::Pool)
+    /// unit of the same binding, opened when something reads it, so carrying
+    /// one costs nothing until it is used.
+    Pool(OnceLock<Option<Arc<dyn Executor>>>),
+}
+
+impl AmbientExecutor {
+    fn executor(&self) -> Option<Arc<dyn Executor>> {
+        match &self.executor {
+            Handle::Installed(executor) => Some(Arc::clone(executor)),
+            Handle::Pool(pool) => pool
+                .get_or_init(|| {
+                    let bound = self.bound.as_ref()?;
+                    bound.pool(self.scope.unwrap_or(ExecutorScope::Request))
+                })
+                .clone(),
+        }
+    }
+}
+
+impl AmbientValue for AmbientExecutor {
+    /// A continuation that can outlive the transaction runs on a pool unit of
+    /// the binding that opened it — a body is polled after the commit, a batch
+    /// serves every field, held work runs once the transaction is gone; one that
+    /// opens its own unit (a task, a connection's next message, a job) gets
+    /// none, so a detached write cannot run outside a unit of work.
+    fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
+        match into {
+            Continuation::Body | Continuation::Batch | Continuation::Commit => {
+                Some(Arc::new(Self {
+                    executor: Handle::Pool(OnceLock::new()),
+                    scope: self.scope,
+                    bound: self.bound.clone(),
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    /// Re-entered inside another unit, a capture runs under no wider scope
+    /// than that unit's: a job's capture inside a request runs as the request.
+    fn reenter(self: Arc<Self>) -> Option<Arc<Self>> {
+        let Some(scope) = self.scope else {
+            return Some(self);
+        };
+        let running = nest_rs_core::ambient::<AmbientExecutor>();
+        let installed = within(running.as_deref(), scope);
+        if installed == scope {
+            return Some(self);
+        }
+        Some(Arc::new(Self {
+            executor: match &self.executor {
+                Handle::Installed(executor) => Handle::Installed(Arc::clone(executor)),
+                // Its pool opens under the scope it now runs under.
+                Handle::Pool(_) => Handle::Pool(OnceLock::new()),
+            },
+            scope: Some(installed),
+            bound: self.bound.clone(),
+        }))
+    }
+}
+
+/// `scope`, or [`Request`](ExecutorScope::Request) inside a unit `running`
+/// tags anything but [`Job`](ExecutorScope::Job): an install never widens the
+/// unit it runs in, and outside every unit it tags what it is given.
+fn within(running: Option<&AmbientExecutor>, scope: ExecutorScope) -> ExecutorScope {
+    match running.map(|ambient| ambient.scope) {
+        None | Some(Some(ExecutorScope::Job)) => scope,
+        Some(_) => ExecutorScope::Request,
+    }
+}
+
+/// The scope an install of `scope` is tagged with where this runs: never wider
+/// than the running unit's.
+pub fn installed_scope(scope: ExecutorScope) -> ExecutorScope {
+    within(nest_rs_core::ambient::<AmbientExecutor>().as_deref(), scope)
 }
 
 /// The installed ambient executor, or `None` outside any scope. An
 /// ORM-specific `Repo` calls this and downcasts via [`Executor::as_any`].
 pub fn current_executor() -> Option<Arc<dyn Executor>> {
-    EXECUTOR.try_with(Arc::clone).ok()
+    nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.executor())
 }
 
 /// The installed ambient executor scope, or `None` outside any scope.
 pub fn current_executor_scope() -> Option<ExecutorScope> {
-    EXECUTOR_SCOPE.try_with(Clone::clone).ok()
+    nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.scope)
 }
 
-/// Install `executor` without tagging a scope. Prefer the request/job
-/// variants at framework boundaries so authorization can distinguish the
-/// two paths. An untagged (unset) scope is treated as **fail-closed** by a
-/// scope-aware `Repo`: with no ambient ability it denies every row, exactly
-/// like a request — only [`with_job_executor`] grants unscoped reads.
-pub async fn with_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    EXECUTOR.scope(executor, fut).await
+/// The binding that opened the running unit, carried with its executor.
+pub(crate) fn current_bound() -> Option<Bound> {
+    nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.bound.clone())
+}
+
+/// Install `executor` without tagging a scope: it keeps the scope installed
+/// where `fut` runs, and an untagged one is **fail-closed** like a request —
+/// only [`with_job_executor`] grants unscoped reads.
+pub fn with_executor<F: Future>(
+    executor: Arc<dyn Executor>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    nest_rs_core::__private::with_ambient_from(
+        move || {
+            let running = nest_rs_core::ambient::<AmbientExecutor>();
+            Arc::new(AmbientExecutor {
+                executor: Handle::Installed(executor),
+                scope: running.as_ref().and_then(|ambient| ambient.scope),
+                bound: running.and_then(|ambient| ambient.bound.clone()),
+            })
+        },
+        fut,
+    )
 }
 
 /// Install `executor` and tag the scope as a request — the path on which a
 /// `Repo` fails closed when no ambient authorization context is present.
-pub async fn with_request_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    EXECUTOR
-        .scope(executor, EXECUTOR_SCOPE.scope(ExecutorScope::Request, fut))
-        .await
+///
+/// Framework plumbing, beside [`with_job_executor`]: a unit is the edge's own,
+/// opened through [`run_unit`](crate::run_unit), and a service test's the
+/// testing harness's; a framework suite installs a handle of its own here.
+pub fn with_request_executor<F: Future>(
+    executor: Arc<dyn Executor>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    install(executor, ExecutorScope::Request, fut)
 }
 
 /// Install `executor` and tag the scope as a worker job — the path on
 /// which a `Repo` runs unscoped (no principal ⇒ system work).
-pub async fn with_job_executor<F: Future>(executor: Arc<dyn Executor>, fut: F) -> F::Output {
-    EXECUTOR
-        .scope(executor, EXECUTOR_SCOPE.scope(ExecutorScope::Job, fut))
-        .await
+///
+/// It never widens the unit it runs in: inside a request, a continuation of
+/// one or an untagged install, `fut` runs under the request scope, so a unit
+/// that fails closed stays closed. Outside every unit it grants the job scope
+/// to whatever handle it is given, which is why it is no public function: a
+/// framework suite running system work on a handle of its own calls it, and a
+/// service's system work is a queue attempt or a tick of its own.
+pub fn with_job_executor<F: Future>(
+    executor: Arc<dyn Executor>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    install(executor, ExecutorScope::Job, fut)
+}
+
+/// Install `executor` under `scope`, keeping the binding of the unit it runs
+/// in, or under [`Request`](ExecutorScope::Request) inside a unit not tagged
+/// [`Job`](ExecutorScope::Job).
+fn install<F: Future>(
+    executor: Arc<dyn Executor>,
+    scope: ExecutorScope,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    nest_rs_core::__private::with_ambient_from(
+        move || {
+            let running = nest_rs_core::ambient::<AmbientExecutor>();
+            Arc::new(AmbientExecutor {
+                executor: Handle::Installed(executor),
+                scope: Some(within(running.as_deref(), scope)),
+                bound: running.and_then(|ambient| ambient.bound.clone()),
+            })
+        },
+        fut,
+    )
+}
+
+/// Install a unit's `executor` under `scope`, with the binding that opened it,
+/// never wider than the unit it opens in, as [`install`].
+pub(crate) fn install_unit<F: Future>(
+    executor: Arc<dyn Executor>,
+    scope: ExecutorScope,
+    bound: Bound,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    nest_rs_core::__private::with_ambient_from(
+        move || {
+            let running = nest_rs_core::ambient::<AmbientExecutor>();
+            Arc::new(AmbientExecutor {
+                executor: Handle::Installed(executor),
+                scope: Some(within(running.as_deref(), scope)),
+                bound: Some(bound),
+            })
+        },
+        fut,
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::RequestContinuation;
+
     use super::*;
 
     struct StubExecutor;
@@ -109,6 +394,17 @@ mod tests {
 
     fn stub() -> Arc<dyn Executor> {
         Arc::new(StubExecutor)
+    }
+
+    #[test]
+    fn a_handle_keeping_no_outbox_hands_every_job_back_to_be_filed_at_once() {
+        let mut unread = std::iter::from_fn(|| -> Option<OutboxRecord> {
+            panic!("a handle keeping no outbox builds no record")
+        });
+        let handle = StubExecutor;
+        assert!(handle.write_outbox(&mut unread).is_none());
+        assert!(handle.remove_outbox("notify", uuid::Uuid::nil()).is_none());
+        assert!(handle.remove_outbox_unique("notify", "key").is_none());
     }
 
     #[tokio::test]
@@ -152,16 +448,93 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nested_scope_shadows_outer() {
-        with_request_executor(stub(), async {
-            assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
-            with_job_executor(stub(), async {
-                assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
+    async fn a_nested_install_shadows_then_restores_the_outer_scope() {
+        with_job_executor(stub(), async {
+            with_request_executor(Arc::new(OnPool), async {
+                assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
+                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
             })
             .await;
-            assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
+            assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn a_job_install_never_widens_a_unit_that_fails_closed() {
+        let job = || {
+            with_job_executor(Arc::new(OnPool), async {
+                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+                current_executor_scope()
+            })
+        };
+        let streamed = with_request_executor(stub(), async {
+            RequestContinuation::capture(Continuation::Body).expect("a request carries a body")
+        })
+        .await;
+
+        let ran = [
+            ("a request", with_request_executor(stub(), job()).await),
+            ("an untagged install", with_executor(stub(), job()).await),
+            ("a request's streaming body", streamed.scope(job()).await),
+            ("a job", with_job_executor(stub(), job()).await),
+            ("no unit", job().await),
+        ];
+
+        assert_eq!(
+            ran,
+            [
+                ("a request", Some(ExecutorScope::Request)),
+                ("an untagged install", Some(ExecutorScope::Request)),
+                ("a request's streaming body", Some(ExecutorScope::Request)),
+                ("a job", Some(ExecutorScope::Job)),
+                ("no unit", Some(ExecutorScope::Job)),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn a_jobs_capture_re_entered_inside_a_request_runs_under_the_request() {
+        let (captured, task) = with_job_executor(stub(), async {
+            (
+                RequestContinuation::capture(Continuation::Commit)
+                    .expect("a job carries its commit"),
+                nest_rs_core::TaskContext::capture(Continuation::Commit),
+            )
+        })
+        .await;
+        let scoped = || captured.scope(async { current_executor_scope() });
+
+        let ran = [
+            ("a request", with_request_executor(stub(), scoped()).await),
+            (
+                "a request, entered",
+                with_request_executor(stub(), async { captured.enter(current_executor_scope) })
+                    .await,
+            ),
+            (
+                "a task carried into a request",
+                with_request_executor(stub(), task.carry(async { current_executor_scope() })).await,
+            ),
+            ("an untagged install", with_executor(stub(), scoped()).await),
+            ("a job", with_job_executor(stub(), scoped()).await),
+            ("no unit", scoped().await),
+        ];
+
+        assert_eq!(
+            ran,
+            [
+                ("a request", Some(ExecutorScope::Request)),
+                ("a request, entered", Some(ExecutorScope::Request)),
+                (
+                    "a task carried into a request",
+                    Some(ExecutorScope::Request)
+                ),
+                ("an untagged install", Some(ExecutorScope::Request)),
+                ("a job", Some(ExecutorScope::Job)),
+                ("no unit", Some(ExecutorScope::Job)),
+            ],
+        );
     }
 
     #[tokio::test]
@@ -171,5 +544,186 @@ mod tests {
             assert!(e.as_any().is::<StubExecutor>());
         })
         .await;
+    }
+
+    /// Another handle than the stub, to tell an inner install from an outer.
+    struct OnPool;
+
+    impl Executor for OnPool {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    fn crossing(executor: Arc<dyn Executor>, into: Continuation) -> Option<Arc<AmbientExecutor>> {
+        Arc::new(AmbientExecutor {
+            executor: Handle::Installed(executor),
+            scope: Some(ExecutorScope::Request),
+            bound: None,
+        })
+        .carry(into)
+    }
+
+    #[test]
+    fn a_continuation_that_opens_its_own_unit_carries_no_executor() {
+        for into in [
+            Continuation::Task,
+            Continuation::Connection,
+            Continuation::Envelope,
+        ] {
+            assert!(crossing(stub(), into).is_none(), "{into:?}");
+        }
+    }
+
+    #[test]
+    fn a_continuation_that_can_outlive_the_transaction_never_holds_it() {
+        for into in [
+            Continuation::Body,
+            Continuation::Batch,
+            Continuation::Commit,
+        ] {
+            let carried = crossing(stub(), into).expect("the scope crosses");
+            assert!(
+                carried.executor().is_none(),
+                "{into:?} runs on a pool its binding opens, and none is bound here",
+            );
+            assert_eq!(
+                carried.scope,
+                Some(ExecutorScope::Request),
+                "{into:?} keeps the tag"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_untagged_install_keeps_the_scope_already_installed() {
+        with_request_executor(stub(), async {
+            with_executor(Arc::new(OnPool), async {
+                assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
+                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+            })
+            .await;
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_untagged_install_built_as_an_argument_keeps_the_scope_it_runs_under() {
+        let untagged = with_executor(Arc::new(OnPool), async {
+            assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
+            assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+        });
+        with_job_executor(stub(), untagged).await;
+    }
+
+    #[test]
+    fn an_install_holds_the_unit_it_runs_once() {
+        let heavy = || async {
+            let held = [0u8; 32 * 1024];
+            tokio::task::yield_now().await;
+            std::hint::black_box(&held);
+        };
+        let alone = std::mem::size_of_val(&heavy());
+        let installed = [
+            (
+                "with_executor",
+                std::mem::size_of_val(&with_executor(stub(), heavy())),
+            ),
+            (
+                "with_request_executor",
+                std::mem::size_of_val(&with_request_executor(stub(), heavy())),
+            ),
+            (
+                "with_job_executor",
+                std::mem::size_of_val(&with_job_executor(stub(), heavy())),
+            ),
+        ];
+        for (installer, size) in installed {
+            assert!(
+                size < alone + 1024,
+                "{installer} weighs {size} bytes around a {alone}-byte unit",
+            );
+        }
+    }
+
+    /// A boundary's transaction, reduced to a place to keep held work.
+    #[derive(Default)]
+    struct Holding(std::sync::Mutex<Vec<Deferred>>);
+
+    impl Executor for Holding {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn after_commit(&self, work: Deferred) -> Option<Deferred> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(work);
+            None
+        }
+    }
+
+    fn ran() -> (
+        Arc<std::sync::atomic::AtomicBool>,
+        impl Future<Output = ()> + Send,
+    ) {
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let set = flag.clone();
+        (flag, async move {
+            set.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+    }
+
+    #[tokio::test]
+    async fn after_commit_runs_at_once_outside_any_scope() {
+        let (flag, work) = ran();
+        after_commit(work).await;
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn an_executor_with_nothing_to_wait_for_runs_the_work_inside_the_callers_scope() {
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let record = seen.clone();
+        with_request_executor(stub(), async move {
+            after_commit(async move {
+                *record
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some(current_executor_scope());
+            })
+            .await;
+        })
+        .await;
+        assert_eq!(
+            *seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            Some(Some(ExecutorScope::Request)),
+        );
+    }
+
+    #[tokio::test]
+    async fn an_executor_that_holds_the_work_keeps_it_until_the_boundary_runs_it() {
+        let holding = Arc::new(Holding::default());
+        let (flag, work) = ran();
+        with_request_executor(holding.clone(), after_commit(work)).await;
+        assert!(
+            !flag.load(std::sync::atomic::Ordering::SeqCst),
+            "held work does not run before its boundary settles",
+        );
+
+        let held: Vec<Deferred> = std::mem::take(
+            &mut *holding
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        assert_eq!(held.len(), 1);
+        for work in held {
+            work.await;
+        }
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

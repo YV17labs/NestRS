@@ -12,21 +12,14 @@ categories = ["development-tools::debugging", "asynchronous"]
 
 
 [features]
-# OTLP exporter is default so a dev who sets NESTRS_OPENTELEMETRY__OTLP_ENDPOINT
+# OTLP exporter is default so a deployment that sets OTEL_EXPORTER_OTLP_ENDPOINT
 # gets traces out of the box.
 #
 # There is no `http` feature, and its removal is the point: this crate used to
 # mount a per-request interceptor, which reached one edge. What it did now hangs
-# off the framework's span constructor, so a headless worker gets it too — and
-# nothing here compiles poem or nest-rs-http any more.
-#
-# That sentence was false for as long as `nest-rs-http`, `nest-rs-interceptors`
-# and `poem` stayed in `[dependencies]` as `optional` with no `dep:` reference:
-# Cargo synthesises a public implicit feature per such entry, so
-# `--features poem` built poem and the comment above described the opposite of
-# what the manifest allowed. `tokio` and `async-trait` were the same shape
-# without the feature — dependencies no source file named. All five are gone;
-# what remains is what `src/` actually reaches.
+# off the framework's span constructor, so a headless worker gets it too â and
+# nothing here compiles the HTTP stack. Every `optional` dependency is named
+# by a `dep:` below: one that is not becomes a public feature Cargo synthesises.
 default = ["otlp"]
 otlp = [
     "dep:opentelemetry",
@@ -36,31 +29,62 @@ otlp = [
     "dep:opentelemetry-appender-tracing",
     "dep:tracing-opentelemetry",
     "dep:uuid",
+    "dep:reqwest",
+    "nest-rs-config/reqwest",
 ]
 
 [dependencies]
-# `logging` for `TextFormat` / `JsonFormat`: the console this crate installs is
-# the kernel's console, not a second one. Stated rather than leaned on, even
-# though it is one of `nest-rs-core`'s default features.
+# `logging` for `ConsoleLayer` and the log filter: the console this crate
+# installs is the kernel's console, not a second one. Stated rather than leaned
+# on, even though it is one of `nest-rs-core`'s default features.
 nest-rs-core = { workspace = true, features = ["logging"] }
-nest-rs-config.workspace = true
+# `tls` is `ClientTls`, what the collector's certificate must chain to and the
+# certificate presented to it.
+nest-rs-config = { workspace = true, features = ["tls"] }
+# The OTLP endpoint is parsed once, when the config resolves, by the WHATWG
+# parser the exporter's HTTP client dials through.
+url.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 thiserror.workspace = true
 
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
+# `gzip-http` compresses an export when `OTEL_EXPORTER_OTLP_COMPRESSION` says
+# `gzip`, the one compression the OTLP specification names; `zstd-http` stays
+# off, and `zstd` is refused at boot.
+opentelemetry-otlp = { workspace = true, features = ["gzip-http"], optional = true }
 opentelemetry-semantic-conventions = { workspace = true, optional = true }
 opentelemetry-appender-tracing = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
+# The exporters' HTTP client is this crate's, built with `ClientTls`, so https
+# and its verification depend on no other crate's features: `blocking` is the
+# client the SDK's HTTP exporters take, `rustls` (the workspace's) the TLS.
+reqwest = { workspace = true, features = ["blocking"], optional = true }
 
 [dev-dependencies]
-# `OpenTelemetryConfig::from_env` reads `NESTRS_OPENTELEMETRY__*` off the process
-# env; the tests isolate it with `figment::Jail`, matching how `nest-rs-config`
-# tests its env reads.
+# `TestAuthority` issues the certificate the collector double presents over TLS.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# The collector double serves on a runtime of its own.
+tokio.workspace = true
+# The console's `RUST_LOG` and `<PREFIX>_LOG_*` and the specification's `OTEL_*` are read off the
+# process env; the tests isolate them with `figment::Jail`, matching how
+# `nest-rs-config` tests its env reads.
 figment = { workspace = true, features = ["test"] }
+# The SDK's in-memory span and metric exporters, which the ids and metrics
+# tests read what was exported from.
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+# A child process's JSON console lines, read back by its parent test.
+serde_json.workspace = true
+# A package declaring its own unit, whose exported span must carry the ids its
+# operation line carries.
+nestrs-unit-probe = { path = "tests/unit-probe" }
+# A `log` logger set before `init`, which keeps the `log` records.
+log.workspace = true
+# A test's scratch files — the certificate files the specification's
+# variables name — live in a directory removed when it drops, on every exit.
+tempfile.workspace = true
 
 [lints]
 workspace = true

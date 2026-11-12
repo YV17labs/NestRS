@@ -1,47 +1,459 @@
 //! RFC 6749 §4.4.2 and §5.1 on the wire.
-//!
-//! The point of holding these shapes in the framework is that every issuer
-//! spells them the same, so what is asserted here is the **spelling**: the
-//! member names the specification fixes, and the two `serde` behaviours a
-//! conforming endpoint depends on. The transport encoding — `Form` at the token
-//! endpoint — is poem's, not this type's, so it is asserted where it is applied.
 
+use nest_rs_config::Surface;
+use nest_rs_core::{Discovery, module};
+use nest_rs_http::{
+    HttpConfig, HttpControllerMeta, HttpModule, IntoResponse, StatusCode, controller, routes,
+};
 use nest_rs_oauth_server::{AccessTokenRequest, AccessTokenResponse};
+use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
+use nest_rs_testing::{LogCapture, TestApp, TestResponse};
 
-#[test]
-fn the_response_carries_exactly_the_members_5_1_marks_required() {
-    let body = serde_json::to_value(AccessTokenResponse {
-        access_token: "t".into(),
-        token_type: "Bearer".into(),
-        expires_in: 3600,
-    })
-    .expect("serializes");
+/// The one encoding RFC 6749 §4.4.2 gives a token request.
+const FORM: &str = "application/x-www-form-urlencoded";
 
-    let object = body.as_object().expect("a JSON object");
-    let mut members: Vec<&str> = object.keys().map(String::as_str).collect();
-    members.sort_unstable();
-    assert_eq!(members, ["access_token", "expires_in", "token_type"]);
+/// The JSON `response` answers: its one serialization.
+async fn wire(response: AccessTokenResponse) -> serde_json::Value {
+    let body = response
+        .into_response()
+        .into_body()
+        .into_bytes()
+        .await
+        .expect("a body");
+    serde_json::from_slice(&body).expect("JSON")
 }
 
-#[test]
-fn a_request_omitting_scope_deserializes_because_3_3_makes_it_optional() {
-    let request: AccessTokenRequest =
-        serde_json::from_str(r#"{"grant_type":"client_credentials"}"#).expect("body");
-
-    assert_eq!(request.grant_type, "client_credentials");
-    assert_eq!(request.scope, None);
-}
-
-/// §5.2 obliges the endpoint to answer an unknown grant with
-/// `unsupported_grant_type`, which it can only do if the value reaches it.
-#[test]
-fn an_unknown_grant_reaches_the_issuer_rather_than_failing_to_deserialize() {
-    let request: AccessTokenRequest =
-        serde_json::from_str(r#"{"grant_type":"urn:ietf:params:oauth:grant-type:device_code"}"#)
-            .expect("body");
+#[tokio::test]
+async fn the_response_carries_exactly_the_members_5_1_marks_required() {
+    let body = wire(AccessTokenResponse::bearer("t", 3600)).await;
 
     assert_eq!(
-        request.grant_type,
-        "urn:ietf:params:oauth:grant-type:device_code"
+        body,
+        serde_json::json!({ "access_token": "t", "token_type": "Bearer", "expires_in": 3600 })
+    );
+}
+
+/// §5.1 and §3.3: an issuer that narrows or defaults the grant says so.
+#[tokio::test]
+async fn a_granted_scope_is_written_as_the_scope_member() {
+    let body = wire(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read"])).await;
+
+    assert_eq!(body["scope"], "posts:read");
+}
+
+#[tokio::test]
+async fn several_granted_scopes_are_written_space_delimited() {
+    let body =
+        wire(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read", "posts:write"]))
+            .await;
+
+    assert_eq!(body["scope"], "posts:read posts:write");
+}
+
+/// What a token route returns, behind an alias: still documented by its type.
+type Issued = nest_rs_http::Result<AccessTokenResponse>;
+
+/// The route documents the body its return type answers, with no
+/// `#[api(response = …)]` restating it.
+#[controller(path = "/")]
+struct IssuerController;
+
+#[routes]
+impl IssuerController {
+    #[post("/token")]
+    #[public]
+    async fn token(&self) -> nest_rs_http::Result<AccessTokenResponse> {
+        Ok(AccessTokenResponse::bearer("t", 3600).with_scope(["posts:read"]))
+    }
+
+    #[post("/token/aliased")]
+    #[public]
+    async fn aliased(&self) -> Issued {
+        Ok(AccessTokenResponse::bearer("t", 3600))
+    }
+}
+
+#[module(imports = [HttpModule], providers = [IssuerController])]
+struct IssuerApp;
+
+/// RFC 6749 §5.1's `no-store` and `no-cache` reach the client through the edge.
+#[tokio::test]
+async fn a_token_route_answers_no_store_through_the_transport() {
+    let app = TestApp::for_module::<IssuerApp>()
+        .await
+        .expect("the issuer app boots");
+
+    let response = app.http().post("/token").send().await;
+    response.assert_status_is_ok();
+    response.assert_header("cache-control", "no-store");
+    response.assert_header("pragma", "no-cache");
+    response
+        .assert_json(serde_json::json!({
+            "access_token": "t",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "posts:read",
+        }))
+        .await;
+}
+
+#[tokio::test]
+async fn the_route_documents_the_access_token_response_it_returns() {
+    let app = TestApp::for_module::<IssuerApp>()
+        .await
+        .expect("the issuer app boots");
+
+    let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
+    for handler in ["token", "aliased"] {
+        let route = controllers
+            .iter()
+            .flat_map(|controller| controller.meta.routes().iter())
+            .find(|route| route.handler() == handler)
+            .expect("the token route is discovered");
+        let schema_of = route.response().expect("a documented response");
+
+        let mut generator = schemars::SchemaGenerator::default();
+        let documented = schema_of(&mut generator);
+        assert_eq!(
+            documented.get("$ref").and_then(serde_json::Value::as_str),
+            Some("#/$defs/AccessTokenResponse"),
+            "{handler}",
+        );
+        let definition = generator
+            .definitions()
+            .get("AccessTokenResponse")
+            .expect("the response's schema is a named component");
+        let mut members: Vec<&str> = definition["properties"]
+            .as_object()
+            .expect("an object schema")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        members.sort_unstable();
+        assert_eq!(
+            members,
+            ["access_token", "expires_in", "scope", "token_type"],
+            "{handler}",
+        );
+    }
+}
+
+/// The token request as an endpoint reads it: §4.4.2's parameters, in the
+/// encoding it fixes.
+#[controller(path = "/")]
+struct RequestController;
+
+#[routes]
+impl RequestController {
+    #[post("/token")]
+    #[public]
+    async fn token(&self, request: AccessTokenRequest) -> nest_rs_http::Result<String> {
+        Ok(format!(
+            "{} {:?} {:?}",
+            request.grant_type, request.scope, request.resource
+        ))
+    }
+}
+
+#[module(imports = [HttpModule], providers = [RequestController])]
+struct RequestApp;
+
+#[module(
+    imports = [HttpModule::for_root(HttpConfig {
+        max_body_bytes: 32,
+        ..HttpConfig::default()
+    })],
+    providers = [RequestController],
+)]
+struct CappedRequestApp;
+
+#[module(
+    imports = [
+        HttpModule,
+        OpenApiModule::for_root(OpenApiConfig {
+            enabled: Surface::Open,
+            ..OpenApiConfig::default()
+        }),
+    ],
+    providers = [RequestController],
+)]
+struct DocumentedRequestApp;
+
+async fn token_request(app: &TestApp, content_type: &str, body: &str) -> TestResponse {
+    app.http()
+        .post("/token")
+        .content_type(content_type)
+        .body(body.to_owned())
+        .send()
+        .await
+}
+
+/// §3.3: `scope` is OPTIONAL, so a request omitting it reaches the issuer.
+#[tokio::test]
+async fn a_request_omitting_scope_is_read_because_3_3_makes_it_optional() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let response = token_request(&app, FORM, "grant_type=client_credentials").await;
+
+    response.assert_status_is_ok();
+    response.assert_text("client_credentials [] []").await;
+}
+
+/// §5.2's `unsupported_grant_type`, with §5.1's directives, answered by the
+/// request itself and filed by its reason: a grant the endpoint does not serve
+/// never reaches the issuer, and is never quoted.
+#[tokio::test]
+async fn a_grant_the_endpoint_does_not_serve_is_unsupported_grant_type() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    for grant_type in [
+        "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
+        "password",
+        "authorization_code",
+        "Client_Credentials",
+        "client_credentials%20",
+        "never-logged-grant",
+    ] {
+        let logs = LogCapture::install();
+        let response = token_request(&app, FORM, &format!("grant_type={grant_type}")).await;
+
+        let event = logs.expect_one("nest_rs::oauth::server", "token request refused");
+        assert_eq!(event.level, "warn");
+        assert!(event.fields.keys().eq(["reason"]), "{event:?}");
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("unsupported_grant_type")
+        );
+        assert!(!format!("{event:?}").contains("never-logged"), "{event:?}");
+        response.assert_status(StatusCode::BAD_REQUEST);
+        response.assert_header("cache-control", "no-store");
+        response.assert_header("pragma", "no-cache");
+        response.assert_header_is_not_exist("www-authenticate");
+        response
+            .assert_json(serde_json::json!({ "error": "unsupported_grant_type" }))
+            .await;
+    }
+}
+
+/// RFC 8707 §2: "Multiple `resource` parameters MAY be used", so the one
+/// parameter §3.2 lets repeat is read each time, in order — which of them a
+/// token is minted for is the issuer's to decide.
+#[tokio::test]
+async fn the_resource_parameter_is_read_every_time_it_is_sent() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let response = token_request(
+        &app,
+        FORM,
+        "grant_type=client_credentials&resource=https%3A%2F%2Fapi.example.com\
+         &scope=posts%3Aread&resource=https%3A%2F%2Fmcp.example.com%2Fmcp",
+    )
+    .await;
+
+    response.assert_status_is_ok();
+    response
+        .assert_text(
+            r#"client_credentials ["posts:read"] ["https://api.example.com", "https://mcp.example.com/mcp"]"#,
+        )
+        .await;
+}
+
+/// §3.3: the scope is one space-delimited list, read into its tokens in the
+/// order sent.
+#[tokio::test]
+async fn the_scope_is_read_into_its_space_delimited_tokens() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let response = token_request(
+        &app,
+        FORM,
+        "grant_type=client_credentials&scope=posts%3Awrite+posts%3Aread++posts%3Awrite",
+    )
+    .await;
+
+    response.assert_status_is_ok();
+    response
+        .assert_text(r#"client_credentials ["posts:write", "posts:read", "posts:write"] []"#)
+        .await;
+}
+
+/// §5.2's `invalid_request`, with §5.1's directives, saying where the request
+/// failed.
+async fn assert_invalid_request(response: TestResponse, said: &str) {
+    response.assert_status(StatusCode::BAD_REQUEST);
+    response.assert_header("content-type", "application/json");
+    response.assert_header("cache-control", "no-store");
+    response.assert_header("pragma", "no-cache");
+    response.assert_header_is_not_exist("www-authenticate");
+    response
+        .assert_json(serde_json::json!({
+            "error": "invalid_request",
+            "error_description": said,
+        }))
+        .await;
+}
+
+/// A token request missing `grant_type`, or sending it with no value (§3.2:
+/// "treated as if they were omitted"), reads the same refusal.
+#[tokio::test]
+async fn a_missing_or_empty_grant_type_is_invalid_request_naming_the_parameter() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    for body in ["scope=posts%3Aread", "grant_type=&scope=posts%3Aread"] {
+        assert_invalid_request(
+            token_request(&app, FORM, body).await,
+            "form field `grant_type`: missing",
+        )
+        .await;
+    }
+}
+
+/// §3.2: "Request and response parameters MUST NOT be included more than
+/// once" — said by the parameter, never by the value it held.
+#[tokio::test]
+async fn a_repeated_parameter_is_invalid_request_naming_it_and_never_its_value() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let response = token_request(
+        &app,
+        FORM,
+        "grant_type=client_credentials&grant_type=sk_live_51",
+    )
+    .await;
+
+    assert_invalid_request(response, "form field `grant_type`: duplicate").await;
+}
+
+/// §4.4.2 fixes the encoding: a JSON body is a malformed token request,
+/// answered by the type the endpoint reads, never the one sent.
+#[tokio::test]
+async fn a_body_that_is_not_a_form_is_invalid_request_naming_only_the_form_type() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let response = token_request(
+        &app,
+        "application/json; secret=sk_live_51",
+        r#"{"grant_type":"client_credentials"}"#,
+    )
+    .await;
+
+    assert_invalid_request(
+        response,
+        "the request's content type is not `application/x-www-form-urlencoded`",
+    )
+    .await;
+}
+
+/// §5.2: a request that "utilizes more than one mechanism for authenticating
+/// the client" — the `Authorization` header and a credential in the body.
+#[tokio::test]
+async fn a_credential_in_the_body_beside_the_header_is_invalid_request() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    for credential in [
+        "client_secret=sk_live_51",
+        "client_assertion=sk_live_51",
+        "client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer",
+    ] {
+        let response = app
+            .http()
+            .post("/token")
+            .header("authorization", "Basic Y2k6czNjcmV0")
+            .content_type(FORM)
+            .body(format!("grant_type=client_credentials&{credential}"))
+            .send()
+            .await;
+        assert_invalid_request(
+            response,
+            "the client authenticates by more than one mechanism: the `Authorization` header \
+             and the body",
+        )
+        .await;
+    }
+}
+
+/// §3.2: an empty parameter is an omitted one — `scope=` asks for no scope,
+/// `client_secret=` is no second mechanism.
+#[tokio::test]
+async fn an_empty_parameter_is_read_as_omitted() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let response = app
+        .http()
+        .post("/token")
+        .header("authorization", "Basic Y2k6czNjcmV0")
+        .content_type(FORM)
+        .body("grant_type=client_credentials&scope=&client_secret=&resource=")
+        .send()
+        .await;
+
+    response.assert_status_is_ok();
+    response.assert_text("client_credentials [] []").await;
+}
+
+/// What the transport refuses before any parameter is read keeps its answer.
+#[tokio::test]
+async fn a_body_past_the_cap_stays_the_transports_413() {
+    let app = TestApp::for_module::<CappedRequestApp>()
+        .await
+        .expect("boots");
+
+    let response = token_request(
+        &app,
+        FORM,
+        "grant_type=client_credentials&scope=posts%3Aread+posts%3Awrite",
+    )
+    .await;
+
+    response.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    response.assert_header("content-type", "application/problem+json");
+}
+
+/// The document reads what the request answers, with no guard saying it: §5.2's
+/// body on a `400`, where the transport's cap keeps its problem document.
+#[tokio::test]
+async fn the_route_documents_the_refusal_the_request_answers() {
+    let app = TestApp::for_module::<DocumentedRequestApp>()
+        .await
+        .expect("boots");
+
+    let response = app.http().get("/api-json").send().await;
+    let doc: serde_json::Value = response.json().await.value().deserialize();
+
+    let responses = &doc["paths"]["/token"]["post"]["responses"];
+    let refused = &responses["400"]["content"];
+    assert!(
+        refused.get("application/problem+json").is_none(),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["application/json"]["schema"]["$ref"], "#/components/schemas/TokenError",
+        "{refused}",
+    );
+    let capped = &responses["413"]["content"];
+    assert!(capped.get("application/problem+json").is_some(), "{capped}");
+}
+
+/// The extractor documents its body as a `Form<…>` spelling would.
+#[tokio::test]
+async fn the_route_documents_the_form_body_the_request_reads() {
+    let app = TestApp::for_module::<RequestApp>().await.expect("boots");
+
+    let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
+    let body = controllers
+        .iter()
+        .flat_map(|controller| controller.meta.routes().iter())
+        .find(|route| route.handler() == "token")
+        .and_then(|route| route.request_body())
+        .expect("the token route documents its body");
+
+    assert_eq!(body.media_type(), FORM);
+    let schema_of = body.schema().expect("a named type");
+    let mut generator = schemars::SchemaGenerator::default();
+    assert_eq!(
+        schema_of(&mut generator)
+            .get("$ref")
+            .and_then(serde_json::Value::as_str),
+        Some("#/$defs/AccessTokenRequest"),
     );
 }

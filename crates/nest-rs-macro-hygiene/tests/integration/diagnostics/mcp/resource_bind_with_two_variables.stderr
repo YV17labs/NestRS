@@ -1,0 +1,5 @@
+error: `#[authorize(.., bind = Service)]` loads the subject from the template's one variable, its id, and `note://{org}/{id}` names 2 — name the id alone, or keep `#[authorize(Action, Entity)]` and load the row in the body with the service's `access`
+  --> tests/integration/diagnostics/mcp/resource_bind_with_two_variables.rs:41:27
+   |
+41 |     #[resource(template = "note://{org}/{id}")]
+   |                           ^^^^^^^^^^^^^^^^^^^

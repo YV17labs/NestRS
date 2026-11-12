@@ -1,0 +1,11 @@
+error: #[expose]: `Model` derives `SimpleObject`, which writes every column, hidden ones included, onto a wire — a reply answers `Post` (`Post::from(&model)`): drop the derive
+  --> tests/integration/diagnostics/seaorm/simple_object_on_the_model.rs:11:58
+   |
+11 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, SimpleObject, InputObject)]
+   |                                                          ^^^^^^^^^^^^
+
+error: #[expose]: `Model` derives `InputObject`, which reads every column, hidden ones included, off a body no input validates — a write takes `CreatePost` or `UpdatePost`, the inputs `#[expose(input(create, update))]` declares: drop the derive
+  --> tests/integration/diagnostics/seaorm/simple_object_on_the_model.rs:11:72
+   |
+11 |     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, SimpleObject, InputObject)]
+   |                                                                        ^^^^^^^^^^^

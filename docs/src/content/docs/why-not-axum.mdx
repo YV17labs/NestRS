@@ -27,13 +27,7 @@ pub struct OrgsController {
     svc: Arc<OrgsService>,
 }
 
-#[crud(
-    service = svc,
-    entity = OrgEntity,
-    output = Org,
-    create = CreateOrg,
-    update = UpdateOrg,
-)]
+#[crud(service = OrgsService)]
 impl OrgsController {}
 ```
 
@@ -94,10 +88,8 @@ pub struct OrgsController {
 impl OrgsController {
     /// The controller's route prefix, from `#[controller(path = "…")]`.
     pub const PATH: &'static str = "/orgs";
-    /// Construct this provider by resolving its `#[inject]` fields from the
-    /// container. Emitted by the decorator; called by the register phase,
-    /// not by hand.
-    pub fn from_container(container: &::nest_rs::core::Container) -> Self {
+    #[doc(hidden)]
+    pub fn __nestrs_from_container(container: &::nest_rs::core::Container) -> Self {
 …
 ```
 
@@ -107,11 +99,11 @@ the option and the accepted set, at the line and column you typed it:
 
 ```bash frame="terminal"
 $ cargo check -p features
-error: unknown #[crud] argument `servcie`; expected `service`, `entity`, `output`, `create`, `update`, `ops` or `paginate`
-  --> crates/features/src/orgs/http/controller.rs:17:5
+error: unknown #[crud] argument `servcie`; expected `service`, `ops`, `paginate` or `api`
+  --> crates/features/src/orgs/http/controller.rs:16:8
    |
-17 |     servcie = svc,
-   |     ^^^^^^^
+16 | #[crud(servcie = OrgsService)]
+   |        ^^^^^^^
 ```
 
 What a decorator cannot check at compile time — that every injected
@@ -125,14 +117,14 @@ you forgot to thread through surfaces where you use it, at runtime, on the
 request that needs it.
 
 NestRS records imports and dependencies at compile time and walks that graph in
-`App::build()`, so the same mistake is a startup error naming the consumer, the
+`App::builder().build()`, so the same mistake is a startup error naming the consumer, the
 missing dependency and the module that provides it. The check and its error are
 on [Providers](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot).
 
 ## Performance is the secondary benefit
 
-NestRS sits on top of hyper, tokio and poem — the same native core the fastest
-Rust frameworks use. So throughput is not the axis that separates the two:
+NestRS sits on top of hyper and tokio — the same native core the fastest Rust
+frameworks use. So throughput is not the axis that separates the two:
 both are compiled and both are fast, and against a managed runtime the margin
 is a consequence of that core rather than an argument for this framework.
 Protocol, figures and reproduction steps are on the

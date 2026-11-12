@@ -1,13 +1,9 @@
 use anyhow::Result;
-use tracing_subscriber::EnvFilter;
+use nest_rs::core::logging::{LogSettings, install_console};
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    install_console(&LogSettings::from_env()?);
 
     let conn = nest_rs::seaorm::connect_from_env().await?;
     let inserted = seed::run(&conn).await?;

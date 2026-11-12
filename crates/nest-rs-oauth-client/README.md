@@ -2,7 +2,7 @@
 
 OAuth 2.0 client for NestRS: the Authorization Code flow with PKCE, a signed CSRF/PKCE transaction, and the token exchange — the role RFC 6749 §1.1 calls the client.
 
-Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
+Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 
 ```sh
 cargo add nest-rs --features oauth-client

@@ -1,0 +1,40 @@
+error[E0277]: `NotesService` offers no create: implement `Creatable` for it, or drop `create` from `#[crud(ops = …)]`
+  --> tests/integration/diagnostics/http/crud_op_the_service_does_not_offer.rs:46:6
+   |
+46 | impl NotesController {}
+   |      ^^^^^^^^^^^^^^^ `#[crud]` generates a create for this service
+   |
+help: the trait `Creatable` is not implemented for `NotesService`
+  --> tests/integration/diagnostics/http/crud_op_the_service_does_not_offer.rs:33:1
+   |
+33 | struct NotesService;
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: `#[crud]` generates every op `ops` lists, all five by default, each typed off the service's trait: `impl Creatable for NotesService` declares the input it inserts
+
+error[E0277]: `NotesService` offers no create: implement `Creatable` for it, or drop `create` from `#[crud(ops = …)]`
+  --> tests/integration/diagnostics/http/crud_op_the_service_does_not_offer.rs:45:1
+   |
+45 | #[crud(service = NotesService, ops = [get, create])]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `#[crud]` generates a create for this service
+   |
+help: the trait `Creatable` is not implemented for `NotesService`
+  --> tests/integration/diagnostics/http/crud_op_the_service_does_not_offer.rs:33:1
+   |
+33 | struct NotesService;
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: `#[crud]` generates every op `ops` lists, all five by default, each typed off the service's trait: `impl Creatable for NotesService` declares the input it inserts
+   = note: this error originates in the attribute macro `::nest_rs::http::routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `NotesService` offers no create: implement `Creatable` for it, or drop `create` from `#[crud(ops = …)]`
+  --> tests/integration/diagnostics/http/crud_op_the_service_does_not_offer.rs:45:1
+   |
+45 | #[crud(service = NotesService, ops = [get, create])]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `#[crud]` generates a create for this service
+   |
+help: the trait `Creatable` is not implemented for `NotesService`
+  --> tests/integration/diagnostics/http/crud_op_the_service_does_not_offer.rs:33:1
+   |
+33 | struct NotesService;
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: `#[crud]` generates every op `ops` lists, all five by default, each typed off the service's trait: `impl Creatable for NotesService` declares the input it inserts
+   = note: this error originates in the attribute macro `crud` (in Nightly builds, run with -Z macro-backtrace for more info)

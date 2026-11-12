@@ -1,113 +1,286 @@
 //! One structured event per request, on `nest_rs::operation`.
 //!
-//! The file keeps its name: it implements `NESTRS_HTTP__ACCESS_LOG`, and an
-//! access log is precisely what one edge's per-request line is. What the rename
-//! took away is the *family's* target wearing this edge's word — see
-//! [`nest_rs_core::operation_log::TARGET`](nest_rs_core::operation_log::TARGET).
+//! `trace_id` and `span_id` are not fields: every line carries its unit's
+//! correlation from the ambient context, which the body re-enters
+//! (`response_body`). The line carries the server's values only
+//! (`.claude/decisions/payload-never-quoted.md`): `path` is the route template
+//! the router matched (`/posts/{id}`), never the path the client sent, and a
+//! request no route matched files none at all; `verb` is the method as the HTTP
+//! conventions know it, `_OTHER` for a token the client chose; no user agent,
+//! which is free text. Both read as the route's `mounted` line says them.
 //!
-//! # Why the transport owns this
+//! A request dropped before it answers — by the shutdown window or a client's
+//! reset — files its line [`CANCELLED`] through [`Unanswered`], with no `status`
+//! and no `bytes`. A handler that unwinds is answered `500` by the edge, and its
+//! line files [`PANIC`] with that `status`, as does a body that unwinds as it is
+//! written, with what it wrote. An HTTP/1.1 half-close is not an abandonment:
+//! hyper runs the handler to its end.
 //!
-//! Everything the line carries — method, path, status, duration, client, user
-//! agent, and the request's [`Correlation`] — is what *this* transport knows
-//! about a request it served. None of it needs a collector, a propagator or an
-//! exporter, so none of it may depend on one being mounted: an access log is how
-//! an operator answers "what did this deployment do", and that question does not
-//! become answerable only once OTLP is configured.
-//!
-//! `trace_id` and `span_id` are the transport's too — W3C Trace Context, minted
-//! or continued by the edge with no collector, propagator or exporter involved.
-//! The observability stack *enriches* what is exported; it never decides what
-//! this line can say.
-//!
-//! They are **not** written here, and that is deliberate: every line the console
-//! renders carries the correlation of the unit of work it belongs to, read off
-//! the ambient context, so spelling them as event fields would print them twice
-//! in text and put them in two different positions in the JSON envelope. The
-//! body re-enters the request's context around this line for exactly that
-//! reason — see `response_body`.
-//!
-//! # What is filed here, and what is not
-//!
-//! The line reports the body's size, so it is filed once the body has been
-//! written — by [`response_body`](crate::response_body), which wraps the body
-//! for that and for the larger reason that a streaming response is still the
-//! request running. This module owns the *line*; that one owns the *body*, and
-//! the split is deliberate: the body is carried whether or not the line is on.
+//! [`CANCELLED`]: nest_rs_core::operation_log::CANCELLED
+//! [`PANIC`]: nest_rs_core::operation_log::PANIC
 
+use std::borrow::Cow;
 use std::time::Instant;
 
-use poem::Request;
-use poem::http::{Method, Uri};
+use nest_rs_core::RequestContinuation;
 
-use crate::client_ip::ClientIp;
+use crate::matched::MatchedRoute;
 
 /// A request being timed. Opened before the inner tree runs, filed once the
 /// response body has been written.
 pub(crate) struct AccessLog {
-    method: Method,
-    /// Cloned rather than formatted: `Uri`'s path is a `Bytes` slice, so this is
-    /// a refcount bump and the path is read back without allocating.
-    uri: Uri,
-    client: ClientIp,
-    user_agent: Option<String>,
+    /// The [`KnownMethods`](crate::trace_context::KnownMethods) name.
+    verb: Cow<'static, str>,
+    /// The slot the router notes the matched template in; read when the line
+    /// is filed.
+    matched: MatchedRoute,
     start: Instant,
 }
 
 impl AccessLog {
-    /// Snapshot what only the *request* can answer, before it is consumed.
-    ///
-    /// `client` and `user_agent` are passed in rather than read here because the
-    /// operation span needs the same answers: reading twice would be two chances
-    /// for the span and the line to disagree about who called.
-    pub(crate) fn open(req: &Request, client: ClientIp, user_agent: Option<&str>) -> Self {
+    /// Snapshot what only the *request* can answer, before it is consumed:
+    /// its method as the line names it. `start` is the instant the request
+    /// arrived, which its budget counts from too.
+    pub(crate) fn open(verb: Cow<'static, str>, matched: &MatchedRoute, start: Instant) -> Self {
         Self {
-            method: req.method().clone(),
-            uri: req.uri().clone(),
-            client,
-            // Owned rather than borrowed: the `HeaderValue`'s bytes are a slice
-            // of hyper's shared read buffer, which holding would pin until the
-            // response body ends.
-            user_agent: user_agent.map(str::to_owned),
-            start: Instant::now(),
+            verb,
+            matched: matched.clone(),
+            start,
         }
     }
 
     /// The line. `bytes` is the response body actually written.
     ///
-    /// The target and the duration formula come from
-    /// [`operation_log`](nest_rs_core::operation_log) rather than being spelled
-    /// here: this is one member of a family every edge files into, and a second
-    /// copy of either is what makes a family drift while both halves look right.
-    ///
-    /// **No `outcome` field, and that is deliberate.** Its peers carry one
-    /// because they have no other way to say how the work ended; a request has
-    /// `status`, which says it more precisely than three words could. Classifying
-    /// a `404` or a `401` as `ok` or `error` is a judgement the framework has no
-    /// business making on an operator's behalf.
-    pub(crate) fn emit(self, status: u16, bytes: u64) {
-        tracing::info!(
-            name: crate::unit::REQUEST,
-            target: nest_rs_core::operation_log::TARGET,
-            message = crate::unit::REQUEST,
-            method = %self.method,
-            path = self.uri.path(),
+    /// An answer that ran to its end carries no `outcome`: its `status` says it.
+    /// A body the transport stopped carries
+    /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED), and the answer to
+    /// an unwind, or a body that unwound,
+    /// [`PANIC`](nest_rs_core::operation_log::PANIC).
+    pub(crate) fn emit(
+        self,
+        span: &tracing::Span,
+        status: u16,
+        bytes: u64,
+        outcome: Option<&'static str>,
+    ) {
+        let path = self.matched.route();
+        nest_rs_core::operation_line!(
+            crate::unit::REQUEST,
+            span: span,
+            outcome: outcome,
+            started: self.start,
+            verb = %self.verb,
+            path = path.as_deref(),
             status,
             bytes,
-            duration_ms = nest_rs_core::operation_log::duration_ms(self.start),
-            client_ip = %self.client.ip,
-            // Whether the address came from a proxy header or from the peer.
-            // Two very different confidences, and an incident query that cannot
-            // tell them apart is reading a number it should not trust.
-            forwarded = self.client.forwarded,
-            user_agent = self.user_agent.as_deref(),
         );
     }
 
-    /// File a request whose response this edge never got to hold — an `Err` on
-    /// its way to a layer outside, which will render it. No body passed through
-    /// here, so there is nothing to count; the status is what that error will
-    /// answer with.
-    pub(crate) fn abandoned(self, status: u16) {
-        self.emit(status, 0);
+    /// File a request that ended before it answered. No `status` and no
+    /// `bytes`: a `0` in either would claim a response nobody sent.
+    fn unanswered(self, span: &tracing::Span, outcome: &'static str) {
+        let path = self.matched.route();
+        nest_rs_core::operation_line!(
+            crate::unit::REQUEST,
+            span: span,
+            outcome: outcome,
+            started: self.start,
+            verb = %self.verb,
+            path = path.as_deref(),
+        );
+    }
+}
+
+/// What a request owes if it ends before it answers, held while it runs: its
+/// span named for the route it matched and recorded failed, and its line filed
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) — or
+/// [`PANIC`](nest_rs_core::operation_log::PANIC) if an unwind the edge does not
+/// contain takes it down.
+///
+/// Declared after everything it borrows, so a dropped request drops it first.
+pub(crate) struct Unanswered<'a> {
+    log: Option<AccessLog>,
+    continuation: &'a RequestContinuation,
+    span: &'a tracing::Span,
+    method: &'a str,
+    matched: &'a MatchedRoute,
+    answered: bool,
+}
+
+impl<'a> Unanswered<'a> {
+    pub(crate) fn hold(
+        log: Option<AccessLog>,
+        continuation: &'a RequestContinuation,
+        span: &'a tracing::Span,
+        method: &'a str,
+        matched: &'a MatchedRoute,
+    ) -> Self {
+        Self {
+            log,
+            continuation,
+            span,
+            method,
+            matched,
+            answered: false,
+        }
+    }
+
+    /// The request produced an answer: its span is named off the answer, and its
+    /// line is the answer's to file.
+    pub(crate) fn answered(mut self) -> Option<AccessLog> {
+        self.answered = true;
+        self.log.take()
+    }
+}
+
+impl Drop for Unanswered<'_> {
+    fn drop(&mut self) {
+        if self.answered {
+            return;
+        }
+        let outcome = if std::thread::panicking() {
+            nest_rs_core::operation_log::PANIC
+        } else {
+            nest_rs_core::operation_log::CANCELLED
+        };
+        crate::trace_context::name_route(self.span, self.method, self.matched.route().as_deref());
+        match self.log.take() {
+            Some(log) => self
+                .continuation
+                .enter(|| log.unanswered(self.span, outcome)),
+            None => nest_rs_core::operation_log::record_outcome(self.span, outcome),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_core::Correlation;
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+
+    /// A line opened on a request the router matched `matched` for.
+    fn held(matched: &MatchedRoute) -> (AccessLog, RequestContinuation) {
+        let log = AccessLog::open(Cow::Borrowed("GET"), matched, Instant::now());
+        let continuation = RequestContinuation::new(None, Correlation::minted(None));
+        (log, continuation)
+    }
+
+    fn matched(template: &str) -> MatchedRoute {
+        let matched = MatchedRoute::default();
+        matched.note(&std::sync::Arc::from(template));
+        matched
+    }
+
+    fn the_line(logs: &LogCapture) -> nest_rs_testing::CapturedEvent {
+        logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::REQUEST.name(),
+        )
+    }
+
+    #[test]
+    fn a_request_dropped_unanswered_files_its_line_cancelled() {
+        let logs = LogCapture::install();
+        let route = matched("/reports/{id}");
+        let (log, continuation) = held(&route);
+        let span = tracing::Span::none();
+        drop(Unanswered::hold(
+            Some(log),
+            &continuation,
+            &span,
+            "GET",
+            &route,
+        ));
+
+        let line = the_line(&logs);
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::CANCELLED)
+        );
+        assert_eq!(line.field("status"), None);
+        assert_eq!(line.field("bytes"), None);
+        assert_eq!(line.field("path").as_deref(), Some("/reports/{id}"));
+        assert!(line.trace_id.is_some(), "{line:#?}");
+    }
+
+    /// A path as sent is the client's: the line names the template it matched,
+    /// and a request that matched none names no path at all.
+    #[test]
+    fn the_line_names_the_matched_template_never_the_path_sent() {
+        for (route, named) in [
+            (matched("/reports/{id}"), Some("/reports/{id}")),
+            (MatchedRoute::default(), None),
+        ] {
+            let logs = LogCapture::install();
+            let (log, _continuation) = held(&route);
+            log.emit(&tracing::Span::none(), 200, 2, None);
+            let line = the_line(&logs);
+            assert_eq!(line.field("path").as_deref(), named);
+        }
+    }
+
+    /// What the console's text format is written to.
+    #[derive(Clone, Default)]
+    struct Written(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Written {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Written {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The console's text format prints a field written as a `&str` in quotes
+    /// and one written through `Display` bare: the verb is printed `verb=GET`,
+    /// as a query on the console's lines matches it.
+    #[test]
+    fn the_console_line_prints_the_verb_bare() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let written = Written::default();
+        let layer = tracing_subscriber::fmt::layer()
+            .event_format(nest_rs_core::__private::TextFormat::new(false))
+            .with_ansi(false)
+            .with_writer(written.clone());
+        let subscriber = tracing_subscriber::Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let (log, _continuation) = held(&matched("/reports/{id}"));
+            log.emit(&tracing::Span::none(), 200, 2, None);
+        });
+        let line = String::from_utf8(written.0.lock().expect("unpoisoned").clone())
+            .expect("the console writes UTF-8");
+        assert!(line.contains(" verb=GET "), "{line}");
+    }
+
+    #[test]
+    fn an_answered_request_is_not_filed_by_the_guard() {
+        let logs = LogCapture::install();
+        let matched = MatchedRoute::default();
+        let (log, continuation) = held(&matched);
+        let span = tracing::Span::none();
+        let answered =
+            Unanswered::hold(Some(log), &continuation, &span, "GET", &matched).answered();
+        assert!(answered.is_some());
+        logs.expect_none(
+            nest_rs_core::operation_log::TARGET,
+            crate::unit::REQUEST.name(),
+        );
     }
 }

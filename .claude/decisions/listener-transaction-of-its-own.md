@@ -1,0 +1,84 @@
+# A listener reached under a caller's own transaction runs in a unit of its own
+
+Settled on 2026-10-17, when each event listener became a unit of work of its
+own. A transaction the caller opens itself — `db.begin()` inside
+`retry_on_conflict`, an `Executor::Txn` it installs — commits out of the
+framework's sight, so the bus cannot hold a dispatch for it: an event emitted
+there runs its listeners at once, before the caller's commit. What those
+listeners run on had three answers. Correctness decided: a listener's answer
+settles what it wrote, and nothing it fails reaches its emitter's writes,
+whatever its emitter ran on.
+
+**Chosen — a unit of its own, beside the caller's transaction.** The bus opens
+the listener's unit through the binding its emitter ran under, as it does for
+work held until a commit, so a listener means one thing everywhere: one
+transaction (the pool under `transactional = false`), settled on its answer,
+cut at its own deadline. What it costs, and the events docs say so: the
+listener runs on another connection, so it does not see the rows the caller
+has not committed; it waits on any row the caller locked — the caller is
+itself awaiting `emit` — until its statement budget or its timeout cuts it;
+and its commit stands if the caller rolls back afterwards. Emitting after the
+caller's own `commit` avoids all three, and stays the advice.
+
+**Refused:**
+
+- **A passenger of the caller's transaction** — what a listener did before.
+  Its `Err` cannot roll back what it wrote, since the caller commits it, and a
+  statement it fails aborts the caller's transaction: the emitter's writes go
+  down with a reaction, which the data layer's rule forbids.
+- **A savepoint in the caller's transaction** (`atomic`, which sea-orm nests
+  there). It sees the caller's rows and waits on none of its locks, but a
+  released savepoint commits nothing: the listener's `Ok` would no longer mean
+  its writes landed, they would stand or fall with a transaction the caller
+  settles after the listener answered. The same listener would then be durable
+  on its `Ok` after an emitter's commit and provisional under a caller's
+  transaction — two meanings for one decorator. And it saves the database's
+  half only: a job the listener pushed or a mail it sent outlives the caller's
+  rollback either way.
+
+**The limit.** The bus opens a unit only through the binding its emitter ran
+under. An emit outside every unit of work — a task handed to `TaskContext`, a
+binary of one's own, a test, a lifecycle hook while hooks run outside a unit —
+has none, so its listeners run bare on whatever the emitter installed, a
+caller's `Executor::Txn` included: there they are passengers. Closing it takes
+a binding the bus reaches without its emitter, the one the container provides,
+read when the listeners are wired; the bus holds no container today.
+
+## 2026-10-17 — a lifecycle hook is a unit of work, so its emits reach the binding
+
+Each lifecycle hook now runs as a `lifecycle.hook` unit through the binding
+the driver provides, so a listener a hook emits to opens a unit of its own
+like any other: its `Err` rolls back what it wrote, its `Ok` commits it in a
+transaction of its own, and the dispatch waits for the hook's commit. The
+limit keeps its other members — a task handed to `TaskContext`, a binary of
+one's own, a test — and closing those still takes a binding the bus reaches
+without its emitter.
+
+## 2026-11-05 — no caller's transaction is installed
+
+`Executor::Txn` is gone (`visibility-tiers.md`, 2026-11-05): no public function
+could install one, so the handle this entry calls "an `Executor::Txn` it
+installs" stood only in framework tests. The choice stands for the transaction
+a caller still opens, a `db.begin()`: a listener reached before its commit is a
+unit of its own. The passenger the limit above describes is gone: an emit
+outside every unit runs its listeners with no executor, so a `Repo` call in one
+fails closed. What the limit still costs is that closed read, in a task handed
+to `TaskContext` under an app that binds a unit of work.
+
+## 2026-11-06 — the bus reaches the binding the container provides
+
+The limit above is closed. A listener resolves the app's `dyn UnitOfWork` where
+it is subscribed, as every edge resolves its binding once at boot, and opens its
+unit through the binding its emitter ran under, or that one for an emitter under
+none: a task handed to `TaskContext`, a binary's own task, a test. So a listener
+means one transaction settled on its answer wherever the emit stands, and its
+`Repo` call no longer fails for want of an executor in an app that binds a unit
+of work; an app binding none is what stays bare. The emitter's binding keeps
+precedence, since a unit it ran under is the one that decides.
+
+**The scope stays the fail-closed `Request`** when no unit tags one. A task
+carries no executor scope across `TaskContext`, so a listener a job's task
+reaches reads as a request does: by the ability the task carried, and with none
+it reads no row. Reading it as system work would hand an unscoped read to
+whatever a request's task emits. System work off every unit opens its own unit
+with `run_unit`, the escape `data-layer.md` names.

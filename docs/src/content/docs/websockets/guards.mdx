@@ -1,7 +1,6 @@
 ---
 title: WebSocket guards
 description: Connection-level guards on the upgrade and per-message guards on each envelope — one Guard trait, two scopes.
-tier: basics
 sidebar:
   order: 3
 ---
@@ -18,20 +17,22 @@ and the difference is where you bind it.
 ## Two scopes, one trait
 
 `nest_rs::guards::Guard` is the same trait used for HTTP routes and
-GraphQL operations. It exposes three optional methods — `check_http`,
-`check_graphql`, `check_ws_message` — and a guard implements the ones
-it cares about. WebSockets reach both:
+GraphQL operations. It has two entries, both over the unit being dispatched —
+`check_http` for an HTTP request, `check` for every other edge's unit — and a
+guard overrides the ones it cares about. WebSockets reach both:
 
-| Scope | Decorator location | Trait method run |
+| Scope | Decorator location | Entry run |
 |---|---|---|
-| **Connection** | `#[use_guards(...)]` on the gateway struct | `check_http` (on the upgrade `Request`) |
-| **Message** | `#[use_guards(...)]` next to a `#[subscribe_message]` | `check_ws_message` (on each envelope) |
+| **Connection** | `#[use_guards(...)]` on the gateway struct | `check_http` (on the upgrade request, through `HttpView`) |
+| **Message** | `#[use_guards(...)]` next to a `#[subscribe_message]` | `check` (on each envelope, through `WsView`) |
 
 A guard listed at gateway scope **rejects the upgrade** — the response
 goes back as HTTP, no socket is opened, no `on_connect` fires. A guard
 listed at message scope **rejects the dispatch** — the connection
 stays open, the envelope is replaced with an error frame on the same
-event name, and a `warn!` lands in `nest_rs::ws`.
+event name, and one `guard denied the message` lands on the guard's target
+(`nest_rs::layers` when it declares none) naming the guard, the gateway's path,
+the event and the status — never the guard's text, as on every edge.
 
 ## Connection-level: the upgrade gate
 
@@ -40,120 +41,187 @@ request, like any HTTP guard:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::{gateway, messages};
-use crate::auth::AuthnGuard;
+use crate::authn::AuthnGuard;
+use std::sync::Arc;
 
 #[gateway(path = "/ws")]
 #[use_guards(AuthnGuard)]
 pub struct ChatGateway {
     #[inject]
-    svc: Arc<RoomService>,
+    svc: Arc<ChatService>,
 }
 ```
 
 `AuthnGuard` reads the `Authorization` header (or a cookie, or a query
 parameter — your strategy decides), verifies the token, and attaches
-the principal to the request. A failed check returns the same
+the principal for the rest of the connection. A failed check returns the same
 `Denial` shape an HTTP route would return (`401`, `403`, etc.) — the
 client receives the response, and no socket is ever opened.
 
-Because the `SocketContext` seam runs **after** connection-level
-guards and **captures the post-guard request state**, anything those
-guards attach (the principal, an ambient ability, the database
-executor) is re-installed around every message dispatch on the
-connection. Without that capture, a per-message guard like
-`AuthzGuard` — whose `check_ws_message` reads `current_ability()` and
-fails closed — would see `None` once the upgrade request had unwound.
+A browser sends a page's cookies with any upgrade that page asks for, and
+never consults CORS first, so the upgrade's `Origin` is checked before the
+socket opens (RFC 6455 §10.2), ahead of the gateway's guards: a refused origin
+never pays for authentication. With no
+CORS policy, a page on the server's own origin gets its socket; any other is
+answered `403`, with a `warn` on `nest_rs::ws` that says why by kind and
+names the settings that would admit it, never the origin sent or the `Host` it
+was compared to. Once `<PREFIX>_HTTP__CORS_ORIGINS` is set,
+only the origins it lists get one — the server's own included, when it serves
+the page — and the CORS layer's `403` files its one `warn` on
+`nest_rs::http` ([CORS](/http/cors/#cors)). A client that sends no
+`Origin` — anything but a browser — is not concerned.
+
+Because the connection is captured **after** connection-level guards,
+anything those guards attach (the principal, an ambient ability, the tenant)
+is carried into every message and connection hook on the connection, the ability
+staying off a hook's reads — no seam to bind — and each runs as a unit of work of
+its own, on an executor the gateway opens for it. Without that capture, a per-message guard like
+`AuthzGuard` — whose `check` reads the ambient ability and fails closed —
+would see `None` once the upgrade request had unwound.
+
+No posture stands before a connection hook, so its reads run under no ability, as on
+any unit naming no subject: a `Repo` read or write there fails closed, while the principal
+stays readable. Read what a client should see in a message whose posture names it.
 
 ## Per-message: the envelope gate
 
 A per-message guard runs every time the envelope's `event` matches a
-handler the guard is attached to:
+handler the guard is attached to. Its decision is the one a route's guard writes:
 
 ```rust title="crates/features/src/chat/ws/guard.rs"
-use nest_rs::ws::{messages, WsClient};
-use nest_rs::ws::serde_json::Value;
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, WsGuard, async_trait};
+use std::sync::Arc;
+
+use nest_rs::core::{Layer, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, PrincipalClaim};
+use nest_rs::ws::WsView;
+
+use crate::Claims;
+use crate::chat::ChatService;
 
 #[injectable]
-#[derive(Default)]
-pub struct ModerationGuard;
-
-impl Layer for ModerationGuard {}
+#[derive(Layer)]
+pub struct MutedGuard {
+    #[inject]
+    svc: Arc<ChatService>,
+}
 
 #[async_trait]
-impl Guard for ModerationGuard {
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        _event: &str,
-        data: &Value,
-    ) -> Result<(), Denial> {
-        match data.get("author").and_then(Value::as_str) {
-            Some("banned") => Err(Denial::forbidden("author `banned` is not allowed to post")),
-            _ => Ok(()),
+impl Guard for MutedGuard {
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let caller = cx.require::<Claims>()?;
+        if self.svc.is_muted(&caller.sub).await {
+            return Err(Denial::forbidden("you are muted in this room").with_reason("muted"));
         }
+        Ok(())
+    }
+
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        Some(PrincipalClaim::of::<Claims>())
+    }
+
+    fn target(&self) -> &'static str {
+        crate::chat::TARGET
     }
 }
 
-// The capability marker — see below. One line, right beside the method it attests.
-impl WsGuard for ModerationGuard {}
+impl GuardFor<WsView> for MutedGuard {}
 ```
 
-<Aside type="caution" title="A per-message guard must declare `WsGuard`">
-Every `Guard::check_*` defaults to `Ok(())`, which is right — "this guard
-does not apply to that transport" — and is also why binding a guard that
-only implements `check_http` beside a `#[subscribe_message]` used to
-compile, read as a protection, and pass every message.
+The verified claims are the principal the guard requires, and declares
+(`expected_principal`): the boot refuses a gateway whose upgrade attaches none, so
+it never meets one at a message. The guard writes no log line: the edge files its
+refusal, `guard denied the message` on `features::chat`, with `reason = "muted"`.
+A guard that needs the message itself switches to `WsView`: `event()`, `data()`
+and the `client()` that sent it, whose connection `cx.peer()` names too.
 
-`#[messages]` now requires `WsGuard` of every guard in a per-message
-`#[use_guards]`. Declare it next to the `check_ws_message` it attests. If
-you get this error, the guard almost certainly belongs on the **gateway
-struct** instead, which the diagnostic says:
+A rule about the caller alone — *a token naming a user may post* — needs no guard
+at all. It is a [capability](/security/authorization/policies/#subjects-no-table-holds),
+granted beside every other rule and gated by the posture, which is what the demo's
+chat does below.
+
+<Aside type="caution" title="A per-message guard must declare `GuardFor<WsView>`">
+A guard's `check` is the decision it wrote for the units it declares; one
+whose decision reads the HTTP request would run it on a message, which carries
+none, and refuse or misread every message while reading as a protection.
+
+`#[messages]` requires `GuardFor<WsView>` of every guard in a per-message
+`#[use_guards]`. Declare it next to the `check` it covers. If you get this
+error, the guard almost certainly belongs on the **gateway struct** instead:
 
 ```text frame="terminal"
-error[E0277]: `AuthnGuard` does not check WebSocket messages
-   |
-   |     #[use_guards(AuthnGuard)]
-   |                  ^^^^^^^^^^ this guard has no `check_ws_message`
-   = note: override `check_ws_message`, then declare `impl WsGuard for AuthnGuard {}`;
-           or move it to the `#[gateway]` struct, where guards run on the HTTP upgrade
+$ cargo check -p features
+error[E0277]: `nest_rs::authn::AuthnGuard<JwtStrategy<Claims>>` does not declare that it checks `WsView` units
+   --> crates/features/src/users/ws/gateway.rs:21:18
+    |
+ 21 |     #[use_guards(AuthnGuard)]
+    |                  ^^^^^^^^^^ bound at a site whose units are `WsView`
+    |
+    = note: a guard's `check` decides the units it declares; bound where its units are another edge's, it would run a decision written for a view they do not have
+    = note: write the guard's decision for `WsView` units in `Guard::check` (overriding `Guard::check_http` only where the HTTP request differs from the unit), then declare `impl GuardFor<WsView> for nest_rs::authn::AuthnGuard<JwtStrategy<Claims>> {}`
 ```
 
-**A guard on the `#[gateway]` struct attests `HttpGuard`, not `WsGuard`**:
-the upgrade is an HTTP `GET`, so those are HTTP guards and `check_http` is
-what runs. Both scopes are checked, each against its own marker — which is
-where that distinction stops being folklore.
+**A guard on the `#[gateway]` struct declares `GuardFor<HttpView>`, not
+`GuardFor<WsView>`**: the upgrade is an HTTP `GET`, so those are HTTP guards
+and `check_http` is what runs. Both scopes are checked, each against its own
+view — which is where that distinction stops being folklore.
 </Aside>
 
-Bind it beside the message it gates:
+Bind a guard beside the message it gates, with `#[use_guards(MutedGuard)]`. The
+demo's chat needs none: its rule is a capability, granted only under a token naming
+a user, and the posture gates on it:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
+#[gateway(path = "/ws")]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct ChatGateway {
+    #[inject]
+    svc: Arc<ChatService>,
+}
+
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
-    #[public]
-    #[use_guards(ModerationGuard)]
-    async fn on_message(&self, msg: SendMessageDto) {
-        self.svc.record(msg);
+    #[authorize(Create, Posting)]
+    async fn on_message(&self, caller: Ambient<Claims>, msg: SendMessageDto) -> Result<(), WsError> {
+        self.svc.record(caller.into_inner().sub, msg).opaque()?;
+        Ok(())
     }
 }
 ```
 
-A denial surfaces as a wire-shaped error frame on the rejected event:
+The handler names the author from the same principal, the `Ambient<Claims>`
+parameter the upgrade's `AuthnGuard` attached, so `SendMessageDto` carries the
+text alone: it is an `#[input]`, and a payload naming an author is refused as
+an unknown field before the handler runs.
+
+A denial surfaces as a wire-shaped error frame on the rejected event,
+the class a client branches on beside its sentence — `code`, the member a
+`Problem` answers under too, and the same class as `reason`. Here a service
+token, which names no user, tries to post:
 
 ```text frame="terminal"
-> {"event":"message","data":{"author":"banned","text":"hi"}}
-< {"event":"message","data":{"error":"author `banned` is not allowed to post"}}
+> {"event":"message","data":{"text":"hi"}}
+< {"event":"message","data":{"error":"forbidden","code":"FORBIDDEN","reason":"forbidden"}}
 ```
 
 The connection stays open; the client can fire other events.
 
+A refusal reads the same here as on HTTP, GraphQL and MCP. A `4xx`
+denial carries its own sentence, and its frame adds beside its `code`
+what the client acts on: `retryAfterSeconds` for a rate limit,
+`requiredScopes` for a token too narrow. A `5xx` never carries the guard's text: an internal
+denial answers the opaque frame every unexplained failure answers,
+`"internal error"` (`nest_rs_core::OPAQUE_CLIENT_MESSAGE`) with
+`code: "INTERNAL"`, and an unavailable dependency `"service unavailable"`
+(`UNAVAILABLE_CLIENT_MESSAGE`) with `code: "UNAVAILABLE"` and, when
+known, `retryAfterSeconds`.
+
 ## Mount-time dedup
 
-The `#[messages]` macro composes each event's per-message guard chain at mount
-time from **two** sources: app-global guards and the guards listed on the
-**message** itself. Guards bound on the gateway struct are **not** in this
+Each message is a site of the [pipeline](/websockets/messages/#interceptors-filters-and-pipes),
+whose guard stage is composed once, at boot, from **two** sources: app-global
+guards and the guards listed on the **message** itself, then the class gate its
+posture declares. Guards bound on the gateway struct are **not** in this
 chain — they run once at the upgrade (`check_http`), never per message.
 Duplicates are removed by `TypeId`, so a guard registered globally and also
 listed on a specific message runs **once** per dispatch. Redeclaring on a
@@ -163,23 +231,25 @@ does not share the same globals still carries its own.
 ```text frame="none"
 ConnUpgrade ── check_http ── on_connect
                                   │
-                                  ├── Envelope ── check_ws_message (global ∪ message, dedup) ── dispatch
-                                  └── Envelope ── check_ws_message (...) ── dispatch
+                                  ├── Envelope ── check (global ∪ message, dedup) ── gate ── layers ── handler
+                                  └── Envelope ── check (...) ── gate ── layers ── handler
                                   └── on_disconnect ── close
 ```
 
 A guard chain that returns `Err(Denial)` short-circuits at the first
-denial — later guards do not run, the handler is skipped, the error
-frame is sent.
+denial — later guards do not run, nor the class gate, nor any exception filter
+or handler-stage interceptor, the handler is skipped, and the error frame is
+sent. A unit-stage interceptor still reads that frame, as it reads a route's
+`403`.
 
 <Aside type="note">
-The same `Guard` trait runs across every transport, so a guard that
-implements `check_http`, `check_graphql`, and `check_ws_message` — and
-attests each with its marker — can be wired anywhere without rewriting.
-A guard that only makes sense for one transport implements only
-`check_ws_message`, declares `WsGuard` alone, and leaves the others on
-the default `Ok(())`. There is no separate message-guard *trait*: the
-markers are attestations on the one `Guard`, not four guard types.
+The same `Guard` trait runs across every transport, so a guard that writes
+its decision in `check` — and declares `GuardFor` for each view it serves —
+can be wired anywhere without rewriting: `check_http` runs it on a request. A
+guard that only makes sense for messages declares `GuardFor<WsView>` alone;
+pooled globally, it would run at every request too, so one whose decision is
+the message's alone admits the request in `check_http`. There is no separate message-guard *trait*:
+`GuardFor` declares what the one `Guard` checks, not four guard types.
 </Aside>
 
 ## Authentication and authorization
@@ -188,31 +258,40 @@ WebSockets reuse the HTTP pair **directly** — there is no WS-specific
 guard type. The gateway struct binds
 `#[use_guards(AuthnGuard, AuthzGuard)]`; both run once on the upgrade
 (an HTTP `GET`) and are access-graph-validated like any HTTP binding:
-omit `AuthzWsModule` and those guards are unreachable, so boot fails.
-Because the upgrade's task-locals unwind before message handlers run,
-`WsDataContext` — the `SocketContext` bridge `AuthzWsModule` provides
-— re-seeds the executor and ability around each message. Binding
+omit `AuthzModule` from the adapter's imports and those guards are
+unreachable, so boot fails.
+Because the upgrade has returned before message handlers run, the
+connection carries the ability those guards attached — with every other value
+the upgrade carried — into each message, and the gateway opens each message's
+unit of work itself. Binding
 `AuthzGuard` beside a `#[subscribe_message]` adds a per-message check
-through `check_ws_message`: it denies, fail-closed, when no ambient
-ability is present.
+through `check`: it reads the ability the upgrade attached, and builds one for a
+`#[public]` message alone — the rules of the actor a guard ahead of it identified, or
+those [`define_visitor`](/security/authorization/public-reads/) writes. A gated
+message whose upgrade attaches no ability would answer `401` to every caller, so the
+boot refuses it, naming the remedy: bind `AuthzGuard` at the upgrade, in the
+gateway's `#[use_guards]` or `GlobalGuards`, or declare an `#[authorize]` message
+`#[public(Action, Subject)]`, which keeps its gate.
 
-See [Security](/security/) for the strategy + ability composition; the
-WS-specific bit — `WsDataContext` — lives in `nest_rs::seaorm` behind
-the `ws` feature (packaged by `AuthzWsModule`), alongside its HTTP and
-GraphQL sibling bridges.
+See [Security](/security/) for the strategy + ability composition, and
+[Endpoint guards](/security/authorization/endpoint-guards/) for
+`AuthzModule` beside its GraphQL and MCP siblings.
 
 ## Reference
 
 - [`Guard`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-guards/src/guard.rs) —
-  the `check_http` / `check_graphql` / `check_ws_message` triple.
-- [`EventLayerTable`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/guard.rs) —
-  the per-gateway, per-event guard table the dispatcher iterates.
-- [`crates/features/src/chat/ws/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/ws/guard.rs) —
-  a per-message guard worked end to end.
+  the `check_http` / `check` pair.
+- [`WsView`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/view.rs) —
+  the message a per-message guard reads.
+- [`crates/nest-rs-ws/src/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/guard.rs) —
+  the guard stage each message's site composes once at boot and runs on
+  every message.
+- [`crates/features/src/chat/ws/gateway.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/ws/gateway.rs) —
+  a gateway's upgrade guards and a message's posture, end to end.
 
 ## Going further
 
 - [Security](/security/) — the authn + authz wiring story across HTTP,
   GraphQL, and WS.
-- [Messages](/websockets/messages/) — the wire shape of a denial reply
-  and the return contract.
+- [Replies and error frames](/websockets/replies/) — the wire shape of a
+  denial reply and the return contract.

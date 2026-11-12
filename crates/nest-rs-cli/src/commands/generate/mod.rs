@@ -8,16 +8,18 @@ mod cargo;
 mod entity;
 mod feature;
 mod migration;
+mod port;
+mod promotion;
 mod resource;
 mod support;
 
 /// `nestrs new` writes the same `migrations`/`seed` crates `g migration`
 /// bootstraps — one implementation, reached without opening the module.
-pub(crate) use migration::queue_db_crates;
+pub(crate) use migration::{Registered, queue_db_crates};
 
-pub use adapter::{AdapterOptions, run as run_adapter};
-pub use auth::{AuthOptions, run as run_auth};
-pub use entity::{EntityOptions, run as run_entity};
-pub use feature::{FeatureOptions, run as run_feature};
-pub use migration::{MigrationOptions, run as run_migration};
-pub use resource::{ResourceOptions, run as run_resource};
+pub(crate) use adapter::{AdapterOptions, run as run_adapter};
+pub(crate) use auth::{AuthOptions, run as run_auth};
+pub(crate) use entity::{EntityOptions, run as run_entity};
+pub(crate) use feature::{FeatureOptions, run as run_feature};
+pub(crate) use migration::{MigrationOptions, run as run_migration};
+pub(crate) use resource::{ResourceOptions, run as run_resource};

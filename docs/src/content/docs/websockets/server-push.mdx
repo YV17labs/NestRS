@@ -1,12 +1,9 @@
 ---
 title: Server-side push
 description: Reach connected clients from outside a handler — inject WsServer in a service, a scheduled job, or an HTTP route.
-tier: all-options
 sidebar:
   order: 6
 ---
-
-import { Aside } from '@astrojs/starlight/components';
 
 A `WsClient` exists only inside a `#[subscribe_message]` (or a
 lifecycle hook). Anything that fires *without* a client message — a
@@ -33,8 +30,8 @@ pub struct NotifyService {
 }
 
 impl NotifyService {
-    pub fn announce(&self, text: &str) {
-        let _ = self.server.broadcast("announce", &text);
+    pub fn announce(&self, text: &str) -> Result<usize, serde_json::Error> {
+        self.server.broadcast("announce", &text)
     }
 }
 ```
@@ -50,7 +47,10 @@ pub struct NotifyModule;
 That's the whole wiring. Any handler that calls
 `NotifyService::announce` reaches every live WebSocket connection, even
 the connections held by an entirely different gateway. The registry
-does not care who recorded the message.
+does not care who recorded the message. `WsModule` attaches no transport, so a
+binary that imports this port only to push — a worker — opens no listener; the
+sockets are served by the binary importing a WebSocket adapter, whose gateway
+brings `HttpModule`.
 
 ## What the server exposes
 
@@ -64,11 +64,22 @@ differently to reflect the missing per-connection context:
 | `emit(conn_id, event, &data)` | One specific connection by id. | `client.emit(...)` (this connection) |
 | `connection_count()` | Live connection total. | — |
 
-Each method serializes `data` with `serde`, returns the number of
-outboxes that accepted the frame (`usize`) or whether the target
-connection still existed (`bool`). A serializer failure surfaces as
-`Err(serde_json::Error)`; a closed outbox is silently dropped — the
-writer task already moved on.
+Each method serializes `data` with `serde`, and returns the number of outboxes that
+accepted the frame (`usize`) or whether this connection's did (`bool`: `false` when it
+is gone or its outbox refused the frame). A serializer failure surfaces as
+`Err(serde_json::Error)`; a frame an outbox refuses is shed, with one `warn` on
+`nest_rs::ws` — see [Backpressure](#backpressure).
+
+## A push carries no caller's row
+
+A wire row is judged for the caller whose ability builds it. A push has no
+such caller: every connection `WsServer` reaches receives the same frame,
+whoever is behind it, so a row judged for the caller pushing it refuses there
+([A row answers the caller who judged it](/security/authorization/response-masking/#a-row-answers-the-caller-who-judged-it)).
+Push only what every recipient may read — a notice that something changed, an
+id the client then fetches through a gated message or route — or a row a job
+built, which holds every exposed column for no caller. The framework builds no
+row per recipient.
 
 ## A scheduled push
 
@@ -82,7 +93,6 @@ use nest_rs::core::injectable;
 use nest_rs::schedule::scheduled;
 use nest_rs::ws::WsServer;
 
-#[scheduled]
 #[injectable]
 pub struct Heartbeat {
     #[inject]
@@ -92,8 +102,9 @@ pub struct Heartbeat {
 #[scheduled]
 impl Heartbeat {
     #[every("5s")]
-    async fn tick(&self) {
-        let _ = self.server.broadcast("heartbeat", &chrono::Utc::now());
+    async fn tick(&self) -> anyhow::Result<()> {
+        self.server.broadcast("heartbeat", &chrono::Utc::now())?;
+        Ok(())
     }
 }
 ```
@@ -121,43 +132,51 @@ into a service that records state, and the service holds the registry
 and broadcasts the derived event. `crates/features/src/chat/service.rs`
 shows exactly this:
 
-```rust title="crates/features/src/chat/service.rs"
+```rust title="crates/features/src/chat/service.rs (from the demo, abridged)"
 #[injectable]
-pub struct RoomService {
+pub struct ChatService {
     #[inject]
     server: Arc<WsServer>,
-    history: Mutex<Vec<ChatMessage>>,
+    history: Mutex<VecDeque<ChatMessageDto>>,
+    // …
 }
 
-impl RoomService {
-    pub fn record(&self, msg: SendMessage) -> ChatMessage {
-        let stored = ChatMessage { author: msg.author, text: msg.text };
-        self.history.lock().push(stored.clone());
-        let _ = self.server.broadcast("message", &stored);
-        stored
+impl ChatService {
+    // …
+    pub fn record(
+        &self,
+        author: Subject,
+        message: SendMessageDto,
+    ) -> Result<ChatMessageDto, serde_json::Error> {
+        let stored = ChatMessageDto {
+            author,
+            text: message.text,
+        };
+        // …
+        let reached = self.server.broadcast("message", &stored)?;
+        // …
+        Ok(stored)
     }
+    // …
 }
 ```
 
-The gateway handler is two lines; the service owns the side effect.
+The gateway handler is two lines — it reads the author off the caller the
+upgrade authenticated and hands the message over; the service owns the side
+effect.
 
 ## Backpressure
 
-Each connection has a writer task draining an `unbounded_channel` into
-the `Sink`. A slow client backs up its own outbox; the read/dispatch
-loop on every other connection stays unaffected. Frames sent to a
-closed outbox are dropped silently — the registry returns the count of
-outboxes that accepted the frame, so a `broadcast(...)` to `N`
-connections may legitimately report `< N` while you race a slow
-disconnect.
-
-<Aside type="note">
-"Unbounded" here means the in-process channel is unbounded. Backpressure
-policy is yours to set, on purpose: the right answer differs per traffic
-shape — disconnect on outbox depth, drop on TTL, coalesce successive
-frames. The registry hands back the accepted-frame count, and
-`WsServer::connection_count` gives you the other half of the signal.
-</Aside>
+Each connection has a writer task draining a bounded outbox — 256 frames — into
+the socket, so a slow client backs up its own outbox and the read loop on every
+other connection stays unaffected. A push to a full outbox is shed, with a
+`warn` on `nest_rs::ws`: the registry returns the count of outboxes that
+accepted the frame, so a `broadcast(...)` to `N` connections may report `< N`
+while a slow client lags or a disconnect races it. A reply to a message that
+finds the outbox full closes the socket `1008`, and a client that takes nothing
+at all is dropped at the transport's send deadline,
+`<PREFIX>_HTTP__SEND_TIMEOUT_SECS` — see
+[When the server closes a socket](/websockets/socket-lifecycle/#when-the-server-closes-a-socket).
 
 ## Reference
 

@@ -1,7 +1,7 @@
 //! Files every scaffold writes (env cascade, gitignore, agent rules, …).
 
-pub const RUST_TOOLCHAIN: &str = r#"[toolchain]
-channel = "1.97"
+pub(crate) const RUST_TOOLCHAIN: &str = r#"[toolchain]
+channel = "1.100"
 # `llvm-tools-preview` carries the `llvm-cov` / `llvm-profdata` that
 # `nestrs run test cov` shells out to. It is pinned per toolchain rather than
 # installed once per machine because those binaries only read a `.profraw`
@@ -10,12 +10,77 @@ channel = "1.97"
 components = ["clippy", "rustfmt", "llvm-tools-preview"]
 "#;
 
+/// `clippy.toml` — raw SQL named where it is written, which `Repo` refuses when it
+/// runs once it leaves its operand. `nestrs run lint` runs it with `-D warnings`.
+pub(crate) const CLIPPY_TOML: &str = r#"# Raw SQL reaches the statement as written. `Repo` puts a condition in one
+# parenthesized operand beside what the ability allows and refuses, when the query
+# runs, text that would leave it; these are the calls through which sea-query writes
+# text unescaped, named here so you read each where it is written. Where only raw
+# text can say it, `#[expect(clippy::disallowed_methods, reason = "…")]` opens it on
+# one line a review reads, and a value goes in `cust_with_values`.
+#
+# A derive's expansion sits beside the item carrying it, out of that `#[expect]`'s
+# reach: `#[sea_orm(select_as, save_as, save_array_as)]` expands to `cast_as`, and a
+# `DeriveActiveEnum` on a native enum with no `rs_type` to `sea_query::Enum`. There
+# the opening goes on the module holding the entity, `#![expect(…)]` at the top of
+# its file; `rs_type = "String"` on that enum needs none.
+#
+# This holds where clippy runs with this file: `nestrs run lint` does. It names
+# calls, so a `sea_query::Enum` literal through its full path or a glob and a
+# hand-written `Iden` borrowing its text pass it; `Repo`'s check holds those too.
+disallowed-methods = [
+    { path = "sea_query::Expr::cust", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::cust_with_values", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::cust_with_expr", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::cust_with_exprs", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::Custom", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::CustomWithExpr", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Expr::custom_keyword", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Keyword::Custom", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Func::cust", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::Func::cast_as", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::ExprTrait::cast_as", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why, on the module holding the entity when #[sea_orm(select_as, save_as, save_array_as)] expands to it" },
+    { path = "sea_query::ExprTrait::as_enum", reason = "a type name reaches the statement as written, bound or not: Repo refuses one leaving its quotes when the query runs, and this says so where it is written — use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+    { path = "sea_query::Expr::AsEnum", reason = "a type name reaches the statement as written, bound or not: Repo refuses one leaving its quotes when the query runs, and this says so where it is written — use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+    { path = "sea_query::Expr::Constant", reason = "a value written into the statement skips its bind: Repo refuses a sea_query::Enum's type name leaving its quotes when the query runs, and this says so where it is written — bind it with Expr::val, order by a column, or open it with #[expect] naming why" },
+    { path = "sea_query::OptionEnum::None", reason = "a type name reaches the statement as written, bound or not: Repo refuses one leaving its quotes when the query runs, and this says so where it is written — use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+    { path = "sea_query::ArrayType::Enum", reason = "a type name reaches the statement as written, bound or not: Repo refuses one leaving its quotes when the query runs, and this says so where it is written — use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+    { path = "sea_query::BinOper::Custom", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::PgFunc::json_exists", reason = "a JSON path is written between quotes as it is: Repo refuses one leaving them when the query runs, and this says so where it is written — keep the path a constant, a value going in `passing`, and open it with #[expect] naming why" },
+    { path = "sea_query::PgFunc::json_value", reason = "a JSON path is written between quotes as it is: Repo refuses one leaving them when the query runs, and this says so where it is written — keep the path a constant, a value going in `passing`, and open it with #[expect] naming why" },
+    { path = "sea_query::PgFunc::json_query", reason = "a JSON path is written between quotes as it is: Repo refuses one leaving them when the query runs, and this says so where it is written — keep the path a constant, a value going in `passing`, and open it with #[expect] naming why" },
+    { path = "sea_query::PgFunc::json_table", reason = "a JSON path is written between quotes as it is: Repo refuses one leaving them when the query runs, and this says so where it is written — keep the path a constant, a value going in `passing`, and open it with #[expect] naming why" },
+    { path = "sea_query::Order::Field", reason = "a value written into the statement skips its bind: Repo refuses a sea_query::Enum's type name leaving its quotes when the query runs, and this says so where it is written — bind it with Expr::val, order by a column, or open it with #[expect] naming why" },
+    { path = "sea_query::SelectStatement::order_by_customs", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::SelectStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::UpdateStatement::order_by_customs", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::UpdateStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::DeleteStatement::order_by_customs", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::DeleteStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::OnConflict::constraint", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::WindowStatement::order_by_customs", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::WindowStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::WindowStatement::partition_by_custom", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::OverStatement::partition_by_customs", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::OrderedStatement::order_by_customs", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+    { path = "sea_query::OrderedStatement::order_by_customs_with_nulls", reason = "raw SQL is the injection class: Repo refuses text leaving the operand it puts it in when the query runs, and this says so where it is written — write the condition with sea-query's typed builders, its values bound, or open it with #[expect] naming why" },
+]
+
+disallowed-types = [
+    { path = "sea_query::Enum", reason = "a type name reaches the statement as written, bound or not: Repo refuses one leaving its quotes when the query runs, and this says so where it is written — use a DeriveActiveEnum, with rs_type = \"String\" on a native enum column, or open it with #[expect] naming why, on the module holding the enum when the derive expands to it" },
+]
+"#;
+
 /// `db.just` — shipped in every project so the database verbs are present from
 /// day one, whether or not the project has a database yet. Recipes follow the
 /// nestrs convention: a `migrations` crate (the `migrate` bin) and a `seed` crate.
 /// They start working once you add those — see the database docs.
-pub const DB_JUSTFILE: &str = r#"# Database lifecycle, exposed as `nestrs run db <verb>` (see `mod db` in the
+pub(crate) const DB_JUSTFILE: &str = r#"# Database lifecycle, exposed as `nestrs run db <verb>` (see `mod db` in the
 # Justfile). Recipes assume the nestrs `migrations` + `seed` crates.
+
+# Local migrations and seed run against `compose.yml`'s services, so they declare
+# the development profile, whose `.env.development` names them.
+export {{env_prefix}}_ENV := "development"
 
 # Bare `nestrs run db` lists these instead of running the first recipe.
 _default:
@@ -45,20 +110,22 @@ seed:
 reset: fresh seed
 "#;
 
-/// `compose.yml` — Postgres + Redis for local development, shipped so a
-/// DB-backed feature works the moment you add one: `docker compose up -d`,
-/// then `nestrs run db up`. The committed `.env` points at these services on
-/// `localhost`. Delete it if your project never touches a database or a queue.
-pub const COMPOSE: &str = r#"# Local development services. Start them with:
+/// `compose.yml` — Postgres, Valkey and an S3 object store for local
+/// development, shipped so a feature reaching any of them works the moment you
+/// add it: `docker compose up -d`, then `nestrs run db up`. `.env.development`
+/// and `.env.test` point at these services on `localhost`. Delete what your
+/// project never touches.
+pub(crate) const COMPOSE: &str = r#"# Local development services. Start them with:
 #
 #   docker compose up -d
 #
-# The committed `.env` points {{env_prefix}}_SEAORM__URL / {{env_prefix}}_REDIS__URL at these
-# on localhost. `nestrs run db up` then applies your migrations.
+# `.env.development` and `.env.test` point {{env_prefix}}_SEAORM__URL, {{env_prefix}}_REDIS__URL and
+# {{env_prefix}}_STORAGE__* at these on localhost. `nestrs run db up` then applies your
+# migrations.
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_USER: {{kebab}}
       POSTGRES_PASSWORD: {{kebab}}
@@ -66,7 +133,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U {{kebab}}"]
       interval: 5s
@@ -74,15 +141,49 @@ services:
       retries: 10
 
   redis:
-    image: redis:7
+    image: valkey/valkey:9.1
     ports:
       - "6379:6379"
     volumes:
-      - redisdata:/data
+      - valkeydata:/data
+
+  # An S3 object store (RustFS). The storage client proves its bucket at boot,
+  # so `storage-buckets` creates development's and the suites' once it answers.
+  storage:
+    image: rustfs/rustfs:1.0.5
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_ACCESS_KEY: {{kebab}}
+      RUSTFS_SECRET_KEY: {{kebab}}
+    ports:
+      - "9000:9000"
+    volumes:
+      - storagedata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/health >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  storage-buckets:
+    image: rustfs/rustfs:1.0.5
+    depends_on:
+      storage:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for bucket in {{kebab}} {{kebab}}-test; do
+          status=$$(curl -sS -o /dev/null -w '%{http_code}' --aws-sigv4 'aws:amz:us-east-1:s3' \
+            --user '{{kebab}}:{{kebab}}' -X PUT "http://storage:9000/$$bucket")
+          case $$status in 200 | 409) ;; *) echo "bucket $$bucket: $$status" >&2; exit 1 ;; esac
+        done
 
 volumes:
   pgdata:
-  redisdata:
+  valkeydata:
+  storagedata:
 "#;
 
 /// The line that puts the project's env prefix on every process `just` starts.
@@ -90,7 +191,7 @@ volumes:
 /// A template rather than a `format!` in the command module: everything the CLI
 /// writes into a generated project lives here, which is also what keeps it under
 /// the mechanical guards in `super::tests`.
-pub const ENV_PREFIX_JUSTFILE: &str = r#"# Every framework variable carries this prefix ({{env_prefix}}_ENV, {{env_prefix}}_HTTP__PORT, …).
+pub(crate) const ENV_PREFIX_JUSTFILE: &str = r#"# Every framework variable carries this prefix ({{env_prefix}}_ENV, {{env_prefix}}_HTTP__PORT, …).
 # It must be set on the process, so it lives here and in your deployment —
 # never in `.env`, which is read too late to have chosen itself.
 export {{env_prefix_var}} := "{{env_prefix}}"
@@ -100,12 +201,12 @@ export {{env_prefix_var}} := "{{env_prefix}}"
 /// Why the `dev` recipe sets `<PREFIX>_ENV` on the command line. Told once and
 /// rendered into the recipe, because a story drifts the moment it is told
 /// twice.
-pub const DEV_RECIPE_NOTE: &str = r#"# `{{env_prefix}}_ENV` is set here rather than in `.env`: it selects the `.env`
+pub(crate) const DEV_RECIPE_NOTE: &str = r#"# `{{env_prefix}}_ENV` is set here rather than in `.env`: it selects the `.env`
 # cascade, so it has to exist before any file is read. It also arms every
 # development-only affordance (the `POST /auth/dev-token` route `nestrs g auth`
-# writes), which is why absence has to mean "not development" everywhere else."#;
+# writes), which is why absence means production everywhere else."#;
 
-pub const GITIGNORE: &str = r#"/target
+pub(crate) const GITIGNORE: &str = r#"/target
 **/*.rs.bk
 
 # Coverage (cargo-llvm-cov)
@@ -123,35 +224,79 @@ pub const GITIGNORE: &str = r#"/target
 .DS_Store
 "#;
 
-pub const ENV: &str = r#"# nestrs workspace — committed base config (`.env` cascade).
+pub(crate) const ENV: &str = r#"# nestrs workspace — committed base config (`.env` cascade).
 #
-# Each app's root `module.rs` sets its own HTTP defaults
-# (`HttpConfig { port: …, ..Default::default() }`). Those are defaults, not a
-# lock: any `{{env_prefix}}_HTTP__*` key set in the real environment still wins, field
-# by field — so a deployment moves the port or turns on TLS without touching
-# the code.
+# Every app reads this file. What tells one app apart — its port — lives in its
+# own `apps/<app>/.env`, read over these under a declared development or test
+# profile only; a deployment sets its own. A config pinned in code
+# (`Module::for_root(config)`) cuts its whole `{{env_prefix}}_<NAMESPACE>__*` namespace off
+# these files, and the boot names each key it then ignores: the scaffold pins
+# none.
 #
-# Postgres + Redis as `compose.yml` exposes them on localhost. Start them with
-# `docker compose up -d`, then `nestrs run db up`. An app only connects if it
-# imports SeaOrmModule / RedisModule, so these are inert for a plain HTTP app.
-{{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
-{{env_prefix}}_REDIS__URL=redis://localhost:6379
+# No database or queue URL here: this file is read in production too. The
+# plaintext URLs of `compose.yml`'s services live in `.env.development` and
+# `.env.test`, read only under those profiles; a deployment sets its own
+# {{env_prefix}}_SEAORM__URL and {{env_prefix}}_REDIS__URL, over TLS.
 #
 # Precedence (highest first):
-#   real env  >  pinned in `module.rs`  >  .env.<{{env_prefix}}_ENV>.local  >  .env.local
-#   >  .env.<{{env_prefix}}_ENV>  >  .env
+#   real env  >  apps/<app>/.env.<{{env_prefix}}_ENV>.local  >  apps/<app>/.env.local
+#   >  apps/<app>/.env.<{{env_prefix}}_ENV>  >  apps/<app>/.env
+#   >  .env.<{{env_prefix}}_ENV>.local  >  .env.local  >  .env.<{{env_prefix}}_ENV>  >  .env
 "#;
 
-pub const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides. An unset {{env_prefix}}_ENV still loads
-# this cascade, but arms no development-only affordance: those need it set, on the
-# process, to development, dev or test — `nestrs run dev` does it. Setting it here
-# would be too late and is refused at boot.
+pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides, read only when the process declares
+# {{env_prefix}}_ENV=development (or dev) — `nestrs run dev` and `nestrs run db` do; an unset one runs as
+# production and never reads this file. Setting it here would be too late and is
+# refused at boot.
 # Committed; layered on top of `.env`, below `.env.local` and the real environment.
 
-# Verbose, human-readable logs while developing.
-{{env_prefix}}_LOG=debug
-{{env_prefix}}_LOG_FORMAT=text
+# Verbose logs, each line naming where it was emitted. The console already
+# writes text under this profile, JSON under any other. The filter is the
+# ecosystem's RUST_LOG, which a real one in your shell outranks.
+RUST_LOG=debug
 {{env_prefix}}_LOG_SOURCE_LOCATION=true
+"#;
+
+pub(crate) const ENV_TEST: &str = r#"# nestrs workspace — test-profile overrides, read only under {{env_prefix}}_ENV=test,
+# which the test harness declares for every suite.
+# Committed; layered on top of `.env`, below `.env.test.local` and the real environment.
+
+# A suite's console holds what went wrong. A real RUST_LOG outranks this line.
+RUST_LOG=warn
+"#;
+
+/// `compose.yml`'s services, in plaintext, appended to the two profiles that
+/// run beside it, each followed by its own Redis line: never in `.env`, which
+/// production reads.
+pub(crate) const DEV_SERVICES: &str = r#"# Postgres, Valkey and the S3 store as `compose.yml` exposes them on localhost.
+# Start them with `docker compose up -d`, then `nestrs run db up`. An app only
+# connects to what its imports run on, the data layer, a Redis binding or the
+# store, so these are inert for a plain HTTP app. All run without TLS here,
+# which the URLs say: Postgres's connection is verified TLS unless
+# `sslmode=disable` opens it, and the store's `http://` endpoint is refused
+# outside development and test.
+{{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}?sslmode=disable
+"#;
+
+/// Development's Redis: database 0, the one `nestrs run dev` drains — and its
+/// bucket, the one a running app lists.
+pub(crate) const DEVELOPMENT_SERVICES: &str = r#"{{env_prefix}}_REDIS__URL=redis://localhost:6379
+{{env_prefix}}_STORAGE__URL=s3://{{kebab}}
+{{env_prefix}}_STORAGE__ENDPOINT=http://localhost:9000
+{{env_prefix}}_STORAGE__ACCESS_KEY={{kebab}}
+{{env_prefix}}_STORAGE__SECRET_KEY={{kebab}}
+"#;
+
+/// The suites' Redis: a database of their own, so a running app never runs a
+/// test's job, nor a test a job the app filed — and a bucket of their own, so
+/// what a test uploads never sits among what a running app lists.
+pub(crate) const TEST_SERVICES: &str = r#"# The test suites enqueue on Redis database 1, never on the 0 a running
+# `nestrs run dev` drains, and file into a bucket of their own.
+{{env_prefix}}_REDIS__URL=redis://localhost:6379/1
+{{env_prefix}}_STORAGE__URL=s3://{{kebab}}-test
+{{env_prefix}}_STORAGE__ENDPOINT=http://localhost:9000
+{{env_prefix}}_STORAGE__ACCESS_KEY={{kebab}}
+{{env_prefix}}_STORAGE__SECRET_KEY={{kebab}}
 "#;
 
 /// The file that *instructs* a developer to write `.env.local`, so it is where
@@ -159,7 +304,7 @@ pub const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only ove
 /// (hermetic by design). Without that line, a developer whose Postgres is not on
 /// the default port edits `.env.local`, watches `nestrs run test e2e` fail to
 /// connect, and has nothing pointing at the file being ignored.
-pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or secret-shaped settings:
+pub(crate) const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or secret-shaped settings:
 #
 #   cp .env.example .env.local
 #
@@ -167,9 +312,10 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 # machine-specific test override (a different Postgres port, say) goes in
 # `.env.test.local` — also git-ignored. See https://nestrs.dev/configuration/env-cascade/
 #
-# Uncomment when you add a database (https://nestrs.dev/configuration/).
+# `.env.development` already points at `compose.yml`'s services; uncomment to
+# reach yours elsewhere (https://nestrs.dev/configuration/).
 
-# {{env_prefix}}_SEAORM__URL=postgres://user:pass@localhost:5432/{{kebab}}
+# {{env_prefix}}_SEAORM__URL=postgres://user:pass@localhost:5432/{{kebab}}?sslmode=disable
 # {{env_prefix}}_REDIS__URL=redis://localhost:6379
 "#;
 
@@ -186,10 +332,10 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 /// no matter what the app grows into — and the emitted file says so, because
 /// the developer who later adds a database is the one who has to know why this
 /// suite boots a feature rather than the root.
-pub const SMOKE: &str = r#"//! In-process smoke test — boots the feature's own module through `TestApp`,
+pub(crate) const SMOKE: &str = r#"//! In-process smoke test — boots the feature's own module through `TestApp`,
 //! no live infra, so it belongs to the `integration` suite and runs on every
-//! `nestrs run test unit`. Tests needing a database, queue or object store go
-//! next door in `tests/e2e/main.rs`.
+//! `nestrs run test integration`. Tests needing a database, queue or object
+//! store go next door in `tests/e2e/main.rs`.
 //!
 //! It deliberately boots the *feature* module rather than the app root: the app
 //! root grows every transport and connection the app serves, and this suite
@@ -225,7 +371,7 @@ async fn hello_endpoint_greets() {
 /// The title and the one paragraph both layouts open with. Split out because
 /// a fix applied to one head would otherwise ship silently one-sided — nothing
 /// compares the two.
-pub const AGENTS_INTRO: &str = r#"# AGENTS.md — {{pascal}}
+pub(crate) const AGENTS_INTRO: &str = r#"# AGENTS.md — {{pascal}}
 
 How this project is laid out and named. `nestrs new` wrote this file; it is
 yours to edit. Read it before adding a file: the conventions below cannot be
@@ -234,7 +380,7 @@ folder nobody can navigate.
 
 "#;
 
-pub const AGENTS_LAYOUT: &str = r#"## Layout — two homes, and the rule that divides them
+pub(crate) const AGENTS_LAYOUT: &str = r#"## Layout — two homes, and the rule that divides them
 
 ```
 apps/<app>/src/     main.rs + module.rs only — pure composition
@@ -255,10 +401,12 @@ crates/features/src/<feature>/
   graphql/  module.rs resolver.rs
   ws/       module.rs gateway.rs
   queue/    module.rs processor.rs
+  schedule/ module.rs tasks.rs
   mcp/      module.rs tool.rs
+  events/   module.rs listener.rs
 ```
 
-`nestrs g feature|resource|http|graphql|ws|queue|schedule|mcp` writes that
+`nestrs g feature|resource|http|graphql|ws|queue|schedule|mcp|events` writes that
 shape and performs the two wiring edits a copy cannot carry — the `pub mod`
 line in `crates/features/src/lib.rs` and the module entry in the serving app's
 `module.rs`. Prefer it over hand-copying.
@@ -286,18 +434,24 @@ all.
 
 ## Database — migrations and seed
 
-`nestrs g migration <name>` writes the file, its `mod` line in
-`crates/migrations/src/lib.rs`, and regenerates `migrator.rs` from that list —
-the two registrations cannot drift, and neither is written by hand.
+A migration is a file in `crates/migrations/src/`, its `mod` line in `lib.rs`,
+and `migrator.rs` regenerated from that list — the two registrations cannot
+drift, and neither is written by hand. `nestrs g resource <name>
+<column>:<type>…` writes its table's migration from the same column list as
+the entity and the round trip; `nestrs g migration <name>` writes any other.
 
 **The `DeriveIden` enum in a migration names the table, not the migration.**
 `DeriveIden` snake-cases it straight into the DDL, so it must agree with the
 entity's `#[sea_orm(table_name = "...")]` or the entity reads a table nothing
-created. The scaffolded body creates a table with the house columns
-(`created_at` / `updated_at` / `deleted_at`, matching what `#[expose(...,
-soft_delete, timestamps)]` expects); swap it for an `alter_table` to change an
-existing one. Every column you add goes in **twice** — once in the builder, once
-as a variant of that enum.
+created. `nestrs g migration create_<table>` over an entity `nestrs g entity`
+wrote reads its `Model`: each column goes into the builder and the enum, and a
+field it cannot type is named for you to add. A table a registered migration
+creates is never created twice, so `create_posts` after `g resource posts` is
+refused: a later change takes a migration of its own name
+(`add_<column>_to_<table>`), whose skeleton — a table with the house columns
+`created_at` / `updated_at` / `deleted_at` that `#[expose(..., soft_delete,
+timestamps)]` expects — you swap for an `alter_table`, each column you add in
+the builder and as a variant of that enum.
 
 `crates/seed/` runs on `nestrs run db seed`, and `nestrs run db reset` runs it
 against a database that may already hold rows — so every insert there is
@@ -315,7 +469,7 @@ idempotent (find-or-create, or `ON CONFLICT DO NOTHING`).
 /// require. The note is an HTML comment — stripped before the file enters an
 /// agent's context, so it costs no tokens and reads as intended by whoever
 /// opens the file.
-pub const CLAUDE_POINTER: &str = r#"@AGENTS.md
+pub(crate) const CLAUDE_POINTER: &str = r#"@AGENTS.md
 
 <!--
 This project's conventions live in AGENTS.md, the format every coding agent
@@ -327,61 +481,87 @@ for Claude Code alone belong below the import.
 
 /// The conventions, in two pieces.
 ///
-/// The architecture model is `architecture.md` beside this file — one copy,
-/// embedded here and symlinked into `.claude/rules/`, so the rules this repo
-/// works under and the rules it ships are the same bytes.
+/// The architecture model is `architecture.md` beside this file, embedded
+/// verbatim; `naming.rs` scrapes its reserved-vocabulary fence, and
+/// `.claude/rules/architecture.md` is this repository's copy of it.
 ///
-/// **The real file is the build's, the symlink is `.claude/`'s**, and not the
-/// reverse: a checkout with `core.symlinks=false` (Windows without Developer
-/// Mode) materializes a link as a text file holding its target path, so an
-/// inverted arrangement would embed that path into every scaffolded
-/// `AGENTS.md` and compile clean. `.claude/` degrading there costs a session
-/// its rules; the build silently shipping a filename does not degrade, it
-/// lies. `cargo package` follows a symlink under the package root and archives
-/// its bytes, so publishing does not decide this — the failure mode does.
+/// It carries no `{{key}}`: `render` would substitute one here, but the
+/// `.claude/` copy is read as rules unrendered and would show it literally —
+/// so everything per-project lives in the half below.
 ///
-/// The split point is the symlink, not the placeholders: `render` runs over
-/// the whole document, so an embedded `{{key}}` would substitute fine. What it
-/// cannot do is read as rules through the raw symlink, where a placeholder
-/// stays literal — so everything per-project lives in the half below.
 /// `static`, not `const`: a `const` is re-materialized at every use site, and
 /// this one embeds ~9 KB from two modules that land in different codegen units.
 /// A `static` has one address, so the blob ships once however many scaffolds
 /// reference it.
-pub static AGENTS_BODY: &str = concat!(
+pub(crate) static AGENTS_BODY: &str = concat!(
     "\n",
     include_str!("architecture.md"),
     r#"
 ## Access posture — declared per operation, never inferred
 
-Every route, query, message and tool declares its posture, and an operation that
-declares none is flagged at boot. There are two declarations, and the answer
-picks between them — not the caller:
+A GraphQL operation declares its posture, or it does not compile: `/graphql`
+admits a caller with no credential, so the posture is what refuses a visitor. An
+HTTP route, a WebSocket message and an MCP operation a guard covers may leave it
+to the guard, and one no guard covers declares it or refuses the boot; so does
+an operation of an MCP endpoint `McpAccess::Public` opens, whatever guards stand
+beside it. There are three declarations, and the answer picks between them — not
+the caller:
 
-- `#[authorize(Action, Entity)]` — the class-level gate **plus** automatic
-  field-level masking of the value returned. Reach for it whenever the answer is
-  entity data, and return the `#[expose]`d wire type (wrapped in `Json<T>` where
-  the transport needs it) so the mask has a shape to work on.
-- `#[public]` — no gate and no mask. It says *this operation* has no entity to
-  gate; it does not say the caller is unauthenticated.
+- `#[authorize(Action, Entity)]` — the class-level gate, and reads under the
+  caller's ability. Reach for it whenever the answer is entity data, and return
+  the `#[expose]`d wire type built from the rows (`User::from(&row)`, wrapped in
+  `Json<T>` where the transport needs it): each row is judged for the caller where
+  it is built, a column its grant withholds reading `null`.
+- `#[authorize(Action, Subject)]` on a `#[subject]` — the same gate, with its
+  scope challenge, on a capability no table holds (`#[subject] pub struct
+  Exporting;`, granted with `ab.can(Action::Manage, Exporting)`), reading under
+  the caller's ability as an entity's posture does.
+- `#[public(Action, Subject)]` — the same arguments and the same gate, on the
+  ability a caller with no credential has: `define_visitor`'s, or
+  `define`'s for a valid token. It is what a visitor's read says.
+- `#[public]` — a caller with no credential is admitted, and the unit reads
+  nothing a grant guards. It is an opening, written on purpose; behind an upgrade
+  or an MCP endpoint that authenticates, where it could open nothing, it refuses
+  the boot, and a rate limit, which identifies no one, covers no unit without it.
 
 **Rows are ability-scoped, and the guards are what install the scope.** `Repo`
 filters every read by the caller's ambient `Ability`; with none installed a read
-denies every row rather than returning them unscoped. So a scaffolded adapter is
-not "open" — it answers nothing until it is wired, which is the fail-secure half
-of the design. Before an operation serves real rows: swap `#[public]` for
-`#[authorize]`, bind `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct, and
-import the edge's authz module in that adapter's `module.rs` —
-`AuthzModule`, `AuthzGraphqlModule`, `AuthzWsModule`, `AuthzMcpModule`.
-`nestrs g auth` writes all of them, and `nestrs g <edge>` on a `g resource` port
-emits the wiring already done.
+denies every row rather than returning them unscoped. A `Repo` select hands out no
+statement, and raw SQL in its filter (`Expr::cust` and its family) is the one way
+past it, which `clippy.toml` refuses where `nestrs run lint` runs: write the condition
+with sea-query's typed builders. A scaffolded HTTP route or WebSocket gateway is
+guarded already — `nestrs g http` and `g ws` bind the two
+guards and write the auth adapter they come from — a GraphQL operation or an
+MCP tool `nestrs g graphql|mcp` writes over a port with no entity is gated on
+the `#[subject]` it writes beside the service, and an operation that declares a
+bare `#[public]` answers no entity data. Before an operation serves real rows, it
+declares `#[authorize]` on the entity they come from, or `#[public(Read, Entity)]`
+where a visitor reads them — one gated on the port's `#[subject]` re-points its
+posture to the entity, so a caller holding no grant on its rows is refused rather
+than handed an empty answer — and its edge is wired: the
+guards on the struct, and the edge's authz module imported in that adapter's
+`module.rs`:
+
+| Edge | `#[use_guards(…)]` on the struct | Imported in `module.rs` |
+|---|---|---|
+| HTTP controller | `AuthnGuard, AuthzGuard` | `AuthzModule` |
+| WS gateway | `AuthnGuard, AuthzGuard` — they run on the upgrade, an HTTP `GET` | `AuthzModule` |
+| GraphQL resolver | `AuthzGuard` — the guards the module declares for `/graphql` authenticate the request | `AuthzGraphqlModule` |
+| MCP tool | none — the guards the module declares for `/mcp` gate every call at its request | `AuthzMcpModule` |
+
+A guard bound where its check never runs is a compile error naming the edge it
+does check: `AuthnGuard` checks HTTP requests only, so a resolver refuses it.
+`nestrs g auth` writes the guards and `AuthzModule`, `nestrs g graphql|mcp`
+writes that edge's module, and `g http`, `g ws`, `g graphql` and `g mcp` emit
+the wiring already done, writing the auth adapter first when the workspace has
+none.
 
 Two edges answer differently, by design. A **scheduled** tick is system work:
-`SeaOrmDatabaseModule`'s job context installs the executor with no ability, so `Repo`
-runs unscoped and there is nothing to declare. **MCP** gates at the endpoint,
-through the app's `dyn McpOperationGuard`, else the global guard pool, else
-deny-all — so an `/mcp` endpoint with no bridge registered answers 401 to every
-tool call.
+its unit of work runs on `SeaOrmDatabaseModule`'s executor with no ability, so `Repo`
+runs unscoped and there is nothing to declare. **MCP** gates at the endpoint's
+request, through the global guard pool and the `EndpointGuards` a module
+declares for it, either alone, else deny-all — so an `/mcp` endpoint with
+neither answers 401 to every tool call.
 
 **`AuthzAbility` is the whole policy, and it grants nothing until you say so.** A
 freshly scaffolded resource answers 403 on every route until a rule names its
@@ -389,13 +569,15 @@ entity:
 
 ```rust
 ab.can(Action::Read, post::Entity);
-ab.can(Action::Manage, post::Entity)
-    .when(|p| p.eq(post::Column::AuthorId, actor.sub));
+if let Some(user_id) = actor.sub.user_id() {
+    ab.can(Action::Manage, post::Entity)
+        .when(|p| p.eq(post::Column::AuthorId, user_id));
+}
 ```
 
 `define` answers for an authenticated actor; `define_visitor` answers for a
-caller with no token, on a `#[public]` route only — a `#[public]` route reached
-*with* a valid token uses `define`. `nestrs g resource` prints the lines to paste
+caller with no token, on what `#[public(Action, Subject)]` opens — such a route
+reached *with* a valid token uses `define`. `nestrs g resource` prints the lines to paste
 for the resource it just generated.
 
 ## Errors
@@ -416,7 +598,8 @@ pinned in code. A field that only exists in one of the two is incomplete.
 check, not in a test. `{{env_prefix_var}}` is set on the process and
 renames every framework variable at once, so a name typed by hand points at
 nothing the day it changes, and the compiler never notices. Build it
-(`nest_rs_config::var_name`, `EnvPrefix::var`) or name the setting in words.
+(`nest_rs::config::var_name`, `nest_rs::core::EnvPrefix::var`) or name the
+setting in words.
 
 ## Dependencies
 
@@ -426,7 +609,7 @@ nothing the day it changes, and the compiler never notices. Build it
 ## Observability
 
 A constant event-name message plus structured fields, never interpolation —
-the output is JSON. `tracing::info!(target: "features::users", user_id = %id,
+the output is JSON. `tracing::info!(target: crate::users::TARGET, user_id = %id,
 "created user")`, not a formatted sentence. **Every event carries at least one
 field**; a bare log is a defect, and the events queried under an incident are
 exactly the ones people emit bare. Controllers log `info` on success, services
@@ -435,7 +618,13 @@ exactly the ones people emit bare. Controllers log `info` on success, services
 **The target is rooted at the crate that emits, never at the product.** One
 target per concern per crate: `features::users` here. A crate whose name is
 not the product's keeps its own root anyway — the target's one job is to say
-where the event came from.
+where the event came from. **It is declared once, by the module that owns it**
+— `pub const TARGET: &str = "features::users";` at the top of
+`users/mod.rs`, written by the first file that logs (`nestrs g ws` writes it
+with the gateway); a feature that emits nothing declares none — and every call
+site names that constant. A literal retyped per file is a typo away from a target
+no filter selects, and nothing says so; a test asserts against the same
+constant for the same reason.
 
 ## Testing
 
@@ -450,14 +639,22 @@ The scaffolded `tests/integration/main.rs` boots the **feature's own** module
 through `TestApp`, never the app root: the root grows every transport and
 connection the app serves, and the moment it imports `SeaOrmDatabaseModule` a suite
 defined as infrastructure-free waits 30 s for a pool. Assert on the composed app
-in `tests/e2e/main.rs` instead — scaffolded empty, and where a test boots against
-a throwaway database with `nest_rs::testing`'s `EphemeralDatabase` (feature
-`orm`) before driving it through `TestApp` the same way.
+in `tests/e2e/` instead — scaffolded empty, and where a test boots the module
+`main` runs on a throwaway database, `TestApp::builder()` with
+`.ephemeral_database::<migrations::Migrator>()` (`nest-rs`'s `seaorm` feature, on
+since `nestrs new`, and its `testing` feature, which each app enables in its
+`[dev-dependencies]` alone, so no release binary carries the harness), and
+`.ephemeral_signing_key()`, which has the app verify the tokens of a key the
+test holds; it calls a guarded route with `app.bearer(&claims)`, a token that
+key signs for the app's audience. `nestrs g resource` writes the first: the
+resource's round trip in `tests/e2e/<resource>.rs`, and the `boot` fixture in
+`tests/e2e/main.rs`.
 
 ## Commands
 
-`nestrs run` is the single front door: `dev`, `start`, `build`, `lint`,
-`check`, `test <unit|e2e|cov|doc>`. This project's framework variables carry
+`nestrs run` is the single front door: `dev`, `start`, `build`, `lint`, `ci`,
+`check`, `test [unit|integration|e2e|doc|cov]` — bare `test` runs every kind.
+This project's framework variables carry
 the `{{env_prefix}}_` prefix.
 "#
 );
@@ -466,11 +663,11 @@ the `{{env_prefix}}_` prefix.
 /// layout — it exists so the two filtersets resolve, and a suite with no tests
 /// yet has nothing to say that its own header would not be guessing at.
 ///
-/// `nestrs run test unit` filters on `not binary(e2e)` and `test e2e` on
+/// `nestrs run test integration` filters on `not binary(e2e)` and `test e2e` on
 /// `binary(e2e)` — nextest rejects a filterset naming a binary the workspace
 /// does not have, so the suite has to exist from day one for either command to
 /// run at all. What belongs in it — the tests needing live Postgres, Redis or
 /// object storage, booted against a throwaway database through
 /// `nest_rs::testing`'s `EphemeralDatabase` — is stated in the generated
 /// `AGENTS.md`.
-pub const E2E: &str = "";
+pub(crate) const E2E: &str = "";

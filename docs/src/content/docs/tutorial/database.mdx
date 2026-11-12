@@ -1,86 +1,57 @@
 ---
 title: Persist through Postgres
-description: Import SeaOrmDatabaseModule, declare the migration, run the binary against Postgres — mutating routes commit in a transaction; failures roll back.
+description: Start Postgres, apply the post table's migration, run the binary on the data layer blog imports — mutating routes commit in a transaction; failures roll back.
 sidebar:
   order: 6
 ---
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
-You add one module to the app root and one migration to the workspace,
-and the data layer comes alive. By the end of this page, `POST /posts`
-persists into Postgres inside a transaction, a failing handler rolls
-back automatically, and the e2e baseline you add in
-[Test it end to end](/tutorial/testing/) has a real database to point at.
+You start Postgres and apply the post table's migration, and the data layer
+`blog` imports comes alive. By the end of this page, the five CRUD routes
+mount, `POST /posts` persists inside a transaction a failing handler rolls
+back, and the e2e suite of [Test it end to end](/tutorial/testing/) has a
+database to point at.
 
 ## The data layer in one import
 
-Two imports activate the SeaORM data layer, one per shape:
-`SeaOrmModule::for_root(None)` opens the pool from `NESTRS_SEAORM__URL`, and
-`SeaOrmDatabaseModule` — a bare import beside it — registers the transaction
-interceptor and binds the worker context over that pool. The configuration
-uses the framework's dual-path rule — pin a value here or leave it
-`None` and let env vars supply it.
+`nestrs g resource` wrote the data layer's one import into `blog`'s root on
+page 2: `SeaOrmDatabaseModule` binds the unit of work each request and job runs
+in, over the pool `SeaOrmModule` opens from `<PREFIX>_SEAORM__URL`. Every route
+`#[crud]` generates runs its `Repo` call inside one, so an app importing
+`PostsHttpModule` without the binding never boots: the access graph refuses it,
+naming the line to add. The crates are
+[**`nest-rs-database`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database),
+the store-agnostic seam, and
+[**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm),
+its implementation on [SeaORM](https://www.sea-ql.org/SeaORM/).
 
-The data layer crates are
-[**`nest-rs-database`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-database)
-(the store-agnostic seam) and
-[**`nest-rs-seaorm`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm)
-(the SeaORM implementation, on top of [SeaORM](https://www.sea-ql.org/SeaORM/)).
-
-```rust title="apps/blog/src/module.rs" {3, 10}
-use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
-
-use features::authn::AuthnModule;
-use features::authz::AuthzModule;
-use features::posts::PostsHttpModule;
-
-#[module(imports = [
-    SeaOrmModule::for_root(None),
-    SeaOrmDatabaseModule,
-    HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-    AuthnModule,
-    AuthzModule,
-    PostsHttpModule,
-])]
-pub struct BlogModule;
-```
-
-Add the crate to the app's `Cargo.toml`:
-
-```toml title="apps/blog/Cargo.toml (from the demo)"
-nest-rs = { workspace = true, features = ["http", "seaorm"] }
-```
-
-The `http` feature flag turns on the ORM hooks the HTTP data layer
-needs when a controller reaches the DB through `Repo`.
+No manifest line moves: the workspace's `nest-rs` already carries `seaorm`,
+and `http` beside it turns on the hooks the HTTP data layer needs.
 
 ## A migration for the post table
 
 `nestrs new` ships a `migrations` crate holding every SeaORM migration, plus
-the `migrate` binary the `nestrs run db …` verbs drive. Generate the file — the
-CLI registers it in **both** `lib.rs` and `migrator.rs`, which is the pair
-people forget by hand:
-
-```bash
-nestrs g migration create_post
-```
+the `migrate` binary the `nestrs run db …` verbs drive. `nestrs g resource`
+wrote the `post` table's migration into it on page 2, from the entity's column
+list, and registered it in both `lib.rs` and `migrator.rs`, regenerated from
+`lib.rs`'s list so the two can never disagree:
 
 <FileTree>
 - crates/migrations/
   - src/
     - lib.rs
     - migrator.rs
-    - m20260609_000000_create_post.rs
+    - m20260609_000000_create_posts.rs
     - bin/
       - migrate.rs
 </FileTree>
 
-Fill in the columns it stubbed:
+It creates the columns `Post` declares, the key and the three timestamps
+`timestamps` and `soft_delete` read included, each in the builder and as a
+variant of the enum, which `DeriveIden` writes into the DDL:
 
-```rust title="crates/migrations/src/m20260609_000000_create_post.rs (from the demo)"
+```rust title="crates/migrations/src/m20260609_000000_create_posts.rs"
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -97,6 +68,23 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Post::Id).uuid().not_null().primary_key())
                     .col(ColumnDef::new(Post::Title).string().not_null())
                     .col(ColumnDef::new(Post::Body).text().not_null())
+                    .col(
+                        ColumnDef::new(Post::CreatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(Post::UpdatedAt)
+                            .timestamp_with_time_zone()
+                            .not_null()
+                            .default(Expr::current_timestamp()),
+                    )
+                    .col(
+                        ColumnDef::new(Post::DeletedAt)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await
@@ -109,138 +97,152 @@ impl MigrationTrait for Migration {
     }
 }
 
+// `DeriveIden` snake-cases these into SQL: this enum writes the
+// `post` table and its columns. Rename it if your entity's
+// `#[sea_orm(table_name = "…")]` says otherwise — the two must agree.
 #[derive(DeriveIden)]
 enum Post {
     Table,
     Id,
     Title,
     Body,
+    CreatedAt,
+    UpdatedAt,
+    DeletedAt,
 }
 ```
 
-The generator already registered it. `lib.rs` is the `mod` list; `migrator.rs`
-is regenerated from that list, so the two can never disagree:
-
-```rust title="crates/migrations/src/lib.rs (from the demo)"
-mod m20260609_000000_create_post;
-mod migrator;
-
-pub use migrator::{Migrator, migrate};
-```
-
-The reference workspace lists other migrations (`org`, `user`, …) for
-`api`. Your tutorial migrator only needs `post` until you
-extend the workspace.
+The file name carries the day you ran `nestrs g resource`; yours differs from
+the one above. A later change to the table takes a migration of its own,
+named for what it does — `nestrs g migration add_status_to_posts` writes one
+for you to fill ([Migrations](/database/migrations/)) — since the database that
+applied this one never runs it again.
 
 ## Run Postgres
 
-`nestrs new` scaffolds a `compose.yml` with Postgres and Redis, and the
-committed `.env` already points `NESTRS_SEAORM__URL` at it. The credentials
+`nestrs new` scaffolds a `compose.yml` with Postgres, Valkey and an S3 object
+store, and the committed `.env.development` and `.env.test` already point
+`<PREFIX>_SEAORM__URL` at it — never `.env`, which production reads too, so a
+deployment cannot fall back to a plaintext local URL. The credentials
 are the **workspace** name, not the app's — a workspace scaffolded with
-`nestrs new hello` gets `postgres://hello:hello@localhost:5432/hello`, whatever
-its apps are called. Bring the services up once:
+`nestrs new hello` gets
+`postgres://hello:hello@localhost:5432/hello?sslmode=disable`, whatever its
+apps are called. Bring the services up once — `blog` reaches Postgres alone;
+the store and Valkey wait for a feature that needs them:
 
 ```bash frame="terminal"
 $ docker compose up -d
-✔ Container hello-postgres-1  Started
-✔ Container hello-redis-1     Started
+✔ Container hello-postgres-1         Started
+✔ Container hello-redis-1            Started
+✔ Container hello-storage-1          Healthy
+✔ Container hello-storage-buckets-1  Started
 
 $ nestrs run db up
-INFO sea_orm_migration::migrator::exec: Applying migration 'm20260609_000000_create_post'
-INFO sea_orm_migration::migrator::exec: Migration 'm20260609_000000_create_post' has been applied
+INFO sea_orm_migration::migrator::exec: Applying migration 'm20260609_000000_create_posts'
+INFO sea_orm_migration::migrator::exec: Migration 'm20260609_000000_create_posts' has been applied
 ```
 
-`nestrs run db up` runs `Migrator::up` against `NESTRS_SEAORM__URL`. The
-binary resolves it through `connect_from_env`, which reads the same `.env`
-cascade the apps do — a tool and its app can never end up pointed at different
-databases.
+`nestrs run db up` runs `Migrator::up` against `<PREFIX>_SEAORM__URL`, read
+through `connect_from_env` off the `.env` cascade the apps read, so a tool and
+its app never point at different databases; `db.just` declares the development
+profile for every `db` recipe, as `nestrs run dev` does for the app.
 
 ## Transactions wrap mutating routes automatically
 
-`SeaOrmDatabaseModule` registers a request interceptor that classifies the
-HTTP method and installs the right executor before the handler runs:
+Every request runs in the unit of work `SeaOrmDatabaseModule` binds, which reads
+the HTTP method and installs the right executor before the handler runs:
 
 | HTTP method | Ambient executor |
 |-------------|------------------|
-| `GET` / `HEAD` / `OPTIONS` / `TRACE` | Pool — read-only, no transaction |
-| `POST` / `PATCH` / `PUT` / `DELETE` | Transaction — committed on 2xx/3xx, rolled back otherwise |
+| `GET` / `HEAD` / `OPTIONS` / `TRACE` | Pool — no transaction, each statement commits on its own |
+| `POST` / `PATCH` / `PUT` / `DELETE` | Transaction, opened on the first statement — committed on 2xx/3xx, rolled back otherwise |
 
-The contract you write code against: every successful mutation
-commits, every error response unwinds. No `tx.begin()` / `tx.commit()`
-in the service.
+The contract you write code against: on a mutating method, every success
+commits and every error response unwinds. A safe method has nothing to
+unwind — a `GET` that writes keeps its write, whatever it answers. No
+`tx.begin()` / `tx.commit()` in the service.
 
 ## Run the binary
 
 ```bash frame="terminal"
 $ nestrs run dev blog
-INFO nest_rs::orm: connecting to database max_connections=None
-DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
+INFO nest_rs::app: app starting app="blog" version="0.1.0" framework="7.0.0"
+INFO nest_rs::orm: connecting to database endpoint=localhost:5432 max_connections=10
+INFO nest_rs::app: app ready transports="http" addresses="0.0.0.0:3001"
 ```
 
-Those lines come from `.env.development`, which sets `NESTRS_LOG=debug`.
-`connecting to database` is the only ORM boot line — the pool is lazy, so
-there is no "connected" confirmation to wait for; the first query is what
-proves the credentials.
+`connecting to database` names Postgres by host and port, never by its URL,
+which carries the credentials; refused credentials stop the boot at once.
 
-Every route is behind the guards you bound on the previous page, so it needs a
-bearer token. `nestrs g auth` wrote one route that mints them — signed with the
-`NESTRS_AUTHN__SECRET` it put in `.env`, and refusing to boot anywhere but
-development and test:
+The `nest_rs::routes` target prints every mount: the full CRUD surface of one
+`#[crud]` block, with no handler body written, beside the development token route:
+
+```text frame="terminal"
+INFO nest_rs::routes: mounted host="DevTokenController" method="dev_token" verb="POST" path="/auth/dev-token"
+INFO nest_rs::routes: mounted host="PostsController" method="list" verb="GET" path="/posts"
+INFO nest_rs::routes: mounted host="PostsController" method="create" verb="POST" path="/posts"
+INFO nest_rs::routes: mounted host="PostsController" method="get" verb="GET" path="/posts/{id}"
+INFO nest_rs::routes: mounted host="PostsController" method="update" verb="PUT" path="/posts/{id}"
+INFO nest_rs::routes: mounted host="PostsController" method="delete" verb="DELETE" path="/posts/{id}"
+```
+
+Every route is behind the guards `nestrs g resource` bound, which you read on the
+previous page, so an anonymous call stops at the door:
 
 ```bash frame="terminal"
-$ TOKEN=$(curl -s -X POST http://localhost:3005/auth/dev-token \
+$ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3001/posts
+401
+```
+
+```text frame="terminal"
+WARN nest_rs::authn: guard denied the request guard="AuthnGuard<JwtStrategy<Claims>>" unit="http.request" host="PostsController" method="list" verb="GET" path="/posts" status=401 reason="missing_credentials" error="missing credentials" trace_id=01a190f2f5e277bda79f735006bdcc6b span_id=0b5f30d871801957
+```
+
+One denial, one line, naming the route by its `mounted` line's fields, with the
+request's `trace_id` and no `actor_id`. Drop `#[use_guards(...)]` and the boot
+refuses instead, naming every route no guard covers.
+
+A call needs a bearer token. The auth adapter's development route mints one,
+signed with the `<PREFIX>_AUTHN__SECRET` drawn into `.env.local` and issued by
+`blog` to itself (its origin, which `apps/blog/.env` names as both issuer and
+audience):
+
+```bash frame="terminal"
+$ TOKEN=$(curl -s -X POST http://localhost:3001/auth/dev-token \
     -H 'Content-Type: application/json' -d '{}' | jq -r .access_token)
 ```
 
 Pass `{"roles": ["admin"]}` for an admin token, or a `sub` to pin the subject.
 The real login is yours to write — what counts as a credential and where users
 live are domain decisions, and [Add a login route](/security/add-login/) is the
-pattern. Delete `crates/features/src/authn/http/` the day you write it.
+pattern.
 
 ```bash frame="terminal"
-$ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
+$ curl -s -X POST http://localhost:3001/posts -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' -d '{"title":"Hello","body":"World"}'
-{"id":"019f9bd5-725d-7ee2-8031-b45d3aa4cc7a","title":"Hello","body":"World"}
+{"id":"019f9bd5-725d-7ee2-8031-b45d3aa4cc7a","title":"Hello","body":"World","created_at":"2026-…","updated_at":"2026-…"}
 
-$ curl -s http://localhost:3005/posts -H "Authorization: Bearer $TOKEN"
-[{"id":"019f9bd5-725d-7ee2-8031-b45d3aa4cc7a","title":"Hello","body":"World"}]
+$ curl -s http://localhost:3001/posts -H "Authorization: Bearer $TOKEN"
+[{"id":"019f9bd5-725d-7ee2-8031-b45d3aa4cc7a","title":"Hello","body":"World","created_at":"2026-…","updated_at":"2026-…"}]
 ```
 
-**No row crosses the data layer without an ability.** `Repo` ANDs
-`Ability::condition_for` into every read and every by-id write, and a request
-with no ability at all is filtered to nothing rather than granted everything —
-fail-closed, deliberately. Drop the `ab.can(Action::Manage, post::Entity)` you
-added on the previous page and the same two calls answer `403` with an empty
-table behind them.
-
-Create a second post with the same title — there is no unique constraint
-on `title`, so both rows persist. Transaction rollback on a `5xx` is what
-the e2e suite in [Test it end to end](/tutorial/testing/) locks down when
-you add richer failure paths; for now, trust the interceptor contract
-above.
+Both calls ran under the caller's ability, as every read does since the
+previous page: drop the `ab.can(Action::Manage, post::Entity)` you added there
+and the same two calls answer `403` with an empty table behind them. `blog`'s
+rule is one blanket grant; [Secure your posts](/tutorial/security/) narrows it.
 
 <Aside type="tip">
-Set `RUST_LOG=nest_rs::orm=trace` to watch the `BEGIN` / `COMMIT` /
-`ROLLBACK` pairs scroll past on mutating routes. The same `trace_id`
-tags the interceptor span and the SQL spans.
+Set `RUST_LOG=nest_rs::orm=trace` to watch `Repo`'s own events, such as
+`instance check` on a by-id load. Each line carries the request's `trace_id`.
 </Aside>
 
 ## What you have now
 
-- `SeaOrmModule::for_root(None)` + `SeaOrmDatabaseModule` in the app — the
-  data layer is on.
-- A migration adding the `post` table, applied through
-  `nestrs run db up`.
+- Postgres running beside `blog`, and the data layer `g resource` wired —
+  the five CRUD routes mount.
+- The `post` table's migration, applied through `nestrs run db up`.
 - `POST /posts` persisting into Postgres inside an automatic
   transaction, scoped by the caller's ability.
-
-<Aside type="note">
-`blog` grants one blanket rule, so row-level filtering and response masking are
-present but not yet *doing* anything. [Authenticate and
-authorize](/tutorial/security/) replaces it with per-caller conditions and field
-grants — the layers you saw enforced on [See the security
-payoff](/tutorial/checkpoint/).
-</Aside>
 
 ## Going further
 

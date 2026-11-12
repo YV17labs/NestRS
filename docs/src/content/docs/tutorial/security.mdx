@@ -1,313 +1,157 @@
 ---
-title: Authenticate and authorize
-description: AuthnGuard verifies the JWT, AuthzAbility decides what the caller may do, Repo filters every read, Bind enforces by-id access.
+title: Secure your posts
+description: Narrow blog's blanket Manage rule into a policy — anyone signed in reads, only an admin writes — and pin the refusal a plain user gets.
 sidebar:
   order: 9
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+[Authenticate and authorize](/tutorial/authorization/) read how `api`'s policy
+scopes rows and masks fields. Your `blog` still runs on the one blanket rule
+[Expose over HTTP](/tutorial/http/) granted. This page turns it into a policy
+of its own, and the suite pins the refusal it makes. By the end, `POST /posts`
+answers `201` for an admin and `403` for a plain user, with no check in the
+handler.
 
-<Aside type="caution">
-This page reads the reference **`api`**'s `users` feature, not your **`blog`**.
-Per-caller filtering needs a tenant column and a masked field, and `blog`'s
-`Post` deliberately has neither. Clone the repo to follow along
-(`nestrs run dev api`), then apply the last section to your own `posts`.
-</Aside>
+## Narrow the policy
 
-This is the feature behind [See the security payoff](/tutorial/checkpoint/)
-— now you read how it is built. Your `blog` already carries the same two
-guards from [Expose over HTTP](/tutorial/http/), with one blanket `Manage`
-rule standing in for a real policy. Here that policy gets teeth: the framework
-filters every read by the caller's organisation, gates every by-id load against
-their ability, and masks the response before it leaves the process. By the end
-of this page, a cross-tenant `GET /users/:id` returns `403`, a plain user sees
-only their org, and the `email` column disappears from a non-admin listing.
+Step 4 left `posts` on one blanket rule — `Action::Manage` for everybody.
+Rewriting `define` in `crates/features/src/authz/ability.rs` turns it into a
+policy, using only the columns `blog` already has:
 
-## Two layers, two guards
-
-Authentication and authorization are different jobs handled by different
-crates. The reference feature wires both:
-
-- **`AuthnGuard`** lives in
-  [**`nest-rs-authn`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authn).
-  A `Strategy` turns the request into a principal — for a resource
-  server, that's `JwtStrategy<Claims>` verifying a `Bearer` token.
-- **`AuthzGuard`** lives in
-  [**`nest-rs-authz`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authz).
-  It seeds the ambient `Ability` from the principal and an `AbilityFactory`.
-
-Two crates, one binding on the controller. The reference feature
-re-exports both under `crates/features/src/authn/` and `authz/`; the
-tutorial reuses those aliases.
-
-## The principal
-
-A resource server pins a single alias once. The reference feature's
-`Claims` carries an org id and a role set — exactly what authz reads
-back.
-
-```rust title="crates/features/src/authn/strategy.rs (from the demo)"
-pub type AuthnStrategy = JwtStrategy<Claims>;
-
-pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
-```
-
-`JwtStrategy<Claims>` is provided by `nest-rs-authn`. On a missing or
-expired token it returns `401` automatically — the controller never
-sees the request.
-
-Both aliases, their modules, and the `Claims` above are what
-[`nestrs g auth`](/cli/#generate-features-and-adapters) writes. They are app
-code by necessity — the framework is generic over the principal and the policy,
-so it cannot ship a `Claims` or an `AuthzAbility` for you.
-
-## The policy
-
-`AuthzAbility` is the single source of truth for *what each role may do*.
-Admins manage their org's users; plain users read a scoped, redacted
-view. The reference policy fits in one method:
-
-```rust title="crates/features/src/authz/ability.rs (from the demo)"
+```rust title="crates/features/src/authz/ability.rs" {21-25}
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
-use crate::Claims;
-use crate::users as user;
+use crate::authn::Claims;
+use crate::posts as post;
 
 #[injectable]
-#[derive(Default)]
 pub struct AuthzAbility;
 
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
+    /// Every rule this app grants, keyed off the authenticated actor. Nothing
+    /// is granted until you add a `can` here — reads return 403 and no row
+    /// crosses the data layer.
+    ///
+    /// `nestrs g resource <name>` prints the grant to paste for the resource it
+    /// just generated, with `_ab` renamed `ab`; narrow it to a user's own rows
+    /// with `.when(|p| p.eq(Column::AuthorId, user_id))` under
+    /// `if let Some(user_id) = actor.sub.user_id()` — a client owns none.
     fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
+        ab.can(Action::Read, post::Entity);
         if actor.is_admin() {
-            ab.can(Action::Manage, user::Entity)
-                .when(|p| p.eq(user::Column::OrgId, actor.org_id));
-        } else {
-            ab.can(Action::Read, user::Entity)
-                .when(|p| p.eq(user::Column::OrgId, actor.org_id))
-                .fields([user::Column::Id, user::Column::Name]);
-            ab.can(Action::Create, user::Entity)
-                .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+            ab.can(Action::Manage, post::Entity);
         }
     }
+
+    /// What an *unauthenticated* caller may do, on what `#[public(Action, Entity)]`
+    /// opens. Empty on purpose: nothing is public until you say so here, and a
+    /// route naming its read still serves no row without a grant — a
+    /// `can(Action::Read, …)` narrowed by `.when(…)` to the rows meant for
+    /// anyone.
+    ///
+    /// Such a route reached with a valid token uses `define` instead — this branch
+    /// answers only for the visitor.
+    fn define_visitor(&self, _ab: &mut AbilityBuilder) {}
 }
 ```
 
-Two patterns to read here:
+## Pin the refusal in the suite
 
-- **`.when(|p| p.eq(Column::OrgId, actor.org_id))`** is the row-level
-  rule — every read and every by-id write the caller issues filters by
-  that condition. Cross-tenant access becomes structurally impossible.
-- **`.fields([...])`** is the field-level rule — when a plain user
-  reads a `User`, only the listed columns survive the response masker;
-  `email` is dropped before the body leaves the process.
+Anyone signed in may read; only an admin may write. The suite you finished on
+page 7 signs its tokens as a plain user, so its writes now answer `403`: sign
+them as an admin, and pin the refusal a plain user gets — the policy is as
+much the feature as its routes:
 
-## Bind the guards on the controller
+```rust title="apps/blog/tests/e2e/posts.rs" {9, 13, 20, 51, 69-79}
+use nest_rs::http::StatusCode;
+use serde_json::json;
+use uuid::Uuid;
 
-The controller declaration changes by two attributes — one for the
-guard chain, one for the by-id extractor.
+use features::authn::{Claims, Role, Subject};
 
-```rust title="crates/features/src/users/http/controller.rs (from the demo)" {3-9, 13, 16-19, 23-29}
-use std::sync::Arc;
+use crate::boot;
 
-use nest_rs::authz::http::Authorize;
-use nest_rs::authz::{Create, Read};
-use nest_rs::http::{Ctx, Valid, controller, crud};
-use nest_rs::seaorm::Bind;
-use nest_rs::http::poem::Result;
-use nest_rs::http::poem::web::Json;
-
-use crate::Claims;
-use features::authn::AuthnGuard;
-use features::authz::AuthzGuard;
-use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
-
-#[controller(path = "/users")]
-#[use_guards(AuthnGuard, AuthzGuard)]
-pub struct UsersController {
-    #[inject]
-    svc: Arc<UsersService>,
+fn bearer(app: &nest_rs::testing::TestApp, role: Role) -> String {
+    app.bearer(&Claims {
+        sub: Subject::User(Uuid::now_v7()),
+        client_id: "e2e".into(),
+        roles: vec![role],
+    })
 }
 
-#[crud(/* same as before */)]
-impl UsersController {
-    #[post("/")]
-    async fn create(
-        &self,
-        _authz: Authorize<Create, UserEntity>,
-        auth: Ctx<Claims>,
-        body: Valid<Json<CreateUser>>,
-    ) -> Result<Json<User>> {
-        let user = self.svc.create_in_org(body.into_inner(), auth.org_id).await?;
-        Ok(Json(User::from(&user)))
-    }
+#[tokio::test]
+async fn posts_round_trip() {
+    let app = boot().await;
+    let bearer = bearer(&app, Role::Admin);
 
-    #[get("/:id")]
-    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
-        Json(User::from(&*user))
-    }
+    let created = app
+        .http()
+        .post("/posts")
+        .header("authorization", &bearer)
+        .body_json(&json!({ "title": "Title 1", "body": "Body 1" }))
+        .send()
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let created = created.json().await;
+    let id = created.value().object().get("id").string().to_owned();
+
+    let read = app
+        .http()
+        .get(format!("/posts/{id}"))
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    read.assert_status_is_ok();
+    let read = read.json().await;
+    let fields = read.value().object();
+    assert_eq!(fields.get("title").string(), "Title 1");
+    assert_eq!(fields.get("body").string(), "Body 1");
+}
+
+#[tokio::test]
+async fn create_with_empty_title_returns_400() {
+    let app = boot().await;
+    app.http()
+        .post("/posts")
+        .header("authorization", bearer(&app, Role::Admin))
+        .body_json(&json!({ "title": "", "body": "Body 1" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_without_a_token_returns_401() {
+    let app = boot().await;
+    app.http()
+        .post("/posts")
+        .body_json(&json!({ "title": "Title 1", "body": "Body 1" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn a_plain_user_cannot_create_a_post() {
+    let app = boot().await;
+    app.http()
+        .post("/posts")
+        .header("authorization", bearer(&app, Role::User))
+        .body_json(&json!({ "title": "Title 1", "body": "Body 1" }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
 }
 ```
-
-Four things changed:
-
-| Change | Job |
-|--------|-----|
-| `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
-| `auth: Ctx<Claims>` | Read the principal that `AuthnGuard` attached to the request |
-| `_authz: Authorize<Create, UserEntity>` | Check the ability allows `Create` on `UserEntity` before the body runs |
-| `user: Bind<Read, UsersService>` | Parse the `:id`, load the row through the service, return `403` if the ability refuses it |
-
-The org id comes from the caller's claims, never from the body — there
-is no placeholder to fill in and no way to spoof the tenant.
-
-## Import the authz module
-
-The HTTP adapter now needs the authz bridge:
-
-```rust title="crates/features/src/users/http/module.rs (from the demo)" {3, 7}
-use nest_rs::core::module;
-
-use super::controller::UsersController;
-use crate::authz::AuthzModule;
-use crate::users::UsersModule;
-
-#[module(
-    imports = [UsersModule, AuthzModule],
-    providers = [UsersController],
-)]
-pub struct UsersHttpModule;
-```
-
-`AuthzModule` carries the `AuthzGuard` provider and the response
-masker. Forgetting the import is caught at boot by the access graph —
-the binary fails to start with a clear "missing guard" error rather
-than running silently unprotected.
-
-The app root — `api`, not `blog` — imports `AuthnModule` and
-`AuthzModule` once:
-
-```rust title="apps/api/src/module.rs (from the demo, abridged)"
-use features::authn::AuthnModule;
-use features::authz::AuthzModule;
-use features::users::UsersHttpModule;
-use nest_rs::core::module;
-
-#[module(
-    imports = [
-        SeaOrmModule::for_root(None),
-        SeaOrmDatabaseModule,
-        HttpModule::for_root(HttpConfig {
-            port: 3002,
-            ..Default::default()
-        }),
-        AuthnModule,
-        AuthzModule,
-        UsersHttpModule,
-    ],
-)]
-pub struct ApiModule;
-```
-
-## What changed at runtime
-
-Three behaviours land without writing them in the handler.
-
-**Row-level filter on every read.** A plain user issuing
-`GET /users` gets `WHERE org_id = $caller_org_id` appended to the
-SQL — the `Repo::scoped(Action::Read)` `CrudService::list` uses joins
-the ambient ability's `condition_for(Read)`.
-
-**By-id load checks access.** `Bind<Read, UsersService>` parses the
-`:id` path segment, loads the row through the service, runs the
-ability check. Three failure shapes:
-
-| Caller's view | Status |
-|---------------|--------|
-| The row doesn't exist | `404` |
-| The row exists but the ability refuses it | `403` |
-| The `:id` segment isn't a valid UUID | `400` |
-
-`403` (rather than `404`) on a denied-but-existing row discloses that the
-row exists — the standard REST trade-off, chosen here so a client can
-tell "not yours" from "not there". Collapse the `403` into a `404` when
-existence itself is confidential: see [by-id
-binding](/security/authorization/by-id-binding/). A `500` would mean the ambient ability
-didn't install; that's a wiring bug.
-
-**Response masking on every body.** The masker runs after the handler
-returns. It reconstructs the full `User` model from the body, walks
-`Ability::mask`, and drops any column outside the caller's
-`.fields([...])` grant. A plain user's listing returns:
-
-```json
-[{ "id": "018f…", "name": "Bob" }]
-```
-
-— no `email`, even though the handler returned a `Json<User>` that
-included it. Forgetting per-handler redaction is structurally
-impossible.
-
-## See it for yourself
-
-A short check from the reference e2e:
-
-```bash frame="terminal"
-$ curl -i -H 'Authorization: Bearer <plain-user-token-for-org-A>' \
-    http://localhost:3002/users/<user-in-org-B>
-HTTP/1.1 403 Forbidden
-
-$ curl -s -H 'Authorization: Bearer <plain-user-token>' \
-    http://localhost:3002/users
-[{"id":"018f…","name":"Bob"}]
-```
-
-The email is gone, the cross-tenant load is refused, and the handler
-never had to know.
-
-## Now narrow your own `blog`
-
-Step 4 left `posts` on one blanket rule — `Action::Manage` for everybody.
-Rewriting `define` in `crates/features/src/authz/ability.rs` turns it into a
-policy, using only the columns `blog` already has (the actor comes first — the
-trait's own order):
-
-```rust title="crates/features/src/authz/ability.rs (from the demo)"
-use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
-
-use crate::authn::Claims;
-use crate::posts::entity as post;
-
-impl AbilityFactory for AuthzAbility {
-    type Actor = Claims;
-
-    fn define(&self, actor: &Self::Actor, ability: &mut AbilityBuilder) {
-        ability.can(Action::Read, post::Entity);
-        if actor.is_admin() {
-            ability.can(Action::Manage, post::Entity);
-        }
-    }
-}
-```
-
-Anyone signed in may read; only an admin may write.
 
 Restart, mint a plain token and a `{"roles":["admin"]}` one from
 `POST /auth/dev-token`, and `POST /posts` answers `201` for the second and
 `403` for the first — with no check in the handler. That is the same mechanism
-this page just walked through, at the size your domain is.
-
-## What the reference feature has
-
-- A `UsersController` guarded by `AuthnGuard` + `AuthzGuard` — every
-  route requires a valid JWT and a matching ability.
-- An `AuthzAbility` policy that scopes reads to the caller's org and
-  masks the email column for plain users.
-- `Bind<Read, UsersService>` on the by-id route — `403` on a denied
-  row, `404` on a missing one, both without manual checks.
+[the previous page](/tutorial/authorization/) walked through, at the size your
+domain is.
 
 ## Going further
 

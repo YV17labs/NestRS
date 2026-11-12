@@ -7,19 +7,17 @@
 //! full Rust parse.
 
 /// A pure, idempotent rewrite of a file's contents.
-pub type Transform = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+pub(crate) type Transform = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// Ensure a single `mod`/`pub mod`/`use` declaration line is present.
-pub fn ensure_decl(line: &str) -> Transform {
+pub(crate) fn ensure_decl(line: &str) -> Transform {
     ensure_lines(vec![line.to_string()])
 }
 
-/// Ensure several declaration lines are present in one pass — use this rather
-/// than multiple `edit`s on the same file (each `edit` re-reads the file from
-/// disk, so two would clobber each other). Each line is inserted after the
-/// last existing line sharing its leading keyword (`mod` with `mod`, `pub use`
-/// with `pub use`).
-pub fn ensure_lines(new_lines: Vec<String>) -> Transform {
+/// Ensure several declaration lines are present in one pass — one `edit` per
+/// file, since two would clobber each other. Each line is inserted after the last
+/// existing line sharing its leading keyword.
+pub(crate) fn ensure_lines(new_lines: Vec<String>) -> Transform {
     let new_lines: Vec<String> = new_lines
         .into_iter()
         .map(|l| l.trim_end().to_string())
@@ -46,13 +44,11 @@ pub fn ensure_lines(new_lines: Vec<String>) -> Transform {
 
 /// Ensure every `(use_path, ident)` is imported into a
 /// `#[module(imports = [ … ])]` block: `use <use_path>;` among the top-of-file
-/// `use` lines, and the bare `<ident>,` entry before the closing `]`.
+/// `use` lines, and the bare `<ident>,` entry before the closing `]` — a
+/// `#[module(…)]` listing no imports yet gains its `imports = [<ident>]`.
 ///
-/// Takes a slice rather than one pair because a caller wiring two modules must
-/// land them in **one** transform: `Scaffold::apply` resolves every edit against
-/// the file on disk, so two edits of the same path would each start from the
-/// original and the second write would drop the first.
-pub fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
+/// A slice, so a caller wiring two modules lands them in **one** transform.
+pub(crate) fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
     let imports: Vec<(String, String)> = imports
         .iter()
         .map(|(use_path, ident)| (format!("use {use_path};"), (*ident).to_owned()))
@@ -71,21 +67,27 @@ pub fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
 fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) -> bool {
     let mut changed = false;
 
-    // 1. The `use` import at the top of the file.
+    // 1. The `use` import at the top of the file, with the imports of its crate.
     if !lines.iter().any(|l| l.trim() == use_line) {
+        let same_crate = format!("{}::", use_line.split("::").next().unwrap_or(use_line));
         let insert_at = lines
             .iter()
-            .rposition(|l| l.trim_start().starts_with("use "))
+            .rposition(|l| l.trim_start().starts_with(&same_crate))
+            .or_else(|| {
+                lines
+                    .iter()
+                    .rposition(|l| l.trim_start().starts_with("use "))
+            })
             .map(|i| i + 1)
             .unwrap_or(0);
         lines.insert(insert_at, use_line.to_owned());
         changed = true;
     }
 
-    // 2. The entry inside `imports = [ … ]`.
-    if let Some((start, end)) = imports_span(lines) {
-        let already = lines[start..=end].iter().any(|l| entry_matches(l, ident));
-        if !already {
+    // 2. The entry inside `imports = [ … ]`, opening the list where there is none.
+    match imports_span(lines) {
+        None => changed |= open_imports(lines, ident),
+        Some((start, end)) if !lines[start..=end].iter().any(|l| entry_matches(l, ident)) => {
             if start == end {
                 // Single-line `imports = [A, B]` — splice into the brackets.
                 if let Some(spliced) = splice_inline(&lines[start], ident) {
@@ -98,37 +100,52 @@ fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) ->
                 changed = true;
             }
         }
+        Some(_) => {}
     }
 
     changed
 }
 
-/// Turn on `#[expose(graphql)]` for an entity that does not carry it — what a
-/// port needs before a resolver can name its output type (the flag is what
-/// emits the async-graphql `SimpleObject`, the loaders and the relation
-/// resolvers; without it the generated resolver fails on an unsatisfied
-/// `OutputType` bound).
-///
-/// Anchored on the **struct-level** attribute: the entity's own `#[expose(`
-/// starts a line at column 0, while every field-level one is indented.
-pub fn ensure_expose_graphql() -> Transform {
+/// The first and last line of an entity's **struct-level** attribute: its own
+/// `#[expose(` starts a line at column 0, while every field-level one is indented.
+fn expose_span(content: &str) -> Option<(usize, usize)> {
+    let at = content.lines().position(|l| l.starts_with("#[expose("))?;
+    let end = content
+        .lines()
+        .skip(at)
+        .position(|l| l.trim_end().ends_with(")]"))?;
+    Some((at, at + end))
+}
+
+/// Whether `content` holds the attribute [`ensure_expose_graphql`] flags, which a
+/// transform leaving a file unchanged would not tell from its being flagged already.
+pub(crate) fn declares_expose(content: &str) -> bool {
+    expose_span(content).is_some()
+}
+
+/// Turn on `#[expose(graphql)]` for an entity that does not carry it, so a
+/// resolver can name it as its output type.
+pub(crate) fn ensure_expose_graphql() -> Transform {
     Box::new(move |content: &str| {
+        let (at, end) = expose_span(content)?;
         let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
-        let at = lines.iter().position(|l| l.starts_with("#[expose("))?;
-        // The attribute's own argument list, whether written on one line or
-        // spread over several — a field's `#[expose(...)]` is indented, so the
-        // scan stops before reaching one.
-        let end = lines[at..]
-            .iter()
-            .position(|l| l.trim_end().ends_with(")]"))
-            .map(|offset| at + offset)?;
         if lines[at..=end].iter().any(|l| {
             l.split(|c: char| !c.is_alphanumeric())
                 .any(|w| w == "graphql")
         }) {
             return None;
         }
-        lines[at] = lines[at].replacen("#[expose(", "#[expose(graphql, ", 1);
+        if lines[at].trim_end() == "#[expose(" {
+            // rustfmt leaves this attribute as written and refuses a trailing
+            // space, so the flag takes a line of its own.
+            let indent: String = lines[at + 1]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+            lines.insert(at + 1, format!("{indent}graphql,"));
+        } else {
+            lines[at] = lines[at].replacen("#[expose(", "#[expose(graphql, ", 1);
+        }
         Some(rejoin(&lines, content))
     })
 }
@@ -160,6 +177,21 @@ fn imports_span(lines: &[String]) -> Option<(usize, usize)> {
         .position(|l| l.trim_start().starts_with(']'))
         .map(|i| start + 1 + i)?;
     Some((start, end))
+}
+
+/// Open `imports = [<ident>]` in the first `#[module(` of `lines`, which lists
+/// none: inline after the parenthesis, or on a line of its own when the
+/// attribute's arguments start on the next one. `false` when there is none.
+fn open_imports(lines: &mut Vec<String>, ident: &str) -> bool {
+    let Some(at) = lines.iter().position(|l| l.contains("#[module(")) else {
+        return false;
+    };
+    if lines[at].trim_end().ends_with("#[module(") {
+        lines.insert(at + 1, format!("    imports = [{ident}],"));
+    } else {
+        lines[at] = lines[at].replacen("#[module(", &format!("#[module(imports = [{ident}], "), 1);
+    }
+    true
 }
 
 /// Splice `ident` before the `]` of a single-line `imports = [ … ]`.
@@ -219,13 +251,12 @@ mod tests {
         let idx_mod = out.find("pub mod http;").unwrap();
         let idx_use = out.find("pub use module::Foo;").unwrap();
         assert!(idx_mod < idx_use);
-        // re-running is a no-op
         assert!(ensure_decl("pub mod http;")(&out).is_none());
     }
 
     #[test]
     fn ensure_module_import_into_multiline_block() {
-        let src = "use nest_rs_core::module;\nuse nest_rs_http::HttpModule;\n\n#[module(\n    imports = [\n        HttpModule::for_root(None),\n    ],\n)]\npub struct AppModule;\n";
+        let src = "use nest_rs_core::module;\nuse nest_rs_http::HttpModule;\n\n#[module(\n    imports = [\n        HttpModule,\n    ],\n)]\npub struct AppModule;\n";
         let one =
             || ensure_module_imports(&[("features::posts::PostsHttpModule", "PostsHttpModule")]);
         let out = one()(src).expect("inserts");
@@ -235,13 +266,12 @@ mod tests {
         let entry = out.find("PostsHttpModule,").unwrap();
         let close = out.find("    ],").unwrap();
         assert!(entry < close);
-        // idempotent
         assert!(one()(&out).is_none());
     }
 
     #[test]
     fn ensure_module_import_single_line_block() {
-        let src = "use nest_rs_http::HttpModule;\n\n#[module(imports = [HttpModule::for_root(None)])]\npub struct AppModule;\n";
+        let src = "use nest_rs_http::HttpModule;\n\n#[module(imports = [HttpModule])]\npub struct AppModule;\n";
         let t = ensure_module_imports(&[("crate::posts::PostsHttpModule", "PostsHttpModule")]);
         let out = t(src).expect("inserts");
         assert!(out.contains("PostsHttpModule"));
@@ -249,8 +279,31 @@ mod tests {
     }
 
     #[test]
+    fn ensure_module_import_opens_the_list_a_module_lacks() {
+        for (src, opened) in [
+            (
+                "use nest_rs::core::module;\n\n#[module(providers = [PostsService])]\npub struct PostsModule;\n",
+                "#[module(imports = [EventsModule], providers = [PostsService])]",
+            ),
+            (
+                "use nest_rs::core::module;\n\n#[module(\n    providers = [PostsService],\n)]\npub struct PostsModule;\n",
+                "#[module(\n    imports = [EventsModule],\n    providers = [PostsService],",
+            ),
+        ] {
+            let t = || ensure_module_imports(&[("nest_rs::events::EventsModule", "EventsModule")]);
+            let out = t()(src).expect("inserts");
+            assert!(
+                out.contains("use nest_rs::core::module;\nuse nest_rs::events::EventsModule;\n"),
+                "beside the imports of its crate: {out}",
+            );
+            assert!(out.contains(opened), "{out}");
+            assert!(t()(&out).is_none(), "idempotent: {out}");
+        }
+    }
+
+    #[test]
     fn ensure_expose_graphql_flags_the_entity_not_its_fields() {
-        let src = "use nest_rs_resource::expose;\n\n#[expose(name = \"Post\", service = super::service::PostsService)]\n#[sea_orm::model]\npub struct Model {\n    #[expose(input(create, update))]\n    pub name: String,\n}\n";
+        let src = "use nest_rs::seaorm::expose;\n\n#[expose(name = \"Post\", service = super::service::PostsService)]\n#[sea_orm::model]\npub struct Model {\n    #[expose(input(create, update))]\n    pub name: String,\n}\n";
         let out = ensure_expose_graphql()(src).expect("flags the entity");
         assert!(
             out.contains("#[expose(graphql, name = \"Post\""),
@@ -264,17 +317,29 @@ mod tests {
     }
 
     #[test]
+    fn ensure_expose_graphql_flags_the_resource_entity_on_a_line_of_its_own() {
+        let src = crate::templates::resource::ENTITY;
+        let out = ensure_expose_graphql()(src).expect("flags the entity");
+        assert!(
+            out.contains("#[expose(\n    graphql,\n    name = \"{{entity}}\","),
+            "the flag opens the attribute's argument lines: {out}"
+        );
+        assert!(
+            out.lines().all(|line| line == line.trim_end()),
+            "no line ends in a space rustfmt refuses: {out}"
+        );
+        assert!(ensure_expose_graphql()(&out).is_none(), "idempotent");
+    }
+
+    #[test]
     fn ensure_expose_graphql_leaves_a_multiline_attribute_that_has_it() {
         let src = "#[expose(\n    name = \"User\",\n    service = super::service::UsersService,\n    graphql,\n)]\npub struct Model;\n";
         assert!(ensure_expose_graphql()(src).is_none());
     }
 
-    // The reason this takes a slice: a caller wiring two modules gets one
-    // transform. Split across two `Scaffold::edit`s they would each resolve
-    // against the file on disk and the second write would drop the first.
     #[test]
     fn ensure_module_imports_lands_every_pair_in_one_pass() {
-        let src = "use nest_rs_core::module;\n\n#[module(\n    imports = [\n        HttpModule::for_root(None),\n    ],\n)]\npub struct AppModule;\n";
+        let src = "use nest_rs_core::module;\n\n#[module(\n    imports = [\n        HttpModule,\n    ],\n)]\npub struct AppModule;\n";
         let pairs = [
             ("features::authn::AuthnModule", "AuthnModule"),
             ("features::authz::AuthzModule", "AuthzModule"),

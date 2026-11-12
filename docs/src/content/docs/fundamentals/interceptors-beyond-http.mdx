@@ -1,0 +1,75 @@
+---
+title: Interceptors beyond HTTP
+description: "An interceptor around each GraphQL root field, the three GraphQL places that run less, and where every other edge says what its unit runs."
+sidebar:
+  order: 8.5
+---
+
+An [interceptor](/fundamentals/interceptors/) is written once and wraps a unit
+on every edge: a GraphQL field, a WebSocket message, an MCP operation, a job, a
+tick and a listener call. Each edge's page says what its unit runs, and
+[what each edge runs](/fundamentals/request-lifecycle/#what-each-edge-runs)
+links them side by side; GraphQL's is here, since a field is the unit inside a
+request.
+
+## Around a GraphQL field
+
+Each root field of a GraphQL operation — a `#[query]`, a `#[mutation]`, an
+`#[entity]`, and the federation fields `_service` and `_entities` — is a unit
+of its own, `graphql.field`, inside the `/graphql` request that carried it.
+The app's interceptors, the resolver's and the field's own run around it, after
+its guards and its class gate, exactly as around a route. `cx.unit()` names the
+unit, and `GraphqlView` says which field and the role it plays:
+
+```rust title="apps/api/src/interceptor.rs"
+use nest_rs::core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable};
+use nest_rs::graphql::{GraphqlView, unit};
+
+#[injectable]
+#[derive(Layer)]
+pub struct FieldTiming;
+
+#[async_trait]
+impl Interceptor for FieldTiming {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let started = std::time::Instant::now();
+        let outcome = next.run(cx).await;
+        if cx.unit() == unit::FIELD
+            && let Some(view) = cx.switch_to::<GraphqlView>()
+        {
+            tracing::info!(field = view.field(), elapsed = ?started.elapsed(), "field timed");
+        }
+        outcome
+    }
+}
+```
+
+On a resolver it reads the same as on a controller:
+
+```rust title="crates/features/src/users/graphql/resolver.rs"
+#[resolver]
+#[use_interceptors(FieldTiming)]
+pub struct UsersResolver {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+```
+
+Three places run less, each because of what it is:
+
+- **The `/graphql` request** is an HTTP self-mount: the unit stage runs around
+  it, the handler stage does not — its fields are where the work is.
+- **A `#[field_resolver]`** is no unit: it runs once per parent row, so only
+  the interceptors declared on it run around it, never the app's nor its
+  resolver's. Bind one on the method when a field resolver must be wrapped.
+- **A `#[subscription]`'s** interceptors wrap its opening — the stream it
+  answers — never each item the stream yields.
+
+## Going further
+
+- [Interceptors](/fundamentals/interceptors/) — write one, and the three scopes
+  it binds at.
+- [The request lifecycle](/fundamentals/request-lifecycle/#what-each-edge-runs)
+  — the stages each edge's unit runs.
+- [Guards beyond HTTP](/fundamentals/guards-beyond-http/) — the guard a field
+  runs before its interceptors.

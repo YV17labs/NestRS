@@ -7,7 +7,7 @@ import { Steps } from '@astrojs/starlight/components';
 
 ## Prerequisites
 
-NestRS needs **Rust 1.97+** (edition 2024). Install [rustup](https://rustup.rs)
+NestRS needs **Rust 1.100+** (edition 2024). Install [rustup](https://rustup.rs)
 if you don't have it:
 
 ```bash
@@ -23,12 +23,15 @@ cargo install --locked nest-rs-cli
 That's the only thing you install by hand. The first time you run a task with
 `nestrs run`, the CLI installs the dev toolchain it drives —
 [`just`](https://github.com/casey/just) for the recipes, `bacon` for watch mode,
-`cargo-nextest` for tests — once, then never again. Set `NESTRS_NO_BOOTSTRAP=1`
+`cargo-nextest` for tests, `cargo-llvm-cov` for coverage — once, then never again. Set `NESTRS_NO_BOOTSTRAP=1`
 (or pass `--no-bootstrap`) on CI to opt out and install them yourself.
 
 As with any Rust dependency, `cargo install nest-rs-cli` and your first
 `nestrs run` compile the crate graph once — a few minutes, cached from then on.
 Every build after that is an incremental, sub-second rebuild.
+
+CI proves Linux on x86_64 alone; macOS is run by hand as a development host, and
+no job builds or runs Windows.
 
 ## Scaffold and start
 
@@ -87,18 +90,19 @@ pub struct HelloController {
 
 #[routes]
 impl HelloController {
-    // Every route declares a posture, and an unguarded one is flagged at boot.
+    // A route no guard covers is refused at boot unless it says #[public].
     // This greeting is deliberately open, so it says so.
     #[get("/")]
     #[public]
+    #[api(summary = "Greet the caller")]
     async fn hello(&self) -> String {
         self.svc.greeting()
     }
 }
 ```
 
-The `#[public]` is not decoration: a route with no posture is flagged at boot
-(`unguarded routes detected`), and this one is open on purpose.
+The `#[public]` is not decoration: a route no guard covers and no `#[public]`
+opens refuses the boot, naming the route, and this one is open on purpose.
 
 The scaffold depends on `nest-rs` and enables the features it needs — one
 entry, whatever the app grows into. Each module page adds a feature, not a
@@ -110,7 +114,7 @@ Edit the greeting in `crates/features/src/hello/service.rs`, save, and
 `nestrs run dev` hot-reloads. Then curl again:
 
 ```rust title="crates/features/src/hello/service.rs"
-fn greeting(&self) -> String {
+pub fn greeting(&self) -> String {
     "Hello, NestRS".to_string()   // was "Hello World"
 }
 ```
@@ -127,4 +131,4 @@ That's the loop — edit, save, curl. Every reference section builds on it.
 - [Tutorial](/tutorial/) — add `apps/blog/` with `nestrs new blog` and build posts over HTTP.
 - [The demo apps (Publish)](/publish/) — the multi-tenant publishing platform all the reference apps build.
 - [CLI](/cli/) — scaffold apps, features, and transport adapters.
-- [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, interceptors, filters.
+- [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, interceptors, exception filters.

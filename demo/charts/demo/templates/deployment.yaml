@@ -1,4 +1,9 @@
 {{- include "demo.validate" . -}}
+{{- $written := dict }}
+{{- range $app, $_ := .Values.apps }}
+{{- $_ := set $written $app (fromYaml (include "demo.appSecrets" (dict "ctx" $ "app" $app))) }}
+{{- end }}
+{{- $secretChecksum := toYaml $written | sha256sum }}
 {{- range $app, $_ := .Values.apps }}
 {{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}
 {{- if eq $cfg.kind "deployment" }}
@@ -22,8 +27,10 @@ spec:
         # Roll the pods when the configuration changes — an env var only reaches
         # a process at start, so a ConfigMap edit is otherwise invisible.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
-        {{- if not $.Values.existingSecret }}
-        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") $ | sha256sum }}
+        # And when a Secret the chart writes does. One sum over all of them: pods are read
+        # where Secrets are not, and a sum of one app's alone would test a guess at its secret.
+        {{- if index $written $app }}
+        checksum/secret: {{ $secretChecksum }}
         {{- end }}
         {{- with $cfg.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -60,6 +67,13 @@ spec:
             {{- include "demo.env" (dict "ctx" $ "app" $app) | nindent 12 }}
           envFrom:
             {{- include "demo.envFrom" (dict "ctx" $ "app" $app) | nindent 12 }}
+          {{- if $cfg.shutdownDelaySeconds }}
+          # The native sleep action: the distroless image has no `sleep` to exec.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $cfg.shutdownDelaySeconds }}
+          {{- end }}
           {{- include "demo.probes" $ | nindent 10 }}
           resources:
             {{- toYaml $cfg.resources | nindent 12 }}

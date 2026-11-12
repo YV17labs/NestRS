@@ -1,0 +1,5 @@
+error: #[cron] `tz`: "Europe/Pariz" is not a zone of the IANA time zone database bundled with jiff — it takes an `Area/Location` identifier (e.g. "Europe/Paris", "America/New_York", "UTC")
+  --> tests/integration/diagnostics/schedule/cron_tz_is_not_an_iana_name.rs:16:32
+   |
+16 |     #[cron("0 0 * * * *", tz = "Europe/Pariz")]
+   |                                ^^^^^^^^^^^^^^

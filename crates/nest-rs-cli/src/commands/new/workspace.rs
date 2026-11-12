@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::commands::queue_db_crates;
+use crate::commands::{Registered, queue_db_crates};
 use crate::context::NestrsWorkspace;
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;
@@ -13,7 +13,7 @@ use super::{queue_agent_files, queue_env_files};
 
 const HELLO_APP_PORT: u16 = 3000;
 
-pub fn scaffold_root(
+pub(super) fn scaffold_root(
     output: &Path,
     names: &Names,
     env_prefix: &str,
@@ -32,6 +32,7 @@ pub fn scaffold_root(
         root.join("rust-toolchain.toml"),
         r.render(shared::RUST_TOOLCHAIN),
     );
+    s.create(root.join("clippy.toml"), r.render(shared::CLIPPY_TOML));
     s.create(root.join("README.md"), r.render(workspace::README));
     // A workspace writes its domain logic in the shared feature library, so the
     // span-target example is rooted there rather than at the app.
@@ -40,7 +41,7 @@ pub fn scaffold_root(
         root.join("crates/features/Cargo.toml"),
         r.render(workspace::FEATURES_CARGO),
     );
-    queue_db_crates(&mut s, &root, &[]);
+    queue_db_crates(&mut s, &root, &Registered::default(), true);
     queue_root_files(&mut s, &root, names, env_prefix);
 
     // The first app is always `hello`, whatever the workspace is called.
@@ -60,6 +61,8 @@ pub fn scaffold_root(
         &root.join("apps").join(&hello_names.kebab),
         &hello_names,
         HELLO_APP_PORT,
+        env_prefix,
+        true,
     );
 
     let report = s.apply(dry_run)?;
@@ -77,7 +80,7 @@ pub fn scaffold_root(
     Ok(())
 }
 
-pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliResult<()> {
+pub(super) fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliResult<()> {
     let root = ws.apps_root().join(&names.kebab);
     if root.exists() {
         return Err(CliError::AppExists {
@@ -85,10 +88,7 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
             path: root,
         });
     }
-    // Same shape as the root scaffold: the app gets a `hello` feature named
-    // after it, so `nestrs run dev <app>` answers on `/` the first time. A
-    // feature already owning that name would be clobbered, so refuse instead —
-    // the app name is the one thing the caller can change for free.
+    // A feature already owning the app's name would be clobbered, so refuse.
     if ws.feature_exists(&names.snake) {
         return Err(CliError::FeatureExists {
             name: names.snake.clone(),
@@ -106,11 +106,11 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
             format!("pub use {}::{};", names.snake, names.http_module()),
         ]),
     );
-    queue_app(&mut s, &root, names, port);
-    // Adding an app to an existing workspace: the prefix belongs to the
-    // environment that runs it, so it is read from there rather than chosen
-    // again.
-    queue_root_files(&mut s, &ws.root, names, &crate::context::env_prefix());
+    // The prefix belongs to the environment that runs the app, so it is read
+    // from there.
+    let env_prefix = crate::context::env_prefix();
+    queue_app(&mut s, &root, names, port, &env_prefix, ws.lints);
+    queue_root_files(&mut s, &ws.root, names, &env_prefix);
 
     let report = s.apply(dry_run)?;
     if !dry_run {
@@ -123,10 +123,10 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
         names.kebab,
         root.display()
     );
-    // The pin is a claim about a file on disk, so it is only true once one is.
+    // A claim about a file on disk, so it is only true once one is.
     println!(
-        "HTTP port: {port} ({} in src/module.rs)",
-        report.verb("pinned", "would be pinned"),
+        "HTTP port: {port} ({} in .env)",
+        report.verb("set", "would be set"),
     );
     report.print(&ws.root);
     print_app_next_steps(ws, names, port);
@@ -134,8 +134,7 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
 }
 
 /// The app's `hello` feature — port (module + service) plus its HTTP adapter,
-/// the shared [`hello`] templates in the workspace's feature layout. Every
-/// identifier derives from `names`, so `hello` and any later app are one shape.
+/// the shared [`hello`] templates in the workspace's feature layout.
 fn queue_hello_feature(s: &mut Scaffold, feature_root: &Path, names: &Names) {
     let r = Renderer::new(names);
     s.create(feature_root.join("mod.rs"), r.render(hello::FEATURE_MOD));
@@ -158,9 +157,23 @@ fn queue_hello_feature(s: &mut Scaffold, feature_root: &Path, names: &Names) {
     );
 }
 
-fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
-    let r = Renderer::new(names).with("port", port.to_string());
-    s.create(app_root.join("Cargo.toml"), r.render(workspace::APP_CARGO));
+/// Queue the app crate at `app_root`; `lints` says whether its workspace
+/// declares the lints its manifest inherits.
+fn queue_app(
+    s: &mut Scaffold,
+    app_root: &Path,
+    names: &Names,
+    port: u16,
+    env_prefix: &str,
+    lints: bool,
+) {
+    let r = with_env_prefix(Renderer::new(names), env_prefix).with("port", port.to_string());
+    let mut manifest = r.render(workspace::APP_CARGO);
+    if lints {
+        manifest.push_str(workspace::INHERITED_LINTS);
+    }
+    s.create(app_root.join("Cargo.toml"), manifest);
+    s.create(app_root.join(".env"), r.render(workspace::APP_ENV));
     s.create(app_root.join("src/lib.rs"), r.render(workspace::APP_LIB));
     s.create(app_root.join("src/main.rs"), r.render(workspace::APP_MAIN));
     s.create(
@@ -168,9 +181,7 @@ fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
         r.render(workspace::APP_MODULE),
     );
 
-    // No live infra involved ⇒ `integration`, never `e2e` (the suite norm).
-    // The *feature's* HTTP module, not the app root: the root accumulates every
-    // transport and connection the app serves, and this suite must stay
+    // The feature's HTTP module, not the app root, so the suite stays
     // infrastructure-free however the app grows.
     let smoke = r
         .clone()
@@ -189,9 +200,7 @@ fn queue_app(s: &mut Scaffold, app_root: &Path, names: &Names, port: u16) {
 }
 
 fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names, env_prefix: &str) {
-    // Seeded, not bare: the Justfile below is what sets the prefix on every
-    // process `nestrs run` starts, so a renderer that does not know it would
-    // write the placeholder out verbatim.
+    // Seeded: the Justfile sets the prefix on every process `nestrs run` starts.
     let r = with_env_prefix(Renderer::new(names), env_prefix);
     queue_env_files(s, base, &r);
     s.create_if_missing(base.join("Justfile"), r.render(workspace::JUSTFILE));
@@ -199,8 +208,6 @@ fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names, env_prefix: &s
     s.create_if_missing(base.join("db.just"), r.render(shared::DB_JUSTFILE));
     s.create_if_missing(base.join("compose.yml"), r.render(shared::COMPOSE));
     s.create_if_missing(base.join(".gitignore"), r.render(shared::GITIGNORE));
-    // No `.dockerignore`: the scaffold ships no Dockerfile, so there is
-    // nothing for it to scope.
 }
 
 fn print_root_next_steps(root: &Path) {

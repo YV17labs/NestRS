@@ -1,0 +1,5 @@
+error: `#[tools]` declares `#[tool(name = "lookup")]` on `first` and again on `second`: a host routes each tool name, and each prompt name, to one method, so one of the two would never run — give one a distinct `name`
+  --> tests/integration/diagnostics/mcp/tools_one_name_on_two_methods.rs:18:5
+   |
+18 |     #[tool(name = "lookup", description = "Look one up, again.")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

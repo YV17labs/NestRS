@@ -1,0 +1,11 @@
+error: unknown #[principal] argument `subject`; expected `actor`, `tenant` or `scopes`
+ --> tests/integration/diagnostics/authn/principal_identity_unknown_role.rs:8:17
+  |
+8 |     #[principal(subject)]
+  |                 ^^^^^^^
+
+error: #[principal] names the role its field plays — `#[principal(actor)]`, `#[principal(tenant)]` or `#[principal(scopes)]`
+  --> tests/integration/diagnostics/authn/principal_identity_unknown_role.rs:14:5
+   |
+14 |     #[principal]
+   |     ^^^^^^^^^^^^

@@ -1,0 +1,11 @@
+error: `#[public]` is written twice here — it declares once, and a second copy would be read by nothing. Keep one, with everything it says
+  --> tests/integration/diagnostics/http/a_route_decorator_written_twice.rs:16:5
+   |
+16 |     #[public]
+   |     ^^^^^^^^^
+
+error: `#[api]` is written twice here — it declares once, and a second copy would be read by nothing. Keep one, with everything it says
+  --> tests/integration/diagnostics/http/a_route_decorator_written_twice.rs:30:5
+   |
+30 |     #[api(summary = "second")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^

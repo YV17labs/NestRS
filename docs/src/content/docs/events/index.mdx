@@ -6,15 +6,21 @@ description: A typed in-process event bus — emit any Clone event, listeners de
 import { Aside } from '@astrojs/starlight/components';
 
 An event listener is **a method** on any `#[injectable]` provider, tagged
-with `#[on_event]` inside a `#[listeners]` impl block. Importing
-`EventsModule` in the app's `AppModule` wires every discovered listener
-from the fully-assembled container at bootstrap.
+with `#[on_event]` inside a `#[listeners]` impl block. `EventsModule`, which
+the port emitting the event imports to inject the bus, subscribes every
+discovered listener
+from the fully-assembled container as the boot ends, before the first
+lifecycle hook — so an event an `#[on_module_init]` hook emits reaches its
+listeners.
 
 An event is any `Clone + Send + 'static` type. Dispatch is in-process and
 awaited: `bus.emit(event)` clones the event for each listener registered
-on that type, runs them in registration order, and returns once they all
-complete. There is no broker, no retries — for cross-process or durable
-work, push a job on the [Queue](/queue/) instead.
+on that type and runs them in registration order — **once the emitter's
+transaction has committed** when it emits inside one, and never for a write
+that rolled back. What stays open, a GraphQL subscription among them, reads
+the same events at the same commit through
+[`bus.stream()`](/events/streams/). There is no broker, no retries — for
+cross-process or durable work, push a job on the [Queue](/queue/) instead.
 
 ## Install
 
@@ -27,41 +33,56 @@ cargo add nest-rs --features events
 A regular `#[injectable]` provider with one decorated method. The
 `#[listeners]` attribute marks the impl block; `#[on_event]` marks the
 method as a listener for the event type read from its parameter. Here the
-`notifications` slice reacts to a fact the `posts` slice publishes:
+`posts` slice indexes a post it published for search:
 
-```rust title="crates/features/src/notifications/events/listener.rs (from the demo, abridged)"
+```rust title="crates/features/src/posts/events/listener.rs"
+use std::sync::Arc;
+
 use nest_rs::core::injectable;
 use nest_rs::events::listeners;
 
-use crate::posts::PostPublishedEvent;
+use crate::posts::{PostPublishedEvent, SearchIndex};
 
 #[injectable]
-#[derive(Default)]
-pub struct NotificationsListener;
+pub struct PostsListener {
+    #[inject]
+    search: Arc<SearchIndex>,
+}
 
 #[listeners]
-impl NotificationsListener {
+impl PostsListener {
     #[on_event]
-    async fn on_post_published(&self, event: PostPublishedEvent) {
-        tracing::info!(
-            target: "features::notifications",
-            post_id = %event.post_id,
-            org_id = %event.org_id,
-            title = %event.title,
-            "notifying subscribers of a published post",
+    async fn on_post_published(&self, event: PostPublishedEvent) -> anyhow::Result<()> {
+        self.search.index(&event.post).await?;
+        tracing::debug!(
+            target: crate::posts::TARGET,
+            post_id = %event.post.id,
+            "indexed a published post",
         );
+        Ok(())
     }
 }
 ```
 
-- **`#[injectable]`** makes `NotificationsListener` a regular DI provider.
+- **`#[injectable]`** makes `PostsListener` a regular DI provider.
   It is a plain provider, not a service: it reacts to a fact, it is not an
   entity's DB gateway.
 - **`#[listeners]`** on the impl block orchestrates the per-method
   `#[on_event]` attributes and submits one listener per decorated method.
-- **`#[on_event]`** takes no arguments — the event type is read from the
-  method's first parameter after `&self`. The bus enforces
-  `Clone + Send + 'static` on it through the call site.
+- **`#[on_event]`** reads the event type from the method's first parameter
+  after `&self`. The bus enforces `Clone + Send + 'static` on it through the
+  call site. The method returns `()` or, as here, a `Result<(), E>` whose
+  error converts into `Box<dyn Error + Send + Sync>` — `anyhow::Result<()>` or
+  a crate's own error type. Its two keys, `timeout` and `transactional`, shape
+  the call's unit of work: [Event dispatch](/events/dispatch/).
+
+A listener reacts in process, and a reaction lost to a crash is lost. Work
+that must survive one — the org's notification of the same publish — is a
+[queue](/queue/) job, and the service pushes it inside its own transaction
+rather than from a listener: the job is
+[written into that transaction](/queue/outbox/)
+and filed once it commits, so a crash after the commit loses nothing and a
+refused push fails the request that made it.
 
 ## Several listeners on the same provider
 
@@ -69,31 +90,31 @@ The pattern the framework is built for: one `#[injectable]` declares the
 deps once, multiple decorated methods share them. Two methods can even
 listen to the *same* event; both run, in registration order:
 
-```rust title="crates/features/src/notifications/events/listener.rs"
+```rust title="crates/features/src/posts/events/listener.rs"
 #[injectable]
-pub struct NotificationsListener {
+pub struct PostsListener {
     #[inject]
-    mailer: Arc<Mailer>,
+    search: Arc<SearchIndex>,
 }
 
 #[listeners]
-impl NotificationsListener {
+impl PostsListener {
     #[on_event]
-    async fn email_the_author(&self, event: PostPublishedEvent) {
-        self.mailer.notify_published(event.post_id).await;
+    async fn on_post_published(&self, event: PostPublishedEvent) -> anyhow::Result<()> {
+        self.search.index(&event.post).await
     }
 
     #[on_event]
-    async fn index_for_search(&self, event: PostPublishedEvent) {
-        // reindex `event.post_id` for full-text search
+    async fn refresh_suggestions(&self, event: PostPublishedEvent) {
+        // refresh what search suggests for `event.post.title`
     }
 }
 ```
 
-Two inventory entries — `NotificationsListener::email_the_author` and
-`NotificationsListener::index_for_search` — both pointing at the same
-instance. Same `Arc<Mailer>`, two subscriptions to `PostPublishedEvent`;
-both run, in registration order.
+Two inventory entries — `PostsListener::on_post_published` and
+`PostsListener::refresh_suggestions` — both pointing at the same instance. Same
+`Arc<SearchIndex>`, two subscriptions to `PostPublishedEvent`; both run, in
+registration order.
 
 <Aside type="caution">
 A single `#[listeners]` impl block per struct. Put every listener of a
@@ -106,14 +127,12 @@ provider in the same block — same convention as `#[routes]`,
 The payload is a plain `Clone` struct at the producer's port
 (`event.rs`) — the same feature that emits it owns its definition:
 
-```rust title="crates/features/src/posts/event.rs (from the demo, abridged)"
-use uuid::Uuid;
+```rust title="crates/features/src/posts/event.rs (from the demo)"
+use super::entities::post::Post;
 
 #[derive(Clone)]
 pub struct PostPublishedEvent {
-    pub post_id: Uuid,
-    pub org_id: Uuid,
-    pub title: String,
+    pub post: Post,
 }
 ```
 
@@ -126,121 +145,105 @@ parameter is `PostPublishedEvent` subscribes to it.
 The emitter injects `Arc<EventBus>` like any other dep and calls `emit`
 once the work is done:
 
-```rust title="crates/features/src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs (from the demo, abridged)"
 #[injectable]
 pub struct PostsService {
     #[inject]
     bus: Arc<EventBus>,
+    #[inject]
+    jobs: Arc<Jobs>,
+    // …
 }
 
 impl PostsService {
-    pub async fn create_in_org(&self, input: CreatePost) -> Result<Post, ServiceError> {
-        let model = self.insert_through_repo(input).await?;
+    pub async fn publish(&self, model: Model) -> Result<Post, PostError> {
+        // …
+        let receipt = self.jobs.push(NotifyQueue, notification).await?;
+        // …
+        let post = Post::from(&published);
         self.bus
-            .emit(PostPublishedEvent {
-                post_id: model.id,
-                org_id: model.org_id,
-                title: model.title.clone(),
-            })
+            .emit(PostPublishedEvent { post: post.clone() })
             .await;
-        Ok(Post::from(&model))
+        Ok(post)
     }
 }
 ```
 
-`emit` is awaited — when it returns, every listener has run. Emitting an
-event with no subscriber is a no-op (not an error), so adding a listener
-later does not require touching the emitter.
+`publish` writes the post, its notification job and its publication row
+inside the request's transaction, so the listeners wait for it: `emit` hands
+the dispatch to the unit of work, which runs it once the transaction has
+committed and drops it if the transaction rolls back. Subscribers hear of a
+post that is published, never of one a failed request un-published — and the
+service did not have to say so. The job takes the same road through the
+outbox: filed after the commit, never after a rollback. Where nothing is
+waiting to commit — a safe request, a job running on the pool, an app with
+no database — `emit` returns once every listener has run. Emitting an event
+with no subscriber is a no-op (not an error), so adding a listener later does
+not require touching the emitter.
+
+A GraphQL subscription or a server-sent stream reads the same events as a
+stream: [Event streams](/events/streams/).
 
 ## Wire it in
 
-The emitting feature and the listener feature each list `EventsModule` in
-their own module — the bus is a shared singleton, so a diamond import is
-built once. The producer's `PostsModule` lists `imports = [EventsModule]`
-to inject `Arc<EventBus>`; the listener's module does the same:
+The producer's `PostsModule` lists `imports = [EventsModule]` to inject
+`Arc<EventBus>`, and the listener's `events/` adapter imports its port, so the
+bus arrives with it — a shared singleton, built once however many modules
+import it:
 
-```rust title="crates/features/src/notifications/events/module.rs (from the demo)"
+```rust title="crates/features/src/posts/events/module.rs"
 use nest_rs::core::module;
-use nest_rs::events::EventsModule;
 
-use super::listener::NotificationsListener;
+use super::listener::PostsListener;
+use crate::posts::PostsModule;
 
 #[module(
-    imports = [EventsModule],
-    providers = [NotificationsListener],
+    imports = [PostsModule],
+    providers = [PostsListener],
 )]
-pub struct NotificationsEventsModule;
+pub struct PostsEventsModule;
 ```
 
-The app composes the producer and the listener; `EventsModule` arrives
-transitively through both (registration is idempotent):
+The app lists the adapter beside the edges it serves, so its imports say which
+reactions the binary runs:
 
-```rust title="apps/api/src/module.rs (from the demo, abridged)"
-use nest_rs::core::module;
-
-use features::notifications::NotificationsEventsModule;
-use features::posts::PostsHttpModule;
-
-#[module(imports = [
-    PostsHttpModule,
-    NotificationsEventsModule,
-])]
+```rust title="apps/api/src/module.rs"
+#[module(imports = [PostsHttpModule, PostsEventsModule])]
 pub struct ApiModule;
 ```
 
 ## Run it
 
-At bootstrap each wired listener logs one line at `debug`, target
-`nest_rs::events`:
+As the boot ends, each wired listener files one `mounted` line, target
+`nest_rs::events`, as every edge's unit does:
 
 ```text frame="terminal"
-DEBUG nest_rs::events: wired event listener listener="NotificationsListener::on_post_published"
+INFO nest_rs::events: mounted host="PostsListener" method="on_post_published" event="PostPublishedEvent"
 ```
 
-Dispatch is inline — `emit` awaits each listener in turn — so a listener is not
-a unit of work of its own: its logs file under the span of whatever emitted the
-event, with that request's `trace_id` and `actor_id`. See
-[Correlation](/fundamentals/correlation/).
+Each listener call then runs as a unit of work of its own, `events.dispatch`,
+and files one operation line naming the listener and the event, by the same
+value.
+[Event dispatch](/events/dispatch/) covers that unit — its transaction, its
+deadline, the order the bus keeps and what a failure changes.
 
 <Aside type="caution">
 Without `EventsModule` anywhere in the tree, the `EventBus` is absent —
 every `#[listeners]` provider compiles in but stays inert (no
-subscription is wired). This is the same "linked but unreachable"
+subscription is wired), and the boot names each one at `warn`. This is the same "linked but unreachable"
 property the rest of the framework relies on: an app that does not want
 the bus omits the module.
 </Aside>
 
-## The shape of dispatch
-
-`bus.emit(event)` reads the listener list once (under an uncontended
-`RwLock` — read-only after bootstrap), then awaits each listener in turn
-with its own clone of the event. Three consequences worth naming:
-
-- **Order is deterministic** — registration order is preservation order;
-  listeners are registered in the order their providers appear in
-  `providers = [...]`, then in the order their methods appear in the
-  `#[listeners]` impl block.
-- **Failure is local** — a listener returns `()`; there is no `Result` to
-  propagate, no retry, no dead-letter queue, no global rollback. A
-  **panicking** listener is contained to itself: the panic is caught, logged
-  at `error` on `nest_rs::events` with the event type and the panic message,
-  and the chain continues with the next listener. `emit` returns normally, so
-  the emitter's own post-emit work still runs and an HTTP response is still
-  built. Side effects that can fail belong on the [Queue](/queue/), which
-  buys retries as well as isolation.
-- **No bridge to a transaction** — `emit` does not enroll itself in the
-  ambient executor's transaction. If a listener must write to the same
-  transaction as the emitter, call it directly from the service instead
-  of going through the bus; emit once the transaction commits for the
-  fire-and-forget cases.
-
 ## Module-gated, even when the crate is shared
 
 A worker app that links `features` for the data layer but only imports
-`PostsModule` keeps `NotificationsListener` inert: the inventory entry is
-present in the binary but skipped at boot (a `warn` on `nest_rs::events`)
-because the provider is not reachable from the worker's module tree. Same
-property as queue processors and scheduled jobs.
+`PostsModule` keeps `PostsListener` inert: the inventory entry is
+present in the binary but skipped at boot because the provider is not reachable
+from the worker's module tree. The skip is said once on `nest_rs::events` — at
+`debug`, since a listener in a shared crate whose module this app does not import
+is another binary's, and at `warn` with a `hint` naming the remedy when it is the
+app's own code. Same property as queue processors and scheduled jobs.
 
 ## Reference
 
@@ -248,11 +251,13 @@ property as queue processors and scheduled jobs.
   `#[on_event]`.
 - `crates/features/src/posts/event.rs` + `service.rs` — the producer:
   payload at the port, emitted from the service.
-- `crates/features/src/notifications/events/listener.rs` — the listener
-  host in an `events/` adapter folder.
+- `crates/nest-rs-events/tests/integration/bus.rs` — listener hosts driven end
+  to end.
 
 ## Going further
 
+- [Event dispatch](/events/dispatch/) — each listener's unit of work, its
+  deadline, the order of dispatch and what a failure changes.
 - [Queue](/queue/) — durable, distributed, retried; the right tool when
   the work must outlive the request or run on another binary. A bus event
   shares the past-tense `…Event` naming; the difference is delivery

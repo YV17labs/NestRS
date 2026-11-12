@@ -1,13 +1,29 @@
+use auth::SignInConfig;
 use features::{Claims, Role};
-use poem::http::StatusCode;
+use nest_rs::http::StatusCode;
+use nest_rs::testing::LogCapture;
 use serde_json::json;
 
 use super::harness::*;
 
+fn the_one_refusal_says_neither(logs: &LogCapture, reason: &str, email: &str, password: &str) {
+    let refusal = logs.expect_one(features::users::TARGET, "login failed");
+    assert_eq!(refusal.level, "warn");
+    assert_eq!(refusal.field("reason").as_deref(), Some(reason));
+    assert!(
+        refusal
+            .fields
+            .values()
+            .all(|value| !value.contains(email) && !value.contains(password)),
+        "{refusal:?}"
+    );
+    logs.expect_none(features::sign_in::TARGET, "sign-in refused");
+}
+
 #[tokio::test]
 async fn login_issues_a_token_the_public_key_verifies() {
-    let (db, app) = boot().await;
-    seed_org_and_user(db.connection().as_ref()).await;
+    let app = boot().await;
+    seed_org_and_user(&app).await;
 
     let resp = app
         .http()
@@ -19,49 +35,138 @@ async fn login_issues_a_token_the_public_key_verifies() {
         .send()
         .await;
     resp.assert_status_is_ok();
+    resp.assert_header("cache-control", "no-store");
+    resp.assert_header("pragma", "no-cache");
 
-    let json = resp.json().await;
-    let token = json
-        .value()
-        .object()
-        .get("access_token")
-        .string()
-        .to_owned();
-    let claims: Claims = resource_server_verifier()
+    let token = access_token(resp).await;
+    let claims: Claims = resource_server_verifier(&app, API)
         .verify(&token)
+        .await
         .expect("the public key verifies the privately-signed token");
-    assert_eq!(claims.org_id.to_string(), ORG_ID);
-    assert!(claims.sub.is_some());
+    assert!(
+        resource_server_verifier(&app, ASSISTANT)
+            .verify::<Claims>(&token)
+            .await
+            .is_err(),
+        "a sign-in naming no resource is minted for the first served, and only for it"
+    );
+    assert_eq!(claims.org_id, ORG_ID);
+    assert!(claims.sub.user_id().is_some(), "{:?}", claims.sub);
+    assert_eq!(claims.client_id, SignInConfig::default().client_id);
     assert!(claims.roles.contains(&Role::Admin));
 }
 
 #[tokio::test]
 async fn login_rejects_bad_credentials() {
-    let (db, app) = boot().await;
-    seed_org_and_user(db.connection().as_ref()).await;
+    let logs = LogCapture::install();
+    let app = boot().await;
+    seed_org_and_user(&app).await;
 
-    app.http()
+    let resp = app
+        .http()
         .post("/login")
         .body_json(&json!({
             "email": LOGIN_EMAIL,
             "password": "wrong-password",
         }))
         .send()
-        .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_json(json!({ "error": "invalid_grant" })).await;
+    the_one_refusal_says_neither(&logs, "bad_password", LOGIN_EMAIL, "wrong-password");
 }
 
 #[tokio::test]
 async fn login_rejects_unknown_email() {
-    let (_db, app) = boot().await;
+    let logs = LogCapture::install();
+    let app = boot().await;
 
-    app.http()
+    let resp = app
+        .http()
         .post("/login")
         .body_json(&json!({
             "email": "nobody@example.com",
             "password": LOGIN_PASSWORD,
         }))
         .send()
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_json(json!({ "error": "invalid_grant" })).await;
+    the_one_refusal_says_neither(&logs, "unknown_email", "nobody@example.com", LOGIN_PASSWORD);
+}
+
+#[tokio::test]
+async fn login_refuses_another_media_type_naming_only_json() {
+    let app = boot().await;
+
+    let resp = app
+        .http()
+        .post("/login")
+        .content_type(FOREIGN_MEDIA_TYPE)
+        .body(
+            json!({
+                "email": LOGIN_EMAIL,
+                "password": LOGIN_PASSWORD,
+            })
+            .to_string(),
+        )
+        .send()
+        .await;
+    resp.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let body = resp.0.into_body().into_string().await.expect("a body");
+    assert!(!body.contains("x-quoted-marker"), "{body}");
+    assert!(body.contains("application/json"), "{body}");
+}
+
+#[tokio::test]
+async fn login_names_the_resource_its_token_is_for() {
+    let app = boot().await;
+    seed_org_and_user(&app).await;
+
+    let resp = app
+        .http()
+        .post("/login")
+        .body_json(&json!({
+            "email": LOGIN_EMAIL,
+            "password": LOGIN_PASSWORD,
+            "resource": ASSISTANT,
+        }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let token = access_token(resp).await;
+
+    resource_server_verifier(&app, ASSISTANT)
+        .verify::<Claims>(&token)
         .await
-        .assert_status(StatusCode::UNAUTHORIZED);
+        .expect("the resource asked for accepts it");
+    assert!(
+        resource_server_verifier(&app, API)
+            .verify::<Claims>(&token)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn login_for_a_resource_the_issuer_does_not_serve_is_an_invalid_target() {
+    let logs = LogCapture::install();
+    let app = boot().await;
+    seed_org_and_user(&app).await;
+
+    let resp = app
+        .http()
+        .post("/login")
+        .body_json(&json!({
+            "email": LOGIN_EMAIL,
+            "password": LOGIN_PASSWORD,
+            "resource": "https://billing.example.com",
+        }))
+        .send()
+        .await;
+
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_json(json!({ "error": "invalid_target" })).await;
+    let refusal = logs.expect_one(features::sign_in::TARGET, "sign-in refused");
+    assert_eq!(refusal.field("reason").as_deref(), Some("invalid_target"));
 }

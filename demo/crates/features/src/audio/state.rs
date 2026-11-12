@@ -1,7 +1,7 @@
-use schemars::JsonSchema;
-use serde::Serialize;
+use nest_rs::core::output;
 
-#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[output]
+#[derive(Debug, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum TranscodeState {
     Pending,

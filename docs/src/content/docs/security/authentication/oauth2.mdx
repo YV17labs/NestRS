@@ -1,7 +1,6 @@
 ---
 title: OAuth2
 description: Authorization-code flow with PKCE — OAuthClient builds the redirect, validates the callback, and the JWT carries the CSRF state stateless.
-tier: all-options
 sidebar:
   order: 4
 ---
@@ -11,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 `OAuthClient` runs the authorization-code flow against any provider
 that speaks RFC 6749. The flow uses PKCE end-to-end and keeps the
 CSRF state in a signed cookie — no server-side session, no Redis
-lookup, no in-memory map. The redirect leg returns a URL the browser
+lookup, no in-memory map. The redirect leg answers the `302` the browser
 follows; the callback leg validates the `state`, exchanges the code
 for an access token, and hands you the provider's user info.
 
@@ -33,54 +32,61 @@ cargo add nest-rs --features oauth-client
 Enabling `social` brings it along: every social provider composes this client
 as its shared flow.
 
+An app issuing tokens of its own also plays §1.1's *authorization server*, a
+capability of its own: `/callback` below answers with its `AccessTokenResponse`,
+and [Token endpoint](/security/authentication/oauth2-token-endpoint/) is that endpoint whole, so
+`nest_rs::oauth::server` needs its feature beside this one.
+
+```bash frame="terminal"
+cargo add nest-rs --features oauth-server
+```
+
 ## Wire it in
 
-`OAuthClientModule::for_root(None)` registers an `OAuthClient` as global
-infrastructure, configured via `NESTRS_OAUTH_CLIENT__*` env vars. Pin the
+`OAuthClientModule` registers an `OAuthClient` as global
+infrastructure, configured via `<PREFIX>_OAUTH__CLIENT__*` env vars. Pin the
 config in code by passing an `OAuthClientConfig`.
 
 ```rust title="apps/auth/src/module.rs"
 #[module(
     imports = [
-        ConfigModule::for_root(),
-        AuthnModule::for_root(None),
-        OAuthClientModule::for_root(None),
+        OAuthClientModule,
+        AuthnHttpModule,
     ],
 )]
 pub struct AuthModule;
 ```
 
-A controller then exposes the two HTTP legs. The exemplar in
-`crates/features/src/oauth/` ships the full handler:
+A controller then exposes the two HTTP legs. Behind a social provider, the
+callback's strategy is the framework's ([Social login](/security/authentication/social-login/#the-request-flow),
+the exemplar in `crates/features/src/sign_in/`); over a client of your own it
+looks like this:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
+use std::sync::Arc;
+
+use nest_rs::authn::JwtService;
+use nest_rs::core::Ambient;
+use nest_rs::http::{Result, controller, routes};
+use nest_rs::oauth::client::{AuthorizationRedirect, OAuthClient};
+use nest_rs::oauth::server::AccessTokenResponse;
+
 #[controller(path = "/")]
 pub struct OAuthController {
+    #[inject]
+    client: Arc<OAuthClient>,
+    #[inject]
+    jwt: Arc<JwtService>,
     #[inject]
     issuer: Arc<TokenIssuer>,
 }
 
 #[routes]
 impl OAuthController {
-    // The redirect leg is a plain handler: a `Strategy` maps a request to a
-    // principal and never issues a transport response, so the 302 and the
-    // cookie are built here. `#[public]` because there is no credential yet.
     #[get("/authorize")]
     #[public]
-    async fn authorize(&self) -> Result<Response> {
-        let auth = self.client.authorize(&self.jwt, "github")?;
-        Ok(Response::builder()
-            .status(StatusCode::FOUND)
-            .header(header::LOCATION, auth.url)
-            .header(
-                header::SET_COOKIE,
-                format!(
-                    "nestrs_oauth_tx={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
-                    auth.transaction,
-                    OAuthClient::TRANSACTION_TTL_SECS,
-                ),
-            )
-            .finish())
+    async fn authorize(&self) -> Result<AuthorizationRedirect> {
+        Ok(self.client.authorize(&self.jwt, "github", None)?)
     }
 
     // NOT `#[public]`: `OAuthGuard` authenticates *from* `code`/`state`, so it
@@ -89,12 +95,10 @@ impl OAuthController {
     // would fail on the missing principal instead.
     #[get("/callback")]
     #[use_guards(OAuthGuard)]
-    async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
-        Ok(Json(self.issuer.issue(
-            Some(caller.user_id),
-            caller.org_id,
-            caller.roles.clone(),
-        )?))
+    async fn callback(&self, caller: Ambient<Caller>) -> Result<AccessTokenResponse> {
+        Ok(self
+            .issuer
+            .issue(caller.user_id, caller.org_id, caller.roles.clone())?)
     }
 }
 ```
@@ -107,53 +111,46 @@ tells `AuthnGuard` to admit a rejected credential as anonymous, which turns a
 forged-callback `401` into a failure on the missing principal — invisible to any
 alert, WAF rule or rate limit keyed on `401`.
 
+`/authorize` returns what the client answers, an `AuthorizationRedirect`: the
+`302` to the provider, the transaction cookie and `Cache-Control: no-store` are
+the framework's, and the OpenAPI document names the `302` and its `Location` off
+the return type.
+
+`/callback` returns `AccessTokenResponse` bare. The type renders its own JSON
+with the `Cache-Control: no-store` and `Pragma: no-cache` RFC 6749 §5.1 requires
+on a token, so the browser that followed the redirect keeps no copy of it in a
+back-forward cache, and the OpenAPI document reads the body off the return
+type all the same.
+
 ## Configuration
 
-`OAuthClientConfig` lives in `nest-rs-oauth-client` and reads the `oauth_client`
-namespace — the OAuth *client* role has its own crate, so it has its own
-namespace rather than borrowing the one belonging to the crate that answers
-*who the caller is*.
-
-`OAuthClientConfig` is a `validator`-validated struct: every URL field
-must be non-empty (length ≥ 1) or the boot fails loudly. All fields
-follow the dual-path rule.
-
-| Field | Env var | Validation |
-|-------|---------|------------|
-| `client_id` | `NESTRS_OAUTH_CLIENT__CLIENT_ID` | length ≥ 1 |
-| `client_secret` | `NESTRS_OAUTH_CLIENT__CLIENT_SECRET` | length ≥ 1 |
-| `auth_url` | `NESTRS_OAUTH_CLIENT__AUTH_URL` | length ≥ 1 + parses as URL |
-| `token_url` | `NESTRS_OAUTH_CLIENT__TOKEN_URL` | length ≥ 1 + parses as URL |
-| `redirect_url` | `NESTRS_OAUTH_CLIENT__REDIRECT_URL` | absolute URL |
-| `userinfo_url` | `NESTRS_OAUTH_CLIENT__USERINFO_URL` | length ≥ 1 |
-| `scopes` | `NESTRS_OAUTH_CLIENT__SCOPES` | comma-separated list |
-
-`OAuthClient::new` runs `validate()` first, then constructs the
-underlying `BasicClient`. The HTTP backend refuses redirects during
-the token exchange — following them is an SSRF risk per the `oauth2`
-crate's own guidance.
+Every `OAuthClientConfig` field, the TLS each call to the provider runs over,
+and the bound each call is held to are on
+[OAuth2 client configuration](/security/authentication/oauth2-configuration/).
 
 ## The redirect leg
 
-`authorize` produces the URL the browser follows and the signed
-transaction cookie that ties the round-trip together:
+`authorize` produces the answer a handler returns: the URL the browser
+follows and the signed transaction cookie that ties the round-trip together.
 
 ```rust title="crates/features/src/authn/http/controller.rs"
-let auth = self.client.authorize(&self.jwt, "github")?;
-// auth.url        — the provider redirect URL
-// auth.transaction — short-lived JWT cookie: CSRF state + PKCE verifier
+Ok(self.client.authorize(&self.jwt, "github", Some("https://api.example.com"))?)
 ```
 
 The `provider` argument is the registry key of the provider this flow is for.
-It is **load-bearing**: it is minted into the transaction, and `exchange`
-refuses a transaction issued for a different provider (`AuthError::Failed("OAuth
-provider mismatch")`) *before* the CSRF compare — which is what stops a
-transaction being replayed across providers.
+It is **load-bearing**: it is minted into the transaction, and `callback`
+refuses a transaction issued for a different provider (`AuthError::Failed`,
+its detail `OAuth provider mismatch`) *before* the CSRF compare — which is what stops a
+transaction being replayed across providers. The `resource` is the
+[RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) resource your own
+token is asked for once the flow ends, signed into the transaction so the
+callback reads back what the redirect leg asked (`None` when it named none).
 
 The transaction is a JSON Web Token signed by your app's
-`JwtService`, carrying the random CSRF `state`, the PKCE verifier,
-and `exp`. The browser stores it as a cookie; the callback leg
-verifies the signature before trusting any of it.
+`JwtService`, carrying the random CSRF `state`, the PKCE verifier, the
+`resource` and `exp`. The browser stores it as a cookie the framework names
+and writes, and the callback leg verifies the signature before trusting any
+of it.
 
 The framework generates a fresh PKCE pair per flow
 (`PkceCodeChallenge::new_random_sha256`) and a fresh CSRF token
@@ -162,27 +159,42 @@ The framework generates a fresh PKCE pair per flow
 ## The callback leg
 
 The provider redirects to `redirect_url` with `state` and `code`
-query parameters. `exchange` verifies the cookie's signature,
-compares its CSRF state to the query string, and only then trades
-the code for a `TokenSet`:
+query parameters — or, when it refuses, `state` and §4.1.2.1's `error`.
+`OAuthClient::transaction_from` reads the transaction back from the
+request's `Cookie` fields — every one of them, since HTTP/2 may split the
+cookies over several — by its exact name. `callback` takes the query as the
+request carries it: it verifies the cookie's signature, checks it belongs to
+the provider and compares its CSRF state to the query's in constant time
+before it reads anything else there, then answers the provider's refusal or
+the matched `AuthorizationResponse` — the only value `exchange` trades for a
+`TokenSet`:
 
 ```rust title="crates/features/src/authn/http/controller.rs"
-let tokens = self.client.exchange(
+let transaction_cookie = OAuthClient::transaction_from(
+    req.headers()
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|field| field.to_str().ok()),
+)
+.ok_or_else(|| AuthError::failed("OAuth transaction cookie missing"))?;
+
+let response = OAuthClient::callback(
     &self.jwt,
     "github",              // the same provider the transaction was minted for
-    &transaction_cookie,
-    state_from_query,
-    code_from_query,
-).await?;
+    transaction_cookie,
+    req.uri().query().unwrap_or_default(),
+)?;
+let resource = response.resource().map(str::to_owned);
+let tokens = self.client.exchange(response).await?;
 ```
 
-`TokenSet` carries the `access_token` (and a `refresh_token` /
-`id_token` when the provider returns one), so an OIDC provider can read
-identity from the id_token rather than a userinfo call.
+`TokenSet` carries the `access_token`, and a `refresh_token` when the provider returns
+one. `id_token` stays `None` here: an OIDC provider overrides `SocialProvider::exchange`
+to fill it, so it can read identity from the id_token rather than a userinfo call.
 
 The CSRF check runs **before** the exchange — never the other way
-around. A mismatched state returns `AuthError::Failed("OAuth state
-mismatch")` and the flow stops.
+around: no exchange takes a response nobody matched. A mismatched state returns `AuthError::Failed`, its detail
+`OAuth state mismatch`, and the flow stops.
 
 ## User info → principal
 
@@ -198,7 +210,7 @@ struct GoogleUser {
     name: String,
 }
 
-let profile: GoogleUser = self.client.userinfo(&tokens.access_token).await?;
+let profile: GoogleUser = self.client.userinfo(tokens.access_token.expose_secret()).await?;
 ```
 
 Mapping the provider profile into your principal (looking the user up
@@ -209,38 +221,45 @@ principal type.
 ## `AuthorizationRedirect` — the redirect leg's return value
 
 ```rust title="nest_rs::oauth::client::AuthorizationRedirect"
-pub struct AuthorizationRedirect {
-    pub url: String,
-    pub transaction: String,
+pub struct AuthorizationRedirect { /* private fields */ }
+
+impl AuthorizationRedirect {
+    pub fn url(&self) -> &str;
 }
 ```
 
-- `url` — set `Location: <url>` and return `302`.
-- `transaction` — set as an `HttpOnly`, `Secure`, `SameSite=Lax`
-  cookie scoped to the callback path.
+A handler returns it, bare or inside a `Result`, and RFC 6749 §4.1.1's redirect
+is written for it:
 
-The transaction inherits the `JwtService`'s expiry, so a flow that
-takes longer than your `expires_in` to complete fails the verify
-step. Keep the JWT TTL aligned with how long a user typically takes
-to consent.
+```http
+HTTP/1.1 302 Found
+location: <url>
+set-cookie: __Host-oauth_tx=<token>; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax
+cache-control: no-store
+```
 
-## Token endpoint errors
+`no-store` means no cache keeps the response that set the cookie, and the answer
+is the cookie's one way out: its fields are private and written valid where
+`authorize` builds them, so a handler cannot set it on a response of its own.
+`url()` reads where the browser is sent. A transaction `jwt` cannot sign — a
+verify-only service — is a `SignError`, the opaque `500` with no cookie, no
+challenge and its chain at `error`.
 
-A token-issuing controller that fronts the OAuth flow (or its
-`client_credentials` grant) emits RFC 6749 wire codes via
-`TokenError`:
+Behind a social provider, `SocialRegistry::authorize` answers a `SocialRedirect`
+wrapping this one, or the `404` for a provider no imported module registers
+([Social login](/security/authentication/social-login/#the-request-flow)).
 
-| Variant | Wire string | Status |
-|---------|-------------|--------|
-| `UnsupportedGrant` | `unsupported_grant_type` | 400 |
-| `InvalidScope` | `invalid_scope` | 400 |
-| `InvalidClient` | `invalid_client` | 401 |
-| `Sign(inner)` | `server_error` | 500 |
+The cookie's name is `OAuthClient::TRANSACTION_COOKIE`, the framework's
+rather than yours. Its `__Host-` prefix makes a browser refuse it unless
+it is `Secure`, on `Path=/` and without a `Domain`, so a sibling subdomain
+can neither plant nor overwrite it. `HttpOnly` keeps it from every
+script. `SameSite=Lax` lets it ride the provider's redirect back, a
+top-level cross-site navigation that `Strict` would strip.
 
-The `Sign` variant collapses any internal signing failure to the
-opaque RFC code on the wire; the inner `anyhow::Error` stays attached
-for `tracing`. A rename of these strings breaks every conforming
-client — they are wire contracts, not display strings.
+The transaction lives `OAuthClient::TRANSACTION_TTL_SECS` — ten minutes,
+the signed token's `exp` and the cookie's `Max-Age` alike — whatever your
+`JwtService`'s `expires_in`. A user who takes longer to consent starts
+the flow again.
 
 <Aside type="caution">
 `OAuthClient` is a confidential client: it holds a `client_secret` and
@@ -255,8 +274,8 @@ protect a secret.
 - [Social login](/security/authentication/social-login/) — mount
   GitHub/Google (or your own provider) over this client through an open,
   discovered provider contract.
+- [OAuth2 client configuration](/security/authentication/oauth2-configuration/)
+  — the fields, the TLS and the bound on every provider call.
 - [JWT](/security/authentication/jwt/) — the access token your callback issues.
-- [Authentication](/security/authentication/) — the `Strategy` trait
-  the callback runs.
 - [Threat model](/security/threat-model/) — what PKCE + CSRF cookies
   catch, and what they don't.

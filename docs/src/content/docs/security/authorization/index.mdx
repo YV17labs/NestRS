@@ -1,6 +1,6 @@
 ---
 title: Authorization
-description: AuthzAbility compiles your policy into an Ability per request — the framework reads it from the query filter, the by-id binding, and the response mask.
+description: AuthzAbility compiles your policy into an Ability per request, read by the query filter, the by-id binding and each wire row where it is built.
 sidebar:
   label: Overview
   order: 1
@@ -12,10 +12,10 @@ Authorization answers *what the caller may do*. You write one
 `AbilityFactory` per app that compiles the caller's principal into an
 `Ability` — the per-request capability set. The framework reads that
 ability from three places: the query pre-filter on every read, the
-by-id binding when a route loads a row, and the response mask after
-the handler returns. None of them are opt-in per route — they apply
-to every handler whose controller imports the transport's authz
-module.
+by-id binding when a route loads a row, and each wire row where
+`#[expose]`'s conversion builds it. Each is a line on the unit: its `#[authorize]` or
+`#[public(Action, Subject)]` names what it reads, and a unit naming nothing has
+the ability withheld from its reads, so what it did not declare fails closed.
 
 The engine is ability-based — grants, conditional rules, fields — but
 backed by one shared `Predicate` AST so the SQL filter and the
@@ -27,12 +27,16 @@ in-memory check can never disagree row by row.
 cargo add nest-rs --features authz
 ```
 
+`seaorm` turns it on too. Every edge's `#[authorize]` expands into this crate,
+so a decorator carrying it in a build without `authz` is a compile error that
+names the feature.
+
 ## One factory, one ability per request
 
 `AbilityFactory` is a tiny trait you implement once. The framework
 calls `define` per request, after the authn guard attached the
-principal. The resulting `Ability` lives in request extensions and as
-a `task_local!` for the data layer.
+principal. The guard attaches the resulting `Ability`, so it is ambient
+for the rest of the request, where the data layer reads it.
 
 A minimal policy is one statement — "members read their org's users":
 
@@ -41,7 +45,6 @@ use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
 #[injectable]
-#[derive(Default)]
 pub struct AuthzAbility;
 
 impl AbilityFactory for AuthzAbility {
@@ -82,7 +85,7 @@ one statement, no terminal `.add()` call. See
 [Policies](/security/authorization/policies/) for the full builder API.
 
 The trait has a second, defaulted branch — `define_visitor` — that the
-guard calls instead of `define` when a `#[public]` route is reached with
+guard calls instead of `define` when what `#[public(Action, Subject)]` opens is reached with
 no credential. It grants nothing until you write into it; see
 [Public reads](/security/authorization/public-reads/).
 
@@ -104,8 +107,53 @@ pub struct UsersController {
 ```
 
 Order matters: `AuthnGuard` attaches the principal; `AuthzGuard` reads
-it and builds the `Ability`. Every handler downstream sees an ambient
-`Ability` it does not have to thread.
+it and builds the `Ability`. The route's `#[authorize]` class gate runs
+right after them, before any interceptor or filter the route declares, so
+nothing the route binds answers a caller the gate refuses. A handler whose
+posture names what it reads sees an ambient `Ability` it does not have to thread.
+
+## One class gate on every edge
+
+`#[authorize(Action, Entity)]` means one thing wherever it is written — a
+route, a GraphQL operation, a WebSocket message, an MCP tool — because every
+decorator emits the same function, `nest_rs::authz::class_gate::<Action,
+Entity>`, run on the unit right after its guards:
+
+- no ability guard in the unit's chain or at its request: the boot refuses, naming
+  the site and the guard to bind;
+- no ability reached the unit all the same — a guard answering for one attached
+  none: refused opaquely, and one `error` on `nest_rs::authz` names the site and the
+  remedy;
+- the caller is anonymous and the site is not `#[public]`: `401`, whatever
+  the visitor's rules grant — a grant written for
+  [public reads](/security/authorization/public-reads/) never satisfies an
+  `#[authorize]`;
+- no grant on the class: `403`, `forbidden`;
+- a denial no `when` narrows — `cannot(Create, E)` beside `can(Manage, E)` —
+  matches every row, so the action is refused here, and so is a site gated on
+  `Manage`, which means every action: `403`, `forbidden`, the same answer
+  whatever the token carries, since no scope lifts a denial;
+- a grant the token's scopes withhold: `403` naming the scopes to ask for
+  ([Scopes](/security/authorization/scopes/)).
+
+A grant or a denial a `when` narrows passes the gate: the rows decide it, in
+the query pre-filter and on the loaded row. A `when` that holds for every row
+by its shape — `p.all([])`, a disjunction holding one — narrows nothing, and
+its denial is refused here like one with no `when`.
+
+Each refusal files one `warn`, `authorization denied`, with its `reason`, and
+reads the same on every edge, each answering in its own form: it names the unit
+by `host`, `method` and the words its `mounted` line says, as a gate's refusal of
+the class does. The gate is no
+feature of an edge: a package's decorator emits it for its own posture as the
+framework's do.
+
+The subject need not be a table. A capability — may transcode, may export —
+is a [subject `#[subject]` declares](/security/authorization/policies/#subjects-no-table-holds):
+`#[authorize(Manage, Transcoding)]` runs this same gate, scope challenge
+included, and the unit reads under the caller's ability as one naming an entity
+does, each row it answers judged for that caller. A visitor's reads stay closed
+there: a capability names no rows a visitor may read.
 
 ## Three places the framework reads it
 
@@ -114,85 +162,28 @@ it and builds the `Ability`. Every handler downstream sees an ambient
    action+entity into a `sea_orm::Condition`, joined into every query.
    No matching grant ⇒ `1 = 0` ⇒ the query returns nothing. See
    [Row-level filtering](/security/authorization/row-level-filtering/).
-2. **`Bind<A, S>` — the by-id loader.**
+2. **`#[authorize(A, bind = S)]` — the by-id loader.**
    `Service::access(id)` loads the row **unscoped**, then re-checks
    the same primary key filtered by `condition_for(action)` — the
    decision is made in SQL, by the same predicate the list path
    joins. Missing row ⇒ 404, present but denied ⇒ 403. See
    [By-id binding](/security/authorization/by-id-binding/).
-3. **`Authorize<A, S>` — the response shaper.** After a 2xx, the
-   shaper deserializes the body into `S::Model`, runs `Ability::mask`,
-   then `retain_wire_keys` to strip back anything outside the wire
-   DTO. See [Response masking](/security/authorization/response-masking/).
+3. **The wire row, judged where it is built.** `User::from(&row)` judges the
+   whole row under the caller's ability at `Read`: a column its grants
+   withhold reads `null`, a row they refuse answers no one, and the row
+   answers only the caller it was judged for, on every edge and in every shape.
+   See [Response masking](/security/authorization/response-masking/).
 
-## Reading the ambient ability
-
-A handler that builds its own query (rare — prefer letting `Repo`
-scope itself) reads the `Condition` via `Scope<E, A>`:
-
-```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::authz::{Read, http::Scope};
-
-#[get("/users/search")]
-async fn search(
-    &self,
-    scope: Scope<user::Entity, Read>,
-    q: Query<String>,
-) -> Result<Json<Vec<User>>> {
-    let rows = user::Entity::find()
-        .filter(scope.into_inner())
-        .filter(user::Column::Name.contains(&q.0))
-        .all(&conn)
-        .await?;
-    Ok(Json(rows.into_iter().map(User::from).collect()))
-}
-```
-
-A service method or any code running under the request's task-local
-reads the ability directly:
-
-```rust title="crates/features/src/users/service.rs"
-use nest_rs::authz::current_ability;
-
-if let Some(ab) = current_ability() {
-    if !ab.can::<user::Entity>(Action::Update, &model) {
-        return Err(ServiceError::Forbidden);
-    }
-}
-```
-
-`current_ability()` returns `None` outside a request (worker job,
-shutdown hook). Worker jobs run **unscoped** by design — system work
-should not be filtered by a caller's ability. See
-[Threat model](/security/threat-model/) for what that buys and what
-it does not.
-
-## What an `Ability` exposes
-
-```rust title="nest_rs::authz::Ability"
-ability.can_class(Action::Read, TypeId::of::<user::Entity>())
-ability.condition_for::<user::Entity>(Action::Read)
-ability.can::<user::Entity>(Action::Update, &model)
-ability.mask::<user::Entity>(Action::Read, &model)
-ability.mask_many::<user::Entity>(Action::Read, models.iter())
-ability.permitted_fields::<user::Entity>(Action::Read, &model)
-```
-
-Each method targets one layer of enforcement — the framework picks
-which one to call where, but the surface is documented because your
-own services may reach for `can` directly when they cannot fit through
-`Repo` or `Bind`.
-
-`Action::Manage` is the wildcard: a grant on `Manage` matches every
-other action. A grant on `Action::Read` does not imply `Update`.
+A service reads the ability too, when a decision of its own needs it:
+[Reading the ability](/security/authorization/reading-the-ability/).
 
 <Aside type="caution">
 A handler **without** the authz module imported has no request
-`Ability`, and every path fails closed rather than open: `Bind` returns
-500, and a `Repo` read on the request-scoped executor renders `1 = 0` —
-zero rows, plus a `warn` naming the entity and action. The access graph
-catches the missing import at boot, and a route that binds no guard at
-all is named in a boot `warn` on `nest_rs::layers`. Match every new
+`Ability`, and every path fails closed rather than open: an
+`#[authorize]` gate refuses the boot, and a `Repo` read on the request-scoped
+executor renders `1 = 0` — zero rows, plus a `warn` naming the entity and
+action. The access graph catches the missing import at boot, and a route
+that no guard identifying a caller covers and is not `#[public]` refuses the boot. Match every new
 controller with the transport's authz module, and write a
 [negative-path test](/testing/negative-path/) that pins the 403.
 </Aside>
@@ -205,19 +196,18 @@ controller with the transport's authz module, and write a
 - [Row-level filtering](/security/authorization/row-level-filtering/)
   — what `Repo::scoped` does, with before/after SQL.
 - [By-id binding](/security/authorization/by-id-binding/) —
-  `Bind<A, S>` and the 404/403 distinction.
+  `#[authorize(A, bind = S)]` and the 404/403 distinction.
 - [Response masking](/security/authorization/response-masking/) —
-  declare `Authorize<A, S>` and masking is automatic; the
-  `mask`/`retain_wire_keys`/`WireModelDefaults` pipeline is documented
-  as internals (skip on a first pass).
+  each wire row judged where it is built, and what `#[expose(nullable)]`
+  declares a grant may withhold.
 - [Public reads](/security/authorization/public-reads/) —
-  `define_visitor`, the anonymous branch a `#[public]` route reads.
+  `define_visitor`, the anonymous branch a `#[public(Action, Subject)]` unit reads.
 - [OAuth scopes](/security/authorization/scopes/) — `.requires_scope(...)`
   narrows a rule to the scope a *token* carries, and refuses with an
   `insufficient_scope` challenge naming what to request. Read it when
   you hand tokens to third-party clients (MCP, in particular).
-- [Per-transport bridges](/security/authorization/per-transport-bridges/)
-  — how GraphQL, WS, and MCP re-establish the ambient ability
+- [Endpoint guards](/security/authorization/endpoint-guards/)
+  — how GraphQL, WS, and MCP build the ambient ability at their request
   (explanation — useful once you add a second transport, not before).
 
 ## In this section
@@ -229,18 +219,27 @@ controller with the transport's authz module, and write a
 - [Row-level filtering](/security/authorization/row-level-filtering/) —
   what `Repo::scoped` joins into the SQL, with before/after.
 - [Route model binding](/security/authorization/by-id-binding/) —
-  `Bind<A, S>` turning a path id into a loaded, authorized model.
+  `#[authorize(A, bind = S)]` turning a path id into a loaded, authorized
+  model.
 - [Response masking](/security/authorization/response-masking/) — the
-  fail-closed field mask every successful response goes through.
+  row judged where it is built, a withheld column reading `null` in every shape.
 
 ### All options
 
-- [Authorization on GraphQL, WS & MCP](/security/authorization/per-transport-bridges/)
-  — the bridges that re-establish the ambient ability per transport.
+- [Predicates](/security/authorization/predicates/) — the AST a rule's `when`
+  builds, and scoping through a relation.
+- [Field grants](/security/authorization/field-grants/) — the columns a reply
+  shows and a write may set.
+- [Endpoint guards](/security/authorization/endpoint-guards/)
+  — the guards that build the ambient ability at each transport's request.
+- [Authorizing WebSocket messages](/security/authorization/websocket-messages/)
+  — a gateway's guards at its upgrade, a posture per message.
 - [Public reads](/security/authorization/public-reads/) — the anonymous
   branch of the same policy, granting nothing until you write it.
 - [OAuth scopes](/security/authorization/scopes/) — gate a rule on the
   scope a token carries, and refuse with an RFC 6750 challenge.
+- [Reading the ability](/security/authorization/reading-the-ability/) — the
+  ability in a service's own check.
 
 ## Going further
 

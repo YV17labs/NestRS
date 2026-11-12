@@ -1,63 +1,100 @@
-//! What a failing message tells the client, and what it tells the operator — the
-//! WS half of the seam MCP established.
+//! A failure the client is owed no word of, said where it is met: `.opaque()`
+//! turns any error into the [`WsError`] a handler returns, answering
+//! [`OPAQUE_CLIENT_MESSAGE`](nest_rs_core::OPAQUE_CLIENT_MESSAGE) under the
+//! `INTERNAL` code, whatever the error's type would otherwise have answered,
+//! and handing the gateway the whole chain, which it files at `error` naming
+//! the message once that frame is its answer.
 //!
-//! A message's reply is built from whatever the handler returned, and its *error*
-//! frame from whatever the handler's error type prints. `Display` is the wrong
-//! default for that: a `DbErr` carries SQL, column names and sometimes row values.
-//! The framework's own `ServiceError::Db` is `#[error("database error")]` so
-//! nothing leaks today, but a feature's own error type has no such discipline
-//! imposed on it — and a WS client is exactly as untrusted as a language model.
-//!
-//! ```ignore
+//! ```
+//! # use std::sync::Arc;
+//! # use nest_rs_core::injectable;
+//! # use nest_rs_ws::{Gateway, Opaque, WsClient, WsError, WsReply, gateway, messages};
+//! #
+//! # #[derive(serde::Serialize)]
+//! # struct Room {
+//! #     name: String,
+//! # }
+//! #
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct RoomsService;
+//! #
+//! # impl RoomsService {
+//! #     async fn list(&self) -> Result<Vec<Room>, std::io::Error> {
+//! #         Err(std::io::Error::other("relation \"rooms\" does not exist"))
+//! #     }
+//! # }
+//! #
+//! # #[gateway(path = "/ws")]
+//! # struct RoomsGateway {
+//! #     #[inject]
+//! #     svc: Arc<RoomsService>,
+//! # }
+//! #
+//! # #[messages]
+//! # impl RoomsGateway {
 //! #[subscribe_message("rooms.list")]
-//! #[authorize(Read, rooms::Entity)]
+//! #[public]
 //! async fn rooms(&self) -> Result<Vec<Room>, WsError> {
 //!     Ok(self.svc.list().await.opaque()?)
 //! }
+//! # }
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let gateway = RoomsGateway { svc: Arc::new(RoomsService) };
+//! # let reply = gateway.dispatch(&WsClient::for_test(), "rooms.list", serde_json::Value::Null).await;
+//!
+//! assert!(matches!(reply, WsReply::Error(e) if e.error == nest_rs_core::OPAQUE_CLIENT_MESSAGE));
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! **A deliberate error is not this.** A validation rejection, a `Denial`, a
 //! message a client can act on — those exist to be *read*. Return them directly.
 
-use std::fmt::Display;
-
-use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
+use nest_rs_core::__private::Withheld;
 
 use crate::envelope::WsError;
 
 /// Turn a failure the client must not read into one it may.
 ///
-/// Implemented for every `Result` whose error is printable, so it covers a
-/// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
-/// any of them having to know WebSockets exist.
+/// Implemented for every `Result` whose error converts into a boxed error, so
+/// the whole cause chain reaches the operator's line.
 ///
-/// The twin traits on MCP and GraphQL are deliberately separate types rather than
-/// one trait generic over the error: the output is what lets `.opaque()?` infer
-/// from the enclosing handler's return type. See `nest_rs_core::opaque`.
+/// Separate from the MCP and GraphQL twins: the output type is what lets
+/// `.opaque()?` infer from the handler's return type (see `nest_rs_core::opaque`).
 pub trait Opaque<T> {
-    /// Log the real error for the operator, hand the client an opaque one.
+    /// Hand the client an opaque error, keeping the real one for the
+    /// operator's line, which the gateway files once it is the answer.
     fn opaque(self) -> Result<T, WsError>;
 }
 
-impl<T, E: Display> Opaque<T> for Result<T, E> {
+impl<T, E> Opaque<T> for Result<T, E>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
+{
     fn opaque(self) -> Result<T, WsError> {
         self.map_err(|err| {
-            tracing::error!(
-                target: crate::TARGET,
-                error = %err,
-                "websocket message failed",
-            );
-            WsError::new(OPAQUE_CLIENT_MESSAGE)
+            let said = nest_rs_core::error_message(&*nest_rs_core::boxed_error(err));
+            WsError::internal().withholding(Withheld::Failed(said))
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::fmt::Display;
 
-    /// An error whose `Display` carries exactly what must not ship.
+    use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
+
+    use super::*;
+    use crate::envelope::WsReply;
+
+    #[derive(Debug)]
     struct Leaky;
+
+    impl std::error::Error for Leaky {}
 
     impl Display for Leaky {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -76,14 +113,12 @@ mod tests {
         );
     }
 
+    /// No per-field detail — that is for rejections a client can act on —
+    /// and the class a client branches on, as every other edge names it.
     #[test]
-    fn the_structured_member_is_left_empty() {
+    fn the_structured_member_names_the_internal_class_alone() {
         let out: Result<(), WsError> = Err(Leaky).opaque();
-        assert!(
-            out.expect_err("a failure").errors.is_none(),
-            "an opaque failure has no per-field detail to offer — that member is \
-             for rejections a client can act on",
-        );
+        crate::testing::assert_opaque(&out.expect_err("a failure"));
     }
 
     #[test]
@@ -92,26 +127,39 @@ mod tests {
         assert_eq!(out.ok(), Some(7));
     }
 
-    /// The other half of the same contract, and the half nobody read.
-    ///
-    /// Withholding the cause from the client is only safe because it is
-    /// recorded somewhere else — here, an error frame on a long-lived socket. If this event ever stopped
-    /// carrying `error`, every `.opaque()?` on this edge would turn a real
-    /// failure into a blank refusal with no trace at all, and the
-    /// nothing-leaks test next door would still pass: it only asserts what is
-    /// *absent* from the wire.
+    /// The chain is handed to the gateway, which files it once the frame is
+    /// the answer: nothing is filed at the call, and the frame keeps it off the
+    /// wire.
     #[test]
     fn and_the_operator_gets_the_error_the_client_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
-        let _ = Err::<(), _>(Leaky).opaque();
+        let err = Err::<(), _>(Leaky).opaque().expect_err("a failure");
 
+        logs.expect_none("nest_rs::ws", "websocket message failed");
+        assert!(
+            matches!(
+                err.server_failure.as_deref().and_then(|failure| failure.withheld.as_ref()),
+                Some(Withheld::Failed(said)) if said.contains("password_hash")
+            ),
+            "the cause the frame withholds is exactly what the line has to carry, got {:?}",
+            err.server_failure,
+        );
+        let wire = serde_json::to_string(&err).expect("serializes");
+        assert!(!wire.contains("password_hash"), "{wire}");
+
+        let WsReply::Error(_) =
+            crate::envelope::chain_rendered(&err).into_reply(Some("rooms.list"))
+        else {
+            panic!("an error answers an error frame");
+        };
         let event = logs.expect_one("nest_rs::ws", "websocket message failed");
         assert_eq!(event.level, "error");
+        assert_eq!(event.field("event").as_deref(), Some("rooms.list"));
         assert!(
             event
                 .field("error")
                 .is_some_and(|e| e.contains("password_hash")),
-            "the cause the frame withholds is exactly what the log has to carry, got {:?}",
+            "{:?}",
             event.fields,
         );
     }

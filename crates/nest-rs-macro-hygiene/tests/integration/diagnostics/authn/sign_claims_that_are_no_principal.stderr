@@ -1,0 +1,21 @@
+error[E0277]: `Claims` is no principal: it names no subject
+  --> tests/integration/diagnostics/authn/sign_claims_that_are_no_principal.rs:12:22
+   |
+12 |     let _ = jwt.sign(claims);
+   |                 ---- ^^^^^^ names no subject
+   |                 |
+   |                 required by a bound introduced by this call
+   |
+help: the trait `PrincipalIdentity` is not implemented for `Claims`
+  --> tests/integration/diagnostics/authn/sign_claims_that_are_no_principal.rs:7:1
+   |
+ 7 | pub struct Claims {
+   | ^^^^^^^^^^^^^^^^^
+   = note: an access token names its subject (RFC 9068 §2.2), which is what a principal says: `#[derive(PrincipalIdentity)]` on the claims struct and `#[principal(actor)]` on the field naming it
+note: required by a bound in `JwtService::sign`
+  --> $WORKSPACE/crates/nest-rs-authn/src/service.rs
+   |
+   | impl JwtService {
+...
+   |     pub fn sign<C: Serialize + PrincipalIdentity>(&self, claims: &C) -> Result<String, SignError> {
+   |                                ^^^^^^^^^^^^^^^^^ required by this bound in `JwtService::sign`

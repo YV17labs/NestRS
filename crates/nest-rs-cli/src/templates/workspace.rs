@@ -4,26 +4,30 @@
 //! features; each app root `module.rs` composes edge modules only.
 
 /// Root `Cargo.toml` for a greenfield NestRS monorepo (crates.io deps).
-pub const ROOT_CARGO: &str = r#"[workspace]
+pub(crate) const ROOT_CARGO: &str = r#"[workspace]
 resolver = "2"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.100"
 
 [workspace.dependencies]
 anyhow = "1.0"
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 features = { path = "crates/features" }
 migrations = { path = "crates/migrations" }
-nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm", "testing"] }
-poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls"] }
-sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
-sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+nest-rs = { version = "{{nestrs_version}}", features = ["http", "seaorm"] }
+sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio", "macros", "with-uuid", "with-chrono"] }
+sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio"] }
+
+# A value its type marks `#[must_use]` is never discarded with `let _ =`: a
+# swallowed `Result`, or a guard dropped on the spot (OpenTelemetry's flushes
+# and stops exporting there). Every member inherits it with `[lints]`.
+[workspace.lints.clippy]
+let_underscore_must_use = "deny"
 
 # Release: the smallest, fastest single binary — production defaults.
 [profile.release]
@@ -39,14 +43,9 @@ debug = "line-tables-only"
 
 /// The feature crate's manifest.
 ///
-/// `tracing` and `anyhow` ship from the first `nestrs new`, not from the first
-/// `g queue`: a service logs at `debug` and a `#[hooks]` method returns a
-/// fallible `Result` — the two reflexes the framework's own observability and
-/// lifecycle rules prescribe, and the two crates the docs write in feature code
-/// without ever telling the reader to add them. A workspace that configures
-/// `tracing-subscriber` in `main` and cannot emit an event from a service is
-/// wired to log and unable to.
-pub const FEATURES_CARGO: &str = r#"[package]
+/// `tracing` and `anyhow` ship from the first `nestrs new`: a service logs at
+/// `debug` and a `#[hooks]` method returns a `Result`.
+pub(crate) const FEATURES_CARGO: &str = r#"[package]
 name = "features"
 version.workspace = true
 edition.workspace = true
@@ -57,19 +56,28 @@ publish = false
 nest-rs.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+
+[lints]
+workspace = true
 "#;
+
+/// What a member manifest adds when its workspace declares `[workspace.lints]`;
+/// a workspace an older `nestrs new` wrote declares none, and inheriting a
+/// table that does not exist fails its build.
+pub(crate) const INHERITED_LINTS: &str = "\n[lints]\nworkspace = true\n";
 
 /// The feature-crate root. Every workspace starts with the app's own `hello`
 /// feature declared here (see [`super::hello`]).
-pub const FEATURES_LIB: &str = r#"//! Product features — vertical slices shared across apps.
+pub(crate) const FEATURES_LIB: &str = r#"//! Product features — vertical slices shared across apps.
 
 pub mod {{snake}};
 
 pub use {{snake}}::{{http_module}};
 "#;
 
-/// Thin workspace app — composition only (`apps/api` shape).
-pub const APP_CARGO: &str = r#"[package]
+/// Thin workspace app — composition only (`apps/api` shape). The app alone
+/// links OpenTelemetry, which its `main` installs.
+pub(crate) const APP_CARGO: &str = r#"[package]
 name = "{{kebab}}"
 version.workspace = true
 edition.workspace = true
@@ -78,26 +86,30 @@ publish = false
 
 [dependencies]
 features.workspace = true
-nest-rs.workspace = true
-tokio.workspace = true
+nest-rs = { workspace = true, features = ["opentelemetry"] }
 anyhow.workspace = true
 
+[dev-dependencies]
+nest-rs = { workspace = true, features = ["testing"] }
+tokio.workspace = true
 "#;
 
-pub const APP_LIB: &str = r#"mod module;
+pub(crate) const APP_LIB: &str = r#"mod module;
 
 pub use module::{{module}};
 "#;
 
-pub const APP_MAIN: &str = r#"use anyhow::Result;
-use nest_rs::config::Environment;
+/// The binary: the one line that installs OpenTelemetry, which exports
+/// wherever the deployment's `OTEL_*` point, then the app.
+pub(crate) const APP_MAIN: &str = r#"use anyhow::Result;
 use nest_rs::core::App;
+use nest_rs::opentelemetry::OpenTelemetry;
 
 use {{snake}}::{{module}};
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
-    let _environment = Environment::init();
+    let _otel = OpenTelemetry::init()?;
 
     App::builder()
         .module::<{{module}}>()
@@ -111,21 +123,34 @@ async fn main() -> Result<()> {
 /// Composition only — the app's own module name and the feature module it
 /// serves share a snake name, in two different crates (`BlogModule` in
 /// `apps/blog/src/module.rs`, `BlogModule` in `crates/features/src/blog/`).
-pub const APP_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
+/// It lists the edges the app serves; each adapter's handler brings what serves
+/// its edge, so the root names one only to pin it.
+pub(crate) const APP_MODULE: &str = r#"use nest_rs::core::module;
 
 use features::{{snake}}::{{http_module}};
 
 #[module(
     imports = [
-        HttpModule::for_root(HttpConfig { port: {{port}}, ..Default::default() }),
         {{http_module}},
     ],
 )]
 pub struct {{module}};
 "#;
 
-pub const README: &str = r#"# {{kebab}}
+/// The app's own `.env`: what tells it apart from the workspace's other apps,
+/// read over the root's files under a development or test profile — its port,
+/// and the issuer and the audience of the tokens it mints and verifies, its own
+/// origin, which `JwtService` requires once the app authenticates.
+pub(crate) const APP_ENV: &str = r#"# `{{kebab}}`'s own settings, read over the workspace's `.env*` under a
+# declared development or test profile only; a deployment sets its own.
+{{env_prefix}}_HTTP__PORT={{port}}
+# The issuer and the audience every token this app mints names, and every token
+# it verifies must: its own origin, read once the app authenticates.
+{{env_prefix}}_AUTHN__ISSUER=http://localhost:{{port}}
+{{env_prefix}}_AUTHN__AUDIENCE=http://localhost:{{port}}
+"#;
+
+pub(crate) const README: &str = r#"# {{kebab}}
 
 **Workspace** NestRS monorepo — product logic in `crates/features/`, thin
 composition apps under `apps/`. Generated by `nestrs new {{kebab}}`.
@@ -140,15 +165,16 @@ nestrs run build --all        # every app
 ```
 
 Open **http://localhost:3000/** in your browser — `Hello World` from
-`crates/features/src/hello/`. `apps/hello/` only wires modules; the listen
-port is set in `apps/hello/src/module.rs`, not in `.env`.
+`crates/features/src/hello/`. `apps/hello/` only wires modules; its listen
+port is its own setting, in `apps/hello/.env`, read over the workspace's
+`.env*` under the development and test profiles. `nestrs run start` runs under
+production, which reads no app's own file: a deployment names the port.
 
 ## Grow the workspace
 
 ```bash
-nestrs new blog                    # another app + its own hello on GET /
-nestrs g resource posts            # DB-backed CRUD, behind the app's guards
-nestrs g migration create_posts    # its table
+nestrs new blog                                              # another app + its own hello on GET /
+nestrs g resource posts title:string body:text --app blog    # DB-backed CRUD behind blog's guards, its table's migration
 docker compose up -d && nestrs run db up
 ```
 
@@ -162,7 +188,7 @@ Import edge modules in each app's root `module.rs` — see
 in the framework repo.
 "#;
 
-pub const JUSTFILE: &str = r#"{{env_prefix_export}}_default:
+pub(crate) const JUSTFILE: &str = r#"{{env_prefix_export}}_default:
     @just --list
 
 # Run an app with auto-reload — watches the source, rebuilds and restarts on
@@ -185,7 +211,8 @@ build app="hello":
 check:
     cargo check --workspace
 
-# Tests — unit/integration/e2e/doctests. Usage: nestrs run test [unit|e2e|doc]
+# Tests, one recipe per kind; bare `nestrs run test` runs them all.
+# Usage: nestrs run test [unit|integration|e2e|doc|cov]
 mod test
 
 # Database lifecycle. Usage: nestrs run db up|down|fresh|status|seed|reset
@@ -195,30 +222,36 @@ mod db
 fmt:
     cargo fmt --all
 
-# Clippy (strict) + format check.
+# Clippy (strict, every feature) + format check + the naming lint.
 lint:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo fmt --all --check
     nestrs lint
+
+# Every check before a merge: lint, then every test.
+ci: lint test::all
 "#;
 
-pub const TEST_JUSTFILE: &str = r#"# Test recipes, exposed as `nestrs run test <kind>` (see `mod test` in the
-# Justfile). Bare `nestrs run test` lists these — pick a kind to run.
+pub(crate) const TEST_JUSTFILE: &str = r#"# Test recipes, exposed as `nestrs run test <kind>` (see `mod test` in the
+# Justfile). Bare `nestrs run test` runs the first, every kind.
 
-# Bare `nestrs run test` lists the kinds instead of running one.
-_default:
-    @just --list test
+# Every test: unit, integration, e2e and the doc examples.
+all: && doc
+    cargo nextest run --workspace --no-fail-fast
 
-# Unit + integration + doctests, no DB.
+# A new project has no `#[cfg(test)]` module yet, nor an e2e test: their
+# recipes pass with nothing to run until you write the first.
+# The `#[cfg(test)]` modules in each crate's `src/`.
 unit:
-    cargo nextest run --workspace -E 'not binary(e2e)'
-    cargo test --workspace --doc          # nextest skips doctests; run them too
+    cargo nextest run --workspace --no-fail-fast --lib --bins --no-tests=pass
 
-# Each app is scaffolded with an empty one, so `--no-tests=pass` keeps this
-# green until you write the first.
-# e2e tests — the `tests/e2e/main.rs` suites, over live Postgres/Redis.
+# The `tests/integration` suites, in process: no database needed.
+integration:
+    cargo nextest run --workspace --no-fail-fast -E 'kind(test) and not binary(e2e)'
+
+# The `tests/e2e` suites, over live Postgres and Redis.
 e2e:
-    cargo nextest run --workspace -E 'binary(e2e)' --no-tests=pass
+    cargo nextest run --workspace --no-fail-fast -E 'binary(e2e)' --no-tests=pass
 
 # Nothing to install by hand: `cargo-llvm-cov` comes with the CLI's first-run
 # bootstrap, and the `llvm-cov` / `llvm-profdata` it shells out to come from the
@@ -228,9 +261,9 @@ e2e:
 # `just --list` shows the line above a recipe, so the summary goes last.
 # Coverage over the full suite, e2e included.
 cov:
-    cargo llvm-cov nextest --workspace
+    cargo llvm-cov nextest --workspace --no-fail-fast
 
 # Doctests only — the code examples inside `///` doc comments.
 doc:
-    cargo test --workspace --doc
+    cargo test --workspace --doc --no-fail-fast
 "#;

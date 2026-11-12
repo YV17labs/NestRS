@@ -1,3 +1,5 @@
+pub const TARGET: &str = "features::users";
+
 mod dto;
 mod entities;
 mod module;

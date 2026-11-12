@@ -1,18 +1,42 @@
 //! In-process testing harness for nestrs.
 //!
-//! [`TestApp`] boots an app's real DI graph (same four-phase
-//! [`AppBuilder`](nest_rs_core::AppBuilder) build, access-graph enforced) and
-//! exposes HTTP through `poem`'s `TestClient` without binding a socket. GraphQL,
-//! OpenAPI and MCP self-mount over HTTP, so one client drives every surface.
+//! [`HeadlessApp::builder`] boots an app's real DI graph (same four-phase
+//! [`AppBuilder`](nest_rs_core::AppBuilder) build, access-graph enforced) with
+//! no transport, for a worker or a scheduler; it links no HTTP stack. With the
+//! `http` feature, `TestApp` boots the same graph and drives its HTTP stack,
+//! the edge included, through a `TestClient` without binding a socket.
+//! GraphQL, OpenAPI and MCP self-mount over HTTP, so one client drives every
+//! surface.
+//!
+//! Both boot the module the app's `main` boots, so its app-wide layer pools
+//! run in the suite as they do in the binary, and both arm the outbox of an
+//! app binding a store and a queue backend (feature `queue`), as its relay
+//! does at boot.
 //!
 //! Override providers with [`override_dyn`](TestAppBuilder::override_dyn) /
-//! [`override_value`](TestAppBuilder::override_value).
+//! [`override_value`](TestAppBuilder::override_value). Boot on a throwaway
+//! database with `ephemeral_database` (feature `orm`), run a service in a unit
+//! of the app's binding with `unit` and `system_unit` (features `authz`,
+//! `database`), and sign the bearers the app verifies with a key of the test's
+//! own with `ephemeral_signing_key` and `TestApp::bearer` (feature `authn`).
 //!
 //! [`LogCapture`] covers the other half of a transport's contract: the events
 //! it emits. A denial that fails closed but logs nothing passes every response
 //! assertion — and is exactly what nobody can debug at 3am.
-#![cfg_attr(not(test), deny(unsafe_code))]
+//!
+//! [`printed()`] is its twin for a failure: everything an error prints, however
+//! it is read, so a test can assert what it never quotes.
+//!
+//! [`url_on`], [`url_as`] and [`url_at`] put the suite's own URL on a test's
+//! own database, as its own user or at a proxy's address, keeping everything
+//! else the deployment set.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
+#![expect(
+    clippy::panic,
+    clippy::expect_used,
+    reason = "a test harness fails the test it runs in by panicking, as assert! does"
+)]
 
 // An edge module keeps its namespace and gets no root re-export: `graphql::`
 // and `ws::` say which protocol a name belongs to, and that is the scheme every
@@ -20,10 +44,33 @@
 // Re-exporting both ways gave each type two paths, and this crate was already
 // spelling one of them two ways 200 lines apart.
 mod app;
+#[cfg(feature = "http")]
+mod client;
 mod env;
+#[cfg(feature = "http")]
+mod form;
 mod headless;
 mod logs;
+/// Driving the MCP endpoint over the HTTP test client (feature `http`).
+#[cfg(feature = "http")]
 pub mod mcp;
+mod package;
+mod printed;
+#[cfg(feature = "http")]
+mod response;
+#[cfg(feature = "authn")]
+mod signer;
+#[cfg(feature = "database")]
+mod unit;
+mod url;
+#[cfg(feature = "http")]
+mod urlencoded;
+mod wait;
+
+#[cfg(feature = "tls")]
+mod tls;
+#[cfg(feature = "tls")]
+pub use tls::{TestAuthority, TestCertificate, system_connector};
 
 #[cfg(feature = "orm")]
 mod database;
@@ -39,9 +86,35 @@ pub mod graphql;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-pub use app::{TestApp, TestAppBuilder};
+/// The queue backend kit (feature `queue`).
+#[cfg(feature = "queue")]
+pub mod queue;
+
+#[cfg(feature = "http")]
+pub use app::TestApp;
+pub use app::TestAppBuilder;
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
 pub use logs::{CapturedEvent, CapturedSpan, LogCapture};
+pub use printed::printed;
+pub use url::{url_as, url_at, url_on};
+pub use wait::{wait_for, wait_until};
 
-pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};
+#[cfg(feature = "http")]
+pub use client::{TestClient, TestRequestBuilder};
+#[cfg(feature = "http")]
+pub use form::{TestForm, TestFormField};
+#[cfg(feature = "http")]
+pub use response::{TestJson, TestJsonArray, TestJsonObject, TestJsonValue, TestResponse};
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    /// What `queue_kit!` expands to: the cases and the runner each one goes through.
+    #[cfg(feature = "queue")]
+    pub mod queue {
+        pub use crate::queue::kit::{cases, run};
+    }
+}

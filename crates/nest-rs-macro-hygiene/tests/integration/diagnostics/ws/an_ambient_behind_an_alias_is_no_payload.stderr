@@ -1,0 +1,40 @@
+error[E0277]: `Ambient<Caller>` is read by its name on this edge, and this parameter is named otherwise
+  --> tests/integration/diagnostics/ws/an_ambient_behind_an_alias_is_no_payload.rs:22:37
+   |
+22 |     async fn whoami(&self, _caller: Me) -> String {
+   |                                     ^^ read as an argument the protocol decodes
+   |
+   = help: the trait `nest_rs::core::__private::ProtocolArgument` is not implemented for `Ambient<Caller>`
+   = note: write `Ambient<T>` or `Scoped<T>` in the signature, not an alias of it: a GraphQL operation, a WebSocket message and an MCP operation leave a parameter so named out of their protocol's arguments and resolve it from the unit
+note: required by a bound in `nest_rs::core::__private::ParamProbe::<T>::decoded`
+  --> $WORKSPACE/crates/nest-rs-core/src/param.rs
+   |
+   | impl<T: TailParam> ParamProbe<T> {
+...
+   |     pub fn decoded(&self)
+   |     where
+   |         T: ProtocolArgument,
+   |            ^^^^^^^^^^^^^^^^ required by this bound in `ParamProbe::<T>::decoded`
+
+error[E0277]: the trait bound `Ambient<Caller>: serde::de::DeserializeOwned` is not satisfied
+  --> tests/integration/diagnostics/ws/an_ambient_behind_an_alias_is_no_payload.rs:22:37
+   |
+22 |     async fn whoami(&self, _caller: Me) -> String {
+   |                                     ^^ the trait `for<'de> nest_rs::mcp::rmcp::serde::Deserialize<'de>` is not implemented for `Ambient<Caller>`
+   |
+   = help: the following other types implement trait `nest_rs::mcp::rmcp::serde::Deserialize<'de>`:
+             `&'a JsonRawValue` implements `nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+             `&'a [u8]` implements `nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+             `&'a std::path::Path` implements `nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+             `&'a str` implements `nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+             `()` implements `nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+             `(T,)` implements `nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+             `(T0, T1)` implements `nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+             `(T0, T1, T2)` implements `nest_rs::mcp::rmcp::serde::Deserialize<'de>`
+           and $N others
+   = note: required for `Ambient<Caller>` to implement `DeserializeOwned`
+note: required by a bound in `nest_rs::ws::__private::decode_payload`
+  --> $WORKSPACE/crates/nest-rs-ws/src/envelope.rs
+   |
+   | pub fn decode_payload<T: serde::de::DeserializeOwned>(
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `decode_payload`

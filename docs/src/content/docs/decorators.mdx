@@ -14,20 +14,24 @@ inclusion rule, and it is wider than "an attribute macro". Roughly half the
 rows below — `#[get]`, `#[query]`, `#[public]`, `#[on_module_init]` — are
 inert tokens an orchestrator reads (`#[routes]`, `#[operations]`, `#[hooks]`),
 not macros of their own, and they need no import. What decides a row is
-whether you type it, not how the compiler resolves it.
+whether you type it, not how the compiler resolves it. A decorator of your
+own reads its keys and words its refusals as these do, on the kit
+[Writing a decorator](/extending/decorator/) walks through.
 
 ## DI and lifecycle
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[module]` | struct | Composes a binary: lists `providers` it owns and `imports` it depends on | [Modules](/fundamentals/modules/) |
-| `#[injectable]` | struct | Marks a provider built from the container, with optional `scope = request \| transient` | [Providers](/fundamentals/providers/) |
-| `#[inject]` | field | Resolves the field from the container at construction | [Providers](/fundamentals/providers/) |
+| `#[nest_rs::main]` | `main` function | Installs the panic hook, publishes the `.env` cascade and captures the binary's name, version and description (`AppIdentity`, which OpenAPI's `info`, MCP's `serverInfo` and OpenTelemetry's `service.name` default to) before `main`, builds the runtime, and ends the process within the shutdown budget; written in full, never a bare `#[main]`, which `use tokio::main;` would make tokio's | [Shutdown](/fundamentals/shutdown/) |
+| `#[injectable]` | struct | Marks a provider built from the container, with optional `scope = request \| transient` | [Providers](/fundamentals/providers/), [Provider scopes](/fundamentals/provider-scopes/) |
+| `#[inject]` | field | Resolves the field from the container by its type, at construction; takes no argument | [Providers](/fundamentals/providers/) |
+| `#[instance]` | unit struct | Declares a marker naming one instance of a resource the app opens more than once; its name is the ident in snake case | [Instances](/fundamentals/instances/) |
 | `#[hooks]` | impl block | Orchestrates lifecycle methods on a provider | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_module_init]` | method | Runs once after wiring, before serving | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_application_bootstrap]` | method | Runs once after every module init, before serving | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_module_destroy]` | method | Runs on shutdown after transports stop | [Lifecycle](/fundamentals/lifecycle/) |
-| `#[before_application_shutdown]` | method | Runs before the application begins shutting down | [Lifecycle](/fundamentals/lifecycle/) |
+| `#[before_application_shutdown]` | method | Runs on shutdown once every module-destroy hook has run | [Lifecycle](/fundamentals/lifecycle/) |
 | `#[on_application_shutdown]` | method | Runs last during shutdown, best-effort | [Lifecycle](/fundamentals/lifecycle/) |
 
 ## HTTP
@@ -39,42 +43,83 @@ whether you type it, not how the compiler resolves it.
 | `#[get]` `#[post]` `#[put]` `#[patch]` `#[delete]` | method | Binds the method to an HTTP verb at the given path | [Controllers](/http/controllers/) |
 | `#[sse]` | method | Binds a `GET` that answers a `text/event-stream`, with the keep-alive and the connection ceiling | [Streaming](/http/streaming/) |
 | `#[http_code]` | method | Overrides the default response status code | [Responses](/http/responses/) |
-| `#[response_header]` | method | Appends a response header (repeatable) | [Responses](/http/responses/) |
+| `#[response_header]` | method | Sets a response header, `set-cookie` appended (repeatable) | [Responses](/http/responses/) |
 | `#[redirect]` | method | Issues a redirect and discards the handler payload | [Responses](/http/responses/) |
-| `#[use_guards]` | struct or method | Binds container-resolved Guards, first listed outermost | [Guards](/fundamentals/guards/) |
-| `#[use_interceptors]` | struct or method | Binds container-resolved Interceptors | [Interceptors](/fundamentals/interceptors/) |
-| `#[use_filters]` | struct or method | Binds error-mapping Filters (response mapping; the global pool runs at the transport band) | [Exception filters](/fundamentals/exception-filters/#route-bound-filters-via-use_filters) |
-| `#[use_exception_filters]` | struct or method | Binds typed ExceptionFilters — downcast catch, the layer closest to the handler | [Exception filters](/fundamentals/exception-filters/#typed-catches-via-exceptionfilter) |
-| `#[meta]` | method | Attaches typed metadata read back via `Reflector` (repeatable) | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
-| `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
-| `#[interceptor]` | struct | Marks a struct as a global HTTP interceptor | [Interceptors](/fundamentals/interceptors/) |
+| `#[no_pipes]` | method | Runs no global pipe over the route's body, the app's pool included | [Global pipes](/fundamentals/global-pipes/) |
 | `#[version]` | method | Narrows a route to one of the controller's declared versions | [Versioning](/http/versioning/) |
-| `#[force_guards]` | struct or method | Re-runs a guard the broader scope already ran — the opt-out from dedup | [Guards](/fundamentals/guards/#declare-on-the-provider) |
+
+## Layers and posture
+
+One set for every edge: a host is a controller, a resolver, a gateway, an MCP
+host or a worker's impl block, and a method one of its handlers.
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[use_guards]` | host or method | Binds container-resolved guards, first listed outermost | [Guards](/fundamentals/guards/) |
+| `#[force_guards]` | method | Binds a guard and re-runs it though a broader scope already ran it — the opt-out from dedup | [Guards](/fundamentals/guard-scopes/#re-running-one-on-purpose-force_guards) |
+| `#[use_pipes]` | host or method | Binds global pipes to an HTTP or WebSocket site, beside the app's pool | [Global pipes](/fundamentals/global-pipes/) |
+| `#[use_interceptors]` | host or method | Binds interceptors at the handler stage, after the guards | [Interceptors](/fundamentals/interceptors/) |
+| `#[use_exception_filters]` | host or method | Binds exception filters — a typed catch, or every error with `dyn Error + Send + Sync`; the method's tried first | [Error handling](/fundamentals/exception-filters/#exception-filters) |
+| `#[interceptor(stage = unit)]` | struct | Makes a struct an interceptor its module's import brings around the guards of every unit; at the handler stage, an app-wide one is the root's `GlobalInterceptors<(…)>` | [Interceptors](/fundamentals/interceptors/#the-unit-stage-interceptorstage--unit) |
+| `#[meta]` | host or method | Declares typed metadata, the method's over its host's (repeatable); read back by a layer through `cx.reflector()` | [Execution context](/fundamentals/execution-context/#read-what-the-site-declared) |
+| `#[public]` | method | Access posture: the unit admits a caller with no credential — guards relax; bare it reads nothing a grant guards, and `#[public(Action, Subject)]` gates and reads on that caller's ability, as `#[authorize]` does; refused at boot where the request's guards would turn one away | [Public reads](/security/authorization/public-reads/) |
+| `#[authorize]` | method | Access posture: gates the unit by ability (`Action`, `Subject`) and, on an entity, opens its reads under the caller's ability, each wire row judged for that caller; `bind = Service` also loads the row an id names into an `Authorized<Action, E>` parameter, on a route, a GraphQL operation or an MCP `#[resource]` | [Authorization](/security/authorization/), [Route model binding](/security/authorization/by-id-binding/) |
+| `#[subject]` | unit struct | Declares a capability no table holds as an authorization subject: a rule grants it whole, a posture naming it gates on every edge and opens the unit's reads to the caller's ability | [Policies](/security/authorization/policies/#subjects-no-table-holds) |
+
+## Authentication
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[derive(PrincipalIdentity)]` | struct | Makes a claims type a principal: implements `PrincipalIdentity` and `AmbientValue` off the fields `#[principal]` marks | [JWT](/security/authentication/jwt/#claims--your-shape-your-business-rules) |
+| `#[principal]` | field | Marks the role its field plays — `actor` (required), `tenant` or `scopes` — each played by one field | [JWT](/security/authentication/jwt/#claims--your-shape-your-business-rules) |
+
+## Layer attributes, pair by pair
+
+One grammar holds every decorator pair: each layer attribute is taken where
+its edge runs that family, and anywhere else it is a compile error that says
+why — never a layer that silently never runs. The WebSocket `#[on_connect]` /
+`#[on_disconnect]` hooks run outside any site: they refuse a `#[meta]` (no layer
+runs around a hook to read it), a guard (the upgrade's guards admitted the
+socket), a pipe (a hook has no payload) and a posture (no gate stands before a
+hook, so it reads nothing a grant guards), and run no interceptor or exception
+filter yet.
+
+| Attribute | HTTP | GraphQL | WebSockets | MCP | Queue, schedule, events | Hooks, indicators |
+|---|---|---|---|---|---|---|
+| `#[use_guards]` | struct, method | struct, method | struct (the upgrade), method; — on a connection hook | struct, method | — no caller to gate | — |
+| `#[force_guards]` | method | method | method | method | — | — |
+| `#[use_pipes]` | struct, method | — bind a per-argument pipe | struct, method; — on a connection hook | — bind it inside `Parameters<…>` | — bind a per-argument pipe | — |
+| `#[use_interceptors]` | struct, method | struct, method | struct, method; not yet on a connection hook | struct, method | impl block, method | — |
+| `#[use_exception_filters]` | struct, method | struct, method | struct, method; not yet on a connection hook | struct, method | impl block, method | — |
+| `#[meta]` | struct, method | struct, method | struct, method; — on a connection hook | struct, method | impl block, method | — |
+
+**Not yet** marks a family the edge does not run yet: the compiler refuses it
+today, as a silent no-op would be worse, and the edge takes it once it runs it.
+`#[use_filters]` is refused at every pair, naming `#[use_exception_filters]`,
+whose catch-all replaced it.
 
 ## Wire types
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
-| `#[input]` | struct | Shorthand for any type that crosses a wire: `Serialize` + `Deserialize` + `Validate` + `JsonSchema` + `deny_unknown_fields` | [Extractors](/http/extractors/) |
+| `#[input]` | struct | Shorthand for a DTO an edge decodes: `Serialize` + `Deserialize` + `Validate` + `JsonSchema` + `deny_unknown_fields` | [Extractors](/http/extractors/) |
+| `#[output]` | struct, enum | Shorthand for a DTO an edge only sends: `Serialize` + `JsonSchema` | [Controllers](/http/controllers/) |
+| `#[wire_enum]` | enum | Carries the wire derives for an enum both decoded and sent, a column's or a claims role, and under `graphql` its `Enum` | [Entities](/database/entities/#enum-columns) |
 
-One decorator, one definition — an HTTP body, a GraphQL input, a queue
-payload, a WS message and a tool's arguments all take it. Every surface crate
-re-exports it, so import it from the one the file already uses
-(`nest_rs::http::input`, `nest_rs::queue::input`, `nest_rs::mcp::input`,
-`nest_rs::ws::input`, or `nest_rs::core::input`) — they are the same macro.
+One decorator per shape, one definition — an HTTP body, a GraphQL input, a queue
+payload, a WS message and a tool's arguments all take them, from one path:
+`nest_rs::core`, which `nest_rs::prelude` carries too.
 
 ## GraphQL
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
-| `#[resolver]` | struct | Marks a resolver provider and declares its resolver-scope guards | [GraphQL](/graphql/) |
+| `#[resolver]` | struct | Marks a resolver provider and declares its resolver-scope guards, interceptors and exception filters | [GraphQL](/graphql/) |
 | `#[operations]` | impl block | Orchestrates the block's `#[query]` / `#[mutation]` / `#[subscription]` / `#[entity]` / `#[field_resolver]` methods | [GraphQL](/graphql/) |
-| `#[query]` | method | Root query operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
-| `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
-| `#[subscription]` | method | Root subscription over graphql-ws; same posture, gated at subscribe and masked per item | [Subscriptions](/graphql/subscriptions/) |
+| `#[query]` | method | Root query operation; requires an access posture (`#[authorize(…)]`, `#[public(…)]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize(…)]`, `#[public(…)]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
+| `#[subscription]` | method | Root subscription over graphql-ws; same posture, gated at subscribe, each item judged for its subscriber | [Subscriptions](/graphql/subscriptions/) |
 | `#[entity]` | method | Federation entity resolver — the router resolves it by reference through `_entities`; same mandatory posture, and its arguments are the `@key` | [Federation](/graphql/federation/) |
-| `#[authorize]` | method | Access posture: gates the operation by ability (`Action`, `Entity`) and masks the response | [Queries and mutations](/graphql/queries-mutations/) |
-| `#[public]` | method | Access posture: deliberately ungated operation — no gate, no mask | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[field_resolver]` | method | Custom field resolver on a wire type; takes no posture attribute | [Field resolvers](/graphql/field-resolvers/) |
 | `#[dataloader]` | impl block on service | Batches a method into a request-scoped DataLoader | [Dataloader](/database/dataloaders/) |
 
@@ -94,32 +139,34 @@ re-exports it, so import it from the one the file already uses
 |---|---|---|---|
 | `#[queue]` | unit struct | Declares a queue's wire name and payload type in one artifact both producer and consumer import | [Queue](/queue/) |
 | `#[processor]` | impl block | Orchestrates queue consumers on a provider | [Queue](/queue/) |
-| `#[process]` | method | Binds the method to a queue with an optional `retries` budget and `transactional` settling | [Queue](/queue/) |
+| `#[process]` | method | Binds the method to a queue with a `retries` budget, a per-replica `concurrency`, a deployment-wide `throttle`, an attempt's `timeout` and `transactional` settling; the method may take an `Attempt` and a `Checkpoint<_>` beside its job | [Queue](/queue/) |
 
 ## Schedule
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[scheduled]` | impl block | Orchestrates scheduled methods on a provider | [Schedule](/schedule/) |
-| `#[every]` | method | Fires the method on a fixed interval, optional `transactional` | [Schedule](/schedule/) |
-| `#[cron]` | method | Fires the method on a cron expression, optional `tz` and `transactional` | [Schedule](/schedule/) |
-| `#[after]` | method | Fires the method once after a delay from boot, optional `transactional` | [Schedule](/schedule/) |
+| `#[every]` | method | Fires the method on a fixed interval, optional `timeout`, `transactional`, `replicas` and `key` | [Schedule](/schedule/) |
+| `#[cron]` | method | Fires the method on a cron expression, optional `timeout`, `tz`, `transactional`, `replicas` and `key` | [Schedule](/schedule/) |
+| `#[after]` | method | Fires the method once after a delay from boot, optional `timeout` and `transactional` | [Schedule](/schedule/) |
 
 ## Events
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[listeners]` | impl block | Orchestrates event listeners on a provider | [Events](/events/) |
-| `#[on_event]` | method | Subscribes the method to its second-parameter event type | [Events](/events/) |
+| `#[on_event]` | method | Subscribes the method to its second-parameter event type, each call a unit of work of its own, optional `timeout` and `transactional` | [Events](/events/) |
 
 ## MCP
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[mcp]` | struct | Mounts an MCP endpoint over HTTP, at `/mcp` or a declared path | [MCP](/mcp/) |
-| `#[tools]` | impl block | Serves the block's `#[tool]` and `#[prompt]` methods, deriving the advertised capabilities | [MCP](/mcp/) |
+| `#[tools]` | impl block | Serves the block's `#[tool]`, `#[prompt]`, `#[resource]` and `#[resources]` methods, deriving the advertised capabilities | [MCP](/mcp/) |
 | `#[tool]` | method | Exposes the method as an MCP tool; `description = "…"`, or the doc comment as a fallback | [MCP](/mcp/) |
 | `#[prompt]` | method | Exposes the method as an MCP prompt; `description = "…"`, or the doc comment as a fallback | [Resources and prompts](/mcp/resources-and-prompts/) |
+| `#[resource]` | method | Reads the URIs an RFC 6570 `template = "…"` writes, each variable a typed argument, or under `bind = Service` the row it names; `description = "…"`, or the doc comment as a fallback | [Resources and prompts](/mcp/resources-and-prompts/) |
+| `#[resources]` | method | Answers `resources/list`, one per host | [Resources and prompts](/mcp/resources-and-prompts/) |
 
 ## Health
 
@@ -141,7 +188,6 @@ re-exports it, so import it from the one the file already uses
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[expose]` | struct + field | Exposes a SeaORM entity to GraphQL and OpenAPI from one declaration | [Database](/database/) |
-| `#[wire_enum]` | enum | Carries the wire derives for an entity's enum column, so an `#[expose]`d field of that type crosses GraphQL and OpenAPI | [Entities](/database/entities/#enum-columns) |
 | `#[crud]` | impl block | Generates standard CRUD operations on a controller or resolver | [CRUD](/database/crud/) |
 
 ## OpenAPI

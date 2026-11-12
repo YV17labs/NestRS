@@ -2,7 +2,7 @@
 name = "sut-nestrs"
 version = "1.0.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.100"
 publish = false
 
 [workspace]
@@ -14,9 +14,8 @@ publish = false
 # benchmark an install shape that no longer exists.
 nest-rs = { path = "../../../crates/nest-rs", features = ["http"] }
 anyhow = "1.0"
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
-# `serde`/`schemars` stay: `dto.rs` writes those derives itself. `poem` does
-# not — the handler reaches it through `nest_rs::http::poem`.
+# `serde`/`schemars` stay: `dto.rs` writes those derives itself; the handler's
+# `Json` is `nest_rs::http`'s.
 serde = { version = "1.0", features = ["derive"] }
 schemars = "1.2"
 

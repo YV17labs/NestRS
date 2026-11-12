@@ -1,0 +1,5 @@
+error: #[resources] lists every resource a caller may read, so it takes no argument but a request-scoped provider (`Scoped<T>`) or what a guard attached (`Ambient<T>`) — a resource read by its own arguments is a `#[resource(template = "…")]`
+  --> tests/integration/diagnostics/mcp/resources_takes_an_argument.rs:15:27
+   |
+15 |     async fn notes(&self, page: u32) -> Result<Vec<Resource>, McpError> {
+   |                           ^^^^^^^^^

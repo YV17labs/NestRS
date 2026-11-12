@@ -1,49 +1,105 @@
-use nest_rs_config::{Config, ConfigError, ConfigService, Environment, config};
+use std::time::Duration;
 
-/// S3-compatible object storage configuration, read from the
-/// framework-namespaced `NESTRS_STORAGE__*` keys.
+use nest_rs_config::__private::{RetiredKey, RetiredKeys};
+use nest_rs_config::{
+    Bound, BoundedSetting, ClientTls, Config, ConfigError, ConfigField, ConfigService,
+    DurationBounds, Environment, Field, Floor, Namespaced, Setting, Surface, config,
+    endpoint_shown,
+};
+use nest_rs_core::Secret;
+
+use crate::backend::{Backend, Unopened};
+
+/// How long a call waits for the store's answer by default: under the authentication
+/// guard's 18-second net and the HTTP edge's 20-second request timeout.
+const DEFAULT_OPERATION_TIMEOUT_SECS: u64 = 15;
+
+/// How long a transfer waits for its next bytes by default: the 30 seconds
+/// object_store waits for a request by default.
+const DEFAULT_READ_TIMEOUT_SECS: u64 = 30;
+
+// The URL names the store whole now, its scheme picking the backend.
+nest_rs_core::inventory::submit! {
+    RetiredKeys::under("storage", &[RetiredKey::renamed("BUCKET", "URL")])
+}
+
+/// What the boot says when a deployment reaches its store over plain HTTP.
+pub(crate) const PLAINTEXT_OPEN: &str = "the object store is reached over plain HTTP outside a \
+     dev profile: its credentials and presigned URLs travel unencrypted";
+
+/// The object store's configuration, read from the framework-namespaced
+/// `<PREFIX>_STORAGE__*` keys: [`url`](Self::url) names the store, and its
+/// scheme picks the backend — `s3` or `memory`.
 ///
-/// The defaults target a local S3-compatible server over plain HTTP in
-/// path-style addressing (the common shape for MinIO / RustFS in a dev
-/// container). For real AWS S3, leave [`endpoint`](Self::endpoint) empty and
-/// set [`force_path_style`](Self::force_path_style) to `false`.
-#[config(namespace = "storage")]
+/// `Default` is the production-safe value: no store named, no credential, AWS's
+/// own endpoint, and plain HTTP left to the profile, allowed under a declared
+/// development or test profile alone. The store, its endpoint and its pair are
+/// the deployment's, or the profile's `.env` file's, in every profile. The S3
+/// settings are read for an `s3://` store alone: set beside `memory:///`, the
+/// boot refuses them.
+#[config(namespace = "storage", from_env = "manual")]
 #[derive(Clone)]
 pub struct StorageConfig {
-    /// S3 endpoint URL (e.g. `http://rustfs:9000`). Empty ⇒ real AWS S3.
-    pub endpoint: String,
-    /// The S3 region (required).
+    /// The store, whose scheme picks the backend: `s3://<bucket>[/<prefix>]`
+    /// for AWS S3 or a server speaking its API, `memory:///` for one in this
+    /// process — development and tests alone, since a restart loses it. A
+    /// prefix confines every key under it.
+    pub url: String,
+    /// S3 only: an S3-compatible server's endpoint (`https://rustfs:9000`);
+    /// `None` ⇒ AWS's own.
+    pub endpoint: Option<String>,
+    /// S3 only: the region requests are signed for.
     #[validate(length(min = 1, message = "must not be empty"))]
     pub region: String,
-    /// The access key id for S3 authentication.
-    pub access_key: String,
-    /// The secret access key for S3 authentication.
-    pub secret_key: String,
-    /// The bucket every operation is scoped to (required).
-    #[validate(length(min = 1, message = "must not be empty"))]
-    pub bucket: String,
-    /// `true` ⇒ path-style addressing (`endpoint/bucket/key`), required by
-    /// most S3-compatible servers. `false` ⇒ virtual-hosted-style
-    /// (`bucket.endpoint/key`), the AWS default.
+    /// S3 only: `true` ⇒ path-style addressing (`endpoint/bucket/key`), which
+    /// most S3-compatible servers require; `false` ⇒ virtual-hosted-style
+    /// (`bucket.endpoint/key`), AWS's.
     pub force_path_style: bool,
-    /// Allow reaching the endpoint over plain `http://`. Convenient for a local
-    /// MinIO / RustFS dev server, but a footgun in production where credentials
-    /// would travel unencrypted — so it is **opt-in outside dev/test**
-    /// (`NESTRS_STORAGE__ALLOW_HTTP`), defaulting to `true` only in dev/test and
-    /// `false` in staging/production (STORAGE-ST2).
-    pub allow_http: bool,
+    /// S3 only: the access key id requests are signed with.
+    pub access_key: Secret<String>,
+    /// S3 only: the secret access key requests are signed with.
+    pub secret_key: Secret<String>,
+    /// S3 only: allow reaching the endpoint over plain `http://`
+    /// (`<PREFIX>_STORAGE__ALLOW_HTTP`). `Default` leaves it to the profile:
+    /// allowed under a declared development or test profile alone. Opening it
+    /// outside one, [`Surface::Open`] or `true` from the environment, is honoured
+    /// and logged at `warn` where the store opens.
+    pub allow_http: Surface,
+    /// The most a call waits for the store's answer, every retry included,
+    /// and the boot for its proof; a download's body is held by
+    /// [`read_timeout`](Self::read_timeout) instead. Read from
+    /// `<PREFIX>_STORAGE__OPERATION_TIMEOUT_SECS`, whole seconds from 1 to
+    /// 3600, and in code anything above zero up to an hour; defaults to 15s.
+    /// The boot refuses it at or past a net reaching the client.
+    pub operation_timeout: Duration,
+    /// The most a download waits for its next bytes while it is read: one that
+    /// stalls longer is resumed from where it stopped, and fails naming this
+    /// bound if the resumed body sends nothing within it. Read from
+    /// `<PREFIX>_STORAGE__READ_TIMEOUT_SECS`, whole seconds from 1 to 3600, and in
+    /// code anything above zero up to an hour; defaults to 30s.
+    pub read_timeout: Duration,
+    /// S3 only: what an `https://` endpoint's certificate must chain to — the
+    /// system's authorities unless `<PREFIX>_STORAGE__TLS_CA_CERT` names others,
+    /// which replace them. The certificate is verified either way, and its name
+    /// checked against the endpoint's host. A client certificate
+    /// (`<PREFIX>_STORAGE__TLS_CERT` and `TLS_KEY`) is refused: object_store
+    /// cannot present one.
+    pub tls: ClientTls,
 }
 
 impl std::fmt::Debug for StorageConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StorageConfig")
-            .field("endpoint", &self.endpoint)
+            .field("url", &endpoint_shown(&self.url))
+            .field("endpoint", &self.endpoint.as_deref().map(endpoint_shown))
             .field("region", &self.region)
-            .field("access_key", &"<redacted>")
-            .field("secret_key", &"<redacted>")
-            .field("bucket", &self.bucket)
             .field("force_path_style", &self.force_path_style)
+            .field("access_key", &self.access_key)
+            .field("secret_key", &self.secret_key)
             .field("allow_http", &self.allow_http)
+            .field("operation_timeout", &self.operation_timeout)
+            .field("read_timeout", &self.read_timeout)
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -51,102 +107,299 @@ impl std::fmt::Debug for StorageConfig {
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://rustfs:9000".into(),
+            url: String::new(),
+            endpoint: None,
             region: "us-east-1".into(),
-            access_key: "nestrs".into(),
-            secret_key: "nestrs".into(),
-            bucket: "nestrs".into(),
             force_path_style: true,
-            allow_http: true,
+            access_key: Secret::default(),
+            secret_key: Secret::default(),
+            allow_http: Surface::ByProfile,
+            operation_timeout: Duration::from_secs(DEFAULT_OPERATION_TIMEOUT_SECS),
+            read_timeout: Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS),
+            tls: ClientTls::default(),
         }
     }
 }
 
 impl Config for StorageConfig {
-    /// The unpinned baseline is profile-dependent, and both differences are
-    /// security ones. Outside dev/test the dev sentinel credentials
-    /// (`nestrs`/`nestrs`) are dropped so an unset `NESTRS_STORAGE__ACCESS_KEY`
-    /// fails boot naming the variable rather than authenticating with a public
-    /// default (STORAGE-ST1), and plain-HTTP is off so credentials never travel
-    /// unencrypted by omission (STORAGE-ST2). It lives here rather than in
-    /// `from_env` so it applies only where it is a default — overlaying it onto a
-    /// pinned struct would rewrite a deliberate choice.
-    fn defaults() -> Self {
-        let d = Self::default();
-        if dev_profile() {
-            return d;
-        }
-        Self {
-            access_key: String::new(),
-            secret_key: String::new(),
-            allow_http: false,
-            ..d
-        }
-    }
-
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         let d = base;
-        let allow_http = env.flag("ALLOW_HTTP", d.allow_http)?;
+        let url = env.setting(Self::URL.key())?;
+        let backend = match &url {
+            Some(setting) => Backend::parse(&setting.value).map_err(|why| setting.refuse(why)),
+            None => Backend::parse(&d.url).map_err(|why| refuse_url(env, why)),
+        }?;
+        let url = url.map_or(d.url.clone(), |setting| setting.value);
+        let operation_timeout = Self::OPERATION_TIMEOUT.read(env, d.operation_timeout)?;
+        let read_timeout = Self::READ_TIMEOUT.read(env, d.read_timeout)?;
+        if let Backend::Memory { .. } = backend {
+            refuse_memory_deployed(env)?;
+            refuse_s3_settings(env)?;
+            return Ok(Self {
+                url,
+                operation_timeout,
+                read_timeout,
+                ..d
+            });
+        }
+        let allow_http = Surface::overlay(env, Self::ALLOW_HTTP.key(), d.allow_http)?;
+        let access_key = env.setting(Self::ACCESS_KEY.key())?;
+        let secret_key = env.setting(Self::SECRET_KEY.key())?;
+        refuse_half_a_credential(env, &d, access_key.as_ref(), secret_key.as_ref())?;
+        let endpoint = resolve_endpoint(
+            env,
+            env.setting(Self::ENDPOINT.key())?,
+            d.endpoint,
+            allow_http.is_open(),
+        )?;
+        let tls = ClientTls::overlay(env, Self::TLS.key(), d.tls)?;
+        refuse_tls(env, endpoint.as_deref(), &tls)?;
         Ok(Self {
-            endpoint: resolve_endpoint(
-                env.get("ENDPOINT").unwrap_or(d.endpoint),
-                allow_http,
-                &env.var_name("ENDPOINT"),
-                &env.var_name("ALLOW_HTTP"),
-            )?,
-            region: env.get("REGION").unwrap_or(d.region),
-            access_key: resolve_credential(
-                env.get("ACCESS_KEY").unwrap_or(d.access_key),
-                &env.var_name("ACCESS_KEY"),
-            )?,
-            secret_key: resolve_credential(
-                env.get("SECRET_KEY").unwrap_or(d.secret_key),
-                &env.var_name("SECRET_KEY"),
-            )?,
-            bucket: env.get("BUCKET").unwrap_or(d.bucket),
-            force_path_style: env.flag("FORCE_PATH_STYLE", d.force_path_style)?,
+            url,
+            tls,
+            endpoint,
+            region: env.get(Self::REGION.key())?.unwrap_or(d.region),
+            access_key: resolve_credential(Self::ACCESS_KEY.key(), access_key, d.access_key)?,
+            secret_key: resolve_credential(Self::SECRET_KEY.key(), secret_key, d.secret_key)?,
+            force_path_style: env.flag(Self::FORCE_PATH_STYLE.key(), d.force_path_style)?,
             allow_http,
+            operation_timeout,
+            read_timeout,
         })
     }
 }
 
-/// Refuse a plain-`http://` endpoint when plain HTTP is disallowed.
-///
-/// `object_store`'s `with_allow_http` only gates the client's own byte
-/// transfers, and it does so as an opaque request-time failure. Presigning is a
-/// *local* computation, so it was never gated at all: a production app minted
-/// working `http://` URLs carrying the SigV4 signature — the exact leak the
-/// default exists to prevent, on the flow `/storage/` calls canonical.
-///
-/// Rejecting the pairing where the config is resolved fixes both halves at
-/// once: no unencrypted transfer can be attempted, no plaintext URL can be
-/// signed, and a mis-deployed app fails boot naming the variable instead of
-/// starting healthy and 500-ing on first use. Pure, so the branch is testable
-/// without env mutation.
-fn resolve_endpoint(
-    endpoint: String,
-    allow_http: bool,
-    endpoint_var: &str,
-    allow_http_var: &str,
-) -> nest_rs_config::Result<String> {
-    if is_plaintext(&endpoint) && !allow_http {
-        return Err(ConfigError::parse(
-            endpoint_var,
-            format!(
-                "plain-http endpoint `{endpoint}` is refused because {allow_http_var} is false \
-                 (the staging/production default) — credentials and presigned URLs would travel \
-                 unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in"
-            ),
-        ));
+impl StorageConfig {
+    // The overlay is written by hand, so each field is bound here as `#[config]`
+    // binds it.
+
+    /// [`url`](Self::url)'s key and path.
+    pub const URL: Field = Field::new("URL", "StorageConfig::url");
+    /// [`endpoint`](Self::endpoint)'s key and path.
+    pub const ENDPOINT: Field = Field::new("ENDPOINT", "StorageConfig::endpoint");
+    /// [`region`](Self::region)'s key and path.
+    pub const REGION: Field = Field::new("REGION", "StorageConfig::region");
+    /// [`force_path_style`](Self::force_path_style)'s key and path.
+    pub const FORCE_PATH_STYLE: Field =
+        Field::new("FORCE_PATH_STYLE", "StorageConfig::force_path_style");
+    /// [`access_key`](Self::access_key)'s key and path.
+    pub const ACCESS_KEY: Field = Field::new("ACCESS_KEY", "StorageConfig::access_key");
+    /// [`secret_key`](Self::secret_key)'s key and path.
+    pub const SECRET_KEY: Field = Field::new("SECRET_KEY", "StorageConfig::secret_key");
+    /// [`allow_http`](Self::allow_http)'s key and path.
+    pub const ALLOW_HTTP: Field = Field::new("ALLOW_HTTP", "StorageConfig::allow_http");
+    /// [`tls`](Self::tls)'s key and path.
+    pub const TLS: Field = Field::new("TLS", "StorageConfig::tls");
+
+    /// One `warn` when a deployment reaches its store over plain HTTP: honoured,
+    /// since the deployment chose it, and said, since its credentials and presigned
+    /// URLs then cross the network in clear.
+    pub(crate) fn warn_when_open(&self) {
+        let Some(endpoint) = self.endpoint.as_deref().filter(|url| is_plaintext(url)) else {
+            return;
+        };
+        if let Some(environment) = self.allow_http.opened_in_deployment() {
+            tracing::warn!(
+                target: crate::TARGET,
+                environment = environment.as_str(),
+                endpoint = %endpoint_shown(endpoint),
+                "{PLAINTEXT_OPEN}",
+            );
+        }
     }
-    Ok(endpoint)
+
+    /// The operation budget, bound to
+    /// [`operation_timeout`](Self::operation_timeout) as `#[config(bounds = …)]`
+    /// binds a field — the overlay here is written by hand.
+    pub const OPERATION_TIMEOUT: BoundedSetting<Duration> = BoundedSetting::new(
+        DurationBounds::secs(
+            Floor::AboveZero("a zero budget gives up on every call before the store is asked"),
+            Bound::new(
+                60 * 60,
+                "the budget bounds every call a caller waits on, and a store silent for an hour \
+                 is gone rather than slow",
+            ),
+        ),
+        Field::new("OPERATION_TIMEOUT", "StorageConfig::operation_timeout"),
+    );
+
+    /// The read bound, bound to [`read_timeout`](Self::read_timeout).
+    pub const READ_TIMEOUT: BoundedSetting<Duration> = BoundedSetting::new(
+        DurationBounds::secs(
+            Floor::AboveZero("a zero bound cuts every transfer before its first bytes"),
+            Bound::new(
+                60 * 60,
+                "a transfer that moved nothing for an hour is a dead connection, not a slow one",
+            ),
+        ),
+        Field::new("READ_TIMEOUT", "StorageConfig::read_timeout"),
+    );
+
+    /// The store this config names, once every refusal the read makes holds
+    /// for a config built in code too — what [`Storage::connect`] checks
+    /// before anything is sent.
+    ///
+    /// [`Storage::connect`]: crate::Storage::connect
+    pub(crate) fn backend(&self) -> nest_rs_config::Result<Backend> {
+        let env = ConfigService::for_namespace(Self::NAMESPACE);
+        let backend = Backend::parse(&self.url).map_err(|why| refuse_url(&env, why))?;
+        for (setting, value) in [
+            (Self::OPERATION_TIMEOUT, self.operation_timeout),
+            (Self::READ_TIMEOUT, self.read_timeout),
+        ] {
+            setting.check(Self::NAMESPACE, value)?;
+        }
+        if let Backend::Memory { .. } = backend {
+            refuse_memory_deployed(&env)?;
+            return Ok(backend);
+        }
+        refuse_tls(&env, self.endpoint.as_deref(), &self.tls)?;
+        for (key, value) in [
+            (Self::ACCESS_KEY.key(), &self.access_key),
+            (Self::SECRET_KEY.key(), &self.secret_key),
+        ] {
+            if value.expose_secret().trim().is_empty() {
+                return Err(ConfigError::unset(Self::NAMESPACE, key, PAIR_WHY));
+            }
+        }
+        Ok(backend)
+    }
+}
+
+/// A URL that names no store, refused naming the variable, never quoting it.
+fn refuse_url(env: &ConfigService, why: Unopened) -> ConfigError {
+    ConfigError::parse(env.var_name(StorageConfig::URL.key()), why.to_string())
+}
+
+/// Refuse the in-process store outside a declared development or test
+/// profile: it loses every object at a restart.
+fn refuse_memory_deployed(env: &ConfigService) -> nest_rs_config::Result<()> {
+    let deployed = Environment::from_env();
+    if !deployed.is_deployed() {
+        return Ok(());
+    }
+    Err(ConfigError::parse(
+        env.var_name(StorageConfig::URL.key()),
+        format!(
+            "names memory, a store in this process that loses every object at a restart — \
+             refused in a {} profile, and in one {} does not declare: name an s3:// store",
+            deployed.as_str(),
+            Environment::var_name(),
+        ),
+    ))
+}
+
+/// The settings an `s3://` store reads and the in-process one does not.
+const S3_ONLY: [&str; 9] = [
+    StorageConfig::ENDPOINT.key(),
+    StorageConfig::REGION.key(),
+    StorageConfig::FORCE_PATH_STYLE.key(),
+    StorageConfig::ACCESS_KEY.key(),
+    StorageConfig::SECRET_KEY.key(),
+    StorageConfig::ALLOW_HTTP.key(),
+    "TLS_CA_CERT",
+    "TLS_CERT",
+    "TLS_KEY",
+];
+
+/// Refuse an S3 setting the deployment set beside `memory:///`, which would
+/// read none of it, naming the first one set.
+fn refuse_s3_settings(env: &ConfigService) -> nest_rs_config::Result<()> {
+    for key in S3_ONLY {
+        if let Some(set) = env.setting(key)? {
+            return Err(set.refuse(format!(
+                "is set beside {}, which names memory, a store that reads no S3 setting — \
+                 unset it, or name an s3:// store",
+                env.var_name(StorageConfig::URL.key()),
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a plain-`http://` endpoint when plain HTTP is disallowed:
+/// `object_store`'s `with_allow_http` gates transfers only, never presigning.
+/// A blank endpoint is AWS's own.
+fn resolve_endpoint(
+    env: &ConfigService,
+    setting: Option<Setting>,
+    base: Option<String>,
+    allow_http: bool,
+) -> nest_rs_config::Result<Option<String>> {
+    let allow_http_var = env.var_name(StorageConfig::ALLOW_HTTP.key());
+    let reason = |endpoint: &str| {
+        format!(
+            "the plain-http endpoint {} is refused because {allow_http_var} is false, or unset \
+             outside a declared development or test profile — credentials and presigned URLs \
+             would travel unencrypted; use an https:// endpoint, or set {allow_http_var}=true to \
+             opt in",
+            endpoint_shown(endpoint)
+        )
+    };
+    match setting {
+        Some(setting) if setting.value.trim().is_empty() => Ok(None),
+        Some(setting) if is_plaintext(&setting.value) && !allow_http => {
+            Err(setting.refuse(reason(&setting.value)))
+        }
+        Some(setting) => Ok(Some(setting.value)),
+        None => match base {
+            Some(base) if is_plaintext(&base) && !allow_http => Err(ConfigError::parse(
+                env.var_name(StorageConfig::ENDPOINT.key()),
+                reason(&base),
+            )),
+            base => Ok(base.filter(|endpoint| !endpoint.trim().is_empty())),
+        },
+    }
+}
+
+/// Refuse a credential pair the environment set only half of, whatever supplies
+/// the other half: the environment replaces the pair whole or not at all.
+fn refuse_half_a_credential(
+    env: &ConfigService,
+    base: &StorageConfig,
+    access_key: Option<&Setting>,
+    secret_key: Option<&Setting>,
+) -> nest_rs_config::Result<()> {
+    let (set, other, other_value) = match (access_key, secret_key) {
+        (Some(set), None) => (set, StorageConfig::SECRET_KEY.key(), &base.secret_key),
+        (None, Some(set)) => (set, StorageConfig::ACCESS_KEY.key(), &base.access_key),
+        _ => return Ok(()),
+    };
+    let (set_var, other_file_var) = (set.var(), env.var_name(&format!("{other}_FILE")));
+    let other_value = other_value.expose_secret();
+    let message = if other_value.trim().is_empty() {
+        format!("is not set, nor is {other_file_var}, beside {set_var} — set both")
+    } else {
+        format!(
+            "is not set, nor is {other_file_var}, beside {set_var}, so the other half of the pair \
+             would be the value pinned in code — set {} too, so the pair is replaced whole rather \
+             than mixed",
+            env.spellings(other),
+        )
+    };
+    Err(ConfigError::parse(env.var_name(other), message))
+}
+
+/// The library the client reaches S3 through, as a refusal names it.
+const OBJECT_STORE: &str = "object_store, the library storage reaches S3 through,";
+
+/// Refuse TLS material the client cannot use: any beside a plain-http
+/// endpoint, a client certificate object_store cannot present, and material no
+/// handshake could use — at the read, and for a config built in code when the
+/// client is opened.
+fn refuse_tls(
+    env: &ConfigService,
+    endpoint: Option<&str>,
+    tls: &ClientTls,
+) -> nest_rs_config::Result<()> {
+    if endpoint.is_some_and(is_plaintext) {
+        tls.refuse_beside_plaintext(env, &env.var_name(StorageConfig::ENDPOINT.key()))?;
+    }
+    tls.refuse_identity(env, OBJECT_STORE)?;
+    tls.check(env)
 }
 
 /// Whether `endpoint` addresses the store over unencrypted HTTP.
-///
-/// The single spelling of the rule: both the boot-time refusal here and the
-/// client's last-line-of-defence check call it, so a future tweak (an IDN host,
-/// a scheme-relative endpoint) cannot leave the two enforcing different rules.
 pub(crate) fn is_plaintext(endpoint: &str) -> bool {
     endpoint
         .trim_start()
@@ -154,26 +407,27 @@ pub(crate) fn is_plaintext(endpoint: &str) -> bool {
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
 }
 
-/// `true` in every profile but staging/production.
-fn dev_profile() -> bool {
-    !matches!(
-        Environment::from_env(),
-        Environment::Production | Environment::Staging
-    )
-}
+/// Why an unset credential is refused rather than defaulted.
+const PAIR_WHY: &str = "the pair is deployment data, which no default holds in any profile, and a \
+                        config pinned in code reads it from the deployment, not `.env`";
 
-/// The resolved credential, refusing a blank one by naming its variable. Blank
-/// is only reachable outside dev/test, where [`Config::defaults`] drops the dev
-/// sentinel — so this is where STORAGE-ST1 lands as a boot error. Pure, so the
-/// branch is testable without env mutation.
-fn resolve_credential(resolved: String, var: &str) -> nest_rs_config::Result<String> {
-    if resolved.trim().is_empty() {
-        return Err(ConfigError::parse(
-            var,
-            "must be set in staging/production (no dev-credential fallback outside dev/test)",
-        ));
+/// The resolved credential, refusing a blank one under the spelling that set
+/// it, or its variable when unset.
+fn resolve_credential(
+    key: &str,
+    setting: Option<Setting>,
+    base: Secret<String>,
+) -> nest_rs_config::Result<Secret<String>> {
+    match setting {
+        Some(setting) if setting.value.trim().is_empty() => {
+            Err(setting.refuse("is blank — it must hold the credential"))
+        }
+        Some(setting) => Ok(Secret::new(setting.value)),
+        None if base.expose_secret().trim().is_empty() => {
+            Err(ConfigError::unset(StorageConfig::NAMESPACE, key, PAIR_WHY))
+        }
+        None => Ok(base),
     }
-    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -181,59 +435,275 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_allows_http_for_local_dev_servers() {
+    fn the_struct_default_names_nothing_and_leaves_plain_http_to_the_profile() {
+        let d = StorageConfig::default();
+        assert_eq!(d.allow_http, Surface::ByProfile);
         assert!(
-            StorageConfig::default().allow_http,
-            "the dev default targets a plain-http RustFS/MinIO server",
+            d.access_key.expose_secret().is_empty() && d.secret_key.expose_secret().is_empty(),
+            "a pair anyone can read is no credential"
+        );
+        assert!(
+            d.url.is_empty() && d.endpoint.is_none(),
+            "a store and its pair are the profile file's, never the framework's"
         );
     }
 
     #[test]
-    fn the_struct_default_keeps_the_dev_sentinel_credentials() {
-        // `Default` is the pin-friendly value a call site writes
-        // `..Default::default()` against; the profile floor lives in `defaults`.
-        let d = StorageConfig::default();
-        assert_eq!(d.access_key, "nestrs");
-        assert_eq!(d.secret_key, "nestrs");
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn plain_http_by_profile_opens_under_development_and_test_alone() {
+        figment::Jail::expect_with(|jail| {
+            for (profile, open) in [
+                ("development", true),
+                ("test", true),
+                ("staging", false),
+                ("production", false),
+                ("", false),
+            ] {
+                jail.set_env(Environment::var_name(), profile);
+                assert_eq!(
+                    StorageConfig::default().allow_http.is_open(),
+                    open,
+                    "{profile:?}"
+                );
+            }
+            Ok(())
+        });
     }
 
     #[test]
-    fn credential_blank_aborts_naming_its_variable() {
-        // STORAGE-ST1: outside dev/test `Config::defaults` drops the sentinel, so
-        // an unset variable arrives here blank and must abort by name.
-        let err = resolve_credential(
-            String::new(),
-            &nest_rs_config::var_name("storage", "SECRET_KEY"),
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_pin_over_the_struct_default_takes_its_pair_from_the_deployment_in_every_profile() {
+        figment::Jail::expect_with(|jail| {
+            for profile in ["development", "test", "production"] {
+                jail.set_env(Environment::var_name(), profile);
+                let refused = StorageConfig::from_env(&unset(), s3())
+                    .expect_err("no profile has a pair to give")
+                    .to_string();
+                assert!(
+                    refused.starts_with(&format!(
+                        "invalid value for {}",
+                        nest_rs_config::var_name("storage", "ACCESS_KEY")
+                    )) && refused.contains("no default holds in any profile"),
+                    "{profile}: {refused}"
+                );
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_plain_http_endpoint_over_the_struct_default_in_a_deployment_is_refused_naming_the_opt_in()
+    {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(Environment::var_name(), "production");
+            let refused = StorageConfig::from_env(
+                &unset(),
+                StorageConfig {
+                    endpoint: Some("http://minio:9000".into()),
+                    ..s3()
+                },
+            )
+            .expect_err("a deployment does not open plain HTTP unless it says so")
+            .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("storage", "ALLOW_HTTP")),
+                "{refused}"
+            );
+            assert!(
+                refused
+                    .contains("is false, or unset outside a declared development or test profile"),
+                "the sentence says where the refusal comes from, whatever the profile: {refused}"
+            );
+            Ok(())
+        });
+    }
+
+    /// A pin of the store leaves plain HTTP to the profile: open where a
+    /// development or test profile is declared, refused everywhere else.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_plain_http_endpoint_over_the_struct_default_follows_the_profile() {
+        figment::Jail::expect_with(|jail| {
+            let pin = || StorageConfig {
+                endpoint: Some("http://minio:9000".into()),
+                access_key: "key".into(),
+                secret_key: "secret".into(),
+                ..s3()
+            };
+            for (profile, opens) in [
+                ("development", true),
+                ("test", true),
+                ("staging", false),
+                ("production", false),
+                ("", false),
+            ] {
+                jail.set_env(Environment::var_name(), profile);
+                assert_eq!(
+                    StorageConfig::from_env(&unset(), pin()).is_ok(),
+                    opens,
+                    "{profile:?}"
+                );
+            }
+            Ok(())
+        });
+    }
+
+    fn unset() -> ConfigService {
+        ConfigService::with_vars("storage", [])
+    }
+
+    /// The struct default naming an S3 bucket, for the reads about what
+    /// stands beside it.
+    fn s3() -> StorageConfig {
+        StorageConfig {
+            url: "s3://media".into(),
+            ..StorageConfig::default()
+        }
+    }
+
+    #[test]
+    fn an_authority_is_read_for_an_encrypted_endpoint() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let tls = StorageConfig::from_env(
+            &ConfigService::with_vars("storage", [("TLS_CA_CERT", authority.pem())]),
+            paired(),
         )
-        .expect_err("must abort");
+        .expect("an authority resolves")
+        .tls;
+        assert_eq!(tls.authorities_pem(), authority.pem().as_bytes());
         assert!(
-            err.to_string().contains("SECRET_KEY"),
+            StorageConfig::from_env(&unset(), paired())
+                .expect("nothing set resolves")
+                .tls
+                .is_empty(),
+            "and nothing set trusts the system's authorities"
+        );
+    }
+
+    #[test]
+    fn an_authority_that_cannot_be_used_is_refused_naming_its_variable() {
+        let authority = nest_rs_testing::TestAuthority::new();
+        let var = nest_rs_config::var_name("storage", "TLS_CA_CERT");
+        let beside_plaintext = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [
+                    ("TLS_CA_CERT", authority.pem()),
+                    ("ENDPOINT", "http://rustfs:9000"),
+                    ("ALLOW_HTTP", "true"),
+                ],
+            ),
+            paired(),
+        )
+        .expect_err("an authority for a plaintext endpoint")
+        .to_string();
+        assert!(
+            beside_plaintext.contains(&var)
+                && beside_plaintext.contains(&nest_rs_config::var_name("storage", "ENDPOINT"))
+                && beside_plaintext.contains("plaintext"),
+            "{beside_plaintext}"
+        );
+        let empty = StorageConfig::from_env(
+            &ConfigService::with_vars("storage", [("TLS_CA_CERT", "not a certificate s3cret")]),
+            paired(),
+        )
+        .expect_err("an authority holding no certificate")
+        .to_string();
+        assert!(
+            empty.contains(&var)
+                && empty.contains("no CERTIFICATE block")
+                && !empty.contains("s3cret"),
+            "{empty}"
+        );
+    }
+
+    /// object_store has no client-certificate setting, so a certificate the
+    /// deployment sets would go unused while the store refuses the client.
+    #[test]
+    fn a_client_certificate_is_refused_naming_object_store_and_its_variable() {
+        let issued = nest_rs_testing::TestAuthority::new().client("nestrs-test-client");
+        let refused = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [
+                    ("TLS_CERT", issued.cert.as_str()),
+                    ("TLS_KEY", issued.key.as_str()),
+                ],
+            ),
+            paired(),
+        )
+        .expect_err("a certificate object_store cannot present")
+        .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("storage", "TLS_CERT"))
+                && refused.contains("object_store"),
+            "{refused}"
+        );
+    }
+
+    /// A base holding a pair of its own, for the reads that are about
+    /// something else.
+    fn paired() -> StorageConfig {
+        StorageConfig {
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
+            ..s3()
+        }
+    }
+
+    #[test]
+    fn credential_blank_aborts_naming_both_its_spellings() {
+        // The struct default holds no pair, so an unset variable over it
+        // arrives here blank.
+        let err = resolve_credential("SECRET_KEY", None, Secret::default())
+            .expect_err("must abort")
+            .to_string();
+        assert!(
+            err.contains(&nest_rs_config::var_name("storage", "SECRET_KEY")),
             "the error names the variable: {err}",
         );
         assert!(
-            resolve_credential("   ".into(), "K").is_err(),
+            err.contains(&nest_rs_config::var_name("storage", "SECRET_KEY_FILE")),
+            "and its file spelling: {err}",
+        );
+        assert!(
+            resolve_credential("SECRET_KEY", None, "   ".into()).is_err(),
             "whitespace-only is blank too",
         );
     }
 
     #[test]
     fn credential_set_is_taken_verbatim() {
+        let env = ConfigService::with_vars("storage", [("ACCESS_KEY", "AKIAREAL")]);
+        let setting = env.setting("ACCESS_KEY").expect("reads");
         assert_eq!(
-            resolve_credential("AKIAREAL".into(), "K").expect("set ⇒ ok"),
+            resolve_credential("ACCESS_KEY", setting, Secret::default())
+                .expect("set ⇒ ok")
+                .expose_secret(),
             "AKIAREAL",
         );
     }
 
-    // G1/G2: `with_allow_http` only gates the client's own byte transfers, and
-    // only as an opaque request-time 500 — presigning is local, so it minted
-    // working plaintext URLs in production. The pairing has to die at load.
     #[test]
     fn a_plain_http_endpoint_is_refused_when_allow_http_is_false() {
         let err = resolve_endpoint(
-            "http://minio.internal:9000".into(),
+            &unset(),
+            None,
+            Some("http://minio.internal:9000".into()),
             false,
-            &nest_rs_config::var_name("storage", "ENDPOINT"),
-            &nest_rs_config::var_name("storage", "ALLOW_HTTP"),
         )
         .expect_err("plaintext + allow_http=false must abort boot");
         let rendered = err.to_string();
@@ -245,29 +715,136 @@ mod tests {
             rendered.contains("ALLOW_HTTP"),
             "and the opt-in that would allow it: {rendered}",
         );
-        // Case-insensitive and whitespace-tolerant — a scheme is not a shibboleth.
         assert!(
-            resolve_endpoint("  HTTP://x:9000".into(), false, "E", "A").is_err(),
+            resolve_endpoint(&unset(), None, Some("  HTTP://x:9000".into()), false).is_err(),
             "the scheme check must not be defeated by case or leading space",
         );
     }
 
+    /// The endpoint may carry a credential in its userinfo: the refusal shows
+    /// it through `endpoint_shown`, as `Debug` does.
     #[test]
-    fn https_and_the_empty_aws_endpoint_are_always_accepted() {
-        for endpoint in ["https://s3.example", "", "https://minio:9000"] {
+    fn a_refused_endpoint_is_shown_without_its_userinfo() {
+        for (setting, base) in [
+            (
+                ConfigService::with_vars("storage", [("ENDPOINT", "http://k:s3cr3t@minio:9000")])
+                    .setting("ENDPOINT")
+                    .expect("reads"),
+                None,
+            ),
+            (None, Some("http://k:s3cr3t@minio:9000".to_owned())),
+        ] {
+            let refused = resolve_endpoint(&unset(), setting, base, false)
+                .expect_err("plaintext + allow_http=false")
+                .to_string();
+            assert!(refused.contains("http://minio:9000/"), "{refused}");
+            assert!(!refused.contains("s3cr3t"), "{refused}");
+        }
+        let pinned = StorageConfig {
+            url: "s3://bucket/a?token=s3cr3t".into(),
+            endpoint: Some("https://k:s3cr3t@minio:9000".into()),
+            ..StorageConfig::default()
+        };
+        assert!(!format!("{pinned:?}").contains("s3cr3t"), "{pinned:?}");
+    }
+
+    #[test]
+    fn debug_never_prints_the_credentials() {
+        let pinned = StorageConfig {
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
+            ..StorageConfig::default()
+        };
+        let printed = format!("{pinned:?}");
+        assert!(!printed.contains("AKIAPINNED"), "{printed}");
+        assert!(!printed.contains("pinned-secret"), "{printed}");
+        assert!(printed.contains("secret_key: <redacted>"), "{printed}");
+    }
+
+    #[test]
+    fn https_and_the_unset_aws_endpoint_are_always_accepted() {
+        for endpoint in [Some("https://s3.example"), None, Some("https://minio:9000")] {
             assert_eq!(
-                resolve_endpoint(endpoint.into(), false, "E", "A").expect("encrypted ⇒ ok"),
+                resolve_endpoint(&unset(), None, endpoint.map(str::to_owned), false)
+                    .expect("encrypted ⇒ ok")
+                    .as_deref(),
                 endpoint,
             );
         }
+        let blank = ConfigService::with_vars("storage", [("ENDPOINT", " ")]);
+        assert_eq!(
+            resolve_endpoint(
+                &blank,
+                blank.setting("ENDPOINT").expect("reads"),
+                None,
+                false
+            )
+            .expect("a blank endpoint is AWS's own"),
+            None
+        );
+    }
+
+    /// A deployment opting into plain HTTP is honoured, and says so where its
+    /// endpoint is plaintext; `https` needs no opening, and a development
+    /// profile's is no incident.
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn a_deployment_reaching_its_store_over_plain_http_says_so() {
+        let config = |endpoint: &str, allow_http| StorageConfig {
+            endpoint: Some(endpoint.to_owned()),
+            allow_http,
+            ..StorageConfig::default()
+        };
+        figment::Jail::expect_with(|jail| {
+            for (profile, endpoint, allow_http, said) in [
+                ("production", "http://store:9000", Surface::Open, true),
+                ("staging", "http://store:9000", Surface::Open, true),
+                ("", "http://store:9000", Surface::Open, true),
+                ("development", "http://store:9000", Surface::Open, false),
+                ("test", "http://store:9000", Surface::Open, false),
+                ("production", "https://store:9000", Surface::Open, false),
+                ("production", "http://store:9000", Surface::Closed, false),
+                ("production", "http://store:9000", Surface::ByProfile, false),
+            ] {
+                jail.set_env(nest_rs_config::Environment::var_name(), profile);
+                let logs = nest_rs_testing::LogCapture::install();
+                config(endpoint, allow_http).warn_when_open();
+                let line = logs.find(crate::TARGET, PLAINTEXT_OPEN);
+                assert_eq!(
+                    line.len(),
+                    usize::from(said),
+                    "{profile:?} {endpoint} {allow_http:?}"
+                );
+                if said {
+                    assert_eq!(line[0].level, "warn");
+                    assert_eq!(
+                        line[0].field("environment").as_deref(),
+                        Some(if profile.is_empty() {
+                            "production"
+                        } else {
+                            profile
+                        })
+                    );
+                    assert_eq!(
+                        line[0].field("endpoint").as_deref(),
+                        Some("http://store:9000/")
+                    );
+                }
+            }
+            Ok(())
+        });
     }
 
     #[test]
     fn a_plain_http_endpoint_is_accepted_when_allow_http_is_opted_in() {
-        // The dev/test default, and the documented production opt-in.
         assert_eq!(
-            resolve_endpoint("http://rustfs:9000".into(), true, "E", "A").expect("opted in ⇒ ok"),
-            "http://rustfs:9000",
+            resolve_endpoint(&unset(), None, Some("http://rustfs:9000".into()), true)
+                .expect("opted in ⇒ ok")
+                .as_deref(),
+            Some("http://rustfs:9000"),
         );
     }
 
@@ -278,18 +855,18 @@ mod tests {
                 "storage",
                 [("ENDPOINT", "http://minio:9000"), ("ALLOW_HTTP", "false")],
             ),
-            StorageConfig::default(),
+            s3(),
         )
         .expect_err("the resolved config must not carry a plaintext endpoint");
         assert!(err.to_string().contains("ENDPOINT"));
     }
 
-    // The whole point of the overlay: a pinned bucket must not freeze the
-    // credentials or the endpoint alongside it.
     #[test]
     fn env_overrides_each_field_of_a_pinned_config_independently() {
         let pinned = StorageConfig {
-            bucket: "pinned-bucket".into(),
+            url: "s3://pinned-bucket".into(),
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
             ..Default::default()
         };
         let cfg = StorageConfig::from_env(
@@ -298,17 +875,360 @@ mod tests {
                 [
                     ("ENDPOINT", "https://s3.example"),
                     ("ACCESS_KEY", "AKIAREAL"),
+                    ("SECRET_KEY", "real-secret"),
                 ],
             ),
             pinned,
         )
-        .expect("overlay resolves");
-        assert_eq!(cfg.endpoint, "https://s3.example");
-        assert_eq!(cfg.access_key, "AKIAREAL");
+        .expect("a whole pair over a whole pin resolves");
+        assert_eq!(cfg.endpoint.as_deref(), Some("https://s3.example"));
+        assert_eq!(cfg.access_key.expose_secret(), "AKIAREAL");
         assert_eq!(
-            cfg.bucket, "pinned-bucket",
+            cfg.secret_key.expose_secret(),
+            "real-secret",
+            "the pair is replaced whole"
+        );
+        assert_eq!(
+            cfg.url, "s3://pinned-bucket",
             "the pin survives where the env is silent"
         );
-        assert_eq!(cfg.secret_key, "nestrs", "and so does the rest of the pin");
+    }
+
+    #[test]
+    fn half_a_credential_over_a_pinned_pair_is_refused_saying_the_other_is_pinned() {
+        let pinned = paired();
+        for (set, missing) in [("ACCESS_KEY", "SECRET_KEY"), ("SECRET_KEY", "ACCESS_KEY")] {
+            let err = StorageConfig::from_env(
+                &ConfigService::with_vars("storage", [(set, "FROM-DEPLOY")]),
+                pinned.clone(),
+            )
+            .expect_err("a deployment half beside a pinned half is refused");
+            let rendered = err.to_string();
+            assert!(
+                rendered.starts_with(&format!(
+                    "invalid value for {}",
+                    nest_rs_config::var_name("storage", missing)
+                )),
+                "names {missing}: {rendered}"
+            );
+            assert!(rendered.contains("pinned in code"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn half_a_credential_beside_the_struct_default_is_refused_asking_for_both() {
+        for (set, missing) in [("ACCESS_KEY", "SECRET_KEY"), ("SECRET_KEY", "ACCESS_KEY")] {
+            let err = StorageConfig::from_env(
+                &ConfigService::with_vars("storage", [(set, "from-the-deployment")]),
+                s3(),
+            )
+            .expect_err("half a credential beside no pair is refused")
+            .to_string();
+            assert!(
+                err.starts_with(&format!(
+                    "invalid value for {}",
+                    nest_rs_config::var_name("storage", missing)
+                )) && err.contains("set both"),
+                "names {missing}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_operation_budget_sits_below_every_net_a_call_runs_under() {
+        let budget = StorageConfig::default().operation_timeout;
+        assert!(budget < nest_rs_authn::AUTHENTICATE_TIMEOUT, "{budget:?}");
+        let request = nest_rs_http::HttpConfig::default()
+            .request_timeout
+            .expect("the edge bounds a request by default");
+        assert!(budget < request, "{budget:?}");
+    }
+
+    #[test]
+    fn the_timeouts_read_whole_seconds_over_a_pinned_base() {
+        let cfg = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [("OPERATION_TIMEOUT_SECS", "5"), ("READ_TIMEOUT_SECS", "7")],
+            ),
+            paired(),
+        )
+        .expect("both in range");
+        assert_eq!(
+            (cfg.operation_timeout, cfg.read_timeout),
+            (Duration::from_secs(5), Duration::from_secs(7))
+        );
+    }
+
+    #[test]
+    fn a_zero_timeout_is_refused_naming_its_variable_or_its_field() {
+        let zero_operation = StorageConfig {
+            operation_timeout: Duration::ZERO,
+            ..paired()
+        };
+        let zero_read = StorageConfig {
+            read_timeout: Duration::ZERO,
+            ..paired()
+        };
+        for (key, field, pinned) in [
+            (
+                "OPERATION_TIMEOUT_SECS",
+                "StorageConfig::operation_timeout",
+                zero_operation,
+            ),
+            (
+                "READ_TIMEOUT_SECS",
+                "StorageConfig::read_timeout",
+                zero_read,
+            ),
+        ] {
+            let read = StorageConfig::from_env(
+                &ConfigService::with_vars("storage", [(key, "0")]),
+                paired(),
+            )
+            .expect_err("zero is refused")
+            .to_string();
+            assert!(
+                read.contains(&nest_rs_config::var_name("storage", key)),
+                "{read}"
+            );
+
+            let pinned = StorageConfig::from_env(&unset(), pinned)
+                .expect_err("a zero pin is refused")
+                .to_string();
+            assert!(pinned.contains(field), "{pinned}");
+        }
+    }
+
+    /// A file holding `contents`, removed on drop — the value a `_FILE`
+    /// variable names.
+    struct SecretFile(std::path::PathBuf);
+
+    impl SecretFile {
+        fn new(name: &str, contents: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("nest-rs-storage-{name}-{}", std::process::id()));
+            std::fs::write(&path, contents).expect("write the fixture");
+            Self(path)
+        }
+
+        fn path(&self) -> &str {
+            self.0.to_str().expect("a UTF-8 path")
+        }
+    }
+
+    impl Drop for SecretFile {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the test tears down its temp file best-effort"
+        )]
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn half_a_credential_given_as_a_file_names_both_spellings() {
+        let access = SecretFile::new("access", "AKIA-FROM-FILE\n");
+        let err = StorageConfig::from_env(
+            &ConfigService::with_vars("storage", [("ACCESS_KEY_FILE", access.path())]),
+            s3(),
+        )
+        .expect_err("half a credential is refused")
+        .to_string();
+        assert!(
+            err.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY_FILE")),
+            "names the spelling that was set: {err}"
+        );
+        assert!(
+            err.contains(&nest_rs_config::var_name("storage", "SECRET_KEY_FILE")),
+            "and the other half's file spelling: {err}"
+        );
+        assert!(!err.contains("AKIA-FROM-FILE"), "{err}");
+    }
+
+    #[test]
+    fn a_plain_http_endpoint_from_a_file_is_refused_without_quoting_it() {
+        let endpoint = SecretFile::new("endpoint", "http://user:hunter2@minio:9000\n");
+        let err = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [("ENDPOINT_FILE", endpoint.path()), ("ALLOW_HTTP", "false")],
+            ),
+            s3(),
+        )
+        .expect_err("plaintext is refused")
+        .to_string();
+        assert!(
+            err.contains(&nest_rs_config::var_name("storage", "ENDPOINT_FILE")),
+            "{err}"
+        );
+        assert!(!err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    fn a_url_naming_no_store_is_refused_naming_its_variable_and_never_quoting_it() {
+        let var = nest_rs_config::var_name("storage", "URL");
+        for (url, says) in [
+            (
+                "file:///var/s3cr3t",
+                "names `file`, which this release does not open",
+            ),
+            ("gs://s3cr3t", "names `gs`"),
+            ("s3://key:s3cr3t@bucket", "a credential"),
+        ] {
+            let read = StorageConfig::from_env(
+                &ConfigService::with_vars("storage", [("URL", url)]),
+                paired(),
+            )
+            .expect_err("no store this release opens")
+            .to_string();
+            let pinned = StorageConfig::from_env(
+                &unset(),
+                StorageConfig {
+                    url: url.into(),
+                    ..paired()
+                },
+            )
+            .expect_err("no store this release opens, pinned")
+            .to_string();
+            for refused in [read, pinned] {
+                assert!(
+                    refused.contains(&var) && refused.contains(says),
+                    "{url}: {refused}"
+                );
+                assert!(!refused.contains("s3cr3t"), "{refused}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_struct_default_names_no_store_and_the_boot_says_which_variable() {
+        let refused = StorageConfig::from_env(&unset(), StorageConfig::default())
+            .expect_err("no store is named")
+            .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("storage", "URL"))
+                && refused.contains("is not set"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn memory_opens_in_a_development_or_test_profile_and_is_refused_elsewhere() {
+        figment::Jail::expect_with(|jail| {
+            let memory = ConfigService::with_vars("storage", [("URL", "memory:///")]);
+            for profile in ["development", "test"] {
+                jail.set_env(Environment::var_name(), profile);
+                let resolved = StorageConfig::from_env(&memory, StorageConfig::default())
+                    .expect("memory needs no S3 setting");
+                assert_eq!(resolved.url, "memory:///", "{profile}");
+                assert!(
+                    StorageConfig {
+                        url: "memory:///".into(),
+                        ..StorageConfig::default()
+                    }
+                    .backend()
+                    .is_ok(),
+                    "{profile}"
+                );
+            }
+            for profile in ["staging", "production", ""] {
+                jail.set_env(Environment::var_name(), profile);
+                let read = StorageConfig::from_env(&memory, StorageConfig::default())
+                    .expect_err("memory loses everything at a restart")
+                    .to_string();
+                let built = StorageConfig {
+                    url: "memory:///".into(),
+                    ..StorageConfig::default()
+                }
+                .backend()
+                .expect_err("and so does one built in code")
+                .to_string();
+                for refused in [read, built] {
+                    assert!(
+                        refused.contains(&nest_rs_config::var_name("storage", "URL"))
+                            && refused.contains("loses every object at a restart"),
+                        "{profile:?}: {refused}"
+                    );
+                }
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    fn an_s3_setting_beside_memory_is_refused_naming_what_is_set() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(Environment::var_name(), "test");
+            let authority = nest_rs_testing::TestAuthority::new();
+            for (key, value) in [
+                ("ENDPOINT", "https://rustfs:9000"),
+                ("REGION", "eu-west-3"),
+                ("FORCE_PATH_STYLE", "false"),
+                ("ACCESS_KEY", "AKIA"),
+                ("SECRET_KEY", "s3cr3t"),
+                ("ALLOW_HTTP", "true"),
+                ("TLS_CA_CERT", authority.pem()),
+            ] {
+                let refused = StorageConfig::from_env(
+                    &ConfigService::with_vars("storage", [("URL", "memory:///"), (key, value)]),
+                    StorageConfig::default(),
+                )
+                .expect_err("memory reads no S3 setting")
+                .to_string();
+                assert!(
+                    refused.starts_with(&format!(
+                        "invalid value for {}",
+                        nest_rs_config::var_name("storage", key)
+                    )) && refused.contains(&nest_rs_config::var_name("storage", "URL")),
+                    "{key}: {refused}"
+                );
+                assert!(!refused.contains("s3cr3t"), "{refused}");
+            }
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn a_config_built_in_code_is_refused_what_the_read_refuses_naming_the_variables() {
+        let blank_pair = StorageConfig {
+            access_key: Secret::default(),
+            ..paired()
+        }
+        .backend()
+        .expect_err("a blank half of the pair")
+        .to_string();
+        assert!(
+            blank_pair.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY")),
+            "{blank_pair}"
+        );
+        let unopened = StorageConfig {
+            url: "file:///media".into(),
+            ..paired()
+        }
+        .backend()
+        .expect_err("a scheme this release does not open")
+        .to_string();
+        assert!(
+            unopened.contains(&nest_rs_config::var_name("storage", "URL"))
+                && unopened.contains("`file`"),
+            "{unopened}"
+        );
+        assert_eq!(
+            paired().backend().expect("a whole s3 config"),
+            Backend::S3 {
+                bucket: "media".into(),
+                prefix: object_store::path::Path::default(),
+            }
+        );
     }
 }

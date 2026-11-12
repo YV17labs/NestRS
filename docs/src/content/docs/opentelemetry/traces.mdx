@@ -1,6 +1,6 @@
 ---
 title: Traces
-description: "Every request, job and scheduled tick opens a span; W3C traceparent propagation, sampling, and the HTTP interceptor stitch distributed traces together."
+description: "Every request, job and scheduled tick opens a span; W3C traceparent propagation and sampling, seeded on the span every edge opens, stitch traces together."
 sidebar:
   order: 2
 ---
@@ -23,8 +23,9 @@ per crate.
 | Layer | Target |
 |---|---|
 | HTTP request span | `nest_rs::http` — opened by the transport, not by this crate |
-| Operation log, one line per unit of work | `nest_rs::operation` — the only target naming a *kind of line* rather than a subsystem; see [Logs](/opentelemetry/logs/) |
+| Operation log, one line per unit of work | `nest_rs::operation` — the only target naming a *kind of line* rather than a subsystem; see [The operation log](/opentelemetry/operation-log/) |
 | ORM queries | `nest_rs::orm` |
+| Relation dataloaders | `nest_rs::loader` |
 | Authentication | `nest_rs::authn` |
 | Authorization | `nest_rs::authz` |
 | WebSocket events | `nest_rs::ws` |
@@ -32,7 +33,8 @@ per crate.
 | MCP operations | `nest_rs::mcp` |
 | Queue jobs | `nest_rs::queue` |
 | Scheduled jobs | `nest_rs::schedule` |
-| Module lifecycle | `nest_rs::module` |
+| Module registration | `nest_rs::module` |
+| Lifecycle hooks (`#[hooks]`) | `nest_rs::lifecycle` |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) |
 
 ## Custom spans
@@ -64,7 +66,7 @@ both scope the span to the future, not the thread.
 `traceparent` propagation is automatic on incoming HTTP requests — **behind a
 trusted proxy**. The transport, not this crate, decides whether an inbound
 `traceparent` may be believed: it is continued when the direct peer is in
-`NESTRS_HTTP__TRUSTED_PROXIES`, and the trace is **restarted** otherwise, which
+`<PREFIX>_HTTP__TRUSTED_PROXIES`, and the trace is **restarted** otherwise, which
 is what the specification defines a front gate to do. Without that gate any
 client could file its request into a trace of its choosing and set the `sampled`
 flag on traffic it generates. The response carries `traceresponse` so a caller
@@ -77,27 +79,41 @@ preserved across the hop.
 ## Sampling
 
 `ParentBased(TraceIdRatioBased(ratio))` — children inherit the parent's
-sampling decision, so a request either samples end-to-end or not at all.
+sampling decision, so a request either samples end-to-end or not at all. The
+deployment picks the sampler with the specification's own variables, read as
+the SDK reads them:
 
 ```bash
-NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
 ```
 
-Or pinned:
+A sampler the SDK does not build (`jaeger_remote`, `xray`, a misspelling,
+`Always_On` — the names are lowercase) and an argument that is not a number
+between 0 and 1 fail the boot naming the variable, where the SDK would sample
+every trace in their place. An argument beside a sampler that takes none is
+ignored and said at `warn`.
 
-```rust title="apps/api/src/module.rs"
-OpenTelemetryConfig::new("api").with_trace_sample_ratio(0.1)
+Or pinned, in `main`, under those variables:
+
+```rust title="apps/api/src/main.rs"
+let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
+    trace_sample_ratio: 0.1,
+    ..OpenTelemetryConfig::from_env()?
+})?;
 ```
 
 The sampler comes from
 [`opentelemetry_sdk::trace::Sampler`](https://docs.rs/opentelemetry_sdk).
-Ratios are clamped to `[0.0, 1.0]`.
+A pinned ratio outside `[0.0, 1.0]` fails `init_with`, naming
+`OpenTelemetryConfig::trace_sample_ratio`.
 
-## HTTP interceptor
+## The request span
 
-Importing `OpenTelemetryModule` activates the `OpenTelemetryHttp` interceptor
-automatically — there's nothing else to mount. It does **two** things, and both
-are things nothing else can supply:
+`OpenTelemetry::init` seeds what this crate adds onto the framework's span
+constructor, which every edge opens its unit through — there's nothing to
+mount, and no per-request interceptor. It does **two** things, and both are
+things nothing else can supply:
 
 1. **Links the remote parent** when the transport continued an upstream trace,
    so the exported span is a child of the caller's rather than a second root. A
@@ -109,29 +125,55 @@ are things nothing else can supply:
 Everything else belongs to the transport and exists whether or not this crate is
 installed: the span itself, its W3C trace context, the `traceresponse` response
 header, and the access log. The span carries the OTel HTTP semantic-convention attributes:
-`http.request.method`, `url.path` (the addressed path), `http.route` (the
+`http.request.method` (a method the conventions know or a route registers,
+spelled exactly, or `_OTHER`), `url.path` (the addressed path), `url.scheme`
+(`https` or `http`: the client's own, forwarded by a proxy
+`<PREFIX>_HTTP__TRUSTED_PROXIES` lists, else the listener's),
+`http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
-`http.response.status_code`, `http.response.body.size`, `client.address` and
-`user_agent.original`.
+`http.response.status_code`, `http.response.body.size` and
+`user_agent.original`. It carries no `client.address`, which the conventions
+recommend: a client's address is personal data, and a collector keeps what it
+receives — no access line carries it either.
+
+**The span is the one place a value the client chose is kept, and only what
+the conventions ask for.** `url.path`, `user_agent.original` and — for a
+method outside the known set — `http.request.method_original` are the client's
+to write. The conventions require or recommend them and the span goes to your
+own collector, so it keeps them: a stated exception to the rule that no line
+and no reply quotes a client's value, which the
+[access line](/opentelemetry/operation-log/#access-log) follows. A header the span
+records beyond that set is one that parsed under its grammar: a `traceparent`
+the transport did not continue is recorded as the four hex fields it parsed
+to, and an `X-Request-Id` from a trusted proxy only in the shape a proxy mints
+it — a UUID, or 16 to 64 hex digits, as nginx's `$request_id` is. Anything
+else is not recorded. The shape is all the span can check: behind a proxy
+that forwards a client's `X-Request-Id`, hex text the client wrote — a secret
+minted as hex or as a UUID included — is recorded as a minted id would be.
 
 It is named `{method} {route}` through `otel.name`. `tracing` fixes a span
 name to a literal, and one literal for every route makes a trace list
-unreadable. A request that matched
-nothing is named by its method alone, never by the URL.
+unreadable. A request the router's fallback
+answers is named for its mount's catch-all, `GET /{*path}` at the root. A
+request neither a route nor the fallback claims is named by its method alone,
+never by the URL, and a method outside the known set reads `HTTP` there, as
+the conventions spell it.
 
 Body size and duration are measured at **end-of-body**, not at handler return, so
 a half-streamed response and a client disconnect both still produce one access
 line and one complete span.
 
 The request span and the access event both belong to `nest-rs-http`, and exist
-whether or not this crate is installed. What the interceptor adds is the parent
-from an inbound `traceparent` and the sampler's verdict — the access
-line reads that header, which is the whole of the coupling between the two.
-Toggle the line with `NESTRS_HTTP__ACCESS_LOG=false`; nothing about propagation
+whether or not this crate is installed. What this crate adds is the parent
+from an inbound `traceparent` and the sampler's verdict, seeded onto the span
+constructor: no interceptor, and no header the access line reads.
+Toggle the line with `<PREFIX>_HTTP__ACCESS_LOG=false`; nothing about propagation
 or OTLP export changes.
 
 ## Going further
 
-- [Logs](/opentelemetry/logs/) — the access event and structured fields on the span.
+- [Logs](/opentelemetry/logs/) — the structured fields on the span.
+- [The operation log](/opentelemetry/operation-log/) — the access event, one line per
+  unit of work.
 - [Metrics](/opentelemetry/metrics/) — the aggregate counterpart to spans.
 - [OpenTelemetry](/opentelemetry/) — sampling, propagation, and OTLP export.

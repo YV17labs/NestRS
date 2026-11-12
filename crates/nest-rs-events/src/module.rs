@@ -2,134 +2,156 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use nest_rs_core::__private::LifecycleHook;
 use nest_rs_core::{
-    Container, ContainerBuilder, LifecycleHook, LifecyclePhase, Module, ProviderOrder,
-    ReachableProviders, inventory,
+    Container, ContainerBuilder, LifecyclePhase, Module, ProviderOrder, ReachableProviders,
+    Registering, inventory,
 };
 
 use crate::{EventBus, ListenerMethod};
 
-/// Registers the [`EventBus`] and wires every discovered `#[on_event]` method
-/// at application bootstrap against the fully-assembled container.
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        std::any::TypeId::of::<EventBus>,
+        "Import `nest_rs::events::EventsModule` in the module whose provider injects `EventBus`: \
+         it opens the bus and subscribes the listeners the app reaches.",
+    )
+}
+
+/// Registers the [`EventBus`] and subscribes every reachable `#[on_event]`
+/// method to it at the kernel's wiring step, from the assembled container and
+/// before the first lifecycle hook — so an event an init hook emits reaches its
+/// listeners.
+///
+/// Once the app has ended — after every shutdown hook, at the kernel's close
+/// step — the bus lets go of its listeners, so they drop with the app.
 pub struct EventsModule;
 
 impl Module for EventsModule {
-    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
-            return builder;
-        }
-        builder.provide_arc(Arc::new(EventBus::new()))
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_arc(Arc::new(EventBus::new()))
+            .provide_wiring("nest_rs::events::listeners", wire_listeners)
+            .provide_close::<EventBus, _, _>(|bus| async move {
+                bus.unsubscribe_all();
+                Ok(())
+            })
     }
 }
 
-// No-op when EventsModule was not imported (the bus is then absent). Infra
-// hook self-gates inside `wire_listeners`, so it opts out of the inert-hook
-// warn with `present: |_| true`.
+// The report fires exactly when `EventsModule` is absent, so no wiring of its
+// can carry it: this hook is ungated (`present: |_| true`) and wires nothing.
 nest_rs_core::inventory::submit! {
     LifecycleHook {
         phase: LifecyclePhase::OnApplicationBootstrap,
-        provider: "EventsModule",
-        method: "wire_listeners",
+        host: "EventsModule",
+        method: "report_missing_bus",
+        declaration_index: 0,
         origin: module_path!(),
+        host_type_id: std::any::TypeId::of::<EventsModule>,
         present: |_| true,
-        run: wire_listeners,
+        run: report_missing_bus,
     }
 }
 
 /// The sentence the boot files for a listener whose app registered no bus.
-///
-/// A constant rather than a literal because the test that proves this branch has
-/// to name the same event — "assert against shared constants, never a copied
-/// literal", so the report and the suite cannot drift apart.
-pub const NO_BUS_REPORT: &str = "listener declared but no event bus is registered — add `EventsModule` to the root \
-     module's `imports = [...]`";
+pub const NO_BUS_REPORT: &str = "listener declared but no event bus is registered — add `EventsModule` to the \
+     `imports = [...]` of the module whose service emits its event";
 
-fn wire_listeners(
+/// The only site that sees reachable listeners without a bus: no host depends
+/// on `EventBus`, so the app otherwise boots clean.
+fn report_missing_bus(
     container: &Container,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
-        let reachable = container.get::<ReachableProviders>();
-        let Some(bus) = container.get::<EventBus>() else {
-            // Reachable listeners and no bus: every `#[on_event]` method the app
-            // declared is dead, and nothing else can see it. Nothing in the
-            // `#[listeners]` expansion makes a host depend on `EventBus`, so a
-            // provider listed in `providers = [...]` without `EventsModule` in
-            // `imports` boots clean and reacts to nothing — the reachable-set arm
-            // below never fires, because the provider *is* reachable.
-            //
-            // This is the earliest site that can see the fact, so it owes the
-            // report: a silent `Ok(())` here is a feature's whole reaction
-            // surface disappearing with no trace.
-            for entry in reachable_listeners(reachable.as_deref()) {
+        if container.get::<EventBus>().is_none() {
+            let reachable = ReachableProviders::of(container, LISTENERS)?;
+            for entry in reachable_listeners(&reachable) {
                 tracing::warn!(
                     target: crate::TARGET,
-                    listener = entry.name,
-                    origin = entry.origin,
+                    host = entry.host(),
+                    method = entry.method(),
+                    origin = entry.origin(),
                     "{NO_BUS_REPORT}",
                 );
             }
-            return Ok(());
-        };
-        let order = container.get::<ProviderOrder>();
-
-        // Sort before wiring. `inventory::iter` yields **link order** — stable
-        // for a given binary, and reshuffled by any change to the code, so a
-        // pair of listeners ordered deliberately and verified locally was
-        // silently rearranged the next time somebody added a third to the same
-        // block. The bus faithfully preserves whatever it is handed, so the
-        // order has to be right here: providers as they appear in
-        // `providers = [...]` (their rank in the module walk), then methods as
-        // they appear in the `#[listeners]` block. `name` breaks the remaining
-        // tie so an app booted without the access graph (a hand-built
-        // container in a test) is deterministic rather than link-ordered.
-        let mut entries: Vec<&'static ListenerMethod> =
-            inventory::iter::<ListenerMethod>().collect();
-        entries.sort_by_cached_key(|entry| {
-            (
-                order
-                    .as_ref()
-                    .map_or(0, |o| o.rank((entry.provider_type_id)())),
-                entry.declaration_index,
-                entry.name,
-            )
-        });
-
-        for entry in entries {
-            if !is_reachable(reachable.as_deref(), entry) {
-                ::nest_rs_core::report_inert_host!(
-                    target: crate::TARGET,
-                    what: "#[on_event] method",
-                    origin: entry.origin,
-                    listener = entry.name,
-                );
-                continue;
-            }
-            (entry.wire)(container, &bus);
-            tracing::debug!(
-                target: crate::TARGET,
-                listener = entry.name,
-                "wired event listener",
-            );
         }
         Ok(())
     })
 }
 
-/// Whether this app would wire `entry` at all — the one spelling of the
-/// reachable-set gate, read by both the no-bus report and the wiring loop.
-///
-/// One predicate rather than two, because the report speaks about exactly the
-/// population the loop wires: two spellings would let a change to the
-/// reachability rule land in one of them and leave the report describing a set
-/// the app does not have.
-fn is_reachable(reachable: Option<&ReachableProviders>, entry: &ListenerMethod) -> bool {
-    ReachableProviders::reaches(reachable, (entry.provider_type_id)())
+/// What the listener registry holds, as its inert report and a refusal to
+/// read it ungated name it.
+const LISTENERS: &str = "#[on_event] method";
+
+/// Subscribe every reachable listener, in the written order, then open the bus.
+fn wire_listeners(container: &Container) -> anyhow::Result<()> {
+    let Some(bus) = container.get::<EventBus>() else {
+        return Ok(());
+    };
+    let reachable = ReachableProviders::of(container, LISTENERS)?;
+    let order = container.get::<ProviderOrder>();
+
+    // `inventory::iter` yields link order, reshuffled by any code change;
+    // the bus keeps what it is handed, so the written order is restored here.
+    let mut entries: Vec<&'static ListenerMethod> = inventory::iter::<ListenerMethod>().collect();
+    entries.sort_by_cached_key(|entry| {
+        (
+            order.as_ref().map_or(0, |o| o.rank(entry.host_type_id())),
+            entry.declaration_index(),
+            entry.name(),
+        )
+    });
+
+    for entry in entries {
+        if !is_reachable(&reachable, entry) {
+            ::nest_rs_core::report_inert_host!(
+                target: crate::TARGET,
+                what: "#[on_event] method",
+                origin: entry.origin(),
+                host: entry.host_type_id(),
+                container: container,
+                host = entry.host(),
+                method = entry.method(),
+            );
+            continue;
+        }
+        entry.wire(container, &bus)?;
+    }
+    bus.mark_wired();
+    Ok(())
 }
 
-/// The listeners this app would wire, in no particular order — the population
-/// the no-bus report speaks about.
+/// Whether this app would wire `entry` — shared by the no-bus report and the
+/// wiring loop so both speak of one population.
+fn is_reachable(reachable: &ReachableProviders, entry: &ListenerMethod) -> bool {
+    reachable.reaches(entry.host_type_id())
+}
+
 fn reachable_listeners(
-    reachable: Option<&ReachableProviders>,
+    reachable: &ReachableProviders,
 ) -> impl Iterator<Item = &'static ListenerMethod> + '_ {
     inventory::iter::<ListenerMethod>().filter(move |entry| is_reachable(reachable, entry))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listeners_wired_over_a_container_no_app_sealed_are_refused_naming_their_reader() {
+        let by_hand = Container::builder()
+            .provide_arc(Arc::new(EventBus::new()))
+            .build()
+            .expect("the container builds");
+
+        let Err(refused) = wire_listeners(&by_hand) else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        let ungated = refused
+            .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+            .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+        assert_eq!(ungated.reader, "#[on_event] method");
+    }
 }

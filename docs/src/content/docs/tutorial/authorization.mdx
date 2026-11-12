@@ -1,0 +1,241 @@
+---
+title: Authenticate and authorize
+description: AuthnGuard verifies the JWT, AuthzAbility decides what the caller may do, Repo filters every read, and a by-id load checks access.
+sidebar:
+  order: 8.5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution">
+This page reads the reference **`api`**'s `users` feature, not your **`blog`**.
+Per-caller filtering needs a tenant column and a column a grant withholds, and `blog`'s
+`Post` deliberately has neither. Clone the repo to follow along
+(`nestrs run dev api`); the next page applies what it shows to your own `posts`.
+</Aside>
+
+This is the feature behind [See the security payoff](/tutorial/checkpoint/)
+— now you read how it is built. Your `blog` already carries the same two
+guards from [Expose over HTTP](/tutorial/http/), with one blanket `Manage`
+rule standing in for a real policy. Here that policy gets teeth: the framework
+filters every read by the caller's organisation, gates every by-id load against
+their ability, and judges every row it answers against that ability. By the end
+of this page, a cross-tenant `GET /users/{id}` returns `403`, a plain user sees
+only their org, and the `email` column reads `null` in a non-admin listing.
+
+## Two layers, two guards
+
+Authentication and authorization are different jobs handled by different
+crates. The reference feature wires both:
+
+- **`AuthnGuard`** lives in
+  [**`nest-rs-authn`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authn).
+  A `Strategy` turns the request into a principal — for a resource
+  server, that's `JwtStrategy<Claims>` verifying a `Bearer` token.
+- **`AuthzGuard`** lives in
+  [**`nest-rs-authz`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authz).
+  It seeds the ambient `Ability` from the principal and an `AbilityFactory`.
+
+Two crates, one binding on the controller. The reference feature
+re-exports both under `crates/features/src/authn/` and `authz/`; the
+tutorial reuses those aliases.
+
+## The principal
+
+A resource server pins a single alias once. The reference feature's
+`Claims` carries an org id and a role set — exactly what authz reads
+back.
+
+```rust title="crates/features/src/authn/strategy.rs (from the demo)"
+use nest_rs::authn::JwtStrategy;
+
+use super::Claims;
+
+pub type AuthnStrategy = JwtStrategy<Claims>;
+
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
+```
+
+`JwtStrategy<Claims>` is provided by `nest-rs-authn`. On a missing or
+expired token it returns `401` automatically — the controller never
+sees the request.
+
+Both aliases, their modules, and the `Claims` above are what
+[`nestrs g auth`](/cli/generators/) writes. They are app
+code by necessity — the framework is generic over the principal and the policy,
+so it cannot ship a `Claims` or an `AuthzAbility` for you.
+
+## The policy
+
+`AuthzAbility` is the single source of truth for *what each role may do*.
+Admins manage their org's users; plain users read a scoped, redacted
+view. The reference policy fits in one method:
+
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
+use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
+use nest_rs::core::injectable;
+
+// …
+use crate::Claims;
+// …
+use crate::users as user;
+
+#[injectable]
+pub struct AuthzAbility;
+
+impl AbilityFactory for AuthzAbility {
+    type Actor = Claims;
+
+    fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
+        if actor.is_admin() {
+            // …
+            ab.can(Action::Manage, user::Entity)
+                .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+            // …
+        } else {
+            ab.can(Action::Read, user::Entity)
+                .when(|p| p.eq(user::Column::OrgId, actor.org_id))
+                .fields([user::Column::Id, user::Column::Name]);
+            ab.can(Action::Create, user::Entity)
+                .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+            // …
+        }
+        // …
+    }
+}
+```
+
+Two patterns to read here:
+
+- **`.when(|p| p.eq(Column::OrgId, actor.org_id))`** is the row-level
+  rule — every read and every by-id write the caller issues filters by
+  that condition. Cross-tenant access becomes structurally impossible.
+- **`.fields([...])`** is the field-level rule — when a plain user
+  reads a `User`, the wire row `User::from(&row)` builds holds only the
+  listed columns; `email`, declared `#[expose(nullable)]` so a grant may
+  withhold it, reads `null`.
+
+## Bind the guards on the controller
+
+The controller gains one attribute: the guard chain on the struct. Every
+operation `#[crud]` generates declares its own posture, the create included.
+
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)" {5-6, 10}
+use std::sync::Arc;
+
+use nest_rs::http::{controller, crud};
+
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
+use crate::users::UsersService;
+
+#[controller(path = "/users")]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[crud(
+    service = UsersService,
+    // … api(get(…), create(…))
+)]
+impl UsersController {}
+```
+
+| Piece | Job |
+|-------|-----|
+| `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
+| `#[crud]`'s generated `get` | Declares `#[authorize(Read, UserEntity)]`: parse the `{id}`, load the row through the service, `404` if absent, `403` if the ability refuses it |
+| `#[crud]`'s generated `create` | Declares `#[authorize(Create, UserEntity)]`, fills the columns the caller's `Create` grant pins, re-checks the fresh row against it, and answers `201` with its `Location` |
+
+The org id comes from the caller's grant, never from the body. `CreateUser`
+has no `org_id`, and the rule `p.eq(Column::OrgId, actor.org_id)` that
+filters reads also decides the column on a create: `Creatable::create` fills
+what the grant pins and the input left unset, then checks the row in SQL. There
+is no placeholder to fill in, no hand-written create, and no way to spoof the
+tenant.
+
+## Import the authz module
+
+The HTTP adapter imports the authz module, as `blog`'s `PostsHttpModule` has
+since `nestrs g resource` wrote it:
+
+```rust title="crates/features/src/users/http/module.rs (from the demo)" {4, 8}
+use nest_rs::core::module;
+
+use super::controller::UsersController;
+use crate::authz::AuthzModule;
+use crate::users::UsersModule;
+
+#[module(
+    imports = [UsersModule, AuthzModule],
+    providers = [UsersController],
+)]
+pub struct UsersHttpModule;
+```
+
+`AuthzModule` carries the `AuthzGuard` provider. Forgetting the import is
+caught at boot by the access graph — the binary fails to start with a
+`module access violation` naming the guard and the module to import, rather
+than running silently unprotected.
+
+The app root — `api`, not `blog` — lists the adapter, and nothing it brings:
+`AuthzModule` reaches it through `UsersHttpModule`, and `AuthnModule` through
+`AuthzModule`, where the access graph checks each import. It lists no guard
+either: each controller binds its own, as `blog`'s do, so a feature stays covered
+in every app that imports it.
+
+## What changed at runtime
+
+Three behaviours land without writing them in the handler.
+
+**Row-level filter on every read.** A plain user issuing
+`GET /users` gets `WHERE org_id = $caller_org_id` appended to the
+SQL — the `Repo::scoped(Action::Read)` `CrudService::list` uses joins
+the ambient ability's `condition_for(Read)`.
+
+**By-id load checks access.** The generated `get` parses the `{id}`
+path segment, loads the row through the service, runs the ability check
+— as a route of yours does when it declares
+`#[authorize(Read, bind = UsersService)]` and takes the row as an
+`Authorized<Read, UserEntity>`. Three failure shapes:
+
+| Caller's view | Status |
+|---------------|--------|
+| The row doesn't exist | `404` |
+| The row exists but the ability refuses it | `403` |
+| The `{id}` segment isn't a valid UUID | `400` |
+
+`403` (rather than `404`) on a denied-but-existing row discloses that the
+row exists — the standard REST trade-off, chosen here so a client can
+tell "not yours" from "not there". Collapse the `403` into a `404` when
+existence itself is confidential: see [by-id
+binding](/security/authorization/by-id-binding/). A `500` would mean the ambient ability
+didn't install; that's a wiring bug.
+
+**Every row judged where it is built.** `User::from(&row)` judges the whole
+row against the caller's ability as it builds the wire type, so a column
+outside the caller's `.fields([...])` grant reads `null` in it: the email never
+reaches the wire row, so no handler can forget to redact it.
+
+## See it for yourself
+
+A short check from the reference e2e:
+
+```bash frame="terminal"
+$ curl -i -H 'Authorization: Bearer <plain-user-token-for-org-A>' \
+    http://localhost:3002/users/<user-in-org-B>
+HTTP/1.1 403 Forbidden
+
+$ curl -s -H 'Authorization: Bearer <plain-user-token>' \
+    http://localhost:3002/users
+[{"id":"018f…","org_id":null,"name":"Bob","email":null,"created_at":null,"updated_at":null}]
+```
+
+The email reads `null`, the cross-tenant load is refused, and the handler
+never had to know.
+
+## Going further
+
+- [Secure your posts](/tutorial/security/) — the next step: narrow `blog`'s blanket rule into a policy of its own.

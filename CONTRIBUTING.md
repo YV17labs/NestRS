@@ -1,7 +1,9 @@
 # Contributing to NestRS
 
-First off — thank you. NestRS ships under a semver contract, so you are
-contributing to a codebase whose public API is frozen for the current major.
+First off — thank you. NestRS ships under a
+[semver policy](https://nestrs.dev/semver/), so a change that breaks what it
+covers — a public item, a decorator key, a variable, a wire format, a span
+target — waits for the next major.
 This guide is the shortest path from *I want to help* to *my change is merged*.
 
 New here? Browse the
@@ -29,8 +31,8 @@ saves you from building something that doesn't fit the project's direction, and
 lets a maintainer flag overlap or design constraints early. Drafts and questions
 are welcome — you don't need a finished idea to start the conversation.
 
-Read **[CLAUDE.md](CLAUDE.md)** before a non-trivial change. It is the project's
-design record: what was decided and why. Two rules matter most:
+Read **[CLAUDE.md](CLAUDE.md)** before a non-trivial change: the layout, the
+commands and the conventions. Two rules matter most:
 
 - **Reach for the macros first.** Application code stays declarative through
   `#[injectable]`, `#[module]`, `#[controller]`, `#[resolver]` and friends. When a
@@ -43,88 +45,75 @@ design record: what was decided and why. Two rules matter most:
 
 The fastest path is the dev container — see
 [Contributing → Get the dev container running](README.md#contributing) in the
-README. It provisions the Rust toolchain, the dev tooling, and Postgres + Redis
-with `NESTRS_SEAORM__URL` / `NESTRS_REDIS__URL` already wired.
+README. It provisions the Rust toolchain, every tool CI runs, and Postgres, Valkey
+and S3 (RustFS) with their URLs already wired.
 
 Prefer a local toolchain? Install Rust (stable, see
 [`rust-toolchain.toml`](rust-toolchain.toml)) and the CLI:
 
 ```bash
 cargo install --locked nest-rs-cli      # `nestrs run` bootstraps just, bacon, and cargo-nextest on first use
-cargo install --locked cargo-llvm-cov   # only for `nestrs run test cov`
+cargo install --locked cargo-llvm-cov   # only for coverage: `just test::cov`, `nestrs run test cov`
 rustup component add llvm-tools-preview
 ```
 
 ## The workflow
 
-```bash
-nestrs run dev <app>   # run an app in watch mode (rebuild + restart on save)
-nestrs run test unit        # full test suite (cargo-nextest)
-nestrs run lint        # clippy (strict) + format check
-nestrs run fmt         # apply rustfmt
-nestrs run check       # fast type-check
-```
-
-Run `nestrs run` with no arguments to list every recipe.
-
-Before opening a PR, make sure these pass:
+The framework's checks are recipes of the root `Justfile`, the same ones CI
+runs. `demo/` is a separate project and drives itself with `nestrs run`.
 
 ```bash
-nestrs run fmt && nestrs run lint && nestrs run test unit
+just lint   # fmt, clippy, each capability alone, dependency policy
+just test   # every test, against the dev container's Postgres, Valkey and S3
+just ci     # every check CI runs: lint, docs and tests
+just test::cov  # coverage of the same tests, doctests aside
 ```
 
-Unit tests cover logic; the **e2e** suite (`nestrs run test e2e`) covers routing
-and wiring against live infra. For **HTTP, GraphQL, or MCP changes**, close the
-loop on a real socket too: start the app (`nestrs run dev <app>`), exercise the
-affected endpoints (`curl`, an MCP client, the GraphQL playground), and note it
-in the PR. A GraphQL change regenerates the committed SDL by running the dev
-server (see CLAUDE.md).
+Before opening a PR, `just ci` passes. For **HTTP, GraphQL, or MCP changes**,
+close the loop on a real socket too: start an app (`nestrs run dev <app>` in
+`demo/`), exercise the affected endpoints (`curl`, an MCP client, the GraphQL
+playground), and note it in the PR.
 
 ## Pull requests
 
-1. **Fork and branch.** Branch off `main`; name it for the change
+1. **Fork and branch.** Branch off the integration branch — `main`, or the
+   `release/<x.y>` a major is prepared on — and name it for the change
    (`feat/query-param-schemas`, `fix/access-graph-diamond`).
 2. **Keep it focused.** One logical change per PR. Unrelated cleanups belong in
    their own PR.
 3. **Add tests.** A bug fix gets a regression test; a feature gets coverage of
-   the new behaviour. A test binary is always `tests/<suite>/main.rs` with
-   exactly two suite names: **`tests/integration/`** (in-process, submodules
-   **mirror `src/`** — see CLAUDE.md and `nest-rs-authn` as the reference) and
-   **`tests/e2e/`** (live infra, gated by `binary(e2e)`; apps boot their real
-   module against Postgres, no mocks). Never a flat `tests/<x>.rs`.
-   Use `#[cfg(test)]` in `src/` only when tests must see private code; otherwise
-   add `Type::new(...)` so integration tests can construct providers without boot.
-4. **Update the docs.** If you change behaviour, update the crate README, the
-   docs site, and — if you made a design decision — CLAUDE.md. Crate READMEs
-   stay tight (the `Cargo.toml` description, the install line, and links to the
-   matching [nestrs.dev](https://nestrs.dev) page and the repo) — anything
-   longer belongs on the docs site.
+   the new behaviour. A crate's tests that run in process sit in
+   `tests/integration/main.rs`, those against the dev container's services in
+   `tests/e2e/main.rs` — no mocks. Unit tests sit in `#[cfg(test)] mod tests` beside the code.
+4. **Update the docs.** If you change behaviour, update the crate README and
+   the docs site. Crate READMEs stay tight (the `Cargo.toml` description, the
+   install line, and links to the matching [nestrs.dev](https://nestrs.dev)
+   page and the repo) — anything longer belongs on the docs site.
 5. **Write a clear description.** What changed, why, and how you verified it. Link
    the issue it closes.
 
-The *Definition of done* is a green local gate, and it is part of the PR. Run
-`cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo fmt --all --check`, and `cargo nextest run --workspace` (plus the
-`demo/` equivalents via `nestrs run` when you touch the product), then paste
-the output in your PR description. A PR that has not passed them is not ready
-for review.
+The *Definition of done* is `just ci` green — the checks `framework.yml` runs on
+every pull request. A PR that has not passed it is not ready for review.
 
 ### Commit messages
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-<type>: <summary in the imperative mood>
+<type>(<scope>): <what is now true, as one sentence>
 ```
 
 Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `chore`,
-`style`, `perf`. Example: `feat(openapi): emit query-parameter schemas`.
+`perf`, with `!` for a breaking change. Example:
+`fix(pipes): a refused ParseArray item is named by its position and type, never quoted`.
 
 ## Adding a dependency
 
-Every new third-party crate must have a published release within the last ~12
-months. If a candidate fails this bar, say so explicitly in the PR — don't add a
-stale dependency silently. See the *Dependency bar* section of CLAUDE.md.
+A new third-party crate is a maintainer's decision: propose it in the issue
+first. It needs a published release within about the last twelve months. A
+crate whose types would reach the public API is either one of the libraries
+whose majors are NestRS's, or it is wrapped so that none of its types do — see
+[Third-party libraries](https://nestrs.dev/semver/#third-party-libraries).
 
 ## Code of Conduct
 

@@ -6,88 +6,56 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Ability-based authorization for NestRS: one ability definition driving an access gate, a SeaORM query pre-filter, and response field-masking. Transport bindings (`http`, `graphql`, `mcp`) live behind Cargo features; the database-coupled extractors (`Bind`, `bind`, `LoaderScope`, `WsDataContext`) live in `nest-rs-seaorm` so the engine stays free of a data-layer dependency."
+description = "Ability-based authorization for NestRS: one ability definition driving an access gate, a SeaORM query pre-filter, and the judgement of every wire row where it is built. Transport bindings (`http`, `graphql`, `ws`, `mcp`) live behind Cargo features; the loader that reads the row `#[authorize(A, bind = S)]` authorizes lives in `nest-rs-seaorm`, which owns the data layer it loads through."
 keywords = ["framework", "nestrs", "authorization", "permissions", "rbac"]
 categories = ["authentication", "web-programming"]
+
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
 
 
 [features]
 default = []
-# HTTP surface: poem extractors (`Authorize`, `Scope`), the request-scoped
-# `AbilityGuard`, and the `RouteResponseShaper` that masks responses
-# transparently. The `Bind` route-model extractor lives in
-# `nest_rs_seaorm::Bind` (it must use the data layer). Also activates the
-# unified `nest_rs_guards::Guard` impl so `AbilityGuard` can be used both
-# per-route and globally via `App::builder().use_guards_global(...)`.
-# `AbilityGuard` itself is at the crate root and every transport feature turns
-# it on, because it answers all four; this feature adds only HTTP's own
-# extractors and shaper. It no longer forwards `nest-rs-guards/ws`: that
-# forwarding existed solely because the guard's `check_ws_message` used to
-# compile under `http`, which is what the guard living in `http/` cost.
+# HTTP surface: the `Authorize` extractor, the `AbilityGuard`'s
+# HTTP entry, and the `RouteResponseShaper` that runs the class gate and opens the
+# route's reads.
+# The row `#[authorize(A, bind = S)]` loads is `nest-rs-seaorm`'s (it must use
+# the data layer). `AbilityGuard` itself is at the crate root and every
+# transport feature turns it on, because it answers all four; its
+# `GuardFor<HttpView>` comes with it, since every edge runs `check_http` on an
+# HTTP request, and each in-band feature declares its own edge's view.
 http = [
-    "dep:nest-rs-core",
     "dep:nest-rs-http",
-    "dep:nest-rs-guards",
-    "dep:nest-rs-resource",
-    "dep:poem",
 ]
-# GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
-# accessor + `ContextSeed`, and the `authorize` class-level gate. The
-# resolver-side `bind` helper and `LoaderScope` live in
-# `nest_rs_seaorm::graphql`.
+# GraphQL surface: the `ability` accessor, reading the field's unit, and the
+# guard each column of a judged wire row resolves under. The class gate is
+# `class_gate`, every edge's, at the crate root. The row `bind = S` loads for a
+# field is `nest-rs-seaorm`'s.
 graphql = [
-    "dep:nest-rs-core",
     "dep:nest-rs-graphql",
-    # The root `AbilityGuard` is what a resolver binds, and its `check_http`
-    # entry is what `GraphqlAbilityBridge` runs in band — so this surface needs
-    # `nest-rs-http`, which the GraphQL bindings alone never named. The two
-    # sibling crates need no `dep:` line: `nest-rs-guards/graphql` and
-    # `nest-rs-resource/graphql` are the strong form, which activates the
-    # optional dependency as well as its feature.
+    # The root `AbilityGuard` is what `/graphql`'s request runs, through its
+    # `check_http` entry — so this surface needs `nest-rs-http`, which the
+    # GraphQL bindings alone never named.
     "dep:nest-rs-http",
-    "nest-rs-guards/graphql",
-    "nest-rs-resource/graphql",
-    "dep:poem",
 ]
-# MCP surface: the operation-guard ability bridge (`McpAbilityBridge`), which
-# runs the guard chain and installs the ambient ability for the operation.
-# Masking inside a tool body is the transport-free `masked_output_ambient`. The
-# data context that makes `Repo` work inside a tool body is
-# `nest_rs_seaorm::McpDataContext`, behind that crate's `mcp` feature.
-# `nest-rs-guards/mcp` is forwarded for the same reason the GraphQL binding
-# forwards `nest-rs-guards/graphql`: it is what seeds the in-band fallback
-# (`GlobalPoolMcpGuard`) so `use_guards_global` reaches `/mcp`.
+# MCP surface: the `AbilityGuard`'s `GuardFor<McpView>`; the edge opens each
+# operation's unit of work through the bound `UnitOfWork`.
 mcp = [
-    "dep:nest-rs-core",
     "dep:nest-rs-mcp",
-    # Same as GraphQL: the root guard's `check_http` is what `McpAbilityBridge`
-    # runs in band.
+    # Same as GraphQL: the root guard's `check_http` is what `/mcp`'s request runs.
     "dep:nest-rs-http",
-    "dep:nest-rs-guards",
-    "nest-rs-guards/mcp",
-    # `masked_value_for` strains a masked row against the entity's statically
-    # known exposed columns, which is `WireModelDefaults::wire_keys`.
-    "dep:nest-rs-resource",
-    "dep:poem",
 ]
-# WebSocket surface: the per-message class gate (`ws::authorize`) and reply mask
-# (`ws::masked_value_for`) that `#[messages]` emits from an
-# `#[authorize(Action, Entity)]`. There is no bridge here and deliberately so —
-# a gateway is `EdgePosture::Guarded`, so the upgrade already ran the real HTTP
-# chain; what a message needs re-established is the ambient ability, and that is
-# `nest_rs_seaorm::ws::WsDataContext`. `nest-rs-guards/ws` is forwarded for
-# `denial_to_ws_error`, so a gate refusal and a guard refusal reach the client
-# through one frame.
+# WebSocket surface: the `AbilityGuard`'s `GuardFor<WsView>`, beside the class
+# gate every edge shares. A gateway's upgrade runs the HTTP chain, and what a
+# message needs re-established is the ambient ability, which the connection
+# carries.
 ws = [
-    "dep:nest-rs-core",
     "dep:nest-rs-ws",
-    # The root guard's `check_ws_message` lives behind *this* feature now, and
-    # its `check_http` entry is what runs on the upgrade.
+    # The root guard's `check_http` entry is what runs on the upgrade.
     "dep:nest-rs-http",
-    "dep:nest-rs-guards",
-    "nest-rs-guards/ws",
-    "dep:nest-rs-resource",
-    "dep:poem",
 ]
 # Enable every transport binding at once — useful for
 # `cargo test -p nest-rs-authz --features full`.
@@ -101,50 +69,68 @@ full = ["http", "graphql", "ws", "mcp"]
 # columns (the dominant scalar-comparison use case) regardless of which
 # features the consuming workspace enables.
 sea-orm = { workspace = true, features = ["with-chrono"] }
-# Response masking serializes a model then strips disallowed keys.
-serde.workspace = true
-serde_json.workspace = true
-# The ambient request `Ability` is carried in a `tokio::task_local!`.
-tokio.workspace = true
 tracing.workspace = true
 # `AbilityBuilder::build` returns a typed error when a rule's relation
 # predicate is malformed (the `Deny` sentinel).
 thiserror.workspace = true
+# The kernel every crate composes on: the engine names it for whom a wire row
+# answers and the refusal it hands the edge answering with it. It was
+# optional while only the transport bindings named it, and the engine
+# naming it under `default = []` is what broke `authz` alone.
+nest-rs-core.workspace = true
+# The class gate answers with the guards' `Denial`, which every edge renders;
+# the guard contract depends on the kernel alone, so the gate stays ungated.
+nest-rs-guards.workspace = true
+# `with_ability` narrows what the unit runs under, and a job's unit holds no
+# ability: the port's executor scope tells a job from a request holding none.
+nest-rs-database.workspace = true
+# `#[subject]`, re-exported at the root beside the trait it implements.
+nest-rs-authz-macros.workspace = true
+# Each `#[expose]`d entity files the columns its wire type cannot answer null, which
+# a reply's grant may not withhold.
+inventory.workspace = true
 
 # Optional dependencies — pulled in by the feature flags above.
-nest-rs-core = { workspace = true, optional = true }
 nest-rs-http = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
-nest-rs-guards = { workspace = true, optional = true }
 nest-rs-mcp = { workspace = true, optional = true }
-nest-rs-resource = { workspace = true, optional = true }
 nest-rs-ws = { workspace = true, optional = true }
-poem = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Self dev-dependency: turn on every transport binding for this crate's own
 # test targets. Without it `cargo nextest run --workspace` (the Definition of
 # done) builds this crate with `default = []`, so every `#[cfg(feature = …)]`
-# bridge test in `tests/integration/` compiles away — the http / graphql / mcp
+# edge test in `tests/integration/` compiles away — the http / graphql / mcp
 # suites would exist but never run. Dev-deps do not propagate, so no consumer
 # gains a feature from this.
 nest-rs-authz = { path = ".", features = ["full"] }
 # Engine-only tests: `tests/ability.rs` builds a throwaway SeaORM entity and
-# renders `condition_for` to SQL; the masking tests serialize a model via serde.
+# renders `condition_for` to SQL; the edge tests serialize their handlers' bodies.
 sea-orm.workspace = true
 serde.workspace = true
-# Bridge mirror tests boot the full surface (HTTP + GraphQL); compiled when the
+# The edge tests boot the full surface (HTTP + GraphQL); compiled when the
 # corresponding feature is enabled (`cargo test -p nest-rs-authz --features full`).
 nest-rs-core = { path = "../nest-rs-core" }
+# A subgraph's suite opens its SDL (`GraphqlConfig::federation_sdl`), a
+# `Surface` this crate names nowhere else.
+nest-rs-config = { path = "../nest-rs-config" }
+# A subscription's judged rows, read over the stream a domain event feeds.
+nest-rs-events = { path = "../nest-rs-events" }
 nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-guards = { path = "../nest-rs-guards" }
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # The `ws` mirror suites declare a real `#[gateway]`, whose expansion names
 # `::nest_rs_ws::` paths at the call site.
 nest-rs-ws = { path = "../nest-rs-ws" }
-nest-rs-resource = { path = "../nest-rs-resource" }
-nest-rs-testing = { path = "../nest-rs-testing" }
+# The edge modules' examples write `#[expose]`, whose expansion judges each wire
+# row through this crate. Path-only: seaorm depends on this crate, and only a
+# versionless dev-edge keeps that from being a cycle a publish cannot order.
+# `http`, for the class gate's order on a `#[crud]` controller.
+nest-rs-seaorm = { path = "../nest-rs-seaorm", features = ["http", "graphql"] }
+# `graphql` and `authz`: a gated subscription driven as a caller
+# (`graphql_socket().ability(..)`); `ws`: a gated message sent over a real
+# upgrade, where its class gate runs.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["authz", "graphql", "http", "ws"] }
 # A crate that defines `#[resolver]`s needs `async-graphql` as a direct dep,
 # since the generated `#[Object]` code names `async_graphql::` paths.
 async-graphql.workspace = true
@@ -153,7 +139,6 @@ serde_json.workspace = true
 # puts a `JsonSchema` bound on their `Json<T>` payloads.
 schemars.workspace = true
 tokio.workspace = true
-poem.workspace = true
 
 [lints]
 workspace = true

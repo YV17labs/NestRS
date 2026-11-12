@@ -1,7 +1,6 @@
 ---
 title: Providers
-description: "What the container builds — #[injectable], #[inject], scopes, and the boot-time access graph."
-tier: basics
+description: "What the container builds — #[injectable], #[inject], and the boot-time access graph that checks the wiring."
 sidebar:
   order: 3
 ---
@@ -26,15 +25,14 @@ A provider is any struct the container can build. Mark it
 `#[injectable]`, list it in a module's `providers = [...]`, declare
 dependencies as `#[inject]` fields.
 
-```rust title="crates/features/src/posts/service.rs (from the demo)"
+```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 use nest_rs::core::injectable;
-use sea_orm::DatabaseConnection;
 
 #[injectable]
 pub struct PostsService {
     #[inject]
-    db: Arc<DatabaseConnection>,
+    config: Arc<PostsConfig>,
 }
 
 impl PostsService {
@@ -43,16 +41,17 @@ impl PostsService {
 ```
 
 `#[injectable]` registers `PostsService` by `TypeId`. The
-`#[inject] db` field says: resolve `Arc<DatabaseConnection>` from the
-container when you build me — typically seeded by
-`SeaOrmModule::for_root(...)`.
+`#[inject] config` field says: resolve `Arc<PostsConfig>` from the container when
+you build me — a `#[config]` a provider injects loads itself. The database is no
+field: a service reaches it through `Repo`.
 
 Controllers, resolvers, and gateways are providers too — they just also
 mount on a transport:
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs"
 use std::sync::Arc;
 use nest_rs::http::{controller, routes};
+use nest_rs::http::Json;
 
 #[controller(path = "/posts")]
 pub struct PostsController {
@@ -63,18 +62,18 @@ pub struct PostsController {
 #[routes]
 impl PostsController {
     #[get("/")]
-    async fn list(&self) -> Vec<Post> {
-        self.svc.list().await
+    async fn list(&self) -> Json<Vec<Post>> {
+        Json(self.svc.list().await)
     }
 }
 ```
 
-```rust title="crates/features/src/posts/module.rs (from the demo)"
+```rust title="crates/features/src/posts/module.rs"
 #[module(providers = [PostsService])]
 pub struct PostsModule;
 ```
 
-```rust title="crates/features/src/posts/http/module.rs (from the demo)"
+```rust title="crates/features/src/posts/http/module.rs"
 #[module(
     imports = [PostsModule],
     providers = [PostsController],
@@ -83,7 +82,8 @@ pub struct PostsHttpModule;
 ```
 
 `PostsModule` owns the service. `PostsHttpModule` owns the controller and
-imports the port so `PostsController` can inject `PostsService`.
+imports the port so `PostsController` can inject `PostsService`. The controller
+brings `HttpModule`, the server it is served on.
 
 ```mermaid
 flowchart TB
@@ -102,77 +102,22 @@ the container and listed in `providers = [...]`:
 |-----------|----------------|
 | `#[injectable]` | `PostsService` — data layer |
 | `#[controller]` | `PostsController` — HTTP routes |
-| `#[interceptor]` | Cross-cutting HTTP wrapper (logging, DB context, …) |
+| `#[interceptor(stage = unit)]` | What a module brings around every unit's guards (timing, a challenge, …) |
 
-Other transports use the same idea (`#[resolver]`, `#[gateway]`,
-`#[processor]`, …) when you add them. See their categories when you need
-them — not required to compose a minimal HTTP app.
+Other transports use the same idea (`#[resolver]`, `#[gateway]`, `#[mcp]`) when
+you add them; a queue processor is an `#[injectable]` with a `#[processor]` impl.
+See their categories when you need them — not required to compose a minimal HTTP app.
 
 Every provider implements `Discoverable`; transports mount only what the
 import tree reaches ([Modules](/fundamentals/modules/#compose-the-root-module)).
 
-## Scopes — singleton, request, transient
+## Scopes
 
-```rust title="three providers, three scopes"
-#[injectable]                    // singleton — default
-pub struct PostsService { /* ... */ }
-
-#[injectable(scope = request)]   // one instance per request
-pub struct RequestLogger { /* ... */ }
-
-#[injectable(scope = transient)] // fresh instance every resolution
-pub struct IdGenerator { /* ... */ }
-```
-
-| Scope | Built | Shared as |
-|-------|-------|-----------|
-| `singleton` (default) | Once at boot | `Arc<T>` everywhere |
-| `request` | Once per request | Cached for that request |
-| `transient` | On every resolution | Never cached |
-
-**Singletons** — `PostsService`, `PostsController`, the DB pool: built at
-boot, injected as `Arc<T>`.
-
-**Request-scoped** — may inject singletons; singletons may **not**
-inject request-scoped types (they exist before any request). Reach them
-through the request boundary, not `#[inject]` on a singleton:
-
-```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::Scoped;
-
-#[get("/trace")]
-async fn trace(&self, log: Scoped<RequestLogger>) -> String {
-    log.line("listed posts");
-    "ok".into()
-}
-```
-
-HTTP, GraphQL, and MCP each install a fresh request scope per call
-(one per request for HTTP, one per operation for GraphQL and MCP).
-Within a scope, request-scoped providers are cached and shared; across
-scopes, fresh instances are built. GraphQL resolvers reach them with
-`nest_rs::graphql::Scoped<T>` (from the async-graphql `&Context`), MCP
-tools with `nest_rs::mcp::Scoped<T>` — the same shape as HTTP's
-`Scoped<T>`. A request-scoped provider may itself inject another
-request-scoped provider (both share the per-request cache); a cycle
-panics at resolution with the named chain.
-
-<Aside type="caution">
-A `#[dataloader]` batch closure runs **off-task** (a spawned future),
-so a request-scoped provider is not reachable inside batch
-computation — batches re-establish ambient state through their own
-`BatchContext` seam.
-</Aside>
-
-**Transient** — rebuild on every `Scoped<T>` / `get::<T>()` extraction.
-Use for throw-away per-call state (a one-shot builder — never a
-correlation id, which the framework already carries). A transient must not depend on itself — cycles panic at
-resolution with a clear diagnostic.
-
-<Aside type="note">
-Most services in `posts/` are **singletons**. Reach for `request` or
-`transient` only when you need per-request or per-call isolation.
-</Aside>
+A provider is a singleton unless it declares otherwise:
+`#[injectable(scope = request)]` builds one per request, `scope = transient` one
+per resolution, and a handler reaches either through a `Scoped<T>` parameter.
+[Provider scopes](/fundamentals/provider-scopes/) is when each is built and what
+shares it.
 
 ## The access graph — wiring checked at boot
 
@@ -180,7 +125,10 @@ The container is flat at runtime — every registered `TypeId` is
 globally resolvable — but `#[module]` makes wiring **declarative**. At
 boot the access graph checks: every `#[inject]` on a provider must be
 reachable from that provider's module through `imports`, or be global
-infrastructure (DB pool, config, …).
+infrastructure — what a seed or a factory makes, such as a config or the
+database connection ([what is global](/fundamentals/module-boot/#what-is-global)).
+What a hand-written module installs in its `register` is outside the check
+and reached only once that module has registered: import it.
 
 Typical mistake — controller registered without importing the port:
 
@@ -204,7 +152,7 @@ both fixes — import the owner, or route through a module already imported.
 Boot fails before HTTP listens — not on the first request.
 
 The same check applies to layers bound with
-`#[use_guards(...)]` / `#[use_filters(...)]` /
+`#[use_guards(...)]` / `#[use_exception_filters(...)]` /
 `#[use_interceptors(...)]`: if a controller lists a guard, its module
 must import a module that provides that guard.
 
@@ -220,48 +168,67 @@ flowchart TB
   PM --> PS
 ```
 
+### A dependency nothing provides
+
+A dependency no module of the app provides fails the boot with a
+`MissingDependencyError` naming it.
+
+When the crate owning a missing dependency's type knows the line to add, the
+refusal says it in place of the generic one. A service injecting
+`Arc<Jobs>` in an app that binds no queue backend reads:
+
+```text frame="terminal"
+unmet dependency: `PostsService` (in module `PostsModule`) depends on `Jobs`, which no module this app imports provides. Import exactly one queue backend's binding — `nest_rs::redis::RedisQueueModule` binds the queue port over Redis.
+```
+
+A crate of your own names one for a type it owns with
+`nest_rs::core::DependencyRemedy`, keyed by the type the container holds. The
+same line closes the refusal when only a module your app does not reach lists the
+type; a module it reaches is named instead, since importing it is the fix.
+
+A type whose key your app chooses — a resource opened [per instance](/fundamentals/instances/),
+`RedisConnection<Cache>` — carries its line itself, and the boot reads it where
+you inject it, an `#[inject]` field or a `Scoped<T>` parameter alike:
+
+```text frame="terminal"
+unmet dependency: `CacheService` (in module `CatalogModule`) depends on `RedisConnection<Cache>`, which no module this app imports provides. Import `nest_rs::redis::RedisModule::<Cache>`, which opens the Redis connection every binding of the `cache` instance shares.
+```
+
+A resource of your own that an app opens per instance implements
+`nest_rs::core::CarriesRemedy` the same way, its sentence naming the instance's
+import.
+
+### Optional dependencies
+
+An `Option<Arc<T>>` field is a dependency the provider runs without when this
+binary lacks the capability:
+
+```rust title="crates/features/src/posts/service.rs"
+#[injectable]
+pub struct PostsService {
+    #[inject]
+    config: Arc<PostsConfig>,
+    #[inject]
+    notifications: Option<Arc<NotificationsService>>,
+}
+```
+
+It is `None` when no module the app imports provides `NotificationsService`.
+Otherwise the same access graph holds it: when the app imports the module
+providing it, `PostsService`'s module imports that module too, or the boot
+fails with the access violation above — so whether the capability is present
+never depends on the order of `imports`. A singleton cannot hold a
+request-scoped or transient provider this way either. And a provider built
+before a hand-written module registers what it optionally injects fails the
+boot (`LateOptionalDependencyError`) rather than run as if it were absent.
+
 ## Hiding the impl — `pub trait` + `as dyn Trait`
 
 When another feature must call into `posts/` without naming the concrete
-struct, expose a `pub trait` and keep the impl module-private:
-
-```rust title="crates/features/src/posts/service.rs (from the demo)"
-use std::sync::Arc;
-
-use nest_rs::core::{async_trait, injectable};
-
-#[async_trait]
-pub trait PostsService: Send + Sync {
-    async fn list(&self) -> Result<Vec<Post>, Error>;
-}
-
-#[injectable]
-pub(crate) struct PostsServiceImpl {
-    #[inject]
-    db: Arc<DatabaseConnection>,
-}
-
-#[async_trait]
-impl PostsService for PostsServiceImpl { /* ... */ }
-```
-
-```rust title="crates/features/src/posts/module.rs"
-#[module(providers = [PostsServiceImpl as dyn PostsService])]
-pub struct PostsModule;
-```
-
-`#[async_trait]` is required on both the trait and the impl — an async method
-in a `dyn`-compatible trait needs the boxed-future desugaring. It comes from
-`nest_rs::core`, so this is not a manifest line.
-
-Consumers inject `Arc<dyn PostsService>`, never `PostsServiceImpl`. There
-is **no `exports = [...]`** list — Rust visibility plus the
-`as dyn Trait` binding is the encapsulation primitive.
-
-When you do not need to hide the impl, register `PostsService` directly
-in `PostsModule` — as in the snippets above. The trait pattern is optional:
-use it when a second feature needs the port without coupling to your
-concrete type.
+struct, bind it behind a trait — `PostsServiceImpl as dyn PostsService` — and
+consumers inject `Arc<dyn PostsService>`. [Providers behind a
+trait](/fundamentals/provider-traits/) shows the binding and the one instance it
+holds.
 
 ## The runtime escape hatch
 
@@ -282,27 +249,18 @@ prefer `#[inject]` so refactors stay checked at boot.
   `PostsHttpModule`, same as on the Modules page.
 </Aside>
 
-## Keyed providers — static roles
+## Instances — one resource opened twice
 
-When several instances of **one** type coexist and differ only by config
-— a primary and a replica `DatabaseConnection`, two cache pools — give
-each a compile-time key instead of a wrapper type. Register with
-`provide_keyed("primary", …)` and inject with `#[inject(key = "primary")]`;
-the access graph validates a keyed dependency exactly like a bare one, so
-a missing key fails boot naming the type and the key.
-
-Keyed injection is for **static, compile-time-known roles**. It is the
-opposite case from an **open, extensible set** discovered at runtime — a
-plugin registry, the social-login providers — where the members are not
-known in advance and each carries real per-member code. Those use the
-inventory-discovery seam (a public trait + `inventory::submit!`), not a
-key; see [social login](/security/authentication/social-login/) for the
-canonical example.
+A provider is found by its type, so one type is one value. Two of one resource —
+a queue's Valkey beside a cache's — are two types: a marker declared with
+`#[instance]`, which [Instances](/fundamentals/instances/) walks through.
 
 ## Going further
 
 - [Modules](/fundamentals/modules/) — where providers are listed and
   imports compose.
+- [Provider scopes](/fundamentals/provider-scopes/) — singleton, request or
+  transient, and the `Scoped<T>` parameter.
 - [Guards](/fundamentals/guards/) — providers bound at the request edge.
 - [Database / `Repo`](/database/) — the choke point every service reaches
   the DB through.

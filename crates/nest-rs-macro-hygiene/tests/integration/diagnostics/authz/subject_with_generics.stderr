@@ -1,0 +1,5 @@
+error: #[subject] takes no generics: a rule and a posture name one class, by its type
+ --> tests/integration/diagnostics/authz/subject_with_generics.rs:7:21
+  |
+7 | pub struct Exporting<T>;
+  |                     ^^^

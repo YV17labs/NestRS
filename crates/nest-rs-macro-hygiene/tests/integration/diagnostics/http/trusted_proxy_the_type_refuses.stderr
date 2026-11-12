@@ -1,0 +1,56 @@
+error: `trusted_proxy!` takes a string literal, `trusted_proxy!("10.0.0.0/8")`; an entry read at run time is `.parse()?`
+  --> tests/integration/diagnostics/http/trusted_proxy_the_type_refuses.rs:12:54
+   |
+12 |     let not_a_literal: TrustedProxy = trusted_proxy!(read);
+   |                                                      ^^^^
+
+error[E0080]: evaluation panicked: `trusted_proxy!`: this trusted proxy entry is a CIDR range whose prefix length is past the bits its address holds
+ --> tests/integration/diagnostics/http/trusted_proxy_the_type_refuses.rs:8:57
+  |
+8 |     let past_its_address: TrustedProxy = trusted_proxy!("10.42.0.0/61");
+  |                                                         ^^^^^^^^^^^^^^ evaluation of `main::TRUSTED_PROXY` failed inside this call
+  |
+note: inside `nest_rs::http::__private::literal`
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_display(&$arg);
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: $WORKSPACE/crates/nest-rs-http/src/trusted_proxy.rs
+  |
+  |     panic!("{}", refused.literal_refusal())
+  |     --------------------------------------- in this macro invocation
+
+error[E0080]: evaluation panicked: `trusted_proxy!`: this trusted proxy entry is a `/0` range, under which every caller could forge the address it is attributed to; name your proxies' own range
+ --> tests/integration/diagnostics/http/trusted_proxy_the_type_refuses.rs:9:54
+  |
+9 |     let every_address: TrustedProxy = trusted_proxy!("0.0.0.0/0");
+  |                                                      ^^^^^^^^^^^ evaluation of `main::TRUSTED_PROXY` failed inside this call
+  |
+note: inside `nest_rs::http::__private::literal`
+ --> $RUST/core/src/panic.rs
+  |
+  |         $crate::panicking::panic_display(&$arg);
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: $WORKSPACE/crates/nest-rs-http/src/trusted_proxy.rs
+  |
+  |     panic!("{}", refused.literal_refusal())
+  |     --------------------------------------- in this macro invocation
+
+error[E0080]: evaluation panicked: `trusted_proxy!`: this trusted proxy entry is neither an IP address nor a CIDR range (`10.0.0.0/8`)
+  --> tests/integration/diagnostics/http/trusted_proxy_the_type_refuses.rs:10:47
+   |
+10 |     let a_name: TrustedProxy = trusted_proxy!("ingress.internal");
+   |                                               ^^^^^^^^^^^^^^^^^^ evaluation of `main::TRUSTED_PROXY` failed inside this call
+   |
+note: inside `nest_rs::http::__private::literal`
+  --> $RUST/core/src/panic.rs
+   |
+   |         $crate::panicking::panic_display(&$arg);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+   |
+  ::: $WORKSPACE/crates/nest-rs-http/src/trusted_proxy.rs
+   |
+   |     panic!("{}", refused.literal_refusal())
+   |     --------------------------------------- in this macro invocation

@@ -1,10 +1,12 @@
-use poem::http::StatusCode;
+use nest_rs::http::StatusCode;
+use nest_rs::oauth::client::{OAuthClient, TARGET};
+use nest_rs::testing::LogCapture;
 
 use super::harness::*;
 
 #[tokio::test]
 async fn the_social_authorize_endpoint_redirects_to_the_provider() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = app.http().get("/social/github/authorize").send().await;
     resp.assert_status(StatusCode::FOUND);
     resp.assert_header_exist("location");
@@ -21,7 +23,7 @@ async fn the_social_authorize_endpoint_redirects_to_the_provider() {
 
 #[tokio::test]
 async fn the_provider_path_segment_is_case_insensitive() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     let resp = app.http().get("/social/GitHub/authorize").send().await;
     resp.assert_status(StatusCode::FOUND);
     let location = resp.0.headers().get("location").expect("location header");
@@ -36,7 +38,7 @@ async fn the_provider_path_segment_is_case_insensitive() {
 
 #[tokio::test]
 async fn a_configured_provider_that_is_not_imported_is_unknown() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .get("/social/gitlab/authorize")
         .send()
@@ -46,10 +48,104 @@ async fn a_configured_provider_that_is_not_imported_is_unknown() {
 
 #[tokio::test]
 async fn the_social_callback_rejects_a_forged_state() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
     app.http()
         .get("/social/github/callback?code=abc&state=forged")
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn the_social_callback_reads_the_transaction_cookie_the_redirect_set() {
+    let logs = LogCapture::install();
+    let app = boot().await;
+    let authorize = app.http().get("/social/github/authorize").send().await;
+    let set_cookie = authorize
+        .0
+        .headers()
+        .get("set-cookie")
+        .expect("the redirect sets the transaction cookie")
+        .to_str()
+        .expect("an ascii cookie")
+        .to_owned();
+    assert!(
+        set_cookie.starts_with(&format!("{}=", OAuthClient::TRANSACTION_COOKIE)),
+        "{set_cookie}"
+    );
+    let cookie = set_cookie
+        .split(';')
+        .next()
+        .expect("the cookie's name and value");
+
+    app.http()
+        .get("/social/github/callback?code=abc&state=forged")
+        .header("cookie", format!("theme=dark; {cookie}"))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let rejected = logs.expect_one(TARGET, "OAuth callback rejected");
+    assert_eq!(
+        rejected.field("reason").as_deref(),
+        Some("csrf_state_mismatch"),
+        "the transaction was read and verified; only the forged state stopped it"
+    );
+}
+
+#[tokio::test]
+async fn the_social_authorize_endpoint_refuses_a_resource_the_issuer_does_not_serve() {
+    let app = boot().await;
+    let resp = app
+        .http()
+        .get("/social/github/authorize")
+        .query("resource", &"https://billing.example.com")
+        .send()
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+    resp.assert_json(serde_json::json!({ "error": "invalid_target" }))
+        .await;
+}
+
+#[tokio::test]
+async fn a_provider_refusal_at_the_callback_signs_no_one_in() {
+    let logs = LogCapture::install();
+    let app = boot().await;
+    let authorize = app
+        .http()
+        .get("/social/github/authorize")
+        .query("resource", &ASSISTANT)
+        .send()
+        .await;
+    authorize.assert_status(StatusCode::FOUND);
+    let header = |name: &str| {
+        authorize
+            .0
+            .headers()
+            .get(name)
+            .expect("the redirect carries it")
+            .to_str()
+            .expect("an ascii header")
+            .to_owned()
+    };
+    let cookie = header("set-cookie")
+        .split(';')
+        .next()
+        .expect("the cookie's name and value")
+        .to_owned();
+    let location = header("location");
+    let state = location
+        .split(['?', '&'])
+        .find_map(|pair| pair.strip_prefix("state="))
+        .expect("the redirect carries its state");
+
+    app.http()
+        .get("/social/github/callback")
+        .query("error", &"access_denied")
+        .query("state", &state)
+        .header("cookie", cookie)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    logs.expect_none(TARGET, "OAuth callback rejected");
 }

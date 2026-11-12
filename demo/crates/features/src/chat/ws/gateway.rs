@@ -1,15 +1,19 @@
 use std::sync::Arc;
 
-use nest_rs::ws::{Scoped, WsClient, WsScopeError, gateway, messages, serde_json};
+use nest_rs::authz::Create;
+use nest_rs::core::{Ambient, Scoped, error_message};
+use nest_rs::ws::{Opaque, WsClient, WsError, gateway, messages};
 
-use super::guard::ModerationGuard;
 use super::request_seq::RequestSeq;
+use crate::Claims;
 use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
+use crate::chat::Posting;
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::service::ChatService;
 
 #[gateway(path = "/ws")]
-#[use_guards(AuthnGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct ChatGateway {
     #[inject]
     svc: Arc<ChatService>,
@@ -29,52 +33,46 @@ impl ChatGateway {
     }
 
     #[subscribe_message("message")]
-    #[public]
-    #[use_guards(ModerationGuard)]
-    async fn on_message(&self, message: SendMessageDto) -> Result<(), serde_json::Error> {
-        self.svc.record(message)?;
+    #[authorize(Create, Posting)]
+    async fn on_message(
+        &self,
+        caller: Ambient<Claims>,
+        message: SendMessageDto,
+    ) -> Result<(), WsError> {
+        self.svc.record(caller.into_inner().sub, message).opaque()?;
         Ok(())
     }
 
     #[subscribe_message("history")]
-    #[public]
     async fn history(&self) -> Vec<ChatMessageDto> {
         self.svc.history()
     }
 
     #[subscribe_message("presence")]
-    #[public]
     async fn presence(&self) -> usize {
         self.svc.present()
     }
 
     #[subscribe_message("seq")]
-    #[public]
-    async fn seq(&self) -> Result<u64, WsScopeError> {
-        Ok(Scoped::<RequestSeq>::from_context()?.value())
+    async fn seq(&self, seq: Scoped<RequestSeq>) -> u64 {
+        seq.value()
     }
 
     #[subscribe_message("typing")]
-    #[public]
-    async fn typing(&self, message: SendMessageDto, client: &WsClient) {
-        if let Err(e) = client.broadcast("typing", &message) {
-            tracing::warn!(target: "features::chat", error = %e, "broadcast failed");
+    #[authorize(Create, Posting)]
+    async fn typing(
+        &self,
+        caller: Ambient<Claims>,
+        message: SendMessageDto,
+        client: &WsClient,
+    ) -> Result<(), WsError> {
+        let typing = ChatMessageDto {
+            author: caller.into_inner().sub,
+            text: message.text,
+        };
+        if let Err(e) = client.broadcast("typing", &typing) {
+            tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::any::TypeId;
-
-    use nest_rs::core::Discoverable;
-
-    use super::ChatGateway;
-    use crate::chat::service::ChatService;
-
-    #[test]
-    fn gateway_declares_its_injected_dependency_for_the_access_graph() {
-        assert!(ChatGateway::dependencies().is_empty());
-        assert!(ChatGateway::injected().contains(&TypeId::of::<ChatService>()));
+        Ok(())
     }
 }

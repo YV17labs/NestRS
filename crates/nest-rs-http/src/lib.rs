@@ -1,108 +1,425 @@
-//! HTTP transport for nestrs — a [`nest_rs_core::Transport`] backed by poem.
+//! HTTP transport for nestrs — a [`nest_rs_core::Transport`] served by its own
+//! accept loop on hyper.
 //!
-//! [`HttpTransport`] mounts every `#[routes]` controller, every self-mounting
-//! endpoint another surface declares (a GraphQL schema, an MCP service — each
-//! via [`HttpEndpointMeta`]), and any extra endpoint registered with
-//! [`HttpTransport::mount`].
+//! [`HttpTransport`], built from the app's [`HttpConfig`] alone, assembles one
+//! route table, [`HttpRoutes`], from every `#[routes]` controller and every
+//! self-mounting endpoint another surface declares (a GraphQL schema, an MCP
+//! service — each via [`HttpEndpointMeta`]).
+//!
+//! Its vocabulary names no server library: the `http` crate's head types,
+//! re-exported here as their one path, and nestrs's own [`Request`],
+//! [`Response`], [`Body`], [`HttpError`] and [`Endpoint`].
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
+mod accept_encoding;
 mod access_log;
 mod allow;
-mod boot_check;
+mod ambient;
+mod body;
+mod body_pipes;
+mod canonical_host;
+mod capped;
 pub mod challenge;
 mod client_ip;
+mod compression;
 mod config;
-mod context;
 mod controller;
 mod cors;
+mod created;
+mod deadline;
+mod deprecation;
+mod detached;
+mod documented_answer;
+mod documented_body;
+mod documented_media;
+mod documented_payload;
+mod drain;
 mod edge;
+mod edge_answers;
 mod endpoint;
-mod header;
-mod interceptor;
+mod endpoint_guards;
+mod error;
+mod fallback;
+mod form;
+mod guard_stage;
+mod headers;
+mod json;
+mod keep_alive;
+mod link;
 mod location;
-mod metadata;
+mod matched;
+mod media_type;
 mod module;
 mod multipart;
 mod opaque;
+mod origin;
+mod paginated;
+mod path;
+mod phase;
 mod pipe;
 mod problem;
+mod query;
 mod raw_body;
-mod reflector;
+mod request;
+mod response;
 mod response_body;
+mod route_site;
+mod route_template;
+mod router;
+mod routes;
 mod scope;
 mod security_headers;
+mod server;
 mod shaper;
+mod site;
 mod sse;
+mod stall;
 pub mod target;
+#[cfg(test)]
+mod testing;
 mod tls;
 mod trace_context;
 mod transport;
+mod trusted_proxy;
 pub mod unit;
+mod vary;
 mod versioning;
+mod view;
+mod websocket;
+mod window;
 
-pub use allow::{AllowedMethods, MethodTable};
-pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
+/// A cheaply cloned, shared slice of bytes.
+///
+/// ```
+/// use nest_rs_http::Bytes;
+///
+/// assert_eq!(Bytes::from_static(b"abc").slice(1..), "bc");
+/// ```
+pub use bytes::Bytes;
+/// Typed values riding with a request, a response or an error.
+///
+/// ```
+/// use nest_rs_http::Extensions;
+///
+/// let mut extensions = Extensions::new();
+/// extensions.insert(5_u8);
+/// assert_eq!(extensions.get::<u8>(), Some(&5));
+/// ```
+pub use http::Extensions;
+/// A multimap of header names to values.
+///
+/// ```
+/// use nest_rs_http::{HeaderMap, HeaderValue, header};
+///
+/// let mut headers = HeaderMap::new();
+/// headers.append(header::VARY, HeaderValue::from_static("origin"));
+/// assert_eq!(headers[header::VARY], "origin");
+/// ```
+pub use http::HeaderMap;
+/// A header name, lowercase.
+///
+/// ```
+/// use nest_rs_http::HeaderName;
+///
+/// assert_eq!(HeaderName::from_static("x-request-id").as_str(), "x-request-id");
+/// ```
+pub use http::HeaderName;
+/// A header value: bytes a header may carry, not necessarily text.
+///
+/// ```
+/// use nest_rs_http::HeaderValue;
+///
+/// assert_eq!(HeaderValue::from_static("no-store"), "no-store");
+/// assert!(HeaderValue::from_bytes(b"caf\xe9").is_ok());
+/// ```
+pub use http::HeaderValue;
+/// A request method (RFC 9110 §9).
+///
+/// ```
+/// use nest_rs_http::Method;
+///
+/// assert!(Method::GET.is_safe());
+/// ```
+pub use http::Method;
+/// A response status (RFC 9110 §15).
+///
+/// ```
+/// use nest_rs_http::StatusCode;
+///
+/// assert!(StatusCode::NOT_FOUND.is_client_error());
+/// ```
+pub use http::StatusCode;
+/// A request target: path and query, or an absolute URI.
+///
+/// ```
+/// use nest_rs_http::Uri;
+///
+/// assert_eq!(Uri::from_static("/users?page=2").query(), Some("page=2"));
+/// ```
+pub use http::Uri;
+/// An HTTP protocol version.
+///
+/// ```
+/// use nest_rs_http::Version;
+///
+/// assert_ne!(Version::HTTP_11, Version::HTTP_2);
+/// ```
+pub use http::Version;
+/// The `http` crate's header module: every standard header name as a constant.
+///
+/// ```
+/// use nest_rs_http::header;
+///
+/// assert_eq!(header::CONTENT_TYPE.as_str(), "content-type");
+/// ```
+pub use http::header;
+/// A request's head as the `http` crate holds it, which
+/// [`Request::head`] exposes.
+///
+/// ```
+/// use nest_rs_http::{Method, Request, RequestParts};
+///
+/// let request = Request::builder().finish();
+/// let head: &RequestParts = request.head();
+/// assert_eq!(head.method, Method::GET);
+/// ```
+pub use http::request::Parts as RequestParts;
+/// A response's head as the `http` crate holds it, which
+/// [`Response::into_parts`] hands back.
+///
+/// ```
+/// use nest_rs_http::{Response, ResponseParts, StatusCode};
+///
+/// let (head, _): (ResponseParts, _) = Response::builder().finish().into_parts();
+/// assert_eq!(head.status, StatusCode::OK);
+/// ```
+pub use http::response::Parts as ResponseParts;
+/// A URI scheme: what a request arrived over.
+///
+/// ```
+/// use nest_rs_http::Scheme;
+///
+/// assert_eq!(Scheme::HTTPS.as_str(), "https");
+/// ```
+pub use http::uri::Scheme;
+
+pub use body::Body;
 pub use client_ip::{ClientIp, ClientOrigin};
-pub use config::HttpConfig;
-pub use context::{Ctx, RejectedCredential};
-pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, RequestBodyMeta};
-pub use cors::CorsConfig;
-pub use endpoint::{EdgePosture, HttpEndpointMeta};
-pub use header::Header;
-pub use location::{caller_path, set_created_location};
-pub use metadata::{HandlerMetadata, MappedError, Public};
+pub use config::{
+    DEFAULT_MAX_CONNECTION, DEFAULT_PING_INTERVAL, DEFAULT_PING_TIMEOUT, DEFAULT_SSE_KEEP_ALIVE,
+    DEFAULT_UNIT_TIMEOUT, HttpConfig, MAX_CONNECTION_BOUNDS, MAX_MESSAGE_BYTES_BOUNDS,
+    PING_INTERVAL_BOUNDS, PING_TIMEOUT_BOUNDS, SSE_KEEP_ALIVE_BOUNDS, UNIT_TIMEOUT_BOUNDS,
+};
+pub use controller::{HttpControllerMeta, HttpRouteMeta, RequestBodyMeta, SchemaFn};
+pub use cors::HttpCors;
+pub use created::Created;
+pub use deprecation::DeprecationMeta;
+pub use detached::DetachedWork;
+pub use endpoint::{BoxEndpoint, Endpoint, HttpEndpointMeta, declare_endpoint, endpoint_fn};
+pub use endpoint_guards::{CarriedView, EndpointGuards, GuardList};
+pub use error::{
+    BodyError, HttpError, NotATrustedProxy, ResponseError, Result, RouteTemplateError,
+};
+pub use fallback::HttpFallbackMeta;
+pub use form::Form;
+pub use headers::Header;
+pub use json::Json;
 pub use module::{HttpModule, HttpSetup};
-pub use multipart::{PartExt, PartStream};
-pub use nest_rs_core::input;
-pub use nest_rs_core::{current_request_scope, with_request_scope};
+pub use multipart::{Field, Multipart, PartStream};
 pub use opaque::Opaque;
-pub use pipe::{IntoInner, Piped, Valid};
+pub use paginated::Paginated;
+pub use path::Path;
+pub use pipe::pipe_error;
 pub use problem::{ProblemDetails, normalize_error_response};
+pub use query::Query;
 pub use raw_body::{RawBody, current_body_limit};
-pub use reflector::Reflector;
-pub use scope::Scoped;
-pub use security_headers::SecurityHeadersConfig;
+pub use request::{FromRequest, Request, RequestBody, RequestBuilder};
+pub use response::{IntoResponse, Response, ResponseBuilder};
+pub use response_body::OpenEndedBody;
+pub use route_template::RouteTemplate;
+pub use routes::HttpRoutes;
+pub use security_headers::HttpSecurityHeaders;
 pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};
 pub use sse::{SseEvent, SseSettings, SseStream};
-pub use tls::TlsConfig;
+pub use tls::HttpTls;
 pub use trace_context::{
     TRACEPARENT_HEADER, TRACERESPONSE_HEADER, TRACESTATE_HEADER, UPSTREAM_REQUEST_ID_HEADER,
 };
-pub use transport::{
-    HttpTransport, join_path, normalize_mount_path, version_path, versions_declare,
-};
-pub use versioning::{
-    ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, VersionSelector, declared_versions,
-};
+pub use transport::HttpTransport;
+pub use trusted_proxy::TrustedProxy;
+pub use versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM};
+pub use view::HttpView;
 
-// Cross-crate wiring seams — `pub` by necessity (sibling framework crates and
-// macro-emitted code name them) but not public API: `#[doc(hidden)]` so they do
-// not render as documented surface and freeze at 1.0.
 #[doc(hidden)]
-pub use controller::{SchemaFn, schema_of};
-#[doc(hidden)]
-pub use endpoint::SelfMountGuardWrap;
-#[doc(hidden)]
-pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
-#[doc(hidden)]
-pub use shaper::{CaptureFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
 
-pub use poem;
-// The stream vocabulary an `#[sse]` route is built from — `stream::iter`,
-// `StreamExt`, the channel adapters. Re-exported beside `poem` so a controller
-// that streams declares the umbrella and nothing else.
+    pub use crate::ambient::RejectedCredential;
+    pub use crate::canonical_host::CanonicalHost;
+    pub use crate::controller::{
+        HttpRouteParts, http_controller_meta, http_route_meta, route_denials, schema_of,
+    };
+    pub use crate::deadline::RequestDeadline;
+    pub use crate::deprecation::{deprecated_route, deprecation_meta};
+    pub use crate::documented_answer::{
+        AnswerDoc, AnswerProbe, ComputedAnswerProbe, DocumentedAnswer,
+    };
+    pub use crate::documented_body::{BodyProbe, DocumentedBody, UndocumentedProbe};
+    pub use crate::documented_media::{DocumentedMedia, MediaProbe, UndocumentedMediaProbe};
+    pub use crate::documented_payload::{
+        DocumentedPayload, PayloadProbe, UndocumentedPayloadProbe,
+    };
+    pub use crate::edge_answers::EdgeAnswers;
+    pub use crate::endpoint::{OriginCheck, checks_origin, decided_per_unit, guarded_by};
+    pub use crate::endpoint_guards::{
+        EndpointGuardsMeta, EndpointPosture, NO_GUARD_REMEDY, carried_request_chain,
+    };
+    pub use crate::error::{OriginRefused, OriginRefusedReason};
+    pub use crate::guard_stage::{
+        attached, attached_pending, behind_guards, check_request, denial_to_http_response,
+    };
+    pub use crate::keep_alive::{Due, KeepAlive};
+    pub use crate::module::RUNTIME;
+    pub use crate::multipart::{BoundaryRefused, boundary as multipart_boundary};
+    pub use crate::origin::OriginScheme;
+    pub use crate::pipe::piped;
+    pub use crate::problem::{framework_sentence, method_not_allowed};
+    pub use crate::request::ServedRoute;
+    pub use crate::response::{IntoResult, RouteReturn, RouteReturnFallback};
+    pub use crate::route_site::{
+        RouteGuards, RoutePipes, RouteWrapper, mount_controller, mount_route, route_guard_stage,
+    };
+    pub use crate::shaper::{CaptureFn, GateFn, ShaperProbe, UnshapedProbe, shaped};
+    pub use crate::transport::{
+        join_path, literal_mount_path, normalize_mount_path, version_path, versions_declare,
+    };
+    pub use crate::trusted_proxy::literal as trusted_proxy_literal;
+    pub use crate::versioning::{VersionLocation, declared_versions, version_location};
+    pub use crate::view::with_view;
+    pub use nest_rs_pipes::__private::{
+        DeclaredRules, NoRules, OptionalRules, PipeSpec, ValidateProbe,
+    };
+
+    pub use tracing;
+
+    /// Whether a request asks for a WebSocket and, behind the `websocket`
+    /// feature, the opening handshake on hyper's upgrade, the socket above it,
+    /// and the codes it closes with, for the edges that speak one.
+    pub mod websocket {
+        #[cfg(feature = "websocket")]
+        pub use crate::error::HandshakeRefused;
+        pub use crate::websocket::requested;
+        #[cfg(feature = "websocket")]
+        pub use crate::websocket::{
+            CloseCode, Error, Message, Signal, Utf8Bytes, WebSocketLimits, WebSocketStream,
+            WebSocketUpgrade, close_frame, read_failed,
+        };
+    }
+}
+
+// The stream vocabulary an `#[sse]` route is built from.
 pub use futures_util;
 pub use schemars;
-// `#[input]` carries the DTO derives so the developer does not; routing them
-// through here is what keeps `serde` / `validator` / `schemars` out of their
-// manifest. Plumbing, not curated surface.
-#[doc(hidden)]
-pub use serde;
-#[doc(hidden)]
-pub use validator;
 
-pub use async_trait::async_trait;
+/// `#[controller(path = "/users")]` — the HTTP host on a struct, paired with
+/// [`#[routes]`](macro@routes) on its impl block.
+///
+/// ```
+/// # use nest_rs_http::{controller, routes};
+/// #[controller(path = "/users", version = "1")]
+/// #[derive(Default)]
+/// struct UsersController;
+///
+/// #[routes]
+/// impl UsersController {
+///     #[get("/")]
+///     #[public]
+///     async fn list(&self) -> &'static str {
+///         "[]"
+///     }
+/// }
+///
+/// assert_eq!(UsersController::PATH, "/users");
+/// assert_eq!(UsersController::VERSIONS, ["1"]);
+/// ```
+pub use nest_rs_http_macros::controller;
 
-pub use nest_rs_http_macros::{
-    controller, crud, http_code, interceptor, redirect, response_header, routes,
-};
+/// `#[routes]` — binds a [`#[controller]`](macro@controller)'s methods to HTTP
+/// routes, one per verb attribute.
+///
+/// ```
+/// # use nest_rs_core::{Discoverable, Discovery, module};
+/// # use nest_rs_http::{HttpControllerMeta, Json, Method, controller, routes};
+/// # use nest_rs_testing::TestApp;
+/// #[controller(path = "/users")]
+/// #[derive(Default)]
+/// struct UsersController;
+///
+/// #[routes]
+/// impl UsersController {
+///     #[get("/")]
+///     #[public]
+///     async fn list(&self) -> Json<Vec<String>> {
+///         Json(vec!["ada".into()])
+///     }
+/// }
+/// # #[module(providers = [UsersController])]
+/// # struct UsersModule;
+/// # #[nest_rs_core::main]
+/// # async fn main() -> anyhow::Result<()> {
+///
+/// fn implements<T: Discoverable>() {}
+/// implements::<UsersController>();
+///
+/// # let app = TestApp::for_module::<UsersModule>().await?;
+/// let controllers = Discovery::new(app.container()).meta::<HttpControllerMeta>();
+/// let route = &controllers[0].meta.routes()[0];
+/// assert_eq!((route.method(), route.path(), route.handler()), (&Method::GET, "/", "list"));
+/// assert!(route.response().is_some());
+///
+/// app.http().get("/users").send().await.assert_json(["ada"]).await;
+/// # Ok(())
+/// # }
+/// ```
+pub use nest_rs_http_macros::routes;
+
+/// `#[crud(service = UsersService)]` — generates the standard REST operations
+/// (list, get, create, update, delete) on a [`#[controller]`](macro@controller)
+/// impl block, re-emitted under [`#[routes]`](macro@routes).
+///
+/// Each route delegates to the `nest_rs_seaorm::CrudService` the key names,
+/// through the controller's `#[inject]` field of that type, reads every type
+/// it names off that service and its entity's `#[expose]`, and declares its
+/// posture with `#[authorize(Action, Entity)]`.
+pub use nest_rs_http_macros::crud;
+
+/// `trusted_proxy!("10.42.0.0/16")` — a [`TrustedProxy`] from a literal, an
+/// address or a CIDR range, checked as the program compiles: a `#[module]`'s
+/// imports pin one where no `?` reaches a `Result`, and a typo fails the build
+/// rather than the boot.
+///
+/// ```
+/// use nest_rs_core::module;
+/// use nest_rs_http::{HttpConfig, HttpModule, trusted_proxy};
+///
+/// #[module(imports = [HttpModule::for_root(HttpConfig {
+///     trusted_proxies: vec![trusted_proxy!("10.0.0.1"), trusted_proxy!("10.42.0.0/16")],
+///     ..HttpConfig::default()
+/// })])]
+/// struct AppModule;
+/// # assert_eq!(trusted_proxy!("::ffff:10.0.0.1"), trusted_proxy!("10.0.0.1"));
+/// ```
+///
+/// An entry [`TrustedProxy`] refuses does not compile, in the words the boot
+/// would have used, the macro's name in front:
+///
+/// ```compile_fail
+/// let ingress = nest_rs_http::trusted_proxy!("10.42.0.0/61");
+/// ```
+pub use nest_rs_http_macros::trusted_proxy;
+
+pub use nest_rs_http_macros::http_code;
+pub use nest_rs_http_macros::redirect;
+pub use nest_rs_http_macros::response_header;

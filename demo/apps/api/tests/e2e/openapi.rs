@@ -1,14 +1,18 @@
+use nest_rs::config::Environment;
 use serde_json::json;
 
 use crate::*;
 
+pub(crate) async fn served_document(app: &TestApp) -> Value {
+    let served = app.http().get("/api-json").send().await;
+    served.assert_status_is_ok();
+    served.json().await.value().deserialize()
+}
+
 #[tokio::test]
 async fn openapi_document_describes_the_routes() {
-    let (_db, app) = boot().await;
-    let resp = app.http().get("/api-json").send().await;
-    resp.assert_status_is_ok();
-    let bytes = resp.0.into_body().into_bytes().await.expect("body");
-    let doc: serde_json::Value = serde_json::from_slice(&bytes).expect("api-json is JSON");
+    let app = boot().await;
+    let doc = served_document(&app).await;
 
     let paths = doc["paths"].as_object().expect("paths object");
     assert!(paths.contains_key("/orgs"), "paths include /orgs");
@@ -58,12 +62,21 @@ async fn openapi_document_describes_the_routes() {
         doc["components"]["schemas"]["Org"].is_object(),
         "the output entity is a component, not just the create/update inputs",
     );
+    assert_eq!(
+        list_ok["description"], "OK",
+        "a route's success reads its status alone: {list_ok}",
+    );
+    let user = &doc["components"]["schemas"]["User"]["properties"];
     assert!(
-        list_ok["description"]
+        user["email"]["description"]
             .as_str()
             .expect("a description")
             .contains("ability"),
-        "a masked response says its field set is ability-dependent: {list_ok}",
+        "a property a grant may withhold says so where the row is: {user}",
+    );
+    assert!(
+        user["name"].get("description").is_none(),
+        "a property no grant withholds says nothing of it: {user}",
     );
 
     let created = &doc["paths"]["/orgs"]["post"]["responses"]["201"];
@@ -151,9 +164,29 @@ async fn openapi_document_describes_the_routes() {
         list["parameters"][0]["required"], false,
         "pagination is optional: {list}",
     );
+    assert_eq!(
+        list["responses"]["400"]["content"]["application/problem+json"]["schema"]["$ref"],
+        "#/components/schemas/ProblemDetails",
+        "yet a cursor no page issued is a 400 the list advertises: {list}",
+    );
+    assert_eq!(
+        list["responses"]["200"]["headers"]["Link"]["schema"]["type"], "string",
+        "the paginated list documents the link it sends: {list}",
+    );
+
+    let org = &doc["components"]["schemas"]["Org"]["properties"];
+    assert_eq!(org["id"]["format"], "uuid", "{org}");
+    assert_eq!(org["created_at"]["format"], "date-time", "{org}");
     assert!(
-        list["responses"].get("400").is_none(),
-        "and an operation whose parameters are all optional advertises none: {list}",
+        doc["components"]["schemas"].get("PageParams").is_none(),
+        "a query payload is expanded into parameters, never left as an unused type",
+    );
+
+    let live = &doc["paths"]["/health/live"]["get"];
+    assert_eq!(
+        live["security"],
+        json!([]),
+        "a public route states its opening: {live}",
     );
 
     let throttled = &doc["paths"]["/audio/uploads"]["post"]["responses"]["429"];
@@ -165,5 +198,30 @@ async fn openapi_document_describes_the_routes() {
     assert_eq!(
         throttled["headers"]["Retry-After"]["schema"]["type"], "integer",
         "the 429 documents an integer Retry-After header: {throttled}",
+    );
+}
+
+#[tokio::test]
+async fn the_committed_document_is_the_one_the_app_serves() {
+    let app = boot().await;
+    let served = served_document(&app).await;
+
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json");
+    let committed: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(path).expect("apps/api/openapi.json is committed"),
+    )
+    .expect("the committed document is JSON");
+
+    let stale: Vec<&String> = served["paths"]
+        .as_object()
+        .expect("paths")
+        .keys()
+        .filter(|path| served["paths"][path.as_str()] != committed["paths"][path.as_str()])
+        .collect();
+    assert!(
+        served == committed,
+        "apps/api/openapi.json is not what the api serves (paths differing: {stale:?}): run the \
+         api once under {}=development, which rewrites it, and commit the diff",
+        Environment::var_name(),
     );
 }

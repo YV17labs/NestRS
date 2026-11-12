@@ -21,7 +21,6 @@
     "scheme": { "enum": ["http", "https"] },
     "config": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },
     "secrets": { "type": "object", "additionalProperties": { "type": "string" } },
-    "existingSecret": { "type": "string" },
     "serviceAccount": {
       "type": "object",
       "properties": {
@@ -82,8 +81,14 @@
         "redis": {
           "type": "object",
           "properties": {
+            "topology": { "enum": ["standalone", "sentinel", "cluster"] },
             "address": { "type": "string" },
+            "addresses": { "type": "string" },
+            "sentinelMaster": { "type": "string" },
+            "usernameFromEnv": { "type": "string" },
             "passwordFromEnv": { "type": "string" },
+            "sentinelUsernameFromEnv": { "type": "string" },
+            "sentinelPasswordFromEnv": { "type": "string" },
             "enableTLS": { "type": "boolean" },
             "databaseIndex": { "type": "integer", "minimum": 0 }
           }
@@ -107,6 +112,7 @@
         "backoffLimit": { "type": "integer", "minimum": 0 },
         "hookWeight": { "type": "integer" },
         "replicas": { "type": "integer", "minimum": 0 },
+        "shutdownDelaySeconds": { "type": "integer", "minimum": 0 },
         "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
         "podSecurityContext": { "type": "object" },
         "securityContext": { "type": "object" },
@@ -118,6 +124,15 @@
         "affinity": { "type": "object" },
         "topologySpreadConstraints": { "type": "array" },
         "extraEnv": { "type": "array" },
+        "existingSecret": { "type": "string" },
+        "reads": {
+          "type": "object",
+          "additionalProperties": { "enum": ["required", "optional"] }
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
         "pdb": {
           "type": "object",
           "properties": {

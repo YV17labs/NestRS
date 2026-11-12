@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nest_rs::core::injectable;
@@ -17,30 +16,29 @@ pub struct AudioTasks {
 
 #[scheduled]
 impl AudioTasks {
-    #[every("5s")]
+    #[every("5s", replicas = "one")]
     async fn enqueue_transcode(&self) -> Result<()> {
-        if !self.config.synthetic_seed {
+        if !self.config.seeds() {
             return Ok(());
         }
-        let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc.seed_and_enqueue(format!("track-{id}.mp3")).await?;
+        self.svc.seed_and_enqueue().await?;
         Ok(())
     }
 
     #[after("3s")]
     async fn warmup_on_boot(&self) -> Result<()> {
         tracing::info!(
-            target: "features::audio",
+            target: crate::audio::TARGET,
             phase = "warmup",
             "audio pipeline ready to enqueue",
         );
         Ok(())
     }
 
-    #[cron(CronExpression::EVERY_MINUTE)]
+    #[cron(CronExpression::EVERY_MINUTE, replicas = "each")]
     async fn heartbeat(&self) -> Result<()> {
         tracing::info!(
-            target: "features::audio",
+            target: crate::audio::TARGET,
             queue = AUDIO_QUEUE,
             "audio producer heartbeat",
         );
@@ -52,38 +50,19 @@ impl AudioTasks {
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs::core::{Discoverable, ReachableProviders};
-    use nest_rs::schedule::ScheduledMethod;
+    use nest_rs::schedule::{Replicas, ScheduledMethod};
 
     use super::AudioTasks;
-    use crate::audio::AudioService;
 
     #[test]
-    fn three_methods_are_discovered_through_the_inventory() {
-        let names: Vec<(&'static str, &'static str)> =
+    fn the_transcode_seed_fires_once_per_occurrence_and_the_heartbeat_on_each_replica() {
+        let replicas = |method: &str| {
             nest_rs::core::inventory::iter::<ScheduledMethod>()
-                .filter(|m| (m.provider_type_id)() == TypeId::of::<AudioTasks>())
-                .map(|m| (m.provider, m.method))
-                .collect();
-        assert!(
-            names.contains(&("AudioTasks", "enqueue_transcode")),
-            "{names:?}"
-        );
-        assert!(
-            names.contains(&("AudioTasks", "warmup_on_boot")),
-            "{names:?}"
-        );
-        assert!(names.contains(&("AudioTasks", "heartbeat")), "{names:?}");
-    }
-
-    #[test]
-    fn injected_dependency_is_recorded_for_the_access_graph() {
-        assert!(AudioTasks::dependencies().contains(&TypeId::of::<AudioService>()));
-        assert!(AudioTasks::injected().contains(&TypeId::of::<AudioService>()));
-    }
-
-    #[test]
-    fn reachable_providers_marker_is_a_normal_provider() {
-        let _ = TypeId::of::<ReachableProviders>();
+                .find(|m| m.host_type_id() == TypeId::of::<AudioTasks>() && m.method() == method)
+                .map(|m| m.replicas())
+        };
+        assert_eq!(replicas("enqueue_transcode"), Some(Replicas::One));
+        assert_eq!(replicas("heartbeat"), Some(Replicas::Each));
+        assert_eq!(replicas("warmup_on_boot"), Some(Replicas::Each));
     }
 }

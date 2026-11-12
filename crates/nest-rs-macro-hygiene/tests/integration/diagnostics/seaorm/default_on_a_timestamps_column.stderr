@@ -1,0 +1,5 @@
+error: #[expose] `default`: `timestamps` stamps this column with the save's instant — drop `default`, or drop `timestamps`
+  --> tests/integration/diagnostics/seaorm/default_on_a_timestamps_column.rs:17:24
+   |
+17 |     #[expose(default = DateTimeWithTimeZone::default())]
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,10 +1,8 @@
 //! `#[crud]` — generate standard REST operations on a `#[controller]` impl
-//! block (all five by default; a subset with `ops = [list, get, ...]`) and
-//! re-emit under `#[routes]`. Read ops delegate to the entity's
-//! [`CrudService`] (`access` for by-id route-model binding); the write ops
-//! delegate to its opt-in `Creatable`/`Updatable`/`Deletable` impls. A
-//! hand-written method overrides its generated counterpart.
+//! block, typed off the service its key names, and re-emit it under
+//! `#[routes]`.
 
+use nest_rs_codegen::__private::pair;
 use std::collections::HashSet;
 
 use proc_macro::TokenStream;
@@ -12,12 +10,13 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{ImplItem, ItemImpl, parse_quote};
 
-use nest_rs_codegen::{Paginate, impl_self_ident, parse_crud_args};
+use nest_rs_codegen::__private::{
+    CHECKED_BY_CRUD, CrudDeclaration, CrudOp, CrudTypes, GeneratedOps, Paginate, cfg_attrs,
+    impl_self_ident, parse_crud_args, resource_noun, unit_of_work_required,
+};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
-    // `#[crud]` is the generated spelling of the impl half, so it answers a wrong
-    // shape exactly as `#[routes]` does — through the edge's one pair constant.
-    let item = match crate::controller::HTTP_PAIR.parse_operations(input.into()) {
+    let item = match pair::HTTP.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -29,11 +28,8 @@ pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
 
 pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let cfg = parse_crud_args(args)?;
-    let ops = cfg.generated_ops()?;
     let self_ty = item.self_ty.clone();
-    // Kept for the diagnostic it raises on a non-path `impl` target; the name
-    // itself is no longer needed now that the error mapper is one shared fn.
-    let _ = impl_self_ident(&self_ty, "#[crud]")?;
+    let host = impl_self_ident(&self_ty, "#[crud]")?;
 
     let existing: HashSet<String> = item
         .items
@@ -43,271 +39,222 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             _ => None,
         })
         .collect();
+    let ops = cfg.generated_ops(&existing, |op| op.name().to_owned())?;
+    let prefix_check = by_id_path_check(&self_ty, ops);
 
-    let service = &cfg.service;
-    let entity = &cfg.entity;
-    let output = &cfg.output;
-    let tag = output
-        .segments
-        .last()
-        .map(|s| s.ident.to_string())
-        .unwrap_or_else(|| "Resource".to_owned());
+    let CrudTypes {
+        service,
+        entity,
+        output,
+        create,
+        update,
+        aliases,
+    } = cfg.types(&host, &self_ty, ops);
+    let noun = resource_noun(&host, "Controller");
 
-    // Reject non-UUID-v7 ids before loading — validation half of route-model
-    // binding. The sentence is `nest_rs_core::UUID_V7_REQUIRED`, emitted as a
-    // **path** rather than interpolated: the two runtime sites that enforce the
-    // same rule (`Bind<S, A>` and the GraphQL `bind` helper) cannot depend on a
-    // macro-time crate, so a value baked in here would be a wording only this
-    // one could read.
+    // Emitted as a path, not interpolated: the loader `bind = Service` runs on
+    // every edge enforces the same rule and must read the same sentence.
     let id_v7_check: TokenStream2 = quote! {
         if __id.0.get_version_num() != 7 {
-            return ::core::result::Result::Err(::nest_rs_http::poem::Error::from_string(
-                ::nest_rs_core::UUID_V7_REQUIRED,
-                ::nest_rs_http::poem::http::StatusCode::BAD_REQUEST,
+            return ::core::result::Result::Err(::nest_rs_http::HttpError::from(
+                ::nest_rs_http::ProblemDetails::bad_request()
+                    .with_detail(::nest_rs_core::UUID_V7_REQUIRED),
             ));
         }
     };
 
+    let access_refused: TokenStream2 = quote! {
+        ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
+            ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::FORBIDDEN),
+        ),
+        ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
+            ::nest_rs_http::HttpError::from_status(::nest_rs_http::StatusCode::NOT_FOUND),
+        ),
+    };
+
+    // The parameters generated here declare neither a gate nor a shaper.
+    let unprobed = proc_macro2::Ident::new(crate::routes::UNPROBED, proc_macro2::Span::call_site());
+
     let mut generated: Vec<ImplItem> = Vec::new();
 
-    if ops.list && !existing.contains("list") {
-        let summary = format!("List {tag}");
+    if ops.list {
+        let api = api_args(&cfg, CrudOp::List, format!("List {noun}"));
         let list_method: ImplItem = match cfg.paginate {
-            // Explicit opt-out (`paginate = none`): the full ability-scoped
-            // collection, still backstopped by `CrudService::list`'s hard cap.
             Paginate::None => parse_quote! {
                 #[get("/")]
-                #[api(summary = #summary, tags(#tag))]
+                #[api(#api)]
+                #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                    _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
-                ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<::std::vec::Vec<#output>>> {
-                    let __rows = ::nest_rs_seaorm::CrudService::list(&*self.#service)
+                ) -> ::nest_rs_http::Result<::nest_rs_http::Json<::std::vec::Vec<#output>>> {
+                    let __rows = ::nest_rs_seaorm::CrudService::list(#service(self))
                         .await
-                        .map_err(::nest_rs_seaorm::crud_error)?;
-                    ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(
-                        __rows.iter().map(#output::from).collect(),
+                        .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
+                    ::core::result::Result::Ok(::nest_rs_http::Json(
+                        __rows.iter().map(<#output>::from).collect(),
                     ))
                 }
             },
-            // Keyset pagination (the default): next cursor in `x-next-cursor`
-            // so the body stays a plain (maskable) array.
             Paginate::Cursor => parse_quote! {
                 #[get("/")]
-                // The handler returns a hand-built `Response` (it carries
-                // `x-next-cursor`), so the document cannot read the payload off
-                // the signature — it is declared instead. Without it the list
-                // route advertised no schema at all and a generated client
-                // typed the collection as `any`.
-                #[api(summary = #summary, tags(#tag), response = ::std::vec::Vec<#output>)]
+                #[api(#api)]
+                #[authorize(::nest_rs_authz::Read, #entity)]
                 async fn list(
                     &self,
-                    _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
-                    __page: ::nest_rs_http::poem::web::Query<::nest_rs_seaorm::PageParams>,
-                ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
+                    #[#unprobed] __page: ::nest_rs_http::Query<::nest_rs_seaorm::PageParams>,
+                ) -> ::nest_rs_http::Result<
+                    ::nest_rs_http::Paginated<::nest_rs_http::Json<::std::vec::Vec<#output>>>,
+                > {
+                    let __first = __page.0.limit();
+                    let __after = __page
+                        .0
+                        .cursor()
+                        .map_err(|__e| ::nest_rs_http::pipe_error(&__e))?;
                     let __p = ::nest_rs_seaorm::CrudService::page(
-                        &*self.#service,
-                        __page.0.limit(),
-                        __page.0.after_uuid(),
+                        #service(self),
+                        __first,
+                        __after,
                     )
                     .await
-                    .map_err(::nest_rs_seaorm::crud_error)?;
+                    .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                     let __items: ::std::vec::Vec<#output> =
-                        __p.items.iter().map(#output::from).collect();
-                    let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(::nest_rs_http::poem::web::Json(__items));
-                    // Infallible by construction (a UUID renders ASCII), but
-                    // never `expect` on the per-request path: a failure just
-                    // omits the pagination header.
-                    if let ::core::option::Option::Some(__cursor) = __p.next_cursor
-                        && let ::core::result::Result::Ok(__value) =
-                            ::nest_rs_http::poem::http::HeaderValue::from_str(
-                                &::std::string::ToString::to_string(&__cursor),
-                            )
-                    {
-                        __resp.headers_mut().insert(
-                            ::nest_rs_http::poem::http::HeaderName::from_static("x-next-cursor"),
-                            __value,
-                        );
-                    }
-                    ::core::result::Result::Ok(__resp)
+                        __p.items.iter().map(<#output>::from).collect();
+                    ::core::result::Result::Ok(::nest_rs_http::Paginated::new(
+                        ::nest_rs_http::Json(__items),
+                        __first,
+                        __p.next_cursor,
+                    ))
                 }
             },
         };
         generated.push(list_method);
     }
 
-    if ops.get && !existing.contains("get") {
-        let summary = format!("Fetch {tag} by id");
+    if ops.get {
+        let api = api_args(&cfg, CrudOp::Get, format!("Fetch {noun} by id"));
         generated.push(parse_quote! {
-            #[get("/:id")]
-            #[api(summary = #summary, tags(#tag))]
+            #[get("/{id}")]
+            #[api(#api)]
+            #[authorize(::nest_rs_authz::Read, #entity)]
             async fn get(
                 &self,
-                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
-                __id: ::nest_rs_http::poem::web::Path<::nest_rs_resource::uuid::Uuid>,
-            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
+                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+            ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Read,
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::http_crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__m)))
+                        ::core::result::Result::Ok(::nest_rs_http::Json(<#output>::from(&__m)))
                     }
-                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
-                    ),
-                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
-                    ),
+                    #access_refused
                 }
             }
         });
     }
 
-    if let Some(create) = ops.create
-        && !existing.contains("create")
-    {
-        let summary = format!("Create {tag}");
+    if ops.create {
+        let api = api_args(&cfg, CrudOp::Create, format!("Create {noun}"));
         generated.push(parse_quote! {
             #[post("/")]
-            // The handler hands back a built `Response` (it carries
-            // `Location`), so the document cannot read the payload off the
-            // signature — it is declared, exactly as the paginated list op
-            // declares its array.
-            #[api(summary = #summary, tags(#tag), response = #output)]
+            #[api(#api)]
             #[crud_write]
-            // Marker read by `#[routes]`: the handler below builds a `Location`,
-            // so the document declares it. Shipping the header without declaring
-            // it is the `Retry-After` gap on the throttler's `429`, mirrored.
-            #[crud_location]
-            // `201 Created` is what a route that mints a resource answers.
-            // Declared via `#[http_code]` (not a returned `StatusCode`) so
-            // `#[routes]` records it and the OpenAPI document advertises `201`,
-            // the same way the delete op advertises its `204` (OAPI-O3).
-            #[http_code(201)]
+            #[authorize(::nest_rs_authz::Create, #entity)]
             async fn create(
                 &self,
-                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Create, #entity>,
-                // The collection URI as the caller sent it — global prefix and
-                // version segment included. Reconstructing it from the mount
-                // metadata would re-derive what the request already states.
-                // Read through `caller_path` below: the router strips a global
-                // prefix off `uri()`, and `original_uri()` is populated on the
-                // hyper path only.
-                __req: &::nest_rs_http::poem::Request,
-                __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#create>>,
-            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> {
+                #[#unprobed] __body: ::nest_rs_http::Json<#create>,
+            ) -> ::nest_rs_http::Result<::nest_rs_http::Created<::nest_rs_http::Json<#output>>> {
                 let __row = ::nest_rs_seaorm::Creatable::create(
-                    &*self.#service,
+                    #service(self),
                     __body.into_inner(),
                 )
                 .await
-                .map_err(::nest_rs_seaorm::crud_error)?;
-                let mut __resp = ::nest_rs_http::poem::IntoResponse::into_response(
-                    ::nest_rs_http::poem::web::Json(#output::from(&__row)),
-                );
-                // RFC 9110 §15.3.2: a `201` names what it created. Absent only
-                // for an entity that does not key on a `Uuid` — every other
-                // `#[crud]` route already takes one as its path id.
-                if let ::core::option::Option::Some(__id) =
-                    ::nest_rs_seaorm::model_uuid::<#entity>(&__row)
-                {
-                    ::nest_rs_http::set_created_location(
-                        &mut __resp,
-                        ::nest_rs_http::caller_path(__req),
-                        __id,
-                    );
-                }
-                ::core::result::Result::Ok(__resp)
+                .map_err(::nest_rs_seaorm::__private::http_crud_write_error::<#entity>(
+                    <#create as ::nest_rs_seaorm::CreateModel<#entity>>::field_for,
+                ))?;
+                ::core::result::Result::Ok(::nest_rs_http::Created::at(
+                    ::nest_rs_seaorm::__private::created_key::<#entity>(&__row),
+                    ::nest_rs_http::Json(<#output>::from(&__row)),
+                ))
             }
         });
     }
 
-    if let Some(update) = ops.update
-        && !existing.contains("update")
-    {
-        let summary = format!("Update {tag} by id");
+    if ops.update {
+        let api = api_args(&cfg, CrudOp::Update, format!("Update {noun} by id"));
         generated.push(parse_quote! {
-            #[patch("/:id")]
-            #[api(summary = #summary, tags(#tag))]
+            // RFC 9110 §9.3.4: `Update<E>` carries every writable field, which
+            // replace the row's — a replacement, not RFC 5789's partial patch.
+            #[put("/{id}")]
+            #[api(#api)]
             #[crud_write]
+            #[authorize(::nest_rs_authz::Update, #entity)]
             async fn update(
                 &self,
-                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Update, #entity>,
-                __id: ::nest_rs_http::poem::web::Path<::nest_rs_resource::uuid::Uuid>,
-                __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#update>>,
-            ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
+                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+                #[#unprobed] __body: ::nest_rs_http::Json<#update>,
+            ) -> ::nest_rs_http::Result<::nest_rs_http::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Update,
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::http_crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
                         let __row = ::nest_rs_seaorm::Updatable::update(
-                            &*self.#service,
+                            #service(self),
                             __m,
                             __body.into_inner(),
                         )
                         .await
-                        .map_err(::nest_rs_seaorm::crud_error)?;
-                        ::core::result::Result::Ok(::nest_rs_http::poem::web::Json(#output::from(&__row)))
+                        .map_err(::nest_rs_seaorm::__private::http_crud_write_error::<#entity>(
+                            <#update as ::nest_rs_seaorm::UpdateModel<#entity>>::field_for,
+                        ))?;
+                        ::core::result::Result::Ok(::nest_rs_http::Json(<#output>::from(&__row)))
                     }
-                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
-                    ),
-                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
-                    ),
+                    #access_refused
                 }
             }
         });
     }
 
-    if ops.delete && !existing.contains("delete") {
-        let summary = format!("Delete {tag} by id");
+    if ops.delete {
+        let api = api_args(&cfg, CrudOp::Delete, format!("Delete {noun} by id"));
         generated.push(parse_quote! {
-            #[delete("/:id")]
-            #[api(summary = #summary, tags(#tag))]
+            #[delete("/{id}")]
+            #[api(#api)]
             #[crud_write]
-            // A successful delete is `204 No Content`. Declared via `#[http_code]`
-            // (not a returned `StatusCode`) so `#[routes]` records it on the route
-            // and the OpenAPI document advertises `204`, not `200` (OAPI-O3).
+            // Via `#[http_code]`, not a returned status, so the document advertises it.
             #[http_code(204)]
+            #[authorize(::nest_rs_authz::Delete, #entity)]
             async fn delete(
                 &self,
-                _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Delete, #entity>,
-                __id: ::nest_rs_http::poem::web::Path<::nest_rs_resource::uuid::Uuid>,
-            ) -> ::nest_rs_http::poem::Result<()> {
+                #[#unprobed] __id: ::nest_rs_http::Path<::nest_rs_seaorm::__private::uuid::Uuid>,
+            ) -> ::nest_rs_http::Result<()> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
-                    &*self.#service,
+                    #service(self),
                     ::nest_rs_authz::Action::Delete,
                     __id.0,
                 )
                 .await
-                .map_err(::nest_rs_seaorm::crud_error)?
+                .map_err(::nest_rs_seaorm::__private::http_crud_error)?
                 {
                     ::nest_rs_seaorm::Access::Found(__m) => {
-                        ::nest_rs_seaorm::Deletable::delete(&*self.#service, __m)
+                        ::nest_rs_seaorm::Deletable::delete(#service(self), __m)
                             .await
-                            .map_err(::nest_rs_seaorm::crud_error)?;
+                            .map_err(::nest_rs_seaorm::__private::http_crud_error)?;
                         ::core::result::Result::Ok(())
                     }
-                    ::nest_rs_seaorm::Access::Denied => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::FORBIDDEN),
-                    ),
-                    ::nest_rs_seaorm::Access::Missing => ::core::result::Result::Err(
-                        ::nest_rs_http::poem::Error::from_status(::nest_rs_http::poem::http::StatusCode::NOT_FOUND),
-                    ),
+                    #access_refused
                 }
             }
         });
@@ -315,11 +262,63 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
 
     generated.append(&mut item.items);
     item.items = generated;
+    let unit_of_work = unit_of_work_required(&self_ty, &cfg_attrs(&item.attrs));
 
+    let checked = proc_macro2::Ident::new(CHECKED_BY_CRUD, proc_macro2::Span::call_site());
     Ok(quote! {
-        #[::nest_rs_http::routes]
+        #aliases
+
+        #[::nest_rs_http::routes(#checked)]
         #item
+
+        #prefix_check
+
+        #unit_of_work
     })
+}
+
+/// The assertion that the controller's path names no parameter of its own
+/// when a generated op reads the id — `#[crud]` never sees that path, and
+/// each by-id op reads one parameter, its route's.
+fn by_id_path_check(self_ty: &syn::Type, ops: GeneratedOps) -> Option<TokenStream2> {
+    let by_id: Vec<String> = [
+        (ops.get, CrudOp::Get),
+        (ops.update, CrudOp::Update),
+        (ops.delete, CrudOp::Delete),
+    ]
+    .into_iter()
+    .filter(|&(generated, _)| generated)
+    .map(|(_, op)| format!("`{}`", op.name()))
+    .collect();
+    if by_id.is_empty() {
+        return None;
+    }
+    let ops = by_id.join(", ");
+    let message = format!(
+        "#[crud] reads the id of {ops} from the route's one path parameter, and the \
+         `#[controller]` path names parameters of its own — mount the resource under a path \
+         naming none, or write {ops} by hand",
+    );
+    Some(quote! {
+        const _: () = ::core::assert!(
+            <#self_ty>::__nestrs_controller_path_parameters() == 0,
+            #message,
+        );
+    })
+}
+
+/// The `summary` and `description` an operation's `#[api]` carries: what
+/// `api(<op>(…))` gives it, the default summary otherwise.
+fn api_args(cfg: &CrudDeclaration, op: CrudOp, summary: String) -> TokenStream2 {
+    let api = cfg.api(op);
+    let summary = match api.and_then(|api| api.summary.as_ref()) {
+        Some(written) => quote!(#written),
+        None => quote!(#summary),
+    };
+    let description = api
+        .and_then(|api| api.description.as_ref())
+        .map(|description| quote!(, description = #description));
+    quote!(summary = #summary #description)
 }
 
 #[cfg(test)]
@@ -334,12 +333,10 @@ mod tests {
         crud(args, item).expect("crud generates").to_string()
     }
 
-    // `ops = [list, get, delete]` generates exactly those three routes — no
-    // `create`/`update`, and no need for `create = `/`update = ` input types.
     #[test]
     fn partial_ops_generate_only_the_listed_routes() {
         let out = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, ops = [list, get, delete]
+            service = ThingsService, ops = [list, get, delete]
         });
         assert!(out.contains("fn list"), "list expected: {out}");
         assert!(out.contains("fn get"), "get expected: {out}");
@@ -348,39 +345,131 @@ mod tests {
         assert!(!out.contains("fn update"), "update must be absent: {out}");
     }
 
-    /// R10: the create route builds a `Location`, and `#[routes]` only declares
-    /// it in the OpenAPI document when the handler says so — the marker is the
-    /// whole seam between "the header ships" and "a generated client can read
-    /// it". Asserted on the expansion, because a missing marker is not a
-    /// compile error anywhere: it is a silently poorer document.
     #[test]
-    fn the_create_op_marks_the_location_it_sends() {
+    fn the_create_answers_a_created_and_the_cursor_list_a_paginated_answer() {
         let out = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, create = CreateThing
+            service = ThingsService
         });
+        assert!(out.contains(":: nest_rs_http :: Created <"), "{out}");
+        assert!(out.contains(":: nest_rs_http :: Paginated <"), "{out}");
         assert!(
-            out.contains("crud_location"),
-            "create stamps the marker `#[routes]` reads: {out}",
+            !out.contains("http_code (201)"),
+            "the answer says its status: {out}"
         );
-        // Read ops send no `Location`, so they must not claim one.
-        let read_only = generated_methods(quote! {
-            service = svc, entity = E, output = Thing, ops = [list, get]
+        let whole = generated_methods(quote! {
+            service = ThingsService, ops = [list], paginate = none
         });
         assert!(
-            !read_only.contains("crud_location"),
-            "only the create op declares a Location: {read_only}",
+            !whole.contains("Paginated"),
+            "a full collection sends no cursor: {whole}",
         );
     }
 
-    // Requesting a write op without its input type is a hard macro error.
+    // An attribute, never a parameter: `#[routes]` runs the class gate with the
+    // guards, outside the route's own layers.
     #[test]
-    fn create_op_without_input_type_fails_to_expand() {
+    fn every_op_declares_its_posture_with_authorize() {
+        let out = generated_methods(quote! {
+            service = ThingsService
+        });
+        for action in ["Read", "Create", "Update", "Delete"] {
+            assert!(
+                out.contains(&format!(
+                    "# [authorize (:: nest_rs_authz :: {action} , __NestrsCrudThingsEntity)]"
+                )),
+                "{action}: {out}",
+            );
+        }
+        assert!(!out.contains("Authorize <"), "no posture parameter: {out}");
+    }
+
+    // RFC 5789 makes `PATCH` a partial update; `Update<E>` carries every
+    // writable field, so the route replaces them (RFC 9110 §9.3.4).
+    #[test]
+    fn the_update_op_replaces_the_row_through_put() {
+        let out = generated_methods(quote! {
+            service = ThingsService, ops = [update]
+        });
+        assert!(out.contains("# [put (\"/{id}\")]"), "{out}");
+        assert!(!out.contains("patch"), "{out}");
+    }
+
+    #[test]
+    fn api_documents_the_operation_it_names_and_leaves_the_others_their_default() {
+        let out = generated_methods(quote! {
+            service = ThingsService, ops = [list, get],
+            api(get(summary = "Get a thing in the caller's org", description = "Absent: 404.")),
+        });
+        assert!(
+            out.contains(
+                "# [api (summary = \"Get a thing in the caller's org\" , description = \"Absent: 404.\")]"
+            ),
+            "{out}",
+        );
+        assert!(out.contains("summary = \"List Thing\""), "{out}");
+    }
+
+    #[test]
+    fn api_naming_an_op_ops_leaves_out_fails_to_expand() {
         let item: ItemImpl = parse_quote! { impl Things {} };
         let err = crud(
-            quote! { service = svc, entity = E, output = Thing, ops = [create] },
+            quote! { service = ThingsService, ops = [list], api(get(summary = "x")) },
             item,
         )
-        .expect_err("create without an input type must fail");
-        assert!(err.to_string().contains("create"));
+        .expect_err("docs for an op that is not generated must fail");
+        let err = err.to_string();
+        assert!(
+            err.contains("`get`") && err.contains("`ops` leaves out"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_key_configuring_an_op_the_block_writes_by_hand_fails_to_expand() {
+        for (args, refusal) in [
+            (
+                quote! {
+                    service = ThingsService, ops = [list, get],
+                    api(get(summary = "Get a thing")),
+                },
+                "#[crud] `api` configures the `get` op, which this block writes by hand as \
+                 `fn get` — drop `get(…)`: give that method its own `#[api]`",
+            ),
+            (
+                quote! { service = ThingsService, paginate = none },
+                "#[crud] `paginate` configures the `list` op, which this block writes by hand \
+                 as `fn list` — drop `paginate = …`: the method bounds its own list",
+            ),
+        ] {
+            let item: ItemImpl = parse_quote! {
+                impl Things {
+                    async fn list(&self) {}
+                    async fn get(&self) {}
+                }
+            };
+            let err = crud(args, item).expect_err("a key no generated op reads is refused");
+            assert_eq!(err.to_string(), refusal);
+        }
+    }
+
+    #[test]
+    fn the_service_alone_generates_every_route_typed_off_the_service() {
+        let out = generated_methods(quote! { service = ThingsService });
+        for method in ["fn list", "fn get", "fn create", "fn update", "fn delete"] {
+            assert!(out.contains(method), "{method}: {out}");
+        }
+        for alias in [
+            "fn __nestrs_crud_things_service",
+            "type __NestrsCrudThingsEntity",
+            "type __NestrsCrudThingsOutput",
+            "type __NestrsCrudThingsCreate",
+            "type __NestrsCrudThingsUpdate",
+        ] {
+            assert!(out.contains(alias), "{alias}: {out}");
+        }
+        assert!(
+            out.contains("summary = \"List Thing\""),
+            "the noun is read off the host: {out}"
+        );
     }
 }

@@ -1,46 +1,157 @@
-//! [`RedisQueueModule`] — the producer-side binding. A bare import: it owns no
-//! config, the connection is [`RedisModule`](crate::RedisModule)'s, and what it
-//! adds is the [`JobProducer`] bound over that connection.
+//! [`RedisQueueModule`] — binds the queue port over the shared
+//! [`RedisConnection`]: the producer a feature pushes through, and the consumer
+//! the port's `QueueWorker` runs jobs with when the app reaches a `#[process]`
+//! host, which brings `QueueModule`.
 
-use std::any::TypeId;
-use std::sync::Arc;
+use std::borrow::Borrow;
+use std::marker::PhantomData;
+use std::time::Duration;
 
-use nest_rs_core::{ContainerBuilder, Module};
-use nest_rs_queue::JobProducer;
+use nest_rs_config::{ConfigModule, ConfigSetup, ForInstance, Namespaced, instance_namespace};
+use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering, Unnamed};
+use nest_rs_queue::{BACKEND_REMEDY, BACKEND_TIMEOUT, BoundConsumer, Jobs};
 
-use super::RedisQueueProducer;
-use crate::RedisConnection;
-use crate::connection::CONNECTION_REMEDY;
+use super::consumer::RedisQueueConsumer;
+use super::{RedisQueueConfig, RedisQueueProducer};
+use crate::instance::RedisInstance;
+use crate::{RedisConnection, RedisError, RedisModule};
 
-/// The producer-side binding. Import it beside
-/// [`RedisModule::for_root`](crate::RedisModule::for_root) to push jobs — enough
-/// for an API that enqueues without running a consumer.
-pub struct RedisQueueModule;
+/// The Redis queue binding: an app pushing jobs injects the port's `Arc<Jobs>`,
+/// and an app running them imports a queue adapter beside it. A bare import
+/// reads `<PREFIX>_REDIS__QUEUE__*`; [`for_root`](RedisQueueModule::for_root)
+/// pins the base those variables overlay. It queues on the default instance's
+/// connection, or on a named one's — `RedisQueueModule::<Background>` reading
+/// `<PREFIX>_REDIS__BACKGROUND__QUEUE__*` — and imports the
+/// [`RedisModule`] opening it, which an app names only to pin it.
+pub struct RedisQueueModule<I = Unnamed>(PhantomData<fn() -> I>);
 
-impl Module for RedisQueueModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
-        builder
+impl RedisQueueModule {
+    /// Pin `config` as the base `<PREFIX>_REDIS__QUEUE__*` overlays, per
+    /// field; a queue on a named instance takes `(Marker, config)` and reads
+    /// `<PREFIX>_REDIS__<INSTANCE>__QUEUE__*`. The bare import reads those
+    /// variables over [`RedisQueueConfig`]'s defaults.
+    pub fn for_root<I: Instance>(
+        config: impl Into<ForInstance<I, RedisQueueConfig>>,
+    ) -> RedisQueueSetup<I> {
+        ConfigModule::setup(config)
+    }
+}
+
+impl<I: Instance> RedisQueueModule<I> {
+    /// The producer, as the port's [`Jobs`], and the consumer, each bound under
+    /// the port's type and declared, so a second queue backend imported beside
+    /// this one fails the boot naming both ([`BACKEND_REMEDY`]); and the port's
+    /// net over the connection, which the boot holds the connection's budget
+    /// under.
+    fn bind(builder: ContainerBuilder) -> ContainerBuilder {
+        RedisConnection::<I>::netted(builder, "the queue port", BACKEND_TIMEOUT)
+            .provide_factory_after::<RedisQueueProducer<I>, (RedisConnection<I>,), _, _>(
+                |container| async move {
+                    let producer = RedisQueueProducer::new(RedisConnection::<I>::of(
+                        &container,
+                        "RedisQueueModule",
+                    )?);
+                    producer.load_scripts().await?;
+                    Ok(producer)
+                },
+            )
+            .provide_declared_factory_after::<Jobs, (RedisQueueProducer<I>,), _, _>(
+                BACKEND_REMEDY,
+                |container| async move {
+                    let producer = container.get::<RedisQueueProducer<I>>().ok_or_else(|| {
+                        anyhow::anyhow!("RedisQueueModule: RedisQueueProducer was not resolved")
+                    })?;
+                    Ok(Jobs::new(producer))
+                },
+            )
+            .provide_declared_factory_after::<
+                BoundConsumer,
+                (RedisConnection<I>, I::Of<RedisQueueConfig>),
+                _,
+                _,
+            >(BACKEND_REMEDY, |container| async move {
+                let conn = RedisConnection::<I>::of(&container, "RedisQueueModule")?;
+                let held = ConfigModule::resolved_for::<I, RedisQueueConfig>(&container)?;
+                let config: &RedisQueueConfig = (*held).borrow();
+                renewable::<I>(config.lease, conn.budget())?;
+                Ok(BoundConsumer::new(RedisQueueConsumer::new(conn, config.lease)))
+            })
+    }
+}
+
+impl<I: Instance> Module for RedisQueueModule<I> {
+    // A bare import still reads `<PREFIX>_REDIS__QUEUE__*`; a
+    // `for_root(cfg)`'s declared value supersedes this env-only one.
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        Self::bind(ConfigModule::provide_feature::<I, RedisQueueConfig>(
+            builder,
+        ))
+        .import::<RedisModule<I>>()
     }
 
-    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_collected(TypeId::of::<Self>()) {
-            return builder;
-        }
-        // Bound as both names: `Arc<RedisQueueProducer>` for the concrete
-        // backend and `Arc<dyn JobProducer>` for the portable form the queue
-        // docs prescribe — the contract `/queue/writing-a-driver/` asks a driver
-        // to honour. A factory output so a producing feature injects it as
-        // global infrastructure without importing this module; queued *after*
-        // the connection's factory so `imports` order stays a readability
-        // choice.
-        builder.provide_factory_dyn_after::<RedisQueueProducer, dyn JobProducer, RedisConnection, _, _>(
-            |container| async move {
-                let conn = container
-                    .get::<RedisConnection>()
-                    .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
-                Ok(RedisQueueProducer::new((*conn).clone()))
-            },
-            |producer| Arc::new(producer) as Arc<dyn JobProducer>,
-        )
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<RedisModule<I>>()
+    }
+}
+
+/// The configured import [`RedisQueueModule::for_root`] returns: the config it
+/// pins, and the bindings — queued once, however many sites import the module.
+pub type RedisQueueSetup<I = Unnamed> = ConfigSetup<RedisQueueModule<I>, RedisQueueConfig, I>;
+
+/// `Ok` when the port's renewal fits in `lease` though it waits out the whole
+/// `budget`, else the refusal naming the instance `I`'s variables.
+fn renewable<I: Instance>(lease: Duration, budget: Duration) -> Result<(), RedisError> {
+    nest_rs_queue::lease_fits_renewal(lease, budget).ok_or_else(|| RedisError::BudgetPastLease {
+        budget,
+        lease,
+        lease_var: RedisQueueConfig::LEASE
+            .var(&instance_namespace::<I>(RedisQueueConfig::NAMESPACE)),
+        connect_timeout_var: RedisInstance::of::<I>().connect_timeout_var(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_defaults_fit_and_a_lease_no_renewal_fits_is_refused() {
+        let budget = crate::RedisConfig::default().connect_timeout;
+        assert!(renewable::<Unnamed>(RedisQueueConfig::default().lease, budget).is_ok());
+        let Err(refused) = renewable::<Unnamed>(Duration::from_secs(1), Duration::from_secs(1))
+        else {
+            panic!("a lease no longer than the budget must be refused");
+        };
+        assert!(
+            matches!(refused, RedisError::BudgetPastLease { .. }),
+            "{refused}"
+        );
+        let rendered = refused.to_string();
+        assert!(
+            rendered.contains(&nest_rs_config::var_name("redis__queue", "LEASE_SECS"))
+                && rendered.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+            "{rendered}"
+        );
+    }
+
+    #[nest_rs_core::instance]
+    struct Jobs;
+
+    #[test]
+    fn a_lease_refused_on_a_named_instance_names_that_instance_s_variables() {
+        let Err(refused) = renewable::<Jobs>(Duration::from_secs(1), Duration::from_secs(1)) else {
+            panic!("a lease no longer than the budget must be refused");
+        };
+        let rendered = refused.to_string();
+        assert!(
+            rendered.contains(&nest_rs_config::var_name(
+                "redis__jobs__queue",
+                "LEASE_SECS"
+            )) && rendered.contains(&nest_rs_config::var_name(
+                "redis__jobs",
+                "CONNECT_TIMEOUT_SECS"
+            )),
+            "{rendered}"
+        );
     }
 }

@@ -1,0 +1,5 @@
+error: `#[tools] impl` must be on a concrete self type — each operation declares its site in a `static`, which no parameter of the impl reaches, so a generic host's instances would share one site
+  --> tests/integration/diagnostics/mcp/tools_on_a_generic_host.rs:11:5
+   |
+11 | impl<T: Send + Sync + 'static> DemoTool<T> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^

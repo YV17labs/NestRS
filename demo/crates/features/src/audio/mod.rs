@@ -1,11 +1,14 @@
+pub const TARGET: &str = "features::audio";
+
 mod command;
 mod config;
 mod dtos;
 mod error;
-mod guard;
 mod module;
 mod service;
 mod state;
+mod transcodes;
+mod transcoding;
 
 pub mod http;
 pub mod mcp;
@@ -13,15 +16,15 @@ pub mod queue;
 pub mod schedule;
 
 pub use command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
-pub use config::AudioConfig;
+pub use config::{AudioConfig, SEED_OPEN};
 pub use dtos::{
     DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeProgressDto,
-    UploadRequestDto,
 };
-pub use guard::TranscodeGuard;
 pub use module::AudioModule;
 pub use service::AudioService;
 pub use state::TranscodeState;
+pub use transcodes::Transcodes;
+pub use transcoding::Transcoding;
 
 pub use http::AudioHttpModule;
 pub use mcp::AudioMcpModule;

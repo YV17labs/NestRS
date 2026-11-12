@@ -1,0 +1,15 @@
+error[E0277]: `NotesController` injects no `ArchiveService`
+  --> tests/integration/diagnostics/http/crud_service_the_host_does_not_inject.rs:53:6
+   |
+53 | impl NotesController {}
+   |      ^^^^^^^^^^^^^^^ `#[crud]` delegates to the host's `ArchiveService` field
+   |
+   = note: `#[crud(service = …)]` names the type of an `#[inject]` field of its host: add `#[inject] svc: Arc<ArchiveService>` to `NotesController`
+help: the trait `Injects<ArchiveService>` is not implemented for `NotesController`
+      but trait `Injects<NotesService>` is implemented for it
+  --> tests/integration/diagnostics/http/crud_service_the_host_does_not_inject.rs:46:1
+   |
+46 | #[controller(path = "/notes")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `NotesService`, found `ArchiveService`
+   = note: this error originates in the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)

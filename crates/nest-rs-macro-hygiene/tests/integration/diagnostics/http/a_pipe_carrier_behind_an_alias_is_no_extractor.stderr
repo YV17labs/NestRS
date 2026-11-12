@@ -1,0 +1,38 @@
+error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a handler parameter
+  --> tests/integration/diagnostics/http/a_pipe_carrier_behind_an_alias_is_no_extractor.rs:18:41
+   |
+18 |     async fn create(&self, Piped(name): Trimmed) -> String {
+   |                                         ^^^^^^^ not read off the request
+   |
+   = help: the trait `FromRequest<'_>` is not implemented for `Piped<Trim, nest_rs::http::Json<std::string::String>>`
+   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`; who may call is a decorator on the route, `#[public(Action, Subject)]` where a caller with no credential is admitted and `#[authorize(Action, Subject)]` where a principal must back it, never a parameter
+   = help: the following other types implement trait `FromRequest<'a>`:
+             &'a nest_rs::http::Request
+             Ambient<T>
+             ClientIp
+             RawBody
+             Result<T, HttpError>
+             Scoped<T>
+             nest_rs::http::Body
+             nest_rs::http::Form<T>
+           and $N others
+
+error[E0277]: `Piped<Trim, nest_rs::http::Json<std::string::String>>` is not a handler parameter
+  --> tests/integration/diagnostics/http/a_pipe_carrier_behind_an_alias_is_no_extractor.rs:14:1
+   |
+14 | #[routes]
+   | ^^^^^^^^^ not read off the request
+   |
+   = help: the trait `FromRequest<'_>` is not implemented for `Piped<Trim, nest_rs::http::Json<std::string::String>>`
+   = note: a body is `Json<T>`, a path `Path<T>`, a query `Query<T>`; a service is `#[inject]`ed on the controller struct, and a request-scoped one read through `Scoped<T>`; who may call is a decorator on the route, `#[public(Action, Subject)]` where a caller with no credential is admitted and `#[authorize(Action, Subject)]` where a principal must back it, never a parameter
+   = help: the following other types implement trait `FromRequest<'a>`:
+             &'a nest_rs::http::Request
+             Ambient<T>
+             ClientIp
+             RawBody
+             Result<T, HttpError>
+             Scoped<T>
+             nest_rs::http::Body
+             nest_rs::http::Form<T>
+           and $N others
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

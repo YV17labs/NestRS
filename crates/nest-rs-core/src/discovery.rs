@@ -1,15 +1,13 @@
-//! The read side of discovery — [`Discovery`], the transport-agnostic
-//! facade over the container's metadata index that transports and applicative
-//! scanners (OpenAPI, cron, MCP, …) query to find the surfaces they mount.
+//! The read side of discovery — [`Discovery`], over the container's metadata
+//! index.
 
 use std::any::{Any, TypeId};
 use std::sync::Arc;
 
 use crate::container::Container;
 
-/// Read-side facade over the container's metadata index, used by transports
-/// and applicative scanners (OpenAPI, cron, MCP, …) without coupling to a
-/// specific transport.
+/// Read-side facade over the container's metadata index, for transports and
+/// scanners (OpenAPI, cron, MCP, …) to find the surfaces they mount.
 pub struct Discovery<'a> {
     container: &'a Container,
 }
@@ -24,7 +22,7 @@ impl<'a> Discovery<'a> {
     pub fn meta<M: Any + Send + Sync>(&self) -> Vec<Discovered<M>> {
         self.container
             .metadata_entries(TypeId::of::<M>())
-            .map(|entries| {
+            .map_or_default(|entries| {
                 entries
                     .iter()
                     .filter_map(|entry| {
@@ -35,22 +33,22 @@ impl<'a> Discovery<'a> {
                             .ok()
                             .map(|meta| Discovered {
                                 meta,
-                                provider_type_id: entry.provider_type_id,
+                                host_type_id: entry.host_type_id,
                             })
                     })
                     .collect()
             })
-            .unwrap_or_default()
     }
 }
 
 /// A discovered piece of metadata, paired with the host provider's `TypeId`
 /// when host-bound. Scanners invoke the live provider through closures
 /// embedded in `meta`.
+#[non_exhaustive]
 pub struct Discovered<M> {
     /// The metadata payload the provider submitted at registration.
     pub meta: Arc<M>,
     /// `TypeId` of the host provider when the metadata is host-bound (a scanner
     /// resolves the live provider through it); `None` for free-standing metadata.
-    pub provider_type_id: Option<TypeId>,
+    pub host_type_id: Option<TypeId>,
 }

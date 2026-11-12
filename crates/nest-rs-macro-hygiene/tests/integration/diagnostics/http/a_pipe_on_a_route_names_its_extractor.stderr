@@ -1,0 +1,5 @@
+error: a pipe on a route names the extractor it reads — write `Piped<P, Json<T>>` (or `Query<T>`, `Form<T>`, `Path<T>`, `Header<T>`); `Piped<P>` is the form of the edges that decode their argument themselves
+  --> tests/integration/diagnostics/http/a_pipe_on_a_route_names_its_extractor.rs:15:41
+   |
+15 |     async fn create(&self, Piped(name): Piped<Trim>) -> String {
+   |                                         ^^^^^^^^^^^

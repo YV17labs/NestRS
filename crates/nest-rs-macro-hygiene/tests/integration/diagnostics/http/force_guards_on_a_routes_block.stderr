@@ -1,0 +1,5 @@
+error: `#[force_guards]` is not taken on a `#[routes]` block: re-running a guard is a decision about one operation, not a posture a whole host takes — write `#[force_guards]` on the method
+  --> tests/integration/diagnostics/http/force_guards_on_a_routes_block.rs:12:1
+   |
+12 | #[force_guards(Fresh)]
+   | ^^^^^^^^^^^^^^^^^^^^^^

@@ -1,91 +1,63 @@
 //! Covers `src/interceptor.rs` across the transports it is meant to
 //! serve — both refusals the edge decorates.
 //!
-//! The RFC 9728 challenge is attached at the transport edge precisely so it does
-//! not depend on which layer wrote the `401`. These tests boot the real thing on
-//! each transport and check that the pointer is there — an MCP client and a WS
-//! client discover the authorization server exactly as an HTTP client does.
-//!
-//! The `401` proves *a client with no token learns where to get one*. The
-//! step-up `403` proves the other half: *a client whose token verified but is
-//! too narrow learns which scope to ask for* — without it a narrow token meets
-//! a bare `403` and the only recovery is guesswork. That denial is raised by an
-//! ordinary guard, which is the point: the challenge is written once at the
-//! edge, so any guard, extractor or bridge that refuses with
-//! [`Denial::insufficient_scope`] gets a conformant answer without knowing this
-//! module exists.
-//!
-//! `/graphql` is absent on purpose: it answers an unauthenticated operation with
-//! `200 OK` + an `UNAUTHENTICATED` error frame, so there is no `401` to carry a
-//! challenge. Its clients discover through the well-known document, which the
-//! spec offers as the equal alternative — `controller.rs` covers that path.
+//! `/graphql` is absent: it answers an unauthenticated operation `200 OK` with an
+//! `UNAUTHENTICATED` frame, so there is no `401` to carry a challenge.
 
 use crate::AlwaysUnauthorized;
-use nest_rs_authn::{AuthnModule, JwtConfig};
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_authn::{AuthnConfig, AuthnModule};
+use nest_rs_core::{Layer, async_trait, injectable, module};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_http::challenge::{BEARER, NoBearerChallenge};
+use nest_rs_http::{StatusCode, header};
+use nest_rs_http::{controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule, WELL_KNOWN_PATH};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsModule, gateway, messages};
-use poem::Request;
-use poem::http::{StatusCode, header};
 
 use crate::{EchoTool, challenge};
 
 const RESOURCE: &str = "http://localhost";
 const SECRET: &str = "transport-parity-secret-0123456789";
 
-/// The scope the step-up guard below demands, and the one the scoped deployment
-/// advertises — so the client is told to ask for something discovery actually
-/// names.
+/// The scope the step-up guard below demands, and the one the scoped deployment advertises.
 const REQUIRED: &str = "posts:write";
 
-/// What the `401` challenge must be, on every transport that can carry one —
-/// built from the path the crate publishes at, not a copy of it.
+/// What the `401` challenge must be, on every transport that can carry one.
 fn expected() -> String {
     format!("Bearer resource_metadata=\"{RESOURCE}{WELL_KNOWN_PATH}\"")
 }
 
 fn authn() -> nest_rs_authn::AuthnSetup {
-    AuthnModule::for_root(JwtConfig {
+    AuthnModule::for_root(AuthnConfig {
         secret: Some(SECRET.into()),
-        audience: Some(RESOURCE.into()),
-        ..JwtConfig::default()
+        ..AuthnConfig::default()
     })
 }
 
 fn discovery() -> nest_rs_oauth_resource::OAuthResourceSetup {
-    OAuthResourceModule::for_root(
-        OAuthResourceConfig::default()
-            .with_resource(RESOURCE)
-            .with_authorization_servers(["https://auth.example.com"]),
-    )
+    OAuthResourceModule::for_root(OAuthResourceConfig {
+        resource: Some(RESOURCE.into()),
+        authorization_servers: vec!["https://auth.example.com".into()],
+        ..Default::default()
+    })
 }
 
-/// The step-up tests advertise scopes as well, so the challenge names something
-/// the metadata document also carries.
 fn scoped_resource_server() -> nest_rs_oauth_resource::OAuthResourceSetup {
-    OAuthResourceModule::for_root(
-        OAuthResourceConfig::default()
-            .with_resource(RESOURCE)
-            .with_authorization_servers(["https://auth.example.com"])
-            .with_scopes_supported(["posts:read", REQUIRED]),
-    )
+    OAuthResourceModule::for_root(OAuthResourceConfig {
+        resource: Some(RESOURCE.into()),
+        authorization_servers: vec!["https://auth.example.com".into()],
+        scopes_supported: vec!["posts:read".into(), REQUIRED.into()],
+        ..Default::default()
+    })
 }
-
-// ═══ The 401 — a tokenless client learns where to get one ═══════════════════
-
-// ── MCP ─────────────────────────────────────────────────────────────────────
 
 #[module(imports = [authn(), discovery()], providers = [EchoTool])]
 struct McpResourceServer;
 
 #[tokio::test]
 async fn an_mcp_endpoint_refusing_an_unauthenticated_call_carries_the_pointer() {
-    // `/mcp` is `EdgePosture::Exempt` — it skips the guard chain and denies
-    // in-band instead. That bypass must not also bypass discovery: an MCP
-    // client's whole flow starts from this response.
+    // `/mcp` refuses at its own request stage; discovery still decorates the refusal.
     let app = TestApp::for_module::<McpResourceServer>()
         .await
         .expect("boots");
@@ -95,8 +67,6 @@ async fn an_mcp_endpoint_refusing_an_unauthenticated_call_carries_the_pointer() 
     assert_eq!(challenge(&resp.0), expected());
 }
 
-// ── WS ──────────────────────────────────────────────────────────────────────
-
 #[gateway(path = "/ws")]
 #[use_guards(AlwaysUnauthorized)]
 struct ChatGateway;
@@ -104,7 +74,6 @@ struct ChatGateway;
 #[messages]
 impl ChatGateway {
     #[subscribe_message("ping")]
-    #[public]
     async fn ping(&self) -> String {
         "pong".into()
     }
@@ -118,8 +87,6 @@ struct WsResourceServer;
 
 #[tokio::test]
 async fn a_refused_websocket_upgrade_carries_the_pointer() {
-    // The upgrade is an HTTP GET carrying the real guards, so its refusal is an
-    // ordinary 401 — and a WS client is an OAuth client like any other.
     let app = TestApp::for_module::<WsResourceServer>()
         .await
         .expect("boots");
@@ -129,46 +96,51 @@ async fn a_refused_websocket_upgrade_carries_the_pointer() {
     assert_eq!(challenge(&resp.0), expected());
 }
 
-// ═══ The step-up 403 — a narrow token learns which scope to ask for ═════════
-
-/// Stands in for the real chain's verdict: the caller authenticated, and the
-/// ability layer withheld the rule their token could not reach. What the
-/// transport does with that verdict is what these tests are about.
+/// Stands in for the real chain's verdict: authenticated, but the token's scope falls short.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct TokenTooNarrow;
-
-impl Layer for TokenTooNarrow {}
 
 #[async_trait]
 impl Guard for TokenTooNarrow {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::insufficient_scope([REQUIRED], "forbidden"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for TokenTooNarrow {}
+impl GuardFor<nest_rs_http::HttpView> for TokenTooNarrow {}
 
-/// The refusal that is *not* a scope problem — no wider token fixes it, so no
-/// challenge may be emitted.
+/// A refusal no wider token fixes, so no challenge may be emitted.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct NeverAllowed;
-
-impl Layer for NeverAllowed {}
 
 #[async_trait]
 impl Guard for NeverAllowed {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for NeverAllowed {}
+impl GuardFor<nest_rs_http::HttpView> for NeverAllowed {}
 
-/// Every assertion the step-up challenge has to satisfy, in one place: the
-/// error code a client branches on, the scope it must request, and the document
-/// it requests it from.
+/// The step-up challenge: its error code, the scope to request, and the document.
 fn assert_is_step_up(challenge: &str) {
     assert!(
         challenge.contains("error=\"insufficient_scope\""),
@@ -185,8 +157,6 @@ fn assert_is_step_up(challenge: &str) {
         "and where to ask — the same document the 401 points at: {challenge}",
     );
 }
-
-// ── HTTP ────────────────────────────────────────────────────────────────────
 
 #[controller(path = "/posts")]
 #[use_guards(TokenTooNarrow)]
@@ -231,9 +201,6 @@ async fn an_http_scope_denial_tells_the_client_which_scope_to_request() {
 
 #[tokio::test]
 async fn an_ordinary_forbidden_carries_no_challenge_at_all() {
-    // Telling this caller to go widen their token sends them somewhere that
-    // cannot help — and a client that retries a fresh token forever is a worse
-    // outcome than a plain refusal.
     let app = TestApp::for_module::<HttpResourceServer>()
         .await
         .expect("boots");
@@ -246,23 +213,20 @@ async fn an_ordinary_forbidden_carries_no_challenge_at_all() {
     );
 }
 
-// ── MCP ─────────────────────────────────────────────────────────────────────
-
 #[module(
     imports = [authn(), scoped_resource_server()],
     providers = [EchoTool, TokenTooNarrow],
 )]
 struct McpStepUpServer;
 
+#[module(imports = [McpStepUpServer], providers = [GlobalGuards<(TokenTooNarrow,)>])]
+struct AnMcpScopeDenialCarriesTheSameChallengeApp;
+
 #[tokio::test]
 async fn an_mcp_scope_denial_carries_the_same_challenge() {
-    // `/mcp` is `EdgePosture::Exempt`: it gates in-band, through the global
-    // pool folded in by `FallbackMcpGuard`. That path builds its refusal as a
-    // poem `Err`, which is exactly where the evidence used to be dropped — so
-    // this asserts transport parity *and* the `Err`-path fix underneath it.
+    // `/mcp` is a self-mount: the transport's request stage runs the global pool.
     let app = TestApp::builder()
-        .module::<McpStepUpServer>()
-        .use_guards_global([guard::<TokenTooNarrow>()])
+        .module::<AnMcpScopeDenialCarriesTheSameChallengeApp>()
         .build()
         .await
         .expect("boots");
@@ -272,19 +236,14 @@ async fn an_mcp_scope_denial_carries_the_same_challenge() {
     assert_is_step_up(&challenge(&resp.0));
 }
 
-// ═══ The drift — a scope the deployment never advertises ════════════════════
-
-/// A deployment whose document advertises `posts:read` and nothing else, while
-/// the guard above demands `posts:write`. That pairing is a real deployment
-/// mistake rather than a contrived one: the guard lives in the feature crate
-/// and the document in the environment, so they drift apart one at a time.
+/// A deployment advertising `posts:read` alone while the guard demands `posts:write`.
 fn drifted_resource_server() -> nest_rs_oauth_resource::OAuthResourceSetup {
-    OAuthResourceModule::for_root(
-        OAuthResourceConfig::default()
-            .with_resource(RESOURCE)
-            .with_authorization_servers(["https://auth.example.com"])
-            .with_scopes_supported(["posts:read"]),
-    )
+    OAuthResourceModule::for_root(OAuthResourceConfig {
+        resource: Some(RESOURCE.into()),
+        authorization_servers: vec!["https://auth.example.com".into()],
+        scopes_supported: vec!["posts:read".into()],
+        ..Default::default()
+    })
 }
 
 #[module(
@@ -295,11 +254,6 @@ struct DriftedResourceServer;
 
 #[tokio::test]
 async fn a_scope_the_document_never_advertises_is_reported_at_warn() {
-    // The interceptor is the one place both halves are known, so it is the only
-    // place the drift can be caught — and the client cannot see it at all: the
-    // challenge it receives is well-formed and names a scope its authorization
-    // server will refuse to issue. Nothing but this event stands between that
-    // and a client retrying forever.
     let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::for_module::<DriftedResourceServer>()
         .await
@@ -307,8 +261,6 @@ async fn a_scope_the_document_never_advertises_is_reported_at_warn() {
 
     let resp = app.http().post("/posts").send().await;
     resp.assert_status(StatusCode::FORBIDDEN);
-    // The challenge is still emitted: the drift is the deployment's to fix, and
-    // withholding the pointer would help no one.
     assert_is_step_up(&challenge(&resp.0));
 
     let event = logs.expect_one(
@@ -321,46 +273,50 @@ async fn a_scope_the_document_never_advertises_is_reported_at_warn() {
         event.field("reason").as_deref(),
         Some("scope_not_advertised")
     );
-    assert!(
-        event.field("scopes").is_some_and(|s| s.contains(REQUIRED)),
+    assert_eq!(
+        event.field("scopes").as_deref(),
+        Some(REQUIRED),
         "the event names the scope that is missing from the document, got {:?}",
         event.fields,
     );
 }
 
-// ═══ A scope name that cannot go in a header ════════════════════════════════
-//
-// The resource URI and the metadata URL are character-checked at boot, so the
-// only way a challenge becomes unrepresentable is a **scope** — and scopes do
-// not come from config. `Denial::insufficient_scope([..])` takes whatever the
-// guard hands it, in application code the config never sees.
-//
-// What must not happen is a 403 that silently loses its `WWW-Authenticate`: the
-// client is then told "forbidden" with no code and no pointer, which reads as a
-// final refusal, and the step-up never happens. Nothing about the response says
-// the header was dropped, so the event is the only trace.
+// A scope outside RFC 6749 §3.3's grammar: scopes come from a guard, not the
+// config checked at boot, so the challenge leaves the attribute out and says so.
 
-/// A scope carrying a newline — RFC 6749 forbids it in a scope token, and
-/// `HeaderValue::from_str` refuses the challenge built around it.
-const UNREPRESENTABLE: &str = "posts:\nwrite";
+/// A scope carrying a space, which would read as two scopes in the attribute.
+const OUTSIDE_THE_GRAMMAR: &str = "posts write";
+
+/// What the operator reads when the challenge goes without its scopes.
+const LEFT_OUT: &str =
+    "a required scope is not a scope-token; the challenge is sent without its scope attribute";
 
 #[injectable]
-#[derive(Default)]
-struct ScopeWithAControlCharacter;
-
-impl Layer for ScopeWithAControlCharacter {}
+#[derive(Default, Layer)]
+struct ScopeOutsideTheGrammar;
 
 #[async_trait]
-impl Guard for ScopeWithAControlCharacter {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
-        Err(Denial::insufficient_scope([UNREPRESENTABLE], "forbidden"))
+impl Guard for ScopeOutsideTheGrammar {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::insufficient_scope(
+            [OUTSIDE_THE_GRAMMAR],
+            "forbidden",
+        ))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for ScopeWithAControlCharacter {}
+impl GuardFor<nest_rs_http::HttpView> for ScopeOutsideTheGrammar {}
 
 #[controller(path = "/malformed")]
-#[use_guards(ScopeWithAControlCharacter)]
+#[use_guards(ScopeOutsideTheGrammar)]
 struct MalformedScopeController;
 
 #[routes]
@@ -373,12 +329,12 @@ impl MalformedScopeController {
 
 #[module(
     imports = [authn(), scoped_resource_server()],
-    providers = [MalformedScopeController, ScopeWithAControlCharacter],
+    providers = [MalformedScopeController, ScopeOutsideTheGrammar],
 )]
 struct MalformedScopeServer;
 
 #[tokio::test]
-async fn a_scope_that_cannot_be_a_header_value_is_reported_rather_than_dropped() {
+async fn a_scope_outside_the_grammar_leaves_the_attribute_out_and_is_reported() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::for_module::<MalformedScopeServer>()
         .await
@@ -386,65 +342,66 @@ async fn a_scope_that_cannot_be_a_header_value_is_reported_rather_than_dropped()
 
     let resp = app.http().get("/malformed").send().await;
     resp.assert_status(StatusCode::FORBIDDEN);
-    // The enriched challenge cannot be built, so what stands is the one the
-    // guard layer wrote from a *static* RFC 6750 §3.1 code. The safety property
-    // is unchanged and asserted below: the offending scope never reaches the
-    // wire — the alternative would be smuggling a newline into a response
-    // header. What changed is that a caller now reads why they were refused
-    // instead of a bare `403`, which is also what an app that mounts no
-    // discovery document gets.
-    let challenge = resp
-        .0
-        .headers()
-        .get(header::WWW_AUTHENTICATE)
-        .expect("the static code stands even when the scope list cannot be sent")
-        .to_str()
-        .expect("a challenge built from constants is a valid header value");
-    assert_eq!(challenge, r#"Bearer error="insufficient_scope""#);
-    assert!(
-        !challenge.contains("posts:"),
-        "the scope that could not be encoded is not on the wire, got {challenge:?}",
+    assert_eq!(
+        challenge(&resp.0),
+        format!(
+            "Bearer error=\"insufficient_scope\", resource_metadata=\"{RESOURCE}{WELL_KNOWN_PATH}\""
+        ),
+        "the step-up challenge still points at the document, without the scope it cannot carry",
     );
 
-    let event = logs.expect_one(
-        nest_rs_oauth_resource::TARGET,
-        "insufficient-scope challenge is not a valid header value",
+    let said: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.message == LEFT_OUT)
+        .collect();
+    let [event] = said.as_slice() else {
+        panic!("one refusal files one line: {said:#?}");
+    };
+    assert_eq!(
+        (event.target.as_str(), event.level.as_str()),
+        (nest_rs_http::target::HTTP, "warn"),
+        "the edge stamped the guard's step-up and said it",
     );
-    assert_eq!(event.level, "error");
-    assert!(
-        event
-            .field("challenge")
-            .is_some_and(|c| c.contains("posts:")),
-        "the event carries the challenge that could not be sent, which is what \
-         points at the offending scope, got {:?}",
+    assert_eq!(
+        event.field("scopes").as_deref(),
+        Some(OUTSIDE_THE_GRAMMAR),
+        "the line names the rule's scopes, got {:?}",
         event.fields,
     );
     assert!(
-        event.field("error").is_some(),
-        "…and why it could not, got {:?}",
-        event.fields,
+        logs.events()
+            .iter()
+            .filter(|event| event.target == nest_rs_oauth_resource::TARGET)
+            .all(|event| event.field("challenge").is_none()),
+        "no line carries the challenge, whose pointer holds the resource's URI: {:#?}",
+        logs.events(),
     );
 }
 
-/// A guard that refuses the way a real authentication guard does: an
-/// `AuthError` rendered through its own `IntoResponse`, so the response carries
-/// the RFC 6750 §3.1 `error` code this layer cannot reconstruct.
+/// A guard that refuses the way a real authentication guard does, so the response
+/// carries the RFC 6750 §3.1 `error` code this layer cannot reconstruct.
 #[injectable]
+#[derive(Layer)]
 struct ExpiredCredential;
-
-impl Layer for ExpiredCredential {}
 
 #[async_trait]
 impl Guard for ExpiredCredential {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
-        // Exactly what `AuthnGuard` returns for an expired token: the RFC 6750
-        // §3.1 code travels on the denial, and `denial_to_http_response` writes
-        // the challenge naming it.
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        // What `AuthnGuard` returns for an expired token.
         Err(Denial::invalid_credential("invalid token", "invalid_token"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for ExpiredCredential {}
+impl GuardFor<nest_rs_http::HttpView> for ExpiredCredential {}
 
 #[controller(path = "/guarded")]
 #[use_guards(ExpiredCredential)]
@@ -465,14 +422,8 @@ impl GuardedController {
 )]
 struct ChallengeApp;
 
-/// The merge, and the regression it closes. A handler's own challenge carries
-/// the RFC 6750 §3.1 `error` code — which the interceptor cannot reconstruct,
-/// because only the authentication layer knows *why* the credential failed —
-/// so the discovery pointer is spliced in beside it rather than over it.
-///
-/// Keying on "is it exactly the bare word `Bearer`" made this case silently
-/// lose the pointer the moment the framework started emitting a conformant
-/// challenge: the response was no longer plain, so the interceptor skipped it.
+/// A handler's own challenge carries the RFC 6750 §3.1 `error` code, so the
+/// discovery pointer is spliced in beside it rather than over it.
 #[tokio::test]
 async fn a_challenge_carrying_an_error_code_keeps_it_and_gains_the_pointer() {
     let app = TestApp::for_module::<ChallengeApp>().await.expect("boots");
@@ -483,7 +434,7 @@ async fn a_challenge_carrying_an_error_code_keeps_it_and_gains_the_pointer() {
         .header("authorization", "Bearer expired-token")
         .send()
         .await;
-    response.assert_status(poem::http::StatusCode::UNAUTHORIZED);
+    response.assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
 
     let challenge = crate::challenge(&response.0);
 
@@ -495,4 +446,54 @@ async fn a_challenge_carrying_an_error_code_keeps_it_and_gains_the_pointer() {
         challenge.contains("resource_metadata="),
         "and the deployment's pointer is merged in: {challenge}",
     );
+}
+
+/// A login refusing a password through `?` on `CredentialError`, whose `401`
+/// says *these credentials are wrong*, and a bare `401` beside it.
+#[controller(path = "/session")]
+struct SessionController;
+
+#[routes]
+impl SessionController {
+    #[post("/")]
+    #[public]
+    async fn login(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_authn::CredentialError.into())
+    }
+
+    #[get("/expired")]
+    #[public]
+    async fn expired(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::UNAUTHORIZED,
+        ))
+    }
+}
+
+#[module(imports = [authn(), discovery()], providers = [SessionController])]
+struct SessionServer;
+
+/// The marker a handler's `Err` carries out of its rendering reaches the unit
+/// stage and the client's response, so a wrong password is answered the bare
+/// challenge every `401` owes and never the resource's pointer, while a bare
+/// `401` still gains it.
+#[tokio::test]
+async fn no_bearer_challenge_survives_rendering() {
+    let app = TestApp::for_module::<SessionServer>().await.expect("boots");
+
+    let refused = app.http().post("/session").send().await;
+    refused.assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        challenge(&refused.0),
+        BEARER,
+        "a wrong password points at no authorization server",
+    );
+    assert!(
+        refused.0.extensions().get::<NoBearerChallenge>().is_some(),
+        "the mark the handler's error set reaches the response the client is sent",
+    );
+
+    let bare = app.http().get("/session/expired").send().await;
+    bare.assert_status(StatusCode::UNAUTHORIZED);
+    assert_eq!(challenge(&bare.0), expected());
 }

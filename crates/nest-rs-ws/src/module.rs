@@ -1,72 +1,67 @@
-//! [`WsModule`] — provides the [`WsServer`] connection registry and resolves
-//! [`WsConfig`] (the socket-lifetime ceiling). Import it in any module whose
-//! gateways broadcast or whose services push to clients, so `#[inject]
-//! Arc<WsServer>` resolves and passes the access graph.
-//!
-//! It owns the **namespaced** registries too: a `#[gateway(namespace = N)]`
-//! submits its marker and [`WsNamespaces`] installs the matching
-//! `WsServer<N>`, so `Arc<WsServer<NotifyNs>>` is reachable on exactly the same
-//! terms as the default one — one import, one named boot error when it is
-//! missing, no dependence on where the gateway sits in the module tree. See
-//! `crate::namespace` for what that replaced.
-//!
-//! [`WsConfig`] loads from `NESTRS_WS__*` by default (importing `WsModule` is
-//! enough); [`WsModule::for_root`] supplies a base for those variables to
-//! overlay, so a field pinned in code is still overridable per field by the
-//! deployment (see `nest_rs_config::Config`).
+//! [`WsModule`] — provides the [`WsServer`] connection registries, namespaced
+//! ones included, and resolves [`WsConfig`].
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::__private::RuntimeModule;
 use nest_rs_core::module;
+use nest_rs_http::HttpModule;
 
 use crate::config::WsConfig;
 use crate::namespace::WsNamespaces;
 use crate::server::WsServer;
 
-/// DI module that provides the [`WsServer`] connection registry and resolves
-/// [`WsConfig`]. Import it wherever a gateway broadcasts or a service pushes to
-/// clients; see the module docs.
-#[module(imports = [ConfigModule::for_feature::<WsConfig>()], providers = [WsServer, WsNamespaces])]
+/// DI module that provides the [`WsServer`] connection registries and resolves
+/// [`WsConfig`]. A listed gateway brings it; import it where a service pushes
+/// to clients.
+///
+/// It attaches no transport: a gateway brings the HTTP transport it upgrades
+/// from itself, and a port pushing to clients opens no listener in a binary
+/// serving no gateway.
+#[module(imports = [nest_rs_config::__private::feature::<WsConfig>()], providers = [WsServer, WsNamespaces])]
 pub struct WsModule;
 
 impl WsModule {
-    /// `None` ⇒ load [`WsConfig`] from `NESTRS_WS__*` over its defaults;
-    /// `Some(cfg)` makes `cfg` the base those variables overlay. Either way the
-    /// [`WsServer`] registry is provided, so this is a drop-in replacement for
-    /// importing the bare [`WsModule`].
-    pub fn for_root(config: impl Into<Option<WsConfig>>) -> WsSetup {
+    /// Pin `config` as the base `<PREFIX>_WS__*` overlays, per field; the
+    /// bare import reads those variables over [`WsConfig`]'s defaults.
+    pub fn for_root(config: WsConfig) -> WsSetup {
         ConfigModule::setup(config)
     }
 }
 
 /// [`DynamicModule`](nest_rs_core::DynamicModule) returned by
-/// [`WsModule::for_root`]: resolves [`WsConfig`]
-/// (env over the pinned base), then brings the base [`WsModule`] wiring (the
-/// [`WsServer`] registry). This factory is queued first, so it wins over — and
-/// skips — the plain env factory the base module queues; registering the server
-/// dedups with any gateway's own `WsModule` import.
-///
-/// Pin-and-recurse is the whole behaviour, so it is [`ConfigSetup`] rather than
-/// a type of its own.
+/// [`WsModule::for_root`]: resolves [`WsConfig`] (env over the pinned base),
+/// then brings the base [`WsModule`] wiring.
 pub type WsSetup = ConfigSetup<WsModule, WsConfig>;
+
+/// What a gateway runs on, which `#[messages]` brings: the transport it
+/// upgrades from, and the registry it reads.
+pub const RUNTIME: &[RuntimeModule] = &[
+    RuntimeModule::of::<HttpModule>(),
+    RuntimeModule::of::<WsModule>(),
+];
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_core::{Container, Module};
+    use nest_rs_core::Container;
     use std::sync::Arc;
 
     #[test]
     fn provides_the_server_registry() {
-        let container = WsModule::register(Container::builder()).build();
+        let container = Container::builder()
+            .provide(WsConfig::default())
+            .import::<WsModule>()
+            .build()
+            .expect("the container builds");
         let server: Option<Arc<WsServer>> = container.get();
         assert!(server.is_some());
     }
 
-    /// Pinned ceiling for the `for_root` test below, as a real import site.
     fn pinned_ws() -> WsSetup {
-        WsModule::for_root(
-            WsConfig::default().with_max_connection(std::time::Duration::from_secs(42)),
-        )
+        WsModule::for_root(WsConfig {
+            max_connection: Some(std::time::Duration::from_secs(42)),
+            ..WsConfig::default()
+        })
     }
 
     #[module(imports = [pinned_ws()])]
@@ -77,11 +72,7 @@ mod tests {
         use nest_rs_core::App;
         use std::time::Duration;
 
-        // `for_root(Some(cfg))` queues the resolving factory rather than
-        // providing the struct verbatim — that is what keeps `NESTRS_WS__*` live
-        // for every field the call site did not pin — so the value materializes
-        // in the AppBuilder's factory phase. Boot the app rather than driving
-        // `collect` by hand.
+        // The pinned value materializes in the factory phase, so the app is booted.
         let app = App::builder()
             .module::<PinnedWsHost>()
             .build()

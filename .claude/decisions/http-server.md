@@ -1,0 +1,489 @@
+# The HTTP server under nestrs: poem, until a dated condition
+
+poem carries every edge: `nest_rs_http::poem` and `nest_rs_ws::poem` are
+re-exported, about 36 public signatures take poem's types (`Request`,
+`Response`, `Endpoint`, `StatusCode`), `nest-rs-testing` re-exports its
+`TestClient`, and `#[routes]` / `#[crud]` wrap poem's `#[handler]`, which
+targets the call site's `poem` — the defect `macros.md` states, and why every
+generated project names `poem` itself. 26 crates use it; the seven most coupled
+(http, http-macros, ws, testing, openapi, graphql, mcp) hold about 31 000 lines.
+
+**Measured on 2026-10-04** (crates.io and GitHub APIs):
+
+- The last release is 3.1.12, 2025-07-28 — past the 12-month bar. Master is
+  active in bursts (58 commits in a year, 16 of the last 24 in three days), one
+  collaborator merges and cannot publish, and the one publisher's public activity
+  is elsewhere. 4.0 is prepared (poem-web/poem#1200, "prepared, not yet
+  released… when publication is approved"); it drops `rustls-pemfile`
+  (RUSTSEC-2025-0134, accepted in `deny.toml` for poem's TLS listener).
+- async-graphql, by the same publisher, has 8.0 stalled at a release candidate
+  since April, and RUSTSEC-2026-0253 is fixed only there.
+- The ecosystem standardised on tower: axum is owned by the tokio-rs teams (127 M
+  downloads in 90 days against poem's 765 k), rmcp's server is a
+  `tower::Service` that nestrs mounts through poem's `tower-compat`, utoipa and
+  aide target axum, and `async-graphql-axum` is downloaded twenty times
+  `async-graphql-poem`.
+
+**Options weighed.** Stay on 3.1 with a dated condition; take 4.0 at its
+release (breaking for nestrs's users, so a major); move to axum and tower, where
+a handler is a plain function and the `#[handler]` defect disappears with the
+macro; or first make the public API speak the `http` crate's types and nestrs's
+own, with the server an internal adapter — NestJS's `HttpAdapter`
+(platform-express, platform-fastify) — so that changing server breaks nothing.
+
+**Decided (2026-10-04): stay on 3.1, flagged at the pin.** 4.0 is taken at its
+release, in a nestrs major. With no poem release by 2027-01-31 the server moves.
+
+**Proposed, awaiting the owner: the 8.0 direction** — decouple first (the
+public API on `http` types and nestrs's own), then axum as the adapter. Not in
+7.0: 7.0 ships the queue on Redis Streams before Rust 1.100 (2026-11-12) breaks
+apalis-redis 0.7 for every queue user, and a server change would delay it.
+
+## 2026-10-09 — the decouple moves into 7.0, and the accept loop is nestrs's
+
+The owner moved the 8.0 direction into 7.0 on 2026-10-09, which supersedes "Not
+in 7.0" above. The public API speaks the `http` crate's types and nestrs's own —
+`Request`, `Response`, `Body`, `HttpError`, an `Endpoint` trait — and names no
+poem type: the `poem` re-exports go, no generated manifest declares it, and a
+`disallowed-types` lint lifted in the one adapter file holds it. The server is
+an internal adapter, so a later move to axum and tower is a minor.
+
+poem stays the request engine — its router, CORS, compression and the query,
+form and multipart decoders — behind that crate-private adapter file, until the
+condition above. With poem internal, 4.0 is taken at its release in a nestrs
+minor, not a major, and the 2027-01-31 condition moves the adapter file, not the
+API; the move to axum stays dated by it.
+
+The accept loop becomes nestrs's, on hyper-util's `auto` connection builder and
+tokio-rustls, because poem's server cannot bound what a server must: it offers
+no hook for hyper's timer (the connection phases), a connection cap, accept
+errors, which it drops, or a TLS handshake deadline, and it re-raises a
+handler's panic in the connection task. It leaves the HTTP/2 stream cap unset
+too; a setter exists, and the loop sets the cap since it changes anyway. A
+fork is refused (`manifests-ci.md`: no fork, no vendoring, no `[patch]`). The
+loop installs the process crypto provider when none is, as poem's TLS listener
+does, so no later client finds another default.
+
+tower stays out of the 7.0 public API: tower-layer's last release (0.3.3,
+2024-08-01) is past the freshness bar, and nothing first-party needs tower once
+rmcp is mounted through its own `handle`. A public server-adapter trait waits
+for a second adapter.
+
+The first paragraph's `#[handler]` sentence was already stale: `#[routes]`
+writes its endpoint by hand, mirroring that expansion.
+
+Lands with `feat/accept-loop` (the loop) and `feat/http-vocabulary` (the
+types), then the branches that move the transport, the routes and each edge
+onto them; `refactor/retire-replaced-contracts-and-poem` takes poem off the
+public surface.
+
+## 2026-10-11 — one write per HTTP/1 flush, a body handed over 64 KiB at a time, and `TCP_NODELAY` stays
+
+The accept loop hands hyper a socket that takes vectored writes, so hyper's
+automatic strategy sent each HTTP/1 response as one `writev(2)` of separate
+slices — head and body, three more per chunk of a streamed body — where poem's
+server, whose boxed socket hid vectored writes, had copied them into one
+buffer. A same-session bisect of the bench put about 4.5 % of the JSON route's
+throughput and 11 to 15 % of its p99 on the loop. The loop sets hyper's
+`writev(false)`: what a flush sends is one buffer and one `write(2)`, as under
+poem — a small response leaves in one flush, a streamed one in a flush per
+chunk it waits on, and a buffer the socket takes in parts in several writes.
+Over TLS rustls no longer gathers the slices into a vector on each write.
+HTTP/2 keeps h2's own choice.
+
+The copy has a price poem's server paid as well: hyper copies a body frame
+whole into the connection's write buffer, which keeps its capacity until the
+connection closes. A body handed over as one large frame — a static file
+embedded in the binary, uncompressed by default — would hold its size on every
+keep-alive connection that served it, up to the connection cap times the
+largest such body, and any client can drive that. So a response body hands
+hyper at most 64 KiB of a frame at a time, split without a copy, on HTTP/1 as
+on HTTP/2, where the same piece keeps a stream's send deadline: the write
+buffer stays within its 64 KiB cap plus one piece. Measured on hyper 1.12 with
+the loop's settings, an idle keep-alive connection held about 66 KB after a
+4 MiB one-frame response on the automatic strategy, 4.25 MB with
+`writev(false)` alone, and 123 KB with the pieces. Each body byte is still
+copied once, as under poem.
+
+`TCP_NODELAY` stays. A response leaving in one flush never meets Nagle's
+algorithm, so dropping it saves one call per connection, and it would let a
+stream's next chunk — an event, a frame — wait on the acknowledgement of the
+previous one (a delayed ACK, up to 40 ms on Linux).
+
+Refused: a socket wrapper of our own that coalesces small vectored writes and
+passes large ones through. It would keep a large frame uncopied, at the price
+of a mechanism over every socket to maintain; hyper's switch restores the
+write poem's server made, and the pieces the body already cut for HTTP/2 bound
+its copy.
+
+## 2026-10-14 — the transport above the router on nestrs's types; what the adapter owes on the wire
+
+The accept loop hands each request to the stack as nestrs's `Request` (its peer,
+local address, scheme, original URI and arrival instant inline; hyper's
+`OnUpgrade` left in the extensions, where a leaf on either side of the bridge
+takes it), and the edge, the bands and the response body's carrier speak
+nestrs's types. poem stays behind one crate-private file, `poem_adapter.rs`:
+the router, wrapped once, and the CORS and compression layers, crossed once for
+both. A band still written on poem crosses the bridge around itself.
+
+Moving those layers behind the adapter meant pinning their wire behaviour in
+black-box suites a later adapter passes unchanged, and the pinning found poem
+short of the standards: its CORS layer sends `Vary: Origin` only for a
+wildcard pattern, so a shared cache could hand one listed origin's answer to
+another; its compression reads `;q=` only without whitespace, ignores
+`identity`, takes a coding weighed `q=0`, misspells `zstd`, and compresses an
+event stream, whose encoder then holds every event back. The adapter adds
+`Vary: Origin`, and the transport negotiates `Accept-Encoding` itself (RFC 9110
+§12.5.3), leaves an event stream, a `204`, a `304` and an encoded response as
+written, says `Vary: Accept-Encoding`, and keeps poem's middleware only to
+decode a request body. Standards over the library decided; the conformance
+suites hold it.
+
+**On HTTP/2 a body's last byte is handed on its own.** hyper hands h2 a frame as
+soon as the stream's window has room for one byte of it, so a stream's task —
+and its send deadline — ended with up to one 64 KiB piece still waiting on a
+window the peer withheld, sent under the idle deadline. Held back, the last
+byte waits for capacity until everything before it has left, and the stream is
+reset at the send deadline like any other part of the response. A body that
+says it ended is split as it is handed; a stream that only tells its end when
+polled again is polled once ahead on HTTP/2. The cost is one more `DATA` frame
+per HTTP/2 response with a body; HTTP/1 is untouched. Refused: bounding h2's
+send buffer (`max_send_buf_size`), which the correction proposed — it caps what
+h2 grants as capacity, not the frame hyper hands on one byte of it, so the tail
+stays; and holding back a byte of every streamed chunk, which would double the
+frames of an event stream.
+
+**2026-10-14 — the router is compiled from nestrs's table.** Every controller
+and surface registers on `HttpRoutes`; the adapter compiles the table into
+poem's router and does nothing else per request but match the path. The
+method dispatch (`405` with `Allow`, `HEAD` served by `GET`), the parameters'
+decoding, the template each entry records, the version rewrite, the global
+prefix (applied at registration) and the fallback are nestrs's own, pinned by
+`tests/integration/routes.rs` and its siblings, so the next adapter brings a
+path matcher and nothing more.
+
+## 2026-10-18 — the test kit drives the endpoint itself
+
+`nest-rs-testing` no longer re-exports poem's `TestClient`: its own client
+takes any `nest_rs_http::Endpoint` and sends nestrs's `Request` to it, as the
+accept loop does, so a suite names no server type and the next adapter
+rewrites none. The names and assertions are poem's, ported with its MIT
+notice, and a failure now names the header or the JSON path it read. A request
+has no peer unless the test gives it one, as poem's had none. Refused: a
+client over a loopback socket, which would test the socket on every request
+where `tests/integration/server.rs` already does once; and keeping poem's
+client behind the bridge, which kept poem's `test` feature, and the MPL-2.0
+`sse-codec` it pulls, in every suite's graph.
+
+## 2026-10-18 — the WebSocket upgrade is nestrs's, and so is its close code
+
+Both socket edges — a gateway and the graphql-ws socket — open on one
+handshake of the transport's own, `nest_rs_http`'s hidden `websocket` module
+behind the `websocket` feature: RFC 6455 §4.2.1's checks, each refusal a
+problem document naming what the handshake lacks (`400` for the method and
+for the `Upgrade`, `Connection` and `Sec-WebSocket-Key` lines, `426` with
+`Sec-WebSocket-Version: 13` for the version), then the `101` with its accept
+key, and the socket on tokio-tungstenite 0.30 over the connection hyper hands
+across — its place under the connection cap and its send deadline kept,
+since the accept loop's wrapper sits under hyper's upgrade. A request with no
+connection under it to switch — HTTP/1.0, or the in-process test client —
+answers `426`, as axum's extractor does, where poem answered a `500`. The
+ports of poem's checks are stricter where the RFC is: one key of 16 bytes in
+base64, one version line, the tokens read in any case from any line.
+
+Both edges register the handshake on the route table at `GET`, so another
+method meets the table's `405` and the one `Allow` the address carries. The
+table hands a `HEAD` to the `GET` entry as a `GET` and marks it, and the
+handshake refuses a marked request `400` (RFC 6455 §4.1: a handshake is a
+`GET`): a `405` of its own would name an `Allow` it cannot know, `/graphql`
+serving `POST` too. `Upgrade` is read as RFC 9110 §7.8's list by one
+predicate, which the browser-origin check, the GraphQL `GET` and the
+handshake share, so no upgrade the handshake admits skips the origin check.
+
+`CloseCode` keeps its name and poem's variants, nestrs's own enum now and
+`#[non_exhaustive]`; every `u16` round-trips, an application's `44xx`
+through `Reserved`. It is defined beside the upgrade, not in `nest-rs-ws`,
+because the graphql-ws socket closes with it too and `nest-rs-graphql` does
+not depend on the gateway's crate; `nest_rs::ws::CloseCode` is its one public
+path. The conversions to tungstenite's code stay private. A read past the
+message cap now closes `1009 Message Too Big` on both edges, read off
+tungstenite's typed capacity error, which poem flattened into an opaque
+`io::Error`.
+
+Refused: keeping the type in `nest-rs-ws` and having graphql-ws close with
+bare numbers — two vocabularies for one code; a public handshake type,
+which no app writes and the next adapter would have to keep; and a gateway
+registered for every method, which answered another method behind the
+guards, with an `Allow` beside the table's.
+
+## 2026-10-19 — GraphQL over HTTP without async-graphql-poem
+
+`/graphql`'s `POST` and `GET` endpoints implement the transport's `Endpoint`
+and register on the route table with `HttpRoutes::route`; async-graphql-poem
+leaves the workspace, and with it the last request for poem's `websocket`
+feature, so tokio-tungstenite 0.27 leaves both lockfiles. The answer is written
+as async-graphql-poem wrote it for 6.x, pinned by a header-set test: JSON as
+`application/json; charset=utf-8`, `200` whatever `errors` holds, the schema's
+cache hint as `Cache-Control` when every operation succeeded, then each header
+a resolver set, copied from the `HeaderMap` async-graphql holds rather than
+through the string round trip the adapter made. A multipart request is read by
+async-graphql's own `receive_batch_body` over the body's stream, a file held to
+the transport's body cap. What the endpoint refuses — a batch past
+`max_batch_size`, a `GET` it cannot serve — reaches the self-mount's site as an
+`HttpError`, where the app's exception filters read it, instead of being
+rendered inside a poem leaf first.
+
+With the playground off, a plain `GET` is answered `405` with `Allow: POST`,
+where 6.x sent no `Allow` (RFC 9110 §15.5.6 requires one): a GraphQL request
+travels as a `POST` there, and `GET` serves only the handshake. It is the
+endpoint's answer to a request its address routes, not the table's to a method
+the address does not serve, so the table's `Allow: POST, GET, HEAD` for any
+other method stands beside it; RFC 9110 §10.2.1 lets the set follow the
+request. Refused: `426` with `Upgrade: websocket`, which would point a client
+that wanted a query at a socket.
+
+## 2026-10-22 — poem is the adapter's alone
+
+The decouple the 2026-10-09 entry moved into 7.0 is done: no public
+signature, re-export or macro expansion names a poem type, and no manifest but
+`nest-rs-http`'s declares poem — neither the demo's, the bench's, nor any one
+`nestrs new` writes. poem lives in one crate-private file, `poem_adapter.rs`:
+the router, the CORS and compression layers, the query, form and multipart
+decoders, and the crossings between nestrs's request, response, body and error
+and poem's, which never leave it. The hidden bridge
+(`nest_rs_http::__private::poem_bridge`), `HttpRoutes::route_poem` and
+`route_any_poem`, `nest_rs::http::poem`, and the poem impls kept for the
+migration (`ProblemDetails`' and `Response`'s) are gone.
+
+Two rungs hold it, both in every gate: clippy's `disallowed-types` refuses
+every poem type the adapter names in any other file, lifted there by one
+`#![expect]`; `deny.toml` bans poem with `nest-rs-http` its only wrapper, which
+`just lint`'s dependency policy checks. What neither sees is review's: a public
+item written inside the adapter, such as a trait impl between a public type
+and a poem type, and a poem type the adapter does not name, which the change
+that makes the adapter name it lists in `clippy.toml` — the lint takes no glob.
+The root pin drops poem's `server` and `anyhow` features: the accept loop is
+ours.
+
+Moving the engine is that file's replacement. The owner moved it to axum
+inside 7.0 on 2026-10-14, the change that retires the pin; the conformance
+suites pin what the next adapter answers on the wire, and they now include
+the CORS layer's methods and refusals. A policy naming no method admits the
+methods the route table serves and the three CORS-safelisted ones — every
+method a page may send beside an address answering any method itself, as
+`/mcp` does — where poem listed every method it knows, `CONNECT` and `TRACE`
+among them; `*` answers
+`*`, as Fetch spells the wildcard; a configured method Fetch forbids a page to
+send fails the boot; and each refusal files one `warn` on `nest_rs::http`
+naming the check it failed — origin, method or headers — and nothing the
+request sent, where a refusal answered outside the edge filed nothing.
+
+## 2026-10-23 — poem leaves; the route table matches its own paths
+
+The owner's yes of 2026-10-14 closed the dated condition early: poem's last
+release (3.1.12, 2025-07-28) is past the 12-month bar, its one publisher is
+active elsewhere and 4.0 is unreleased. poem is now in no manifest and no
+lockfile — the framework's, the demo's, the bench's or one `nestrs new`
+writes.
+
+**axum, weighed as decided, then read to its router.** The adapter was to be
+axum's, and axum's `Router` is matchit (`=0.8.4`, 2024-07-11; matchit's own line
+is 0.9). matchit refuses a parameter beside a catch-all at one position
+(`/files/{name}` and `/files/{*rest}`) and a catch-all beside a deeper
+parameter (`/a/{x}/b` and `/a/{*rest}`): the route table admits both, its
+conformance suite pins the first, and axum's `route_service` panics on such an
+insert where the boot must refuse or serve. Beyond the matcher, axum's `Router`
+would cost a crossing per request — the body boxed into axum's, a boxed clone of
+the route's service, the parameters decoded into an extension of its own — for
+what the transport already owns: the method dispatch, the `405` with `Allow`,
+the fallback, the template and the parameters. Its extractors change the
+answers: `Query` and `Form` read through serde_path_to_error, which prefixes
+serde's sentence with a path, and `Multipart` lends its fields from the reader
+and caps a body at 2 MiB unless a layer lifts it, where nestrs's `Field` is
+owned and the cap is the edge's. So no axum crate is a dependency; the
+decision's reasons — off a stale crate, onto what the ecosystem maintains —
+hold through the crates axum and tower-http wrap.
+
+**The router is the transport's own.** `router.rs` compiles the table into a
+tree of path segments: a literal before a parameter before a catch-all at each,
+the next candidate tried when a deeper segment fails, a parameter after
+literal text before a bare one, the longest text first. It is the order
+poem's radix tree gave, kept, with two edges now said the rule's way and
+pinned: a catch-all never matches its bare prefix, so a root catch-all no
+longer answers `/`; and a parameter matches no empty value, so `/a//b` is no
+longer `/a/{x}/b` with an empty `x`, as an empty last segment never was. Each
+parameter is percent-decoded once, a non-UTF-8 one the client's `400`, before
+the method is chosen. Refused: matchit with a second tree for the catch-alls,
+which answers `/a/b` with `/{x}/b` where the first segment's literal (`/a/{*rest}`)
+must win.
+
+**The decoders and the codings are the crates axum and tower-http wrap, taken
+directly.** serde_urlencoded reads the query string and a form, poem's
+sentences byte for byte; multer reads a multipart body's frames as they
+arrive, and a part streams in pieces through its own 4 KiB reader, as under
+poem; both are past the freshness bar, finished, without an advisory, and
+flagged at their pins. async-compression
+encodes a response (brotli at its fastest level, the others at their default,
+as before) and decodes a request body its `Content-Encoding` names. Refused:
+tower-http's `CompressionLayer`, which negotiates on its own and skips a body
+under 32 bytes, and its `CorsLayer`, which lets an unlisted origin through
+without its headers where the policy answers `403` and files a `warn`.
+
+**CORS is the transport's own layer** over B-41's policy, poem's rules kept — a
+listed origin compared exactly, any origin echoed, never `*`, a preflight that
+names no method refused, one listed header in a preflight's request enough, its
+answer naming the listed ones — and three of poem's defects left behind, each
+pinned: `Vary` is added to, never replaced (poem's any-origin answer dropped the
+`Accept-Encoding` compression had said); a policy without `max_age` sends no
+`Access-Control-Max-Age`, as `HttpCors` documents (poem sent its own day); an
+origin no header can carry fails the boot (poem panicked).
+
+What stays the transport's own, then, is all of it: the accept loop, TLS,
+the router, CORS, the `Accept-Encoding` negotiation and the vocabulary. The
+holders follow the crates: clippy's `disallowed-types` refuses multer's and
+async-compression's types outside the one file wrapping each (`multipart.rs`,
+`compression.rs`); `deny.toml`'s poem ban left with poem, and no engine is left
+for another crate to reach around. What neither sees stays review's: a type
+of those crates the file does not name yet, and a `pub` item written inside
+it.
+
+## 2026-10-26 — the CORS allow-list is parsed once, and both readers read it
+
+`HttpCors::origins` had two readers that read it two ways. The CORS layer kept
+each entry as header bytes and compared a request's `Origin` with them; the
+browser-origin check of the upgrades and `/mcp` parsed each entry as an origin
+(RFC 6454 §6.2) and dropped one it could not parse, reading the container's
+config again rather than the transport's. So one deployment value answered
+twice: `https://app.example/` was dead bytes to the first and nothing to the
+second, `https://APP.example` admitted a socket and refused a `fetch`, a
+punycode page was refused unless the list held its raw UTF-8, and `null` was
+admitted by both.
+
+**One parse, at boot, one list.** The transport parses the list once into
+origins, the CORS layer reads it, and the browser-origin check reads the same
+value from the transport — never its own read of the configuration. A
+request's `Origin` is parsed the same way and matched by its tuple; the bytes a
+browser sends, the serialization each entry keeps, decide first, so the parse
+runs only for what no browser sends. The answer still echoes the request's own
+`Origin` bytes, which the browser compares with its serialization exactly.
+
+**An entry that is no origin fails the boot**: a path (a trailing `/`
+included), a query, a fragment, userinfo, no or an empty host, a malformed IP
+literal or port, a host that ends in a number and is no IPv4 address
+(`app.123`), a percent-encoded host, a space or control character, a
+character outside ASCII — an internationalized host is written in IDNA's ASCII
+form, as browsers send it. The refusal names the list, the entry's place and
+the kind, never the entry, which is a deployment's data (the payload rule);
+`methods`, `headers` and `exposed_headers` refuse the same way, an entry beside
+a `*` included. A list naming no origin installs no CORS layer, whatever else
+it sets. `for_root` and the environment already read an empty list as no
+layer; a seeded `HttpConfig` (`App::builder().provide`) or a config handed to
+`HttpTransport::from_config` reached the layer with it, and it admitted every
+origin.
+
+**An entry in a form a browser never sends is the origin it parses to**, an
+upper-case scheme or host, the scheme's default port, or an IPv4 host written
+other than as its four decimal bytes: RFC 6454 §5 compares origins as tuples,
+and the URL standard parses `https://APP.example:443` to the origin
+`https://app.example` and, through its IPv4 parser, `https://127.1` or
+`https://0x7f.0.0.1` to `https://127.0.0.1`; the browser-origin check read the
+first two so already.
+Weighed: refusing it so the list holds the bytes a browser sends. Both are
+equally safe, since an entry has one meaning either way; refusing fails a boot
+over the spelling of a value whose meaning is not in doubt, which no standard
+asks.
+
+**`null` fails the boot.** Every sandboxed iframe, `data:` document and
+redirect across origins sends `Origin: null` whatever site it runs on (WHATWG
+HTML, opaque origins), so a listed `null` admits every site that asks;
+OWASP's HTML5 security cheat sheet and PortSwigger's CORS research name it a
+vulnerability, and with `credentials` it is the opening the policy refuses for
+`*`. The refusal says so and points at `*`, which says what it opens and which
+`credentials` refuses. A `null` a browser sends is refused by both readers
+under any list but `*`.
+
+## 2026-10-26 — a form's refusal leaves poem's `url decode:` prefix
+
+The 2026-10-23 entry kept poem's sentences byte for byte, `url decode:`
+before a form's refusal included. A query, a form and a JSON body now say
+where a decode failed (`payload-never-quoted.md`, 2026-10-26): `query
+parameter `file`: …`, `form field `grant_type`: missing`, `JSON body at
+`author.name`: …`. With `form field` in the sentence, `url decode` was a
+second word for one concept, so it left; nothing else of poem's wording is
+left to keep.
+
+## 2026-10-27 — the title and the opening describe the server this record started from
+
+The title ("poem, until a dated condition") and the paragraphs above the
+2026-10-09 entry state poem as the server, as it was on 2026-10-04. Since
+2026-10-23 the server is nestrs's own: hyper and hyper-util serve the
+connections, the transport routes on its own segment tree, answers CORS itself,
+decodes with serde_urlencoded and multer and encodes with async-compression,
+and poem is in no manifest or lockfile. The project map's opening line names
+hyper among the libraries the decorators sit over.
+
+## 2026-11-05 — a non-special scheme's host stays opaque
+
+The 2026-10-26 entry read every listed origin's host alike, and a run showed what
+that does: `foo://ABC` admitted `foo://abc`, `foo://127.1` admitted
+`foo://127.0.0.1` and `foo://app.1` failed the boot. The URL standard parses a host
+as a domain or an address only over its special schemes (`ftp`, `file`, `http`,
+`https`, `ws`, `wss`); over any other the host is opaque, its bytes. Now it keeps
+them. An IPv6 literal reads as one whatever the scheme, since the standard's host
+parser takes `[…]` before it looks at the scheme.
+
+**Refused:** keeping the lowercase comparison for a non-special scheme as the more
+forgiving one. Two extensions whose ids differ by case are two origins to the
+standard, and a list admits what it names. A percent-encoded host stays refused
+over every scheme: `http`'s `Authority`, which reads the entry, takes none in a
+hostname, and refusing it fails a boot in the open.
+
+**Not done:** `default_port` holds RFC 9110's and RFC 6455's four and not `ftp`'s
+`21`, which the URL standard's table gives. So `ftp://a:21` and `ftp://a` are two
+origins here and one there. No browser serves a page over `ftp`, so none sends
+either; it costs a line when one does.
+
+## 2026-11-05 — an `OPTIONS` naming no method is no preflight
+
+The 2026-10-23 entry kept poem's rule that a preflight naming no method is refused,
+and a run showed what it cost. WHATWG Fetch calls a CORS-preflight request one that
+uses `OPTIONS` and carries `Access-Control-Request-Method`; the layer refused any
+`OPTIONS` with an `Origin` and without it, `403`, so a `route(Method::OPTIONS, …)`
+or `route_any` entry was never reached from a listed origin. A page's own
+`fetch(url, { method: "OPTIONS" })` was refused right after its preflight had
+admitted it, a method `SENDABLE_METHODS` advertises. Now only a request carrying
+the header is a preflight, and any other goes on with the headers an admitted
+answer carries. The refusal an unlisted origin gets stands in front of both.
+
+## 2026-11-11 — a multipart boundary is read off the edge's own parse of its type
+
+The 2026-10-23 entry reads a `Multipart` body through multer, and the
+2026-10-19 one `/graphql`'s through async-graphql's `receive_batch_body`. Each
+took its boundary from mime 0.3's parse of the client's `Content-Type`, which
+refuses types RFC 9110 §5.6.6 admits (whitespace before a `;`, an empty
+parameter) and reads a `boundary` named twice by its first. Both readers now
+take the boundary from the edge's own parse of the type, the `MediaType` whose
+essence the body extractors already decide on, through one function:
+
+- **The boundary is RFC 2046 §5.1.1's**: 1 to 70 of its characters, the last no
+  space. A type naming none, or one outside that set, answers `400` said by kind
+  (`BoundaryRefused`), never the value.
+- **A `boundary` named twice is refused.** A parameter is named once (RFC 6838
+  §4.3), and a reader in front of the app, a proxy or a firewall scanning
+  uploads, that takes the other one reads a body the app does not: one reading
+  of the type leaves no second.
+- **`/graphql` hands async-graphql `multipart/form-data; boundary="<b>"`**,
+  built from the boundary the edge read, never the client's type. A boundary in
+  that set holds no `"` and no `\`, so it cannot leave its quotes, and mime 0.3
+  reads every one.
+
+A client whose boundary is outside RFC 2046's set, or named twice, now reads
+`400` where it was read; browsers, curl and the common HTTP libraries write one
+inside it, and the upgrading guide says so.
+
+Refused: **any token as a boundary**, which RFC 9110's parameter grammar admits
+and RFC 2046 does not; a reader holding to RFC 2046 would refuse or cut what the
+app reads. **The first of two `boundary` parameters**, mime 0.3's reading, which
+another reader may take as the last. **Handing async-graphql the client's
+type**, which answered a type RFC 9110 admits "the `operations` part does not
+decode" and kept a second parse of the type beside the edge's.

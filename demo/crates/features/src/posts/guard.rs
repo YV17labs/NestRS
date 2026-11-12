@@ -1,72 +1,36 @@
-use nest_rs::core::{Layer, injectable};
-use nest_rs::graphql::GraphqlOperationContext;
-use nest_rs::guards::{Denial, GraphqlGuard, Guard, HttpGuard};
-use nest_rs::http::async_trait;
-use poem::Request;
-use uuid::Uuid;
+use nest_rs::core::{Layer, UnitContext, UnitView, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
 
 use crate::Claims;
 
-#[derive(Debug, Clone, Copy)]
-pub struct PostAuthor(pub Uuid);
-
 #[injectable]
-#[derive(Default)]
+#[derive(Layer)]
 pub struct PostAuthorGuard;
-
-impl Layer for PostAuthorGuard {}
 
 #[async_trait]
 impl Guard for PostAuthorGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let author_id = {
-            let claims = req.extensions().get::<Claims>().ok_or_else(|| {
-                Denial::internal("PostAuthorGuard requires AuthnGuard to run first")
-            })?;
-            let Some(sub) = claims.sub else {
-                tracing::warn!(
-                    target: "features::posts",
-                    org_id = %claims.org_id,
-                    reason = "no_subject",
-                    "post write denied",
-                );
-                return Err(Denial::forbidden(
-                    "a bearer token with a subject is required to write posts",
-                ));
-            };
-            sub
-        };
-        req.extensions_mut().insert(PostAuthor(author_id));
-        Ok(())
+    async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        let claims = cx.require::<Claims>()?;
+        match claims.sub.user_id() {
+            Some(_) => Ok(()),
+            None => Err(
+                Denial::forbidden("writing a post takes a token naming a user")
+                    .with_reason("not_a_user"),
+            ),
+        }
     }
 
-    async fn check_graphql(&self, op: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
-        match op.data_opt::<Claims>() {
-            Some(claims) if claims.sub.is_some() => Ok(()),
-            Some(claims) => {
-                tracing::warn!(
-                    target: "features::posts",
-                    org_id = %claims.org_id,
-                    "post write denied: token carries no subject",
-                );
-                Err(Denial::forbidden(
-                    "a bearer token with a subject is required to write posts",
-                ))
-            }
-            None => {
-                tracing::warn!(
-                    target: "features::posts",
-                    reason = "no_claims",
-                    "post write denied",
-                );
-                Err(Denial::forbidden(
-                    "a bearer token with a subject is required to write posts",
-                ))
-            }
-        }
+    fn phase(&self) -> GuardPhase {
+        GuardPhase::Authorization
+    }
+
+    fn expected_principal(&self) -> Option<PrincipalClaim> {
+        Some(PrincipalClaim::of::<Claims>())
+    }
+
+    fn target(&self) -> &'static str {
+        crate::posts::TARGET
     }
 }
 
-impl GraphqlGuard for PostAuthorGuard {}
-
-impl HttpGuard for PostAuthorGuard {}
+impl<V: UnitView> GuardFor<V> for PostAuthorGuard {}

@@ -1,0 +1,5 @@
+error: `#[use_guards]` is not taken on a `#[scheduled]` method: a job, a tick and an event have no caller to gate — guard where the work is produced
+  --> tests/integration/diagnostics/schedule/use_guards_beside_after.rs:16:5
+   |
+16 |     #[use_guards(AllowAll)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

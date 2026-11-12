@@ -9,8 +9,8 @@ const POSTS_TOOL: &str = "list_posts";
 
 #[tokio::test]
 async fn one_endpoint_lists_both_features_tools() {
-    let (_db, app) = boot().await;
-    let auth = bearer();
+    let app = boot().await;
+    let auth = sign(&app, ORG_ID);
 
     let session = open_session(app.http(), SHARED_ENDPOINT, Some(&auth)).await;
     let body = call_method(
@@ -39,8 +39,8 @@ async fn one_endpoint_lists_both_features_tools() {
 
 #[tokio::test]
 async fn the_second_endpoint_serves_only_its_own_feature() {
-    let (_db, app) = boot().await;
-    let auth = bearer();
+    let app = boot().await;
+    let auth = sign(&app, ORG_ID);
 
     let session = open_session(app.http(), POSTS_ENDPOINT, Some(&auth)).await;
     let body = call_method(
@@ -64,14 +64,14 @@ async fn the_second_endpoint_serves_only_its_own_feature() {
 
 #[tokio::test]
 async fn the_app_names_the_endpoint_its_features_share() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let resolved = endpoint_identity(app.container(), SHARED_ENDPOINT);
     let declared = resolved
         .implementation()
         .expect("the assistant names itself for every endpoint it exposes");
 
-    let body = initialize(app.http(), SHARED_ENDPOINT, Some(&bearer())).await;
+    let body = initialize(app.http(), SHARED_ENDPOINT, Some(&sign(&app, ORG_ID))).await;
     let advertised = &result(&body)["result"];
 
     assert_eq!(
@@ -104,12 +104,12 @@ async fn the_app_names_the_endpoint_its_features_share() {
 
 #[tokio::test]
 async fn a_feature_names_the_endpoint_it_owns() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
     let shared = endpoint_identity(app.container(), SHARED_ENDPOINT);
     let app_identity = shared.implementation().expect("the app names itself");
 
-    let body = initialize(app.http(), POSTS_ENDPOINT, Some(&bearer())).await;
+    let body = initialize(app.http(), POSTS_ENDPOINT, Some(&sign(&app, ORG_ID))).await;
     let advertised = &result(&body)["result"];
 
     assert_eq!(
@@ -133,16 +133,15 @@ async fn a_feature_names_the_endpoint_it_owns() {
 
 #[tokio::test]
 async fn a_merged_endpoint_still_row_filters_the_tool_body() {
-    let (db, app) = boot().await;
-    let conn = db.connection();
-    let acme = seed_org_with_post(&conn, "Acme", "acme-only-post").await;
-    seed_org_with_post(&conn, "Globex", "globex-only-post").await;
+    let app = boot().await;
+    let acme = seed_org_with_post(&app, "Acme", "acme-only-post").await;
+    seed_org_with_post(&app, "Globex", "globex-only-post").await;
 
     let body = call_tool(
         app.http(),
         SHARED_ENDPOINT,
         "list_people",
-        Some(&bearer_for(&acme.to_string())),
+        Some(&sign(&app, acme)),
     )
     .await;
 
@@ -158,8 +157,7 @@ async fn a_merged_endpoint_still_row_filters_the_tool_body() {
     );
     assert!(
         body.contains("structuredContent"),
-        "…and the rows travel as structured content (SEP-2106), which is what \
-         `#[authorize]`'s response mask has a shape to work on — a hand-joined \
-         string would ship the same rows past an inert mask: {body}",
+        "…and the rows travel as structured content (SEP-2106), the shape the \
+         tool's output schema declares, never a hand-joined string: {body}",
     );
 }

@@ -1,55 +1,74 @@
 ---
 title: File uploads
-description: Accept a multipart/form-data upload with poem's Multipart extractor and stream the part into object storage.
-tier: all-options
+description: Accept a multipart/form-data upload with the Multipart extractor and stream the part into object storage.
 sidebar:
   order: 10
 ---
 
-Take a file part straight from a `multipart/form-data` request with
-poem's `Multipart` extractor. `#[routes]` passes it through like any other
-handler argument, so a direct upload is the single-round-trip alternative
-to the [presigned flow](/storage/): the client posts the bytes, the server
-stores them.
+Take a file part straight from a `multipart/form-data` request with the
+`Multipart` extractor, which parses the body with
+[multer](https://docs.rs/multer), and hand it to storage as it arrives. A direct
+upload is the single-round-trip alternative to the
+[presigned flow](/storage/transfers/#presigned-uploads): the client posts the bytes, the server stores
+them. The demo reads the form in an extractor of its own, so the handler is
+one delegation:
 
-```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {2}
+```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {3, 6}
 #[post("/uploads/direct")]
-async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> {
-    while let Some(part) = form.next_field().await.map_err(bad_request)? {
-        if part.name() != Some("file") {
-            continue;
-        }
-        let filename = part.file_name().map(str::to_owned).unwrap_or_default();
-        UploadRequestDto { filename: filename.clone() }.validate().map_err(unprocessable)?;
-        let ticket = self.svc.store_upload(&filename, part.into_byte_stream())
-            .await.map_err(internal)?;
-        return Ok(Json(ticket));
-    }
-    Err(Error::from_string("multipart body has no `file` part", StatusCode::BAD_REQUEST))
+// … #[meta(…)], #[api(…, multipart = DirectUploadDto, …)]
+async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
+    Ok(Json(
+        self.svc
+            .store_upload(upload.part.into_byte_stream())
+            .await
+            .opaque()?,
+    ))
 }
 ```
 
-Two lines carry the weight: the filename is validated **before** it becomes
-an object key, and `into_byte_stream()` hands the part to storage as it
-arrives, so it never exists whole in memory.
+`UploadedAudio` walks the form to its `file` part — a `FromRequest`, so
+`#[routes]` passes it through like any other handler argument:
+
+```rust title="crates/features/src/audio/http/uploaded_audio.rs (from the demo)"
+pub struct UploadedAudio {
+    pub part: Field,
+}
+
+impl<'a> FromRequest<'a> for UploadedAudio {
+    async fn from_request(req: &'a Request, body: &mut RequestBody) -> Result<Self> {
+        let mut form = Multipart::from_request(req, body).await?;
+        while let Some(part) = form.next_field().await? {
+            if part.name() == Some("file") {
+                return Ok(Self { part });
+            }
+        }
+        Err(HttpError::from(
+            ProblemDetails::bad_request().with_detail("multipart body has no `file` part"),
+        ))
+    }
+}
+```
+
+Two choices carry the weight: the part's filename is never read, so the
+client names no object key, and `into_byte_stream()` hands the part to
+storage as it arrives, so it never exists whole in memory.
 
 ## Stream the part instead of buffering it
 
 `field.bytes()` is the buffered form: the whole part lands in memory before the
 handler sees any of it. That is right for a form value and wrong for a file.
-`PartExt::into_byte_stream()` is the other half — the part as it arrives, in the
+`Field::into_byte_stream()` is the other half — the part as it arrives, in the
 shape [`Storage::put_stream`](/storage/) consumes:
 
 ```rust title="crates/features/src/audio/service.rs (from the demo, abridged)"
-use nest_rs::http::PartExt;
-
 pub async fn store_upload(
     &self,
-    filename: &str,
     part: impl Stream<Item = std::io::Result<Bytes>> + Send,
 ) -> Result<PresignedUrlDto, AudioError> {
-    let key = format!("{}-{filename}", Uuid::now_v7());
-    self.storage.put_stream(&key, AUDIO_CONTENT_TYPE, part).await?;
+    let key = Uuid::now_v7().to_string();
+    self.storage
+        .put_stream(&key, AUDIO_CONTENT_TYPE, part)
+        .await?;
     // …
 }
 ```
@@ -58,13 +77,14 @@ The service names a stream, not a transport type, so the same method serves a
 multipart part, a proxied download, or a test fixture. Peak memory is one
 multipart chunk plus one object-store part, whatever the file's size.
 
-## Validate the filename at the edge
+## Mint the key, never take it
 
-A multipart part's filename is attacker-controlled — never let it become
-an object key unchecked. Reuse the same validated DTO the rest of the
-slice binds (`UploadRequestDto`), so one anti-traversal allowlist covers
-both the presigned and the direct path. A rejected name is a `422`, never
-a stored object.
+A multipart part's filename is the client's choice — never let it become an
+object key, or reach a log line or a reply. The service mints the key, a
+UUID, and the response hands it back: every later call (`/audio/transcode`,
+`/audio/results`) takes that key, parsed as a UUID at the edge, so a client
+can name no path, traverse no prefix and smuggle no text into a log. The
+[presigned flow](/storage/transfers/#presigned-uploads) mints its key the same way.
 
 ## Document the form
 
@@ -72,17 +92,18 @@ Nothing in a `Multipart` handler states what the form's parts are, so
 `#[api(multipart = Type)]` declares them and the
 [OpenAPI document](/openapi/) files the schema under `multipart/form-data`:
 
-```rust title="crates/features/src/media/http/controller.rs"
-#[derive(JsonSchema)]
+```rust title="crates/features/src/audio/dtos/direct_upload_dto.rs (from the demo)"
+use schemars::JsonSchema;
+
+#[derive(Debug, Clone, JsonSchema)]
 pub struct DirectUploadDto {
     #[schemars(extend("format" = "binary"))]
     pub file: String,
 }
-
-#[post("/uploads/direct")]
-#[api(multipart = DirectUploadDto)]
-async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> { /* ... */ }
 ```
+
+`upload_direct`, at the top of the page, names it in its
+`#[api(…, multipart = DirectUploadDto, …)]`.
 
 `format: binary` is what makes Swagger UI render a file picker for the part.
 Undeclared, a `Multipart` handler still documents `multipart/form-data` with a
@@ -100,11 +121,19 @@ states the parts.
 
 ## Limits
 
-- The [`max_body_bytes` cap](/http/configuration/) gates **every** body,
-  `Multipart` included. A direct upload larger than the cap answers `413 Payload Too Large` before a
-byte reaches your handler, and the default cap is **2 MiB** — so a 3 MiB
-upload fails out of the box. Raising the ceiling is
-`NESTRS_HTTP__MAX_BODY_BYTES`, not a compensating control in your code.
+- The request's `Content-Type` is read as RFC 9110 writes a media type —
+  whitespace around a `;` and an empty parameter are fine — and its `boundary`
+  as RFC 2046 does: 1 to 70 of its characters, named once. Any other type
+  answers `415 Unsupported Media Type`; a boundary that is missing, named twice
+  or outside that set answers `400`, saying which and never the value. A
+  [GraphQL multipart request](/graphql/configuration/) reads its type the same way.
+- The [`max_body_bytes` cap](/http/limits/#request-body-size-limit)
+  gates **every** body, `Multipart` included. An upload declaring a length past
+  the cap — a browser's form does — is answered `413 Content Too Large` unread;
+  one that declares none is cut at the cap as it is read, and answered `413`
+  too. The default cap is **2 MiB** — so a 3 MiB upload fails out of the box.
+  Raising the ceiling is `<PREFIX>_HTTP__MAX_BODY_BYTES`, not a compensating
+  control in your code.
   The admin gate and rate limit the demo binds are defence in depth, not the
   size bound.
 - Streaming bounds **memory**, not the request: the part is still read through
@@ -112,9 +141,18 @@ upload fails out of the box. Raising the ceiling is
   what lets a large file through; streaming is what keeps the process from
   holding it. For very large media the presigned PUT still wins — it avoids
   proxying the bytes through the server at all.
+- A long upload runs against the [request timeout](/http/limits/#request-timeout),
+  `20` seconds by default and counted from the request's arrival, its body's
+  reading included: an upload slower than that is answered `503` part-way. A
+  transport taking large files over slow links turns the budget off
+  (`<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS=0`) or raises it — there is no budget per
+  route yet. `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS` (`10` seconds) never cuts an
+  upload that keeps sending: it counts the gap between two of its packets, and
+  is the one bound left on a body once the budget is off.
 
 ## Going further
 
-- [File storage](/storage/) — the presigned flow and the object-store client.
+- [Uploads and downloads](/storage/transfers/) — the presigned flow, and what the
+  server reads and writes itself.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio/http/controller.rs) — the direct upload in full.
 - [Streaming responses](/http/streaming/) — the download counterpart.

@@ -1,40 +1,51 @@
-use features::Role;
+use features::testing::{claims, client};
+use features::{Role, Subject};
 use live::LiveModule;
-use nest_rs::authn::JwtConfig;
 use nest_rs::testing::ws::{WsApp, WsSocket};
 use nest_rs::testing::{TestApp, TestAppBuilder};
 use serde_json::Value;
 use uuid::Uuid;
 
-pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
+pub(crate) use features::testing::{ORG_ID, connection};
 
-pub(crate) async fn test_token() -> String {
-    token_for_org(Uuid::parse_str(ORG_ID).expect("valid org uuid"), Role::User).await
+pub(crate) fn user_bearer(app: &WsApp, user: Uuid) -> String {
+    app.bearer(&claims(ORG_ID, Role::User, Subject::User(user)))
 }
 
-pub(crate) async fn token_for_org(org_id: Uuid, role: Role) -> String {
-    features::testing::token(org_id, vec![role], None)
+pub(crate) fn machine_bearer(app: &WsApp) -> String {
+    app.bearer(&claims(ORG_ID, Role::User, client()))
 }
 
-pub(crate) fn boot_builder() -> TestAppBuilder {
+pub(crate) fn builder() -> TestAppBuilder {
     TestApp::builder()
         .module::<LiveModule>()
-        .provide(JwtConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
-            ..Default::default()
-        })
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
+}
+
+pub(crate) async fn boot() -> TestApp {
+    builder()
+        .build()
+        .await
+        .expect("LiveModule boots against a throwaway database")
 }
 
 pub(crate) async fn serve() -> WsApp {
-    boot_builder()
+    builder()
         .build_ws()
         .await
-        .expect("LiveModule serves on a real port")
+        .expect("LiveModule serves on a real port against a throwaway database")
 }
 
 pub(crate) async fn open(app: &WsApp, path: &str) -> WsSocket {
-    app.socket(path).bearer(&test_token().await).connect().await
+    open_as(app, path, &user_bearer(app, Uuid::now_v7())).await
+}
+
+pub(crate) async fn open_as(app: &WsApp, path: &str, authorization: &str) -> WsSocket {
+    app.socket(path)
+        .header("authorization", authorization)
+        .connect()
+        .await
 }
 
 pub(crate) async fn wait_for_presence(socket: &mut WsSocket, want: u64) {

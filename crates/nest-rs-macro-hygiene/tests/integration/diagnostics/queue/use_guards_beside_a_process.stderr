@@ -1,0 +1,5 @@
+error: `#[use_guards]` is not taken on a `#[processor]` method: a job, a tick and an event have no caller to gate — guard where the work is produced
+  --> tests/integration/diagnostics/queue/use_guards_beside_a_process.rs:25:5
+   |
+25 |     #[use_guards(AllowAll)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

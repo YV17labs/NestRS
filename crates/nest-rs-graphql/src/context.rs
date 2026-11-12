@@ -1,245 +1,141 @@
-//! Per-request context bridge: forward selected poem request values into the
-//! async-graphql context. Needed because async-graphql-poem does not forward
-//! poem request extensions, and an async-graphql `Extension` never sees the
-//! poem request. [`ContextEndpoint`] folds every link-time-registered
-//! [`GraphqlContextSeed`] over the parsed request before executing it.
+//! Per-request context bridge: async-graphql does not see the HTTP request, so
+//! [`ContextEndpoint`] folds every link-time-registered [`GraphqlContextSeed`]
+//! over the parsed request before executing it.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_graphql::parser::types::{DocumentOperations, OperationType};
-use async_graphql::{BatchRequest, Data, Executor, Request as GqlRequest};
-use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
-use nest_rs_core::{Container, ReachableProviders};
-use poem::http::StatusCode;
-use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, Response, Result};
+use async_graphql::http::{MultipartOptions, receive_batch_body};
+use async_graphql::{
+    BatchRequest, BatchResponse, Data, Executor, ParseRequestError, Request as GqlRequest,
+};
+use futures_util::TryStreamExt;
+use nest_rs_core::__private::serde::Serialize;
+use nest_rs_core::__private::serde::de::DeserializeOwned;
+use nest_rs_core::code;
+use nest_rs_core::{
+    Container, Handler, Posture, ReachableProviders, UngatedDiscoveryError, UnitContext,
+};
+use nest_rs_http::__private::{RequestDeadline, multipart_boundary, with_view};
+use nest_rs_http::{
+    Body, BodyError, Endpoint, HeaderValue, HttpError, Request, Response, ResponseError,
+    StatusCode, current_body_limit, declare_endpoint, header,
+};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, PipeError};
 
-/// A per-request forwarder, submitted via `inventory`. `seed` reads from the
-/// poem request (and the container) and attaches values to the GraphQL
-/// request.
-///
-/// `owner_type_id == None` => framework-level seed, always fires.
-/// `Some(id)` => fires only when the owner is in `ReachableProviders`, so
-/// two GraphQL apps in one workspace can forward different principal types
-/// without colliding.
+use crate::module::GraphqlModule;
+use crate::operation_units::OperationUnits;
+
+/// A per-request forwarder, submitted via `inventory`, attaching values from
+/// the HTTP request (and the container) to the GraphQL request.
 pub struct GraphqlContextSeed {
-    /// `None` for a framework-level seed (always fires); `Some(id)` gates the
-    /// seed on its owner being reachable, so two apps forward different types
-    /// without colliding.
-    pub owner_type_id: fn() -> Option<TypeId>,
-    /// How far the forwarded value is allowed to travel — see [`SeedLifetime`].
-    pub lifetime: SeedLifetime,
-    /// Reads from the poem request and container and attaches values onto the
-    /// outgoing GraphQL request.
-    pub seed: fn(&Request, &Container, GqlRequest) -> GqlRequest,
+    owner: Option<fn() -> TypeId>,
+    lifetime: SeedLifetime,
+    seed: ContextSeed,
 }
 
-/// How long a forwarded value stays valid, which on a graphql-ws socket is a
-/// real question rather than a formality: the socket is opened by **one**
-/// request and then serves operations for hours.
-///
-/// A value that is the caller's *identity* is the connection's — that is the
-/// whole model of an authenticated socket, and it is why the lifetime ceiling
-/// exists. A value that belongs to the *upgrade request* is not: forwarding it
-/// would hand every operation on that socket the same per-request state, which
-/// is a silent lie rather than a missing feature. So each seed says which it is,
-/// and the socket carries only the first kind.
+impl GraphqlContextSeed {
+    /// A seed that `seed` attaches values onto each GraphQL request with, as
+    /// far as `lifetime` lets them travel.
+    ///
+    /// `owner` gates it on that provider being reachable, so two apps forward
+    /// different types without colliding; `None` is a framework-level seed,
+    /// which always fires.
+    pub const fn new(
+        owner: Option<fn() -> TypeId>,
+        lifetime: SeedLifetime,
+        seed: fn(&Request, &Container, GqlRequest) -> GqlRequest,
+    ) -> Self {
+        Self {
+            owner,
+            lifetime,
+            seed,
+        }
+    }
+}
+
+/// How long a forwarded value stays valid — on a graphql-ws socket, opened by
+/// **one** request that then serves operations for hours, only the caller's
+/// identity carries over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SeedLifetime {
     /// The upgrade request's own state — forwarded on the POST path, and
-    /// **dropped** on a socket. `Scoped<T>` then reports the scope as absent,
-    /// which is the truth, instead of resolving a request-scoped provider built
-    /// once at the upgrade and shared for the connection's life.
+    /// **dropped** on a socket.
     Request,
-    /// The caller's identity, established once at the upgrade and valid for as
-    /// long as the connection is — a principal, an `Ability`. Forwarded on both
-    /// paths.
+    /// The caller's identity — a principal, an `Ability` — forwarded on both paths.
     Connection,
 }
 
 inventory::collect!(GraphqlContextSeed);
 
-// Framework-level seed (always fires): forward the per-request `RequestScope`
-// installed by the HTTP transport edge (outermost over the whole route
-// tree, so a `/graphql` request already carries it) into the async-graphql
-// context. Resolvers then reach request-scoped providers via
-// [`crate::Scoped<T>`]. Absent (a hand-rolled executor in a test, or a non-HTTP
-// mount) ⇒ the request is forwarded untouched.
-//
-// Caveat: this reaches resolver bodies only. A `#[dataloader]` batch runs
-// off-task (its own spawned future) where this context does not propagate —
-// batches re-establish ambient state through their own `GraphqlBatchContext`
-// seam, not `Scoped<T>`.
-inventory::submit! {
-    GraphqlContextSeed {
-        owner_type_id: || None,
-        // The upgrade's scope is the upgrade's. A subscription reaching
-        // `Scoped<T>` gets "not installed" rather than an instance built once,
-        // hours ago, and shared by every operation on the socket since.
-        lifetime: SeedLifetime::Request,
-        seed: |_req, _container, gql| match nest_rs_http::current_request_scope() {
-            Some(scope) => gql.data(scope),
-            None => gql,
-        },
-    }
-}
-
-/// A boxed, `Send` future — the return type of an async method in a
-/// dyn-compatible GraphQL trait.
+/// A boxed, `Send` future: what the endpoint holds a socket's serving behind,
+/// and what a DataLoader batch runs as.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Per-operation guard the GraphQL endpoint runs around every request — the
-/// resolver-side analog of HTTP's `RouteResponseShaper`. `nest-rs-graphql` only
-/// defines this seam; `nest_rs_authz::graphql`'s `GraphqlAbilityBridge`
-/// implements it to authenticate and install the caller's ambient `Ability`
-/// for the operation's duration.
+/// The site every `/graphql` request runs as before its operations: an
+/// endpoint whose operations each declare their own posture, so an
+/// authentication guard admits an anonymous request there while still
+/// verifying a presented credential.
 ///
-/// Bind with `providers = [MyBridge as dyn GraphqlOperationGuard]`. With none
-/// registered the endpoint falls back to [`FallbackOperationGuard`] (the
-/// global guard pool, seeded by `use_guards_global`) — `/graphql` is
-/// `EdgePosture::Exempt` at the HTTP edge, so this in-band seam is the
-/// *only* place guards run on GraphQL operations. A registered guard
-/// **replaces** the fallback: it owns the chain (the canonical bridge runs
-/// the same `AuthnGuard` + `AuthzGuard` itself, so nothing runs twice).
-pub trait GraphqlOperationGuard: Send + Sync + 'static {
-    /// Attach per-request state to the poem request before seeds forward it.
-    /// Return `Err(Response)` to reject the operation before parsing.
-    fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>>;
+/// Its address is the default mount, `/graphql`, wherever
+/// [`GraphqlConfig::path`](crate::GraphqlConfig::path) moves it: an app serves
+/// one schema, so the address names one endpoint either way.
+pub static ENDPOINT: Handler =
+    declare_endpoint::<GraphqlModule>("GraphqlModule", "/graphql", Posture::InBand);
 
-    /// Wrap `inner` to install ambient state for its duration (e.g. the
-    /// caller's `Ability`, which `Guard::check_graphql` and the ability-scoped
-    /// data layer both read from the ambient slot).
-    ///
-    /// The future returns `()` rather than a `Response` because the two things
-    /// that need scoping are not the same shape: one HTTP operation, and one
-    /// graphql-ws **socket**, which lives across many operations and answers
-    /// with frames rather than a response. One method for both is the point —
-    /// a socket that installed different ambient state than the POST path would
-    /// be the same endpoint enforcing two postures.
-    fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()>;
-}
-
-/// Factory slot for the fallback [`GraphqlOperationGuard`]. `nest-rs-guards`'
-/// `use_guards_global` provides one (a fn pointer — the container does not
-/// exist yet at builder time) that folds the global guard pool in-band;
-/// `ContextEndpoint` invokes it at mount when no `dyn GraphqlOperationGuard`
-/// is registered. This is what keeps `/graphql` fail-secure under
-/// `EdgePosture::Exempt`: forgetting the authz bridge module does not leave
-/// operations unguarded — the global pool still gates them.
-///
-/// **Internal ABI** — a seeded fn-pointer wired by the framework crates
-/// (lockstep with `nest-rs-graphql`); not a user-constructed type.
-#[doc(hidden)]
-pub struct FallbackOperationGuard(pub fn(&Container) -> Arc<dyn GraphqlOperationGuard>);
-
-/// Bridge slot for global pipes on GraphQL operation **variables** — the
-/// operation-level analog of HTTP's `transform_body`. `nest-rs-guards`'
-/// `use_pipes_global` provides a fn pointer that folds every registered global
-/// pipe's [`GlobalPipe::transform_graphql_variables`](nest_rs_pipes::GlobalPipe)
-/// over an operation's variables; `ContextEndpoint` invokes it after parsing,
-/// before execution. Defined here (the endpoint calls it) and provided by
-/// guards (which owns the `PipeSpecs` registry) — the same seeded-fn-pointer
-/// pattern as [`FallbackOperationGuard`], since guards depends on this crate,
-/// not the reverse. A rejection becomes a GraphQL error response.
-///
-/// **Internal ABI** — a seeded fn-pointer wired by the framework crates
-/// (lockstep with `nest-rs-graphql`); not a user-constructed type.
-#[doc(hidden)]
-pub struct GraphqlVariablePipe(
-    pub fn(&Container, &mut serde_json::Value) -> Result<(), nest_rs_pipes::PipeError>,
-);
-
-/// The `/graphql` endpoint. Mirrors `async_graphql_poem::GraphQL`'s GET / POST
-/// / batch handling but folds every [`GraphqlContextSeed`] over the request first.
-/// The upstream `accept: multipart/mixed` incremental-delivery path
-/// (`@defer` / `@stream`) is not reproduced.
 /// The per-request step one [`GraphqlContextSeed`] contributes.
 type ContextSeed = fn(&Request, &Container, GqlRequest) -> GqlRequest;
 
-/// What both `/graphql` endpoints — the request/response one and the graphql-ws
-/// one — need from the container, resolved **once** at mount: which guard gates
-/// operations, and which context seeds fire for this app.
-///
-/// Shared rather than resolved twice, and that is the point: a socket and a POST
-/// that disagreed about who is authenticated, or about which principal type is
-/// forwarded, would be the same endpoint enforcing two postures.
+/// What both `/graphql` endpoints — POST and graphql-ws — need from the
+/// container, resolved **once** at mount so the two cannot run different
+/// global pipes, nor forward different seeds. Their request's guards run in
+/// front of both, in the transport.
 pub(crate) struct OperationBridge {
     pub(crate) container: Container,
-    pub(crate) op_guard: Option<Arc<dyn GraphqlOperationGuard>>,
-    /// The seeds that fire for this app. The module gate is an access-graph
-    /// fact frozen at boot, so re-walking link-time inventory per request only
-    /// re-answered it.
+    /// The global pipes folded over each operation's variables.
+    pipes: Arc<[Arc<dyn GlobalPipe>]>,
+    /// The seeds that fire for this app, module-gated once at mount.
     seeds: Arc<[ContextSeed]>,
-    /// The subset a graphql-ws connection inherits from its upgrade — see
-    /// [`SeedLifetime`]. Resolved at mount beside the full set rather than
-    /// filtered per connection, for the same reason.
+    /// The subset a graphql-ws connection inherits from its upgrade.
     connection_seeds: Arc<[ContextSeed]>,
 }
 
+/// `POST` on the GraphQL path: a JSON request or batch, or a GraphQL multipart
+/// request, with every seed folded over each operation first, each operation
+/// run as its own unit. The `multipart/mixed` incremental-delivery answer
+/// (`@defer` / `@stream`) is not offered.
 pub(crate) struct ContextEndpoint<E> {
-    executor: E,
+    units: OperationUnits<E>,
     bridge: Arc<OperationBridge>,
     max_batch_size: usize,
 }
 
 impl OperationBridge {
-    pub(crate) fn new(container: Container) -> Self {
-        let op_guard = match container.get_dyn::<dyn GraphqlOperationGuard>() {
-            Some(guard) => {
-                tracing::debug!(
-                    target: crate::TARGET,
-                    mode = "operation_guard",
-                    "graphql operations gated",
-                );
-                Some(guard)
-            }
-            None => match container.get::<FallbackOperationGuard>() {
-                Some(factory) => {
-                    tracing::debug!(
-                        target: crate::TARGET,
-                        mode = "global_guard_pool",
-                        "graphql operations gated",
-                    );
-                    Some((factory.0)(&container))
-                }
-                None => {
-                    // No global guards, no bridge: the app has no authn
-                    // posture, so an unguarded schema is its deliberate
-                    // shape — but say so once at boot.
-                    tracing::warn!(
-                        target: crate::TARGET,
-                        mode = "unguarded",
-                        "no operation guard registered — graphql operations run unguarded",
-                    );
-                    None
-                }
-            },
-        };
-        // Module-gate the inventory once: framework-level seeds always fire;
-        // owner-keyed seeds fire only when the owner is reachable. A missing
-        // gate (hand-rolled container in a test) skips owner-keyed seeds —
-        // fail-closed.
-        let reachable = container.get::<ReachableProviders>();
-        let active: Vec<&GraphqlContextSeed> = inventory::iter::<GraphqlContextSeed>()
-            .filter(|reg| match (reg.owner_type_id)() {
-                None => true,
-                Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
-            })
-            .collect();
+    /// What both endpoints read of the app `container` holds, or a refusal of
+    /// a container no app sealed.
+    pub(crate) fn new(container: Container) -> Result<Self, UngatedDiscoveryError> {
+        let active = active_seeds(&container)?;
         let seeds: Arc<[_]> = active.iter().map(|reg| reg.seed).collect();
         let connection_seeds: Arc<[_]> = active
             .iter()
             .filter(|reg| reg.lifetime == SeedLifetime::Connection)
             .map(|reg| reg.seed)
             .collect();
-        Self {
+        let pipes = nest_rs_pipes::__private::resolve_global_pipes(&container);
+        Ok(Self {
             connection_seeds,
             container,
-            op_guard,
+            pipes,
             seeds,
-        }
+        })
+    }
+
+    /// The global pipes each operation's variables go through.
+    pub(crate) fn pipes(&self) -> &Arc<[Arc<dyn GlobalPipe>]> {
+        &self.pipes
     }
 
     fn seed(&self, req: &Request, gql: GqlRequest) -> GqlRequest {
@@ -248,17 +144,9 @@ impl OperationBridge {
             .fold(gql, |gql, seed| seed(req, &self.container, gql))
     }
 
-    /// The connection-level [`Data`] for a graphql-ws socket.
-    ///
-    /// The seeds are written against a `Request` because that is what an
-    /// operation carries on the POST path; a socket has no per-operation HTTP
-    /// request, only the upgrade. So they fold over a scratch request whose
-    /// `data` is then taken — one implementation of "what this app forwards",
-    /// rather than a parallel set of socket seeds that could forward a
-    /// different principal than the POST endpoint does.
-    ///
-    /// Only [`SeedLifetime::Connection`] seeds fold: the identity established at
-    /// the upgrade is the connection's, the upgrade's *request* state is not.
+    /// The connection-level [`Data`] for a graphql-ws socket: the
+    /// [`SeedLifetime::Connection`] seeds folded over a scratch request whose
+    /// `data` is then taken, so the socket forwards what the POST path does.
     pub(crate) fn connection_data(&self, req: &Request) -> Data {
         self.connection_seeds
             .iter()
@@ -269,300 +157,413 @@ impl OperationBridge {
     }
 }
 
+/// What the context seed registry holds, as a refusal to read it ungated
+/// names it.
+const SEEDS: &str = "GraphQL context seed";
+
+/// The seeds that fire for the app `container` holds: every framework-level
+/// one, and those whose owner it reaches.
+fn active_seeds(
+    container: &Container,
+) -> Result<Vec<&'static GraphqlContextSeed>, UngatedDiscoveryError> {
+    let reachable = ReachableProviders::of(container, SEEDS)?;
+    Ok(inventory::iter::<GraphqlContextSeed>()
+        .filter(|reg| reg.owner.is_none_or(|owner| reachable.reaches(owner())))
+        .collect())
+}
+
+/// `data` with what a graphql-ws connection on `req` inherits from its
+/// upgrade: the app's connection seeds, folded under what is ambient where
+/// this runs.
+pub fn connection_data(
+    container: &Container,
+    req: &Request,
+    data: Data,
+) -> Result<Data, UngatedDiscoveryError> {
+    let mut gql = GqlRequest::new("");
+    gql.data = data;
+    Ok(active_seeds(container)?
+        .into_iter()
+        .filter(|reg| reg.lifetime == SeedLifetime::Connection)
+        .fold(gql, |gql, reg| (reg.seed)(req, container, gql))
+        .data)
+}
+
+/// The `T` `data` holds, if any: async-graphql reads a request's data by type only
+/// through a `Context`, which a request has none of before it executes.
+pub(crate) fn held_by<T: Any>(data: &Data) -> Option<&T> {
+    data.get(&TypeId::of::<T>())?.downcast_ref()
+}
+
 impl<E> ContextEndpoint<E> {
-    pub(crate) fn new(executor: E, bridge: Arc<OperationBridge>, max_batch_size: usize) -> Self {
+    pub(crate) fn new(
+        units: OperationUnits<E>,
+        bridge: Arc<OperationBridge>,
+        max_batch_size: usize,
+    ) -> Self {
         Self {
-            executor,
+            units,
             bridge,
             max_batch_size,
         }
     }
 
-    /// Run the registered global pipes over each operation's variables when a
-    /// [`GraphqlVariablePipe`] bridge is provided (`use_pipes_global`). No
-    /// bridge ⇒ untouched. A pipe rejection returns a GraphQL error response.
+    /// Hand the global pipes each operation's variables, as the `/graphql`
+    /// request's unit; a refusal returns a GraphQL error response.
     fn pipe_variables(
         &self,
+        req: &mut Request,
         batch: BatchRequest,
     ) -> std::result::Result<BatchRequest, Box<Response>> {
-        let container = &self.bridge.container;
-        let Some(bridge) = container.get::<GraphqlVariablePipe>() else {
+        let pipes = &self.bridge.pipes;
+        if pipes.is_empty() {
             return Ok(batch);
-        };
-        let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Box<Response>> {
-            let mut value = serde_json::to_value(&r.variables).unwrap_or(serde_json::Value::Null);
-            if let Err(err) = (bridge.0)(container, &mut value) {
-                return Err(variable_pipe_error_response(&err));
-            }
-            // A pipe may rewrite the variables into a shape that is no longer a
-            // GraphQL variables object (a bare array, scalar, or `null`).
-            // Deserialization back into `Variables` then fails — surface it as a
-            // variable-pipe error naming the failure rather than silently running
-            // the operation with no variables (`unwrap_or_default`).
-            r.variables = match serde_json::from_value(value) {
-                Ok(variables) => variables,
-                Err(err) => {
-                    return Err(variable_pipe_error_response(
-                        &nest_rs_pipes::PipeError::new(format!(
-                            "variable pipe produced an invalid variables object: {err}"
-                        )),
-                    ));
-                }
+        }
+        with_view(&ENDPOINT, req, |cx| {
+            let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Box<Response>> {
+                r.variables = fold_variables(cx, &r.variables, pipes)
+                    .map_err(|err| variable_pipe_error_response(&err))?;
+                Ok(r)
             };
-            Ok(r)
-        };
-        match batch {
-            BatchRequest::Single(r) => Ok(BatchRequest::Single(apply(r)?)),
-            BatchRequest::Batch(rs) => {
-                let mut out = std::vec::Vec::with_capacity(rs.len());
-                for r in rs {
-                    out.push(apply(r)?);
+            match batch {
+                BatchRequest::Single(r) => Ok(BatchRequest::Single(apply(r)?)),
+                BatchRequest::Batch(rs) => {
+                    let mut out = std::vec::Vec::with_capacity(rs.len());
+                    for r in rs {
+                        out.push(apply(r)?);
+                    }
+                    Ok(BatchRequest::Batch(out))
                 }
-                Ok(BatchRequest::Batch(out))
             }
+        })
+    }
+}
+
+/// Fold `pipes` over `variables` through the JSON form a pipe reads, as the
+/// unit `cx` belongs to; a pipe's refusal, and variables that do not survive
+/// the round trip, as the [`PipeError`] a GraphQL error answers.
+pub(crate) fn fold_variables<T: Serialize + DeserializeOwned>(
+    cx: &UnitContext<'_>,
+    variables: &T,
+    pipes: &[Arc<dyn GlobalPipe>],
+) -> std::result::Result<T, PipeError> {
+    let mut value = serde_json::to_value(variables).map_err(|err| {
+        let err = nest_rs_core::DecodeError::new(&err);
+        tracing::error!(
+            target: crate::TARGET,
+            error = %err,
+            "graphql variables could not be written as JSON for the global pipes",
+        );
+        PipeError::new(format!(
+            "the operation variables could not be read as JSON: {err}",
+        ))
+    })?;
+    for pipe in pipes {
+        pipe.transform(cx, ArgumentKind::Variables, &mut value)?;
+    }
+    // A pipe may rewrite the variables into a shape that is no longer a
+    // GraphQL variables object.
+    serde_json::from_value(value).map_err(|err| {
+        PipeError::new(format!(
+            "variable pipe produced an invalid variables object: {}",
+            nest_rs_core::DecodeError::new(&err),
+        ))
+    })
+}
+
+/// The request's GraphQL batch, or the answer to a body that is not one.
+///
+/// JSON is decoded here rather than by async-graphql: `BatchRequest` is an
+/// untagged enum whose serde error names neither variant, so a failed body is
+/// re-read as the shape it was to say why.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal describes the body; the read and decode errors would quote it"
+)]
+#[expect(
+    clippy::result_large_err,
+    reason = "async-graphql's `BatchRequest`, 344 bytes, outweighs the response: boxing the refusal shrinks nothing"
+)]
+async fn read_batch(req: &Request, body: Body) -> Result<BatchRequest, Response> {
+    let multipart = req.content_type().filter(|value| {
+        value
+            .trim_start()
+            .get(..10)
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("multipart/"))
+    });
+    if let Some(content_type) = multipart {
+        let boundary =
+            multipart_boundary(content_type).map_err(|said| refused(&said.to_string()))?;
+        // async-graphql reads the type with mime 0.3, which refuses some types
+        // RFC 9110 admits: it is handed the boundary alone, quoted.
+        let content_type = format!("multipart/form-data; boundary=\"{boundary}\"");
+        // A file is never larger than the body the transport's cap admits.
+        let options = MultipartOptions::default().max_file_size(current_body_limit());
+        let body = body.into_stream().into_async_read();
+        return receive_batch_body(Some(content_type), body, options)
+            .await
+            .map_err(|refusal| multipart_refused(&refusal));
+    }
+    let bytes = body.into_bytes().await.map_err(|_| refused(UNREADABLE))?;
+    serde_json::from_slice::<BatchRequest>(&bytes).map_err(|_| refused(&what_it_is_not(&bytes)))
+}
+
+/// What a body that failed to read is said as; the body cap answers `413` itself.
+const UNREADABLE: &str = "the request body could not be read";
+
+/// The answer to a multipart body that is not a GraphQL request, read by
+/// variant: a file past the cap as the cap answers; the `operations` and `map`
+/// parts' decoders wrap serde's sentence, which quotes the part; every other
+/// variant's own sentence is fixed.
+fn multipart_refused(refusal: &ParseRequestError) -> Response {
+    use ParseRequestError as Refused;
+
+    fn part(name: &str, source: &(dyn std::error::Error + Send + Sync + 'static)) -> String {
+        match source.downcast_ref::<serde_json::Error>() {
+            Some(error) => format!(
+                "the `{name}` part: {}",
+                nest_rs_core::DecodeError::new(error)
+            ),
+            None => format!("the `{name}` part does not decode"),
         }
     }
-}
 
-/// Whether **every** operation definition in **every** request of the batch is
-/// a `query` — the only shape that provably cannot write, and so the only one
-/// safe to run outside the request transaction (DATA-S5).
-///
-/// Conservative by construction: a `mutation` or `subscription` definition
-/// anywhere in the batch answers `false` even when `operationName` selects a
-/// query beside it, and so does any parse failure. Misreading a mutation as
-/// read-only would run it with no atomicity or rollback, so every uncertain
-/// case keeps the transaction.
-///
-/// Parsing here is not extra work: [`GqlRequest::parsed_query`] caches the
-/// document on the request and async-graphql's executor reuses it.
-fn is_read_only(batch: &mut BatchRequest) -> bool {
-    let requests: &mut [GqlRequest] = match batch {
-        BatchRequest::Single(request) => std::slice::from_mut(request),
-        BatchRequest::Batch(requests) => requests.as_mut_slice(),
+    let reason = match refusal {
+        Refused::PayloadTooLarge => {
+            let limit = current_body_limit();
+            return BodyError::TooLarge { limit }.as_response();
+        }
+        Refused::InvalidRequest(source) => part("operations", source.as_ref()),
+        Refused::InvalidFilesMap(source) => part("map", source.as_ref()),
+        Refused::Io(_) => UNREADABLE.to_owned(),
+        fixed => fixed.to_string(),
     };
-    requests
-        .iter_mut()
-        .all(|request| match request.parsed_query() {
-            Ok(document) => match &document.operations {
-                DocumentOperations::Single(op) => op.node.ty == OperationType::Query,
-                DocumentOperations::Multiple(ops) => {
-                    ops.values().all(|op| op.node.ty == OperationType::Query)
-                }
-            },
-            Err(_) => false,
-        })
+    refused(&reason)
 }
 
-/// Run `fut` on a non-transactional handle when the ambient executor can hand
-/// one out — see [`nest_rs_database::Executor::non_transactional`]. Nothing
-/// installed (no ORM, or already on the pool) ⇒ the future runs untouched on
-/// whatever the request boundary installed.
-async fn without_transaction(fut: BoxFuture<'_, ()>) {
-    match nest_rs_database::current_executor().and_then(|executor| executor.non_transactional()) {
-        Some(executor) => nest_rs_database::with_request_executor(executor, fut).await,
-        None => fut.await,
+/// Why `bytes` is not a GraphQL request, as the shape it was decodes it: where
+/// in the JSON body, when it is JSON.
+fn what_it_is_not(bytes: &[u8]) -> String {
+    let value = match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(value) => value,
+        Err(not_json) => return nest_rs_core::DecodeError::new(&not_json).to_string(),
+    };
+    let report = if value.is_array() {
+        refusal::<Vec<GqlRequest>>(&value)
+    } else {
+        refusal::<GqlRequest>(&value)
+    };
+    match report {
+        Some(report) => match report.path() {
+            Some(path) => format!("the JSON body at `{path}`: {report}"),
+            None => report.to_string(),
+        },
+        None => "neither a GraphQL request nor a list of them".to_owned(),
     }
+}
+
+/// Why `value` does not decode as `T`, located in it; `None` when it does.
+fn refusal<T: DeserializeOwned>(value: &serde_json::Value) -> Option<nest_rs_core::DecodeError> {
+    T::deserialize(value)
+        .err()
+        .map(|error| nest_rs_core::DecodeError::new(&error).located::<T, _>(value))
+}
+
+/// Answer a request that is not a GraphQL request: GraphQL-over-HTTP's `400`
+/// with an `errors` entry under its class, `INVALID_ARGUMENT`, and no `data`
+/// member since nothing was executed.
+fn refused(reason: &str) -> Response {
+    tracing::debug!(
+        target: crate::TARGET,
+        reason,
+        "graphql request refused: the body is not a GraphQL request",
+    );
+    let body = serde_json::json!({
+        "errors": [{
+            "message": format!("the body is not a GraphQL request: {reason}"),
+            "extensions": { crate::CODE_EXTENSION: code::INVALID_ARGUMENT.as_str() },
+        }],
+    });
+    Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .content_type(HeaderValue::from_static("application/json"))
+        .body(serde_json::to_vec(&body).unwrap_or_default())
+}
+
+/// A variable-pipe `PipeError` as one GraphQL error, as a resolver's pipe
+/// refusal reads ([`pipe_error`](crate::pipe_error)): its message, the
+/// `INVALID_ARGUMENT` code under `extensions.code`, and field-level errors
+/// under `extensions.errors`.
+pub(crate) fn variable_pipe_error(err: &PipeError) -> serde_json::Value {
+    let mut extensions = serde_json::Map::new();
+    extensions.insert(
+        crate::CODE_EXTENSION.to_owned(),
+        code::INVALID_ARGUMENT.as_str().into(),
+    );
+    if let Some(details) = err.details() {
+        extensions.insert(crate::FIELD_ERRORS_EXTENSION.to_owned(), details.clone());
+    }
+    serde_json::json!({ "message": err.message(), "extensions": extensions })
 }
 
 /// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
-/// with an `errors` array, the GraphQL wire convention (matching how a resolver
-/// error surfaces), with any field-level errors under
-/// `extensions.errors` — the same member name every other transport uses.
-fn variable_pipe_error_response(err: &nest_rs_pipes::PipeError) -> Box<Response> {
-    let mut error = serde_json::json!({ "message": err.message() });
-    if let Some(details) = err.details() {
-        error["extensions"] = serde_json::json!({ crate::FIELD_ERRORS_EXTENSION: details });
-    }
-    let body = serde_json::json!({ "data": serde_json::Value::Null, "errors": [error] });
+/// with an `errors` array holding [`variable_pipe_error`].
+fn variable_pipe_error_response(err: &PipeError) -> Box<Response> {
+    let body = serde_json::json!({
+        "data": serde_json::Value::Null,
+        "errors": [variable_pipe_error(err)],
+    });
     Box::new(
         Response::builder()
             .status(StatusCode::OK)
-            .content_type("application/json")
+            .content_type(HeaderValue::from_static("application/json"))
             .body(serde_json::to_vec(&body).unwrap_or_default()),
     )
 }
 
 impl<E: Executor> Endpoint for ContextEndpoint<E> {
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> Result<Response> {
-        let (mut req, mut body) = req.split();
-        // Guard runs *before* parsing/seeding so attached state is on the
-        // request when seeds forward it.
-        if let Some(guard) = &self.bridge.op_guard
-            && let Err(resp) = guard.before(&mut req).await
-        {
-            return Ok(resp);
-        }
-        let batch = GraphQLBatchRequest::from_request(&req, &mut body).await?.0;
-        // Enforce the batch-size cap FIRST — before the variable pipes fold over
-        // every operation. Checking it only in the seed match below meant a
-        // 10k-op batch paid the full pipe cost before the 413 (GQL-I6).
+    /// Read, pipe, seed and execute the request its guards admitted.
+    async fn call(&self, mut req: Request) -> nest_rs_http::Result<Response> {
+        let body = req.take_body();
+        let batch = match read_batch(&req, body).await {
+            Ok(batch) => batch,
+            Err(refusal) => return Ok(refusal),
+        };
+        // Before the variable pipes fold over every operation.
         if let BatchRequest::Batch(rs) = &batch
             && rs.len() > self.max_batch_size
         {
-            return Err(Error::from_status(StatusCode::PAYLOAD_TOO_LARGE));
+            return Err(HttpError::from_status(StatusCode::PAYLOAD_TOO_LARGE));
         }
-        // Global variable pipes (operation-level; `transform_graphql_variables`).
-        // A rejection short-circuits with a GraphQL error response.
-        let batch = match self.pipe_variables(batch) {
+        let batch = match self.pipe_variables(&mut req, batch) {
             Ok(batch) => batch,
             Err(resp) => return Ok(*resp),
         };
-        let mut batch = match batch {
+        let batch = match batch {
             BatchRequest::Single(r) => BatchRequest::Single(self.bridge.seed(&req, r)),
             BatchRequest::Batch(rs) => {
                 BatchRequest::Batch(rs.into_iter().map(|r| self.bridge.seed(&req, r)).collect())
             }
         };
-        // Decided before execution and applied around the whole operation
-        // (guard included) so nothing under it opens the request transaction.
-        let read_only = is_read_only(&mut batch);
-        // The response travels out through a local slot because the guard scopes
-        // a `()` future — see [`GraphqlOperationGuard::around`] for why that is
-        // the shape. A borrow, not a channel: the future ends at the `.await`
-        // below, which is what lets the answer be read straight after.
-        let mut answered: Option<Response> = None;
-        let inner: BoxFuture<()> = Box::pin(async {
-            answered = Some(
-                GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response(),
-            );
-        });
-        let guarded = match &self.bridge.op_guard {
-            Some(guard) => guard.around(&req, inner),
-            None => inner,
-        };
-        if read_only {
-            without_transaction(guarded).await;
-        } else {
-            guarded.await;
-        }
-        Ok(answered.unwrap_or_else(|| {
-            // Unreachable unless a panic unwound past the executor: report it
-            // rather than serve an empty 200.
-            tracing::error!(
-                target: crate::TARGET,
-                reason = "no_response",
-                "the guarded operation produced no response",
-            );
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .finish()
-        }))
+        let executed = self
+            .units
+            .execute_batch_within(batch, req.extensions().get::<RequestDeadline>())
+            .await;
+        batch_response(&executed)
     }
 }
 
-/// Forward a per-request value attached by the authentication guard into the
-/// GraphQL context, so resolvers read it with `ctx.data::<T>()`.
-///
-/// ```ignore
-/// nest_rs_graphql::forward_principal!(MyPrincipal);
-/// ```
-///
-/// `T: Clone + Send + Sync + 'static`. Anonymous requests pass through
-/// untouched, which is also the whole gate: the forwarder copies a value only
-/// if something already attached that value to the request, and the only thing
-/// that does is the authn guard — already module-gated. A second gate below it
-/// would be an owner provider the consumer declares, which is an empty marker
-/// struct in every app, silent when forgotten, and *wider* than the condition
-/// it replaces: a registered marker fires the forwarder whether or not anyone
-/// authenticated. See the *Hard "no" list*'s module-gating entry, which records
-/// why a request-scoped forwarder is not discovery.
-#[macro_export]
-macro_rules! forward_principal {
-    ($ty:ty) => {
-        $crate::inventory::submit! {
-            $crate::GraphqlContextSeed {
-                owner_type_id: || ::core::option::Option::None,
-                // A principal is established once, at the request that carries
-                // it — including the upgrade of a graphql-ws socket, whose
-                // operations are that principal's for as long as it is open.
-                lifetime: $crate::SeedLifetime::Connection,
-                seed: |__req, _container, __gql| match __req.extensions().get::<$ty>() {
-                    ::core::option::Option::Some(__v) => __gql.data(::core::clone::Clone::clone(__v)),
-                    ::core::option::Option::None => __gql,
-                },
-            }
-        }
-    };
+/// `executed` as GraphQL over HTTP's JSON answer: `200` whatever `errors`
+/// holds, the schema's `cache-control` hint when every operation succeeded,
+/// then each header a resolver set, added beside the answer's own rather than
+/// replacing them.
+fn batch_response(executed: &BatchResponse) -> nest_rs_http::Result<Response> {
+    let body = serde_json::to_vec(executed)
+        .map_err(|err| HttpError::new(err, StatusCode::INTERNAL_SERVER_ERROR))?;
+    let mut response = Response::builder()
+        .content_type(HeaderValue::from_static("application/json; charset=utf-8"))
+        .body(body);
+    let headers = response.headers_mut();
+    if executed.is_ok()
+        && let Some(hint) = executed.cache_control().value()
+        && let Ok(hint) = HeaderValue::try_from(hint)
+    {
+        headers.insert(header::CACHE_CONTROL, hint);
+    }
+    headers.extend(executed.http_headers_iter());
+    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_core::__private::serde;
+
     use super::*;
 
-    fn single(query: &str) -> BatchRequest {
-        BatchRequest::Single(GqlRequest::new(query))
+    #[test]
+    fn seeds_folded_over_a_container_no_app_sealed_are_refused_naming_their_reader() {
+        let by_hand = Container::builder().build().expect("the container builds");
+        let upgrade = Request::builder().finish();
+
+        let Err(ungated) = connection_data(&by_hand, &upgrade, Data::default()) else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        assert_eq!(ungated.reader, "GraphQL context seed");
     }
 
-    fn batch(queries: &[&str]) -> BatchRequest {
-        BatchRequest::Batch(queries.iter().map(|q| GqlRequest::new(*q)).collect())
+    /// Variables whose JSON form cannot be written.
+    struct Unwritable;
+
+    impl serde::Serialize for Unwritable {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> std::result::Result<S::Ok, S::Error> {
+            Err(<S::Error as serde::ser::Error>::custom(
+                "sk_live_51HsecretTOKEN",
+            ))
+        }
+    }
+
+    impl<'de> serde::Deserialize<'de> for Unwritable {
+        fn deserialize<D: serde::Deserializer<'de>>(_: D) -> std::result::Result<Self, D::Error> {
+            Ok(Self)
+        }
     }
 
     #[test]
-    fn a_query_is_read_only() {
-        assert!(is_read_only(&mut single("query { me { id } }")));
+    fn variables_that_cannot_be_read_as_json_answer_the_pipe_error_not_null() {
+        let mut request = Request::builder().finish();
+        let Err(refusal) = with_view(&ENDPOINT, &mut request, |cx| {
+            fold_variables(cx, &Unwritable, &[])
+        }) else {
+            panic!("the pipes would run over `null` in place of the variables");
+        };
+        let message = refusal.message();
+        assert!(
+            message.starts_with("the operation variables could not be read as JSON"),
+            "{message}",
+        );
+        assert!(!message.contains("sk_live"), "never the value: {message}");
+        let error = variable_pipe_error(&refusal);
+        assert_eq!(error["message"], message, "{error}");
     }
 
+    /// A variable pipe's refusal names the class HTTP's `400` names, beside its
+    /// field map when it has one, as a resolver's pipe refusal does.
     #[test]
-    fn an_anonymous_shorthand_operation_is_read_only() {
-        // The shorthand has no `query` keyword; the spec still makes it a query.
-        assert!(is_read_only(&mut single("{ me { id } }")));
+    fn a_variable_pipe_s_refusal_names_the_invalid_argument_class() {
+        let bare = variable_pipe_error(&PipeError::new("must be a valid UUID"));
+        assert_eq!(
+            bare,
+            serde_json::json!({
+                "message": "must be a valid UUID",
+                "extensions": { "code": "INVALID_ARGUMENT" },
+            }),
+        );
+
+        let details = serde_json::json!({ "name": [{ "code": "length" }] });
+        let detailed = variable_pipe_error(&PipeError::with_details(
+            "validation failed",
+            details.clone(),
+        ));
+        assert_eq!(
+            detailed,
+            serde_json::json!({
+                "message": "validation failed",
+                "extensions": { "code": "INVALID_ARGUMENT", "errors": details },
+            }),
+        );
     }
 
+    /// A file past the cap is answered as the cap answers a body past it; the
+    /// transport's own read usually stops first, the body holding the file.
     #[test]
-    fn an_introspection_query_is_read_only() {
-        assert!(is_read_only(&mut single("{ __schema { types { name } } }")));
-    }
+    fn a_file_past_the_cap_is_413_as_the_cap_answers() {
+        let refused = multipart_refused(&ParseRequestError::PayloadTooLarge);
 
-    #[test]
-    fn a_mutation_is_not_read_only() {
-        assert!(!is_read_only(&mut single("mutation { createUser { id } }")));
-    }
-
-    #[test]
-    fn a_subscription_is_not_read_only() {
-        assert!(!is_read_only(&mut single(
-            "subscription { userAdded { id } }"
-        )));
-    }
-
-    #[test]
-    fn a_document_holding_a_mutation_beside_the_selected_query_is_not_read_only() {
-        // `operationName` picks `Read`, but the document still defines a
-        // mutation: we classify the whole document, never the selected
-        // operation, so a selection bug upstream cannot strand a write outside
-        // the transaction.
-        let request =
-            GqlRequest::new("query Read { me { id } } mutation Write { createUser { id } }")
-                .operation_name("Read");
-        assert!(!is_read_only(&mut BatchRequest::Single(request)));
-    }
-
-    #[test]
-    fn a_batch_of_queries_is_read_only() {
-        assert!(is_read_only(&mut batch(&["{ me { id } }", "query { a }"])));
-    }
-
-    #[test]
-    fn a_batch_holding_one_mutation_is_not_read_only() {
-        assert!(!is_read_only(&mut batch(&[
-            "{ me { id } }",
-            "mutation { bump }",
-        ])));
-    }
-
-    #[test]
-    fn an_unparsable_query_is_not_read_only() {
-        // The executor will reject it; until then it stays transactional.
-        assert!(!is_read_only(&mut single("{{{")));
-    }
-
-    #[test]
-    fn a_field_named_like_a_mutation_stays_read_only() {
-        // Pins the choice of parsing over text matching: a `mutation` substring
-        // in a field name must not cost the optimization.
-        assert!(is_read_only(&mut single("{ mutationLog { id } }")));
+        assert_eq!(refused.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            refused.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/problem+json")),
+        );
     }
 }

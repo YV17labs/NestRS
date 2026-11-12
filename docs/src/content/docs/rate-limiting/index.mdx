@@ -3,11 +3,9 @@ title: Rate limiting
 description: "Per-route rate limiting — a guard, a default limit from env, per-handler overrides via #[meta(Throttle::…)]."
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 The throttler turns a unit of work into "at most N per window, per
 caller". One `ThrottlerModule` import provides the in-memory counter (an
-[`InMemoryThrottler`] fixed-window store); one
+`InMemoryThrottler`, a fixed-window store); one
 `#[use_guards(ThrottlerGuard)]` binds it wherever a guard binds; one
 `#[meta(Throttle::per_minute(10))]` overrides the limit for a single
 handler. Over the limit, an HTTP route answers `429 Too Many Requests`
@@ -16,30 +14,22 @@ error frame.
 
 `ThrottlerGuard` checks **all four request-carrying edges**, and each keys
 its bucket on the unit that edge addresses joined with the caller it can
-see:
+see: [Rate-limit buckets](/rate-limiting/buckets/).
 
-| Edge | Bucket |
-|---|---|
-| HTTP | the matched route pattern + the client address |
-| GraphQL | the field name — an operation carries no client address, so every caller shares that field's bucket |
-| MCP | the tool or prompt name — same, and the operation runs on a task rmcp spawned |
-| WS | the event name + the connection — the peer that keyed the upgrade is gone by the time a message runs |
+`#[meta(Throttle::…)]` overrides the module default on every edge — beside a
+route, a `#[query]`, a `#[subscribe_message]` or a `#[tool]`, or on its host
+for all of them; a unit that pins none counts against `ThrottlerConfig`'s
+limit.
 
-That is not a nicety: `/graphql` and `/mcp` are `EdgePosture::Exempt` and a
-WS message runs after the upgrade's chain returned, so **none of the three
-is reachable from an HTTP-scope binding**. Bind the guard globally *as well*
-where those mounts are public, so the request carrying the document, the
-session or the upgrade is metered per address too.
-
-Only HTTP carries per-unit metadata, so `#[meta(Throttle::…)]` overrides the
-module default there and nowhere else; the other three count against
-`ThrottlerConfig`'s limit.
-
-Bind it **per route**, or per controller. `use_guards_global` works and reads
+Bind it **per route**, or per controller. The app's `GlobalGuards` works and reads
 the same `#[meta(Throttle::…)]` — the guard pool runs post-routing, see
 [the request lifecycle](/fundamentals/request-lifecycle/) — but it meters
 *every* route the pool reaches at the module default, which is a wider
 decision than rate limiting usually is.
+
+**A rate limit opens nothing.** It identifies no one, so it covers no unit: a route, a
+message or an operation under `ThrottlerGuard` alone says `#[public]` or fails the
+boot, which names each. Beside an authentication guard, it needs nothing more.
 
 ## Install
 
@@ -57,25 +47,41 @@ cargo add nest-rs --features redis-throttler
 
 ## Wire it in
 
-```rust title="apps/api/src/module.rs (from the demo)"
+The adapter whose controller binds the guard imports the port, as it imports
+the module serving its edge:
+
+```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
 use nest_rs::throttler::ThrottlerModule;
 
-#[module(imports = [ThrottlerModule::for_root(None)])]
-pub struct ApiModule;
+use super::controller::PostsController;
+use crate::posts::PostsModule;
+
+#[module(
+    imports = [PostsModule, ThrottlerModule],
+    providers = [PostsController],
+)]
+pub struct PostsHttpModule;
 ```
 
 That import is the whole wiring. It registers the shared store **and** the
 `ThrottlerGuard` that reads it, both as global infrastructure — so the guard
 resolves from any module that binds it, and nothing goes in a controller
 module's `providers`. Listing `ThrottlerGuard` there as well is a duplicate
-registration and fails the boot naming it.
+registration and fails the boot naming it. Several adapters importing it share
+one store and one policy, and the app's root imports nothing for them.
 
-Passing `None` loads `ThrottlerConfig` from `NESTRS_THROTTLER__*`; the
-defaults (`60` requests per `60s` window) apply when nothing is set.
-Pass `Some(ThrottlerConfig { ... })` to pin the limit in code — the pinned
-value is the base `NESTRS_THROTTLER__*` overlays, field by field, on the same
-dual-path rule the rest of the framework follows.
+A root whose `GlobalGuards` lists the guard binds it too, so it imports
+`ThrottlerModule` itself: the pool stays armed whichever adapters the root lists.
+
+The bare import reads `ThrottlerConfig` from `<PREFIX>_THROTTLER__*` over its
+defaults (`60` requests per `60s` window), which apply when nothing is set.
+`ThrottlerModule::for_root(ThrottlerConfig { .. })`, at the root, pins the limit
+in code, superseding the adapters' bare imports —
+the pinned value is the base `<PREFIX>_THROTTLER__*` overlays, field by field,
+on the same dual-path rule the rest of the framework follows. The limit runs from
+`1` to a billion requests per window and the window from a second to a day, and a
+value outside either range fails the boot naming its variable.
 
 ```bash frame="terminal"
 NESTRS_THROTTLER__LIMIT=120
@@ -86,26 +92,30 @@ NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
 
 ## Guard a controller
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::controller;
 use nest_rs::throttler::ThrottlerGuard;
 
 #[controller(path = "/posts")]
-#[use_guards(ThrottlerGuard)]
+#[use_guards(AuthnGuard, ThrottlerGuard)]
 pub struct PostsController { /* … */ }
 ```
 
 Every route on this controller now goes through the throttler. The
-default limit applies unless a handler overrides it.
+default limit applies unless a handler overrides it. Each route's
+[OpenAPI document](/openapi/) lists its `429` and the `Retry-After` it
+carries, wherever the guard is bound — the controller, the route, an alias,
+the global pool — `#[public]` routes included.
 
 ## Override per route
 
-```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{controller, routes};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
+use nest_rs::http::Json;
 
 #[controller(path = "/posts")]
-#[use_guards(ThrottlerGuard)]
+#[use_guards(AuthnGuard, ThrottlerGuard)]
 pub struct PostsController { /* … */ }
 
 #[routes]
@@ -120,7 +130,7 @@ impl PostsController {
 ```
 
 `#[meta]` attaches the limit to the route; the guard reads it back through
-the `Reflector` at request time. `create` is capped at 10/min; `list`
+`cx.reflector()` at request time. `create` is capped at 10/min; `list`
 inherits the module default. Forms:
 
 | Form                                | Meaning                          |
@@ -129,45 +139,18 @@ inherits the module default. Forms:
 | `Throttle::per_minute(n)`           | `n` requests per minute          |
 | `Throttle::new(n, Duration::from_secs(s))` | `n` requests per `s` seconds |
 
+A window must count something: `Throttle::new` refuses one under a
+millisecond — the Redis store's resolution — which in a `const` is a compile
+error and in `#[meta]` fails the boot at the route. A zero window reset every
+bucket on every hit, so the limiter let everything through at any limit.
+`<PREFIX>_THROTTLER__WINDOW_SECS=0`, or a pinned `window: Duration::ZERO`, fails the
+boot naming the variable for the same reason.
+
 ## What "per client" means
 
-The client key is the **direct peer IP** by default — every request
-coming from the same IP shares the same window. If the request arrives
-through a reverse proxy you have listed in
-`NESTRS_HTTP__TRUSTED_PROXIES`, the throttler reads the **rightmost** hop that
-is not itself a trusted proxy — from `Forwarded` (RFC 7239), else
-`X-Forwarded-For`, else `X-Real-IP` — and counts that as the client.
-
-**Rightmost, not leftmost** — and the difference is the whole defence. A proxy
-*appends* the address it received the request from to the right of the chain,
-so the genuine client is the last hop your infrastructure wrote. A caller can
-only *prepend*, and a prepended entry lands to the **left** of the genuine one:
-it can neither mint a fresh bucket by rotating a value nor drain a victim's by
-forging theirs. Keying on the leftmost hop is exactly the spoofable rule this
-avoids — if you reproduce this keying anywhere else, reproduce it in this
-direction.
-
-The rest of the rule:
-
-- A forwarding header from a peer that is **not** a listed proxy is
-  **ignored** — a direct client cannot bypass its own bucket by setting one.
-- An unparseable hop in the chain is skipped, never used as a key.
-- An unparseable IP in `TRUSTED_PROXIES` **aborts the boot** naming
-  the offending value — never a silent skip.
-- A request with no peer addr (synthetic, in-process) is counted
-  against a literal `"global"` bucket.
-
-The list is `NESTRS_HTTP__TRUSTED_PROXIES`, on the transport, not on the
-throttler: which proxies a deployment believes decides who *every* request is
-attributed to — the [`ClientIp`](/http/extractors/) extractor's answer as much
-as the rate-limit bucket's. One list, so a `429` and the log line explaining it
-can never name different callers.
-
-<Aside type="caution">
-Trust the proxy header **only** when the request arrived through a
-proxy you control. Production behind an ingress: list the ingress IPs.
-Direct exposure: leave `TRUSTED_PROXIES` empty.
-</Aside>
+On HTTP the client is the direct peer's network, or, behind a proxy you list,
+the rightmost hop it did not write:
+[Rate-limit buckets](/rate-limiting/buckets/#what-per-client-means).
 
 ## Run it
 
@@ -202,82 +185,98 @@ Enable it at the top of this page, then:
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisThrottlerModule};
-use nest_rs::throttler::ThrottlerModule;
+use nest_rs::redis::RedisThrottlerModule;
+
+use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    ThrottlerModule::for_root(None),   // the policy and the guard — unchanged
-    RedisModule::for_root(None),       // the one Redis connection (NESTRS_REDIS__URL)
-    RedisThrottlerModule,              // the counters move to Redis
+    PostsHttpModule,
+    RedisThrottlerModule,
 ])]
-pub struct AppModule;
+pub struct ApiModule;
 ```
 
-Three lines, three shapes. `ThrottlerModule::for_root` stays exactly as it was:
-it owns the policy (`NESTRS_THROTTLER__*` — the limit and the window are the
+One line, at the root. `ThrottlerModule`, which the adapter imports, stays
+exactly as it was: it owns the policy (`<PREFIX>_THROTTLER__*` — the limit and the window are the
 throttler's whatever store counts them) and the `ThrottlerGuard` that applies it.
 `RedisThrottlerModule` is a bare import that *declares* `RedisThrottler` as the
 `dyn ThrottlerStore`, which supersedes the port's in-process default wherever
-the three fall in `imports`; it runs over the connection `RedisModule::for_root`
-opens, and an app that also queues shares that one connection with its
-producer. You add a line to move the counters off-process and remove none. A
+the two fall in the app's imports; it imports the `RedisModule` opening its
+connection (`<PREFIX>_REDIS__URL`), and an app that also queues shares that one
+`RedisConnection` with its producer. You add a line to move the counters off-process and remove none. A
 second vendor binding beside it is a named boot failure, never a silent
 last-one-wins.
 
-The counter is a single `EVAL` — `INCR`, read the TTL, set it on the first hit —
-so it is atomic across replicas with no check-then-act race. A backend failure
-**denies**: a rate limiter that fails open is not a rate limiter.
+**Redis never holds a client.** A bucket's subject — the route and the client's
+address, the field and the actor — is personal data, and Redis keeps what it
+counts where a replica, a backup or a `SCAN` reads it. So a store whose counters
+leave the process counts each bucket under a pseudonym: the first 128 bits of an
+HMAC-SHA256 of its subject, in hex (`nestrs:throttler:buckets:3f9c…`), keyed by
+`<PREFIX>_THROTTLER__PSEUDONYM_KEY`. Set it to the same 32 bytes or more on every
+replica, as a secret:
 
-### Writing your own
-
-```rust title="crates/mythrottler/src/throttler/store.rs"
-use async_trait::async_trait;
-use nest_rs::throttler::{Decision, Throttle, ThrottlerStore};
-
-pub struct MyThrottler { /* your client */ }
-
-#[async_trait]
-impl ThrottlerStore for MyThrottler {
-    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
-        // Count one hit for `key`; return `allowed` and, when denied, the
-        // `Retry-After` duration.
-        todo!()
-    }
-}
+```bash frame="terminal"
+NESTRS_THROTTLER__PSEUDONYM_KEY_FILE=/run/secrets/throttler-pseudonym-key   # openssl rand -base64 32
 ```
 
-A store counts and nothing else. Which limit a route runs under is the port's
-policy, carried by the guard; your binding is a bare module that *declares*
-your store as the `dyn ThrottlerStore`
-(`provide_declared_factory_after::<Arc<dyn ThrottlerStore>, YourConnection, _, _>(BACKEND_REMEDY, …)`)
-so it supersedes the in-process default and contests a second vendor's by name.
-The trait is **async**, so a networked implementor awaits its round-trip
-directly — no `block_in_place` bridge occupying a runtime worker per check, and
-no panic on a current-thread runtime.
+Without it the boot refuses, naming the store and the variable: replicas keyed
+apart would each count their own buckets in the shared store. Changing it starts
+every bucket afresh, which costs a window at most. A key under 32 bytes is
+refused too, without being repeated — HMAC-SHA256's key is as strong as its
+length up to the hash's size (RFC 2104 §3).
 
-There is no `trusted_proxies` on the trait, and that is deliberate: a store
-counts hits, while **who** a hit belongs to is the transport's answer
-(`nest_rs_http::ClientOrigin`, configured by `NESTRS_HTTP__TRUSTED_PROXIES`).
-A backend that had to be told about proxies would be a second place the same
-question is answered.
+The counter is one Lua script — `INCR`, read the TTL with `PTTL`, set it with
+`PEXPIRE` on the first hit — so it is atomic across replicas with no
+check-then-act race. A window in its last millisecond, whose TTL Redis answers
+`0`, has ended: the script deletes it with `PEXPIRE … 0`, so that hit opens the
+next window, as it would in process. A backend failure
+**denies**: a rate limiter that fails open is not a rate limiter. The store
+answers Redis's error and the guard refuses the caller, as it does for any store
+that cannot count (below). Each command is bounded by the connection's budget
+(`<PREFIX>_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by default), well inside the guard's
+own bound — the boot refuses a budget at or past it — so an outage reaches the
+guard's line as Redis's own error, with its cause.
 
-<Aside type="note">
-**Fixed-window by design.** `Throttle { limit, window }` maps one-to-one onto
-a counter plus a TTL — the shape every distributed store implements cheaply,
-and the reason the Redis store is a short Lua script. Sliding-window and
-token-bucket algorithms need per-key state the trait deliberately does not carry
-(a list of timestamps, or a `(tokens, refilled_at)` pair); implement them in a
-downstream crate with their own store type.
-</Aside>
+The script is sent as `EVALSHA`, with a `SCRIPT LOAD` the first time Redis has not
+cached it, and Redis checks the commands *inside* it against the caller's ACL as
+well. With the connection's `PING`, which proves it at boot, and the `SELECT` of the
+database its URL names, a Redis user for the rate limiter is this rule and nothing
+more:
+
+```text title="Redis ACL — rate limiter"
+ACL SETUSER <user> reset on ><password> ~nestrs:throttler:* +ping +select +evalsha +script|load +incr +pttl +pexpire
+```
+
+Under Sentinel and on a Cluster, the rule is created on every node and takes
+what its topology's connection adds — see
+[ACL on Sentinel and Cluster](/queue/topologies/#acl-on-sentinel-and-cluster).
+
+An app that also queues or fires scheduled jobs once gives the same user
+[the queue's](/queue/delivery/#where-a-queue-lives) and
+[the schedule's](/schedule/once/#the-keys) rules as well.
+
+**The server runs `maxmemory-policy noeviction`.** A window carries an expiry, so
+a `volatile-*` or `allkeys-*` policy may evict a full one once the server reaches
+its `maxmemory`, and the next hit opens a fresh window: the client it denied gets
+through. The boot cannot read the policy, so it is the deployment's to set, for
+every binding the server holds — see [Eviction](/queue/topologies/#eviction).
+
+### Your own store
+
+Any store that can count a window implements `ThrottlerStore` and binds it the
+way `RedisThrottlerModule` does: the contract, its binding, the net it answers
+under and why its failure always denies are on
+[Writing a rate-limit store](/rate-limiting/writing-a-store/).
 
 ## Reference
 
 - `crates/nest-rs-throttler/` — `ThrottlerModule`, `ThrottlerGuard`,
-  `ThrottlerConfig`, `Throttle`, `InMemoryThrottler`.
+  `ThrottlerConfig`, `Throttle`, `InMemoryThrottler`, `ThrottlerStore`,
+  `ThrottlerStoreError`.
 
 ## Going further
 
-- [Configuration](/configuration/) — `NESTRS_THROTTLER__*` follows the
+- [Configuration](/configuration/) — `<PREFIX>_THROTTLER__*` follows the
   same env → struct dual path every module uses.
 - [Guards](/fundamentals/guards/) — what `#[use_guards(ThrottlerGuard)]`
-  binds, and why a global guard is the wrong shape here.
+  binds, and the scopes it binds at.

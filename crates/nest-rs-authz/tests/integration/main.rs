@@ -1,19 +1,31 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md).
-//!
-//! Transport-binding tests are gated on the same feature that exposes them in
-//! `src/`: run with `cargo test -p nest-rs-authz --features full` to exercise
-//! every bridge in this crate.
+//! Integration tests mirroring `src/`; run with `--features full` to exercise
+//! every transport binding.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod ability;
 mod builder;
+mod context;
 
-// `src/guard.rs` is transport-agnostic, so its mirror is here and not under an
-// edge; the files inside carry the per-entry feature gates.
+// `src/guard.rs` is transport-agnostic, so its mirror sits here, not under an edge.
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
 
+// One gate, every edge: its suite needs all four.
+#[cfg(all(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod gate;
+
 #[cfg(feature = "http")]
 mod http;
+
+// A subject no table holds, gated on every edge: its suite needs all four.
+#[cfg(all(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod subject;
 
 #[cfg(feature = "graphql")]
 mod graphql;
@@ -24,27 +36,53 @@ mod mcp;
 #[cfg(feature = "ws")]
 mod ws;
 
+// A wire row judged where it is built, served on every edge: its suite needs them all.
+#[cfg(all(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod judged;
+
+/// A story whose `headline` the table calls `display_title`: a field grant names the
+/// column, and the wire carries it under the field's own key.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+pub(crate) mod story {
+    use nest_rs_seaorm::expose;
+    use sea_orm::entity::prelude::*;
+
+    #[expose(name = "Story")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "stories")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key)]
+        #[expose]
+        pub id: i32,
+        #[sea_orm(column_name = "display_title")]
+        #[expose]
+        pub headline: String,
+        #[expose(nullable)]
+        pub body: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(crate) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 /// A parent/child pair whose one job is to be the *wrong* relation: `child`
 /// belongs_to `parent`, so a `related` call naming any other entity is the
 /// mismatch that trips the fail-closed `Deny` sentinel.
-///
-/// At the suite root for the reason [`widget`] is: two modules assert on that
-/// sentinel — the builder's own rejection and the `warn` `AbilityGuard` emits —
-/// and with a copy each they could drift into testing different mismatches
-/// while both reporting the rule holds.
 pub(crate) mod parent {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "parents")]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub org_id: i32,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(crate) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -52,16 +90,16 @@ pub(crate) mod parent {
 pub(crate) mod child {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "children")]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub parent_id: i32,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {
+    pub(crate) enum Relation {
         #[sea_orm(
             belongs_to = "super::parent::Entity",
             from = "Column::ParentId",
@@ -74,41 +112,27 @@ pub(crate) mod child {
 }
 
 /// A throwaway SeaORM entity to act as the authorization `Subject`, with a
-/// server-only column (`secret`) the wire DTOs never carry —
-/// [`WireModelDefaults`](nest_rs_resource::WireModelDefaults) reconstructs it so
-/// policy can read it, and the exposed-key strainer drops it again.
-///
-/// At the suite root because the `mcp` and `ws` mirrors both mask against it: one
-/// `widget` per test binary, so the two suites cannot drift into masking
-/// different shapes and reporting the same conclusion.
+/// server-only column (`secret`) the wire DTOs never carry, and a `name` a grant
+/// may withhold.
 #[cfg(any(feature = "mcp", feature = "ws"))]
 pub(crate) mod widget {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
+    #[expose(name = "Widget", graphql)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key)]
+        #[expose]
         pub id: i32,
+        #[expose(nullable)]
         pub name: String,
         pub secret: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(crate) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-#[cfg(any(feature = "mcp", feature = "ws"))]
-impl nest_rs_resource::WireModelDefaults for widget::Entity {
-    fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
-        map.entry("secret")
-            .or_insert(serde_json::Value::String(String::new()));
-    }
-
-    fn wire_keys() -> Option<&'static [&'static str]> {
-        Some(&["id", "name"])
-    }
 }

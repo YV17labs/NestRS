@@ -7,13 +7,39 @@ into a single runtime image, so an app here is a Deployment whose `command`
 names its binary. Adding one is an entry in `apps`, not a template.
 
 ```bash
+openssl genpkey -algorithm ed25519 -out signing.pem
+openssl pkey -in signing.pem -pubout -out verifying.pem
+
 helm install demo demo/charts/demo \
+  --set apps.auth.host=auth.example.com \
+  --set apps.api.host=api.example.com \
+  --set apps.assistant.host=assistant.example.com \
+  --set apps.live.host=live.example.com \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="redis://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379" \
+  --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379" \
+  --set secrets.STORAGE__ACCESS_KEY="$STORAGE_ACCESS_KEY" \
+  --set secrets.STORAGE__SECRET_KEY="$STORAGE_SECRET_KEY" \
+  --set-file secrets.AUTHN__PRIVATE_KEY=signing.pem \
+  --set-file secrets.AUTHN__PUBLIC_KEY=verifying.pem \
+  --set-file secrets.OAUTH__SERVER__CLIENTS=clients.json
 ```
 
-`helm template` renders offline against Kubernetes 1.20 unless told otherwise,
-below this chart's floor — pass `--kube-version 1.31.0` when rendering locally.
+The secrets are the *Required* list in [`values.yaml`](values.yaml): a cluster's own services, the
+object store's credentials, the signing keypair, and `clients.json`, the array of clients
+`auth` registers, each with its `client_id`, `client_secret`, `payload`, `scopes` and
+`resources`. The chart derives the cross-app URLs from the hostnames, and each app's
+audience from its own. Leave out a secret, or the hostname of `api`, `assistant`, `auth`
+or `live`, and the install is refused, naming each setting and the apps that cannot run
+without it: an app reading one refuses its boot without it, but for the signing key,
+without which `auth` boots and its token endpoint answers `500`. An app kept off the
+Ingress pins its `AUTHN__AUDIENCE` in its own `config` instead. Social sign-in stays optional: a provider is on once
+a deployment names its `CLIENT_ID` and `CLIENT_SECRET`, and one of the two alone is
+refused like a missing secret.
+
+`helm template` renders against the Kubernetes version its Helm was built with,
+which may sit below this chart's floor — pass `--kube-version 1.31.0` when
+rendering locally.
 
 ## What it deploys
 
@@ -35,33 +61,64 @@ The framework reads its settings from the environment, so a cluster only ever
 sets variables — `.env` is a local convenience the image does not carry.
 
 - `config` — non-secret keys, spelled **without** the prefix, written to a
-  ConfigMap. `LOG: info` becomes `NESTRS_LOG`.
-- `secrets` — same spelling, written to a Secret this chart owns. Bring your own
-  with `existingSecret` instead; the two are alternatives, not layers.
+  ConfigMap. `LOG_FORMAT: json` becomes `NESTRS_LOG_FORMAT`. The ecosystem's
+  unprefixed variables, `RUST_LOG` and `OTEL_*`, go in `extraEnv`.
+- `secrets` — same spelling, each written into the Secret of the apps that read it,
+  and only theirs: every app has a Secret of its own, `<release>-<app>`, holding the keys
+  its `reads` names in `values.yaml`, so `auth`'s signing key and registered clients
+  reach `auth` alone, and the migration job holds the database URL and nothing else. A
+  key changed rolls every app reading a Secret the chart writes: their pods carry one
+  checksum over all of those Secrets, since a pod is read where a Secret is not, and a
+  checksum of one app's alone would let anyone reading pods test a guess at the secret it
+  holds. A key no app reads refuses the install rather than going nowhere.
+- `apps.<name>.reads` — what that app's modules load from a deployment, each
+  `required` or `optional`. A key of `secrets` reaches exactly the apps naming it, and a
+  `required` one nothing hands an app — in `secrets`, `config`, its own `config` or
+  `extraEnv`, under its name or as `<KEY>_FILE` — refuses the install, and so does one
+  handed under both, which an app refuses at boot. Your own module reading a key adds it
+  here.
+- `apps.<name>.existingSecret` — a Secret of yours that app reads in place of the one
+  the chart writes, for an operator or a secrets manager that owns them. Set it per app
+  to keep each to its own keys; `defaults.existingSecret` hands every app the same one,
+  and with it every key you put in it. The chart cannot read a Secret it does not write,
+  so an app with one is checked for nothing.
+- `apps.<name>.config` — that app's own keys, same spelling, laid over `config`
+  for it alone: what `apps/<name>/.env` holds in a local run, which a
+  deployment never reads. The api's `HTTP__COMPRESSION` is one.
 - `envPrefix` — renames every framework variable at once. It is set on the
   process, which is why it is a pod env var and never a file.
 
 **Set the hostnames rather than the URLs.** The demo's apps address each other
-by URL — the issuer a token is signed by, the audience it is minted for, the
-resource identifier RFC 9728 discovery serves, the MCP `Host` allowlist, the
-social redirect URIs — and every one of those is some app's public origin. The
-chart derives them from `apps.<name>.host`, so renaming a hostname cannot leave
-half the pair behind. Anything in `config` still wins.
+by URL — the issuer a token is signed by, the audience each app requires, the
+resource identifier RFC 9728 discovery serves, the resources a sign-in may be
+minted a token for, the social redirect URIs — and every one of those is some
+app's public origin. The chart derives them from `apps.<name>.host`, so renaming
+a hostname cannot leave half the pair behind. Each app requires its own origin
+as a token's audience, so a token `auth` mints for one app is refused by every
+other (RFC 8707). Anything in `config` still wins, under its name or as `<KEY>_FILE`.
+
+A social redirect is derived only for a provider whose client id `auth` is handed where
+the chart sees it — `secrets`, `config`, or its own `config` or `extraEnv`, under its name
+or as `<KEY>_FILE` — since a redirect with no client is a half-configured provider, which
+refuses `auth`'s boot. An id
+in `auth`'s `existingSecret`, which the chart does not read, takes
+`SOCIAL__<PROVIDER>__REDIRECT_URL` in `config`.
 
 ## Scaling the queue worker
 
 **Queue depth is the right signal, and KEDA is how you read it.** Two facts
 from the framework's own source decide this:
 
-1. The worker runs `concurrency(1)` per `#[process]` method — throughput comes
-   from replicas, never from a bigger pod — and the demo's processors are pure
-   I/O (an S3 round-trip, one INSERT). A pod draining a backlog of thousands
-   sits near 0% CPU, so a CPU-driven HPA never fires. `autoscaling` is there for
-   a processor that is genuinely CPU-bound; on these jobs it is inert.
+1. A `#[process]` method runs as many jobs at once as its `concurrency`
+   declares, in each replica — four transcodes, one notification write — and
+   throughput past that comes from replicas. Both jobs are pure I/O (an S3
+   round-trip, one INSERT), so a pod draining a backlog of thousands sits near
+   0% CPU and a CPU-driven HPA never fires. `autoscaling` is there for a
+   processor that is genuinely CPU-bound; on these jobs it is inert.
 2. Kubernetes has no native queue-depth trigger. HPA reads CPU, memory, or an
    external metric that something else must publish — and `HPAScaleToZero` was
    alpha from 1.16 to 1.36. [KEDA](https://keda.sh) is the one moving part that
-   turns a list length into replicas.
+   turns a stream's length into replicas.
 
 ```yaml
 keda:
@@ -73,33 +130,102 @@ apps:
       enabled: true
 ```
 
-The triggers ship pre-wired to the demo's two queues. The key names are apalis's
-own layout — `<queue>:active` is the pending list, and `<queue>` is the name the
-`#[queue]` declaration gives it.
+Under Sentinel or on a Cluster, `keda.redis.topology` picks KEDA's scaler for
+it — `redis-sentinel-streams` or `redis-cluster-streams` — reading every host
+from `keda.redis.addresses`, and under Sentinel the service from
+`keda.redis.sentinelMaster`:
+
+```yaml
+keda:
+  redis:
+    topology: cluster
+    addresses: node-a:6379,node-b:6379,node-c:6379
+```
+
+KEDA's cluster scaler reads database 0 alone, so the chart refuses a Cluster
+with another `databaseIndex`. KEDA's user takes the rule the queue's docs
+prescribe; its credentials ride in the worker pod's env, named by
+`keda.redis.usernameFromEnv` and `passwordFromEnv` — and, for its user on the
+sentinels, `sentinelUsernameFromEnv` and `sentinelPasswordFromEnv`.
+
+The triggers ship pre-wired to the demo's two queues, as `redis-streams`
+triggers on `streamLength`. Each names the stream a worker reads,
+`nestrs:queue:{<queue>}:jobs`, where `<queue>` is the name the `#[queue]`
+declaration gives it. Its `streamLength` is the backlog one replica is sized
+for, so it moves with the method's `concurrency`: the audio trigger asks for a
+replica per 20 on the stream because each one runs four transcodes at once.
+
+The stream holds a job until it ends, so the trigger counts jobs **waiting and
+running**: a replica busy with long transcodes does not read as idle. KEDA can
+still scale a replica down mid-job when the backlog shrinks. The pod then
+drains: running jobs get the shutdown window, and what still runs when it closes
+is handed back to the queue and runs again, from the start, on another replica.
+Nothing is lost, but the work is done twice. Bound it with a scale-down
+stabilization window at least as long as a job — `keda.behavior`, rendered as
+the ScaledObject's `advanced.horizontalPodAutoscalerConfig.behavior`:
+
+```yaml
+apps:
+  worker:
+    keda:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 600
+```
+
+— and keep `terminationGracePeriodSeconds` at least 9.5s above
+`<PREFIX>_QUEUE__SHUTDOWN_TIMEOUT_SECS` plus `shutdownDelaySeconds`, for the
+shutdown hooks and the telemetry and console flushes that follow the drain,
+raising both toward a job's length when jobs are long (see
+[Graceful shutdown](#graceful-shutdown)).
 
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
 its own, and two of them would scale the same Deployment against each other.
+
+Scaling the worker does not multiply its schedule. The one job it runs on a
+clock, the hourly notifications purge, is declared `replicas = "one"`: each
+occurrence is claimed in the Redis the queues already use and fires on one
+replica, whatever `maxReplicaCount` allows.
 
 ### Why `minReplicaCount` is 1
 
 Scale-to-zero is one value away and deliberately not the default:
 
-- a worker start re-enqueues orphaned jobs across **all** registered consumers,
-  not just its own previous incarnation, so every scale-up re-runs its peers'
-  in-flight jobs. `#[process]` handlers must be idempotent — the framework says
-  so already — and scaling stays unhurried on purpose;
-- at zero replicas nothing promotes `<queue>:scheduled` into `<queue>:active`
-  and nothing recovers `<queue>:inflight` from a pod that died mid-job. Neither
-  is reachable from today's demo, where the producer pushes straight to
-  `:active` and retries are in-process, but both become permanent the day a
-  delayed push appears.
+- a job held back — a retry waiting for its backoff, a delayed push — waits on
+  `nestrs:queue:{<queue>}:due`, which the trigger does not read, and only a
+  running worker files it on the stream the trigger reads. Every demo job
+  retries, so at zero replicas a retry waits for the next push to wake the
+  deployment.
 
-Set it to 0 knowing that.
+A scale-up is safe either way: a worker never takes a job a peer holds until
+that peer's lease lapsed. The queue is still at least once, so the handlers stay
+idempotent. Set it to 0 knowing that.
 
 ## Graceful shutdown
 
-The framework installs a SIGTERM handler and drains its transports, so
-`terminationGracePeriodSeconds` is the window it gets. Two are not the default:
-the worker's is 45s, above the 30s
-`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` it drains within, and `live`'s is
-60s because a rollout drops WebSocket connections and clients reconnect.
+**A pod leaves its Service before it stops listening.** Kubernetes removes a
+terminating pod from the Service's endpoints while it sends `SIGTERM`, and
+kube-proxy and the ingress controllers learn of it a few seconds later; the
+framework's HTTP transport stops accepting at the signal. Without a delay
+between the two, a rolling deploy sends some requests to a closed port, and
+their clients see a refused connection or a `502`. So every app's container
+sleeps `shutdownDelaySeconds` — 5 by default — in a `preStop` hook before the
+signal, still serving. It is the native `sleep` action: the distroless image has
+no `sleep` binary to exec, which is why the chart needs Kubernetes 1.30.
+Behind a load balancer that targets pod IPs and deregisters slower than that,
+raise the delay to its deregistration time; `0` renders no hook.
+
+`/health/ready` does not take the pod out sooner: it answers `200` until the
+listener closes at the signal, so a readiness probe learns the pod is gone only
+once it fails. The `preStop` delay is the one way out ahead of the signal.
+
+Then the framework drains its transports, so `terminationGracePeriodSeconds`,
+which Kubernetes counts from the start of the `preStop` hook, holds the delay
+and the way down. The default 35s holds the 5s delay and every app's way down
+at the framework's defaults — 20s for the HTTP window or the worker's drain,
+half a second after it, five for the shutdown hooks, three for the telemetry
+flush and one for the console — `live`'s included: its sockets close with
+`1001 Going Away` at the signal, and their clients reconnect to a replica still
+serving. Raise an app's grace period with any window or delay you raise,
+keeping it 9.5s above the window plus the delay; the chart refuses to render a
+grace under the delay plus 29.5s.

@@ -1,0 +1,11 @@
+error: #[module] `providers`: `Host` is listed twice — a provider is listed once
+  --> tests/integration/diagnostics/core/provider_listed_twice.rs:16:29
+   |
+16 | #[module(providers = [Host, Host])]
+   |                             ^^^^
+
+error: #[module] `providers`: `Host as dyn Bridge` is listed twice — a provider is listed once
+  --> tests/integration/diagnostics/core/provider_listed_twice.rs:19:43
+   |
+19 | #[module(providers = [Host as dyn Bridge, Host as dyn Bridge])]
+   |                                           ^^^^^^^^^^^^^^^^^^

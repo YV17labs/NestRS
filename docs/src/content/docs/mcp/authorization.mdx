@@ -1,28 +1,24 @@
 ---
 title: MCP authorization
-description: The operation guard every MCP capability is gated by, the mandatory posture, and what a deny-all endpoint looks like.
+description: The guards every MCP request runs, the posture an operation declares, and what a deny-all endpoint looks like.
 sidebar:
   order: 2
 ---
 
-The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To
-authenticate instead — bearer JWT, ability, row-level filtering — import
-`AuthzMcpModule`, which binds
-[`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
-endpoint's `dyn McpOperationGuard` (mirroring `AuthzModule`,
-`AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
-re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
-the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
-in the same order, from the same `run_ability_chain`, nothing re-implemented per
-transport.
+The quickstart opened `/mcp` deliberately with
+`McpModule::for_root(McpAccess::Public)`. To authenticate instead — bearer JWT, ability,
+row-level filtering — import `AuthzMcpModule`, which declares
+[`EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>`](/security/authorization/endpoint-guards/)
+(mirroring `AuthzModule` on HTTP and WebSocket, and `AuthzGraphqlModule` on
+GraphQL). The transport runs your `AuthnGuard` + `AuthzGuard` on every
+MCP request, and every operation it carries runs under the `Ability` they
+attached — the same guards HTTP and GraphQL run, in the same order, nothing
+re-implemented per transport.
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/assistant/src/module.rs"
 #[module(
     imports = [
-        HttpModule::for_root(None),
-        SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        AuthnModule,
         AuthzMcpModule,
     ],
     providers = [HelloTool],
@@ -30,20 +26,23 @@ transport.
 pub struct AssistantModule;
 ```
 
-With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
-endpoint's guard, so the closed default is replaced, not silenced (a registered
-bridge also replaces the global-pool fallback: it runs the same guards itself,
-so nothing runs twice). Tools then
+With `AuthzMcpModule` imported you drop the opening — no
+`McpModule::for_root(McpAccess::Public)`, gated by default: the module's guards are the endpoint's, so the
+closed default is met, not silenced, and a module declaring guards beside an
+opening fails the boot. They join the app's global guard pool rather than
+replacing it: every guard the app's `GlobalGuards<(...)>` lists still runs at the
+request, and a guard in both runs once. Tools then
 read the ambient ability the same way HTTP handlers do: through a service that
 goes through `Repo`, which applies the ability's row-level filter automatically.
 A tool that lists users gets only the users the caller is allowed to see — same
 policy, same `AuthzAbility`, same audit log under `nest_rs::authz`. See the
-[per-transport bridges](/security/authorization/per-transport-bridges/) page for
-the four-transport story.
+[endpoint guards](/security/authorization/endpoint-guards/) page for the
+four-transport story.
 
 ## Every operation is traced
 
-The bridge answers *who is calling*, and it answers it in the logs too.
+The endpoint's guards answer *who is calling*, and they answer it in the logs
+too.
 Every operation runs in its own [`mcp.operation`
 span](/fundamentals/correlation/), under the trace of the HTTP request it
 arrived on and carrying the `actor_id` the authn guard resolved. A model
@@ -54,60 +53,97 @@ edge: rmcp addresses many operations over one HTTP request, so the endpoint's
 access line names the session and would say nothing about the work.
 
 ```text frame="terminal"
-INFO nest_rs::operation: mcp.operation operation="call_tool" outcome="ok" duration_ms=25.252 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=50514602c8481e19
-INFO nest_rs::operation: http.request method=POST path="/mcp" status=200 bytes=211 duration_ms=25.927 client_ip=0.0.0.0 forwarded=false trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=b3162e5d41cfe17e
+INFO nest_rs::operation: mcp.operation mcp_method="tools/call" path="/mcp" tool="hello" outcome="ok" duration_ms=25.252 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=50514602c8481e19
+INFO nest_rs::operation: http.request verb=POST path="/mcp" status=200 bytes=211 duration_ms=25.927 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=b3162e5d41cfe17e
 ```
 
 The tool call and the request that carried it share a `trace_id` and hold
 different `span_id`s, so "what did this call do" is answerable on its own.
+The line names what the server declares: the protocol's method, `_OTHER` for a
+custom one, and a tool by the name a host gives it, `_OTHER` for one no host
+declares. A prompt name, a resource URI or a task id is the client's to write
+and stays off the line; the span records the prompt and the resource, as the
+telemetry conventions ask.
 Everything the tool and the data layer below it log carries the operation's ids
 and its `actor_id`. See [Logs](/opentelemetry/logs/).
 
 ## Declaring the posture
 
-Each operation declares what it is, with the same two attributes a
-`#[query]` takes:
+An endpoint authenticating at its request has decided who is calling before any
+operation runs, so **an operation it covers needs no posture of its own**, as a route
+needs none under a guard. Where one declares who may call it beyond that, it
+does so with the attribute a `#[query]` takes:
 
 ```rust title="crates/features/src/users/mcp/tool.rs"
 #[tools]
 impl UsersTool {
     #[tool(description = "List the people the caller may see.")]
     #[authorize(Read, UserEntity)]
-    async fn list_people(&self) -> Result<Json<Vec<User>>, McpError> {
-        Ok(Json(CrudService::list(&*self.svc).await.opaque()?
-            .iter().map(User::from).collect()))
+    async fn list_people(&self) -> Result<Json<Vec<User>>, ServiceError> {
+        Ok(Json(self.svc.list().await?.iter().map(User::from).collect()))
     }
 }
 ```
 
 `#[authorize(Action, Entity)]` emits the class-level gate before the body and
-masks the returned value through the caller's field grants after it — the tool
-writes neither. `#[public]` is the other half: no gate, no mask, and the
-endpoint's own guard still authenticated the request.
+opens its reads to the caller's ability, and each `User` the body builds with
+`User::from` is judged for that caller where it is built — the tool writes
+neither.
+
+**`#[public]` means what it means on every edge: a caller with no credential is
+admitted.** So it belongs on an endpoint [the app opened](/mcp/#the-smallest-possible-tool)
+with `McpAccess::Public`, where the guards no longer run at the request and every
+operation states its posture, or the boot fails naming it. Behind a guard declaring
+`GuardPhase::Authentication` or `Authorization` at the request, and on an endpoint
+denying every request, `#[public]` could open nothing, and the boot refuses it,
+saying which guard stands in the way. A guard that identifies no one — a rate limit
+in the pool — leaves it standing: a visitor does reach the operation. Under such
+guards alone an operation says `#[public]` or fails the boot, one error naming every
+such operation: a rate limit covers nothing. An `AuthzGuard` the pool folds over an
+opened endpoint's operation gives a tool the rules
+[`define_visitor`](/security/authorization/public-reads/) writes, where its line
+names what it reads:
+
+```rust title="crates/features/src/posts/mcp/tool.rs"
+#[tool(description = "The published posts.")]
+#[public(Read, post::Entity)]
+async fn feed(&self) -> Result<Json<Vec<Post>>, ServiceError> {
+    Ok(Json(self.svc.feed().await?))
+}
+```
+
+It takes `#[authorize]`'s arguments, `bind = Service` on a `#[resource]` included,
+and each row it answers is judged for that caller as it is built. A bare `#[public]`
+reads nothing a grant guards: its reads answer nothing, with a `warn` naming that
+line.
 
 For an answer that is a **capability** rather than a row — a presigned URL, a
-computed report — there is no entity to gate, so bind a guard beside the
-operation instead. `#[use_guards(...)]` works per host and per operation, and
-the app-wide pool joins them in one chain deduplicated by type, so a guard
-declared at two scopes still checks the operation once:
+computed report — the posture names the capability itself: a subject
+[`#[subject]`](/security/authorization/policies/#subjects-no-table-holds)
+declares, which no table holds. On such a subject `#[authorize]` runs the same class
+gate, and the tool reads under the caller's ability as one naming an entity does:
 
 ```rust title="crates/features/src/audio/mcp/tool.rs"
     #[tool(description = "Report whether an uploaded file has been transcoded.")]
-    #[public]
-    #[use_guards(TranscodeGuard)]
+    #[authorize(Manage, Transcoding)]
     async fn transcode_status(&self, /* … */) -> Result<String, McpError> { /* … */ }
 ```
 
-One `Guard` impl serves both transports: `check_http` reads the ability off the
-request, `check_mcp` reads the ambient one the bridge installed.
+The policy grants it to admins behind a scope,
+`ab.can(Action::Manage, Transcoding).requires_scope(AUDIO_TRANSCODE)`, so the
+gate refuses a caller with no admin grant, and an admin whose token was not
+granted `audio:transcode` with the challenge naming that scope
+([OAuth scopes](/security/authorization/scopes/#a-scope-on-a-capability-no-table-holds)).
+The same posture gates the HTTP routes that mint the upload URLs: one rule,
+one gate, on every edge.
 
-Masking round-trips the value through the entity model, so it needs the full
-`#[expose]` shape to reconcile against — and MCP has no selection set to excuse
-a stripped **required** field, so such a mask fails the operation closed. A
-column a field grant may mask should be `Option` on the entity. When a tool
-deliberately answers with a narrower projection, say
-`#[authorize(Action, Entity, unmasked)]`: the gate and the row filter stay, and
-the projection *is* the field restriction.
+A tool's answer is written inside its site, so each wire row it carries is
+written for the caller that site answers: a column their grant withholds reads
+`null` in the structured content, as the output schema rmcp derives from the
+`Json<T>` says it may, and a row their grants refuse fails the operation with
+`FORBIDDEN`. A tool answering a projection of its own — a DTO, a
+`CallToolResult`, prose — writes what it read under the caller's ability, and
+what it copies out of a row is its own line.
 
 ## Telling a client how to authenticate
 
@@ -115,14 +151,13 @@ Guarding the endpoint closes it; it does not tell a client how to open it. The
 MCP authorization spec requires the server to publish that, so add
 `OAuthResourceModule` and name the deployment:
 
-```rust title="apps/api/src/module.rs"
-imports = [/* … */, OAuthResourceModule::for_root(None)]
+```rust title="apps/assistant/src/module.rs"
+imports = [/* … */, OAuthResourceModule]
 ```
 
 ```bash
-NESTRS_OAUTH_RESOURCE__RESOURCE=https://mcp.example.com
-NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
-NESTRS_AUTHN__AUDIENCE=https://mcp.example.com
+NESTRS_OAUTH__RESOURCE__RESOURCE=https://mcp.example.com
+NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
 ```
 
 Every `401` from `/mcp` then carries the RFC 9728 pointer, and
@@ -134,13 +169,19 @@ www-authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/
 
 That is the first hop of the client's flow — rmcp implements the rest of it, so
 an MCP client reaches your authorization server without being configured with
-its address. `NESTRS_AUTHN__AUDIENCE` becomes mandatory under this module: see
-[split deployment](/security/authentication/split-deployment/)
-for why a resource server that skips it can be handed someone else's token.
+its address, and asks it for a token for `https://mcp.example.com`, the RFC 8707
+`resource`. The two lines are also all the server checks a token against: its
+`aud` must be the resource and its `iss` one of the authorization servers, so a
+token minted for another service, or by an issuer this document does not name,
+opens no session — see
+[split deployment](/security/authentication/split-deployment/#binding-a-token-to-its-resource).
+And the endpoint answers the resource's host: `<PREFIX>_MCP__ALLOWED_HOSTS`
+keeps its loopback default, and `mcp.example.com` is admitted beside it.
 
 ## Going further
 
 - [MCP](/mcp/) — writing the tool this page gates.
-- [Authorization](/security/authorization/) — the ability the bridge installs.
+- [Authorization](/security/authorization/) — the ability the endpoint's guards
+  attach.
 - [Response masking](/security/authorization/response-masking/) — what
   `#[authorize]` arms on the way out.

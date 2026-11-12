@@ -1,20 +1,18 @@
-//! `#[messages]`-generated `Gateway::dispatch` — the return-type shape paths
-//! the macro picks (Unit / Value / `Result<(), E>` / `Result<T, E>`) — and the
-//! address the generated `Discoverable` mounts that dispatcher at. The macro
-//! itself lives in `nest-rs-ws-macros`; this file pins its observable behaviour.
+//! `#[messages]`-generated `Gateway::dispatch` — its return-type shapes — and
+//! the address the generated `Discoverable` mounts it at.
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
-use nest_rs_pipes::{Pipe, PipeError, Piped, Trim, Valid};
+use nest_rs_core::{Layer, async_trait, injectable, module};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_http::{StatusCode, header};
+use nest_rs_pipes::{
+    ArgumentKind, GlobalPipe, GlobalPipes, ParseArray, Pipe, PipeError, Piped, Trim,
+};
 use nest_rs_testing::TestApp;
-use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
-use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, async_trait, gateway, messages};
-use poem::http::{StatusCode, header};
+use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, WsView, gateway, messages};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-/// A typed error that is **`Serialize`** and whose `Display` deliberately
-/// withholds a field — the shape that made the alias leak matter.
+/// A typed error that is `Serialize` and whose `Display` withholds a field.
 #[derive(Debug, Serialize)]
 struct DbFailure {
     dsn: String,
@@ -29,10 +27,24 @@ impl std::fmt::Display for DbFailure {
 
 impl std::error::Error for DbFailure {}
 
-/// The alias the return-type detection cannot see through.
+/// The alias the syntactic return-type detection cannot see through.
 type ServiceResult<T> = Result<T, DbFailure>;
 
-/// A pipe that always rejects — exercises the WS pipe error path.
+/// The same shape with an error that is `Display` and **not** `Error`.
+#[derive(Debug, Serialize)]
+struct DisplayOnly {
+    dsn: String,
+}
+
+impl std::fmt::Display for DisplayOnly {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("display-only failure")
+    }
+}
+
+type DisplayOnlyResult<T> = Result<T, DisplayOnly>;
+
+/// A pipe that always rejects.
 struct Reject;
 
 impl Pipe for Reject {
@@ -49,8 +61,28 @@ struct NameInput {
     name: String,
 }
 
+/// A signup a handler validates itself, the way its service does.
+#[derive(Validate)]
+struct Signup {
+    #[validate(length(min = 32))]
+    password: String,
+}
+
+/// A developer's own error: a constant sentence, the validation failure kept as
+/// its source.
+#[derive(Debug, thiserror::Error)]
+enum SignupError {
+    #[error("validation failed")]
+    Validation(#[from] validator::ValidationErrors),
+}
+
+/// A developer's own error saying the validation failure as its own.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+struct SpelledSignupError(#[from] validator::ValidationErrors);
+
 #[gateway(path = "/test")]
-pub struct TestGateway;
+pub(crate) struct TestGateway;
 
 #[messages]
 impl TestGateway {
@@ -88,30 +120,51 @@ impl TestGateway {
     #[public]
     async fn nothing_handler(&self) {}
 
-    // `Piped<Trim, String>`: the wire payload is a `String`; the handler sees it
-    // trimmed — the WS analog of the HTTP / GraphQL / queue pipe forms.
     #[subscribe_message("trim")]
     #[public]
-    async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
+    async fn trim_handler(&self, name: Piped<Trim>) -> String {
         name.into_inner()
     }
 
-    // A rejecting pipe replies with an error frame, never reaching the body.
     #[subscribe_message("checked")]
     #[public]
-    async fn checked_handler(&self, name: Piped<Reject, String>) -> String {
+    async fn checked_handler(&self, name: Piped<Reject>) -> String {
         name.into_inner()
     }
 
-    // `Valid<T>`: validates the deserialized payload before the handler runs.
-    #[subscribe_message("named")]
+    // A list whose items must parse: a refused item is said, never quoted.
+    #[subscribe_message("ids")]
     #[public]
-    async fn named_handler(&self, input: Valid<NameInput>) -> String {
-        input.into_inner().name
+    async fn ids_handler(&self, ids: Piped<ParseArray<u64>>) -> Vec<u64> {
+        ids.into_inner()
     }
 
-    // The two spellings of one type. `literal` is what the macro can see; the
-    // three `renamed_*` handlers are the same `Result` behind an alias.
+    // A handler whose own validation refuses the payload, through its error.
+    #[subscribe_message("sign_up")]
+    #[public]
+    async fn sign_up_handler(&self, password: String) -> Result<String, SignupError> {
+        Signup { password }.validate()?;
+        Ok("signed up".to_owned())
+    }
+
+    // The same refusal, through an error that spells it.
+    #[subscribe_message("sign_up_spelled")]
+    #[public]
+    async fn sign_up_spelled_handler(
+        &self,
+        password: String,
+    ) -> Result<String, SpelledSignupError> {
+        Signup { password }.validate()?;
+        Ok("signed up".to_owned())
+    }
+
+    #[subscribe_message("named")]
+    #[public]
+    async fn named_handler(&self, input: NameInput) -> String {
+        input.name
+    }
+
+    // `literal` is what the macro can see; `renamed_*` hide the `Result` behind an alias.
     #[subscribe_message("literal")]
     #[public]
     async fn literal_handler(&self) -> Result<String, DbFailure> {
@@ -124,10 +177,172 @@ impl TestGateway {
         Err(failure())
     }
 
+    #[subscribe_message("renamed_display_only")]
+    #[public]
+    async fn renamed_display_only_handler(&self) -> DisplayOnlyResult<String> {
+        Err(DisplayOnly {
+            dsn: "postgres://u:hunter2@db".to_string(),
+        })
+    }
+
     #[subscribe_message("renamed_ok")]
     #[public]
     async fn renamed_ok_handler(&self) -> ServiceResult<String> {
         Ok("fine".to_string())
+    }
+
+    // A `Result` around a `Result`: the inner `Err` is the handler's failure,
+    // spelled literally or through the alias.
+    #[subscribe_message("nested_literal")]
+    #[public]
+    async fn nested_literal_handler(&self) -> Result<Result<String, DbFailure>, std::io::Error> {
+        Ok(Err(failure()))
+    }
+
+    #[subscribe_message("nested_renamed")]
+    #[public]
+    async fn nested_renamed_handler(&self) -> ServiceResult<Result<String, DbFailure>> {
+        Ok(Err(failure()))
+    }
+
+    #[subscribe_message("nested_ok")]
+    #[public]
+    async fn nested_ok_handler(&self) -> Result<ServiceResult<String>, std::io::Error> {
+        Ok(Ok("fine".to_string()))
+    }
+
+    // Errors that are not `Send + Sync`, each with a cause beneath its sentence.
+    #[subscribe_message("unsendable_boxed")]
+    #[public]
+    async fn unsendable_boxed_handler(&self) -> Result<String, Box<dyn std::error::Error>> {
+        Err(Box::new(LocalFailure::new()))
+    }
+
+    #[subscribe_message("unsendable_rc")]
+    #[public]
+    async fn unsendable_rc_handler(&self) -> Result<String, LocalFailure> {
+        Err(LocalFailure::new())
+    }
+
+    // A body the handler decodes itself, failing in each tier's shape.
+    #[subscribe_message("decode_anyhow")]
+    #[public]
+    async fn decode_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
+        let amount: u64 = serde_json::from_str(SECRET_BODY)?;
+        Ok(amount.to_string())
+    }
+
+    #[subscribe_message("decode_serde")]
+    #[public]
+    async fn decode_serde_handler(&self) -> Result<String, serde_json::Error> {
+        serde_json::from_str::<u64>(SECRET_BODY).map(|amount| amount.to_string())
+    }
+
+    #[subscribe_message("decode_unsendable")]
+    #[public]
+    async fn decode_unsendable_handler(&self) -> Result<String, Box<dyn std::error::Error>> {
+        Ok(serde_json::from_str::<u64>(SECRET_BODY)?.to_string())
+    }
+
+    #[subscribe_message("decode_display_only")]
+    #[public]
+    async fn decode_display_only_handler(&self) -> Result<String, DecodeDisplayOnly> {
+        serde_json::from_str::<u64>(SECRET_BODY)
+            .map(|amount| amount.to_string())
+            .map_err(DecodeDisplayOnly)
+    }
+
+    /// The edge's own deliberate error.
+    #[subscribe_message("deliberate")]
+    #[public]
+    async fn deliberate_handler(&self) -> Result<String, nest_rs_ws::WsError> {
+        Err(nest_rs_ws::WsError::new("nope"))
+    }
+
+    /// A domain error saying what its client may read.
+    #[subscribe_message("taken")]
+    #[public]
+    async fn taken_handler(&self) -> Result<String, Taken> {
+        Err(Taken)
+    }
+
+    /// A `Problem` carried through anyhow answers itself.
+    #[subscribe_message("problem_in_anyhow")]
+    #[public]
+    async fn problem_in_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
+        Err(
+            nest_rs_core::anyhow::Error::from(nest_rs_core::Problem::new(
+                404,
+                nest_rs_core::code::NOT_FOUND,
+            ))
+            .context("loading the room"),
+        )
+    }
+
+    /// A deliberate frame, carried through anyhow: it is found and sent whole,
+    /// details included.
+    #[subscribe_message("frame_in_anyhow")]
+    #[public]
+    async fn frame_in_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
+        Err(nest_rs_ws::WsError::new("pick another name")
+            .with_errors(serde_json::json!({ "name": ["taken"] }))
+            .into())
+    }
+}
+
+/// A domain error that says what its client may read, never its own sentence.
+#[derive(Debug, thiserror::Error)]
+#[error("the handle ada@example.com is taken")]
+struct Taken;
+
+impl nest_rs_core::ToProblem for Taken {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        Some(
+            nest_rs_core::Problem::new(409, nest_rs_core::code::CONFLICT)
+                .with_detail("the handle is taken")
+                .with_retry_after(30),
+        )
+    }
+}
+
+/// What every `decode_*` handler decodes: a number, sent a secret.
+const SECRET_BODY: &str = r#""sk_live_51HsecretTOKEN""#;
+
+/// A `Display`-only error spelling a decode failure — the third tier, which has
+/// no chain to read vocabulary off: it answers opaquely, its sentence on the
+/// operator's line said without the value.
+struct DecodeDisplayOnly(serde_json::Error);
+
+impl std::fmt::Display for DecodeDisplayOnly {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "could not read the amount: {}", self.0)
+    }
+}
+
+/// An error holding an `Rc` — neither `Send` nor `Sync` — whose sentence names
+/// no cause, so only a walk of its chain reaches the one beneath it.
+#[derive(Debug)]
+struct LocalFailure {
+    cause: std::rc::Rc<std::io::Error>,
+}
+
+impl LocalFailure {
+    fn new() -> Self {
+        Self {
+            cause: std::rc::Rc::new(std::io::Error::other("replica lagging")),
+        }
+    }
+}
+
+impl std::fmt::Display for LocalFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("read failed")
+    }
+}
+
+impl std::error::Error for LocalFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.cause)
     }
 }
 
@@ -149,17 +364,38 @@ async fn result_ok_serializes_to_reply() {
     }
 }
 
+/// An error nobody meant for the client answers the opaque frame; its chain is
+/// filed once, at `error`.
 #[tokio::test]
-async fn result_err_becomes_error_frame() {
+async fn result_err_becomes_an_opaque_error_frame() {
+    let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(&WsClient::for_test(), "err", serde_json::Value::Null)
         .await;
     match reply {
         WsReply::Error(msg) => {
-            assert!(msg.error.contains("boom"), "want 'boom' in {msg}");
+            assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{msg}");
+            assert_eq!(
+                msg.code.as_deref(),
+                Some(nest_rs_core::code::INTERNAL.as_str()),
+                "{msg:?}",
+            );
+            assert!(
+                msg.errors.is_none(),
+                "the class alone, no per-field detail: {msg:?}"
+            );
         }
         _ => panic!("expected Error for Result::Err"),
     }
+    let failed = logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
+    assert_eq!(failed.level, "error");
+    assert_eq!(failed.field("event").as_deref(), Some("err"));
+    assert_eq!(failed.field("error").as_deref(), Some("boom"));
+    assert!(
+        logs.events_at(tracing::Level::WARN).is_empty(),
+        "an opaque failure is filed once: {:#?}",
+        logs.events(),
+    );
 }
 
 #[tokio::test]
@@ -174,16 +410,17 @@ async fn result_ok_unit_sends_none() {
 }
 
 #[tokio::test]
-async fn result_err_unit_becomes_error_frame() {
+async fn result_err_unit_becomes_an_opaque_error_frame() {
+    let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(&WsClient::for_test(), "err_unit", serde_json::Value::Null)
         .await;
     match reply {
-        WsReply::Error(msg) => {
-            assert!(msg.error.contains("boom-unit"), "want 'boom-unit' in {msg}");
-        }
+        WsReply::Error(msg) => assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE),
         _ => panic!("expected Error for Result<(), E>::Err"),
     }
+    let failed = logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
+    assert_eq!(failed.field("error").as_deref(), Some("boom-unit"));
 }
 
 #[tokio::test]
@@ -208,33 +445,35 @@ async fn unit_return_sends_none() {
     );
 }
 
+/// An event no handler declares is the client's own word: refused as
+/// unknown, and neither the frame's text nor the report repeats it; the
+/// report is at `debug`, a client's error being no denial.
 #[tokio::test]
 async fn unknown_event_returns_unknown_error() {
     let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
-        .dispatch(&WsClient::for_test(), "missing", serde_json::Value::Null)
+        .dispatch(
+            &WsClient::for_test(),
+            "marked:missing",
+            serde_json::Value::Null,
+        )
         .await;
     match reply {
         WsReply::Error(msg) => {
-            assert!(
-                msg.error.contains("missing") && msg.error.contains("unknown"),
-                "want 'unknown' + the event name in {msg}",
-            );
+            assert!(msg.error.contains("unknown event"), "{msg}");
+            assert!(!msg.error.contains("marked"), "{msg}");
         }
         _ => panic!("expected Error for an unrouted event"),
     }
 
-    // A socket stays open after an unrouted event, so nothing surfaces at the
-    // transport: a client typo and a deploy that dropped a `#[subscribe_message]`
-    // look identical from the outside and both keep the connection alive. The
-    // event is what separates them, and it is the only per-message trace on a
-    // long-lived connection.
     let event = logs.expect_one(
         "nest_rs::ws",
         "subscribe_message dispatched to an unknown event",
     );
-    assert_eq!(event.level, "warn");
-    assert_eq!(event.field("event").as_deref(), Some("missing"));
+    assert_eq!(event.level, "debug");
+    for (field, value) in &event.fields {
+        assert!(!value.contains("marked"), "{field} = {value}");
+    }
 }
 
 #[tokio::test]
@@ -270,7 +509,7 @@ async fn a_rejecting_pipe_replies_with_an_error_frame() {
 }
 
 #[tokio::test]
-async fn a_valid_payload_is_validated_before_the_handler() {
+async fn a_payload_whose_type_declares_rules_is_validated_before_the_handler() {
     let ok = TestGateway
         .dispatch(
             &WsClient::for_test(),
@@ -296,10 +535,6 @@ async fn a_valid_payload_is_validated_before_the_handler() {
                 msg.error.contains("validation failed"),
                 "want validation error in {msg}"
             );
-            // The finding: the macro formatted only `PipeError::message()`, so a
-            // client learned that validation failed and never which field. The
-            // per-field detail rides the frame as `errors`, the member name HTTP
-            // uses for the same rejection.
             let errors = msg
                 .errors
                 .as_ref()
@@ -313,9 +548,6 @@ async fn a_valid_payload_is_validated_before_the_handler() {
     }
 }
 
-/// The wire shape, not just the reply value: a client parses
-/// `{ event, data: { error, errors } }`, and `errors` is absent — not `null` —
-/// when the failure had no structured detail. Same asymmetry HTTP has.
 #[tokio::test]
 async fn the_error_frame_carries_error_and_errors_under_data() {
     let bad = TestGateway
@@ -333,6 +565,7 @@ async fn the_error_frame_carries_error_and_errors_under_data() {
             .expect("parse");
     assert_eq!(frame["event"], "named");
     assert!(frame["data"]["error"].is_string(), "{frame}");
+    assert_eq!(frame["data"]["code"], "INVALID_ARGUMENT", "{frame}");
     assert!(frame["data"]["errors"]["name"].is_array(), "{frame}");
 
     let plain = nest_rs_ws::WsError::new("unknown event `nope`");
@@ -345,13 +578,6 @@ async fn the_error_frame_carries_error_and_errors_under_data() {
     );
 }
 
-/// A `Result` reached through a type alias must behave exactly like the literal
-/// form. It did not: return-type detection is syntactic on the last path
-/// segment, so `ServiceResult<T>` read as an ordinary value and the `Err`
-/// variant was serialized into the reply `data` — the whole error struct,
-/// including the field `Display` withholds, in a frame with no `error` key. It
-/// compiled without a warning and logged nothing, because nothing knew a
-/// failure had happened.
 #[tokio::test]
 async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -360,19 +586,43 @@ async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
         .await;
 
     match reply {
-        WsReply::Error(msg) => assert_eq!(msg.error, "database unavailable"),
+        WsReply::Error(msg) => assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE),
         WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
-        WsReply::None => panic!("expected an error frame"),
+        other => panic!("expected an error frame, got {other:?}"),
     }
 
-    // …and the denial is greppable, on the transport's own target.
-    let event = logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
-    assert_eq!(event.level, "warn");
+    let event = logs.expect_one("nest_rs::ws", "websocket message failed");
+    assert_eq!(event.level, "error");
     assert_eq!(event.field("event").as_deref(), Some("renamed"));
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some("database unavailable")
+    );
 }
 
-/// Both spellings produce the same frame — the point of the fix is that the
-/// contract no longer depends on how the type was written.
+#[tokio::test]
+async fn an_aliased_result_with_a_display_only_error_is_an_error_frame() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "renamed_display_only",
+            serde_json::Value::Null,
+        )
+        .await;
+
+    match reply {
+        WsReply::Error(msg) => assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE),
+        WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
+        other => panic!("expected an error frame, got {other:?}"),
+    }
+    let failed = logs.expect_one("nest_rs::ws", "websocket message failed");
+    assert_eq!(
+        failed.field("error").as_deref(),
+        Some("display-only failure")
+    );
+}
+
 #[tokio::test]
 async fn the_literal_and_aliased_forms_reply_identically() {
     let mut frames = Vec::new();
@@ -392,12 +642,9 @@ async fn the_literal_and_aliased_forms_reply_identically() {
         }
     }
     assert_eq!(frames[0], frames[1]);
-    // The withheld field never reaches the wire on either path.
     assert!(!frames[0].contains("hunter2"), "{}", frames[0]);
 }
 
-/// The `Ok` half still replies with the value, so the fix costs the happy path
-/// nothing — an aliased `Result` is now simply a `Result`.
 #[tokio::test]
 async fn an_aliased_result_still_replies_on_ok() {
     let reply = TestGateway
@@ -409,17 +656,66 @@ async fn an_aliased_result_still_replies_on_ok() {
     }
 }
 
-// --- E4: a refused dispatch must be greppable, whoever refused it ---
-
-/// `/websockets/messages/` promises "a `warn!` lands in the `nest_rs::ws`
-/// target alongside the frame, so a denied dispatch shows up in logs without
-/// extra instrumentation" — in the paragraph about a `Valid<T>` rejection.
-///
-/// Only a handler-returned `Err` warned. A pipe rejection and a malformed
-/// payload — a *client* sending garbage, which is the case worth alerting on —
-/// produced the right frame and no record at any level.
 #[tokio::test]
-async fn a_pipe_rejection_warns_on_the_ws_target() {
+async fn a_result_inside_a_result_is_an_error_frame_however_it_is_spelled() {
+    for event in ["nested_literal", "nested_renamed"] {
+        let logs = nest_rs_testing::LogCapture::install();
+        match TestGateway
+            .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
+            .await
+        {
+            WsReply::Error(msg) => {
+                assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{event}");
+            }
+            WsReply::Reply(value) => {
+                panic!("`{event}`: the inner Err was shipped as a success frame — {value}")
+            }
+            other => panic!("`{event}`: expected an error frame, got {other:?}"),
+        }
+        let line = logs.expect_one("nest_rs::ws", "websocket message failed");
+        assert_eq!(line.field("event").as_deref(), Some(event));
+        assert_eq!(line.field("error").as_deref(), Some("database unavailable"));
+    }
+}
+
+#[tokio::test]
+async fn a_result_inside_a_result_replies_with_the_inner_value() {
+    match TestGateway
+        .dispatch(&WsClient::for_test(), "nested_ok", serde_json::Value::Null)
+        .await
+    {
+        WsReply::Reply(v) => assert_eq!(v.as_str(), Some("fine")),
+        _ => panic!("expected the inner Ok value"),
+    }
+}
+
+#[tokio::test]
+async fn an_error_that_is_not_send_logs_its_cause_chain() {
+    for event in ["unsendable_boxed", "unsendable_rc"] {
+        let logs = nest_rs_testing::LogCapture::install();
+        match TestGateway
+            .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
+            .await
+        {
+            WsReply::Error(msg) => {
+                assert_eq!(msg.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{event}");
+            }
+            _ => panic!("`{event}`: expected an error frame"),
+        }
+        let line = logs.expect_one("nest_rs::ws", "websocket message failed");
+        assert_eq!(
+            line.field("error").as_deref(),
+            Some("read failed: replica lagging"),
+            "`{event}` logs the whole chain",
+        );
+    }
+}
+
+/// A pipe's rejection is the client's error, which the message's line files:
+/// the operator reads the rejection at `debug` on `nest_rs::ws`, never a
+/// `warn`.
+#[tokio::test]
+async fn a_pipe_rejection_is_reported_at_debug_on_the_ws_target() {
     let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(
@@ -431,12 +727,13 @@ async fn a_pipe_rejection_warns_on_the_ws_target() {
     assert!(matches!(reply, WsReply::Error(_)), "the frame is unchanged");
 
     let event = logs.expect_one("nest_rs::ws", "subscribe_message rejected by a pipe");
-    assert_eq!(event.level, "warn");
+    assert_eq!(event.level, "debug");
     assert_eq!(event.field("event").as_deref(), Some("checked"));
+    assert!(logs.events_at(tracing::Level::WARN).is_empty());
 }
 
 #[tokio::test]
-async fn a_structured_validation_rejection_warns_too() {
+async fn a_structured_validation_rejection_is_reported_at_debug_too() {
     let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(
@@ -448,12 +745,15 @@ async fn a_structured_validation_rejection_warns_too() {
     assert!(matches!(reply, WsReply::Error(_)));
 
     let event = logs.expect_one("nest_rs::ws", "subscribe_message rejected by a pipe");
-    assert_eq!(event.level, "warn");
+    assert_eq!(event.level, "debug");
     assert_eq!(event.field("event").as_deref(), Some("named"));
+    assert!(logs.events_at(tracing::Level::WARN).is_empty());
 }
 
+/// A payload that does not decode is the client's error, which the message's
+/// line files: its report says where at `debug`, never a `warn`.
 #[tokio::test]
-async fn a_malformed_payload_warns_on_the_ws_target() {
+async fn a_malformed_payload_is_reported_at_debug_naming_where() {
     let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(
@@ -463,33 +763,127 @@ async fn a_malformed_payload_warns_on_the_ws_target() {
         )
         .await;
     match reply {
-        WsReply::Error(msg) => assert!(
-            msg.error.contains("invalid payload for `named`"),
-            "the frame is unchanged: {}",
-            msg.error,
+        WsReply::Error(msg) => assert_eq!(
+            msg.error, "invalid payload for `named` at `name`: missing",
+            "the frame names the field it misses",
         ),
         WsReply::Reply(value) => panic!("expected an error frame, got a reply: {value}"),
-        WsReply::None => panic!("expected an error frame, got silence"),
+        other => panic!("expected an error frame, got {other:?}"),
     }
 
     let event = logs.expect_one(
         "nest_rs::ws",
         "subscribe_message payload failed to deserialize",
     );
-    assert_eq!(event.level, "warn");
+    assert_eq!(event.level, "debug");
     assert_eq!(event.field("event").as_deref(), Some("named"));
+    assert_eq!(event.field("error").as_deref(), Some("at `name`: missing"));
+    assert!(
+        logs.events_at(tracing::Level::WARN).is_empty(),
+        "{:#?}",
+        logs.events()
+    );
 }
 
-// ── The mount address: `#[gateway(version = …)]` ────────────────────────────
-//
-// A gateway's mount is a path a client selects, so it declares a version the
-// way a controller does and resolves it through the same
-// `nest_rs_http::version_path`. What follows pins the three things that
-// declaration decides: the effective path, what the router serves, and what the
-// boot does with two gateways that share a path.
+#[tokio::test]
+async fn a_malformed_payload_is_reported_without_its_value() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "named",
+            serde_json::json!({ "name": 4_242_424_242_424_242_u64 }),
+        )
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("expected an error frame");
+    };
+    assert_eq!(
+        frame.error,
+        "invalid payload for `named` at `name`: invalid type: an integer, expected a string"
+    );
+    assert_eq!(
+        frame.code.as_deref(),
+        Some("INVALID_ARGUMENT"),
+        "the class HTTP's 400 names for a body that does not decode",
+    );
+    assert!(frame.errors.is_none(), "no field map: {frame:?}");
+    let event = logs.expect_one(
+        "nest_rs::ws",
+        "subscribe_message payload failed to deserialize",
+    );
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some("at `name`: invalid type: an integer, expected a string")
+    );
+}
+
+#[tokio::test]
+async fn a_refused_list_item_is_quoted_neither_in_the_frame_nor_on_the_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "ids",
+            serde_json::json!("1,sk_live_51HsecretTOKEN,3"),
+        )
+        .await;
+    let WsReply::Error(error) = reply else {
+        panic!("expected an error frame from the refusing pipe");
+    };
+    let frame = nest_rs_ws::WsEnvelope::encode("ids", &error).expect("encode");
+    assert!(
+        !frame.contains("sk_live"),
+        "the frame quotes the item: {frame}"
+    );
+    logs.expect_one(nest_rs_ws::TARGET, "subscribe_message rejected by a pipe");
+    let quoting: Vec<String> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.fields.values().any(|value| value.contains("sk_live")))
+        .map(|event| format!("{} {:?}", event.message, event.fields))
+        .collect();
+    assert!(quoting.is_empty(), "lines quoting the item: {quoting:#?}");
+}
+
+/// validator's own `Display` prints every rule's parameters, the submitted
+/// value among them.
+#[tokio::test]
+async fn a_validation_failure_a_handler_returns_is_said_without_the_submitted_value() {
+    let mut quoting = Vec::new();
+    for event in ["sign_up", "sign_up_spelled"] {
+        let logs = nest_rs_testing::LogCapture::install();
+        let reply = TestGateway
+            .dispatch(
+                &WsClient::for_test(),
+                event,
+                serde_json::json!("sk_live_51HsecretTOKEN"),
+            )
+            .await;
+        let WsReply::Error(error) = reply else {
+            panic!("`{event}`: expected an error frame from the refusing handler");
+        };
+        let frame = nest_rs_ws::WsEnvelope::encode(event, &error).expect("encode");
+        if frame.contains("sk_live") {
+            quoting.push(format!("`{event}` frame: {frame}"));
+        }
+        assert_eq!(error.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE, "{event}");
+        logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
+        quoting.extend(
+            logs.events()
+                .into_iter()
+                .filter(|line| line.fields.values().any(|value| value.contains("sk_live")))
+                .map(|line| format!("`{event}` line: {} {:?}", line.message, line.fields)),
+        );
+    }
+    assert!(
+        quoting.is_empty(),
+        "the submitted value, quoted: {quoting:#?}"
+    );
+}
 
 #[gateway(path = "/ws", version = "1")]
-pub struct VersionedGateway;
+pub(crate) struct VersionedGateway;
 
 #[messages]
 impl VersionedGateway {
@@ -500,9 +894,6 @@ impl VersionedGateway {
     }
 }
 
-/// `version_path` prefixes, so a declared version moves the whole mount under
-/// `/v{n}` — the same address shape `#[controller(version = "1")]` produces, and
-/// the reason the argument is spelled identically on both edges.
 #[test]
 fn a_declared_version_moves_the_mount_under_its_segment() {
     assert_eq!(VersionedGateway::VERSION, Some("1"));
@@ -514,8 +905,6 @@ fn a_declared_version_moves_the_mount_under_its_segment() {
     assert_eq!(VersionedGateway::__nestrs_mount_path(), "/v1/ws");
 }
 
-/// The other half, and the one that guarantees this is additive: a gateway that
-/// declares no version mounts exactly where it always did.
 #[test]
 fn an_undeclared_version_leaves_the_mount_alone() {
     assert_eq!(TestGateway::VERSION, None);
@@ -525,14 +914,9 @@ fn an_undeclared_version_leaves_the_mount_alone() {
 #[module(imports = [WsModule], providers = [VersionedGateway])]
 struct VersionedModule;
 
-/// What a socket-less client can prove about a mount, and it is more than it
-/// looks: `400 invalid protocol` is poem's `WebSocket` extractor refusing a GET
-/// that is not an upgrade, so only a mounted gateway endpoint can answer it.
-/// `500 no upgrade` is that same extractor accepting the *whole* handshake —
-/// method, `Upgrade`, `Connection`, `Sec-WebSocket-Version`, `Sec-WebSocket-Key`
-/// — and finding no hyper upgrade seam, which is exactly as far as an in-process
-/// `TestClient` reaches. Past that seam is `nest_rs_testing::ws`, which binds a
-/// real port; the socket-driven witnesses are at the end of this file.
+/// The status an in-process handshake gets: `426 Upgrade Required` is the
+/// upgrade accepting the whole handshake and finding no connection under the
+/// request to switch, which only a mounted gateway answers.
 async fn upgrade_status(app: &TestApp, path: &str) -> StatusCode {
     app.http()
         .get(path)
@@ -554,7 +938,7 @@ async fn a_versioned_gateway_serves_at_its_version_segment_and_nowhere_else() {
 
     assert_eq!(
         upgrade_status(&app, "/v1/ws").await,
-        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::UPGRADE_REQUIRED,
         "the handshake reached the gateway and passed every header check",
     );
     app.http()
@@ -563,9 +947,6 @@ async fn a_versioned_gateway_serves_at_its_version_segment_and_nowhere_else() {
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 
-    // …and the undeclared address is not a second door. A gateway that declared
-    // a version and stayed reachable unversioned would be the silent-fallback
-    // failure URI versioning exists to avoid.
     assert_eq!(upgrade_status(&app, "/ws").await, StatusCode::NOT_FOUND);
     app.http()
         .get("/ws")
@@ -574,10 +955,6 @@ async fn a_versioned_gateway_serves_at_its_version_segment_and_nowhere_else() {
         .assert_status(StatusCode::NOT_FOUND);
 }
 
-/// A boot log naming an address nobody can connect to is worse than none — it is
-/// the first thing read when a socket will not open. Both events the mount emits
-/// carry the effective path: the transport's, and the per-event one `#[messages]`
-/// writes from inside the mount closure.
 #[tokio::test]
 async fn the_boot_log_names_the_address_a_client_connects_to() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -587,47 +964,52 @@ async fn the_boot_log_names_the_address_a_client_connects_to() {
 
     let endpoint = logs.expect_one("nest_rs::routes", "mounted endpoint");
     assert_eq!(endpoint.field("path").as_deref(), Some("/v1/ws"));
-    assert_eq!(endpoint.field("kind").as_deref(), Some("ws"));
+    assert_eq!(endpoint.field("surface").as_deref(), Some("ws"));
+    assert_eq!(endpoint.field("host").as_deref(), Some("VersionedGateway"));
 
-    let message = logs.expect_one("nest_rs::routes", "mounted message");
+    let message = logs.expect_one("nest_rs::routes", "mounted");
     assert_eq!(message.field("path").as_deref(), Some("/v1/ws"));
     assert_eq!(message.field("event").as_deref(), Some("ping"));
+    assert!(message.field("host").is_some(), "{message:?}");
+    assert!(message.field("method").is_some(), "{message:?}");
 }
 
-// A gateway owns its mount, so "which gateway is at this address" is a question
-// with a testable answer: give each version a connection guard that denies with
-// its own reason. The reason rides the problem+json `detail`, so the response
-// names the gateway whose upgrade chain actually ran.
+// Each version's connection guard denies with its own reason, so the response
+// names the gateway whose upgrade chain ran.
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct V1Guard;
-
-impl Layer for V1Guard {}
 
 #[async_trait]
 impl Guard for V1Guard {
-    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("the v1 socket refused you"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for V1Guard {}
+impl GuardFor<nest_rs_http::HttpView> for V1Guard {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct V2Guard;
-
-impl Layer for V2Guard {}
 
 #[async_trait]
 impl Guard for V2Guard {
-    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("the v2 socket refused you"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for V2Guard {}
+impl GuardFor<nest_rs_http::HttpView> for V2Guard {}
 
 #[gateway(path = "/chat", version = "1")]
 #[use_guards(V1Guard)]
@@ -661,10 +1043,6 @@ impl ChatV2Gateway {
 )]
 struct TwoVersionsModule;
 
-/// Two gateways, one declared `path`, two versions. The duplicate-self-mount
-/// boot error compares the **effective** path, so these are two mounts rather
-/// than a collision — and each serves its own upgrade chain, which is what makes
-/// them independent rather than merely distinct.
 #[tokio::test]
 async fn two_versions_of_one_path_both_boot_and_serve_their_own_chain() {
     let app = TestApp::for_module::<TwoVersionsModule>()
@@ -684,14 +1062,12 @@ async fn two_versions_of_one_path_both_boot_and_serve_their_own_chain() {
         );
     }
 
-    // The bare path belongs to neither.
     app.http()
         .get("/chat")
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND);
 
-    // …and the message tables stayed separate, each answering for itself.
     assert!(matches!(
         ChatV1Gateway.dispatch(&WsClient::for_test(), "say", serde_json::Value::Null).await,
         WsReply::Reply(v) if v.as_str() == Some("v1"),
@@ -725,9 +1101,7 @@ impl TwinBGateway {
 #[module(imports = [WsModule], providers = [TwinAGateway, TwinBGateway])]
 struct TwinModule;
 
-/// The half a version must not weaken: same path *and* same version is still one
-/// address with two owners, and it fails boot naming both rather than letting
-/// poem panic during route assembly.
+/// Fails boot naming both rather than panicking during route assembly.
 #[tokio::test]
 async fn one_path_and_one_version_shared_by_two_gateways_still_fails_boot() {
     let Err(err) = TestApp::for_module::<TwinModule>().await else {
@@ -746,27 +1120,17 @@ async fn one_path_and_one_version_shared_by_two_gateways_still_fails_boot() {
     );
 }
 
-// ── Above `dispatch`: the connection itself ─────────────────────────────────
-//
-// Everything up to here calls `Gateway::dispatch` directly, which is the whole
-// of the message table and none of the socket. The upgrade, the `WsConfig` it
-// resolves, the socket-lifetime ceiling, the per-message cap, the writer task,
-// the registry entry's cleanup and every Close frame the server sends live in
-// the connection task `on_upgrade` spawns, and none of them had a witness in
-// this workspace. `nest_rs_testing::ws` binds a real port so they do.
-
 use nest_rs_testing::LogCapture;
 use nest_rs_testing::ws::WsFrame;
 use nest_rs_ws::CloseCode;
 use nest_rs_ws::{WsConfig, WsServer};
 use std::time::Duration;
 
-/// A read budget for asserting *absence*, so a test does not pay the driver's
-/// full timeout to prove a socket stayed quiet.
+/// A read budget for asserting absence, shorter than the driver's full timeout.
 const QUIET: Duration = Duration::from_millis(150);
 
 #[gateway(path = "/socket")]
-pub struct SocketGateway;
+pub(crate) struct SocketGateway;
 
 #[messages]
 impl SocketGateway {
@@ -780,10 +1144,6 @@ impl SocketGateway {
 #[module(imports = [WsModule], providers = [SocketGateway])]
 struct SocketModule;
 
-/// The round trip nothing asserted: a real handshake, the connection task, the
-/// writer half, and back. Below it, the three `nest_rs::operation` lines the
-/// edge owes — a socket that opens, serves and closes with nothing on the
-/// console is work no operator can account for.
 #[tokio::test]
 async fn a_message_round_trips_over_a_real_upgrade() {
     let logs = LogCapture::install();
@@ -808,10 +1168,6 @@ async fn a_message_round_trips_over_a_real_upgrade() {
         "the upgrade registered the connection",
     );
 
-    // §5.5.1: an endpoint that *receives* a Close must send one back. The
-    // protocol layer queues that echo when it decodes the frame — and nothing
-    // ever flushed it, because the writer task simply dropped the `Sink`, so
-    // the client read 1006 on a close it had itself requested.
     let echo = socket
         .close(CloseCode::Normal, "done")
         .await
@@ -822,15 +1178,13 @@ async fn a_message_round_trips_over_a_real_upgrade() {
         "the peer's own status comes back"
     );
 
-    // The registry entry goes with the connection: `RegistryGuard`'s `Drop`
-    // runs before the echo reaches the wire, so observing the echo is enough
-    // to observe the cleanup.
+    // `RegistryGuard`'s `Drop` runs before the echo reaches the wire.
     assert_eq!(server.connection_count(), 0, "the entry did not outlive it");
 
     for unit in [
-        nest_rs_ws::unit::CONNECT,
-        nest_rs_ws::unit::MESSAGE,
-        nest_rs_ws::unit::DISCONNECT,
+        nest_rs_ws::unit::CONNECT.name(),
+        nest_rs_ws::unit::MESSAGE.name(),
+        nest_rs_ws::unit::DISCONNECT.name(),
     ] {
         let line = logs.expect_one(nest_rs_core::operation_log::TARGET, unit);
         assert_eq!(line.message, unit);
@@ -847,7 +1201,7 @@ async fn a_message_round_trips_over_a_real_upgrade() {
     }
     let message = logs.expect_one(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_ws::unit::MESSAGE,
+        nest_rs_ws::unit::MESSAGE.name(),
     );
     assert_eq!(message.field("event").as_deref(), Some("echo"));
     assert_eq!(
@@ -858,20 +1212,18 @@ async fn a_message_round_trips_over_a_real_upgrade() {
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
+/// The floor every connection ceiling is held to: a second.
+const CEILING: Duration = Duration::from_secs(1);
+
 #[module(
     imports = [WsModule, WsModule::for_root(WsConfig {
-        max_connection: Some(Duration::from_millis(200)),
+        max_connection: Some(CEILING),
         ..WsConfig::default()
     })],
     providers = [SocketGateway],
 )]
 struct CeilingModule;
 
-/// The ceiling is a security control — it forces a re-upgrade so `exp` is
-/// checked again — and a client that cannot tell it from a dropped connection
-/// retries blindly and never re-authenticates. It closed by dropping the
-/// `Sink`, so the peer read **1006**, which §7.4.1 reserves for a connection
-/// closed with no Close frame at all: a network fault.
 #[tokio::test]
 async fn the_lifetime_ceiling_closes_with_going_away() {
     let logs = LogCapture::install();
@@ -882,6 +1234,11 @@ async fn the_lifetime_ceiling_closes_with_going_away() {
         .expect("a pinned ceiling boots");
 
     let mut socket = app.socket("/socket").connect().await;
+    // The ceiling passes on paused time, while nothing reads: its Close waits
+    // buffered for the read below, back on the real clock.
+    tokio::time::pause();
+    tokio::time::sleep(CEILING + Duration::from_millis(1)).await;
+    tokio::time::resume();
     let (code, reason) = socket.expect_close().await;
     assert_eq!(
         code,
@@ -893,14 +1250,338 @@ async fn the_lifetime_ceiling_closes_with_going_away() {
         "the peer is told what to do about it, not only that it happened",
     );
 
-    // The operator's half of the same event, so a close on the wire and a line
-    // in the log cannot come to describe different closes.
     let closing = logs.expect_one("nest_rs::ws", "closing socket: max lifetime reached");
     assert_eq!(
         closing.field("close_code").as_deref(),
         Some(u16::from(CloseCode::Away).to_string().as_str()),
     );
 
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// The floor every per-unit timeout is held to: a second.
+const MESSAGE_DEADLINE: Duration = Duration::from_secs(1);
+
+static STALL_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[gateway(path = "/deadline")]
+pub(crate) struct DeadlineGateway;
+
+#[messages]
+impl DeadlineGateway {
+    #[subscribe_message("stall")]
+    #[public]
+    async fn stall(&self) -> String {
+        STALL_STARTED.notify_one();
+        std::future::pending::<()>().await;
+        "never".to_owned()
+    }
+
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        message_timeout: Some(MESSAGE_DEADLINE),
+        ..WsConfig::default()
+    })],
+    providers = [DeadlineGateway],
+)]
+struct DeadlineModule;
+
+/// The read loop answers one message at a time: one that never answers would
+/// hold its socket until the connection's lifetime ends.
+#[tokio::test]
+async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_on() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<DeadlineModule>()
+        .build_ws()
+        .await
+        .expect("a pinned message deadline boots");
+    assert!(
+        logs.find("nest_rs::ws", OUTLASTS_THE_WINDOW).is_empty(),
+        "a deadline inside the window is not worth a word",
+    );
+
+    let mut socket = app.socket("/deadline").connect().await;
+    socket.send("stall", serde_json::Value::Null).await;
+    STALL_STARTED.notified().await;
+    // The deadline passes on paused time, while nothing reads: its frame waits
+    // buffered for the read below, back on the real clock.
+    tokio::time::pause();
+    tokio::time::sleep(MESSAGE_DEADLINE + Duration::from_millis(1)).await;
+    tokio::time::resume();
+
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["event"], "stall", "{frame}");
+    assert_eq!(
+        frame["data"]["error"], "the message was not answered in time",
+        "{frame}"
+    );
+    assert_eq!(frame["data"]["reason"], "timeout", "{frame}");
+    assert_eq!(
+        frame["data"]["code"],
+        nest_rs_core::code::UNAVAILABLE.as_str(),
+        "{frame}"
+    );
+
+    socket.send("echo", serde_json::json!("still here")).await;
+    assert_eq!(
+        socket.next_envelope().await["data"],
+        "still here",
+        "the socket goes on serving",
+    );
+
+    let line = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_ws::unit::MESSAGE.name(),
+        )
+        .into_iter()
+        .find(|line| line.field("event").as_deref() == Some("stall"))
+        .expect("the timed-out message files its line");
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+    );
+    let cut = logs.expect_one(
+        "nest_rs::ws",
+        "websocket message not answered within its deadline; it is cut",
+    );
+    assert_eq!(cut.level, "warn");
+    assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
+    assert_eq!(cut.field("path").as_deref(), Some("/deadline"));
+    assert_eq!(cut.field("event").as_deref(), Some("stall"));
+    assert_eq!(cut.field("timeout_ms").as_deref(), Some("1000"));
+
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_ws::unit::MESSAGE.name()
+                && span.field("ws.event").as_deref() == Some("stall")
+        })
+        .expect("the message's span");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+        "a cut is the server's own failure: {:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+}
+
+/// How a unit the recording binding opened ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnitEnd {
+    /// Settled, told whether the unit succeeded.
+    Settled { ok: bool },
+    /// Dropped before it settled: whatever it held stays unsettled.
+    Abandoned,
+}
+
+static UNITS_ENDED: std::sync::Mutex<Vec<(&'static str, UnitEnd)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn units_ended() -> Vec<(&'static str, UnitEnd)> {
+    UNITS_ENDED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// A unit-of-work binding recording how each unit it opened ended.
+#[injectable]
+#[derive(Default)]
+struct RecordingUnitOfWork;
+
+/// One unit of [`RecordingUnitOfWork`], which records its end once.
+struct RecordingUnit {
+    unit: &'static str,
+    settled: bool,
+}
+
+impl RecordingUnit {
+    fn record(&self, end: UnitEnd) {
+        UNITS_ENDED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((self.unit, end));
+    }
+}
+
+struct NoExecutor;
+
+impl nest_rs_database::Executor for NoExecutor {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl nest_rs_database::UnitOfWork for RecordingUnitOfWork {
+    fn open(
+        &self,
+        spec: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(RecordingUnit {
+            unit: spec.unit.name(),
+            settled: false,
+        }))
+    }
+
+    fn settle_net(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(16)
+    }
+}
+
+impl nest_rs_database::OpenUnit for RecordingUnit {
+    fn executor(&self) -> std::sync::Arc<dyn nest_rs_database::Executor> {
+        std::sync::Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        mut self: Box<Self>,
+        ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        self.settled = true;
+        self.record(UnitEnd::Settled { ok });
+        Box::pin(std::future::ready(nest_rs_database::Settlement::Settled))
+    }
+}
+
+impl Drop for RecordingUnit {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.record(UnitEnd::Abandoned);
+        }
+    }
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        message_timeout: Some(MESSAGE_DEADLINE),
+        ..WsConfig::default()
+    })],
+    providers = [DeadlineGateway, RecordingUnitOfWork as dyn nest_rs_database::UnitOfWork],
+)]
+struct DeadlineInUnitModule;
+
+/// The deadline cuts the message's body inside its unit, never the unit around
+/// it: one cut around the unit would drop it unsettled, a transaction neither
+/// committed nor rolled back.
+#[tokio::test]
+async fn a_message_cut_at_its_deadline_settles_its_unit_as_a_failure() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<DeadlineInUnitModule>()
+        .build_ws()
+        .await
+        .expect("a pinned message deadline boots over a unit-of-work binding");
+
+    let mut socket = app.socket("/deadline").connect().await;
+    socket.send("stall", serde_json::Value::Null).await;
+    STALL_STARTED.notified().await;
+    tokio::time::pause();
+    tokio::time::sleep(MESSAGE_DEADLINE + Duration::from_millis(1)).await;
+    tokio::time::resume();
+
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["data"]["reason"], "timeout", "{frame}");
+    let messages: Vec<UnitEnd> = units_ended()
+        .into_iter()
+        .filter(|(unit, _)| *unit == nest_rs_ws::unit::MESSAGE.name())
+        .map(|(_, end)| end)
+        .collect();
+    assert_eq!(
+        messages,
+        [UnitEnd::Settled { ok: false }],
+        "the cut message's unit settled as a failure: {:?}",
+        units_ended(),
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Told back to let a held rollback end.
+static ROLLBACK_RELEASED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// A binding whose rollback waits, on a task of its own, until the test lets it
+/// end — a statement the cut body left running in the database.
+#[nest_rs_core::injectable]
+#[derive(Default)]
+struct HeldRollback;
+
+struct HeldRollbackUnit;
+
+impl nest_rs_database::UnitOfWork for HeldRollback {
+    fn open(
+        &self,
+        _: &nest_rs_database::UnitSpec,
+    ) -> Result<Box<dyn nest_rs_database::OpenUnit>, nest_rs_database::Unhonoured> {
+        Ok(Box::new(HeldRollbackUnit))
+    }
+
+    fn settle_net(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(16)
+    }
+}
+
+impl nest_rs_database::OpenUnit for HeldRollbackUnit {
+    fn executor(&self) -> std::sync::Arc<dyn nest_rs_database::Executor> {
+        std::sync::Arc::new(NoExecutor)
+    }
+
+    fn settle(
+        self: Box<Self>,
+        ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = nest_rs_database::Settlement> + Send>> {
+        let ended = tokio::spawn(async move {
+            if !ok {
+                ROLLBACK_RELEASED.notified().await;
+            }
+        });
+        Box::pin(async move {
+            drop(ended.await);
+            nest_rs_database::Settlement::Settled
+        })
+    }
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        message_timeout: Some(MESSAGE_DEADLINE),
+        ..WsConfig::default()
+    })],
+    providers = [DeadlineGateway, HeldRollback as dyn nest_rs_database::UnitOfWork],
+)]
+struct HeldRollbackModule;
+
+/// A cut message is answered at its deadline, whatever its rollback still waits
+/// on: the driver ends the rollback on its own task.
+#[tokio::test]
+async fn a_message_cut_at_its_deadline_is_answered_while_its_rollback_still_waits() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<HeldRollbackModule>()
+        .build_ws()
+        .await
+        .expect("a pinned message deadline boots over a unit-of-work binding");
+
+    let mut socket = app.socket("/deadline").connect().await;
+    socket.send("stall", serde_json::Value::Null).await;
+    STALL_STARTED.notified().await;
+    tokio::time::pause();
+    tokio::time::sleep(MESSAGE_DEADLINE + Duration::from_millis(1)).await;
+    tokio::time::resume();
+
+    let frame = socket.next_envelope().await;
+    assert_eq!(frame["data"]["reason"], "timeout", "{frame}");
+    ROLLBACK_RELEASED.notify_one();
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
@@ -913,12 +1594,14 @@ async fn the_lifetime_ceiling_closes_with_going_away() {
 )]
 struct CappedModule;
 
-/// The per-message cap is enforced at the protocol layer, so an oversize frame
-/// is refused *while reading* (WS-I1) — and the refusal surfaces as a read
-/// error, with the framing gone mid-message. The socket cannot continue, so it
-/// ends; what changed is that it now ends by *saying so*.
+/// The protocol-layer cap surfaces as a read error with the framing gone, so the
+/// socket cannot continue: it closes with the code RFC 6455 §7.4.1 gives a
+/// message too big to process. No unit opens — reading the frame is what the cap
+/// exists not to do — so the close is the operator's one line about it: a `warn`
+/// naming the gateway as its `mounted` lines do, the cap and the code, never the
+/// frame.
 #[tokio::test]
-async fn a_message_past_the_cap_closes_the_socket_instead_of_vanishing() {
+async fn a_message_past_the_cap_closes_1009_message_too_big() {
     let logs = LogCapture::install();
     let app = nest_rs_testing::TestApp::builder()
         .module::<CappedModule>()
@@ -927,35 +1610,62 @@ async fn a_message_past_the_cap_closes_the_socket_instead_of_vanishing() {
         .expect("a pinned message cap boots");
 
     let mut socket = app.socket("/socket").connect().await;
+    let marker = "sk_live_51HsecretTOKEN";
     socket
-        .send("echo", serde_json::json!("x".repeat(512)))
+        .send("echo", serde_json::json!(marker.repeat(32)))
         .await;
 
     let (code, reason) = socket.expect_close().await;
     assert_eq!(
         code,
-        CloseCode::Error,
-        "§7.4.1 1011: poem hands the cause on as an opaque `io::Error`, so the cap cannot be \
-         claimed as the reason — a code the peer cannot check would be worse than the generic one",
+        CloseCode::Size,
+        "§7.4.1 1009 Message Too Big: {reason}"
     );
     assert!(!reason.is_empty());
+    app.shutdown().await.expect("the transport stops cleanly");
 
-    let read = logs.expect_one("nest_rs::ws", "websocket read error");
+    let read = logs.expect_one("nest_rs::ws", "closing socket: a message is past its cap");
+    assert_eq!(read.level, "warn", "a client refused, as a 413 is");
+    for (field, value) in [
+        ("host", "SocketGateway"),
+        ("path", "/socket"),
+        ("close_code", "1009"),
+        ("max_message_bytes", "64"),
+    ] {
+        assert_eq!(
+            read.field(field).as_deref(),
+            Some(value),
+            "{field}: {:?}",
+            read.fields
+        );
+    }
+    let mounted = logs
+        .find(nest_rs_http::target::ROUTES, "mounted")
+        .into_iter()
+        .find(|line| line.field("host").as_deref() == Some("SocketGateway"))
+        .expect("the gateway mounted");
+    assert_eq!(
+        read.field("path"),
+        mounted.field("path"),
+        "it joins its mount"
+    );
     assert!(
         read.field("error")
             .is_some_and(|e| e.contains("Space limit")),
         "…while the operator's line does name the size that did it: {:?}",
         read.fields,
     );
-
-    app.shutdown().await.expect("the transport stops cleanly");
+    assert!(!logs.quotes(marker), "no line quotes the frame");
+    assert!(
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_ws::unit::MESSAGE.name()
+        )
+        .is_empty(),
+        "no message unit opened for a frame never read",
+    );
 }
 
-/// RFC 6455 §5.6 makes Binary a first-class data frame, so a client is entitled
-/// to send one. This gateway's contract is a JSON text envelope, so refusing it
-/// is right — refusing it with no reply and no log at any level is the silent
-/// failure `CLAUDE.md` forbids, and from the client's side it is
-/// indistinguishable from a handler that never answered.
 #[tokio::test]
 async fn a_binary_frame_is_refused_in_band_and_the_socket_survives() {
     let logs = LogCapture::install();
@@ -982,18 +1692,26 @@ async fn a_binary_frame_is_refused_in_band_and_the_socket_survives() {
         "websocket message refused: binary frames carry no envelope",
     );
     assert_eq!(event.field("bytes").as_deref(), Some("3"));
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+        "the frame is a message its edge refused: {line:#?}",
+    );
+    assert_eq!(
+        line.field("event").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER),
+    );
 
-    // Framing is intact, so the refusal is in band and the connection lives —
-    // the same answer the oversize boundary gives, for the same reason.
     socket.send("echo", serde_json::json!("still here")).await;
     assert_eq!(socket.next_envelope().await["data"], "still here");
 
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
-/// An unrouted event answers and keeps the socket open — the frame is the
-/// answer, and nothing follows it. Proves the driver's silence assertion is
-/// real, and pins the one arm of the loop that must *not* close.
 #[tokio::test]
 async fn an_unknown_event_answers_once_and_leaves_the_socket_open() {
     let app = nest_rs_testing::TestApp::builder()
@@ -1021,4 +1739,1625 @@ async fn an_unknown_event_answers_once_and_leaves_the_socket_open() {
     );
 
     app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Uppercases `data.msg`, and refuses the `boom` event outright.
+#[injectable]
+#[derive(Default, Layer)]
+struct ShoutPipe;
+
+/// What each pipe call was handed: the input, the unit's edge, the site's
+/// address, and the event the view holds.
+type Seen = (
+    ArgumentKind,
+    Option<nest_rs_core::Edge>,
+    &'static str,
+    Option<String>,
+);
+
+static PIPED: std::sync::Mutex<Vec<Seen>> = std::sync::Mutex::new(Vec::new());
+
+impl GlobalPipe for ShoutPipe {
+    fn transform(
+        &self,
+        cx: &nest_rs_core::UnitContext<'_>,
+        argument: ArgumentKind,
+        value: &mut serde_json::Value,
+    ) -> Result<(), PipeError> {
+        let event = cx.switch_to::<WsView>().map(|view| view.event().to_owned());
+        PIPED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((argument, cx.edge(), cx.handler().address(), event));
+        if cx.handler().address() == "boom" {
+            return Err(PipeError::new("no boom allowed"));
+        }
+        if let Some(msg) = value.get("msg").and_then(serde_json::Value::as_str) {
+            value["msg"] = serde_json::Value::String(msg.to_uppercase());
+        }
+        Ok(())
+    }
+}
+
+#[gateway(path = "/piped")]
+pub(crate) struct PipedGateway;
+
+#[messages]
+impl PipedGateway {
+    #[subscribe_message("say")]
+    #[public]
+    async fn say(&self, data: serde_json::Value) -> serde_json::Value {
+        data
+    }
+
+    #[subscribe_message("boom")]
+    #[public]
+    async fn boom(&self) -> &'static str {
+        "the handler ran"
+    }
+}
+
+#[module(imports = [WsModule], providers = [ShoutPipe, PipedGateway])]
+struct PipedModule;
+
+#[module(imports = [PipedModule], providers = [GlobalPipes<(ShoutPipe,)>])]
+struct AGlobalPipeFoldsOverEachMessagesDataAndItsRefusalIsAFrameApp;
+
+#[tokio::test]
+async fn a_global_pipe_folds_over_each_messages_data_and_its_refusal_is_a_frame() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<AGlobalPipeFoldsOverEachMessagesDataAndItsRefusalIsAFrameApp>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+
+    let mut socket = app.socket("/piped").connect().await;
+    socket.send("say", serde_json::json!({ "msg": "hi" })).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(
+        reply["data"]["msg"], "HI",
+        "the pipe ran before the handler: {reply}"
+    );
+
+    socket.send("boom", serde_json::json!({ "msg": "x" })).await;
+    let refusal = socket.next_envelope().await;
+    assert_eq!(
+        refusal,
+        serde_json::json!({
+            "event": "boom",
+            "data": {
+                "error": "invalid data for `boom`: no boom allowed",
+                "code": "INVALID_ARGUMENT",
+            },
+        }),
+        "the pipe's refusal answers in place of the handler, under its class",
+    );
+
+    socket
+        .send("unknown", serde_json::json!({ "msg": "x" }))
+        .await;
+    let _unknown = socket.next_envelope().await;
+    assert_eq!(
+        PIPED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+        [
+            (
+                ArgumentKind::Data,
+                Some(nest_rs_core::Edge::Ws),
+                "say",
+                Some("say".to_owned()),
+            ),
+            (
+                ArgumentKind::Data,
+                Some(nest_rs_core::Edge::Ws),
+                "boom",
+                Some("boom".to_owned()),
+            ),
+        ],
+        "a call per declared event, on its data, as the message's unit; none for an \
+         event no handler serves",
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+// An attribute macro reads a method before its `#[cfg]` is evaluated, so every
+// hook reaches the expansion, including one compiled out.
+
+static CFG_HOOK_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[gateway(path = "/cfg-hooks")]
+pub(crate) struct CfgHookGateway;
+
+#[messages]
+impl CfgHookGateway {
+    #[cfg(test)]
+    #[on_connect]
+    fn connected(&self) {
+        CFG_HOOK_RAN.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(any())]
+    #[on_connect]
+    fn never_compiled(&self) {}
+}
+
+#[tokio::test]
+async fn a_hook_compiled_in_survives_a_compiled_out_one_declared_after_it() {
+    CfgHookGateway.on_connect(&WsClient::for_test()).await;
+    assert!(
+        CFG_HOOK_RAN.load(std::sync::atomic::Ordering::SeqCst),
+        "the `#[on_connect]` whose `#[cfg]` holds is the one the gateway runs",
+    );
+}
+
+/// Every tier a handler's error takes: `anyhow::Result` with `?`, serde's error
+/// itself, an error that is not `Send`, and a `Display`-only one.
+#[tokio::test]
+async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_value() {
+    const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
+    let logs = nest_rs_testing::LogCapture::install();
+    let invalid = nest_rs_core::code::INVALID_ARGUMENT.as_str();
+    let internal = nest_rs_core::code::INTERNAL.as_str();
+    for (event, framed, class) in [
+        ("decode_anyhow", REPORT.to_owned(), invalid),
+        ("decode_serde", REPORT.to_owned(), invalid),
+        ("decode_unsendable", REPORT.to_owned(), invalid),
+        (
+            "decode_display_only",
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE.to_owned(),
+            internal,
+        ),
+    ] {
+        let reply = TestGateway
+            .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
+            .await;
+        let WsReply::Error(frame) = reply else {
+            panic!("{event}: a failed handler answers with an error frame");
+        };
+        assert_eq!(frame.error, framed, "{event}");
+        assert_eq!(frame.code.as_deref(), Some(class), "{event}");
+        assert!(frame.errors.is_none(), "{event}: {frame:?}");
+    }
+    let quoting: Vec<String> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.fields.values().any(|value| value.contains("sk_live")))
+        .map(|event| format!("{} {:?}", event.message, event.fields))
+        .collect();
+    assert!(quoting.is_empty(), "lines quoting the value: {quoting:#?}");
+}
+
+/// The edge's own deliberate error answers as built.
+#[tokio::test]
+async fn a_ws_error_a_handler_returns_answers_as_built() {
+    let reply = TestGateway
+        .dispatch(&WsClient::for_test(), "deliberate", serde_json::Value::Null)
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(
+        serde_json::to_value(&frame).expect("a frame"),
+        serde_json::json!({ "error": "nope" }),
+        "a frame a handler built with no class names none",
+    );
+}
+
+/// A `ToProblem` error answers its problem — its detail, its code and its wait
+/// beside it — never its own sentence; a `Problem` in an anyhow chain answers
+/// itself.
+#[tokio::test]
+async fn a_problem_answers_its_detail_its_code_and_its_wait() {
+    let reply = TestGateway
+        .dispatch(&WsClient::for_test(), "taken", serde_json::Value::Null)
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(
+        serde_json::to_value(&frame).expect("a frame"),
+        serde_json::json!({
+            "error": "the handle is taken",
+            "code": "CONFLICT",
+            "retryAfterSeconds": 30,
+        }),
+    );
+
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "problem_in_anyhow",
+            serde_json::Value::Null,
+        )
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(
+        serde_json::to_value(&frame).expect("a frame"),
+        serde_json::json!({ "error": "not found", "code": "NOT_FOUND" }),
+    );
+}
+
+#[tokio::test]
+async fn a_frame_returned_through_anyhow_is_sent_whole() {
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "frame_in_anyhow",
+            serde_json::Value::Null,
+        )
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(frame.error, "pick another name");
+    assert_eq!(
+        frame.errors.as_deref(),
+        Some(&serde_json::json!({ "name": ["taken"] }))
+    );
+}
+
+static SLOW_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static STUCK_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+/// Told once the flood is queued: from there the writer has more to send than
+/// any socket buffer holds, so it parks on the first frame the kernel refuses.
+static FLOODED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[gateway(path = "/leaving")]
+pub(crate) struct LeavingGateway;
+
+#[messages]
+impl LeavingGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+
+    /// Takes long enough for shutdown to be asked for while it runs, and far
+    /// less than the window.
+    #[subscribe_message("slow")]
+    #[public]
+    async fn slow(&self, text: String) -> String {
+        SLOW_STARTED.notify_one();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        text
+    }
+
+    /// Waits on something that never comes.
+    #[subscribe_message("stuck")]
+    #[public]
+    async fn stuck(&self) -> String {
+        STUCK_STARTED.notify_one();
+        std::future::pending::<()>().await;
+        "never".to_owned()
+    }
+
+    #[subscribe_message("explode")]
+    #[public]
+    async fn explode(&self) -> String {
+        tokio::task::yield_now().await;
+        panic!("the handler exploded with sk_live_secret in hand")
+    }
+
+    /// Queues more than a socket's buffers hold, for a client that will not
+    /// read it: the writer parks on the first frame the kernel cannot take.
+    #[subscribe_message("flood")]
+    #[public]
+    async fn flood(&self, client: &WsClient) {
+        let chunk = "x".repeat(128 * 1024);
+        for _ in 0..256 {
+            let _ = client.emit("chunk", &chunk);
+        }
+        FLOODED.notify_one();
+    }
+}
+
+/// The shutdown window of [`LeavingModule`]'s transport.
+const WINDOW: Duration = Duration::from_secs(1);
+
+#[module(
+    imports = [
+        WsModule,
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+            shutdown_timeout: WINDOW,
+            ..Default::default()
+        }),
+    ],
+    providers = [LeavingGateway],
+)]
+struct LeavingModule;
+
+async fn leaving_app() -> nest_rs_testing::ws::WsApp {
+    nest_rs_testing::TestApp::builder()
+        .module::<LeavingModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port")
+}
+
+/// The sentence a gateway's boot check files for a deadline the window cannot hold.
+const OUTLASTS_THE_WINDOW: &str = "a websocket unit's deadline outlasts the shutdown window: one \
+                                   admitted just before a stop can be cut unanswered";
+
+#[tokio::test]
+async fn each_unit_deadline_past_the_shutdown_window_is_said_at_boot() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+
+    let said = logs.find("nest_rs::ws", OUTLASTS_THE_WINDOW);
+    let units: Vec<_> = said.iter().filter_map(|line| line.field("unit")).collect();
+    assert_eq!(
+        units,
+        ["ws.message", "ws.connect", "ws.disconnect"],
+        "{said:#?}"
+    );
+    for line in &said {
+        assert_eq!(line.level, "warn");
+        assert_eq!(line.field("path").as_deref(), Some("/leaving"));
+        assert_eq!(line.field("timeout_ms").as_deref(), Some("20000"));
+        assert_eq!(
+            line.field("shutdown_timeout_ms").as_deref(),
+            Some(WINDOW.as_millis().to_string().as_str()),
+        );
+    }
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Tokio's clock, paused and held still while the test waits on a real
+/// socket: it does not auto-advance while a blocking task runs (`time::pause`,
+/// *Preventing auto-advance*), so no timer fires whatever the machine's load.
+/// Held 60 s at most, so a wait that needed the clock to move meets its timers
+/// then and fails rather than hang; dropped, it lets the clock go.
+struct Frozen {
+    _thaw: std::sync::mpsc::Sender<()>,
+}
+
+impl Frozen {
+    fn clock() -> Self {
+        tokio::time::pause();
+        let (thaw, frozen) = std::sync::mpsc::channel::<()>();
+        tokio::task::spawn_blocking(move || frozen.recv_timeout(Duration::from_secs(60)));
+        Self { _thaw: thaw }
+    }
+}
+
+#[tokio::test]
+async fn an_idle_socket_is_closed_going_away_at_the_signal() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    assert_eq!(socket.next_envelope().await["data"], "hi");
+
+    let frozen = Frozen::clock();
+    let asked = tokio::time::Instant::now();
+    let stopping = tokio::spawn(app.shutdown());
+    let (code, reason) = socket.expect_close().await;
+    stopping
+        .await
+        .expect("shutdown does not panic")
+        .expect("the transport stops cleanly");
+
+    assert_eq!(
+        code,
+        CloseCode::Away,
+        "§7.4.1 1001: the server is going down"
+    );
+    assert!(
+        reason.contains("reconnect"),
+        "the peer is told what to do: {reason}"
+    );
+    assert_eq!(
+        asked.elapsed(),
+        Duration::ZERO,
+        "an idle socket does not spend the window: the way down ran on a clock held still",
+    );
+    drop(frozen);
+    let left = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::DISCONNECT.name(),
+    );
+    assert_eq!(
+        left.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "the disconnect hook still ran: {left:#?}",
+    );
+}
+
+#[tokio::test]
+async fn a_message_running_at_the_signal_is_answered_before_the_close() {
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("slow", serde_json::json!("last word")).await;
+    SLOW_STARTED.notified().await;
+
+    let stopping = tokio::spawn(app.shutdown());
+    let reply = socket.next_envelope().await;
+    let (code, _) = socket.expect_close().await;
+    stopping
+        .await
+        .expect("shutdown does not panic")
+        .expect("the transport stops cleanly");
+
+    assert_eq!(reply["data"], "last word", "the reply came first");
+    assert_eq!(code, CloseCode::Away);
+}
+
+#[tokio::test]
+async fn a_message_still_running_at_the_window_is_dropped_and_files_cancelled() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("stuck", serde_json::Value::Null).await;
+    STUCK_STARTED.notified().await;
+
+    // The window passes on paused time: nothing reads the socket meanwhile.
+    tokio::time::pause();
+    let asked = tokio::time::Instant::now();
+    app.shutdown().await.expect("the transport stops cleanly");
+    let took = asked.elapsed();
+    tokio::time::resume();
+
+    assert!(
+        took >= WINDOW
+            && took < WINDOW + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT + Duration::from_secs(1),
+        "the message held the window, and nothing past it — took {took:?}",
+    );
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(line.field("event").as_deref(), Some("stuck"));
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert!(
+        matches!(
+            socket.read_within(Duration::from_secs(2)).await,
+            nest_rs_testing::ws::WsRead::Aborted(_)
+        ),
+        "the socket was cut with the message",
+    );
+}
+
+#[tokio::test]
+async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+
+    socket.send("explode", serde_json::Value::Null).await;
+    let answer = socket.next_envelope().await;
+    assert_eq!(answer["event"], "explode");
+    assert_eq!(
+        answer["data"],
+        serde_json::json!({
+            "error": nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+            "code": nest_rs_core::code::INTERNAL.as_str(),
+        }),
+        "{answer}"
+    );
+    assert!(!answer.to_string().contains("sk_live"), "{answer}");
+
+    socket.send("echo", serde_json::json!("still here")).await;
+    assert_eq!(
+        socket.next_envelope().await["data"],
+        "still here",
+        "the socket goes on serving",
+    );
+
+    let exploded: Vec<_> = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_ws::unit::MESSAGE.name(),
+        )
+        .into_iter()
+        .filter(|line| line.field("event").as_deref() == Some("explode"))
+        .collect();
+    assert_eq!(exploded.len(), 1, "{exploded:#?}");
+    assert_eq!(
+        exploded[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_ws::unit::MESSAGE.name()
+                && span.field("ws.event").as_deref() == Some("explode")
+        })
+        .expect("the message's span");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    let contained = logs.expect_one(
+        nest_rs_ws::TARGET,
+        "websocket handler panicked; its client is answered with an internal error",
+    );
+    assert_eq!(contained.level, "error");
+    assert!(
+        contained
+            .field(nest_rs_core::panic::FIELD)
+            .is_some_and(|panic| panic.contains("the handler exploded")),
+        "{contained:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[gateway(path = "/broken-hooks")]
+pub(crate) struct BrokenHooksGateway;
+
+#[messages]
+impl BrokenHooksGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+
+    #[on_disconnect]
+    async fn left(&self) {
+        panic!("the disconnect hook exploded")
+    }
+}
+
+#[gateway(path = "/broken-connect")]
+pub(crate) struct BrokenConnectGateway;
+
+#[messages]
+impl BrokenConnectGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+
+    #[on_connect]
+    async fn joined(&self) {
+        panic!("the connect hook exploded")
+    }
+}
+
+#[module(imports = [WsModule], providers = [BrokenHooksGateway, BrokenConnectGateway])]
+struct BrokenHooksModule;
+
+#[tokio::test]
+async fn a_connect_hook_that_panics_files_panic_and_closes_with_internal_error() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<BrokenHooksModule>()
+        .build_ws()
+        .await
+        .expect("the gateways boot");
+
+    let mut socket = app.socket("/broken-connect").connect().await;
+    let (code, _) = socket.expect_close().await;
+    assert_eq!(code, CloseCode::Error, "§7.4.1 1011");
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::CONNECT.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    let contained = logs.expect_one(
+        nest_rs_ws::TARGET,
+        "websocket connect hook panicked; the socket is closed unserved",
+    );
+    assert_eq!(contained.level, "error");
+    assert!(
+        contained
+            .field(nest_rs_core::panic::FIELD)
+            .is_some_and(|panic| panic.contains("the connect hook exploded")),
+        "{contained:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[tokio::test]
+async fn a_disconnect_hook_that_panics_files_panic_and_the_close_still_completes() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<BrokenHooksModule>()
+        .build_ws()
+        .await
+        .expect("the gateways boot");
+
+    let mut socket = app.socket("/broken-hooks").connect().await;
+    let echo = socket.close(CloseCode::Normal, "done").await;
+    assert_eq!(
+        echo.map(|(code, _)| code),
+        Some(CloseCode::Normal),
+        "§5.5.1: the close is still answered",
+    );
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::DISCONNECT.name(),
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    let contained = logs.expect_one(
+        nest_rs_ws::TARGET,
+        "websocket disconnect hook panicked; the close goes on",
+    );
+    assert_eq!(contained.level, "error");
+    assert!(
+        contained
+            .field(nest_rs_core::panic::FIELD)
+            .is_some_and(|panic| panic.contains("the disconnect hook exploded")),
+        "{contained:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[tokio::test]
+async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("flood", serde_json::Value::Null).await;
+    // The paused clock moves as soon as the runtime idles, which a frame still
+    // crossing loopback does not prevent: wait for the handler first.
+    FLOODED.notified().await;
+    tokio::time::pause();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    app.shutdown().await.expect("the transport stops cleanly");
+    tokio::time::resume();
+
+    let cut = logs.expect_one(
+        nest_rs_http::target::HTTP,
+        "connections still open as the shutdown window closes are cut; a request still \
+         running is dropped unanswered and a stream ends mid-flow",
+    );
+    assert_eq!(
+        cut.field("upgraded_open").as_deref(),
+        Some("0"),
+        "no socket outlived the transport: {cut:#?}",
+    );
+    assert_eq!(cut.field("cut").as_deref(), Some("1"), "{cut:#?}");
+    drop(socket);
+}
+
+/// The send deadline of [`StallingModule`]'s transport.
+const SEND_DEADLINE: Duration = Duration::from_secs(2);
+
+#[module(
+    imports = [
+        WsModule,
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+            send_timeout: SEND_DEADLINE,
+            ..Default::default()
+        }),
+    ],
+    providers = [LeavingGateway],
+)]
+struct StallingModule;
+
+/// A socket whose client stops reading while the gateway pushes goes at the
+/// send deadline, on its own: the read loop ends with the writer, the
+/// disconnect hook runs, and no shutdown is needed to free it.
+#[tokio::test]
+async fn a_socket_whose_client_stops_reading_is_closed_at_the_send_deadline() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<StallingModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("flood", serde_json::Value::Null).await;
+    FLOODED.notified().await;
+
+    tokio::time::pause();
+    tokio::time::sleep(3 * SEND_DEADLINE).await;
+    tokio::time::resume();
+    nest_rs_testing::wait_until(Duration::from_secs(5), || {
+        !logs
+            .find(
+                nest_rs_core::operation_log::TARGET,
+                nest_rs_ws::unit::DISCONNECT.name(),
+            )
+            .is_empty()
+    })
+    .await;
+
+    let stalled = logs.expect_one(
+        nest_rs_ws::TARGET,
+        "the peer took nothing within the send deadline; it is cut off",
+    );
+    assert_eq!(stalled.level, "warn");
+    assert!(stalled.field("conn_id").is_some(), "{stalled:#?}");
+    assert!(stalled.field("error").is_some(), "{stalled:#?}");
+    let left = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::DISCONNECT.name(),
+    );
+    assert_eq!(
+        left.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "the disconnect hook ran: {left:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+    logs.expect_none(
+        nest_rs_http::target::HTTP,
+        "connections still open as the shutdown window closes are cut; a request still \
+         running is dropped unanswered and a stream ends mid-flow",
+    );
+    drop(socket);
+}
+
+/// Refuses every message, and declares no `GuardFor<WsView>`: the global pool
+/// is `Arc<dyn Guard>`, with no declaration to consult.
+#[injectable]
+#[derive(Default, Layer)]
+struct UnmarkedWsGuard;
+
+#[async_trait]
+impl Guard for UnmarkedWsGuard {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::forbidden("refused by an unmarked WS check"))
+    }
+}
+
+#[module(imports = [WsModule], providers = [SocketGateway, UnmarkedWsGuard])]
+struct UnmarkedPoolModule;
+
+#[module(imports = [UnmarkedPoolModule], providers = [GlobalGuards<(UnmarkedWsGuard,)>])]
+struct APooledGuardDeclaringNoWsViewStillChecksEveryMessageApp;
+
+/// The other edges are held in `nest-rs-testing`'s `guard_markers`.
+#[tokio::test]
+async fn a_pooled_guard_declaring_no_ws_view_still_checks_every_message() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<APooledGuardDeclaringNoWsViewStillChecksEveryMessageApp>()
+        .build_ws()
+        .await
+        .expect("an unmarked global guard boots");
+
+    let mut socket = app.socket("/socket").connect().await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    let reply = socket.next_envelope().await.to_string();
+    assert!(
+        !reply.contains("\"hi\""),
+        "the handler must not answer a message its pooled guard refused: {reply}",
+    );
+    assert!(
+        reply.contains("refused by an unmarked WS check"),
+        "the pool ran the guard's own check: {reply}",
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Refuses every message with an internal denial whose text names the server's
+/// own address.
+#[injectable]
+#[derive(Default, Layer)]
+struct LeakyInternalGuard;
+
+#[async_trait]
+impl Guard for LeakyInternalGuard {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::internal("secret detail: redis at 10.0.3.7 refused"))
+    }
+}
+
+impl GuardFor<nest_rs_ws::WsView> for LeakyInternalGuard {}
+
+/// Refuses every message as a rate limit lifting in seven seconds.
+#[injectable]
+#[derive(Default, Layer)]
+struct SevenSecondsGuard;
+
+#[async_trait]
+impl Guard for SevenSecondsGuard {
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::rate_limited(7, "too many messages"))
+    }
+}
+
+impl GuardFor<nest_rs_ws::WsView> for SevenSecondsGuard {}
+
+#[gateway(path = "/refusing")]
+struct RefusingGateway;
+
+#[messages]
+impl RefusingGateway {
+    #[subscribe_message("internal")]
+    #[use_guards(LeakyInternalGuard)]
+    #[public]
+    async fn internal(&self) -> String {
+        "unreachable".into()
+    }
+
+    #[subscribe_message("limited")]
+    #[use_guards(SevenSecondsGuard)]
+    #[public]
+    async fn limited(&self) -> String {
+        "unreachable".into()
+    }
+}
+
+#[module(imports = [WsModule], providers = [RefusingGateway, LeakyInternalGuard, SevenSecondsGuard])]
+struct RefusingModule;
+
+/// A guard's internal denial answers the opaque message, never its text, and is
+/// filed once, by the stage that still holds the `Denial`, as the other three
+/// edges file theirs.
+#[tokio::test]
+async fn a_per_message_internal_denial_answers_opaquely_and_is_filed_once_on_the_layers_target() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<RefusingModule>()
+        .build_ws()
+        .await
+        .expect("a gateway with per-message guards boots");
+
+    let mut socket = app.socket("/refusing").connect().await;
+    socket.send("internal", serde_json::Value::Null).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(reply["event"], "internal");
+    assert_eq!(
+        reply["data"]["error"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{reply}"
+    );
+    assert!(
+        !reply.to_string().contains("secret detail"),
+        "the guard's text reached the client: {reply}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let denied = logs.expect_one(nest_rs_core::target::LAYERS, "guard denied the message");
+    assert_eq!(denied.level, "error", "a 500 is a defect");
+    assert_eq!(
+        denied.field("guard").as_deref(),
+        Some("LeakyInternalGuard"),
+        "{denied:#?}",
+    );
+    assert_eq!(
+        denied.field("event").as_deref(),
+        Some("internal"),
+        "{denied:#?}"
+    );
+    assert_eq!(
+        denied.field("status").as_deref(),
+        Some("500"),
+        "{denied:#?}"
+    );
+    assert!(
+        !format!("{denied:?}").contains("secret detail"),
+        "the site files what it knows, never the guard's text: {denied:#?}",
+    );
+    assert!(
+        logs.events()
+            .iter()
+            .all(|event| event.target != nest_rs_ws::TARGET || event.level != "warn"),
+        "the denial is filed once, not again on the gateway's target: {:#?}",
+        logs.events(),
+    );
+}
+
+/// A rate limit's wait reaches the client in the frame's structured half.
+#[tokio::test]
+async fn a_per_message_rate_limit_carries_its_reason_and_its_wait() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<RefusingModule>()
+        .build_ws()
+        .await
+        .expect("a gateway with per-message guards boots");
+
+    let mut socket = app.socket("/refusing").connect().await;
+    socket.send("limited", serde_json::Value::Null).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(reply["data"]["error"], "too many messages", "{reply}");
+    assert_eq!(reply["data"]["reason"], "rate_limited", "{reply}");
+    assert_eq!(reply["data"]["code"], "RATE_LIMITED", "{reply}");
+    assert_eq!(reply["data"]["retryAfterSeconds"], 7, "{reply}");
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Who the upgrade was for, read back by every unit the socket runs.
+#[derive(Debug)]
+struct Caller(&'static str);
+
+impl nest_rs_core::AmbientValue for Caller {}
+
+/// Adds the caller around the upgrade request, at its unit stage, as a
+/// guard's attachment does.
+#[nest_rs_core::interceptor(stage = unit)]
+#[derive(Default, Layer)]
+struct CallerInterceptor;
+
+#[async_trait]
+impl nest_rs_core::Interceptor for CallerInterceptor {
+    async fn intercept(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+        next: nest_rs_core::Next<'_>,
+    ) -> nest_rs_core::Outcome {
+        cx.attach(Caller("alice"));
+        next.run(cx).await
+    }
+}
+
+/// The caller the connect hook read, `None` until it ran.
+static CONNECTED_AS: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+fn caller() -> &'static str {
+    nest_rs_core::ambient::<Caller>().map_or("nobody", |caller| caller.0)
+}
+
+#[gateway(path = "/caller")]
+pub(crate) struct CallerGateway;
+
+#[messages]
+impl CallerGateway {
+    #[subscribe_message("whoami")]
+    #[public]
+    async fn whoami(&self, _ask: String) -> String {
+        caller().to_owned()
+    }
+
+    #[on_connect]
+    async fn joined(&self) {
+        *CONNECTED_AS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(caller());
+    }
+}
+
+#[module(imports = [WsModule], providers = [CallerInterceptor, CallerGateway])]
+struct CallerModule;
+
+#[tokio::test]
+async fn every_unit_of_a_socket_reads_what_its_upgrade_carried() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<CallerModule>()
+        .build_ws()
+        .await
+        .expect("the gateway boots");
+
+    let mut socket = app.socket("/caller").connect().await;
+    for _ in 0..2 {
+        socket.send("whoami", serde_json::json!("?")).await;
+        let reply = socket.next_envelope().await;
+        assert_eq!(
+            reply["data"], "alice",
+            "a message reads the caller long after the upgrade returned",
+        );
+    }
+    assert_eq!(
+        *CONNECTED_AS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some("alice"),
+        "the connect hook reads it too",
+    );
+}
+
+/// A page on another site, which no CORS policy below lists.
+const ELSEWHERE: &str = "https://evil.example";
+
+/// The browser app a CORS policy lists.
+const LISTED: &str = "https://app.example";
+
+async fn socket_app<M: nest_rs_core::Module + 'static>() -> nest_rs_testing::ws::WsApp {
+    nest_rs_testing::TestApp::builder()
+        .module::<M>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port")
+}
+
+/// A page on another site and the `Host` its request names, both the client's
+/// to choose: each carries [`MARKER`], which no line may hold.
+const ELSEWHERE_MARKED: &str = "http://origin-marker.example";
+const HOST_MARKED: &str = "host-marker.example";
+const MARKER: &str = "marker";
+
+/// RFC 6455 §10.2: CORS never asks the browser about an upgrade, so a page on
+/// another site could open a socket under the visitor's cookies. The line says
+/// the refusal by kind, never the `Origin` sent or the `Host` it was compared to.
+#[tokio::test]
+async fn a_browser_upgrade_from_another_origin_is_refused_while_cors_is_off() {
+    let logs = LogCapture::install();
+    let app = socket_app::<SocketModule>().await;
+
+    let status = app
+        .socket("/socket")
+        .header("origin", ELSEWHERE_MARKED)
+        .header("host", HOST_MARKED)
+        .expect_refused()
+        .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let refused = logs.expect_one("nest_rs::ws", "browser origin refused");
+    assert_eq!(refused.level, "warn");
+    for (field, value) in &refused.fields {
+        assert!(!value.contains(MARKER), "{field} = {value}");
+    }
+    assert_eq!(refused.field("reason").as_deref(), Some("host_differs"));
+    assert_eq!(refused.field("scheme").as_deref(), Some("http"));
+    assert_eq!(refused.field("trusted_proxy").as_deref(), Some("false"));
+    let hint = refused.field("hint").unwrap_or_default();
+    for setting in ["CORS_ORIGINS", "TRUSTED_PROXIES"] {
+        assert!(
+            hint.contains(&nest_rs_config::var_name("http", setting)),
+            "the operator is told which settings decide it: {hint}",
+        );
+    }
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// The frame answers an unknown event on its own `event`, the envelope's
+/// correlation, and nothing the framework files repeats it: the message's
+/// line and span name it `_OTHER`.
+#[tokio::test]
+async fn an_event_no_handler_declares_is_said_other_and_never_quoted() {
+    let logs = LogCapture::install();
+    let app = socket_app::<SocketModule>().await;
+    let mut socket = app.socket("/socket").connect().await;
+
+    socket.send("marked:nope", serde_json::Value::Null).await;
+    let reply = socket.next_envelope().await;
+
+    assert_eq!(reply["event"], "marked:nope", "{reply}");
+    assert!(!reply["data"].to_string().contains("marked"), "{reply}");
+    for event in logs.events() {
+        for (field, value) in &event.fields {
+            assert!(
+                !value.contains("marked"),
+                "{}: {field} = {value}",
+                event.target
+            );
+        }
+    }
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(
+        line.field("event").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER)
+    );
+    let span = logs.expect_span("nest_rs::ws", nest_rs_ws::unit::MESSAGE.name());
+    assert_eq!(
+        span.field("ws.event").as_deref(),
+        Some(nest_rs_core::operation_log::OTHER)
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[tokio::test]
+async fn an_upgrade_with_no_origin_or_its_own_is_served() {
+    let app = socket_app::<SocketModule>().await;
+
+    app.socket("/socket").connect().await;
+    let mut socket = app
+        .socket("/socket")
+        .header("origin", format!("http://{}", app.addr()))
+        .connect()
+        .await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    assert_eq!(socket.next_envelope().await["data"], "hi");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(
+    imports = [
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+            cors: Some(nest_rs_http::HttpCors {
+                origins: vec![LISTED.to_owned()],
+                ..nest_rs_http::HttpCors::default()
+            }),
+            ..nest_rs_http::HttpConfig::default()
+        }),
+        WsModule,
+    ],
+    providers = [SocketGateway],
+)]
+struct ListedOriginModule;
+
+/// Once CORS is set, its layer answers first and admits what it lists alone:
+/// the server's own origin, read off `Host`, would pass a DNS-rebinding page.
+#[tokio::test]
+async fn once_cors_is_set_only_the_origins_it_lists_open_a_socket() {
+    let logs = LogCapture::install();
+    let app = socket_app::<ListedOriginModule>().await;
+
+    let mut socket = app
+        .socket("/socket")
+        .header("origin", LISTED)
+        .connect()
+        .await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    assert_eq!(socket.next_envelope().await["data"], "hi");
+    assert_eq!(
+        app.socket("/socket")
+            .header("origin", ELSEWHERE)
+            .expect_refused()
+            .await,
+        StatusCode::FORBIDDEN,
+    );
+    assert_eq!(
+        app.socket("/socket")
+            .header("origin", format!("http://{}", app.addr()))
+            .expect_refused()
+            .await,
+        StatusCode::FORBIDDEN,
+        "the server's own origin, unlisted",
+    );
+    logs.expect_none("nest_rs::ws", "browser origin refused");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// `Upgrade` is a list (RFC 9110 §7.8): the handshake admits `websocket`
+/// anywhere in it, so the origin check reads it the same way.
+#[tokio::test]
+async fn an_upgrade_listing_websocket_among_others_is_origin_checked_and_served() {
+    let app = socket_app::<SocketModule>().await;
+
+    for listed in ["websocket, h2c", "h2c, WebSocket"] {
+        assert_eq!(
+            app.socket("/socket")
+                .header("upgrade", listed)
+                .header("origin", ELSEWHERE)
+                .expect_refused()
+                .await,
+            StatusCode::FORBIDDEN,
+            "{listed}",
+        );
+        let mut socket = app
+            .socket("/socket")
+            .header("upgrade", listed)
+            .connect()
+            .await;
+        socket.send("echo", serde_json::json!("hi")).await;
+        assert_eq!(socket.next_envelope().await["data"], "hi", "{listed}");
+    }
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// The head `method /socket` with a whole handshake is answered over a real
+/// connection.
+async fn handshake_answer(app: &nest_rs_testing::ws::WsApp, method: &str) -> String {
+    handshake_answer_with(app, method, "").await
+}
+
+/// The same, the handshake carrying `extra`, whole header lines.
+async fn handshake_answer_with(
+    app: &nest_rs_testing::ws::WsApp,
+    method: &str,
+    extra: &str,
+) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = tokio::net::TcpStream::connect(app.addr())
+        .await
+        .expect("the transport listens");
+    stream
+        .write_all(
+            format!(
+                "{method} /socket HTTP/1.1\r\nhost: localhost\r\nupgrade: websocket\r\n\
+                 connection: Upgrade\r\nsec-websocket-version: 13\r\n\
+                 sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n{extra}\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .expect("the handshake is sent");
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut byte))
+            .await
+            .expect("answered")
+            .expect("the connection reads");
+        assert_eq!(read, 1, "the head ended early: {head:?}");
+        head.push(byte[0]);
+    }
+    String::from_utf8(head).expect("an HTTP head")
+}
+
+/// A socket speaks plain frames: a client offering `permessage-deflate` (RFC
+/// 7692) is answered no extension, which RFC 6455 §9.1 lets it go on without.
+#[tokio::test]
+async fn a_handshake_offering_permessage_deflate_negotiates_no_extension() {
+    let app = socket_app::<SocketModule>().await;
+
+    let head = handshake_answer_with(
+        &app,
+        "GET",
+        "sec-websocket-extensions: permessage-deflate; client_max_window_bits\r\n",
+    )
+    .await;
+
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    assert!(
+        !head
+            .to_ascii_lowercase()
+            .contains("sec-websocket-extensions"),
+        "{head}"
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// A gateway serves its handshake at `GET` alone: a `HEAD`, which the route
+/// table serves through `GET`, is refused by the handshake and switches
+/// nothing; another method meets the table's `405`.
+#[tokio::test]
+async fn a_handshake_sent_with_another_method_than_get_opens_no_socket() {
+    let app = socket_app::<SocketModule>().await;
+
+    let head = handshake_answer(&app, "HEAD").await;
+    assert!(head.starts_with("HTTP/1.1 400"), "{head}");
+    let post = handshake_answer(&app, "POST").await;
+    assert!(post.starts_with("HTTP/1.1 405"), "{post}");
+    assert!(post.contains("allow: GET, HEAD"), "{post}");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// Who an upgrade's guard admitted.
+#[derive(Debug)]
+struct Admitted(&'static str);
+
+impl nest_rs_core::AmbientValue for Admitted {}
+
+/// Admits every upgrade, attaching who it admitted.
+#[injectable]
+#[derive(Default, Layer)]
+struct AdmittingGuard;
+
+#[async_trait]
+impl Guard for AdmittingGuard {
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        cx.attach(Admitted("alice"));
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_http::HttpView> for AdmittingGuard {}
+
+fn admitted() -> &'static str {
+    nest_rs_core::ambient::<Admitted>().map_or("nobody", |admitted| admitted.0)
+}
+
+#[gateway(path = "/admitted/by-gateway")]
+#[use_guards(AdmittingGuard)]
+pub(crate) struct GuardedUpgradeGateway;
+
+#[messages]
+impl GuardedUpgradeGateway {
+    #[subscribe_message("whoami")]
+    #[public]
+    async fn whoami(&self, _ask: String) -> String {
+        admitted().to_owned()
+    }
+}
+
+#[gateway(path = "/admitted/by-pool")]
+pub(crate) struct PooledUpgradeGateway;
+
+#[messages]
+impl PooledUpgradeGateway {
+    #[subscribe_message("whoami")]
+    #[public]
+    async fn whoami(&self, _ask: String) -> String {
+        admitted().to_owned()
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [AdmittingGuard, GuardedUpgradeGateway, PooledUpgradeGateway],
+)]
+struct AdmittedModule;
+
+async fn whoami(app: &nest_rs_testing::ws::WsApp, path: &str) -> serde_json::Value {
+    let mut socket = app.socket(path).connect().await;
+    socket.send("whoami", serde_json::json!("?")).await;
+    socket.next_envelope().await["data"].clone()
+}
+
+/// No seam is bound: the connection carries what its upgrade's guards
+/// attached into every message.
+#[tokio::test]
+async fn every_message_reads_what_the_gateways_upgrade_guards_attached() {
+    let app = TestApp::builder()
+        .module::<AdmittedModule>()
+        .build_ws()
+        .await
+        .expect("the gateways boot");
+
+    assert_eq!(
+        whoami(&app, "/admitted/by-gateway").await,
+        "alice",
+        "the gateway's own chain attached it at the upgrade",
+    );
+    assert_eq!(
+        whoami(&app, "/admitted/by-pool").await,
+        "nobody",
+        "an upgrade no guard ran on attaches nothing",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(imports = [AdmittedModule], providers = [GlobalGuards<(AdmittingGuard,)>])]
+struct EveryMessageReadsWhatTheAppWidePoolAttachedAtTheUpgradeApp;
+
+#[tokio::test]
+async fn every_message_reads_what_the_app_wide_pool_attached_at_the_upgrade() {
+    let app = TestApp::builder()
+        .module::<EveryMessageReadsWhatTheAppWidePoolAttachedAtTheUpgradeApp>()
+        .build_ws()
+        .await
+        .expect("the gateways boot");
+
+    assert_eq!(
+        whoami(&app, "/admitted/by-pool").await,
+        "alice",
+        "the pool runs at the upgrade, and the connection carries what it attached",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[gateway(path = "/opens-a-unit")]
+pub(crate) struct OpensAUnitGateway;
+
+#[messages]
+impl OpensAUnitGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [OpensAUnitGateway, RecordingUnitOfWork as dyn nest_rs_database::UnitOfWork],
+)]
+struct OpensAUnitModule;
+
+/// What no handler reads opens no unit of work, as a route's `404` opens none:
+/// the only message of the socket to open one is the one a handler serves.
+#[tokio::test]
+async fn a_frame_no_handler_reads_opens_no_unit_of_work() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<OpensAUnitModule>()
+        .build_ws()
+        .await
+        .expect("a gateway over a unit-of-work binding boots");
+
+    let mut socket = app.socket("/opens-a-unit").connect().await;
+    socket.send("nope", serde_json::Value::Null).await;
+    socket.next_envelope().await;
+    socket.send_text("no envelope").await;
+    socket.next_envelope().await;
+    socket.send_binary(vec![1, 2, 3]).await;
+    socket.next_envelope().await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    socket.next_envelope().await;
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let messages: Vec<UnitEnd> = units_ended()
+        .into_iter()
+        .filter(|(unit, _)| *unit == nest_rs_ws::unit::MESSAGE.name())
+        .map(|(_, end)| end)
+        .collect();
+    assert_eq!(messages, [UnitEnd::Settled { ok: true }], "{messages:?}");
+}
+
+/// An app's own class for a server failure no constant of the framework names.
+const INSUFFICIENT_STORAGE: nest_rs_core::Code = nest_rs_core::Code::new("INSUFFICIENT_STORAGE");
+
+/// Refuses every message it checks, for a cause of the server's own.
+#[injectable]
+#[derive(Default, Layer)]
+struct StoreDown;
+
+#[async_trait]
+impl Guard for StoreDown {
+    async fn check(&self, _: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::unavailable(None, "the store did not answer"))
+    }
+}
+
+impl GuardFor<WsView> for StoreDown {}
+
+/// Refuses every message it checks: the caller may not.
+#[injectable]
+#[derive(Default, Layer)]
+struct Forbids;
+
+#[async_trait]
+impl Guard for Forbids {
+    async fn check(&self, _: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::forbidden("not yours"))
+    }
+}
+
+impl GuardFor<WsView> for Forbids {}
+
+#[gateway(path = "/answers")]
+pub(crate) struct AnswersGateway;
+
+#[messages]
+impl AnswersGateway {
+    #[subscribe_message("deliberate")]
+    #[public]
+    async fn deliberate(&self) -> Result<String, nest_rs_ws::WsError> {
+        Err(nest_rs_ws::WsError::new("no"))
+    }
+
+    #[subscribe_message("conflict")]
+    #[public]
+    async fn conflict(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(
+            409,
+            nest_rs_core::code::CONFLICT,
+        ))
+    }
+
+    #[subscribe_message("typed")]
+    #[public]
+    async fn typed(&self, _count: u32) -> String {
+        "typed".to_owned()
+    }
+
+    #[subscribe_message("forbidden")]
+    #[use_guards(Forbids)]
+    #[public]
+    async fn forbidden(&self) -> String {
+        "never".to_owned()
+    }
+
+    #[subscribe_message("failed")]
+    #[public]
+    async fn failed(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(
+            500,
+            nest_rs_core::code::INTERNAL,
+        ))
+    }
+
+    #[subscribe_message("storage")]
+    #[public]
+    async fn storage(&self) -> Result<String, nest_rs_core::Problem> {
+        Err(nest_rs_core::Problem::new(507, INSUFFICIENT_STORAGE))
+    }
+
+    #[subscribe_message("opaque")]
+    #[public]
+    async fn opaque(&self) -> Result<String, std::io::Error> {
+        Err(std::io::Error::other("the disk is gone"))
+    }
+
+    #[subscribe_message("store_down")]
+    #[use_guards(StoreDown)]
+    #[public]
+    async fn store_down(&self) -> String {
+        "never".to_owned()
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [Forbids, StoreDown, AnswersGateway],
+)]
+struct AnswersModule;
+
+/// A failure the client's own frame earned fails nothing on the server's span,
+/// as HTTP's `4xx` does: its line files `error`, and the span records neither
+/// `error.type` nor a status. A failure of the server's own — a `5xx`'s class,
+/// whatever its code — records both.
+#[tokio::test]
+async fn a_message_records_an_error_on_its_span_only_for_a_failure_of_the_servers_own() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<AnswersModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots");
+
+    let mut socket = app.socket("/answers").connect().await;
+    for event in [
+        "deliberate",
+        "conflict",
+        "forbidden",
+        "failed",
+        "storage",
+        "opaque",
+        "store_down",
+    ] {
+        socket.send(event, serde_json::Value::Null).await;
+        assert!(socket.next_envelope().await["data"]["error"].is_string());
+    }
+    socket.send("typed", serde_json::json!("no number")).await;
+    assert!(socket.next_envelope().await["data"]["error"].is_string());
+    socket.send("nope", serde_json::Value::Null).await;
+    assert!(socket.next_envelope().await["data"]["error"].is_string());
+    socket.send_binary(vec![1, 2, 3]).await;
+    assert!(socket.next_envelope().await["data"]["error"].is_string());
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE.name(),
+    );
+    assert_eq!(lines.len(), 10, "{lines:#?}");
+    for line in &lines {
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "whoever earned it, the unit failed: {line:#?}",
+        );
+    }
+    let spans = logs.spans();
+    let of = |event: &str| {
+        spans
+            .iter()
+            .find(|span| {
+                span.name == nest_rs_ws::unit::MESSAGE.name()
+                    && span.field("ws.event").as_deref() == Some(event)
+            })
+            .unwrap_or_else(|| panic!("the span of `{event}`"))
+    };
+    for event in [
+        "deliberate",
+        "conflict",
+        "forbidden",
+        "typed",
+        nest_rs_core::operation_log::OTHER,
+    ] {
+        let span = of(event);
+        assert_eq!(span.field("error.type"), None, "{event}: {:?}", span.fields);
+        assert_eq!(
+            span.field("otel.status_code"),
+            None,
+            "{event}: {:?}",
+            span.fields
+        );
+    }
+    for event in ["failed", "storage", "opaque", "store_down"] {
+        let span = of(event);
+        assert_eq!(
+            span.field("error.type").as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "{event}: {:?}",
+            span.fields,
+        );
+        assert_eq!(
+            span.field("otel.status_code").as_deref(),
+            Some("error"),
+            "{event}: {:?}",
+            span.fields,
+        );
+    }
 }

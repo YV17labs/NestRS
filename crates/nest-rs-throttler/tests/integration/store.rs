@@ -10,9 +10,7 @@ fn distinct_keys_have_independent_windows() {
     let limit = Throttle::new(1, Duration::from_secs(60));
 
     assert!(store.hit("alice", limit).allowed);
-    // Bob hasn't been counted yet — first hit allowed even though Alice is now over.
     assert!(store.hit("bob", limit).allowed);
-    // Alice's second hit within the same window is denied.
     assert!(!store.hit("alice", limit).allowed);
 }
 

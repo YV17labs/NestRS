@@ -1,86 +1,76 @@
-//! Per-operation request-scope bridge for MCP tool methods — the MCP mirror of
-//! [`nest_rs_http::Scoped<T>`].
+//! MCP's reading of [`Scoped<T>`], the request-scoped provider an operation
+//! `#[tools]` declares takes as a parameter.
 //!
-//! rmcp owns the tool-call dispatch (the handler struct is built once per
-//! session, and a tool method receives no poem request), so there is no
-//! parameter to forward a scope through. Instead [`GuardedEndpoint`] installs
-//! the per-operation `RequestScope` as a task-local around
-//! `self.inner.call(req)`, and a tool method reads it back with
-//! [`Scoped::<T>::from_context`].
+//! An operation receives no HTTP request: the endpoint carries the request's
+//! scope onto rmcp's task, and `#[tools]` resolves each `Scoped<T>` from it
+//! once the operation's guards and class gate admitted the caller.
 //!
-//! ```ignore
-//! #[tool(description = "…")]
-//! async fn do_it(&self) -> Result<CallToolResult, McpError> {
-//!     let cache = nest_rs_mcp::Scoped::<RequestCache>::from_context()?;
-//!     // …
-//! }
 //! ```
+//! # use nest_rs_core::{Scoped, injectable, module};
+//! # use nest_rs_mcp::{DEFAULT_PATH, McpError, McpAccess, McpModule, mcp, tools};
+//! # use nest_rs_testing::mcp::{call_tool, result};
+//! #
+//! # #[injectable(scope = request)]
+//! # #[derive(Default)]
+//! # struct RequestCache;
+//! #
+//! # impl RequestCache {
+//! #     fn value(&self) -> &'static str {
+//! #         "cached"
+//! #     }
+//! # }
+//! #
+//! # #[mcp]
+//! # #[derive(Default)]
+//! # struct CacheHost;
+//! #
+//! # #[tools]
+//! # impl CacheHost {
+//! #[tool(description = "Read this operation's cache.")]
+//! #[public]
+//! async fn do_it(&self, cache: Scoped<RequestCache>) -> Result<String, McpError> {
+//!     Ok(cache.value().to_owned())
+//! }
+//! # }
+//! #
+//! # #[module(imports = [McpModule::for_root(McpAccess::Public)], providers = [RequestCache, CacheHost])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+//! # let body = call_tool(app.http(), DEFAULT_PATH, "do_it", None).await;
 //!
-//! The scope is the one the HTTP transport edge installed outermost over the
-//! whole HTTP route tree (the MCP endpoint is nested under it), so an MCP
-//! operation shares the same per-request resolution model as HTTP and GraphQL.
+//! assert_eq!(result(&body)["result"]["content"][0]["text"], "cached");
+//! # Ok(())
+//! # }
+//! ```
 
 use std::any::type_name;
-use std::ops::Deref;
 use std::sync::Arc;
 
-use nest_rs_core::RequestScope;
+use nest_rs_core::{Failure, RequestScope, Scoped};
 
-use crate::McpError;
+use crate::error::{OperationFailure, ScopeError};
 
 /// The ambient per-operation scope, if one is installed.
-///
-/// The scope carries the app container it was built with, which is why this
-/// transport does not carry a second copy of it — see
-/// [`current_container`](crate::current_container).
 pub(crate) fn current_scope() -> Option<Arc<RequestScope>> {
     nest_rs_core::current_request_scope()
 }
 
-/// Resolves a provider of type `T` from the current MCP operation's
-/// [`RequestScope`]. `from_context` errors if the scope is absent (the endpoint
-/// is not nested under the transport edge, or the tool ran off the request
-/// task) or if no provider is registered for `T`.
-pub struct Scoped<T>(pub Arc<T>);
-
-impl<T> Scoped<T> {
-    /// Take the resolved provider handle out of the wrapper.
-    pub fn into_inner(self) -> Arc<T> {
-        self.0
-    }
-}
-
-impl<T> Deref for Scoped<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-impl<T: Send + Sync + 'static> Scoped<T> {
-    /// Resolve `T` from the operation's request scope, installed by the MCP
-    /// endpoint as a task-local for the duration of the call.
-    pub fn from_context() -> Result<Self, McpError> {
-        let resolved = nest_rs_core::current_request_scope()
-            .ok_or_else(|| {
-                McpError::internal_error(
-                    "request scope not installed — the MCP endpoint installs it per operation"
-                        .to_string(),
-                    None,
-                )
-            })?
-            .get::<T>();
-        match resolved {
-            Some(value) => Ok(Scoped(value)),
-            None => Err(McpError::internal_error(
-                format!(
-                    "no provider registered for `{}` — add it to a module's providers",
-                    type_name::<T>()
-                ),
-                None,
-            )),
-        }
-    }
+/// The `Scoped<T>` an operation takes, from its request scope — emitted by
+/// `#[tools]` in the operation's tail.
+///
+/// A miss is a failure the edge answers opaquely, its chain naming the
+/// provider on the operator's line alone.
+pub fn scoped_parameter<T: Send + Sync + 'static>() -> Result<Scoped<T>, OperationFailure> {
+    let provider = type_name::<T>();
+    let refused = |error: ScopeError| OperationFailure::unanswered(Failure::from(error));
+    let scope = current_scope().ok_or_else(|| refused(ScopeError::NotInstalled { provider }))?;
+    scope
+        .get::<T>()
+        .map(Scoped)
+        .ok_or_else(|| refused(ScopeError::NoProvider { provider }))
 }
 
 #[cfg(test)]
@@ -91,28 +81,29 @@ mod tests {
 
     use super::*;
 
-    /// A request-scoped provider whose id is stamped once when the scope builds
-    /// it — distinct per operation, stable within one.
     struct Probe(u64);
 
-    /// Container whose `Probe` factory pulls a monotonic id, so each scope that
-    /// builds a `Probe` gets a fresh value.
     fn scoped_container() -> Container {
         let counter = Arc::new(AtomicU64::new(0));
         Container::builder()
             .provide_scoped::<Probe, _>(move |_| Probe(counter.fetch_add(1, Ordering::SeqCst)))
             .build()
+            .expect("the container builds")
+    }
+
+    fn resolved() -> Arc<Probe> {
+        match scoped_parameter::<Probe>() {
+            Ok(probe) => probe.into_inner(),
+            Err(_) => panic!("the scope is installed and provides the probe"),
+        }
     }
 
     #[tokio::test]
-    async fn from_context_shares_one_instance_within_an_operation() {
+    async fn one_instance_serves_an_operation() {
         let scope = Arc::new(RequestScope::new(scoped_container()));
-        nest_rs_core::with_request_scope(Some(scope), Correlation::mint(), async {
-            let a = Scoped::<Probe>::from_context().expect("scope installed");
-            let b = Scoped::<Probe>::from_context().expect("scope installed");
-            // One `Probe` per operation: two reads resolve the same cached Arc.
-            assert!(Arc::ptr_eq(&a.0, &b.0));
-            assert_eq!(a.0.0, b.0.0);
+        nest_rs_core::with_request_scope(Some(scope), Correlation::minted(None), async {
+            let (a, b) = (resolved(), resolved());
+            assert!(Arc::ptr_eq(&a, &b));
         })
         .await;
     }
@@ -120,44 +111,36 @@ mod tests {
     #[tokio::test]
     async fn separate_operations_build_distinct_instances() {
         let container = scoped_container();
-        let first = nest_rs_core::with_request_scope(
-            Some(Arc::new(RequestScope::new(container.clone()))),
-            Correlation::mint(),
-            async {
-                Scoped::<Probe>::from_context()
-                    .expect("scope installed")
-                    .0
-                    .0
-            },
-        )
-        .await;
-        let second = nest_rs_core::with_request_scope(
-            Some(Arc::new(RequestScope::new(container))),
-            Correlation::mint(),
-            async {
-                Scoped::<Probe>::from_context()
-                    .expect("scope installed")
-                    .0
-                    .0
-            },
-        )
-        .await;
-        assert_ne!(
-            first, second,
-            "each MCP operation builds its own request-scoped instance",
-        );
+        let operation = |container: Container| {
+            nest_rs_core::with_request_scope(
+                Some(Arc::new(RequestScope::new(container))),
+                Correlation::minted(None),
+                async { resolved().0 },
+            )
+        };
+        let first = operation(container.clone()).await;
+        let second = operation(container).await;
+        assert_ne!(first, second, "each operation builds its own instance");
     }
 
-    #[tokio::test]
-    async fn from_context_errors_without_an_installed_scope() {
-        // No `with_request_scope` wrapper — the task-local is absent, so the
-        // bridge fails loudly rather than resolving from nowhere.
-        let err = Scoped::<Probe>::from_context()
-            .map(|_| ())
-            .expect_err("no scope installed");
+    #[test]
+    fn a_miss_answers_no_type_name_and_files_it() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let Err(missed) = scoped_parameter::<Probe>() else {
+            panic!("no scope is installed");
+        };
+
+        let answered = missed.into_answer();
+
+        assert_eq!(answered.message, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+        assert!(!format!("{answered:?}").contains("Probe"), "{answered:?}");
+        let event = logs.expect_one(crate::TARGET, "mcp operation failed");
         assert!(
-            format!("{err:?}").contains("request scope not installed"),
-            "unexpected error: {err:?}",
+            event
+                .field("error")
+                .is_some_and(|chain| chain.contains("Probe")),
+            "the operator reads the provider: {:?}",
+            event.fields,
         );
     }
 }

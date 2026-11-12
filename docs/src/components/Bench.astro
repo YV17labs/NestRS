@@ -1,16 +1,15 @@
 ---
 /**
- * Benchmark groups — NestRS against both NestJS 11 adapters, one group per
- * metric.
+ * Benchmark groups — NestRS 7.0 against NestJS 12.4 on its node:http adapter,
+ * one group per metric.
  *
- * Data: bench/ harness, tier T1 (JSON through DI + injected service), one
- * pinned core, medians of repeated runs — the regime that favours Node. Bar
- * length is the real measured value on a per-group shared scale (the group's
- * largest value = 100%), so the picture stays honest in both directions: for
- * throughput NestRS is the long bar; for latency, memory and cold start the
- * Node bars grow long, which is exactly the right read. NestRS is always the
- * brand gradient and both Node adapters are muted, so colour means "who",
- * never "good or bad".
+ * Data: bench/ harness, one pinned core each, medians of two rounds of five
+ * timed runs — the regime that favours Node. Bar length is the real measured
+ * value on a per-group shared scale (the group's largest value = 100%), so the
+ * picture stays honest in both directions: for throughput NestRS is the long
+ * bar; for latency, memory and cold start the Node bar grows long, which is
+ * exactly the right read. NestRS is always the brand gradient and Node muted,
+ * so colour means "who", never "good or bad".
  */
 interface Row {
   name: string;
@@ -24,41 +23,55 @@ interface Group {
   rows: Row[];
 }
 
+const NODE = 'NestJS';
+
 const groups: Group[] = [
   {
-    title: 'Throughput — 1 core, req/s',
-    factor: '×2.5 vs Fastify',
+    title: 'Hello world (T1) — 1 core, req/s',
+    factor: '×1.3',
     rows: [
-      { name: 'NestRS', value: 241000, label: '~241k' },
-      { name: 'Fastify', value: 97000, label: '~97k' },
-      { name: 'Express', value: 58000, label: '~58k' },
+      { name: 'NestRS', value: 200900, label: '~201k' },
+      { name: NODE, value: 154200, label: '~154k' },
     ],
   },
   {
-    title: 'Latency p99 — lower is better',
-    factor: '×3.0',
+    title: 'Guarded route (T2) — req/s',
+    factor: '×2.0',
     rows: [
-      { name: 'NestRS', value: 0.42, label: '0.42 ms' },
-      { name: 'Fastify', value: 1.27, label: '1.27 ms' },
-      { name: 'Express', value: 2.11, label: '2.11 ms' },
+      { name: 'NestRS', value: 183000, label: '~183k' },
+      { name: NODE, value: 93200, label: '~93k' },
     ],
   },
   {
-    title: 'Memory under load',
-    factor: '×25',
+    title: 'JSON body read (T4) — req/s',
+    factor: '×2.1',
     rows: [
-      { name: 'NestRS', value: 8, label: '8 MB' },
-      { name: 'Fastify', value: 198, label: '198 MB' },
-      { name: 'Express', value: 206, label: '206 MB' },
+      { name: 'NestRS', value: 196400, label: '~196k' },
+      { name: NODE, value: 93900, label: '~94k' },
     ],
   },
   {
-    title: 'Cold start',
-    factor: '×23',
+    title: 'Latency p99, guarded route',
+    factor: '×2.9',
     rows: [
-      { name: 'NestRS', value: 15, label: '~15 ms' },
-      { name: 'Fastify', value: 360, label: '~360 ms' },
-      { name: 'Express', value: 330, label: '~330 ms' },
+      { name: 'NestRS', value: 0.46, label: '0.46 ms' },
+      { name: NODE, value: 1.32, label: '1.32 ms' },
+    ],
+  },
+  {
+    title: 'Memory idle',
+    factor: '×17',
+    rows: [
+      { name: 'NestRS', value: 6, label: '6 MB' },
+      { name: NODE, value: 103, label: '103 MB' },
+    ],
+  },
+  {
+    title: 'Cold start → first 200',
+    factor: '×22',
+    rows: [
+      { name: 'NestRS', value: 10, label: '~10 ms' },
+      { name: NODE, value: 219, label: '~220 ms' },
     ],
   },
 ];

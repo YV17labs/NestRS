@@ -1,7 +1,6 @@
 ---
 title: Unit tests
 description: "Pure logic next to the code it exercises — #[cfg(test)] mod tests inside src/, Rust's standard home."
-tier: basics
 sidebar:
   order: 2
 ---
@@ -15,7 +14,7 @@ private items the integration tree cannot see.
 `#[cfg(test)] mod tests` inside the `src/` file under test —
 [Rust's standard layout](https://doc.rust-lang.org/book/ch11-03-test-organization.html#the-tests-module-and-cfgtest):
 
-```rust title="crates/features/src/posts/service.rs (from the demo)"
+```rust title="crates/features/src/posts/service.rs"
 use nest_rs::core::injectable;
 
 #[injectable]
@@ -81,7 +80,7 @@ instead.
   integration test (its public API, hand-constructed) or as an app e2e
   (boots the real graph).
 - **Anything that touches the database.** A repository test is
-  integration at best — use `EphemeralDatabase` and an e2e test.
+  integration at best — boot on `ephemeral_database` in an e2e test.
 - **Anything that asserts wiring** — that a guard fires, that a
   controller is mounted, that the access graph rejects a missing
   import. Wiring lives in app e2e.
@@ -104,11 +103,11 @@ through a request, is fine — that is what app e2e is for. Use unit
 tests where the assertion lives one return value away from the input,
 and integration tests where it lives behind the crate's public API.
 The same `#[cfg(test)] mod tests` shape carries
-[policy tests](/testing/policy/) — `Ability::mask` and
+[policy tests](/testing/policy/) — `Ability::permitted_fields` and
 `condition_for` are pure functions on policy types and belong here.
 
 ## Going further
 
 - [Integration tests](/testing/integration/) — the crate's public API in process.
-- [Policy tests](/testing/policy/) — `Ability::mask` and `condition_for` as pure units.
+- [Policy tests](/testing/policy/) — `Ability::permitted_fields` and `condition_for` as pure units.
 - [Testing](/testing/) — the three categories and the `test` recipe group.

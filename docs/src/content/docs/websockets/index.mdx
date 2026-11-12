@@ -14,16 +14,16 @@ event. List the gateway in `#[module(providers = [...])]` and you have
 real-time wired in.
 
 Read this section, then start from the working reference: the
-[`live`](/publish/) app in Publish — a chat gateway plus org-scoped
-notifications, running the exact shapes below.
+[`live`](/publish/) app in Publish — a chat gateway plus a namespaced
+notifications gateway, running the exact shapes below.
 
-`nest-rs-ws` is a thin layer over [`poem`'s WebSocket
-support](https://docs.rs/poem/latest/poem/web/websocket/) — the same
-transport `nest-rs-http` already uses. It hides the read/write split,
-the outbox writer task, the connection registry, and the dispatch
-plumbing behind one decorator.
+`nest-rs-ws` speaks the protocol through
+[tokio-tungstenite](https://docs.rs/tokio-tungstenite), over the connection the
+HTTP transport's own server hands across once it answers the handshake. It
+hides the handshake, the read/write split, the outbox writer task, the
+connection registry, and the dispatch plumbing behind one decorator.
 
-In the [**Publish**](/publish/) workspace, live comments and notifications
+In the [**Publish**](/publish/) workspace, chat and notifications
 run in [`live`](/publish/) on port **3004**.
 
 ## Install
@@ -34,7 +34,9 @@ cargo add nest-rs --features ws
 
 `#[input]` on a typed payload carries its `serde` derives and routes them back
 through the framework, and `nest_rs::ws::tracing` is the gateway's logger — so
-the manifest stops at one line. `nestrs g ws <feature>` writes it.
+the manifest stops at one line. `nestrs g ws <feature>` writes it. Add `authz`
+when a message carries `#[authorize]`, or `seaorm`, which implies it; the
+decorator names the feature when it is missing.
 
 ## A one-event gateway
 
@@ -44,7 +46,6 @@ The smallest possible gateway: one event, one reply.
 use nest_rs::ws::{gateway, messages};
 
 #[gateway(path = "/ws")]
-#[derive(Default)]
 pub struct PingGateway;
 
 #[messages]
@@ -63,44 +64,30 @@ parses each frame's envelope, matches the event, deserializes `data`,
 calls the handler, and serializes the return into a reply frame on the
 same event name.
 
+Each message runs through the same [pipeline](/fundamentals/interceptors/) a
+route does, as a unit of its own: the app's interceptors and exception filters
+wrap it, and so do the ones the gateway and the message bind — see
+[Messages](/websockets/messages/#interceptors-filters-and-pipes).
+
 Wire it in like any other provider:
 
-```rust title="apps/api/src/module.rs"
+```rust title="crates/features/src/chat/ws/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::ws::WsModule;
 
-use features::chat::PingGateway;
+use super::gateway::PingGateway;
 
-#[module(
-    imports = [
-        HttpModule::for_root(HttpConfig { port: 3004, ..Default::default() }),
-        WsModule,
-    ],
-    providers = [PingGateway],
-)]
-pub struct LiveModule;
+#[module(providers = [PingGateway])]
+pub struct ChatWsModule;
 ```
 
-`HttpModule` for the transport, `WsModule` for the connection registry
-(`WsServer`). The gateway itself is listed in `providers` — no
-`.transport(...)` call, no second port.
-
-`WsModule` is **not optional** for a default-namespace gateway: every
-`WsClient` a handler touches reads that registry. A gateway declares the
-dependency, so leaving it out fails the boot through the access graph, naming
-both the missing type and the module that provides it:
-
-```text frame="terminal"
-Error: module access violation: `PingGateway` (in module `LiveModule`) depends on
-`WsServer`, but `LiveModule` imports no module that provides it. `WsServer` is
-provided by `WsModule` — add `WsModule` to `#[module(imports = [...])]` …
-```
-
-Import it in whichever module lists the gateway — `nestrs g ws` writes it into
-the generated adapter module. `WsModule` owns the
-[`namespace`](/websockets/namespaces/)d registries too, so the import is the
-same one step whichever registry a gateway uses.
+The gateway is listed in `providers` — no `.transport(...)` call, no second port —
+and brings what it runs on: `HttpModule` for the transport the upgrade arrives
+on, `WsModule` for the connection registry (`WsServer`) every `WsClient` a
+handler touches reads, [`namespace`](/websockets/namespaces/)d registries
+included. The app imports `ChatWsModule`.
+`WsModule` attaches no transport of its own: a service that pushes to
+clients imports it at its port, and a binary reaching that port opens no
+listener unless an adapter serving on HTTP is imported too.
 
 ## Run it
 
@@ -109,7 +96,7 @@ nestrs run dev live
 ```
 
 ```text frame="terminal"
-2026-06-08T10:23:14Z  INFO nest_rs::routes: mounted endpoint kind="ws" path="/ws"
+2026-06-08T10:23:14Z  INFO nest_rs::routes: mounted endpoint surface="ws" host="PingGateway" path="/ws"
 ```
 
 Drive it from any WebSocket client. With
@@ -133,22 +120,35 @@ The whole conversation is legible from the console — the `101` that opened the
 socket, the connection, then a line per message, all under the upgrade's trace:
 
 ```text frame="terminal"
-INFO nest_rs::operation: http.request method=GET path="/ws" status=101 bytes=0 duration_ms=1.265 client_ip=127.0.0.1 forwarded=false trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
-INFO nest_rs::operation: ws.connect conn_id=0 duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
-INFO nest_rs::operation: ws.message event=message conn_id=0 outcome="ok" duration_ms=0.045 trace_id=01a015e0074575729557467b3d9e2317 span_id=3398a131c2baa84a
-INFO nest_rs::operation: ws.message event=nope conn_id=0 outcome="error" duration_ms=0.011 trace_id=01a015e0074575729557467b3d9e2317 span_id=2a3f10371aa5cbc8
+INFO nest_rs::operation: http.request verb=GET path="/ws" status=101 bytes=0 duration_ms=1.265 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::operation: ws.connect path="/ws" conn_id=0 outcome="ok" duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::operation: ws.message path="/ws" event="message" conn_id=0 outcome="ok" duration_ms=0.045 trace_id=01a015e0074575729557467b3d9e2317 span_id=3398a131c2baa84a
+INFO nest_rs::operation: ws.message path="/ws" event="_OTHER" conn_id=0 outcome="error" duration_ms=0.011 trace_id=01a015e0074575729557467b3d9e2317 span_id=2a3f10371aa5cbc8
 ```
+
+The last message named an event no handler serves. Its line says `_OTHER`
+rather than the event it sent, as its span does: a name only the client used is
+its own data, and no line the framework files repeats it. The client still gets
+`{"event":"nope","data":{"error":"unknown event","code":"NOT_FOUND"}}`,
+answered on the event it sent.
 
 Same `trace_id` throughout, a fresh `span_id` per message — because a connection
 inherits identity, never resources: it takes the upgrade's trace and actor, and
 opens its own request scope per message. Your own handler's events carry the
 message's ids without naming them; see [Logs](/opentelemetry/logs/).
 
+## A socket's bounds
+
+A socket lives at most `<PREFIX>_WS__MAX_CONNECTION_SECS` (four hours), a message
+is held to its size and its timeout, and a peer gone silent is pinged, then
+dropped. [Socket lifecycle](/websockets/socket-lifecycle/) is each bound, the
+handshakes the server refuses and the code each close says.
+
 ## Version the socket
 
 `#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`. It is the same
-`version` argument `#[controller]` takes, resolved through the same
-`version_path`, because a gateway's mount is an address the client selects —
+`version` argument `#[controller]` takes, prefixed to the path the same way,
+because a gateway's mount is an address the client selects —
 [the edges where it is not](/http/versioning/) refuse the argument with a named
 compile error rather than accept a version nothing could apply.
 
@@ -157,7 +157,7 @@ A gateway owns its mount, so the version is part of that ownership: `version =
 message tables, while two gateways sharing a path *and* a version still fail boot
 naming both.
 
-Only the URI form selects a gateway. `NESTRS_HTTP__VERSIONING=header` rewrites
+Only the URI form selects a gateway. `<PREFIX>_HTTP__VERSIONING=header` rewrites
 controller paths in front of routing and never learns a self-mount's prefixes, so
 a versioned gateway stays at `/v1/ws` under every strategy — which is just as
 well, since a browser cannot set headers on a `WebSocket` handshake.
@@ -166,8 +166,8 @@ well, since a browser cannot set headers on a `WebSocket` handshake.
 
 ### Basics
 
-- [Messages](/websockets/messages/) — the envelope shape, the
-  `Result`/`Err` return contract, payload validation, error frames.
+- [Messages](/websockets/messages/) — the envelope shape, the handler's
+  signature, payload validation, and the layers a message runs.
 - [Guards](/websockets/guards/) — authenticate at the upgrade, gate
   per-message envelopes, and the two scopes that split.
 - [Rooms](/websockets/rooms/) — `WsClient::join` / `leave` / `broadcast` /
@@ -175,10 +175,16 @@ well, since a browser cannot set headers on a `WebSocket` handshake.
 
 ### All options
 
+- [Message posture](/websockets/posture/) — the upgrade's guards, `#[public]`
+  and `#[authorize]` on a message.
+- [Replies and error frames](/websockets/replies/) — the `Result`/`Err`
+  return contract, and what an error frame says.
 - [Namespaces](/websockets/namespaces/) — several gateways with isolated
   registries via `WsServer<N>` markers.
 - [Server-side push](/websockets/server-push/) — reaching connected clients
   from a service, a scheduled job, or an HTTP route.
+- [Socket lifecycle](/websockets/socket-lifecycle/) — the handshakes refused,
+  what bounds a socket, and the code each close says.
 
 ## Reference
 

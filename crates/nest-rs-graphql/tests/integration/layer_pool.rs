@@ -1,25 +1,18 @@
-//! The layer-pool contract on the `/graphql` self-mount.
-//!
-//! `/graphql` is `EdgePosture::Exempt`: no guard runs at the HTTP edge. The
-//! per-operation seam is the **only** guard site — the registered
-//! `GraphqlOperationGuard` when the app binds one, otherwise the global-pool
-//! fallback `use_guards_global` seeds. These tests pin the two halves of
-//! that contract: a global guard runs **exactly once** per GraphQL request
-//! (the historical double-run — edge + in-band — must never come back), and
-//! a registered operation guard **replaces** the fallback (the real bridge
-//! runs the same guards itself; a second site would double-run). The
-//! transport-edge interceptor pool still covers the POST.
+//! The layer-pool contract on the `/graphql` self-mount: a global guard runs
+//! **exactly once** per request, the guards a module declares for the
+//! endpoint **add to** the global pool, a guard in both running once, and a
+//! unit-stage interceptor runs around the request.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{
+    Interceptor, Layer, Next, Outcome, UnitContext, async_trait, injectable, module,
+};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
-use nest_rs_graphql::{BoxFuture, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::async_trait;
-use nest_rs_interceptors::{Interceptor, Next, interceptor};
+use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_http::EndpointGuards;
 use nest_rs_testing::TestApp;
-use poem::{Request, Response};
 use tokio::sync::Mutex;
 
 static GUARD_RUNS: AtomicUsize = AtomicUsize::new(0);
@@ -33,49 +26,39 @@ fn reset_counters() {
 
 /// Counts every `check_http` execution, then admits the request.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingPassGuard;
-
-impl Layer for CountingPassGuard {}
 
 #[async_trait]
 impl Guard for CountingPassGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         GUARD_RUNS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for CountingPassGuard {}
+impl GuardFor<nest_rs_http::HttpView> for CountingPassGuard {}
 
-/// Counts every HTTP interception, then forwards.
-#[injectable]
-#[derive(Default)]
+/// Counts every unit it runs around, then forwards.
+#[nest_rs_core::interceptor(stage = unit)]
+#[derive(Default, Layer)]
 struct CountingInterceptor;
-
-impl Layer for CountingInterceptor {}
 
 #[async_trait]
 impl Interceptor for CountingInterceptor {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> poem::Result<Response> {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
         INTERCEPTOR_RUNS.fetch_add(1, Ordering::SeqCst);
-        next.run(req).await
-    }
-}
-
-/// A registered operation guard that runs nothing — stands in for an app
-/// bridge that owns the chain itself.
-#[injectable]
-#[derive(Default)]
-struct NoopOpGuard;
-
-impl GraphqlOperationGuard for NoopOpGuard {
-    fn before<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>> {
-        Box::pin(async move { Ok(()) })
-    }
-
-    fn around<'a>(&'a self, _req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
-        inner
+        next.run(cx).await
     }
 }
 
@@ -92,16 +75,20 @@ impl PingResolver {
 }
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
+    imports = [GraphqlModule],
     providers = [CountingPassGuard, CountingInterceptor, PingResolver],
 )]
 struct FallbackModule;
 
 #[module(
-    imports = [GraphqlModule::for_root(None)],
-    providers = [CountingPassGuard, NoopOpGuard as dyn GraphqlOperationGuard, PingResolver],
+    imports = [GraphqlModule],
+    providers = [
+        CountingPassGuard,
+        PingResolver,
+        EndpointGuards<GraphqlView, (CountingPassGuard,)>,
+    ],
 )]
-struct BridgedModule;
+struct DeclaredModule;
 
 async fn post_ping(app: &TestApp) {
     let resp = app
@@ -123,14 +110,16 @@ async fn post_ping(app: &TestApp) {
     );
 }
 
+#[module(imports = [FallbackModule], providers = [GlobalGuards<(CountingPassGuard,)>])]
+struct GlobalGuardRunsExactlyOncePerGraphqlRequestApp;
+
 #[tokio::test]
 async fn global_guard_runs_exactly_once_per_graphql_request() {
     let _gate = GATE.lock().await;
     reset_counters();
 
     let app = TestApp::builder()
-        .module::<FallbackModule>()
-        .use_guards_global([guard::<CountingPassGuard>()])
+        .module::<GlobalGuardRunsExactlyOncePerGraphqlRequestApp>()
         .build()
         .await
         .expect("boots");
@@ -139,19 +128,21 @@ async fn global_guard_runs_exactly_once_per_graphql_request() {
     assert_eq!(
         GUARD_RUNS.load(Ordering::SeqCst),
         1,
-        "the global guard pool runs in-band (fallback operation guard) and nowhere else — \
-         the edge double-run must never come back",
+        "the global guard pool runs at the request and nowhere else — the double-run \
+         must never come back",
     );
 }
 
+#[module(imports = [DeclaredModule], providers = [GlobalGuards<(CountingPassGuard,)>])]
+struct AGuardBothPooledAndDeclaredForTheEndpointRunsOnceApp;
+
 #[tokio::test]
-async fn a_registered_operation_guard_replaces_the_fallback() {
+async fn a_guard_both_pooled_and_declared_for_the_endpoint_runs_once() {
     let _gate = GATE.lock().await;
     reset_counters();
 
     let app = TestApp::builder()
-        .module::<BridgedModule>()
-        .use_guards_global([guard::<CountingPassGuard>()])
+        .module::<AGuardBothPooledAndDeclaredForTheEndpointRunsOnceApp>()
         .build()
         .await
         .expect("boots");
@@ -159,21 +150,30 @@ async fn a_registered_operation_guard_replaces_the_fallback() {
     post_ping(&app).await;
     assert_eq!(
         GUARD_RUNS.load(Ordering::SeqCst),
-        0,
-        "a registered GraphqlOperationGuard owns the chain — the fallback must not also run \
-         the global pool (the real bridge runs the same guards itself)",
+        1,
+        "the endpoint's guards join the global pool — a guard in both runs once",
     );
 }
 
 #[tokio::test]
-async fn the_global_interceptor_pool_covers_the_graphql_post() {
+async fn a_guard_declared_for_the_endpoint_runs_without_a_pool() {
     let _gate = GATE.lock().await;
     reset_counters();
 
-    let app = TestApp::builder()
-        .module::<FallbackModule>()
-        .use_interceptors_global([interceptor::<CountingInterceptor>()])
-        .build()
+    let app = TestApp::for_module::<DeclaredModule>()
+        .await
+        .expect("boots");
+
+    post_ping(&app).await;
+    assert_eq!(GUARD_RUNS.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_unit_stage_interceptor_runs_around_the_graphql_post() {
+    let _gate = GATE.lock().await;
+    reset_counters();
+
+    let app = TestApp::for_module::<FallbackModule>()
         .await
         .expect("boots");
 
@@ -181,6 +181,437 @@ async fn the_global_interceptor_pool_covers_the_graphql_post() {
     assert_eq!(
         INTERCEPTOR_RUNS.load(Ordering::SeqCst),
         1,
-        "the transport-edge interceptor pool wraps self-mounted surfaces too",
+        "a self-mount's request is a unit of the HTTP edge: the unit stage runs there",
     );
+}
+
+/// The interceptors and exception filters a resolver binds, and the app's own,
+/// around its root fields and its field resolvers.
+mod pipeline {
+    use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use nest_rs_core::{
+        Caught, ExceptionFilter, Interceptor, Layer, Next, Outcome, Problem, UnitContext,
+        injectable, module,
+    };
+    use nest_rs_core::{async_trait, code};
+    use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream};
+    use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
+    use nest_rs_graphql::{FieldRole, GraphqlModule, GraphqlView, operations, resolver};
+    use nest_rs_testing::TestApp;
+    use tokio::sync::broadcast;
+
+    static AROUND_ROOT_FIELDS: AtomicUsize = AtomicUsize::new(0);
+    static AROUND_LABELS: AtomicUsize = AtomicUsize::new(0);
+
+    /// What a global interceptor saw of each unit it ran around: its unit,
+    /// the field and the role the view names.
+    static SEEN: StdMutex<Vec<(&'static str, &'static str, FieldRole)>> = StdMutex::new(Vec::new());
+
+    /// Counts the root fields its resolver binds it on.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct AroundRootFields;
+
+    #[async_trait]
+    impl Interceptor for AroundRootFields {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            AROUND_ROOT_FIELDS.fetch_add(1, Ordering::SeqCst);
+            next.run(cx).await
+        }
+    }
+
+    /// Counts each call of the field resolver it is bound on.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct AroundLabels;
+
+    #[async_trait]
+    impl Interceptor for AroundLabels {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            AROUND_LABELS.fetch_add(1, Ordering::SeqCst);
+            next.run(cx).await
+        }
+    }
+
+    /// Records what the app's own interceptor reads of each unit.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Recorder;
+
+    #[async_trait]
+    impl Interceptor for Recorder {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            let seen = cx
+                .switch_to::<GraphqlView>()
+                .map(|view| (cx.unit().name(), view.field(), view.role()));
+            if let Some(seen) = seen {
+                SEEN.lock().unwrap().push(seen);
+            }
+            next.run(cx).await
+        }
+    }
+
+    /// The ledger refusing a write: a domain error the client is owed no
+    /// explanation for, unless a filter says otherwise.
+    #[derive(Debug)]
+    struct LedgerRefused;
+
+    impl std::fmt::Display for LedgerRefused {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the ledger at 10.0.0.9 refused the write")
+        }
+    }
+
+    impl std::error::Error for LedgerRefused {}
+
+    /// Answers a refused write as the conflict it is.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct LedgerConflict;
+
+    #[async_trait]
+    impl ExceptionFilter for LedgerConflict {
+        type Exception = LedgerRefused;
+
+        async fn catch(&self, _: &LedgerRefused, _: &mut UnitContext<'_>) -> Caught {
+            Caught::Problem(Problem::new(409, code::CONFLICT).with_detail("the ledger is busy"))
+        }
+    }
+
+    #[derive(SimpleObject)]
+    #[graphql(complex)]
+    struct Shelf {
+        id: i32,
+    }
+
+    #[resolver]
+    #[use_interceptors(AroundRootFields)]
+    struct ShelfResolver;
+
+    #[operations]
+    impl ShelfResolver {
+        #[query]
+        #[public]
+        async fn shelves(&self) -> Vec<Shelf> {
+            (1..=3).map(|id| Shelf { id }).collect()
+        }
+
+        #[query]
+        #[public]
+        async fn count(&self) -> i32 {
+            3
+        }
+
+        #[mutation]
+        #[public]
+        #[use_exception_filters(LedgerConflict)]
+        async fn write(&self) -> Result<Option<bool>, LedgerRefused> {
+            Err(LedgerRefused)
+        }
+
+        #[mutation]
+        #[public]
+        async fn touch(&self) -> GqlResult<bool> {
+            Ok(true)
+        }
+
+        #[field_resolver]
+        #[use_interceptors(AroundLabels)]
+        async fn label(&self, parent: &Shelf) -> String {
+            format!("shelf {}", parent.id)
+        }
+
+        #[field_resolver]
+        #[use_exception_filters(LedgerConflict)]
+        async fn balance(&self, parent: &Shelf) -> Result<Option<i32>, LedgerRefused> {
+            match parent.id {
+                2 => Err(LedgerRefused),
+                id => Ok(Some(id)),
+            }
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [AroundRootFields, AroundLabels, LedgerConflict, Recorder, ShelfResolver],
+    )]
+    struct ShelfModule;
+
+    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn post(app: &TestApp, query: &str) -> serde_json::Value {
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": query }))
+            .send()
+            .await;
+        resp.assert_status_is_ok();
+        resp.json().await.value().deserialize()
+    }
+
+    #[tokio::test]
+    async fn a_resolvers_interceptor_wraps_each_root_field_once_and_a_field_resolver_only_where_declared_on_it()
+     {
+        let _serial = SERIAL.lock().await;
+        AROUND_ROOT_FIELDS.store(0, Ordering::SeqCst);
+        AROUND_LABELS.store(0, Ordering::SeqCst);
+        let app = TestApp::for_module::<ShelfModule>().await.expect("boots");
+
+        let body = post(&app, "{ count shelves { label } }").await;
+
+        assert_eq!(body["data"]["shelves"][2]["label"], "shelf 3", "{body}");
+        assert_eq!(
+            AROUND_ROOT_FIELDS.load(Ordering::SeqCst),
+            2,
+            "once per root field, never per parent row: {body}",
+        );
+        assert_eq!(
+            AROUND_LABELS.load(Ordering::SeqCst),
+            3,
+            "the field resolver's own interceptor, once per parent: {body}",
+        );
+    }
+
+    #[module(imports = [ShelfModule], providers = [nest_rs_core::GlobalInterceptors<(Recorder,)>])]
+    struct TheAppsInterceptorRunsAroundEachRootFieldAsAGraphqlFieldUnitApp;
+
+    #[tokio::test]
+    async fn the_apps_interceptor_runs_around_each_root_field_as_a_graphql_field_unit() {
+        let _serial = SERIAL.lock().await;
+        SEEN.lock().unwrap().clear();
+        let app = TestApp::builder()
+            .module::<TheAppsInterceptorRunsAroundEachRootFieldAsAGraphqlFieldUnitApp>()
+            .build()
+            .await
+            .expect("boots");
+
+        let body = post(&app, "{ count shelves { label } }").await;
+
+        assert_eq!(body["data"]["count"], 3, "{body}");
+        let mut seen = SEEN.lock().unwrap().clone();
+        seen.sort_by_key(|(_, field, _)| *field);
+        assert_eq!(
+            seen,
+            [
+                ("graphql.field", "count", FieldRole::RootField),
+                ("graphql.field", "shelves", FieldRole::RootField),
+            ],
+            "one run per root field, under its unit and its role — none at the request, \
+             none per parent row",
+        );
+        assert_eq!(
+            nest_rs_graphql::unit::FIELD.name(),
+            "graphql.field",
+            "the unit a global interceptor reads",
+        );
+    }
+
+    #[tokio::test]
+    async fn an_exception_filter_answers_a_domain_error_as_a_field_error_while_its_siblings_resolve()
+     {
+        let _serial = SERIAL.lock().await;
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<ShelfModule>().await.expect("boots");
+
+        let body = post(&app, "mutation { write touch }").await;
+
+        assert_eq!(
+            body["data"],
+            serde_json::json!({ "write": null, "touch": true }),
+            "the sibling resolved: {body}"
+        );
+        let error = &body["errors"][0];
+        assert_eq!(error["message"], "the ledger is busy", "{body}");
+        assert_eq!(error["extensions"]["code"], "CONFLICT", "{body}");
+        assert_eq!(error["path"], serde_json::json!(["write"]), "{body}");
+        assert!(!body.to_string().contains("10.0.0.9"), "{body}");
+        assert!(
+            logs.find("nest_rs::graphql", "graphql operation failed")
+                .is_empty(),
+            "a failure a filter answered 4xx files nothing",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_field_resolvers_own_exception_filter_answers_its_parent_row() {
+        let _serial = SERIAL.lock().await;
+        let app = TestApp::for_module::<ShelfModule>().await.expect("boots");
+
+        let body = post(&app, "{ shelves { id balance } }").await;
+
+        assert_eq!(body["data"]["shelves"][0]["balance"], 1, "{body}");
+        assert_eq!(
+            body["data"]["shelves"][1],
+            serde_json::json!({ "id": 2, "balance": null }),
+            "{body}"
+        );
+        let error = &body["errors"][0];
+        assert_eq!(error["extensions"]["code"], "CONFLICT", "{body}");
+        assert_eq!(
+            error["path"],
+            serde_json::json!(["shelves", 1, "balance"]),
+            "{body}"
+        );
+        assert!(!body.to_string().contains("10.0.0.9"), "{body}");
+    }
+
+    static OPENINGS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Counts each subscription opening it runs around.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct CountOpenings;
+
+    #[async_trait]
+    impl Interceptor for CountOpenings {
+        async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+            OPENINGS.fetch_add(1, Ordering::SeqCst);
+            next.run(cx).await
+        }
+    }
+
+    #[derive(Clone, Debug, SimpleObject)]
+    struct Entry {
+        n: i32,
+    }
+
+    #[injectable]
+    struct Entries {
+        tx: broadcast::Sender<Entry>,
+    }
+
+    impl Default for Entries {
+        fn default() -> Self {
+            Self {
+                tx: broadcast::channel(8).0,
+            }
+        }
+    }
+
+    /// Every field it declares answers through the filter it binds.
+    #[resolver]
+    #[use_exception_filters(LedgerConflict)]
+    struct VaultResolver {
+        #[inject]
+        entries: Arc<Entries>,
+    }
+
+    #[operations]
+    impl VaultResolver {
+        #[mutation]
+        #[public]
+        async fn seal(&self) -> Result<bool, LedgerRefused> {
+            Err(LedgerRefused)
+        }
+
+        #[subscription]
+        #[public]
+        #[use_interceptors(CountOpenings)]
+        async fn entries(&self) -> impl Stream<Item = Entry> {
+            stream::unfold(self.entries.tx.subscribe(), |mut rx| async move {
+                rx.recv().await.ok().map(|entry| (entry, rx))
+            })
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [LedgerConflict, CountOpenings, Entries, VaultResolver],
+    )]
+    struct VaultModule;
+
+    #[tokio::test]
+    async fn a_resolvers_exception_filter_answers_its_root_field() {
+        let _serial = SERIAL.lock().await;
+        let app = TestApp::for_module::<VaultModule>().await.expect("boots");
+
+        let body = post(&app, "mutation { seal }").await;
+
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "CONFLICT",
+            "{body}"
+        );
+        assert!(!body.to_string().contains("10.0.0.9"), "{body}");
+    }
+
+    #[resolver]
+    struct BareLedgerResolver;
+
+    #[operations]
+    impl BareLedgerResolver {
+        #[mutation]
+        #[public]
+        async fn settle(&self) -> Result<bool, LedgerRefused> {
+            Err(LedgerRefused)
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [LedgerConflict, BareLedgerResolver],
+    )]
+    struct BareLedgerModule;
+
+    #[module(
+        imports = [BareLedgerModule],
+        providers = [nest_rs_core::GlobalExceptionFilters<(LedgerConflict,)>],
+    )]
+    struct TheAppsExceptionFilterAnswersARootFieldApp;
+
+    #[tokio::test]
+    async fn the_apps_exception_filter_answers_a_root_field() {
+        let _serial = SERIAL.lock().await;
+        let app = TestApp::builder()
+            .module::<TheAppsExceptionFilterAnswersARootFieldApp>()
+            .build()
+            .await
+            .expect("boots");
+
+        let body = post(&app, "mutation { settle }").await;
+
+        assert_eq!(
+            body["errors"][0]["extensions"]["code"], "CONFLICT",
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_subscriptions_layers_run_at_its_opening_never_per_item() {
+        let _serial = SERIAL.lock().await;
+        OPENINGS.store(0, Ordering::SeqCst);
+        let app = TestApp::for_module::<VaultModule>().await.expect("boots");
+        let entries = app.container().get::<Entries>().expect("provided");
+        let mut socket = app.graphql_socket().open();
+        socket.connect().await;
+        socket.subscribe("1", "subscription { entries { n } }");
+        let emit = async {
+            nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+                entries.tx.receiver_count() >= 1
+            })
+            .await;
+            for n in 1..=3 {
+                entries
+                    .tx
+                    .send(Entry { n })
+                    .expect("the subscriber is live");
+            }
+        };
+
+        let (first, ()) = tokio::join!(socket.next_item("1"), emit);
+        let mut received = vec![first.expect("an item")];
+        for _ in 1..3 {
+            received.push(socket.next_item("1").await.expect("an item"));
+        }
+
+        assert_eq!(received[2]["data"]["entries"]["n"], 3, "{received:?}");
+        assert_eq!(
+            OPENINGS.load(Ordering::SeqCst),
+            1,
+            "once at the opening, none per item",
+        );
+    }
 }

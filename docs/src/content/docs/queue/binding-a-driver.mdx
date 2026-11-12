@@ -1,0 +1,266 @@
+---
+title: Binding a queue driver
+description: "The module binding a queue driver: the budget the port net holds, the failures it answers, its TLS, its proof at boot, its health and the behaviour kit."
+sidebar:
+  order: 8.1
+---
+
+A queue driver is a contract — [Writing a queue driver](/queue/writing-a-driver/)
+— and a binding: the module an app imports in place of `RedisQueueModule`.
+This page walks the binding, in the order every driver page follows.
+
+## The binding
+
+`<Vendor>QueueModule` binds the producer as the port's `Jobs`, built over it
+with `Jobs::new`, and the consumer as `BoundConsumer`, each a **declaration**
+carrying `BACKEND_REMEDY`, so a second backend imported beside yours fails the
+boot naming both, and a feature injecting `Arc<Jobs>` reaches no backend's
+contract:
+
+```rust title="from nest-rs-redis's queue binding, abridged"
+fn bind(builder: ContainerBuilder) -> ContainerBuilder {
+    RedisConnection::<I>::netted(builder, "the queue port", BACKEND_TIMEOUT)
+        // …
+        .provide_declared_factory_after::<Jobs, (RedisQueueProducer<I>,), _, _>(
+            BACKEND_REMEDY,
+            |container| async move {
+                // …
+                Ok(Jobs::new(producer))
+            },
+        )
+        .provide_declared_factory_after::<
+            BoundConsumer,
+            (RedisConnection<I>, I::Of<RedisQueueConfig>),
+            _,
+            _,
+        >(BACKEND_REMEDY, |container| async move {
+            let conn = RedisConnection::<I>::of(&container, "RedisQueueModule")?;
+            // …
+            renewable::<I>(config.lease, conn.budget())?;
+            Ok(BoundConsumer::new(RedisQueueConsumer::new(conn, config.lease)))
+        })
+}
+```
+
+The worker renews a lease a third of the way in, so a lease no renewal fits
+in lapses while your storage still answers: refuse it at boot with
+`nest_rs::queue::lease_fits_renewal(lease, answer_bound)`, naming the settings
+that lengthen the one or shorten the other, as `renewable` does.
+
+Its `collect` and its `register` each end on `.import::<RedisModule<I>>()`: a
+binding imports the module opening what it runs on, bare, so an app writes the
+binding alone and names that module only to pin it.
+
+An app running jobs imports your module beside its queue adapters, whose hosts
+bring `QueueModule`; one only pushing imports no queue adapter, so no worker. Checkpoint: the worker app's boot logs
+`transport attached transport="queue"`.
+
+## Budget and net
+
+The port waits `BACKEND_TIMEOUT` — eighteen seconds — for each call, its net,
+then gives up on it. Your client's own budget must answer first, with its
+cause, so the binding declares both, and the boot refuses a budget at or past
+the net with `BudgetPastNetError`:
+
+```rust title="from nest-rs-redis's connection"
+pub(crate) fn netted(
+    builder: nest_rs_core::ContainerBuilder,
+    port: &'static str,
+    net: Duration,
+) -> nest_rs_core::ContainerBuilder {
+    builder
+        .provide_meta(Self::declared_budget())
+        .provide_meta(nest_rs_core::Net::over::<Self>(port, net))
+}
+```
+
+`declared_budget` reads the budget off the connection the app opened —
+[Writing a package](/extending/package/#a-resource-it-opens) shows it — and
+`Net::over` names the port in the refusal. Bound each round trip inside that
+budget yourself, so an outage reaches the caller as your error rather than
+as the port's.
+
+## When the backend fails
+
+The port decides, and your backend returns its error rather than logging it,
+so each failure is said once:
+
+- **A push or a cancel** answers the caller your `Err` as it is, a call silent
+  past the net as `QueueError::Unanswered`, and a call that panics as
+  `QueueError::Panicked`, naming the queue and the call — the panic filed once
+  at `error`. Answer your client's failure as an error, never an `unwrap`.
+- **A consumer call** that fails, falls silent or panics counts as one that did
+  not answer, and the worker makes it again under its backoff; a `settle` only
+  while its lease holds, and `prepare` never — it fails the boot.
+- **A checkpoint's read or save** that fails fails the attempt, retryably.
+
+## TLS
+
+A client your driver opens verifies its server, with nothing that turns
+verification off. Read what it trusts and presents as
+`nest_rs::config::ClientTls`, a field of your config named `tls` — the name
+every refusal of its material gives its variables, so the boot refuses any
+other — read under your own namespace: `<PREFIX>_<STORAGE>__TLS_CA_CERT`,
+`__TLS_CERT` and `__TLS_KEY`, each with its `_FILE` spelling. `#[config]` reads
+it by its type:
+
+```rust title="from nest-rs-redis's config, abridged"
+#[config(namespace = "redis")]
+#[derive(Clone, Debug)]
+pub struct RedisConfig {
+    // …
+    #[config(with = url)]
+    pub url: Secret<String>,
+    // …
+    #[config(bounds = CONNECT_TIMEOUT)]
+    pub connect_timeout: Duration,
+    // …
+    pub tls: ClientTls,
+}
+```
+
+Before dialling, `ClientTls::check` refuses material no handshake could use,
+naming your variables and never quoting the PEM, and installs the process's
+rustls provider, which your client's library builds from: with a second provider
+compiled in, rustls would otherwise panic at the first handshake.
+`refuse_beside_plaintext` refuses material beside a URL that does not encrypt,
+where it would go unused.
+Hand your client `authorities_pem()` — the system's authorities, read once,
+unless the deployment names others — and `identity_pem()` when a certificate
+is set.
+
+## Proof at boot
+
+The connection your driver opens is proved before the app serves, through
+`nest_rs::core::prove`: attempt after attempt within the connect budget, on
+`Backoff::RECONNECT`'s curve drawn from the process's own seed, so replicas
+that lost the server together do not dial it again together:
+
+```rust title="from nest-rs-redis's connection"
+pub(crate) async fn proved<T, E, F, Fut>(
+    instance: &RedisInstance,
+    budget: Duration,
+    endpoint: &str,
+    seed: u64,
+    attempt: F,
+) -> Result<T, Unproved<E, RedisError>>
+where
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = Result<T, Attempt<E, RedisError>>>,
+    E: std::error::Error + 'static,
+{
+    prove(
+        budget,
+        Backoff::RECONNECT,
+        seed,
+        said(instance, endpoint, budget),
+        attempt,
+    )
+    .await
+}
+```
+
+Each attempt answers `Attempt::Refused` for what every attempt would meet —
+credentials refused, a handshake `ClientTls::negotiation_failed` recognises —
+which ends the boot at once with `ClientTls::remedy`'s sentence, and
+`Attempt::Failed` for what may clear. `said` reports each retry on your own
+target, naming the server by its endpoint, never by a URL carrying a
+password.
+
+## Health
+
+The module that opens the connection attaches its readiness check, never the
+queue's binding: an `IndicatorEntry` keyed `nestrs_<storage>`, from the
+`register` of the module its `for_root` imports by type, so an app importing
+`HealthModule` checks it once with no import of its own — see
+[an indicator a module attaches](/health/indicators/#an-indicator-a-module-attaches).
+It runs on the readiness and startup probes, never on liveness: an
+orchestrator should not restart a pod because the broker blinked.
+
+## Test it
+
+Implement `KitBackend` — an app reaching your storage on each of the two leases
+a case asks for, how long each lasts, and three hooks on the storage — and let
+`queue_kit!` write one test per case:
+
+```rust title="from nest-rs-queue's suite, abridged"
+impl KitBackend for MemoryKit {
+    const IN_PROCESS: bool = true;
+
+    fn app(&self, lease: KitLease) -> nest_rs_testing::TestAppBuilder {
+        let memory = self.memory(lease);
+        HeadlessApp::builder()
+            .provide(BoundConsumer::new(memory.consumer()))
+            .provide(Jobs::new(Arc::new(memory.clone())))
+    }
+
+    fn lease(&self, lease: KitLease) -> Duration {
+        lease_of(lease)
+    }
+
+    async fn purge(&self, queue: &QueueName) -> anyhow::Result<()> {
+        // …
+    }
+
+    async fn lapse(&self, queue: &QueueName) -> anyhow::Result<()> {
+        // …
+    }
+
+    async fn take(&self, queue: &QueueName) -> anyhow::Result<()> {
+        // …
+    }
+}
+
+/// The kit over a backend that files a record due later.
+mod delaying {
+    use super::MemoryKit;
+
+    nest_rs_testing::queue_kit!(MemoryKit::delaying());
+}
+```
+
+Your crate reaches the kit through the umbrella, as
+`nest_rs::testing::queue_kit!` and `nest_rs::testing::queue::{KitBackend,
+KitLease}`; `app` starts from `nest_rs::testing::HeadlessApp::builder()`,
+since a driver's suite serves no HTTP. `IN_PROCESS` is for a backend living in
+the test's own process, whose leases run on paused time; a networked one
+leaves it `false`.
+
+`KitLease` names the lease a case boots its apps on. `Brief` is short, since
+the two cases whose subject is a renewal wait one out, yet a few seconds for a
+networked backend: a renewal goes a third into the lease, so a runner
+stalled past the other two thirds sees it lapse. `Lasting` outlasts a
+runner stalled for seconds on a loaded CI machine, your connection's own bounds
+widened with it: every other case counts a job's runs, and a delivery a stalled
+runner held past a brief lease would be reclaimed and run again — the
+behaviour right, the count wrong. Those cases lapse a lease only through the
+hooks: `purge` empties a queue, `lapse` makes every lease on it lapse with its
+holder and count unchanged, and `take` hands every delivery to another holder
+that lapses at once — what a frozen worker meets — each whatever the lease's
+kind. Checkpoint: twelve tests pass, among them a worker dying mid-attempt, a
+lease taken under a running attempt, the stall limit, the drain and an
+envelope enqueued twice.
+
+## What fails if you get it wrong
+
+- **A settle that does not check its lease** lets two outcomes land for one job:
+  the kit's case for a lease taken under a running attempt fails.
+- **A renewal that counts a delivery** spends the stall limit on a job that
+  answered every time: once its worker dies after a few renewals, the next
+  delivery is past `STALL_LIMIT` and dead-letters it without running.
+- **An enqueue filing an envelope whose job it still holds** runs that job
+  twice: the kit's case for an envelope enqueued again fails.
+- **A receive handing over more than it was asked** keeps no permit for the
+  extra: the worker hands them back and says `queue backend handed over more
+  deliveries than asked; …` at `error`.
+- **A second backend imported** fails the boot, its message ending in
+  `BACKEND_REMEDY`.
+- **A capability declared and not honoured** passes the boot and fails the kit:
+  a delayed push the backend files at once runs before its delay.
+
+## Going further
+
+- [Writing a queue driver](/queue/writing-a-driver/) — the producer and the
+  consumer the binding provides.
+- [Delivery on Redis](/queue/delivery/) — the reference driver: one Lua script per transition, each fenced.
+- [Extending NestRS](/extending/) — every contract a driver's crate may implement.

@@ -1,0 +1,106 @@
+---
+title: Pipes beyond HTTP
+description: "The same pipes on GraphQL arguments, WebSocket payloads, MCP tool arguments and queued jobs — bound on the wire value, rejected in each edge's own form."
+sidebar:
+  order: 7.2
+---
+
+On GraphQL, WebSockets, MCP and queues the edge decodes the argument itself,
+so the binding is `nest_rs::pipes::Piped<P>`: the wire value is the pipe's
+`In` — the SDL argument type, the WS payload, the tool's arguments, the job
+payload — and `Piped(value)` binds the pipe's output, exactly as on HTTP. The
+edge's macro (`#[operations]`, `#[messages]`, `#[tools]`, `#[processor]`)
+does the stripping and the call; on MCP the carrier goes **inside**
+`Parameters<…>`, since that is what the protocol deserializes an operation's
+arguments into.
+
+An argument whose type declares rules needs no carrier: the edge holds what it
+decoded to them, a pipe's input included, before the pipe runs. Both run in
+the unit's tail, after its guards and its class gate, so a caller the site
+refuses never pays for validation and never learns what a valid input looks
+like.
+
+```rust title="crates/features/src/users/graphql/resolver.rs"
+// GraphQL — the SDL argument is `String`; the body sees it trimmed.
+#[query]
+#[public]
+async fn trimmed(&self, Piped(raw): Piped<Trim>) -> async_graphql::Result<String> {
+    Ok(raw)
+}
+
+// GraphQL — the SDL argument is `NameInput`, held to its rules before the body.
+#[query]
+#[public]
+async fn named(&self, input: NameInput) -> async_graphql::Result<String> {
+    Ok(input.name)
+}
+```
+
+```rust title="crates/features/src/users/ws/gateway.rs"
+// WebSockets — the message payload is a `String`, piped before the handler.
+#[subscribe_message("trim")]
+async fn trim_handler(&self, Piped(name): Piped<Trim>) -> String {
+    name
+}
+```
+
+```rust title="crates/features/src/posts/mcp/tool.rs"
+// MCP — the tool's schema is `SearchPostsDto`, held to its rules before the body.
+#[tool(description = "Search posts by title")]
+#[public(Read, post::Entity)]
+async fn search_posts(
+    &self,
+    Parameters(search): Parameters<SearchPostsDto>,
+) -> Result<String, McpError> {
+    /* ... */
+}
+```
+
+```rust title="crates/features/src/users/queue/processor.rs"
+// Queue — the job payload is a `String`, piped after deserialization.
+#[process(queue = SignupsQueue, retries = 0)]
+async fn handle(&self, Piped(name): Piped<Trim>) -> anyhow::Result<()> {
+    /* ... */
+}
+```
+
+## What a rejection becomes
+
+A `PipeError` rejection surfaces as the transport's native error —
+the handler body never runs:
+
+| Transport | A rejection becomes |
+|-----------|--------------------|
+| HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7", "code": "INVALID_ARGUMENT" }`) |
+| GraphQL | An error in the response's `errors` array, under `extensions.code: "INVALID_ARGUMENT"` |
+| WebSockets | An error frame on the socket (`{ event, data: { error, code: "INVALID_ARGUMENT", errors? } }`) |
+| MCP | `invalid_params` (`-32602`), `{ code: "INVALID_ARGUMENT", errors? }` in the error's `data` |
+| Queue | A job error that dead-letters at once: the same payload fails every attempt |
+
+A handler that parses a value itself answers its `PipeError` the same way,
+through its edge's `pipe_error`: `nest_rs::http::pipe_error`,
+`nest_rs::graphql::pipe_error`, `nest_rs::mcp::pipe_error`, and
+`WsReply::pipe_error` on WebSockets.
+
+A type's rules attach the structured field-level errors to the rejection, and
+**every** transport carries them through under the name
+`errors`: an RFC 9457 extension member on HTTP, `extensions.errors` on
+GraphQL, `data.errors` on a WebSocket frame and in an MCP error, an `errors`
+field on the queue's `job dead-lettered` event. A client (or an operator
+reading a dead-letter log) can always tell which field was wrong, not merely
+that something was. Every edge names the rejection's class beside that map,
+`INVALID_ARGUMENT`, in the member a problem's class rides in there: `code` on
+HTTP, `extensions.code` on GraphQL, `data.code` on WebSockets and MCP. `errors`
+is the field map and nothing else, so a field named `code` never meets the
+class. GraphQL's names each field as its
+[schema spells it](/graphql/error-codes/#field-errors-use-the-schemas-names), `displayName` for a Rust
+`display_name`; the others name it as serde reads it.
+
+## Going further
+
+- [Pipes](/fundamentals/pipes/) — the pipe contract, the built-in set and the
+  HTTP binding.
+- [Global pipes](/fundamentals/global-pipes/) — one pipe over every input of
+  the app.
+- [GraphQL errors](/graphql/errors/) — how a field's rejection reaches the
+  client.

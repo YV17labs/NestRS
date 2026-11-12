@@ -1,6 +1,7 @@
 /// Why a pipe rejected its input. A surface adapter renders it (the HTTP one as
 /// a `400`). Carries a human `message` plus optional structured `details` (e.g.
-/// the field-level errors from [`ValidationPipe`](crate::ValidationPipe)).
+/// the field-level errors of a type's `validator` rules, `From` its
+/// `ValidationErrors`).
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{message}")]
 pub struct PipeError {
@@ -55,8 +56,7 @@ mod tests {
 
     #[test]
     fn display_matches_message() {
-        // `PipeError`'s `#[error("{message}")]` discipline matters — a renderer
-        // (HTTP, WS) writes `Display`, never the inner struct.
+        // A renderer (HTTP, WS) writes `Display`, never the inner struct.
         let err = PipeError::new("not a uuid");
         assert_eq!(err.to_string(), "not a uuid");
     }

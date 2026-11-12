@@ -1,0 +1,75 @@
+---
+title: Authorizing WebSocket messages
+description: A gateway's guards run once at its upgrade, and the ability they attach reaches every message, each declaring the posture it gates on.
+sidebar:
+  order: 6.1
+---
+
+A WS connection is one HTTP upgrade; messages arrive over a long-lived socket
+and dispatch into separate handlers. The upgrade is the gateway's own request,
+so the gateway declares its guards itself, and its adapter imports the module
+providing them, as an HTTP adapter does:
+
+```rust title="crates/features/src/users/ws/module.rs (from the demo)"
+#[module(
+    imports = [UsersModule, AuthzModule],
+    providers = [UsersGateway],
+)]
+pub struct UsersWsModule;
+```
+
+The ability the upgrade's guards attach crosses the connection into every
+message and stays off a connection hook's reads, which no posture names. The gateway
+runs each as a unit of work of its own — a transaction opened on its first query,
+committed unless the reply is an error frame — with no shared state across messages.
+
+The gateway struct binds the real guards; because the upgrade is an HTTP `GET`,
+they run once on it, after the browser origin is checked, and the access graph
+validates them like any HTTP binding (omit `AuthzModule` ⇒ the guards are
+unreachable ⇒ boot fails):
+
+```rust title="crates/features/src/chat/ws/gateway.rs"
+#[gateway(path = "/ws")]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct ChatGateway { /* ... */ }
+
+#[messages]
+impl ChatGateway {
+    #[subscribe_message("users.list")]
+    #[authorize(Read, users::Entity)]
+    async fn list(&self) -> Result<Vec<User>, ServiceError> {
+        Ok(self.svc.list().await?.iter().map(User::from).collect())
+    }
+}
+```
+
+`AuthnGuard` + `AuthzGuard` run at the upgrade — those are real HTTP
+guards on a real `GET`, so they declare `GuardFor<HttpView>`, not
+`GuardFor<WsView>`; `#[gateway]` emits that bound, and `GuardFor<WsView>` is
+what a guard bound beside a `#[subscribe_message]` owes instead.
+
+## A posture per message
+
+**Above that, a message declares a posture where it gates more**, as a route
+does: the guards at the upgrade cover it, so it needs none of its own, and one no
+guard identifying a caller covers says `#[public]` or fails the boot; a rate limit
+identifies no one, so it covers nothing. `#[authorize(Action, Entity)]`
+emits the class gate (`nest_rs::authz::class_gate`, every edge's) before the payload
+is deserialized, and the handler reads under the caller's ability — so a handler
+answering with entity rows writes **no masking call**: each wire row it builds is
+judged for the caller, a withheld column reading `null` in the frame. A gate no
+`AuthzGuard` reaches, at the upgrade or beside the message, refuses the boot, and
+one still finding no ambient ability fails closed. See
+[WebSockets / Message posture](/websockets/posture/) for the full contract.
+
+An optional per-message `#[use_guards(...)]` still adds event-level
+checks; such a guard runs `Guard::check` and must declare
+`GuardFor<WsView>` — see [WebSockets / Guards](/websockets/guards/).
+
+## Going further
+
+- [Endpoint guards](/security/authorization/endpoint-guards/) — how GraphQL
+  and MCP build the ability at their request.
+- [WebSocket guards](/websockets/guards/) — the upgrade gate and the
+  per-message gate, one trait.
+- [WebSockets / Messages](/websockets/messages/) — the message contract.

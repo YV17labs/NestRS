@@ -1,48 +1,46 @@
-//! Activation seam for HTTP. Import [`HttpModule::for_root(...)`] in an
-//! `AppModule.imports` and the framework attaches the
-//! [`HttpTransport`](crate::HttpTransport) at boot. Every option lives on
-//! [`HttpConfig`] (host + port + optional TLS), populated either by the
-//! `NESTRS_HTTP__*` env scheme or by the pinned struct.
+//! Activation seam for HTTP: importing [`HttpModule`] attaches the
+//! [`HttpTransport`] at boot, configured through [`HttpModule::for_root`].
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule, TransportContribution};
+use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::__private::RuntimeModule;
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, Unnamed};
 
 use crate::config::HttpConfig;
 use crate::transport::HttpTransport;
 
-/// The HTTP activation seam. Import [`HttpModule::for_root`] in an app module's
-/// `imports` to attach the [`HttpTransport`](crate::HttpTransport) at boot.
+/// The HTTP activation seam: it attaches the [`HttpTransport`] at boot. A
+/// listed controller brings it, as does every module mounting on HTTP, each
+/// importing it bare, and the app still runs one server; the app imports
+/// [`HttpModule::for_root`] only to pin its config.
 pub struct HttpModule;
 
+/// What a controller runs on, which `#[routes]` brings.
+pub const RUNTIME: &[RuntimeModule] = &[RuntimeModule::of::<HttpModule>()];
+
 impl HttpModule {
-    /// `None` ⇒ load from `NESTRS_HTTP__*`; `Some(cfg)` pins in code.
-    pub fn for_root(config: impl Into<Option<HttpConfig>>) -> HttpSetup {
-        HttpSetup {
-            pinned: config.into(),
-        }
+    /// Pin `config` as the base `<PREFIX>_HTTP__*` overlays, per field; the
+    /// bare import reads those variables over [`HttpConfig`]'s defaults.
+    pub fn for_root(config: HttpConfig) -> HttpSetup {
+        ConfigModule::setup(config)
     }
 }
 
-/// The configured import produced by [`HttpModule::for_root`]. Registers the
-/// [`HttpConfig`] (pinned or env-loaded) and contributes the HTTP transport.
-pub struct HttpSetup {
-    pinned: Option<HttpConfig>,
-}
+/// The configured import [`HttpModule::for_root`] returns.
+pub type HttpSetup = ConfigSetup<HttpModule, HttpConfig>;
 
-impl DynamicModule for HttpSetup {
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder)
+impl Module for HttpModule {
+    // A bare import still reads `<PREFIX>_HTTP__*`; a `for_root(cfg)`'s
+    // declared value supersedes this env-only one.
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature::<Unnamed, HttpConfig>(builder)
     }
 
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        builder.provide_meta(TransportContribution {
-            name: "HttpTransport",
-            build: |c| {
-                let cfg = c
-                    .get::<HttpConfig>()
-                    .expect("HttpConfig is resolved by ConfigModule::provide_feature");
-                Ok(Box::new(HttpTransport::from_config(&cfg)?))
-            },
+    // Registered once however many modules import it, so a feature importing
+    // it beside the app's `for_root` binds no second server to the port.
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transport(|c| {
+            let cfg = ConfigModule::resolved::<HttpConfig>(c)?;
+            HttpTransport::from_config(&cfg)
         })
     }
 }

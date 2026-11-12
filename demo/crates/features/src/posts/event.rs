@@ -1,10 +1,6 @@
-use uuid::Uuid;
-
-use super::entities::post::Post;
+use super::entities::post::Model;
 
 #[derive(Clone)]
 pub struct PostPublishedEvent {
-    pub post_id: Uuid,
-    pub org_id: Uuid,
-    pub post: Post,
+    pub post: Model,
 }

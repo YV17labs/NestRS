@@ -1,37 +1,49 @@
-//! `nestrs g resource <name>` — a DB-backed CRUD slice: an `#[expose]` entity,
-//! a `CrudService`, and a `#[crud]` HTTP controller behind the app's guards.
+//! `nestrs g resource <name> [<column>:<type>[:nullable]…]` — a DB-backed CRUD
+//! slice: an `#[expose]` entity, a `CrudService`, and a `#[crud]` HTTP
+//! controller behind the app's guards, with its table's migration and, in the
+//! app serving it, its round trip — the one column list writing the entity's
+//! fields, the migration's columns and the round trip's body alike.
 //!
-//! **Guards are not optional here, by construction.** Every read `Repo` runs is
-//! filtered by the caller's ambient `Ability`, and an HTTP request has no
-//! ability unless an `AbilityGuard` installed one — so an unguarded DB-backed
-//! controller compiles, mounts, and then serves nothing. The generator
-//! therefore emits the guarded shape and bootstraps the `g auth` adapter when
-//! the workspace has none.
+//! **Guards are not optional**: `Repo` filters every read by the ambient
+//! `Ability` only an `AbilityGuard` installs, so the generator emits the guarded
+//! shape and bootstraps `g auth` when the workspace has none.
 
 use std::path::PathBuf;
 
 use super::auth;
-use super::cargo::{auth_deps, ensure_features_deps, ensure_workspace_deps, resource_deps};
-use super::support::{finish, wire_into_app};
+use super::cargo::{
+    auth_deps, ensure_dev_deps, ensure_features_deps, ensure_workspace_deps, resource_deps,
+    round_trip_dev_deps,
+};
+use super::migration::{queue_migration, refuse_reserved, render_migration};
+use super::support::{Import, Wiring, data_layer, finish, wire_into_app, wiring_lines};
+use crate::column::{self, Column, Table};
 use crate::commands::resolve_start;
-use crate::context::Context;
-use crate::error::{CliError, CliResult};
+use crate::context::{Context, TargetApp};
+use crate::error::{CliError, CliResult, read_if_exists};
 use crate::naming::Names;
-use crate::scaffold::{Renderer, Scaffold, ensure_lines};
+use crate::scaffold::{Renderer, Scaffold, ensure_decl, ensure_lines};
 use crate::templates::resource;
 
-pub struct ResourceOptions {
+pub(crate) struct ResourceOptions {
     pub name: String,
+    /// `<name>:<type>[:nullable]`, each as typed.
+    pub columns: Vec<String>,
     pub path: Option<PathBuf>,
+    /// The app to wire into (`--app`).
+    pub app: Option<String>,
     pub dry_run: bool,
 }
 
-pub fn run(opts: ResourceOptions) -> CliResult<()> {
+pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
+    let target = ctx.target_app(opts.app.as_deref())?;
 
     crate::naming::validate_feature_name(&opts.name).map_err(CliError::InvalidFeatureName)?;
     let names = Names::parse(&opts.name);
+    refuse_reserved(&names.snake, &names.table())?;
+    let columns = Column::parse_all(&opts.columns).map_err(CliError::InvalidColumn)?;
     let root = ws.feature_root(&names.snake);
     if root.exists() {
         return Err(CliError::FeatureExists {
@@ -40,22 +52,22 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
         });
     }
 
-    let r = Renderer::new(&names);
+    let r = Renderer::new(&names).with("columns", column::fields(&columns));
     let mut s = Scaffold::new();
 
     // The guards the controller binds have to exist before it names them.
-    let scaffolded_auth = !auth::exists(&ws);
-    if scaffolded_auth {
-        auth::queue(&mut s, &ws, Vec::new());
-    }
+    let bootstrapped = if auth::exists(&ws) {
+        None
+    } else {
+        Some(auth::queue(&mut s, &ws, Vec::new())?)
+    };
+    let scaffolded_auth = bootstrapped.is_some();
 
-    // DB-backed port.
     s.create(root.join("entity.rs"), r.render(resource::ENTITY));
     s.create(root.join("service.rs"), r.render(resource::SERVICE));
     s.create(root.join("module.rs"), r.render(resource::MODULE));
     s.create(root.join("mod.rs"), r.render(resource::MOD));
 
-    // HTTP adapter — `#[crud]` behind AuthnGuard + AuthzGuard.
     s.create(root.join("http/mod.rs"), r.render(resource::HTTP_MOD));
     s.create(root.join("http/module.rs"), r.render(resource::HTTP_MODULE));
     s.create(
@@ -63,9 +75,8 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
         r.render(resource::HTTP_CONTROLLER),
     );
 
-    // Dependencies + feature registration. Exactly one `edit` per path,
-    // folding in the auth adapter's when this run bootstrapped it: a second
-    // `edit` on the same file re-reads it from disk and clobbers the first.
+    // Exactly one `edit` per path: a second re-reads the file from disk and
+    // clobbers the first.
     let mut deps = resource_deps();
     let mut decls = Vec::new();
     if scaffolded_auth {
@@ -73,24 +84,47 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
         decls.extend(auth::lib_decls());
     }
     decls.push(format!("pub mod {};", names.snake));
-    s.edit(
+    // The table's migration, and the app's round-trip test beside the app the
+    // resource is wired into, which migrates with it.
+    let mut workspace_deps = deps.clone();
+    let migration = queue_migration(
+        &mut s,
+        &ws,
+        &Names::parse(&format!("create_{}", names.snake)),
+        render_migration(&names, &Table::around(&columns), false),
+        &mut workspace_deps,
+        |repeated| CliError::ResourceTableMigrated {
+            resource: names.snake.clone(),
+            table: names.table(),
+            path: repeated.path,
+        },
+    )?;
+    let round_trip = round_trip_test(&target, &names, &columns)?;
+    if round_trip.is_some() {
+        workspace_deps.extend(round_trip_dev_deps());
+    }
+    s.edit_manifest(
         ws.root.join("Cargo.toml"),
-        ensure_workspace_deps(deps.clone()),
+        ensure_workspace_deps(workspace_deps),
     );
-    s.edit(ws.features_cargo(), ensure_features_deps(deps));
+    s.edit_manifest(ws.features_cargo(), ensure_features_deps(deps));
     s.edit(ws.features_lib(), ensure_lines(decls));
 
-    // Wire the HTTP module into the current app — but only when it has a DB,
-    // since the resource module needs `SeaOrmDatabaseModule` at boot. The auth roots
-    // ride along in the same edit when this run scaffolded them, so the
-    // composition site stays the inventory `g auth` would have written.
-    let use_path = format!("features::{}::{}", names.snake, names.http_module());
-    let http_module = names.http_module();
-    let mut imports = vec![(use_path.as_str(), http_module.as_str())];
+    // The edge, the data layer every `#[crud]` route runs its unit of work on,
+    // and the token route of the auth adapter this run wrote.
+    let edge = Import::new(format!(
+        "features::{}::{}",
+        names.snake,
+        names.http_module()
+    ));
+    let mut beside = vec![data_layer()];
     if scaffolded_auth {
-        imports.extend(auth::app_imports());
+        beside.push(auth::app_import());
     }
-    let wired_app = wire_into_app(&ctx, &mut s, &imports, Some("SeaOrmDatabaseModule"));
+    let wiring = wire_into_app(&target, &mut s, &edge, &beside)?;
+    if let Some(test) = &round_trip {
+        test.queue(&mut s);
+    }
 
     finish(
         s,
@@ -98,58 +132,147 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
         &ws.root,
         &format!("resource `{}`", names.snake),
     )?;
-    print_next_steps(&ctx, &names, wired_app, scaffolded_auth);
+    print_next_steps(
+        &names,
+        &migration,
+        &wiring,
+        &edge,
+        &beside,
+        round_trip.as_ref(),
+        bootstrapped.as_ref(),
+    );
     Ok(())
 }
 
-fn print_next_steps(
-    ctx: &Context,
+/// The round-trip test `g resource` writes into the app's `e2e` suite: the
+/// test file, the suite root's module line and `boot` fixture, and the
+/// suite's dev-dependencies.
+struct RoundTrip {
+    /// The app's crate root.
+    app: PathBuf,
+    test: PathBuf,
+    test_body: String,
+    main: PathBuf,
+    main_body: MainBody,
+}
+
+/// What the suite root gets, decided by what it holds.
+enum MainBody {
+    /// No root yet: written whole.
+    Create(String),
+    /// An empty root (`nestrs new`'s): replaced whole.
+    Replace(String),
+    /// A root with tests of its own: the module line, and `boot` when it has
+    /// none.
+    Gains {
+        module: String,
+        boot: Option<String>,
+    },
+}
+
+/// The test for a resource wired into `target`, writing and reading back a
+/// value of each of `columns`; none for a resource no app serves.
+fn round_trip_test(
+    target: &TargetApp,
     names: &Names,
-    wired_app: Option<PathBuf>,
-    scaffolded_auth: bool,
+    columns: &[Column],
+) -> CliResult<Option<RoundTrip>> {
+    let TargetApp::App { name, root } = target else {
+        return Ok(None);
+    };
+    let app = Names::parse(name);
+    let r = Renderer::new(names)
+        .with("app_snake", app.snake.clone())
+        .with("app_module", app.module())
+        .with("body", column::body(columns))
+        .with("assertions", column::assertions(columns));
+    let main = root.join("tests/e2e/main.rs");
+    let main_body = match read_if_exists(&main)? {
+        None => MainBody::Create(r.render(resource::E2E_MAIN)),
+        Some(current) if current.trim().is_empty() => {
+            MainBody::Replace(r.render(resource::E2E_MAIN))
+        }
+        Some(current) => MainBody::Gains {
+            module: format!("mod {};", names.snake),
+            boot: (!current.contains("fn boot(")).then(|| r.render(resource::E2E_BOOT)),
+        },
+    };
+    Ok(Some(RoundTrip {
+        app: root.clone(),
+        test: root.join(format!("tests/e2e/{}.rs", names.snake)),
+        test_body: r.render(resource::E2E_TEST),
+        main,
+        main_body,
+    }))
+}
+
+impl RoundTrip {
+    fn queue(&self, s: &mut Scaffold) {
+        s.create(&self.test, self.test_body.clone());
+        match &self.main_body {
+            MainBody::Create(body) => {
+                s.create(&self.main, body.clone());
+            }
+            MainBody::Replace(body) => {
+                let body = body.clone();
+                s.edit(&self.main, Box::new(move |_| Some(body.clone())));
+            }
+            MainBody::Gains { module, boot } => {
+                let lines = ensure_decl(module);
+                let boot = boot.clone();
+                s.edit(
+                    &self.main,
+                    Box::new(move |current: &str| {
+                        let declared = lines(current).unwrap_or_else(|| current.to_owned());
+                        let out = match &boot {
+                            Some(boot) => format!("{declared}{boot}"),
+                            None => declared,
+                        };
+                        (out != current).then_some(out)
+                    }),
+                );
+            }
+        }
+        s.edit_manifest(
+            self.app.join("Cargo.toml"),
+            ensure_dev_deps(round_trip_dev_deps()),
+        );
+    }
+}
+
+fn print_next_steps(
+    names: &Names,
+    migration: &str,
+    wiring: &Wiring,
+    edge: &Import,
+    beside: &[Import],
+    round_trip: Option<&RoundTrip>,
+    bootstrapped: Option<&auth::Secrets>,
 ) {
     let snake = &names.snake;
     println!();
     println!("Next steps:");
-    println!("  1. Fill in `entity.rs` columns, then:  nestrs g migration create_{snake}");
-    println!("  2. Grant the ability in `crates/features/src/authz/ability.rs` — until you");
-    println!("     do, every route answers 403 and no row crosses the data layer:");
+    println!("  1. Grant the ability in `define`, in `crates/features/src/authz/ability.rs`, its");
+    println!("     `_ab` parameter becoming `ab` — until you do, every route answers 403 and no");
+    println!("     row crosses the data layer:");
     println!();
-    println!("       use crate::{snake} as {snake}_entity;");
-    println!("       ab.can(Action::Manage, {snake}_entity::Entity);");
+    println!("       ab.can(nest_rs::authz::Action::Manage, crate::{snake}::Entity);");
     println!();
-    if wired_app.is_some() {
+    println!("  2. Apply its table's migration, `crates/migrations/src/{migration}.rs`:");
+    println!("       nestrs run db up");
+    for (i, line) in wiring_lines(wiring, edge, beside).iter().enumerate() {
+        let lead = if i == 0 { "  3. " } else { "     " };
+        println!("{lead}{line}");
+    }
+    if let (Some(test), Wiring::Wired { root, .. }) = (round_trip, wiring) {
+        let file = test.test.trim_prefix(root).display().to_string();
         println!(
-            "  3. {} is wired into the current app.",
-            names.http_module()
+            "     Its round trip is `{file}` in that app: `nestrs run test e2e` passes it once"
         );
-    } else if ctx.current_app.is_some() {
-        println!(
-            "  3. Add `SeaOrmModule::for_root(None)` and `SeaOrmDatabaseModule` to this app, then import \
-             `features::{}::{}`.",
-            snake,
-            names.http_module()
-        );
-    } else {
-        println!(
-            "  3. Import `features::{}::{}` in an app that has `SeaOrmDatabaseModule`.",
-            snake,
-            names.http_module()
-        );
+        println!("     the grant is in.");
     }
     println!("  4. Add transports:  nestrs g graphql|ws {}", names.kebab);
-    if scaffolded_auth {
-        println!();
-        println!("Also created the auth adapter (authn/, authz/) the guards need,");
-        println!("plus a development HS256 secret in `.env` — replace it before deploying.");
-        println!();
-        // The adapter includes a route that mints bearer tokens with no
-        // credential — announced here because `g resource` writes it as a side
-        // effect, so a reader who never ran `g auth` would meet it only in a
-        // boot warning whose remedy is to import it.
-        println!("It includes `POST /auth/dev-token`, which mints a token with no credential so");
-        println!("your guarded routes are callable at once. It refuses to boot outside");
-        println!("development and test. Import `features::authn::AuthnHttpModule` to serve it,");
-        println!("or delete `crates/features/src/authn/http/` and write the real login route.");
+    if let Some(secrets) = bootstrapped {
+        auth::print_bootstrapped(secrets);
     }
 }

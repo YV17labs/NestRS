@@ -1,37 +1,60 @@
-//! [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html) Problem Details for HTTP APIs.
+//! [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html) Problem Details for HTTP APIs,
+//! the single error format at the HTTP boundary.
 //!
-//! The single error format at the HTTP boundary: every modelled failure the
-//! transport renders — a handler's `ServiceError`, an inline [`ProblemDetails`],
-//! a validation rejection, a guard denial, a domain exception filter — is an
-//! `application/problem+json` body. A handler that wants a structured error
-//! returns `Err(ProblemDetails::not_found().with_detail("…"))`; the
-//! [`ResponseError`] impl below renders the JSON envelope and stamps the
-//! `Content-Type`. [`normalize_error_response`] is the transport-edge boundary
-//! that lifts any leftover raw plain-text error (an unmounted-route 404, a 413,
-//! an extractor's bad-path-id 400) onto the same envelope, so no route returns
-//! a bare-text or foreign-shaped body for a modelled failure. RFC 9457
-//! extension members (e.g. field-level errors under `errors`) ride via
-//! [`ProblemDetails::with_extension`].
+//! A handler returns `Err(ProblemDetails::not_found().with_detail("…"))`;
+//! [`normalize_error_response`] lifts any leftover plain-text transport error (an
+//! unmounted-route 404, a 413) onto the same `application/problem+json` envelope.
 
-use poem::error::ResponseError;
-use poem::http::{StatusCode, header};
-use poem::{IntoResponse, Response};
+use http::{HeaderValue, StatusCode, header};
+use nest_rs_core::{Code, DecodeError, Problem, code};
 use serde::Serialize;
 
-/// Body of an `application/problem+json` response. Stable URIs for the
-/// well-known constructors live at `https://www.rfc-editor.org/rfc/rfc9457` —
-/// `type` is the only field a client may key on, so the URIs are stable across
-/// releases (and overridable via [`with_type`](Self::with_type) when an app
-/// wants to publish its own type registry).
-// `#[non_exhaustive]`: build via the constructors (`from_status`/`from_error`/
-// `bad_request`/…) + `with_*` builders, never a struct literal — so a new RFC
-// 9457 member can be added without a breaking change. Fields stay `pub` for
-// reading a response's problem body.
+use crate::HttpError;
+
+// Defined beside the 401 that carries it; `challenge` re-exports it as RFC
+// 6750's grammar.
+/// The scheme name, matched case-insensitively per RFC 7235 §2.1.
+pub const BEARER: &str = "Bearer";
+
+/// The extension member a problem document carries its [`Code`] in.
+const CODE: &str = "code";
+
+/// The extension member a problem document carries a field map in.
+pub(crate) const FIELD_ERRORS: &str = "errors";
+
+/// The status a [`Problem`] answers.
+pub(crate) fn status_of(problem: &Problem) -> StatusCode {
+    // `Problem::new` holds its status to 400..=599, every one of them valid.
+    StatusCode::from_u16(problem.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// The response a [`Problem`] answers: its document, and `Retry-After` when it
+/// names a wait (RFC 9110 §10.2.3).
+pub(crate) fn problem_response(problem: &Problem) -> crate::Response {
+    let mut response = crate::IntoResponse::into_response(ProblemDetails::from_problem(problem));
+    if let Some(seconds) = problem.retry_after() {
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+    }
+    response
+}
+
+/// Body of an `application/problem+json` response.
+///
+/// Every problem the framework builds from a status alone has one `type`,
+/// `about:blank`, and the status's reason phrase as its `title`: RFC 9457
+/// §4.2.1's spelling of a problem that means nothing beyond its status. A
+/// status that names one of core's classes adds that class's `code` member and
+/// nothing else — the code a [`Problem`] of that class carries on every edge —
+/// so a problem reads the same whichever part of the framework answered it. A
+/// problem type of an app's own, which a client may key on, is set with
+/// [`with_type`](Self::with_type).
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct ProblemDetails {
-    /// Stable URI identifying the problem type. `about:blank` means the client
-    /// should ignore the type and key on `status` + `title` instead.
+    /// URI identifying the problem type. `about:blank` means the problem says
+    /// nothing beyond its `status`, which a client keys on instead.
     #[serde(rename = "type")]
     pub type_uri: String,
     /// Short, human-readable summary of the problem type (stable per `type`).
@@ -46,12 +69,15 @@ pub struct ProblemDetails {
     /// when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
-    /// RFC 9457 **extension members** — problem-specific data flattened
-    /// alongside the standard fields (e.g. field-level validation errors under
-    /// an `errors` key). Empty ⇒ no extra keys serialized.
+    /// RFC 9457 **extension members**, flattened alongside the standard fields.
     #[serde(flatten)]
-    pub extensions: serde_json::Map<String, serde_json::Value>,
+    pub extensions: Box<serde_json::Map<String, serde_json::Value>>,
 }
+
+// clippy's `result_large_err` refuses, at its default threshold, a `Result`
+// whose error is 128 bytes or more, and an app's handler returns this one; the
+// map is boxed because `serde_json/preserve_order` triples its size.
+const _: () = assert!(size_of::<ProblemDetails>() < 128);
 
 fn serialize_status<S: serde::Serializer>(
     status: &StatusCode,
@@ -61,116 +87,145 @@ fn serialize_status<S: serde::Serializer>(
 }
 
 impl ProblemDetails {
-    /// Convert a `Display` value to the problem `detail` field. Chainable
-    /// shorthand for `.with_detail(err.to_string())`.
-    pub fn from_error(status: StatusCode, title: impl Into<String>, err: impl ToString) -> Self {
-        Self {
-            type_uri: "about:blank".into(),
-            title: title.into(),
-            status,
-            detail: Some(err.to_string()),
-            instance: None,
-            extensions: serde_json::Map::new(),
+    /// A problem whose `detail` is `err`'s own sentence, any decode failure its
+    /// chain holds said without its value ([`DecodeError::redact`]).
+    pub fn from_error(
+        status: StatusCode,
+        title: impl Into<String>,
+        err: &(dyn std::error::Error + 'static),
+    ) -> Self {
+        Self::from_status(status)
+            .with_title(title)
+            .with_detail(DecodeError::redact(&err.to_string(), Some(err)).into_owned())
+    }
+
+    /// The HTTP document of a [`Problem`]: its status's own problem, under
+    /// the problem's [`type_uri`](Problem::type_uri) and
+    /// [`title`](Problem::title) when it names them, its
+    /// [`detail`](Problem::detail) and its field map, the `errors` extension
+    /// member, on a `4xx`, and its code as the `code` extension member.
+    ///
+    /// ```
+    /// use nest_rs_core::{Problem, code};
+    /// use nest_rs_http::ProblemDetails;
+    ///
+    /// let document = ProblemDetails::from_problem(
+    ///     &Problem::new(409, code::CONFLICT).with_detail("the handle is taken"),
+    /// );
+    /// assert_eq!(document.status.as_u16(), 409);
+    /// assert_eq!(document.detail.as_deref(), Some("the handle is taken"));
+    /// assert_eq!(document.extensions["code"], "CONFLICT");
+    /// ```
+    pub fn from_problem(problem: &Problem) -> Self {
+        let mut document = Self::about_blank(status_of(problem)).with_code(problem.code());
+        if let Some((type_uri, title)) = problem.type_uri().zip(problem.title()) {
+            document = document.with_type(type_uri).with_title(title);
+        }
+        if let Some(detail) = problem.detail() {
+            document = document.with_detail(detail);
+        }
+        if let Some(errors) = problem.errors() {
+            document = document.with_extension(FIELD_ERRORS, errors.clone());
+        }
+        document
+    }
+
+    /// The problem an error answers with `status`: the status's own problem,
+    /// whose `detail` on a `4xx` is `error`'s sentence said without any value
+    /// it quotes ([`DecodeError::redact`]), and which a `5xx` answers without
+    /// one, so a driver's message never reaches the wire.
+    pub(crate) fn answering(status: StatusCode, error: &(dyn std::error::Error + 'static)) -> Self {
+        let problem = Self::from_status(status);
+        if !status.is_client_error() {
+            return problem;
+        }
+        let sentence = error.to_string();
+        let said = DecodeError::redact(sentence.trim(), Some(error));
+        if said.is_empty() {
+            problem
+        } else {
+            problem.with_detail(said.into_owned())
         }
     }
 
-    fn new(type_uri: &'static str, title: &'static str, status: StatusCode) -> Self {
+    /// The problem a bare [`StatusCode`] answers: `about:blank` and the
+    /// status's reason phrase (RFC 9457 §4.2.1), and the `code` of the class
+    /// the status names when core names one — the document
+    /// [`from_problem`](Self::from_problem) gives that class's [`Problem`], so
+    /// one class answers one document whoever answered it, a server failure
+    /// the framework does not describe included. Core names a class for every
+    /// status the framework answers; a status it never writes (a `402`, a
+    /// `451`) carries no `code`.
+    ///
+    /// ```
+    /// use nest_rs_http::{ProblemDetails, StatusCode};
+    ///
+    /// let failed = ProblemDetails::from_status(StatusCode::INTERNAL_SERVER_ERROR);
+    /// assert_eq!(failed.extensions["code"], "INTERNAL");
+    /// assert!(failed.detail.is_none());
+    /// let busy = ProblemDetails::from_status(StatusCode::SERVICE_UNAVAILABLE);
+    /// assert_eq!(busy.extensions["code"], "UNAVAILABLE");
+    /// let missing = ProblemDetails::from_status(StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.extensions["code"], "NOT_FOUND");
+    /// let large = ProblemDetails::from_status(StatusCode::PAYLOAD_TOO_LARGE);
+    /// assert_eq!((large.title.as_str(), &large.extensions["code"]), ("Content Too Large", &"CONTENT_TOO_LARGE".into()));
+    /// assert!(ProblemDetails::from_status(StatusCode::PAYMENT_REQUIRED).extensions.is_empty());
+    /// ```
+    pub fn from_status(status: StatusCode) -> Self {
+        let problem = Self::about_blank(status);
+        match status_class(status) {
+            Some(class) => problem.with_code(class),
+            None => problem,
+        }
+    }
+
+    /// `about:blank` and `status`'s reason phrase, no member beside them: the
+    /// base a caller naming the class itself puts its `code` on.
+    pub(crate) fn about_blank(status: StatusCode) -> Self {
         Self {
-            type_uri: type_uri.into(),
-            title: title.into(),
+            type_uri: "about:blank".into(),
+            title: reason_phrase(status).into(),
             status,
             detail: None,
             instance: None,
-            extensions: serde_json::Map::new(),
-        }
-    }
-
-    /// Build a problem from a bare [`StatusCode`], routing the well-known 4xx/5xx
-    /// through their canonical constructor (stable `type` URI + `title`) and
-    /// falling back to `about:blank` + the status' reason phrase for anything
-    /// else. The single seam the transport-edge mapper uses to lift a raw poem
-    /// error (an unmounted-route 404, a 413, a 405) onto the RFC-9457 envelope.
-    pub fn from_status(status: StatusCode) -> Self {
-        match status {
-            StatusCode::BAD_REQUEST => Self::bad_request(),
-            StatusCode::UNAUTHORIZED => Self::unauthorized(),
-            StatusCode::FORBIDDEN => Self::forbidden(),
-            StatusCode::NOT_FOUND => Self::not_found(),
-            StatusCode::CONFLICT => Self::conflict(),
-            StatusCode::UNPROCESSABLE_ENTITY => Self::unprocessable(),
-            StatusCode::INTERNAL_SERVER_ERROR => Self::internal(),
-            other => Self {
-                type_uri: "about:blank".into(),
-                title: other.canonical_reason().unwrap_or("Error").into(),
-                status: other,
-                detail: None,
-                instance: None,
-                extensions: serde_json::Map::new(),
-            },
+            extensions: Box::default(),
         }
     }
 
     /// A `400 Bad Request` problem.
     pub fn bad_request() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.400",
-            "Bad Request",
-            StatusCode::BAD_REQUEST,
-        )
+        Self::from_status(StatusCode::BAD_REQUEST)
     }
 
     /// A `401 Unauthorized` problem.
     pub fn unauthorized() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.401",
-            "Unauthorized",
-            StatusCode::UNAUTHORIZED,
-        )
+        Self::from_status(StatusCode::UNAUTHORIZED)
     }
 
     /// A `403 Forbidden` problem.
     pub fn forbidden() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.403",
-            "Forbidden",
-            StatusCode::FORBIDDEN,
-        )
+        Self::from_status(StatusCode::FORBIDDEN)
     }
 
     /// A `404 Not Found` problem.
     pub fn not_found() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.404",
-            "Not Found",
-            StatusCode::NOT_FOUND,
-        )
+        Self::from_status(StatusCode::NOT_FOUND)
     }
 
     /// A `409 Conflict` problem.
     pub fn conflict() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.409",
-            "Conflict",
-            StatusCode::CONFLICT,
-        )
+        Self::from_status(StatusCode::CONFLICT)
     }
 
     /// A `422 Unprocessable Content` problem — well-formed but semantically invalid.
     pub fn unprocessable() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.422",
-            "Unprocessable Content",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        )
+        Self::from_status(StatusCode::UNPROCESSABLE_ENTITY)
     }
 
-    /// A `500 Internal Server Error` problem.
+    /// A `500 Internal Server Error` problem, under the `INTERNAL` code: what
+    /// every failure the client is not told of answers.
     pub fn internal() -> Self {
-        Self::new(
-            "https://www.rfc-editor.org/rfc/rfc9110#status.500",
-            "Internal Server Error",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )
+        Self::from_status(StatusCode::INTERNAL_SERVER_ERROR)
     }
 
     /// Set the occurrence-specific `detail` message.
@@ -197,9 +252,8 @@ impl ProblemDetails {
         self
     }
 
-    /// Attach an RFC 9457 **extension member** — arbitrary problem-specific data
-    /// serialized alongside the standard fields. Field-level validation errors
-    /// ride here (e.g. `.with_extension("errors", json!({ "email": [...] }))`).
+    /// Attach an RFC 9457 **extension member**, serialized alongside the standard
+    /// fields (e.g. `.with_extension("errors", json!({ "email": [...] }))`).
     pub fn with_extension(
         mut self,
         key: impl Into<String>,
@@ -208,78 +262,121 @@ impl ProblemDetails {
         self.extensions.insert(key.into(), value.into());
         self
     }
+
+    /// The `code` member a client branches on, the class every edge names the
+    /// same failure by.
+    pub(crate) fn with_code(self, class: Code) -> Self {
+        self.with_extension(CODE, class.as_str())
+    }
+}
+
+/// The class `status` names, as core's codes each name their status: the
+/// class every status the framework answers is known by, `INVALID_ARGUMENT`
+/// for a `400` or a `422`, `UNAVAILABLE` for a `503`, the server unable to
+/// serve the request in time, and `INTERNAL` for any other `5xx`. `None` for a
+/// status the framework never answers.
+fn status_class(status: StatusCode) -> Option<Code> {
+    match status {
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => Some(code::INVALID_ARGUMENT),
+        StatusCode::UNAUTHORIZED => Some(code::UNAUTHENTICATED),
+        StatusCode::FORBIDDEN => Some(code::FORBIDDEN),
+        StatusCode::NOT_FOUND => Some(code::NOT_FOUND),
+        StatusCode::METHOD_NOT_ALLOWED => Some(code::METHOD_NOT_ALLOWED),
+        StatusCode::NOT_ACCEPTABLE => Some(code::NOT_ACCEPTABLE),
+        StatusCode::REQUEST_TIMEOUT => Some(code::REQUEST_TIMEOUT),
+        StatusCode::CONFLICT => Some(code::CONFLICT),
+        StatusCode::GONE => Some(code::GONE),
+        StatusCode::PRECONDITION_FAILED => Some(code::PRECONDITION_FAILED),
+        StatusCode::PAYLOAD_TOO_LARGE => Some(code::CONTENT_TOO_LARGE),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(code::UNSUPPORTED_MEDIA_TYPE),
+        StatusCode::RANGE_NOT_SATISFIABLE => Some(code::RANGE_NOT_SATISFIABLE),
+        StatusCode::UPGRADE_REQUIRED => Some(code::UPGRADE_REQUIRED),
+        StatusCode::TOO_MANY_REQUESTS => Some(code::RATE_LIMITED),
+        StatusCode::SERVICE_UNAVAILABLE => Some(code::UNAVAILABLE),
+        status if status.is_server_error() => Some(code::INTERNAL),
+        _ => None,
+    }
+}
+
+/// The `405` an address answers a method it does not serve, with the
+/// methods it does serve as its `Allow` (RFC 9110 §15.5.6).
+pub fn method_not_allowed(allow: HeaderValue) -> crate::Response {
+    let mut refused = crate::IntoResponse::into_response(ProblemDetails::from_status(
+        StatusCode::METHOD_NOT_ALLOWED,
+    ));
+    refused.headers_mut().insert(header::ALLOW, allow);
+    refused
+}
+
+/// The reason phrase RFC 9110 gives `status`, where the `http` crate still
+/// says the RFC 7231 one.
+fn reason_phrase(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::PAYLOAD_TOO_LARGE => "Content Too Large",
+        StatusCode::UNPROCESSABLE_ENTITY => "Unprocessable Content",
+        other => other.canonical_reason().unwrap_or("Error"),
+    }
 }
 
 /// Normalize a response carrying a raw (non-problem) transport error onto the
 /// single RFC-9457 `application/problem+json` envelope.
 ///
-/// The transport-edge boundary the framework installs around the whole route
-/// tree. A `< 400` response, or one already rendered as
-/// `application/problem+json` (a [`ProblemDetails`], a `ServiceError`, a guard
-/// denial, a domain exception filter), passes through untouched. A `>= 400`
-/// response whose body is poem's default `text/plain` (or empty) — an
-/// unmounted-route `404`, a `413`, a `405`, a bad-path-id `400` an extractor
-/// rejected — is rebuilt as `problem+json` keyed on its status, **preserving
-/// the original headers** (`WWW-Authenticate`, `Retry-After`, …). A
-/// client-error (`4xx`) body rides through as `detail`; a server-error (`5xx`)
-/// body is dropped so a driver or panic message never reaches the wire. A
-/// deliberately-typed body (`application/json`, `text/html`, …) is left alone.
-pub async fn normalize_error_response(resp: Response) -> Response {
+/// Only a `>= 400` response with a `text/plain` or empty body is rebuilt, keeping
+/// its headers. Its text becomes `detail` only on a `4xx` the framework wrote
+/// itself, its own sentence with any decode failure said without its value
+/// ([`DecodeError::redact`]); any other text — a library's, a layer's, a
+/// handler's — may quote what the client sent, and answers its status's
+/// problem alone, as a `5xx` always does.
+pub async fn normalize_error_response(resp: crate::Response) -> crate::Response {
     let status = resp.status();
     if !(status.is_client_error() || status.is_server_error()) {
         return resp;
     }
-    // A response a `Filter`/`ExceptionFilter` produced by mapping a handler
-    // error is tagged `MappedError` — its body is a deliberate wire contract
-    // (an app's own envelope, a custom status), never a raw transport error to
-    // rewrite.
-    if resp.extensions().get::<crate::MappedError>().is_some() {
-        return resp;
-    }
-    let content_type = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let already_problem = content_type
-        .as_deref()
-        .is_some_and(|ct| ct.starts_with("application/problem+json"));
-    // Only poem's default plain-text (or a bodyless) error is a raw transport
-    // error; anything a handler deliberately typed is left untouched.
-    let is_raw_transport_error = content_type
-        .as_deref()
-        .is_none_or(|ct| ct.starts_with("text/plain"));
-    if already_problem || !is_raw_transport_error {
+    if !is_raw_text(resp.headers()) {
         return resp;
     }
 
+    let said = resp.extensions().get::<Said>().is_some();
     let (parts, body) = resp.into_parts();
     let mut problem = ProblemDetails::from_status(status);
     if status.is_client_error()
+        && said
         && let Ok(bytes) = body.into_bytes().await
         && let Ok(text) = std::str::from_utf8(&bytes)
         && !text.trim().is_empty()
     {
-        problem = problem.with_detail(text.trim().to_owned());
+        problem = problem.with_detail(DecodeError::redact(text.trim(), None).into_owned());
     }
-    let mut response = problem.as_response();
-    // Carry the original response's headers across — the new body owns
-    // content-type / content-length, everything else (auth challenges, rate
-    // limits) survives. Content/transfer-encoding are dropped too: the
-    // replacement body is fresh and uncompressed, so a stale `Content-Encoding`
-    // copied from a compressed original would make the client fail to decode it.
-    //
-    // **The original wins.** The envelope stamps its own defaults (a bare
-    // `Bearer` on every 401); where the original names the same header it is
-    // strictly more specific — an RFC 9728 pointer, a step-up
-    // `error="insufficient_scope"` — so the first occurrence *replaces* the
-    // default rather than surviving beside it as a uselessly bare duplicate a
-    // client reading only the first value would follow. Later occurrences of a
-    // name append, so a genuinely multi-valued header (`Set-Cookie`) still
-    // arrives whole. Stated generically: the next envelope-level default gets
-    // the same treatment without this function learning its name.
+    replacing(problem, &parts.headers, parts.extensions)
+}
+
+/// Marks a raw-text error body the framework wrote — its own sentence, already
+/// said without the values it quoted — as the one text a problem's `detail`
+/// may carry.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Said;
+
+/// `response` with its raw-text body marked as a sentence the framework owns:
+/// one a sibling crate checked quotes nothing the request carried, which the
+/// normalizer then keeps as the problem's `detail`.
+pub fn framework_sentence(mut response: crate::Response) -> crate::Response {
+    response.extensions_mut().insert(Said);
+    response
+}
+
+/// `problem` as the answer, keeping the head of the response it replaces: its
+/// headers, and its extensions, which the layers outside it read.
+pub(crate) fn replacing(
+    problem: ProblemDetails,
+    headers: &http::HeaderMap,
+    extensions: http::Extensions,
+) -> crate::Response {
+    let mut response = crate::ResponseError::as_response(&problem);
+    // The fresh body is uncompressed: a stale `Content-Encoding` would fail decoding.
+    // An original header replaces the envelope's default (a bare `Bearer`), since a
+    // client reads the first value; later occurrences append (`Set-Cookie`).
     let mut replaced = std::collections::HashSet::new();
-    for (name, value) in parts.headers.iter() {
+    for (name, value) in headers.iter() {
         if name == header::CONTENT_TYPE
             || name == header::CONTENT_LENGTH
             || name == header::CONTENT_ENCODING
@@ -293,13 +390,33 @@ pub async fn normalize_error_response(resp: Response) -> Response {
             response.headers_mut().append(name.clone(), value.clone());
         }
     }
+    response.extensions_mut().extend(extensions);
     response
+}
+
+/// Whether a response with `headers` is a default rendering of an error —
+/// `text/plain`, or no body type at all — rather than a problem or a body
+/// somebody typed.
+pub(crate) fn is_raw_text(headers: &http::HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_none_or(|ct| ct.starts_with("text/plain"))
+}
+
+/// The outermost layer when something wraps the edge: every answer, an `Err`
+/// included, normalized onto the problem document.
+pub(crate) struct Normalized<E>(pub(crate) E);
+
+impl<E: crate::Endpoint> crate::Endpoint for Normalized<E> {
+    async fn call(&self, req: crate::Request) -> crate::Result<crate::Response> {
+        let answer = self.0.call(req).await.unwrap_or_else(HttpError::answer);
+        Ok(normalize_error_response(answer).await)
+    }
 }
 
 impl std::fmt::Display for ProblemDetails {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The error chain only ever shows in logs; the JSON body is the real
-        // response. Keep the `Display` form short and structured.
         write!(f, "{}: {}", self.status.as_u16(), self.title)?;
         if let Some(detail) = &self.detail {
             write!(f, " — {detail}")?;
@@ -310,40 +427,35 @@ impl std::fmt::Display for ProblemDetails {
 
 impl std::error::Error for ProblemDetails {}
 
-impl ResponseError for ProblemDetails {
+impl crate::ResponseError for ProblemDetails {
     fn status(&self) -> StatusCode {
         self.status
     }
 
-    fn as_response(&self) -> Response {
-        // Serialize the body once; on the off-chance serialization fails we
-        // fall back to an empty object so the status code still surfaces.
+    fn as_response(&self) -> crate::Response {
         let body = serde_json::to_vec(self).unwrap_or_else(|_| b"{}".to_vec());
-        let mut builder = Response::builder()
+        let mut builder = crate::Response::builder()
             .status(self.status)
-            .header(header::CONTENT_TYPE, "application/problem+json");
-        // RFC 9110 §11.6.1 / RFC 6750 §3: a 401 MUST carry a challenge, and a
-        // client that never sees one cannot know how to authenticate. Setting
-        // it on the single envelope every 401 travels covers the guard denial
-        // path too — `AuthError::render` used to be the only place that did,
-        // so the header appeared only when a handler returned the error
-        // directly, never on the guard path the docs describe.
+            .content_type(HeaderValue::from_static("application/problem+json"));
+        // RFC 9110 §11.6.1 / RFC 6750 §3: a 401 MUST carry a challenge.
         if self.status == StatusCode::UNAUTHORIZED {
-            builder = builder.header(header::WWW_AUTHENTICATE, "Bearer");
+            builder = builder.header(header::WWW_AUTHENTICATE, HeaderValue::from_static(BEARER));
         }
         builder.body(body)
     }
 }
 
-impl IntoResponse for ProblemDetails {
-    fn into_response(self) -> Response {
-        self.as_response()
+impl crate::IntoResponse for ProblemDetails {
+    fn into_response(self) -> crate::Response {
+        crate::ResponseError::as_response(&self)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::internal_document;
+    use crate::{Response, ResponseError};
 
     #[test]
     fn constructors_set_status_and_title() {
@@ -370,22 +482,9 @@ mod tests {
     }
 
     #[test]
-    fn constructors_preset_type_uri() {
-        // Each well-known constructor must ship with a stable, non-blank URI;
-        // a client may key on it.
-        assert!(
-            ProblemDetails::not_found()
-                .type_uri
-                .starts_with("https://www.rfc-editor.org/rfc/rfc9110"),
-        );
-        assert!(ProblemDetails::unprocessable().type_uri.contains("rfc9110"),);
-    }
-
-    #[test]
     fn with_detail_adds_field() {
         let p = ProblemDetails::not_found().with_detail("user 42 missing");
         assert_eq!(p.detail.as_deref(), Some("user 42 missing"));
-        // Body round-trips through serde with the right shape.
         let v: serde_json::Value = serde_json::from_slice(&p.as_response_body()).unwrap();
         assert_eq!(v["detail"], "user 42 missing");
         assert_eq!(v["status"], 404);
@@ -409,9 +508,6 @@ mod tests {
         assert_eq!(p.title, "Order invalid");
     }
 
-    // G8: RFC 9110 §11.6.1 / RFC 6750 §3 require the challenge on every 401.
-    // It used to be set only by `AuthError::render`, so the guard path — the
-    // one the JWT page documents — shipped a bare 401.
     #[test]
     fn every_401_carries_the_www_authenticate_challenge() {
         let resp = ProblemDetails::unauthorized().as_response();
@@ -421,8 +517,7 @@ mod tests {
                 .map(|v| v.as_bytes()),
             Some(b"Bearer".as_slice()),
         );
-        // …and only a 401 — a 403 means authenticated-but-not-permitted, where
-        // a challenge would invite a pointless retry.
+        // A 403 takes none: a challenge would invite a pointless retry.
         assert!(
             ProblemDetails::forbidden()
                 .as_response()
@@ -434,14 +529,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_richer_challenge_replaces_the_envelope_default_rather_than_stacking() {
-        // A client reads the first `WWW-Authenticate` it finds. Two values —
-        // the envelope's bare `Bearer` and the response's RFC 9728 pointer —
-        // would send a conformant client down the useless one.
         let raw = Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(
                 header::WWW_AUTHENTICATE,
-                "Bearer resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\"",
+                HeaderValue::from_static(
+                    "Bearer resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\"",
+                ),
             )
             .body("nope");
         let normalized = normalize_error_response(raw).await;
@@ -475,8 +569,6 @@ mod tests {
 
     #[test]
     fn with_extension_flattens_alongside_standard_members() {
-        // RFC 9457 extension members sit at the top level next to type/title/
-        // status — not nested under a wrapper key.
         let p = ProblemDetails::bad_request()
             .with_detail("validation failed")
             .with_extension("errors", serde_json::json!({ "email": ["not an email"] }));
@@ -486,47 +578,87 @@ mod tests {
         assert_eq!(v["errors"]["email"][0], "not an email");
     }
 
+    /// RFC 9457 §4.2.1: a problem that says nothing beyond its status is
+    /// `about:blank`, titled with the status's phrase — one rule for every
+    /// status the framework answers, the named constructors included.
     #[test]
-    fn from_status_routes_well_known_codes_to_their_constructor() {
-        assert_eq!(
-            ProblemDetails::from_status(StatusCode::NOT_FOUND).type_uri,
-            ProblemDetails::not_found().type_uri,
-        );
-        assert_eq!(
-            ProblemDetails::from_status(StatusCode::CONFLICT).status,
-            StatusCode::CONFLICT,
-        );
-        // An uncommon status falls back to about:blank + its reason phrase.
-        let teapot = ProblemDetails::from_status(StatusCode::IM_A_TEAPOT);
-        assert_eq!(teapot.type_uri, "about:blank");
-        assert_eq!(teapot.title, "I'm a teapot");
+    fn every_status_the_framework_answers_is_about_blank_with_its_phrase() {
+        for (status, title) in [
+            (StatusCode::BAD_REQUEST, "Bad Request"),
+            (StatusCode::UNAUTHORIZED, "Unauthorized"),
+            (StatusCode::FORBIDDEN, "Forbidden"),
+            (StatusCode::NOT_FOUND, "Not Found"),
+            (StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed"),
+            (StatusCode::NOT_ACCEPTABLE, "Not Acceptable"),
+            (StatusCode::REQUEST_TIMEOUT, "Request Timeout"),
+            (StatusCode::CONFLICT, "Conflict"),
+            (StatusCode::GONE, "Gone"),
+            (StatusCode::PRECONDITION_FAILED, "Precondition Failed"),
+            (StatusCode::PAYLOAD_TOO_LARGE, "Content Too Large"),
+            (StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported Media Type"),
+            (StatusCode::RANGE_NOT_SATISFIABLE, "Range Not Satisfiable"),
+            (StatusCode::UPGRADE_REQUIRED, "Upgrade Required"),
+            (StatusCode::UNPROCESSABLE_ENTITY, "Unprocessable Content"),
+            (StatusCode::TOO_MANY_REQUESTS, "Too Many Requests"),
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+            (StatusCode::SERVICE_UNAVAILABLE, "Service Unavailable"),
+            (StatusCode::IM_A_TEAPOT, "I'm a teapot"),
+        ] {
+            let problem = ProblemDetails::from_status(status);
+            assert_eq!(
+                (problem.type_uri.as_str(), problem.title.as_str()),
+                ("about:blank", title),
+                "{status}",
+            );
+        }
+        for named in [
+            ProblemDetails::bad_request(),
+            ProblemDetails::unauthorized(),
+            ProblemDetails::forbidden(),
+            ProblemDetails::not_found(),
+            ProblemDetails::conflict(),
+            ProblemDetails::unprocessable(),
+            ProblemDetails::internal(),
+        ] {
+            let bare = ProblemDetails::from_status(named.status);
+            assert_eq!(
+                (named.type_uri, named.title),
+                (bare.type_uri, bare.title),
+                "{}",
+                named.status,
+            );
+        }
     }
 
+    /// A raw `401` a handler marked as no call for a bearer token — a wrong
+    /// password — keeps its marks once lifted onto the envelope, and the one
+    /// challenge RFC 9110 §11.6.1 owes every `401`.
     #[tokio::test]
-    async fn normalize_lifts_a_raw_plain_text_transport_error() {
-        // A raw poem status error renders plain text by default; the edge
-        // boundary lifts it onto problem+json keyed on the status, carrying the
-        // (safe) client-error message through as `detail`.
-        let raw = poem::Error::from_string(nest_rs_core::UUID_V7_REQUIRED, StatusCode::BAD_REQUEST)
-            .into_response();
-        let resp = normalize_error_response(raw).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.headers()
-                .get(header::CONTENT_TYPE)
-                .map(|v| v.as_bytes()),
-            Some(b"application/problem+json".as_slice()),
-        );
-        let bytes = resp.into_body().into_bytes().await.expect("body");
-        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
-        assert_eq!(v["status"], 400);
-        assert_eq!(v["detail"], nest_rs_core::UUID_V7_REQUIRED);
+    async fn normalize_keeps_the_marks_a_raw_error_carries() {
+        for marked in [true, false] {
+            let raw = crate::Response::builder().status(StatusCode::UNAUTHORIZED);
+            let raw = match marked {
+                true => raw.extension(crate::challenge::NoBearerChallenge),
+                false => raw,
+            };
+            let resp = normalize_error_response(raw.body("invalid credentials")).await;
+            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                resp.headers()[header::CONTENT_TYPE],
+                "application/problem+json"
+            );
+            assert_eq!(resp.headers()[header::WWW_AUTHENTICATE], BEARER);
+            assert_eq!(
+                resp.extensions()
+                    .get::<crate::challenge::NoBearerChallenge>()
+                    .is_some(),
+                marked,
+            );
+        }
     }
 
     #[tokio::test]
     async fn normalize_passes_through_an_existing_problem() {
-        // A response already rendered as problem+json is left untouched — its
-        // detail survives.
         let existing = ProblemDetails::conflict()
             .with_detail("dup name")
             .as_response();
@@ -539,11 +671,9 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_leaves_a_deliberate_json_error_body_alone() {
-        // A handler that typed its own 4xx `application/json` body is not a raw
-        // transport error — the boundary must not clobber it.
         let typed = Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .content_type("application/json")
+            .content_type(HeaderValue::from_static("application/json"))
             .body(br#"{"custom":"envelope"}"#.to_vec());
         let resp = normalize_error_response(typed).await;
         assert_eq!(
@@ -554,28 +684,29 @@ mod tests {
         );
     }
 
+    /// A layer or a library writing what the client sent into a `4xx` text:
+    /// the problem holds no part of it.
     #[tokio::test]
-    async fn normalize_leaves_a_filter_mapped_response_alone() {
-        // A `Filter`/`ExceptionFilter` mapping tags its response `MappedError`;
-        // its deliberate (plain-text) body must survive the edge boundary.
-        let mut mapped = Response::builder()
-            .status(StatusCode::IM_A_TEAPOT)
-            .body("edge-mapped".as_bytes().to_vec());
-        mapped.extensions_mut().insert(crate::MappedError);
-        let resp = normalize_error_response(mapped).await;
-        assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+    async fn normalize_keeps_no_text_the_framework_did_not_write() {
+        let echoed = Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body("unknown session x-quoted-marker".as_bytes().to_vec());
+        let resp = normalize_error_response(echoed).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let bytes = resp.into_body().into_bytes().await.expect("body");
-        assert_eq!(&bytes[..], b"edge-mapped");
+        let text = std::str::from_utf8(&bytes).expect("utf8");
+        assert!(!text.contains("x-quoted-marker"), "{text}");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
+        assert_eq!(v["title"], "Bad Request");
+        assert!(v.get("detail").is_none(), "{v}");
     }
 
     #[tokio::test]
     async fn normalize_drops_server_error_detail() {
-        // A 5xx must never echo the error text — only the canonical title.
-        let raw = poem::Error::from_string(
-            "connection to db-primary refused",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )
-        .into_response();
+        let raw = Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .content_type(HeaderValue::from_static("text/plain; charset=utf-8"))
+            .body("connection to db-primary refused");
         let resp = normalize_error_response(raw).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let bytes = resp.into_body().into_bytes().await.expect("body");
@@ -585,18 +716,169 @@ mod tests {
             "server-error detail must not leak the driver message: {text}",
         );
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
-        assert_eq!(v["status"], 500);
-        assert_eq!(v["title"], "Internal Server Error");
-        assert!(v.get("detail").is_none(), "no detail on a 500");
+        assert_eq!(v, internal_document(), "the one opaque document");
+    }
+
+    /// A client error answered from its status alone is the class's problem
+    /// whenever core names one for that status, as `#[crud]` and every other
+    /// edge answer it; a status no class names carries no `code`.
+    #[test]
+    fn a_client_status_naming_a_class_answers_its_class_s_problem() {
+        for (status, class) in [
+            (StatusCode::BAD_REQUEST, code::INVALID_ARGUMENT),
+            (StatusCode::UNAUTHORIZED, code::UNAUTHENTICATED),
+            (StatusCode::FORBIDDEN, code::FORBIDDEN),
+            (StatusCode::NOT_FOUND, code::NOT_FOUND),
+            (StatusCode::CONFLICT, code::CONFLICT),
+            (StatusCode::UNPROCESSABLE_ENTITY, code::INVALID_ARGUMENT),
+            (StatusCode::TOO_MANY_REQUESTS, code::RATE_LIMITED),
+            (StatusCode::METHOD_NOT_ALLOWED, code::METHOD_NOT_ALLOWED),
+            (StatusCode::NOT_ACCEPTABLE, code::NOT_ACCEPTABLE),
+            (StatusCode::REQUEST_TIMEOUT, code::REQUEST_TIMEOUT),
+            (StatusCode::GONE, code::GONE),
+            (StatusCode::PRECONDITION_FAILED, code::PRECONDITION_FAILED),
+            (StatusCode::PAYLOAD_TOO_LARGE, code::CONTENT_TOO_LARGE),
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                code::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                code::RANGE_NOT_SATISFIABLE,
+            ),
+            (StatusCode::UPGRADE_REQUIRED, code::UPGRADE_REQUIRED),
+        ] {
+            let bare = serde_json::to_value(ProblemDetails::from_status(status)).unwrap();
+            let problem = Problem::new(status.as_u16(), class);
+            let classed = serde_json::to_value(ProblemDetails::from_problem(&problem)).unwrap();
+            assert_eq!(bare, classed, "{status}");
+            assert_eq!(bare["code"], class.as_str(), "{status}");
+        }
+        for (named, status) in [
+            (ProblemDetails::bad_request(), StatusCode::BAD_REQUEST),
+            (ProblemDetails::unauthorized(), StatusCode::UNAUTHORIZED),
+            (ProblemDetails::forbidden(), StatusCode::FORBIDDEN),
+            (ProblemDetails::not_found(), StatusCode::NOT_FOUND),
+            (ProblemDetails::conflict(), StatusCode::CONFLICT),
+            (
+                ProblemDetails::unprocessable(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_value(named).unwrap(),
+                serde_json::to_value(ProblemDetails::from_status(status)).unwrap(),
+                "{status}",
+            );
+        }
+        for classless in [
+            StatusCode::PAYMENT_REQUIRED,
+            StatusCode::LENGTH_REQUIRED,
+            StatusCode::URI_TOO_LONG,
+            StatusCode::EXPECTATION_FAILED,
+            StatusCode::MISDIRECTED_REQUEST,
+            StatusCode::PRECONDITION_REQUIRED,
+            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+            StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
+        ] {
+            let bare = ProblemDetails::from_status(classless);
+            assert!(bare.extensions.get("code").is_none(), "{classless}");
+        }
+    }
+
+    /// The code set's rule, as `nest_rs_core::code` states it: a
+    /// class a status answers by its own name is that status's reason phrase
+    /// in upper snake case — the document's `title` — and every other class
+    /// is one a named standard reads off, listed here.
+    #[test]
+    fn a_class_a_status_names_is_its_reason_phrase_in_upper_snake_case() {
+        let read_off_another_standard = [
+            code::INVALID_ARGUMENT,
+            code::UNAUTHENTICATED,
+            code::INSUFFICIENT_SCOPE,
+            code::RATE_LIMITED,
+            code::UNAVAILABLE,
+            code::INTERNAL,
+        ];
+        let mut named = 0;
+        for status in (400..=599).filter_map(|status| StatusCode::from_u16(status).ok()) {
+            let Some(class) = status_class(status) else {
+                continue;
+            };
+            if read_off_another_standard.contains(&class) {
+                continue;
+            }
+            let title = ProblemDetails::from_status(status).title;
+            assert_eq!(
+                class.as_str(),
+                title.to_ascii_uppercase().replace(' ', "_"),
+                "{status}",
+            );
+            named += 1;
+        }
+        assert_eq!(
+            named, 12,
+            "the statuses the framework answers by their phrase"
+        );
+    }
+
+    /// A server failure answered from its status alone is its class's
+    /// problem, `code` included and no `detail`: `UNAVAILABLE` for a `503`,
+    /// `INTERNAL` for any other `5xx`, as core's classes read them.
+    #[test]
+    fn a_server_status_answers_its_class_s_problem() {
+        for (status, class) in [
+            (StatusCode::INTERNAL_SERVER_ERROR, code::INTERNAL),
+            (StatusCode::NOT_IMPLEMENTED, code::INTERNAL),
+            (StatusCode::BAD_GATEWAY, code::INTERNAL),
+            (StatusCode::SERVICE_UNAVAILABLE, code::UNAVAILABLE),
+            (StatusCode::GATEWAY_TIMEOUT, code::INTERNAL),
+        ] {
+            let bare = serde_json::to_value(ProblemDetails::from_status(status)).unwrap();
+            let problem = Problem::new(status.as_u16(), class);
+            let classed = serde_json::to_value(ProblemDetails::from_problem(&problem)).unwrap();
+            assert_eq!(bare, classed, "{status}");
+            assert_eq!(bare["code"], class.as_str(), "{status}");
+            assert!(bare.get("detail").is_none(), "{status}");
+        }
+        assert_eq!(
+            serde_json::to_value(ProblemDetails::internal()).unwrap(),
+            internal_document(),
+        );
+        let failed = ProblemDetails::from_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal Server Error",
+            &std::fmt::Error,
+        );
+        assert_eq!(failed.extensions["code"], "INTERNAL");
+    }
+
+    /// The `503` the request deadline answers, an empty body, is lifted onto
+    /// its class's document and keeps its `Retry-After`.
+    #[tokio::test]
+    async fn normalize_answers_the_deadline_s_503_as_its_class_s_document() {
+        let raw = crate::deadline::timed_out(std::time::Duration::from_secs(30));
+        let resp = normalize_error_response(raw).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.headers()[header::RETRY_AFTER], "30");
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let v: serde_json::Value = serde_json::from_slice(&bytes).expect("problem json");
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "type": "about:blank",
+                "title": "Service Unavailable",
+                "status": 503,
+                "code": "UNAVAILABLE",
+            }),
+        );
     }
 
     #[tokio::test]
     async fn normalize_preserves_headers_on_a_bodyless_error() {
-        // A bodyless 401 (no content-type) is a raw transport error; the
-        // boundary lifts it while preserving an auth challenge header.
         let raw = Response::builder()
             .status(StatusCode::UNAUTHORIZED)
-            .header("WWW-Authenticate", "Bearer")
+            .header(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))
             .finish();
         let resp = normalize_error_response(raw).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -615,15 +897,15 @@ mod tests {
 
     #[tokio::test]
     async fn normalize_drops_a_stale_content_encoding_from_the_original() {
-        // The compression layer sits inside this boundary, so a raw error it
-        // already stamped `Content-Encoding: gzip` must not carry that header
-        // onto the fresh, uncompressed problem+json body — else the client
-        // fails to decode it (ERR_CONTENT_DECODING_FAILED).
+        // The compression layer sits inside this boundary.
         let raw = Response::builder()
             .status(StatusCode::GATEWAY_TIMEOUT)
-            .header(header::CONTENT_ENCODING, "gzip")
-            .header(header::TRANSFER_ENCODING, "chunked")
-            .content_type("text/plain")
+            .header(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"))
+            .header(
+                header::TRANSFER_ENCODING,
+                HeaderValue::from_static("chunked"),
+            )
+            .content_type(HeaderValue::from_static("text/plain"))
             .body("upstream timed out");
         let resp = normalize_error_response(raw).await;
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
@@ -643,10 +925,29 @@ mod tests {
         );
     }
 
+    /// A problem's type and title are the document's own RFC 9457 members, its
+    /// field map the `errors` one, beside its class's `code`.
+    #[test]
+    fn a_typed_problem_answers_its_type_title_and_field_map() {
+        let problem = Problem::new(409, code::CONFLICT)
+            .with_type("https://example.com/problems/handle-taken", "Handle taken")
+            .with_detail("@ada is taken")
+            .with_errors(serde_json::json!({ "handle": [{ "code": "taken" }] }));
+        assert_eq!(
+            serde_json::to_value(ProblemDetails::from_problem(&problem)).unwrap(),
+            serde_json::json!({
+                "type": "https://example.com/problems/handle-taken",
+                "title": "Handle taken",
+                "status": 409,
+                "detail": "@ada is taken",
+                "code": "CONFLICT",
+                "errors": { "handle": [{ "code": "taken" }] },
+            }),
+        );
+    }
+
     #[test]
     fn detail_and_instance_omitted_when_absent() {
-        // RFC 9457: `detail` and `instance` are optional, so a minimal problem
-        // serializes only the four core fields.
         let v: serde_json::Value =
             serde_json::from_slice(&ProblemDetails::not_found().as_response_body()).unwrap();
         assert!(v.get("detail").is_none(), "absent detail must be omitted");
@@ -657,9 +958,6 @@ mod tests {
     }
 
     impl ProblemDetails {
-        // Tiny test helper: drain the response into bytes so the assertions
-        // above can inspect the serialized JSON without going through poem's
-        // async body type.
         fn as_response_body(&self) -> Vec<u8> {
             serde_json::to_vec(self).unwrap()
         }

@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `Sheet` is bound `as dyn Draft`, which holds one instance for the app's lifetime, and `Sheet` is `scope = transient`, rebuilt at every resolution: bind a plain `#[injectable]` singleton
+  --> tests/integration/diagnostics/core/dyn_binding_of_a_transient_provider.rs:15:23
+   |
+15 | #[module(providers = [Sheet as dyn Draft])]
+   |                       ^^^^^ evaluation of `_` failed here

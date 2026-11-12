@@ -1,0 +1,11 @@
+error: #[module] `providers`: `Host` is listed beside `Host as dyn Bridge`, which already holds it under its own type — remove the bare entry
+  --> tests/integration/diagnostics/core/provider_listed_beside_its_dyn_binding.rs:16:29
+   |
+16 | #[module(providers = [Host, Host as dyn Bridge])]
+   |                             ^^^^^^^^^^^^^^^^^^
+
+error: #[module] `providers`: `Host` is listed beside `Host as dyn Bridge`, which already holds it under its own type — remove the bare entry
+  --> tests/integration/diagnostics/core/provider_listed_beside_its_dyn_binding.rs:19:43
+   |
+19 | #[module(providers = [Host as dyn Bridge, Host])]
+   |                                           ^^^^

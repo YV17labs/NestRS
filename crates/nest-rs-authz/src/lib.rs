@@ -2,81 +2,104 @@
 //! transport bindings.
 //!
 //! An [`AbilityFactory`] builds an [`Ability`] for the app's actor, which
-//! answers three questions backed by one shared [`Predicate`] (so they can't
-//! drift apart): `can` (gate an action), `condition_for` (lower rules to a
-//! `sea_orm::Condition` for row-level filtering), and `mask` (strip
-//! disallowed instances + fields from a response).
+//! answers three questions backed by one shared [`Predicate`]: `can` (gate an
+//! action), `condition_for` (lower rules to a `sea_orm::Condition` for
+//! row-level filtering), and which rows and columns of an entity a caller may
+//! read, which `#[expose]`'s conversion asks where it builds a wire row.
 //!
-//! [`AbilityGuard`] is the one guard and it is transport-agnostic — it answers
-//! all four edges, so it lives here rather than under any of them.
+//! A rule names a [`Subject`]: an entity, or a capability no table holds that
+//! [`#[subject]`](macro@subject) declares, which a rule grants whole and a posture
+//! gates. Either posture opens its unit's reads to the caller's ability.
 //!
-//! Bindings: `http`, `graphql`, `ws`, `mcp`. The data-coupled bindings
-//! (`Bind`, the GraphQL `bind` helper, `LoaderScope`, `WsDataContext`) live in
-//! `nest-rs-seaorm` so the engine stays free of a data-layer dependency.
+//! `AbilityGuard` is the one guard, answering all four edges; each binding's
+//! feature turns it on.
+//!
+//! Bindings: `http`, `graphql`, `ws`, `mcp`. The data-coupled binding — the
+//! row `#[authorize(A, bind = S)]` loads — lives in `nest-rs-seaorm`.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 mod ability;
 mod action;
 mod builder;
-// The shared per-operation guard chain: only the two `Exempt`-edge transports
-// run it themselves (HTTP gates in the route shaper's pool instead, and a WS
-// gateway is `Guarded` — its upgrade already ran the real chain).
-#[cfg(any(feature = "graphql", feature = "mcp"))]
-mod chain;
+mod contained;
 mod context;
+mod error;
 mod factory;
-// The class-level decision every `#[authorize]`-emitting transport shares.
-//
-// **HTTP included**, and leaving it out is what made `--features http` alone
-// stop compiling: `Authorize`'s extractor reaches `gate::warn_denied` for the
-// denial log, so the module is a dependency of the HTTP half whether or not it
-// re-exports `gate` publicly. Four `nest-rs-cli` scaffold e2e tests were the
-// only thing that ever compiled that feature set, and they failed on it.
-#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod gate;
-// The one guard, at the root because it answers every transport: it implements
-// `check_http`, `check_graphql`, `check_ws_message` and `check_mcp`, and each
-// arm is gated on its own feature. A transport folder would have claimed a
-// quarter of it — see the module's own note.
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod guard;
-mod mask;
+mod judged;
 mod predicate;
 mod subject;
-#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-mod wire_mask;
 
 /// This crate's span target.
-///
-/// Declared here, like every crate's: a target names **where** an event came
-/// from, so the crate that **owns** the concern names it and everything emitting
-/// on it reads the constant. Worth noting for this one either way — the kernel
-/// is an *optional* dependency here, so a path through it would have needed a
-/// feature gate on every denial.
 pub const TARGET: &str = "nest_rs::authz";
 
-pub use ability::{Ability, FieldSet, MalformedRuleError};
+pub use ability::{Ability, FieldSet};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
-pub use builder::{AbilityBuilder, RuleSpec};
-#[cfg(any(feature = "graphql", feature = "mcp"))]
-pub use chain::run_ability_chain;
+pub use builder::{AbilityBuilder, Can, Cannot, RuleSpec};
 pub use context::{current_ability, with_ability};
+pub use error::{ColumnsRefused, MalformedRuleError};
 pub use factory::AbilityFactory;
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-pub use gate::{GateVerdict, gate};
+pub use gate::class_gate;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 pub use guard::AbilityGuard;
-pub use mask::masked_output_ambient;
 pub use predicate::{Predicate, PredicateBuilder};
-pub use subject::Subject;
-#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-pub use wire_mask::{MaskReplyError, masked_reply};
+pub use subject::{RowSubject, Subject};
+
+/// Declares a unit struct a [`Subject`] no table holds — a capability a rule
+/// grants whole and `#[authorize(Action, Subject)]` gates on every edge, opening
+/// no read since the subject has no rows.
+///
+/// ```
+/// use nest_rs_authz::{AbilityBuilder, Action, subject};
+/// use nest_rs_guards::Scope;
+///
+/// /// May export the org's reports.
+/// #[subject]
+/// pub struct Exporting;
+///
+/// const REPORTS_EXPORT: Scope = Scope::new("reports:export");
+///
+/// let mut ab = AbilityBuilder::new();
+/// ab.can(Action::Manage, Exporting).requires_scope(REPORTS_EXPORT);
+/// # ab.build()?;
+/// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
+/// ```
+///
+/// A rule on it takes no `when` and no `fields`, which narrow an entity's rows
+/// and columns, and no `cannot`: the class gate is the subject's one layer, so
+/// a grant not written is the denial.
+///
+/// # Expands to
+///
+/// The struct unchanged, plus its `Subject` impl, which tells every edge's posture
+/// it has no rows to read.
+pub use nest_rs_authz_macros::subject;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg(feature = "mcp")]
-pub mod mcp;
+mod mcp;
 #[cfg(feature = "ws")]
-pub mod ws;
+mod ws;
+
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
+
+    pub use crate::contained::{Uncontained, contained_text, contained_value};
+    pub use crate::context::{AmbientAbility, install_ability, visitors_read_unnamed};
+    #[cfg(feature = "graphql")]
+    pub use crate::judged::judged_field;
+    pub use crate::judged::{
+        Judged, JudgedRow, Judgement, PushedItem, PushedItemFallback, PushedRows, Refused,
+        WireColumns, judge,
+    };
+    pub use inventory;
+    pub use nest_rs_core::__private::{RefusedAnswer, WireRow};
+}

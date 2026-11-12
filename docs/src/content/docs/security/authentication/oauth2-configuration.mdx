@@ -1,0 +1,130 @@
+---
+title: OAuth2 client configuration
+description: OAuthClientConfig's fields, the verified TLS every call to the provider runs over, and the bound each call the client makes is held to.
+sidebar:
+  order: 4.1
+---
+
+The [OAuth2 client](/security/authentication/oauth2/) reads its provider's
+endpoints and its own credentials from `OAuthClientConfig`, and holds every call
+it makes to that provider to TLS and to a bound. This page is both.
+
+## `OAuthClientConfig` fields
+
+`OAuthClientConfig` lives in `nest-rs-oauth-client` and reads the `oauth__client`
+namespace — the OAuth *client* role has its own crate, so it has its own
+namespace rather than borrowing the one belonging to the crate that answers
+*who the caller is*.
+
+`OAuthClientConfig` is a `validator`-validated struct: every URL field
+must be non-empty (length ≥ 1) or the boot fails loudly. All fields
+follow the dual-path rule.
+
+| Field | Env var | Validation |
+|-------|---------|------------|
+| `client_id` | `<PREFIX>_OAUTH__CLIENT__CLIENT_ID` | length ≥ 1 |
+| `client_secret` | `<PREFIX>_OAUTH__CLIENT__CLIENT_SECRET` | length ≥ 1 |
+| `auth_url` | `<PREFIX>_OAUTH__CLIENT__AUTH_URL` | an `https` URL |
+| `token_url` | `<PREFIX>_OAUTH__CLIENT__TOKEN_URL` | an `https` URL |
+| `redirect_url` | `<PREFIX>_OAUTH__CLIENT__REDIRECT_URL` | an `https` URL, or `http` on a loopback address in a development or test profile |
+| `userinfo_url` | `<PREFIX>_OAUTH__CLIENT__USERINFO_URL` | an `https` URL |
+| `scopes` | `<PREFIX>_OAUTH__CLIENT__SCOPES` | comma-separated list, each an RFC 6749 §3.3 `scope-token` |
+| `authorization_parameters` | `<PREFIX>_OAUTH__CLIENT__AUTHORIZATION_PARAMETERS` | a JSON object of strings, under the provider's parameter names — `{"access_type":"offline"}`; none the client sends itself (`state`, `redirect_uri`, …) or sends the token endpoint alone (`client_secret`, `code_verifier`, …), none empty or named twice |
+| `tls` | `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT`, `TLS_CERT`, `TLS_KEY` | PEM, each with its `_FILE` spelling |
+
+`OAuthClient::new` runs `validate()` first, then holds every URL to TLS,
+then builds the client. The provider's three endpoints are `https`: the
+authorization endpoint is where the user signs in (RFC 6749 §3.1), the
+token endpoint receives the client secret and the code (§3.2), and the
+userinfo endpoint a bearer token (RFC 6750 §5.3). The redirect may also be
+`http` on `localhost`, `127.0.0.1` or `[::1]` — the loopback exception of
+RFC 8252 §7.3, which keeps a local `http://localhost:3000/callback`
+working — in a declared development or test profile (`<PREFIX>_ENV`)
+alone, so staging and production take the code back over `https`,
+loopback included. Anything else fails the boot naming the variable, the
+RFC and the profile, never the URL, which may carry credentials. An
+`OAuthClient::new` over a config you composed in code names the field
+instead, `OAuthClientConfig::redirect_url`: no variable of the client's
+was read for it.
+
+The provider's certificate is verified against the system's authorities,
+or against the ones `<PREFIX>_OAUTH__CLIENT__TLS_CA_CERT` names, which
+replace them — an identity provider on a private network signed by your
+own authority is trusted that way. A provider requiring a client
+certificate gets `TLS_CERT` and `TLS_KEY`. All three are read at the start,
+so a renewed file takes effect at the next one: rotate it with a rolling
+restart. Material no handshake could use is refused naming the variable
+it was read from, or, in a config composed in code, its part of
+`OAuthClientConfig::tls`: its authorities, its certificate or its key.
+No setting turns verification off. The HTTP backend refuses
+redirects — following them during the token exchange is an SSRF risk per
+the `oauth2` crate's own guidance, and on a read it could send the bearer
+token anywhere — and `fetch` refuses a URL that is not `https` before
+anything is sent. Beneath both checks the backend itself speaks `https`
+alone, so no URL a provider builds at run time reaches the network in
+plaintext.
+
+## Every provider call has a bound
+
+A provider that stops answering does not hold your callback. Every call
+the client makes — the code exchange, `userinfo`, and any `fetch` —
+carries three bounds, constants on the client:
+
+| Constant | Value | Covers |
+|---|---|---|
+| `OAuthClient::CONNECT_TIMEOUT` | 3 s | reaching the provider: the name lookup, the TCP and TLS handshakes |
+| `OAuthClient::CALL_TIMEOUT` | 5 s | the whole call, from connecting to the last byte of the answer |
+| `OAuthClient::ANSWER_MAX_BYTES` | 64 KiB | the most of an answer read |
+
+An identity provider answers each of these in well under a second, so a
+call past its bound is a provider that is not answering. That is the
+provider's outage, not the caller's failed sign-in, so it fails as
+`AuthError::Unavailable` — a `503` (RFC 9110 §15.6.4), filed at `warn` as
+every `503` — and its sentence names the endpoint and the bound that ended it:
+
+```text
+authentication unavailable: the OAuth provider's token endpoint
+(https://github.com/login/oauth/access_token) did not answer within 5s
+```
+
+A token response or a userinfo document is a few KiB, an id_token
+included, so an answer past 64 KiB is refused the same way — on its
+`Content-Length`, or as soon as the streamed body passes the cap — and
+is never buffered whole:
+
+```text
+authentication unavailable: the OAuth provider's userinfo endpoint
+(https://api.github.com/user) answered more than 65536 bytes, the most
+an OAuth answer is read to
+```
+
+A provider that answers it cannot answer now — a `5xx`, or `429` — is
+unavailable the same way, on the exchange as on a read, and its own
+`Retry-After` reaches the caller when it gave one in seconds; an HTTP-date
+is not converted against this server's clock. A provider that answers and
+refuses — a §5.2 error on the exchange, any other status on a read — is
+the caller's failure, `AuthError::Failed`, a `401`.
+
+A refused connection, like every failure the client reports, names the
+endpoint the same way. The endpoint appears as its scheme, host, port and
+path only (`nest_rs::config::endpoint_shown`): a query string or
+credentials in the URL never reach the sentence, and neither does
+anything the call carried — the client secret, the code, the PKCE
+verifier, the access token.
+
+The bounds sit under the two nets above them. A callback makes at most
+three calls through the client (GitHub: the exchange, `/user`,
+`/user/emails`), so a login spends at most 15 s on its provider — inside
+the guard's own bound on a strategy,
+[`AUTHENTICATE_TIMEOUT`](/security/authentication/writing-a-strategy/#how-long-the-guard-waits)
+(18 s), and the HTTP edge's request timeout (20 s by default). A
+provider that stops answering is reported by the client, naming the
+endpoint, before either of those speaks for it.
+
+## Going further
+
+- [OAuth2](/security/authentication/oauth2/) — the flow this client runs.
+- [Social login](/security/authentication/social-login/) — every provider
+  composes this client, under its own variables.
+- [Writing a strategy](/security/authentication/writing-a-strategy/) — the
+  guard's net above every strategy's own bounds.

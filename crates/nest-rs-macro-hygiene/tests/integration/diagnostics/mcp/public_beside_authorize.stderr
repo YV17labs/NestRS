@@ -1,0 +1,5 @@
+error: `#[authorize(...)]` and `#[public]` contradict — an operation is gated or public, not both
+  --> tests/integration/diagnostics/mcp/public_beside_authorize.rs:40:14
+   |
+40 |     async fn list(&self) -> Result<String, McpError> {
+   |              ^^^^

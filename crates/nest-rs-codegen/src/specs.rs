@@ -1,21 +1,17 @@
-//! Layer-System token emission shared by the transport decorators. Every
-//! scope on every transport (controller/resolver/gateway struct, per-method,
-//! per-operation) turns its `#[use_*(...)]` paths into the same
-//! `Vec<ScopedLayerSpec>` shape; only the erased `dyn Trait` the guard/pipe/
-//! filter/interceptor is coerced to differs. One helper here replaces the
-//! per-family copies that had begun to drift.
+//! Layer-System token emission shared by the transport decorators: every
+//! scope's `#[use_*(...)]` paths become one `Vec<LayerSpec>` shape.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::Path;
 
-/// `Vec<ScopedLayerSpec>` for a scope's layer paths, each entry capturing the
-/// type id, name and a container-resolve closure that coerces the provider to
+/// `Vec<LayerSpec>` for a scope's layer paths, each entry capturing the type
+/// id, name and a container-resolve closure that coerces the provider to
 /// `erased` (e.g. `dyn ::nest_rs_guards::Guard`). Empty paths ⇒ `::std::vec![]`.
 pub fn scoped_specs(paths: &[Path], erased: TokenStream2) -> TokenStream2 {
     let entries = paths.iter().map(|p| {
         quote! {
-            ::nest_rs_guards::dispatch::ScopedLayerSpec::new(
+            ::nest_rs_core::LayerSpec::new(
                 ::core::any::TypeId::of::<#p>(),
                 ::core::any::type_name::<#p>(),
                 |__c| ::nest_rs_core::Container::get::<#p>(__c)
@@ -24,6 +20,16 @@ pub fn scoped_specs(paths: &[Path], erased: TokenStream2) -> TokenStream2 {
         }
     });
     quote! { ::std::vec![#(#entries),*] }
+}
+
+/// `Vec<InterceptorSpec>` for a scope's `#[use_interceptors(...)]` paths.
+pub fn interceptor_specs(paths: &[Path]) -> TokenStream2 {
+    quote! { ::std::vec![#(::nest_rs_core::__private::interceptor::<#paths>()),*] }
+}
+
+/// `Vec<ExceptionFilterSpec>` for a scope's `#[use_exception_filters(...)]` paths.
+pub fn exception_filter_specs(paths: &[Path]) -> TokenStream2 {
+    quote! { ::std::vec![#(::nest_rs_core::__private::exception_filter::<#paths>()),*] }
 }
 
 /// `Vec<TypeId>` for `#[force_guards(...)]` — the Layer-System opt-in that lets

@@ -1,0 +1,20 @@
+error[E0277]: `Forgetful` is not an exception filter
+  --> tests/integration/diagnostics/core/exception_filters_listing_a_type_that_does_not_catch.rs:10:34
+   |
+10 | #[module(providers = [Forgetful, GlobalExceptionFilters<(Forgetful,)>])]
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ bound as an exception filter here
+   |
+help: the trait `nest_rs::core::ExceptionFilter` is not implemented for `Forgetful`
+  --> tests/integration/diagnostics/core/exception_filters_listing_a_type_that_does_not_catch.rs:8:1
+   |
+ 8 | struct Forgetful;
+   | ^^^^^^^^^^^^^^^^
+   = note: implement `ExceptionFilter` for it — `type Exception`, the error it catches (`dyn Error + Send + Sync` for every one), and `async fn catch(&self, exception: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught` — beside `Layer`
+   = help: the following other types implement trait `GlobalExceptionFilterList`:
+             (T₁, T₂, …, Tₙ) for tuples of arity 1 up to and including 8
+   = note: required for `(Forgetful,)` to implement `GlobalExceptionFilterList`
+note: required by a bound in `GlobalExceptionFilters`
+  --> $WORKSPACE/crates/nest-rs-core/src/exception_filter.rs
+   |
+   | pub struct GlobalExceptionFilters<F: GlobalExceptionFilterList>(PhantomData<fn() -> F>);
+   |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `GlobalExceptionFilters`

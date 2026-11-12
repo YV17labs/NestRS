@@ -1,0 +1,6 @@
+name = "nestjs"
+variant = "node"
+runtime = "node"
+port = 3110
+build = "npm ci && npm run build"
+start = "env PORT=3110 node dist/main"

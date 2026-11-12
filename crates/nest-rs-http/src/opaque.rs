@@ -1,74 +1,99 @@
-//! What a failing handler tells the client, and what it tells the operator —
-//! the HTTP half of the seam MCP established and GraphQL and WS joined.
+//! What a failing handler tells the client, and what it tells the operator: a
+//! driver's own error can carry SQL and sometimes row values in its `Display`.
 //!
-//! HTTP was the last of the four client-facing transports without it, and the
-//! omission had no argument behind it: a route's error body is built from
-//! whatever the handler's error type prints, and `Display` is the wrong default
-//! for that job. A `DbErr` carries SQL, column names and sometimes row values; a
-//! storage error carries a bucket key. The framework's own `ServiceError::Db` is
-//! `#[error("database error")]` so nothing leaks through it today, but a
-//! feature's own error type has no such discipline imposed on it — and a browser
-//! is exactly as untrusted as a language model.
-//!
-//! ```ignore
-//! #[get("/reports/:id")]
-//! #[authorize(Read, reports::Entity)]
-//! async fn report(&self, Path(id): Path<Uuid>) -> Result<Json<Report>> {
+//! ```
+//! # use std::sync::Arc;
+//! # use nest_rs_core::{injectable, input, module};
+//! # use nest_rs_http::{Json, Opaque, Path, Result, StatusCode, controller, routes};
+//! # use nest_rs_testing::TestApp;
+//! # #[input]
+//! # struct Report {
+//! #     title: String,
+//! # }
+//! # #[injectable]
+//! # #[derive(Default)]
+//! # struct ReportsService;
+//! # impl ReportsService {
+//! #     async fn render(&self, _id: u64) -> anyhow::Result<Report> {
+//! #         anyhow::bail!("relation reports does not exist")
+//! #     }
+//! # }
+//! # #[controller(path = "/")]
+//! # struct ReportsController {
+//! #     #[inject]
+//! #     svc: Arc<ReportsService>,
+//! # }
+//! # #[routes]
+//! # impl ReportsController {
+//! #[get("/reports/{id}")]
+//! #[public]
+//! async fn report(&self, Path(id): Path<u64>) -> Result<Json<Report>> {
 //!     Ok(Json(self.svc.render(id).await.opaque()?))
 //! }
+//! # }
+//! # #[module(providers = [ReportsService, ReportsController])]
+//! # struct ReportsModule;
+//! # #[nest_rs_core::main]
+//! # async fn main() -> anyhow::Result<()> {
+//! # let app = TestApp::for_module::<ReportsModule>().await?;
+//! # let reply = app.http().get("/reports/7").send().await;
+//!
+//! reply.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+//! let body: serde_json::Value = serde_json::from_str(&reply.0.into_body().into_string().await?)?;
+//! assert_eq!(body["code"], "INTERNAL");
+//! assert!(body.get("detail").is_none());
+//! assert!(!body.to_string().contains("does not exist"));
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! **A deliberate error is not this.** A validation rejection, a `Denial`, a
-//! `404` a client can act on — those exist to be *read*, and they already carry
-//! a wire-safe message. Return them directly; `ProblemDetails` is how.
+//! A deliberate error a client can act on (a validation rejection, a `404`) is
+//! returned directly, as a `ProblemDetails`.
 
-use std::fmt::Display;
+use nest_rs_core::__private::Withheld;
 
-use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
-use poem::Error;
-
+use crate::error::HttpError;
 use crate::problem::ProblemDetails;
 
 /// Turn a failure the client must not read into one it may.
 ///
-/// Implemented for every `Result` whose error is printable, so it covers a
-/// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
-/// any of them having to know HTTP exists.
-///
-/// The twin traits on MCP, GraphQL and WS are deliberately separate types rather
-/// than one trait generic over the error: the output is what lets `.opaque()?`
-/// infer from the enclosing handler's return type. See `nest_rs_core::opaque`.
+/// Implemented for every `Result` whose error converts into a boxed error; the
+/// whole cause chain reaches the operator's line through
+/// [`nest_rs_core::boxed_error`].
 pub trait Opaque<T> {
-    /// Log the real error for the operator, hand the client an opaque one.
-    fn opaque(self) -> Result<T, Error>;
+    /// Hand the client the opaque `500` — [`ProblemDetails::internal`], its
+    /// `code` and no `detail` — keeping the real error for the operator's
+    /// line, which the edge files naming the route once it is the answer.
+    fn opaque(self) -> Result<T, HttpError>;
 }
 
-impl<T, E: Display> Opaque<T> for Result<T, E> {
-    fn opaque(self) -> Result<T, Error> {
+impl<T, E> Opaque<T> for Result<T, E>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
+{
+    fn opaque(self) -> Result<T, HttpError> {
         self.map_err(|err| {
-            tracing::error!(
-                target: crate::target::HTTP,
-                error = %err,
-                "request failed",
-            );
-            // A `ProblemDetails`, not a bare 500: the response shape a client
-            // parses must not change because the *reason* is withheld, or an
-            // opaque failure becomes distinguishable from a legible one by its
-            // envelope alone.
-            Error::from(ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE))
+            let said = nest_rs_core::error_message(&*nest_rs_core::boxed_error(err));
+            // The document every undescribed server failure answers, so the shape
+            // gives nothing away.
+            HttpError::from(ProblemDetails::internal()).withholding(Withheld::Failed(said))
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use poem::error::ResponseError;
-    use poem::http::StatusCode;
+    use std::fmt::Display;
+
+    use http::StatusCode;
 
     use super::*;
 
     /// An error whose `Display` carries exactly what must not ship.
+    #[derive(Debug)]
     struct Leaky;
+
+    impl std::error::Error for Leaky {}
 
     impl Display for Leaky {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -77,8 +102,8 @@ mod tests {
     }
 
     #[test]
-    fn the_body_carries_the_shared_constant_not_the_error() {
-        let out: Result<(), Error> = Err(Leaky).opaque();
+    fn the_error_displays_none_of_its_cause() {
+        let out: Result<(), HttpError> = Err(Leaky).opaque();
         let err = out.expect_err("the failure stays a failure");
         let rendered = err.to_string();
         assert!(
@@ -87,18 +112,15 @@ mod tests {
         );
     }
 
-    /// The other half of the same contract, and the half nobody read.
-    ///
-    /// Withholding the cause from the client is only safe because it is
-    /// recorded somewhere else. If this event ever stopped carrying `error`,
-    /// every `.opaque()?` in the framework would turn a real failure into a
-    /// blank `500` with no trace at all — and the test above would still pass,
-    /// because it only asserts what is *absent* from the wire.
+    /// The chain is kept for the answer, filed once that answer is rendered:
+    /// nothing at the call.
     #[test]
     fn and_the_operator_gets_the_error_the_client_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
-        let _: Result<(), Error> = Err(Leaky).opaque();
+        let err = Err::<(), _>(Leaky).opaque().expect_err("a failure");
+        logs.expect_none("nest_rs::http", "request failed");
 
+        drop(err.into_response());
         let event = logs.expect_one("nest_rs::http", "request failed");
         assert_eq!(event.level, "error");
         assert!(
@@ -110,22 +132,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn it_is_a_500_and_a_problem_document() {
-        let out: Result<(), Error> = Err(Leaky).opaque();
+    /// The `500` every opaque failure answers: its class's code, no detail.
+    #[tokio::test]
+    async fn it_is_the_one_opaque_500_document() {
+        let out: Result<(), HttpError> = Err(Leaky).opaque();
         let err = out.expect_err("a failure");
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let problem = ProblemDetails::internal().with_detail(OPAQUE_CLIENT_MESSAGE);
-        assert_eq!(problem.detail.as_deref(), Some(OPAQUE_CLIENT_MESSAGE));
-        assert_eq!(
-            problem.as_response().status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
+        let body = crate::testing::text(err.into_response()).await;
+        let body: serde_json::Value = serde_json::from_str(&body).expect("problem json");
+        assert_eq!(body, crate::testing::internal_document());
     }
 
     #[test]
     fn a_success_passes_through_untouched() {
-        let out: Result<i32, Error> = Ok::<_, Leaky>(7).opaque();
+        let out: Result<i32, HttpError> = Ok::<_, Leaky>(7).opaque();
         assert_eq!(out.ok(), Some(7));
     }
 }

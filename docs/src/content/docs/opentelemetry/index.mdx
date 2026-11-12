@@ -1,6 +1,6 @@
 ---
 title: OpenTelemetry
-description: First-class OpenTelemetry for nestrs — traces, logs and metrics, W3C propagation, OTLP export — wired by importing one module.
+description: Traces, logs and metrics, W3C propagation and OTLP export — wired by one line in main, configured by the specification's own OTEL_* variables.
 sidebar:
   order: 1
 ---
@@ -17,18 +17,21 @@ for resource and HTTP attributes, and links the `tracing` span tree to its OTel
 counterpart through
 [`tracing-opentelemetry`](https://crates.io/crates/tracing-opentelemetry).
 
-Three signal types ship in one crate, behind one import:
+Three signal types ship in one crate, behind one line of `main`:
 
 - **[Traces](/opentelemetry/traces/)** — every request, job and scheduled tick
-  opens a span; W3C `traceparent` propagation, sampling, and the per-request
-  HTTP interceptor stitch distributed traces together.
+  opens a span, and so does every unit a package declares, exported under the
+  same trace and span ids its log lines carry; W3C `traceparent` propagation
+  and sampling, seeded onto the framework's span constructor, stitch
+  distributed traces together.
 - **[Logs](/opentelemetry/logs/)** — `tracing::info!` and friends flow to the
   console **and** to OTel logs (via
   [`opentelemetry-appender-tracing`](https://crates.io/crates/opentelemetry-appender-tracing))
   with structured fields, configurable level per layer, and JSON for prod.
-- **[Metrics](/opentelemetry/metrics/)** — inject `Arc<OpenTelemetryMeter>` and
-  build counters / histograms / gauges; metrics batch on a `PeriodicReader`
-  and export through the same OTLP endpoint as the traces.
+- **[Metrics](/opentelemetry/metrics/)** — inject `Arc<Metrics>` and record on
+  counters / histograms / gauges, named as the OpenTelemetry Metrics API names
+  them; metrics batch on a `PeriodicReader` and export through the same OTLP
+  endpoint as the traces.
 
 ## Install
 
@@ -36,24 +39,22 @@ Three signal types ship in one crate, behind one import:
 cargo add nest-rs --features opentelemetry
 ```
 
-A headless binary (a queue worker) stops there; an app serving HTTP adds the
-`http` feature for the per-request interceptor — see [Feature
-flags](#feature-flags) below.
+A headless binary (a queue worker) and an app serving HTTP install the same
+line: what this crate adds hangs off the framework's span constructor, which
+every edge opens — see [Feature flags](#feature-flags) below.
 
 ## Wire it in
 
 ```rust title="apps/auth/src/main.rs (from the demo)"
 use anyhow::Result;
-use nest_rs::config::Environment;
 use nest_rs::core::App;
 use nest_rs::opentelemetry::OpenTelemetry;
 
 use auth::AuthModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
-    let _environment = Environment::init();
-    let _otel = OpenTelemetry::init("auth")?;
+    let _otel = OpenTelemetry::init()?;
 
     App::builder()
         .module::<AuthModule>()
@@ -64,143 +65,157 @@ async fn main() -> Result<()> {
 }
 ```
 
-```rust title="apps/auth/src/module.rs (from the demo, abridged)"
-#[module(
-    imports = [
-        ConfigModule::for_root(),
-        OpenTelemetryModule,
-        HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
-    ],
-)]
-pub struct AuthModule;
-```
+One line, one rule: there is no module to import for it, and nothing for a
+suite to call. `OpenTelemetry::init()?` installs the global subscriber and
+must run **before** `App::builder()`. It takes no name: the
+service is the binary `#[nest_rs::main]` started, named and versioned from its
+package's manifest. The returned guard flushes batch exporters on Drop, so it
+must live until `main` returns — bind it to `_otel`, never `_`, which drops it
+on the spot. The guard is `#[must_use]`, and `clippy::let_underscore_must_use`
+refuses the discard: a `nestrs new` workspace denies it for every member; a
+project of your own turns it on in its `[workspace.lints.clippy]`, or the
+trap stays open, since clippy leaves that lint off by default. That flush is
+bounded: the three providers export at once, and what is still exporting after
+three seconds (`FLUSH_TIMEOUT`) is abandoned with a line on stderr naming it,
+so a collector that stopped answering delays the exit by three seconds and
+never holds it. Three is the step of
+[the way down](/fundamentals/shutdown/#the-way-down) before the console's last
+second, which sums to 29.5 seconds under a Kubernetes pod's 30-second grace.
+Nothing is mounted per request: what it adds to a span reaches every edge
+through the framework's span constructor. The one module of this crate,
+`OpenTelemetryModule`, provides [`Metrics`](/opentelemetry/metrics/) to the
+module whose provider injects them, and an app recording no metric of its own
+imports it nowhere.
 
-Two pieces, one rule. `OpenTelemetry::init(name)?` installs the global
-subscriber and must run **before** `App::builder()`. The returned guard flushes
-batch exporters on Drop, so it must live until `main` returns.
-`OpenTelemetryModule` then mounts the per-request HTTP interceptor and exposes
-the meter as a provider.
+`init` stays a line of `main` rather than a `#[nest_rs::main]` key: a pinned
+config goes through `init_with`, and one way to start telemetry beats two.
 
 ## Configure the exporter
 
-Every option of `OpenTelemetryConfig` is settable via env or via the pinned
-struct — the [framework-wide config dual path](/configuration/).
-`OpenTelemetry::init(name)` reads env; `OpenTelemetry::init_with(cfg)` takes a
-pinned `OpenTelemetryConfig`.
-
-| Env var | Field | Default |
-|---|---|---|
-| `NESTRS_OPENTELEMETRY__SERVICE_NAME` | `service_name` | argument to `init` |
-| `NESTRS_OPENTELEMETRY__SERVICE_VERSION` | `service_version` | `None` |
-| `NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT` | `deployment_environment` | `None` |
-| `NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID` | `service_instance_id` | fresh UUIDv7 per process |
-| `NESTRS_LOG` | `log_filter` | `info` (the framework-wide logging family) |
-| `NESTRS_LOG_FORMAT` | `log_format` | `text` in debug, `json` in release |
-| `NESTRS_LOG_SOURCE_LOCATION` | `log_source_location` | `false` |
-| `NESTRS_OPENTELEMETRY__OTLP_ENDPOINT` | `otlp_endpoint` | `None` (console-only) |
-| `NESTRS_OPENTELEMETRY__SAMPLE_RATIO` | `trace_sample_ratio` | `1.0` |
-
-The OTLP exporter wires up **only** when `otlp_endpoint` is set. Without it,
-the subscriber stays console-only; the W3C propagator is still installed so
-an inbound `traceparent` is continued behind a trusted proxy and the response
-carries `traceresponse`.
-
-```bash frame="terminal"
-NESTRS_OPENTELEMETRY__OTLP_ENDPOINT=http://otel-collector:4318 \
-NESTRS_OPENTELEMETRY__SERVICE_VERSION=2026.06.0 \
-NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT=production \
-NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1 \
-NESTRS_LOG=info \
-  nestrs run start api
-```
-
-The exporter uses HTTP/protobuf via `reqwest` (no `tonic`, no `openssl`) — the
-batch processors export from a dedicated non-Tokio thread so the blocking
-reqwest client is the right pick, the upstream-recommended pairing.
+The exporter reads the variables the OpenTelemetry specification names —
+`OTEL_*`, with no prefix — over what `OpenTelemetryConfig` pins. Every one of
+them, and the TLS an export runs over, is on
+[OpenTelemetry configuration](/opentelemetry/configuration/).
 
 ## Feature flags
 
-`nest-rs-opentelemetry` ships two features of its own. You never name them: the
-umbrella's `opentelemetry` feature turns on `otlp`, and the umbrella's `http`
-feature turns on this crate's `http` — so the two lines below differ only in
-whether the binary serves HTTP at all.
+`nest-rs-opentelemetry` ships one feature of its own, which you never name: the
+umbrella's `opentelemetry` feature turns it on.
 
 - **`otlp`** (default) — pulls the `opentelemetry-*` crates, installs the OTLP
-  exporters for traces / metrics / logs, and bridges `tracing` events into OTel
-  logs. Without it, the subscriber stays a pure `tracing-subscriber` setup —
-  useful for a tiny binary that should not link the OTel SDK.
-- **`http`** — pulls `poem` + `nest-rs-http` + `nest-rs-interceptors` so the
-  per-request interceptor compiles: the remote parent link and the sampling
-  decision. A headless app (a queue worker) uses `otlp`
-  **without** `http` and stays free of the HTTP transport. Requires `otlp` — the
-  interceptor reads the trace id off the OTel context.
+  exporters for traces / metrics / logs, bridges `tracing` events into OTel
+  logs, seeds the remote parent link and the sampler's verdict onto the
+  framework's span constructor, and provides `Metrics` through
+  `OpenTelemetryModule`. Without it, the subscriber stays a console-only
+  `tracing` setup, and neither `Metrics` nor its module exists — useful for a
+  tiny binary that should not link the OTel SDK. Its boot line names the service
+  as the exporters' resource would, under the same variables and the same refusals.
+  Such a binary still reads the three selectors: `none` is all it honours, and
+  any other value, `otlp` included, fails the boot naming the variable, since
+  nothing would ship. For the same reason an endpoint set for a signal its
+  selector leaves on — `OTEL_EXPORTER_OTLP_ENDPOINT`, a signal's own, or a
+  pinned `otlp_endpoint` — fails the boot naming it and the feature, unless
+  `OTEL_SDK_DISABLED=true`.
 
-  Without it you still get the request span, the access log and the whole W3C
-  trace context — `trace_id`, `span_id`, `traceparent` across a queue:
-  those are the transport's, and they do not wait on this crate.
+There is no `http` feature: the remote parent link and the sampling decision
+reach every edge through the span constructor, so a queue worker gets them as
+an HTTP app does, and nothing here compiles the HTTP transport. Without this
+crate you still get the request span, the access log and the whole W3C trace
+context — `trace_id`, `span_id`, `traceparent` across a queue: those are the
+transport's, and they do not wait on it.
 
-```toml title="Cargo.toml (headless binary)"
+```toml title="Cargo.toml"
 nest-rs = { workspace = true, features = ["opentelemetry"] }
-```
-
-```toml title="apps/auth/Cargo.toml (from the demo)"
-nest-rs = { workspace = true, features = ["http", "opentelemetry"] }
 ```
 
 ## Boot-time safety
 
 ```text frame="terminal"
-thread 'main' panicked at 'OpenTelemetryModule was imported without calling
-`OpenTelemetry::init` first — the global tracer and meter are no-ops, so
-traces and metrics would be silently dropped. Add `let _otel =
-nest_rs::opentelemetry::OpenTelemetry::init("<service>")?;` at the top of
-`main`, before building the app.'
+Error: OTEL_EXPORTER_OTLP_ENDPOINT sets an OTLP endpoint, but nothing exports to
+it: the process logs through the kernel's console alone — add `let _otel =
+nest_rs::opentelemetry::OpenTelemetry::init()?;` at the top of `main`, with the
+umbrella's `opentelemetry` feature, or set OTEL_SDK_DISABLED=true where this
+binary exports nothing
 ```
 
 Forgetting `OpenTelemetry::init` is the failure mode that hurts in production:
 the backend stays quiet, the team thinks observability is on, and the first
-time someone needs a trace there's nothing to grep. The boot guard makes it a
-deterministic startup error instead — visible the first time you run the
-binary locally.
+time someone needs a trace there's nothing to grep. So the deployment's intent
+decides: `App::run` refuses to start when `OTEL_EXPORTER_OTLP_ENDPOINT`, or a
+signal's own endpoint, is set for a signal the deployment leaves on — no
+`OTEL_SDK_DISABLED=true`, no `OTEL_TRACES_EXPORTER=none` — while the process
+logs through the kernel's console alone, which exports nothing. The check
+lives in the kernel, so it holds in a binary that links no telemetry at all.
+An `init` with no endpoint exports nothing either, so a binary run on your
+machine is never refused; an app that installs a subscriber of its own before
+the boot is its own to judge. The refusal is `App::run`'s alone: a suite boots
+through `App::builder().build()`, never `run`, so a `.env` naming a local
+collector never stops one.
 
 ## Tests
 
 ```rust title="apps/api/tests/e2e/users.rs"
+use api::ApiModule;
+use features::Role;
+use features::testing::{ORG_ID, claims, client};
+use nest_rs::http::header;
 use nest_rs::testing::TestApp;
 
 #[tokio::test]
 async fn users_list_returns_a_page() {
     let app = TestApp::builder()
         .module::<ApiModule>()
-        .with_test_telemetry()
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
         .unwrap();
+    let bearer = app.bearer(&claims(ORG_ID, Role::Admin, client()));
 
-    app.http().get("/users").send().await.assert_status_is_ok();
+    app.http()
+        .get("/users")
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await
+        .assert_status_is_ok();
 }
 ```
 
-`with_test_telemetry` calls `OpenTelemetry::init_for_tests` — a console-only
-init honouring `NESTRS_LOG` then `RUST_LOG` (default `warn` for noise control). It is
-idempotent; the first test to run wins, the rest no-op. It is gated by the
-`opentelemetry` feature on `nest-rs-testing`.
+A suite boots the module `main` boots and never runs `main`, so it asks
+nothing of telemetry: it logs through the console the boot installs, under
+`RUST_LOG` and `<PREFIX>_LOG_*`, and exports nothing. A provider injecting
+`Metrics` gets them all the same, recording on a meter nothing exports.
 
-A test that does **not** import `OpenTelemetryModule` does not need it.
+## In this section
+
+### Basics
+
+- [Traces](/opentelemetry/traces/) — the span every request, job and tick
+  opens, W3C propagation and sampling.
+- [Logs](/opentelemetry/logs/) — the record shape, the ids every line
+  carries, a level per layer and JSON for prod.
+
+### All options
+
+- [The operation log](/opentelemetry/operation-log/) — one line per unit of
+  work, what each edge's line names, and the HTTP access log.
+- [Metrics](/opentelemetry/metrics/) — counters, histograms and gauges a
+  provider records through `Arc<Metrics>`.
+- [OpenTelemetry configuration](/opentelemetry/configuration/) — the
+  `OTEL_*` variables, and the TLS, timeouts and headers an encrypted export
+  runs on.
 
 ## Reference
 
 - `crates/nest-rs-opentelemetry/` — `OpenTelemetry::init`,
-  `OpenTelemetryConfig`, `OpenTelemetryModule`, `OpenTelemetryMeter`,
-  `LogFormat`.
+  `OpenTelemetryConfig`, `OpenTelemetryModule`, and the metrics
+  vocabulary: `Metrics`, `Counter`, `UpDownCounter`, `Histogram`, `Gauge`,
+  `Attribute`, `AttributeValue`, `Describe`. The console's format,
+  `OpenTelemetryConfig::log_format`, is `nest_rs::core::logging::LogFormat`.
 - `crates/nest-rs-server-timing/` — the `Server-Timing` header middleware.
 
 ## Going further
 
-- [Traces](/opentelemetry/traces/) — the spans this exporter ships, and
-  what each edge opens.
-- [Logs](/opentelemetry/logs/) — the record shape, and the ids every line
-  carries.
 - [Correlation](/fundamentals/correlation/) — the trace context underneath,
   which waits on no crate.
 - [Server-Timing](/server-timing/) — the companion header summarising a

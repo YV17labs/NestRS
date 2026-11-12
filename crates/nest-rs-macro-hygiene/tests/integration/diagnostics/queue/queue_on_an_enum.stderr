@@ -1,0 +1,8 @@
+error: #[queue] applies to a unit struct, and this is an enum — a queue's identity is a type carrying no data, the marker a push and a `#[process]` both name (e.g. `#[queue(name = "audio", job = TranscodeCommand)] pub struct AudioQueue;`)
+  --> tests/integration/diagnostics/queue/queue_on_an_enum.rs:13:1
+   |
+13 | / enum DemoQueue {
+14 | |     Audio,
+15 | |     Video,
+16 | | }
+   | |_^

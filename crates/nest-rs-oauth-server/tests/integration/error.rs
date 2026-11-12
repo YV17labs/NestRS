@@ -1,21 +1,14 @@
 //! Covers `src/error.rs` — what a conforming OAuth client actually reads back
 //! from a mounted token endpoint.
 //!
-//! The unit tests beside the enum assert the rendering; this asserts it
-//! **through a booted app**, which is the only thing that proves the response
-//! survives the transport it travels on. That distinction is not academic here:
-//! an earlier version returned the code as a plain-text body, and the
-//! resource-server interceptor stamped a `Bearer` challenge onto the `401` — so
-//! a client authenticating with `Basic` was handed a pointer to RFC 9728
-//! discovery instead of the reason its credentials were refused. Neither fault
-//! is visible to a unit test of the error type.
+//! Booted, because the response must survive the transport: a resource-server
+//! interceptor must not stamp a `Bearer` challenge onto the `401`.
 
 use nest_rs_core::module;
-use nest_rs_guards::NoBearerChallenge;
-use nest_rs_http::{HttpModule, controller, routes};
-use nest_rs_oauth_server::TokenError;
-use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
+use nest_rs_http::challenge::NoBearerChallenge;
+use nest_rs_http::{HttpModule, StatusCode, controller, routes};
+use nest_rs_oauth_server::{TokenEndpointAuthMethod, TokenError};
+use nest_rs_testing::{LogCapture, TestApp};
 
 #[controller(path = "/")]
 struct TokenController;
@@ -24,28 +17,52 @@ struct TokenController;
 impl TokenController {
     #[post("/token")]
     #[public]
-    async fn token(&self) -> poem::Result<String> {
+    async fn token(&self) -> nest_rs_http::Result<String> {
         Err(TokenError::UnsupportedGrant.into())
     }
 
     #[post("/token/client")]
     #[public]
-    async fn client(&self) -> poem::Result<String> {
-        Err(TokenError::InvalidClient.into())
+    async fn client(&self) -> nest_rs_http::Result<String> {
+        Err(TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretBasic).into())
+    }
+
+    #[post("/token/client-in-body")]
+    #[public]
+    async fn client_in_body(&self) -> nest_rs_http::Result<String> {
+        Err(TokenError::InvalidClient(TokenEndpointAuthMethod::ClientSecretPost).into())
+    }
+
+    #[post("/token/no-client")]
+    #[public]
+    async fn no_client(&self) -> nest_rs_http::Result<String> {
+        Err(TokenError::InvalidClient(TokenEndpointAuthMethod::None).into())
+    }
+
+    #[post("/token/outage")]
+    #[public]
+    async fn outage(&self) -> nest_rs_http::Result<String> {
+        Err(TokenError::Server(anyhow::anyhow!("identity store unreachable")).into())
+    }
+
+    #[post("/token/unsigned")]
+    #[public]
+    async fn unsigned(&self) -> nest_rs_http::Result<String> {
+        Err(TokenError::Sign(nest_rs_authn::SignError::new("signing key unusable")).into())
     }
 }
 
-#[module(imports = [HttpModule::for_root(None)], providers = [TokenController])]
+#[module(imports = [HttpModule], providers = [TokenController])]
 struct TokenApp;
 
-/// RFC 6749 §5.2: "The parameters are included in the entity-body of the HTTP
-/// response using the `application/json` media type", and §5.1's `no-store` /
-/// `no-cache` bind the whole token endpoint.
+/// RFC 6749 §5.2's `application/json` body, with §5.1's `no-store` and
+/// `no-cache`; a refusal withholds nothing, so it files no failure line.
 #[tokio::test]
 async fn a_refused_grant_reaches_the_client_as_the_rfc6749_json_error() {
     let app = TestApp::for_module::<TokenApp>()
         .await
         .expect("the token app boots");
+    let logs = LogCapture::install();
 
     let response = app.http().post("/token").send().await;
     response.assert_status(StatusCode::BAD_REQUEST);
@@ -55,29 +72,127 @@ async fn a_refused_grant_reaches_the_client_as_the_rfc6749_json_error() {
     response
         .assert_json(serde_json::json!({ "error": "unsupported_grant_type" }))
         .await;
+    assert_eq!(said(&logs), [], "a client's refusal files nothing");
 }
 
-/// §5.2 again, for the one condition that is a `401`: the code is
-/// `invalid_client`, and the refusal must not be dressed up as a
-/// oauth-resource challenge — which is what the `NoBearerChallenge` marker
-/// on the response is for.
+/// The one `401`: a client refused over HTTP Basic, challenged with the
+/// scheme it used (RFC 6749 §5.2), never dressed up as a resource challenge.
 #[tokio::test]
-async fn a_refused_client_is_a_401_that_is_not_a_resource_challenge() {
+async fn a_client_refused_over_basic_is_a_401_challenged_with_basic() {
     let app = TestApp::for_module::<TokenApp>()
         .await
         .expect("the token app boots");
 
-    let response = app.http().post("/token/client").send().await;
+    let response = app
+        .http()
+        .post("/token/client")
+        .header("authorization", "Basic Y2k6d3Jvbmc=")
+        .send()
+        .await;
     response.assert_status(StatusCode::UNAUTHORIZED);
+    response.assert_header("www-authenticate", r#"Basic realm="authorization server""#);
     response
         .assert_json(serde_json::json!({ "error": "invalid_client" }))
         .await;
 
-    // Through `poem::Error`, which is what `?` in the handler above builds —
-    // and the only spelling that reaches a client.
-    let rendered = poem::Error::from(TokenError::InvalidClient).into_response();
+    // Through the `HttpError` `?` in the handler builds.
+    let rendered = nest_rs_http::HttpError::from(TokenError::InvalidClient(
+        TokenEndpointAuthMethod::ClientSecretBasic,
+    ))
+    .into_response();
     assert!(
         rendered.extensions().get::<NoBearerChallenge>().is_some(),
         "the response opts out of the RFC 9728 pointer",
+    );
+}
+
+/// A client that never used the `Authorization` header — its credentials in
+/// the body, or none — is §5.2's `400 invalid_client`, and carries no
+/// challenge a browser would answer with a credentials prompt.
+#[tokio::test]
+async fn a_client_refused_without_http_authentication_is_a_400_carrying_no_challenge() {
+    let app = TestApp::for_module::<TokenApp>()
+        .await
+        .expect("the token app boots");
+
+    for path in ["/token/client-in-body", "/token/no-client"] {
+        let response = app.http().post(path).send().await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        assert!(
+            response.0.headers().get("www-authenticate").is_none(),
+            "{path}: {:?}",
+            response.0.headers(),
+        );
+        response
+            .assert_json(serde_json::json!({ "error": "invalid_client" }))
+            .await;
+    }
+}
+
+/// Every `warn` and `error` a request filed: its level, its target, its
+/// message and the chain it said.
+fn said(logs: &LogCapture) -> Vec<(String, String, String, Option<String>)> {
+    logs.events()
+        .into_iter()
+        .filter(|event| event.level == "warn" || event.level == "error")
+        .map(|event| {
+            let error = event.field("error");
+            (event.level, event.target, event.message, error)
+        })
+        .collect()
+}
+
+/// A dependency that did not answer while the grant was resolved: `503` (RFC 9110
+/// §15.6.4), the opaque code in the body and nothing of the cause, which the
+/// operator reads once, at `warn`, on the line the HTTP edge files for every
+/// `503`.
+#[tokio::test]
+async fn a_dependency_outage_is_a_503_naming_nothing_of_its_cause() {
+    let app = TestApp::for_module::<TokenApp>()
+        .await
+        .expect("the token app boots");
+    let logs = LogCapture::install();
+
+    let response = app.http().post("/token/outage").send().await;
+    response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    response
+        .assert_json(serde_json::json!({ "error": "server_error" }))
+        .await;
+
+    assert_eq!(
+        said(&logs),
+        [(
+            "warn".to_owned(),
+            nest_rs_http::target::HTTP.to_owned(),
+            "request unavailable".to_owned(),
+            Some("server_error: identity store unreachable".to_owned()),
+        )],
+    );
+}
+
+/// A failure of this server's own — a token it could not sign — stays a `500`
+/// answering the opaque code, its cause filed once at `error`, by the HTTP
+/// edge.
+#[tokio::test]
+async fn a_signing_failure_is_a_500_whose_cause_reaches_the_operator_alone() {
+    let app = TestApp::for_module::<TokenApp>()
+        .await
+        .expect("the token app boots");
+    let logs = LogCapture::install();
+
+    let response = app.http().post("/token/unsigned").send().await;
+    response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    response
+        .assert_json(serde_json::json!({ "error": "server_error" }))
+        .await;
+
+    assert_eq!(
+        said(&logs),
+        [(
+            "error".to_owned(),
+            nest_rs_http::target::HTTP.to_owned(),
+            "request failed".to_owned(),
+            Some("server_error: the token could not be signed: signing key unusable".to_owned()),
+        )],
     );
 }

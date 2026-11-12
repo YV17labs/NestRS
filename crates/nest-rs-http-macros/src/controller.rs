@@ -1,68 +1,63 @@
-//! `#[controller]` — struct decorator (construction + `PATH`/`VERSION` consts +
-//! controller-level interceptor/guard/filter wrapping). `#[routes]` owns the
-//! route table and emits the `Discoverable`/mount.
+//! `#[controller]` — struct decorator: construction, `PATH`/`VERSIONS` and the
+//! controller-level layer specs `#[routes]` reads.
 
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{LitStr, Meta, Token};
+use syn::LitStr;
 
-use nest_rs_codegen::{
-    DecoratorPair, InjectableBody, build_injectable_body, from_container_method,
-    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    require_str_lit, scoped_specs, take_path_list,
-};
-
-/// The HTTP edge's pair. Read by `#[controller]` here and by `#[routes]` /
-/// `#[crud]` next door, so reaching for either half on the wrong shape names the
-/// other one instead of reporting syn's `expected struct`.
-pub(crate) const HTTP_PAIR: DecoratorPair = DecoratorPair {
-    host: "#[controller]",
-    subject: "controller struct",
-    operations: "#[routes]",
-    collects: "#[get] / #[post] / #[put] / #[patch] / #[delete]",
+use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::versioning;
+use nest_rs_codegen::__private::{
+    InjectableBody, MountPath, RoutePath, build_injectable_body, exception_filter_specs,
+    from_container_method, guard_capability_bounds, host_meta_fn, injected_keys_with_layers,
+    injected_names_with_layers, injected_optional_fns, injected_remedies_fn, injects_impls,
+    interceptor_specs, layer_deps, missing_argument, refuse_rust_deprecated, reject_path,
+    scoped_specs,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
-    let (path_lit, versions) = match parse_controller_args(args.into()) {
+    let (path_lit, path_parameters, versions) = match parse_controller_args(args.into()) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
     let versions_slice = quote! { &[#(#versions),*] };
-    let mut item = match HTTP_PAIR.parse_host(input.into()) {
+    let mut item = match pair::HTTP.parse_host(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
+    if let Err(err) = refuse_rust_deprecated(&item.attrs, "a `#[controller]`") {
+        return err.to_compile_error().into();
+    }
 
-    // Inert class-level attributes consumed here; each must sit below `#[controller]`.
-    let interceptors = match take_path_list(&mut item.attrs, "use_interceptors") {
-        Ok(paths) => paths,
+    // Inert class-level attributes: each must sit below `#[controller]`.
+    let Layers {
+        guards,
+        pipes,
+        interceptors,
+        exception_filters,
+        meta,
+        ..
+    } = match take_layers(&pair::HTTP, LayerScope::Host, &mut item.attrs) {
+        Ok(layers) => layers,
         Err(err) => return err.to_compile_error().into(),
     };
-    let guards = match take_path_list(&mut item.attrs, "use_guards") {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let filters = match take_path_list(&mut item.attrs, "use_filters") {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let pipes = match take_path_list(&mut item.attrs, "use_pipes") {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let exception_filters = match take_path_list(&mut item.attrs, "use_exception_filters") {
-        Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
-    };
+    let host_meta = host_meta_fn(&meta);
 
+    // Read before the body strips `#[inject]`: `#[crud]` reaches its service
+    // through the field of its type.
+    let injected_fields = match injects_impls(&item, "controller") {
+        Ok(impls) => impls,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let InjectableBody {
         ctor,
         dep_keys,
         dep_names,
-        ..
+        opt_keys,
+        opt_names,
+        remedies,
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
@@ -71,56 +66,28 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // Access-graph dependencies: `#[inject]` keys + controller-level layers.
-    // Each layer is `Container::get::<P>` at mount, so it must be checked under
-    // the same boot contract as a field — otherwise a layer registered in a
-    // non-imported module resolves silently (flat-container leak). `#[routes]`
-    // owns `Discoverable`, so the keys are exposed via an inherent fn it reads.
-    // Keys and their diagnostic labels from one walk: without the labels a layer
-    // no module provides is reported as `<unnamed dependency>` — including in
-    // the suggested fix — which is precisely the case a `dyn`-injecting guard
-    // hits. `layer_deps` keeps the two index-aligned, so this selector is
-    // written once.
+    // A layer is resolved at mount, so it joins the access graph like a field;
+    // otherwise one from a non-imported module resolves through the flat container.
     let layers = layer_deps(
-        [&interceptors, &guards, &filters, &pipes, &exception_filters]
+        [&interceptors, &guards, &pipes, &exception_filters]
             .into_iter()
             .flatten(),
     );
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
+    let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
+    let injected_remedies = injected_remedies_fn(&remedies);
 
-    // `mount` is emitted by `#[routes]` (separate impl), so the layer lists are
-    // exposed via an inherent fn `#[routes]` calls. Each layer is boxed to a
-    // single `BoxEndpoint` so the result type stays stable regardless of count;
-    // wrap sits outside every per-route layer (first listed outermost within its
-    // layer). Per-route nesting (inner→outer) is built by `#[routes]`:
-    // handler → ability shaper → interceptors → filters → RouteShaper → meta.
-    // Guards stay as a controller-level wrap **only** so
-    // the controller's `#[use_guards]` participates in the per-route Layer
-    // System dedup via `__nestrs_controller_guard_specs()`; the wrap below
-    // simply boxes the endpoint without adding a guard, so we'd otherwise drop
-    // the helper entirely. We keep the box for type stability across handlers.
-    let interceptor_specs = scoped_specs(
-        &interceptors,
-        quote!(dyn ::nest_rs_interceptors::Interceptor),
-    );
-    let filter_specs = scoped_specs(&filters, quote!(dyn ::nest_rs_filters::Filter));
+    let interceptor_specs = interceptor_specs(&interceptors);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
-    // Controller-scope guards fold into every route's chain, so they owe the
-    // same capability the per-route ones do.
-    let capability_bounds =
-        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::HttpGuard));
-    // Does a controller-level `#[use_guards]` include `ThrottlerGuard`? `#[routes]`
-    // reads this to advertise `429` for every route the controller throttles
-    // (OAPI-O4) — a compile-time bool, so the check is free at runtime.
-    let controller_has_throttler = guards.iter().any(crate::routes::guard_path_is_throttler);
-    let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
-    let exception_filter_specs = scoped_specs(
-        &exception_filters,
-        quote!(dyn ::nest_rs_exception_filters::ExceptionFilterErased),
+    let capability_bounds = guard_capability_bounds(
+        guards.iter(),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_http::HttpView>),
     );
+    let pipe_specs = scoped_specs(&pipes, quote!(dyn ::nest_rs_pipes::GlobalPipe));
+    let exception_filter_specs = exception_filter_specs(&exception_filters);
 
-    let residency = HTTP_PAIR.host_residency(&name, &item.generics);
+    let residency = pair::HTTP.host_residency(&name, &item.generics);
 
     quote! {
         #item
@@ -129,6 +96,8 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 
         #residency
 
+        #injected_fields
+
         impl #impl_generics #name #ty_generics #where_clause {
             /// The controller's route prefix, from `#[controller(path = "…")]`.
             pub const PATH: &'static str = #path_lit;
@@ -136,7 +105,16 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
             /// `#[controller(version = …)]`. Empty if unversioned.
             pub const VERSIONS: &'static [&'static str] = #versions_slice;
 
+            /// How many parameters the controller's path names, read by
+            /// `#[routes]` and `#[crud]` where a route reads its id.
+            #[doc(hidden)]
+            pub const fn __nestrs_controller_path_parameters() -> usize {
+                #path_parameters
+            }
+
             #from_container
+
+            #host_meta
 
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
@@ -148,61 +126,38 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
                 #injected_names
             }
 
-            /// Controller-level `#[use_interceptors(...)]`, exposed for the
-            /// `#[routes]` macro to compose into each route's interceptor pool
-            /// (`wrap_route_response_layers`). Empty when none are declared.
+            #injected_optional
+
+            #injected_remedies
+
+            /// Controller-level `#[use_interceptors(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_interceptor_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedInterceptorSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
             {
                 #interceptor_specs
             }
 
-            /// Controller-level `#[use_filters(...)]`, exposed for the
-            /// `#[routes]` macro to compose into each route's filter pool
-            /// (`wrap_route_response_layers`). Empty when none are declared.
-            #[doc(hidden)]
-            pub fn __nestrs_controller_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedFilterSpec>
-            {
-                #filter_specs
-            }
-
-            /// Controller-level `#[use_guards(...)]`, exposed for the
-            /// `#[routes]` macro to fold into each route's
-            /// `RouteShaper`. Empty when none are declared.
+            /// Controller-level `#[use_guards(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::__private::GuardSpec>
             {
                 #guard_specs
             }
 
-            /// Whether a controller-level `#[use_guards(...)]` includes
-            /// `ThrottlerGuard`, so `#[routes]` can advertise a `429` for every
-            /// route this controller throttles (OAPI-O4). A compile-time
-            /// constant folded into each route's `throttled` flag.
-            #[doc(hidden)]
-            pub fn __nestrs_controller_has_throttler() -> bool {
-                #controller_has_throttler
-            }
-
-            /// Controller-level `#[use_pipes(...)]`, exposed for the
-            /// `#[routes]` macro to fold into each route's
-            /// `RouteShaper`. Empty when none are declared.
+            /// Controller-level `#[use_pipes(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_pipe_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedPipeSpec>
+                -> ::std::vec::Vec<::nest_rs_http::__private::PipeSpec>
             {
                 #pipe_specs
             }
 
-            /// Controller-level `#[use_exception_filters(...)]`, exposed for
-            /// the `#[routes]` macro to fold into each route's
-            /// `RouteShaper`. Empty when none are declared.
+            /// Controller-level `#[use_exception_filters(...)]`, read by `#[routes]`.
             #[doc(hidden)]
             pub fn __nestrs_controller_exception_filter_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedExceptionFilterSpec>
+                -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
             {
                 #exception_filter_specs
             }
@@ -211,59 +166,36 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>)> {
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
+const CONTROLLER: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("controller", &["path", "version"]).with_remedies(&[(
+        "version",
+        "to serve several, write one `version = [\"1\", \"2\"]`",
+    )]);
+
+/// The path, how many parameters it names, and the versions served.
+fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, usize, Vec<LitStr>)> {
     let mut path = None;
     let mut versions = Vec::new();
-    for meta in metas {
-        match meta {
-            // Each key answered once. These were plain assignments, so
-            // `version = "1", version = "2"` silently kept the last and mounted
-            // the controller at an address the developer never wrote — while
-            // `version = ["1", "1"]` was already refused, which is the same
-            // question asked in the other spelling.
-            // The shared sentence, with the remedy appended where there is one
-            // — never a second base wording. Both keys asked "declared twice?"
-            // in this decorator's own words while `namespace` next door asked it
-            // in `nest_rs_codegen::reject_duplicate_argument`'s, so one grammar
-            // had two answers.
-            Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                nest_rs_codegen::reject_duplicate_argument(
-                    path.is_some(),
-                    &nv,
-                    "controller",
-                    "path",
-                )?;
-                path = Some(require_str_lit(&nv.value, "controller", "path", "/users")?);
+    CONTROLLER.parse2(args, |arg| {
+        match arg.key() {
+            "path" => path = Some(arg.str_lit("/users")?),
+            "version" => {
+                versions = versioning::parse_version_list(&arg.expr()?, "#[controller]")?;
             }
-            Meta::NameValue(nv) if nv.path.is_ident("version") => {
-                if !versions.is_empty() {
-                    return Err(syn::Error::new_spanned(
-                        &nv,
-                        format!(
-                            "{} — to serve several, write one `version = [\"1\", \"2\"]`",
-                            nest_rs_codegen::duplicate_argument("controller", "version"),
-                        ),
-                    ));
-                }
-                versions =
-                    nest_rs_codegen::versioning::parse_version_list(&nv.value, "#[controller]")?;
-            }
-            other => {
-                return Err(nest_rs_codegen::unmatched_meta(
-                    "controller",
-                    &other,
-                    &["path", "version"],
-                ));
-            }
+            // The grammar hands over only its own keys.
+            _ => {}
         }
-    }
+        Ok(())
+    })?;
     let path = path.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
-            nest_rs_codegen::missing_argument("controller", "path", "\"/users\""),
+            missing_argument("controller", "path", "\"/users\""),
         )
     })?;
-    nest_rs_codegen::reject_path("controller", &path)?;
-    Ok((path, versions))
+    reject_path("controller", &path, MountPath::Prefix)?;
+    let parameters = RoutePath::parse(&path.value())
+        .map_err(|why| syn::Error::new_spanned(&path, why))?
+        .parameter_count();
+    Ok((path, parameters, versions))
 }

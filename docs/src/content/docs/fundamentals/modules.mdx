@@ -1,7 +1,6 @@
 ---
 title: Modules
 description: "The composition unit of every NestRS app — what #[module] declares, how imports wire up, and how a root module grows."
-tier: basics
 sidebar:
   order: 2
 ---
@@ -9,11 +8,12 @@ sidebar:
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
 Every NestRS binary is a tree of modules. This page walks **`blog`**
-through four steps — step ① inline, then the composed root the
+through four steps, from what `nestrs new` writes to the composed root the
 [tutorial](/tutorial/) implements:
 
-1. **One root module** — handlers inline, one transport.
-2. **Extract a feature** — domain code moves to `posts/` with its own prefix.
+1. **A feature adapter and a root** — the handler in the adapter, the root
+   importing it.
+2. **A feature of its own** — a domain gets its port and one adapter per edge.
 3. **Wire imports** — static vs dynamic framework modules.
 4. **Compose** — the root lists imports only; adapters own the handlers.
 
@@ -21,39 +21,49 @@ The snippets are illustrative. Step ① matches the
 [Fundamentals](/fundamentals/) tour — the same `BlogModule` grows on the
 rest of this page.
 
-
-## Start with one module
+## Start with a feature adapter and a root
 
 A module is a struct decorated with `#[module(...)]`. It declares two
 things: the **providers it owns** (built and registered into the
 container) and the **modules it imports** (whose providers it can
 inject).
 
-At the smallest scale, handlers live in the app itself:
+`nestrs new blog` writes the shape every app keeps. The handler lives in a feature's
+adapter, beside the port it serves:
+
+```rust title="crates/features/src/blog/http/module.rs"
+use nest_rs::core::module;
+
+use super::controller::BlogController;
+use crate::blog::BlogModule;
+
+#[module(imports = [BlogModule], providers = [BlogController])]
+pub struct BlogHttpModule;
+```
+
+and the app's root imports the adapter, the edge it serves:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
-use features::blog::BlogController;
-use features::blog::BlogService;
 
-#[module(
-    imports = [HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() })],
-    providers = [BlogService, BlogController],
-)]
+use features::blog::BlogHttpModule;
+
+#[module(imports = [BlogHttpModule])]
 pub struct BlogModule;
 ```
 
-`BlogModule` activates HTTP and registers its own service and controller.
-Providers in the same module share its name prefix — here, `BlogService`
-and `BlogController`.
+The controller brings `HttpModule`, which starts the server: the decorator already
+says the edge. Two modules are named `BlogModule`, the feature's port and the app's
+root, and the path says which; the app only ever names the adapter.
 
 ```mermaid
 flowchart TB
-  BM[BlogModule] --> HM["HttpModule::for_root()"]
-  BM --> BS[BlogService]
-  BM --> BC[BlogController]
+  BM[apps/blog: BlogModule] --> BHM[BlogHttpModule]
+  BHM --> BP[features: BlogModule]
+  BHM --> BC[BlogController]
+  BP --> BS[BlogService]
   BC -. "injects" .-> BS
+  BC -. "brings" .-> HM[HttpModule]
 ```
 
 ## Two lists, one purpose
@@ -67,18 +77,20 @@ A provider listed by another module cannot be redeclared — the container
 is flat. The access graph (see [Providers](/fundamentals/providers/))
 ensures every `#[inject]` resolves through `imports`.
 
-List order does not affect registration. We still list imports in a
-readable order: **config → infrastructure → transports → auth wiring →
-feature adapters**. The app root imports **`PostsHttpModule`**, not
+List order does not decide what registers, and a module's providers build in
+dependency order. It does order the hooks the graph leaves free, and what a
+hand-written module installs reaches only what registers after it
+([what is global](/fundamentals/module-boot/#what-is-global)). We still list imports in a
+readable order: **infrastructure → the transports it pins → feature
+adapters**. The app root imports **`PostsHttpModule`**, not
 `PostsModule` — the port rides along inside the adapter's own `imports`.
 Business modules sit at the bottom of the list.
 
-## Extract a feature
+## A feature of its own
 
-When a domain outgrows the app root, it moves to `crates/features/` with
-its **own name prefix**. The blog handlers become `PostsService` and
-`PostsController` under `PostsModule` — same domain, feature naming, not
-the app-root `Blog*` prefix anymore.
+A real domain gets a feature of its own under `crates/features/src/`, with its
+**own name prefix**: `PostsService` and `PostsController` under `PostsModule`,
+where `Blog*` was the greeting the scaffold starts from.
 
 <FileTree>
 - crates/features/src/posts/
@@ -95,8 +107,8 @@ the app-root `Blog*` prefix anymore.
 One feature, several modules — never one umbrella import. The port
 (`PostsModule`) holds the data layer — `PostsService`, entity, repo wiring.
 It registers **no** controller, resolver, or gateway. Each transport
-adapter (`PostsHttpModule`, …) imports the port and mounts **its** edge
-only.
+adapter (`PostsHttpModule`, …) imports the port and mounts **its** edge only,
+and the decorator on its provider brings the transport that edge runs on.
 
 ### Why not put the controller in `PostsModule`?
 
@@ -110,7 +122,7 @@ Splitting keeps transport **opt-in per binary**:
 | Root imports | What activates |
 |--------------|----------------|
 | `PostsModule` only | Data layer — `PostsService` injectable, **no HTTP routes** |
-| `PostsHttpModule` | HTTP adapter — imports `PostsModule` transitively, mounts `PostsController` |
+| `PostsHttpModule` | HTTP adapter — imports `PostsModule`, mounts `PostsController`, which brings `HttpModule`, and serves it |
 
 `BlogModule` lists `PostsHttpModule`, not `PostsModule`. The adapter
 already imports the port; listing both would be redundant. A
@@ -123,6 +135,7 @@ flowchart TB
   PHM[PostsHttpModule] --> PM
   PHM --> PC[PostsController]
   PC -. "injects" .-> PS
+  PC -. "brings" .-> HM[HttpModule]
 ```
 
 <Aside type="note">
@@ -139,36 +152,47 @@ Framework and feature modules appear in `imports` two ways.
 with configuration at the import site:
 
 ```rust title="apps/blog/src/module.rs"
-SeaOrmModule::for_root(None)
-
 HttpModule::for_root(HttpConfig {
-    host: "0.0.0.0".into(),
-    port: 4000,
+    compression: true,
     ..Default::default()
 })
 ```
 
-**Static** — a bare type, no parameters. Feature adapters like
-`PostsHttpModule` import this way:
+**Static** — a type, bare or with a type argument naming an instance
+(`RedisModule::<Cache>`, below). Feature adapters like `PostsHttpModule`
+import this way, and so does every module reading its config from the
+environment alone (`SeaOrmModule`):
 
 ```rust title="apps/blog/src/module.rs"
 PostsHttpModule
 ```
 
 Static modules dedupe automatically: if two branches of the import tree
-both reach `SeaOrmDatabaseModule` (the bare binding beside `SeaOrmModule`), its
-providers are built once. Dynamic
-modules do **not** dedupe — each call carries its own config.
+both reach `SeaOrmDatabaseModule` (a bare binding, which imports the
+`SeaOrmModule` opening its pool), its providers are built once. A dynamic import carries its own config, so each
+call is read — but what it wires once per app lives in the module it
+imports by type, so it is wired once (see [Safe to import twice](/fundamentals/module-boot/#safe-to-import-twice)).
+
+A dynamic import is the module it configures, as a NestJS `DynamicModule`
+names its `module`: importing `StorageModule::for_root(cfg)` reaches what
+`StorageModule` provides, exactly as importing `StorageModule` does.
+
+A module an app can open once per [instance](/fundamentals/instances/)
+names it as a type argument in a bare import, `BucketModule::<Cache>` beside
+the default's bare `BucketModule`, and in the value of a pin,
+`BucketModule::for_root((Cache, cfg))` beside the default's `for_root(cfg)`.
 
 <Aside type="tip">
-Env vars (`NESTRS_<NAMESPACE>__<KEY>`) fill a dynamic import's config at boot.
-Pass `None` for env-only; pass a config to set defaults in code that the
-environment can still override **per field** — never a lock, see
-[the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
+Env vars (`<PREFIX>_<NAMESPACE>__<KEY>`) fill a module's config at boot. A
+bare import reads it from the environment alone; `for_root` pins a config,
+defaults in code that the real environment can
+still override **per field** — never a lock — while the `.env` files no longer
+reach that namespace at all, see
+[the dual-path rule](/configuration/pinning/#the-dual-path-rule). For the imports above:
 
 ```rust title="apps/blog/src/module.rs"
-SeaOrmModule::for_root(None)
-HttpModule::for_root(None)
+SeaOrmModule
+HttpModule
 ```
 
 ```bash title=".env"
@@ -184,35 +208,50 @@ and deployment-specific host/port from env. See
 
 ## Compose the root module
 
-Once `blog` needs persistence, the inline
-`BlogService` / `BlogController` pair moves into `posts/` (renamed
-`PostsService` / `PostsController`). The root module no longer lists
-providers — it only composes imports:
+Once `blog` needs persistence, the scaffold's greeting gives way to `posts/`, and
+the root picks up the backend it chooses. It still lists no provider — it only
+composes imports:
 
 ```rust title="apps/blog/src/module.rs"
 #[module(
     imports = [
-        ConfigModule::for_root(),
-        SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
         PostsHttpModule,
     ],
 )]
 pub struct BlogModule;
 ```
 
-`HttpModule` starts the transport. `PostsHttpModule` registers
-`PostsController` on it. Framework first, feature adapter second — same
-pattern for every HTTP feature.
-
-`PostsHttpModule` pulls in `PostsModule` through its own `imports` list.
-The root never lists the port when it only wants this transport — and
-never lists a transport it does not serve.
+`PostsHttpModule` imports `PostsModule`, the port, and registers
+`PostsController`, which brings `HttpModule`, which starts the transport. The
+root lists the adapter and nothing it brings: it never lists the port when it
+only wants this transport, never a transport it does not serve, and names
+`HttpModule` only to pin its config (`HttpModule::for_root(HttpConfig { .. })`) — same pattern
+for every edge.
 
 Each import contributes its providers. HTTP mounts only what the import
 tree reaches. Linking a crate without importing its module keeps its
-providers **inert** — compiled in, not activated.
+providers **inert** — compiled in, not activated. The boot seals what the
+tree reaches into the container; a container built by hand with
+`Container::builder()` carries no such set, so a transport asked to discover
+from it refuses with `UngatedDiscoveryError`, naming what it discovers, rather
+than activating everything linked.
+
+A module listing a controller, a gateway, a resolver, an `#[mcp]`, `#[process]`
+or `#[scheduled]` host imports what that edge runs on, bare, because the
+decorator on the host says so; a module the app does not reach brings nothing, so
+the root's import of the adapter is still the one line opening the edge. A
+module listing no host, such as an adapter holding only an interceptor, imports
+its transport itself. So does a hand-written module registering a host, or a host
+you seed: no `#[module]` lists it, so it brings nothing, and the run names it at
+`warn` (`host not served: its edge's transport is not attached`) when nothing
+imports what its edge runs on. HTTP, WebSockets and MCP build their own instance
+from what the registration attaches, so a seed serves nothing there even beside
+the transport, and the run says that instead (`host not served: its edge does not
+mount an instance`): list the host in a `#[module]`'s `providers`.
+
+An app run with no transport at all says `app serves nothing: no transport is
+attached`, runs its init hooks and stops.
 
 That is the usual shape of a root module: compose features and
 framework modules; let adapters own the handlers.
@@ -220,67 +259,31 @@ framework modules; let adapters own the handlers.
 ```mermaid
 flowchart TB
   BM[BlogModule]
-  BM --> CM[ConfigModule]
   BM --> DM[SeaOrmDatabaseModule]
-  BM --> HM[HttpModule]
+  DM --> SM[SeaOrmModule]
   BM --> PHM[PostsHttpModule]
+  PHM --> HM[HttpModule]
   PHM --> PM[PostsModule]
   PM --> PS[PostsService]
   PHM --> PC[PostsController]
 ```
 
-Solid arrows from `BlogModule` are **direct** imports. `PostsModule` is
-reachable only through `PostsHttpModule` — that is the point.
+Solid arrows from `BlogModule` are **direct** imports. `PostsModule` and
+`HttpModule` are reachable only through `PostsHttpModule` — that is the point.
 
 <Aside type="note" title="What to remember">
 - **`#[module]` = two lists** — `providers` you build, `imports` you depend on.
-- **Port vs adapter** — data in `PostsModule`, routes in `PostsHttpModule`; import the adapter at the root when you want that transport.
+- **Port vs adapter** — data in `PostsModule`, routes in `PostsHttpModule`, whose controller brings the transport it serves on; import the adapter at the root when you want that edge.
 - **Opt-in per binary** — import only the modules your deploy serves; everything else stays inert.
 </Aside>
 
 ## Boot sequence
 
-`App::builder().build().await` runs four phases, in order:
-
-1. **Seeds** — runtime values from `main` via `.seed(value)`. A seed
-   wins over a module-built provider of the same type.
-2. **Collect** — async factories run (DB pools, …). A dynamic module's
-   `collect()` lives here.
-3. **Factories** — awaited outputs land in the container as global
-   infrastructure.
-4. **Register** — `Module::register()` builds every provider in
-   dependency order.
-
-Sync-only apps skip collect/factories and call
-`App::new::<BlogModule>()` directly.
-
-## Safe to import twice
-
-The `#[module]` macro registers a module the first time `register()`
-runs, then short-circuits on later calls. A **diamond import** — two
-branches that both reach the same module — still builds that module's
-providers once:
-
-```rust title="a diamond in the import graph"
-#[module(imports = [Common])]
-pub struct B;
-
-#[module(imports = [Common])]
-pub struct C;
-
-#[module(imports = [B, C])]
-pub struct A;
-```
-
-```mermaid
-flowchart TB
-  A --> B
-  A --> C
-  B --> Common
-  C --> Common
-```
-
-`Common`'s providers are registered once, not twice.
+The boot runs four phases over the import tree — seeds, collect, factories,
+register — and reaches what a seed or a factory makes from anywhere, what a module
+lists only through an import. [Module boot](/fundamentals/module-boot/) walks
+each phase, [what is global](/fundamentals/module-boot/#what-is-global), and why a
+module imported twice builds once.
 
 ## Going further
 

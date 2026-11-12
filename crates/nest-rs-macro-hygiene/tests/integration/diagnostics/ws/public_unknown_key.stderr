@@ -1,0 +1,5 @@
+error: expected `#[public(Action, Subject)]` — e.g. `#[public(Read, users::Entity)]`
+  --> tests/integration/diagnostics/ws/public_unknown_key.rs:36:35
+   |
+36 |     #[public(Read, posts::Entity, audience = "everyone")]
+   |                                   ^^^^^^^^^^^^^^^^^^^^^

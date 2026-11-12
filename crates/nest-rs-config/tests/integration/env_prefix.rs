@@ -1,19 +1,14 @@
 //! The custom-prefix contract, exercised end to end.
 //!
-//! The prefix is read from the process environment and frozen on first use, so
-//! each test below owns a process (see the suite root) and sets
-//! `NESTRS_ENV_PREFIX` before anything reads a name. Every assertion then reads
-//! a variable an `ACME` deployment would actually export, and **no `NESTRS_*`
-//! name may resolve anything** — a half-applied rename is exactly the failure
-//! this suite exists to catch.
+//! The prefix is frozen on first use, so each test owns a process and sets
+//! `NESTRS_ENV_PREFIX` before anything reads a name; no `NESTRS_*` name may
+//! resolve anything.
 
-use nest_rs_config::{
-    Config, ConfigModule, ConfigService, Environment, Namespaced, config, var_name,
-};
-use nest_rs_core::{App, EnvPrefix, module};
+use std::sync::Arc;
 
-/// A feature config shaped like every other one in the framework: a namespace,
-/// a `from_env` overlay, a validated default.
+use nest_rs_config::{ConfigService, Environment, Namespaced, config, var_name};
+use nest_rs_core::{App, EnvPrefix, injectable, module};
+
 #[config(namespace = "widget")]
 #[derive(Clone)]
 struct WidgetConfig {
@@ -30,20 +25,21 @@ impl Default for WidgetConfig {
     }
 }
 
-impl Config for WidgetConfig {
-    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
-        Ok(Self {
-            port: env.parse("PORT")?.unwrap_or(base.port),
-            label: env.get("LABEL").unwrap_or(base.label),
-        })
-    }
+/// What reads the widget's config, and so loads it.
+#[injectable]
+struct Widget {
+    #[inject]
+    _config: Arc<WidgetConfig>,
 }
 
-#[module(imports = [ConfigModule::for_root(), ConfigModule::for_feature::<WidgetConfig>()])]
+#[module(providers = [Widget])]
 struct WidgetModule;
 
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_declared_prefix_replaces_nestrs_everywhere() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "ACME");
@@ -60,20 +56,17 @@ fn the_declared_prefix_replaces_nestrs_everywhere() {
     });
 }
 
-/// The composition: the documented wiring booted, and what the caller gets back
-/// asserted. Reading a name proves it is *built* from the prefix; only a boot
-/// proves the factory `ConfigModule` queues reads the same name.
-// Not `#[tokio::test]`: `figment::Jail` is sync and owns the scope, so the
-// runtime is built inside it rather than around it.
+/// Only a boot proves the factory `ConfigModule` queues reads the prefixed name.
+// Not `#[tokio::test]`: `figment::Jail` is sync and owns the scope.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_booted_app_resolves_its_config_from_the_declared_prefix() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "ACME");
         jail.set_env("ACME_WIDGET__PORT", "8443");
-        // The old name must be inert, not a second way in: a deployment that
-        // still exports it has renamed nothing, and a value silently winning
-        // here would hide that.
         jail.set_env("NESTRS_WIDGET__LABEL", "from-the-old-prefix");
 
         let app = tokio::runtime::Builder::new_current_thread()
@@ -85,7 +78,7 @@ fn a_booted_app_resolves_its_config_from_the_declared_prefix() {
         let config = app
             .container()
             .get::<WidgetConfig>()
-            .expect("ConfigModule::for_feature registers the config for injection");
+            .expect("a provider injecting the config loads it");
 
         assert_eq!(config.port, 8443, "ACME_WIDGET__PORT must reach the field");
         assert_eq!(
@@ -96,40 +89,40 @@ fn a_booted_app_resolves_its_config_from_the_declared_prefix() {
     });
 }
 
-/// `<PREFIX>_ENV` selects the `.env` cascade, and it is read before any
-/// `ConfigService` exists — the one variable a rename is most likely to miss.
+/// `<PREFIX>_ENV` is read before any `ConfigService` exists.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_active_environment_is_read_from_the_declared_prefix() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "ACME");
-        jail.set_env("ACME_ENV", "production");
+        jail.set_env("ACME_ENV", "development");
         jail.set_env("NESTRS_ENV", "staging");
         assert_eq!(
             Environment::from_env(),
-            Environment::Production,
+            Environment::Development,
             "ACME_ENV decides; NESTRS_ENV is just another variable now",
         );
         Ok(())
     });
 }
 
-/// A prefix written into the cascade renamed nothing — it could not have
-/// selected the very files it was read from. That must abort, not pass.
-///
-/// Through a plain config read, which is all a one-shot tool does: the
-/// generated `migrate` and `seed` binaries never call `Environment::init`, so a
-/// guard hanging off boot would not cover them.
+/// A prefix written into the cascade aborts, through a plain config read — all
+/// a `migrate` or `seed` binary does.
 #[test]
-#[should_panic(expected = "is `ACME` in the `.env` cascade")]
-#[allow(clippy::result_large_err)]
+#[should_panic(
+    expected = "is set in the `.env` cascade to another prefix than the one already resolved, `FIXTURE`"
+)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_prefix_written_into_the_cascade_aborts_without_environment_init() {
     figment::Jail::expect_with(|jail| {
-        // The process prefix is pinned rather than inherited: the refusal is
-        // about the file *contradicting* the process, so a shell that already
-        // exported `ACME` would make the two agree and the abort would not fire
-        // — a test that passes because the ambient environment happened to
-        // match is a test asserting nothing.
+        // Pinned, not inherited: a shell already exporting `ACME` would agree
+        // with the file and the abort would not fire.
         jail.set_env(EnvPrefix::VAR, "FIXTURE");
         jail.create_file(
             ".env",
@@ -144,13 +137,15 @@ fn a_prefix_written_into_the_cascade_aborts_without_environment_init() {
     });
 }
 
-/// And through `load_cascade`, the other entry into the same files — the one
-/// `nest_rs_testing::load_project_env` takes. It parses and *publishes* without
-/// going through the memoized map, so a guard on that map would leave every e2e
-/// harness uncovered.
+/// And through `load_cascade`, which bypasses the memoized map.
 #[test]
-#[should_panic(expected = "is `ACME` in the `.env` cascade")]
-#[allow(clippy::result_large_err)]
+#[should_panic(
+    expected = "is set in the `.env` cascade to another prefix than the one already resolved, `FIXTURE`"
+)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_prefix_written_into_the_cascade_aborts_through_load_cascade() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "FIXTURE");
@@ -160,12 +155,37 @@ fn a_prefix_written_into_the_cascade_aborts_through_load_cascade() {
     });
 }
 
-/// A malformed value resolves names no operator wrote, so it aborts on the
-/// first read rather than degrading to `NESTRS` — which would be just as wrong,
-/// and silent.
+/// The refusal names the prefix already resolved, never the one the file wrote.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn the_prefix_refusal_quotes_no_value_the_cascade_wrote() {
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(EnvPrefix::VAR, "FIXTURE");
+        jail.create_file(".env", &format!("{}=SK_LIVE_FILE\n", EnvPrefix::VAR))?;
+        let refused = std::panic::catch_unwind(|| {
+            nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Development);
+        })
+        .expect_err("the cascade aborts");
+        let said = refused
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(said.contains("`FIXTURE`"), "{said}");
+        assert!(!said.contains("SK_LIVE"), "{said}");
+        Ok(())
+    });
+}
+
+/// A malformed prefix aborts on the first read rather than degrading to `NESTRS`.
 #[test]
 #[should_panic(expected = "must start with an uppercase ASCII letter")]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_malformed_prefix_aborts_on_first_read() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "acme");

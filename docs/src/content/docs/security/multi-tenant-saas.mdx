@@ -26,19 +26,24 @@ pub struct UsersController {
 ## The guarantee
 
 Once the authz modules are imported, the caller's ambient `Ability` is
-non-optional. It does three things on every request, without a
-per-handler opt-in:
+non-optional. On every unit whose posture names what it reads, the one line a
+handler writes, it does four things, and a unit naming nothing reads nothing a
+grant guards:
 
 - **Pre-filters every read.** `Repo` joins the ability's predicate into
   the SQL `WHERE`, so a member querying posts gets `org_id =
   $caller_org_id` appended.
+- **Stamps and checks every create.** A column the caller's `Create` grant
+  pins — `org_id = $caller_org_id` — is filled when the input left it unset,
+  and the fresh row is re-checked against the grant in SQL: a row outside the
+  caller's org is rolled back and answers `403`.
 - **Gates every by-id write.** A denied-but-existing row updates zero
   rows and returns `403`, not the row.
-- **Masks every response field.** Fields the caller cannot read are
-  stripped from the body before it leaves the process.
+- **Judges each wire row.** A column the caller cannot read is no value in
+  the row it is answered, which reads `null` there.
 
 One predicate AST is interpreted twice — as SQL and in memory — so the
-rows a query returns and the rows the masker keeps cannot diverge. The
+rows a query returns and the rows a reply may answer cannot diverge. The
 mechanics live on one canonical page:
 [Row-level filtering](/security/authorization/row-level-filtering/).
 This page does not re-derive them; it covers what happens at the edges
@@ -46,25 +51,32 @@ of that guarantee.
 
 ## The escape hatches
 
-The framework does not pretend the choke point is inescapable. Three
+The framework does not pretend the choke point is inescapable. Two
 paths reach the database around the ambient scope. Each exists for a
 reason, and each is a place a reviewer must look.
 
-### 1. `Repo::conn()` and injected `Arc<DatabaseConnection>`
+### 1. The named `Repo` escapes and injected `Arc<DatabaseConnection>`
 
-`Repo::conn()` is `pub`. It hands you the ambient executor for a custom
-query. A `find()` against it that skips `scope_for` runs **unfiltered**:
+`Repo` hands out no connection, so a service cannot run a query of its own on
+the unit's executor. A step around the scope goes through a method named
+for it, whose rustdoc states the bar its caller must clear: `Repo::unscoped` and
+`unscoped_by_id` read with no ability, `insert_unscoped` (and its on-conflict form,
+`insert_unscoped_or_existing`) writes with none, and `with_tombstones` keeps the
+ability and reads past soft deletion. The
+credential lookup before sign-in is one, and it reads **across every tenant**:
 
-```rust title="crates/features/src/posts/service.rs"
-// Escape hatch: an unfiltered read across every tenant. A review trigger.
-let every_post = posts::Entity::find()
-    .all(&Repo::<posts::Entity>::conn()?)
-    .await?;
+```rust title="crates/features/src/users/service.rs (from the demo)"
+async fn find_by_email(email: &str) -> Result<Option<entity::Model>, RepoError> {
+    Repo::<Users>::unscoped()
+        .filter(entity::Column::Email.eq(email.to_owned()))
+        .one()
+        .await
+}
 ```
 
 An injected `Arc<DatabaseConnection>` goes one step further — it has no
 executor and no ability at all, the sanctioned bypass for a truly
-contextless path such as a shutdown hook:
+contextless path such as a one-shot command run outside every unit of work:
 
 ```rust title="crates/features/src/sessions/reaper.rs"
 #[injectable]
@@ -78,90 +90,118 @@ Both are deliberate seams for system-level work, not the default path.
 Feature code that reaches for either owes a comment saying why the scope
 does not apply, and a reviewer who confirms it.
 
-### 2. Worker and queue jobs run unscoped by definition
+### 2. Worker and queue jobs run for a tenant, never under an ability
 
 A `#[processor]` runs with **no ambient ability** — and, by default, in one
-transaction per attempt. There is no caller, so there is no scope to
-inherit. That is correct for system work — and it means each processor
-is a tenant boundary you re-establish by hand.
+transaction per attempt. A job is system work with no caller to scope, so the
+row filter is a no-op there: nothing a job reads or writes is filtered for you.
 
-The pattern: carry the tenant id in the job payload, then filter on it
-yourself. The ambient row filter is a no-op here, so the `org_id`
-predicate is yours to add.
+What a job keeps is the tenant it was pushed for. Your claims name it once,
+off the verified token:
 
-The payload carries the tenant id, and it is declared at the feature port
-beside the queue the processor consumes:
-
-```rust title="crates/features/src/posts/command.rs"
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublishCommand {
-    pub post_id: Uuid,
+```rust title="crates/features/src/authn/claims.rs (from the demo, abridged)"
+#[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
+pub struct Claims {
+    // …
+    #[principal(tenant)]
     pub org_id: Uuid,
+    // …
 }
-
-#[queue(name = "posts.publish", job = PublishCommand)]
-pub struct PostsPublishQueue;
 ```
 
-```rust title="crates/features/src/posts/queue/processor.rs"
+The authentication guard makes that tenant ambient for the request. Every job
+the request pushes seals it into its envelope beside the actor, and the worker
+restores it, so `nest_rs::core::current_tenant_id()` answers in a processor
+what it answered in the request that pushed the job. The ambient tenant comes
+from a verified principal or a sealed envelope and nothing else — never a
+header — and a record whose `tenant_id` names no tenant is dead-lettered
+rather than run for none. An envelope is as trusted as
+[whoever can write the queue's keys](/queue/delivery/#where-a-queue-lives), so
+the Redis rules that allow it are part of your tenant isolation.
+
+A job's own facts still travel in its payload. The demo's publish notification
+belongs to the org of the post that was published — a fact the post names, in
+an org the publish was already scoped to — so its payload carries it, declared
+at the feature port beside the queue:
+
+```rust title="crates/features/src/notifications/command.rs (from the demo)"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifyCommand {
+    pub org_id: Uuid,
+    pub message: String,
+}
+
+#[queue(name = "notifications", job = NotifyCommand)]
+pub struct NotifyQueue;
+```
+
+The processor reaches no data itself; it hands the job to its service:
+
+```rust title="crates/features/src/notifications/queue/processor.rs (from the demo)"
 #[processor]
-impl PostsPublishProcessor {
-    #[process(queue = PostsPublishQueue)]
-    async fn publish(&self, job: PublishCommand) -> Result<()> {
-        // No ambient ability — scope explicitly from the payload.
-        let post = post::Entity::find_by_id(job.post_id)
-            .filter(post::Column::OrgId.eq(job.org_id))
-            .one(&Repo::<post::Entity>::conn()?)
-            .await?;
-        // ...
+impl NotificationsProcessor {
+    #[process(queue = NotifyQueue, retries = 3)]
+    async fn notify(&self, job: NotifyCommand) -> Result<()> {
+        self.svc.persist(job).await?;
         Ok(())
     }
 }
 ```
 
-A processor has no caller, so it has no scope to inherit — the tenant
-boundary travels as data, in the job payload, and the `org_id` predicate
-is yours to write. Treat every `#[processor]` as its own boundary: a
-load-by-id with no tenant predicate is the bug to grep for.
+The service writes the row under the payload's org, through `Repo`; the key
+and the creation time are the entity's `#[expose(…, timestamps)]` to seed:
 
-### 3. The Postgres RLS backstop
-
-For the highest-assurance deployments, add a defense-in-depth layer the
-application cannot bypass: a Postgres Row-Level Security policy keyed on
-`tenant_id`. Even an accidental unfiltered query — a stray `conn()`
-`find()`, a processor that forgot its `org_id` predicate — returns
-nothing, because the database itself refuses the rows.
-
-```sql title="the policy, in SQL"
-ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY tenant_isolation ON posts
-  USING (org_id = current_setting('app.current_org')::uuid);
+```rust title="crates/features/src/notifications/service.rs (from the demo, abridged)"
+pub async fn persist(&self, command: NotifyCommand) -> Result<(), ServiceError> {
+    let active = entity::ActiveModel {
+        org_id: Set(command.org_id),
+        message: Set(command.message),
+        ..Default::default()
+    };
+    let model = Repo::<Notifications>::insert_unscoped(active).await?;
+    // …
+    Ok(())
+}
 ```
 
-You set `app.current_org` per connection from the authenticated org id.
-This is belt-and-suspenders: the application-layer filter is the primary
-control, and RLS is the floor under it. Frame it as insurance for the
-tenants who demand it, not a substitute for the guards above.
+A read a job makes filters on its tenant itself. `Repo::<E>::scoped(Action::Read)`
+in a job filters nothing, since no ability exists there, so the service adds
+`.filter(Column::OrgId.eq(tenant))` with the tenant `current_tenant_id()`
+answers — and refuses when it answers `None`. Treat every `#[processor]` as its
+own boundary: a service method a job calls that loads by id with no tenant
+predicate is the bug to grep for.
 
 ## Review checklist
 
 Run this before a tenant-facing release. Each step is one `grep` or one
 read:
 
-1. **Grep for `Repo::conn()`** in feature code. Confirm each call site
-   is a sanctioned unfiltered read, not a forgotten scope.
-2. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
-   Each injection should be a contextless path (a hook), never a request
-   handler.
-3. **Confirm every `#[processor]` re-scopes.** Trace the tenant id from
-   the job payload into the query. A load-by-id with no `org_id`
-   predicate is the bug.
-4. **Confirm every controller carries `#[use_guards(AuthnGuard,
+1. **Grep for `Repo::unscoped`, `unscoped_by_id`, `insert_unscoped` (which
+   finds `insert_unscoped_or_existing` too) and `with_tombstones`** in
+   feature code. Confirm each call site clears the bar
+   the method's rustdoc states, and is not a forgotten scope.
+2. **Grep for `clippy::disallowed_`, `sea_query::Enum` and `impl Iden`** in feature
+   code. A `Repo` select hands out no statement, so nothing rewrites what `Repo`
+   filtered, and raw SQL in a filter is the one way past it: each `#[expect]` opens
+   it, and its text must hold no value; the other two are what clippy cannot name
+   ([Raw SQL in a filter](/database/raw-sql/)).
+   `with_ability` needs no
+   such read: it only narrows the ability the unit runs under, and nothing
+   public widens one — no function installs an executor of its own, and a
+   unit opened or work re-entered inside a request runs as that request. A
+   test runs a service through `TestApp::unit`.
+3. **Grep for `ExecutorScope::Job`** in feature code. A job unit is an
+   edge's — a queue attempt, a tick — and one a feature opens on a task of its
+   own reads unscoped.
+4. **Grep for `Arc<DatabaseConnection>`** outside the framework crates.
+   Each injection should be a contextless path (a one-shot command), never
+   a request handler or a lifecycle hook, which runs in a unit of work.
+5. **Confirm every `#[processor]` re-scopes.** Trace the tenant —
+   `current_tenant_id()`, or the id a tick puts in the payload — into the
+   service's query. A load-by-id with no `org_id` predicate is the bug.
+6. **Confirm every controller carries `#[use_guards(AuthnGuard,
    AuthzGuard)]`.** A missing binding fails closed to empty results, but
    a [negative-path test](/testing/negative-path/) pins it.
-5. **Confirm RLS policies exist** on tenant tables if you enabled the
-   backstop. A table with RLS disabled is a silent gap in the floor.
 
 <Aside type="caution">
 The most probable failure is not a missing guard — the framework makes
@@ -173,6 +213,21 @@ is covered by microsecond unit tests.
 </Aside>
 
 ## Limits
+
+**No database-side backstop exists in 7.0.** The framework sets no
+database session or transaction setting, so a Postgres Row-Level Security
+policy keyed on one has nothing to read. Setting one yourself per connection
+leaks: a pooled connection keeps its session setting after the request and
+serves the next tenant that checks it out. Closing the gap takes the framework
+setting the tenant inside every transaction it opens — local to that
+transaction — on every path that reads, the pool's included. Until it does,
+the application-layer filter above is the only control, and the checklist is
+how you hold it.
+
+**A job pushed outside a request runs for no tenant.** A scheduled tick, a
+boot task or `main` has no verified principal, so what it pushes carries none:
+a tick fanning work out per tenant names each tenant in the job's payload, and
+the service filters on that.
 
 Isolation of rows and fields is the framework's job. Everything a
 production tenant boundary also depends on remains yours: key management,

@@ -1,169 +1,144 @@
 //! `OpenApiModule` — self-mounts `/api` (Swagger UI) + `/api-json` (the document)
-//! over the HTTP transport. Import it; no `main.rs` wiring.
-//!
-//! Both endpoints are **public** (`EdgePosture::Exempt`) — an enabled document is
-//! served to anyone. Gate it with [`OpenApiConfig::enabled`](crate::OpenApiConfig)
-//! (default `true` for local ergonomics): **production deployments should set
-//! `NESTRS_OPENAPI__ENABLED=false`** (or pin `OpenApiConfig { enabled: false, .. }`,
-//! or only import the module on an internal-facing app) so the schema is not
-//! published publicly. When disabled the module mounts neither endpoint and logs
-//! one boot event, so an imported-but-off module is never silently inert.
+//! over the HTTP transport. Both endpoints are **public** (`Posture::Public`).
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{Container, ContainerBuilder, DynamicModule};
-use nest_rs_http::{HttpEndpointMeta, join_path, version_path};
-use poem::{Route, get};
+use nest_rs_config::{ConfigModule, ConfigSetup};
+use nest_rs_core::{
+    Collecting, Container, ContainerBuilder, Handler, Module, Posture, Registering, Unnamed,
+};
+use nest_rs_http::__private::{join_path, version_path};
+use nest_rs_http::{HttpEndpointMeta, HttpModule, Method, declare_endpoint};
 
 use crate::config::OpenApiConfig;
 use crate::document::{Reported, build_document, versioned_documents};
 use crate::ui;
 
-// Conventional documentation paths. The bundled Swagger UI references the spec
-// and its assets *relative* to `DOCS_PATH` (see `ui.rs`), so the whole surface
-// moves as one under a `global_prefix` — but the two paths must stay siblings
-// (`/api` + `/api-json`, assets under `/api/`) for that relative resolution to
-// hold, so they are fixed here (not yet configurable).
+// Must stay siblings, assets under `DOCS_PATH`: `index.html` resolves them relatively.
 const DOCS_PATH: &str = "/api";
 const SPEC_PATH: &str = "/api-json";
-// The bundled UI's three assets, named once: the mount registers them and
-// `also_mounts` declares them, and a path spelled twice is a path that can drift
-// out of the declaration while still being served.
 const CSS_PATH: &str = "/api/swagger-ui.css";
 const BUNDLE_PATH: &str = "/api/swagger-ui-bundle.js";
 const PRESET_PATH: &str = "/api/swagger-ui-standalone-preset.js";
-// Every per-version document sits under `SPEC_PATH`, so one pattern covers them
-// without resolving the container outside the mount closure.
-const VERSIONED_SPEC_PATTERN: &str = "/api-json/*version";
+const INITIALIZER_PATH: &str = "/api/swagger-initializer.js";
+const VERSIONED_SPEC_PATTERN: &str = "/api-json/{*version}";
 
 /// Add to a `#[module(imports = [...])]` to expose `GET /api-json` (the OpenAPI
 /// 3.1 document) and `GET /api` (bundled Swagger UI). Wire it with
-/// `OpenApiModule::for_root()`; configuration loads from `NESTRS_OPENAPI__*`.
+/// `OpenApiModule`; configuration loads from `<PREFIX>_OPENAPI__*`.
 ///
-/// Both endpoints are public; set `NESTRS_OPENAPI__ENABLED=false` (or pin
-/// `OpenApiConfig { enabled: false, .. }`) to mount neither — see
+/// Both endpoints are public, so they are served in a development or test
+/// profile alone until `<PREFIX>_OPENAPI__ENABLED=true` (or a pinned
+/// `OpenApiConfig { enabled: Surface::Open, .. }`) opens them — see
 /// [`OpenApiConfig`].
+/// A bare `OpenApiModule` import beside the app's `for_root` mounts nothing
+/// twice. It imports [`HttpModule`] bare, so the documentation is served
+/// wherever it is imported.
 pub struct OpenApiModule;
 
 impl OpenApiModule {
-    /// Pass `None` to load [`OpenApiConfig`] from `NESTRS_OPENAPI__*`, or an
-    /// `OpenApiConfig` to pin as the base those variables overlay, per field.
-    pub fn for_root(config: impl Into<Option<OpenApiConfig>>) -> OpenApiSetup {
-        OpenApiSetup {
-            pinned: config.into(),
+    /// Pin `config` as the base `<PREFIX>_OPENAPI__*` overlays, per field; the
+    /// bare import reads those variables over [`OpenApiConfig`]'s defaults.
+    pub fn for_root(config: OpenApiConfig) -> OpenApiSetup {
+        ConfigModule::setup(config)
+    }
+}
+
+/// The configured import [`OpenApiModule::for_root`] returns.
+pub type OpenApiSetup = ConfigSetup<OpenApiModule, OpenApiConfig>;
+
+impl Module for OpenApiModule {
+    // A bare import still reads `<PREFIX>_OPENAPI__*`; a `for_root(cfg)`'s
+    // declared value supersedes this env-only one.
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature::<Unnamed, OpenApiConfig>(builder).import::<HttpModule>()
+    }
+
+    // Registered once however many modules import it, so the document mounts once.
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        let builder = builder.import::<HttpModule>();
+        match ConfigModule::resolved::<OpenApiConfig>(&builder.snapshot()) {
+            Ok(config) => register(builder, (*config).clone()),
+            Err(refusal) => builder.refuse(refusal),
         }
     }
 }
 
-/// The configured import produced by [`OpenApiModule::for_root`]. Registers the
-/// [`OpenApiConfig`] and self-mounts the `/api-json` + `/api` endpoints.
-pub struct OpenApiSetup {
-    pinned: Option<OpenApiConfig>,
-}
-
-impl DynamicModule for OpenApiSetup {
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        ConfigModule::provide_feature(self.pinned.clone(), builder)
-    }
-
-    fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
-        let config = builder
-            .snapshot()
-            .get::<OpenApiConfig>()
-            .expect("OpenApiConfig is resolved by ConfigModule::provide_feature");
-        register(builder, (*config).clone())
-    }
-}
-
 fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuilder {
-    // Disabled ⇒ mount neither endpoint (fail-secure for production, where the
-    // public document should not be exposed). Not a failure — an explicit,
-    // documented opt-out — so emit a boot event (never silently inert) and skip
-    // the self-mount by returning the builder untouched.
-    if !options.enabled {
+    options.warn_when_open();
+    if !options.enabled.is_open() {
         tracing::info!(
             target: nest_rs_http::target::ROUTES,
             docs_path = DOCS_PATH,
             spec_path = SPEC_PATH,
             "openapi documentation disabled",
         );
+        if options.emit.writes() {
+            tracing::warn!(
+                target: crate::TARGET,
+                path = %nest_rs_core::__private::in_app_dir(&options.emit_path).display(),
+                "OpenAPI document not written: the documentation is disabled",
+            );
+        }
         return builder;
     }
-    builder
-        // A default version nothing declares would publish an empty document,
-        // which reads as "this deployment serves nothing" rather than as the
-        // wiring mistake it is.
-        .provide_meta(
-            HttpEndpointMeta::new(DOCS_PATH, "openapi", move |container, route: Route| {
-                // One ledger for every document this boot builds: a collision is a
-                // property of the route table, so it is reported once rather
-                // than once per document.
-                let mut reported = Reported::default();
-                let default = spec(container, &options, None, &mut reported);
-                // Emit lives here — the only place with the assembled container.
-                // The OpenAPI analogue of the GraphQL SDL emit: keep the committed
-                // `openapi.json` fresh as a side effect of a dev run. Offloaded to
-                // a blocking task so the synchronous write never stalls the boot
-                // executor; failure still logs at `warn`. The default document is
-                // what is written: a repo commits one file, and it is the one
-                // `/api-json` serves.
-                if options.emit_document {
-                    let dest = options.document_path.clone();
-                    let contents = format!("{default}\n");
-                    tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
-                        Ok(()) => tracing::info!(
-                            target: crate::TARGET,
-                            path = %dest.display(),
-                            bytes = contents.len(),
-                            "wrote OpenAPI document",
-                        ),
-                        Err(err) => tracing::warn!(
-                            target: crate::TARGET,
-                            path = %dest.display(),
-                            error = %err,
-                            "failed to write OpenAPI document",
-                        ),
-                    });
-                }
-                let mut route = route
-                    .at(SPEC_PATH, get(ui::spec_endpoint(default)))
-                    .at(DOCS_PATH, get(ui::swagger_index))
-                    .at(CSS_PATH, get(ui::swagger_css))
-                    .at(BUNDLE_PATH, get(ui::swagger_bundle))
-                    .at(PRESET_PATH, get(ui::swagger_preset));
-                // One document per version when the version is not in the path:
-                // OpenAPI keys operations by path, so two versions a header
-                // selects cannot both be described at `/posts`. Swagger UI stays
-                // on the default document.
-                for version in versioned_documents(container) {
-                    let spec = spec(container, &options, Some(&version), &mut reported);
-                    route = route.at(document_path(&version), get(ui::spec_endpoint(spec)));
-                }
-                route
-            })
-            // Everything the closure above registers beyond `DOCS_PATH`,
-            // declared so the version selector and the mount-path exclusivity
-            // check see the whole surface rather than one corner of it.
-            //
-            // `/api-json` is the one that bit: it is a *sibling* of `DOCS_PATH`,
-            // not a child, so nothing reasoning from `DOCS_PATH`'s subtree ever
-            // covered it — and a versioned root catch-all controller silently
-            // answered the document's own address. The per-version documents
-            // (`/api-json/v1`) sit beneath it, so the wildcard covers them
-            // without this having to resolve the container.
-            .also_mounts([
-                SPEC_PATH,
-                VERSIONED_SPEC_PATTERN,
-                CSS_PATH,
-                BUNDLE_PATH,
-                PRESET_PATH,
-            ])
-            .exempt(),
-        )
+    builder.provide_meta(
+        HttpEndpointMeta::new(&DOCUMENT, DOCS_PATH, "openapi", move |container, routes| {
+            // One ledger for every document, so a route collision is reported once.
+            let mut reported = Reported::default();
+            let default = spec(container, &options, None, &mut reported);
+            if options.emit.writes() {
+                let dest = nest_rs_core::__private::in_app_dir(&options.emit_path);
+                let contents = format!("{default}\n");
+                tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
+                    Ok(()) => tracing::info!(
+                        target: crate::TARGET,
+                        path = %dest.display(),
+                        bytes = contents.len(),
+                        "wrote OpenAPI document",
+                    ),
+                    Err(err) => tracing::warn!(
+                        target: crate::TARGET,
+                        path = %dest.display(),
+                        error = %nest_rs_core::error_message(&err),
+                        "failed to write OpenAPI document",
+                    ),
+                });
+            }
+            routes
+                .route(Method::GET, SPEC_PATH, ui::spec_endpoint(default))
+                .route(Method::GET, DOCS_PATH, ui::swagger_index())
+                .route(Method::GET, CSS_PATH, ui::swagger_css())
+                .route(Method::GET, BUNDLE_PATH, ui::swagger_bundle())
+                .route(Method::GET, PRESET_PATH, ui::swagger_preset())
+                .route(Method::GET, INITIALIZER_PATH, ui::swagger_initializer());
+            // OpenAPI keys operations by path, so a version the path does not
+            // carry needs a document of its own.
+            for version in versioned_documents(container) {
+                let spec = spec(container, &options, Some(&version), &mut reported);
+                routes.route(
+                    Method::GET,
+                    &document_path(&version),
+                    ui::spec_endpoint(spec),
+                );
+            }
+        })
+        // Every path the closure registers beyond `DOCS_PATH`, or a versioned
+        // catch-all controller answers `/api-json`, a sibling outside its subtree.
+        .also_mounts([
+            SPEC_PATH,
+            VERSIONED_SPEC_PATTERN,
+            CSS_PATH,
+            BUNDLE_PATH,
+            PRESET_PATH,
+            INITIALIZER_PATH,
+        ]),
+    )
 }
 
-/// The document for `claims`, serialized. Pretty-printed because it is read by
-/// people as often as by generators; the compact form is the fallback for a
-/// document `serde_json` cannot pretty-print, which no `Value` built here is.
+/// The site the document and its UI answer as: public by design, a development
+/// surface no guard gates.
+static DOCUMENT: Handler =
+    declare_endpoint::<OpenApiModule>("OpenApiModule", DOCS_PATH, Posture::Public);
+
 fn spec(
     container: &Container,
     options: &OpenApiConfig,
@@ -174,9 +149,6 @@ fn spec(
     serde_json::to_string_pretty(&document).unwrap_or_else(|_| document.to_string())
 }
 
-/// Where version `n`'s own document is served: `/api-json/v{n}`. The `/v{n}`
-/// spelling comes from [`version_path`] rather than a second `format!`, so the
-/// document's address and the routes it describes cannot disagree about it.
 fn document_path(version: &str) -> String {
     join_path(SPEC_PATH, &version_path(Some(version), "/"))
 }
@@ -184,12 +156,11 @@ fn document_path(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_core::Discovery;
+    use nest_rs_config::Surface;
+    use nest_rs_core::{App, Discovery, LateFactoryError, module};
     use nest_rs_http::HttpConfig;
 
-    // Count the self-mount edges `register` provided for the given `enabled`
-    // config. The disabled path must contribute zero — no public schema surface.
-    fn mount_count(enabled: bool) -> usize {
+    fn mount_count(enabled: Surface) -> usize {
         let builder = register(
             ContainerBuilder::default(),
             OpenApiConfig {
@@ -202,38 +173,103 @@ mod tests {
             .len()
     }
 
+    #[module(imports = [OpenApiModule])]
+    struct ServesDocumentation;
+
+    /// A hand-written importer that imports the module in its register alone.
+    struct RegistersOnly;
+
+    impl Module for RegistersOnly {
+        fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+            builder.import::<ServesDocumentation>()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_module_imported_in_a_register_alone_fails_the_boot_naming_its_config() {
+        let Err(refused) = App::builder().module::<RegistersOnly>().build().await else {
+            panic!("the documentation would mount over a config nothing resolved");
+        };
+        let late = refused
+            .downcast_ref::<LateFactoryError>()
+            .unwrap_or_else(|| panic!("not the late-factory refusal: {refused:#}"));
+        assert_eq!(late.type_name, std::any::type_name::<OpenApiConfig>());
+    }
+
     #[test]
     fn enabled_self_mounts_the_documentation_edge() {
         assert_eq!(
-            mount_count(true),
+            mount_count(Surface::Open),
             1,
             "enabled must self-mount the docs edge"
         );
     }
 
     #[test]
+    fn an_emit_with_the_documentation_off_writes_nothing_and_says_so() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let builder = register(
+            ContainerBuilder::default(),
+            OpenApiConfig {
+                enabled: Surface::Closed,
+                emit: Surface::Open,
+                ..OpenApiConfig::default()
+            },
+        );
+        assert!(
+            Discovery::new(&builder.snapshot())
+                .meta::<HttpEndpointMeta>()
+                .is_empty()
+        );
+        let event = logs.expect_one(
+            crate::TARGET,
+            "OpenAPI document not written: the documentation is disabled",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("path").as_deref(), Some("openapi.json"));
+
+        let silent = nest_rs_testing::LogCapture::install();
+        register(
+            ContainerBuilder::default(),
+            OpenApiConfig {
+                enabled: Surface::Closed,
+                emit: Surface::Closed,
+                ..OpenApiConfig::default()
+            },
+        );
+        assert!(
+            silent
+                .find(
+                    crate::TARGET,
+                    "OpenAPI document not written: the documentation is disabled"
+                )
+                .is_empty(),
+            "no emit asked, nothing to say",
+        );
+    }
+
+    #[test]
     fn disabled_self_mounts_nothing() {
         assert_eq!(
-            mount_count(false),
+            mount_count(Surface::Closed),
             0,
             "disabled must mount neither /api nor /api-json — no public schema",
         );
     }
 
-    /// A container holding one HTTP config and the controllers `versions`
-    /// declares — everything the boot check reads, and nothing else.
     fn deployment(config: HttpConfig, versions: &'static [&'static str]) -> Container {
         nest_rs_core::Container::builder()
             .provide(config)
-            .provide_meta(nest_rs_http::HttpControllerMeta::new(
+            .provide_meta(nest_rs_http::__private::http_controller_meta(
                 "PostsController",
                 "posts",
                 "/posts",
                 versions,
                 Vec::new(),
-                |_, route| route,
+                |_, _| {},
             ))
             .build()
+            .expect("the container builds")
     }
 
     fn selecting(strategy: nest_rs_http::ApiVersioning, default: Option<&str>) -> HttpConfig {
@@ -246,8 +282,6 @@ mod tests {
 
     #[test]
     fn the_uri_strategy_reads_no_default_version() {
-        // Routing resolves the version there, so `default_version` selects
-        // nothing and the document is composed from the paths as mounted.
         let container = deployment(
             selecting(nest_rs_http::ApiVersioning::Uri, Some("9")),
             &["1"],

@@ -1,8 +1,5 @@
-//! The ability engine exercised through its public API: `condition_for` (the
-//! SeaORM query pre-filter), `can`/`can_class` (the access gate), and
-//! `permitted_fields`/`mask`/`mask_many` (response field-masking). No live
-//! database — `condition_for` is rendered to SQL and the in-memory checks run
-//! against a hand-built `Model`.
+//! The ability engine through its public API: `condition_for` is rendered to
+//! SQL, the in-memory checks run against a hand-built `Model`.
 
 use std::any::TypeId;
 
@@ -10,23 +7,26 @@ use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 
 use nest_rs_authz::{Ability, AbilityBuilder, Action, FieldSet};
 
-// A throwaway SeaORM entity so the engine can be exercised without a live
-// database.
 mod widget {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[expose(name = "Widget")]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "widgets")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key)]
+        #[expose]
         pub id: i32,
+        #[expose(nullable)]
         pub org_id: i32,
+        #[expose]
         pub name: String,
         pub secret: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -65,7 +65,6 @@ fn condition_for_scopes_the_query_to_the_org() {
 
 #[test]
 fn no_grant_matches_nothing() {
-    // No `can` rule for Delete → the pre-filter must exclude every row.
     let sql = widget::Entity::find()
         .filter(ability(7, false).condition_for::<widget::Entity>(Action::Delete))
         .build(DatabaseBackend::Postgres)
@@ -82,8 +81,6 @@ fn can_class_is_the_coarse_gate() {
     assert!(user.can_class(Action::Read, TypeId::of::<widget::Entity>()));
     assert!(!user.can_class(Action::Delete, TypeId::of::<widget::Entity>()));
 
-    // `Manage` is the action wildcard, so an admin passes the gate for any
-    // verb on the subject.
     let admin = ability(7, true);
     assert!(admin.can_class(Action::Delete, TypeId::of::<widget::Entity>()));
 }
@@ -107,41 +104,14 @@ fn permitted_fields_restricts_to_listed_columns() {
         FieldSet::Only(cols) => {
             assert!(cols.contains("id"));
             assert!(cols.contains("name"));
-            assert!(!cols.contains("secret"), "secret must be masked");
+            assert!(!cols.contains("secret"), "secret must be withheld");
         }
-        FieldSet::All => panic!("expected a restricted field set"),
+        _ => panic!("expected a restricted field set"),
     }
 }
 
 #[test]
-fn mask_strips_unpermitted_fields_from_the_body() {
-    let mut b = AbilityBuilder::new();
-    b.can(Action::Read, widget::Entity)
-        .when(|p| p.eq(widget::Column::OrgId, 7))
-        .fields([widget::Column::Id, widget::Column::Name]);
-    let ability = b.build().expect("valid test ability");
-
-    let json = ability.mask::<widget::Entity>(Action::Read, &model(7));
-    let obj = json.as_object().expect("masked model is a JSON object");
-    assert!(obj.contains_key("id"));
-    assert!(obj.contains_key("name"));
-    assert!(!obj.contains_key("secret"), "secret must be stripped");
-    assert!(!obj.contains_key("org_id"), "org_id must be stripped");
-}
-
-#[test]
-fn mask_many_drops_unauthorized_instances() {
-    let user = ability(7, false);
-    let rows = [model(7), model(8), model(7)];
-    // Only the org-7 rows survive the instance check; with no field
-    // restriction every field is kept.
-    let masked = user.mask_many::<widget::Entity>(Action::Read, rows.iter());
-    assert_eq!(masked.len(), 2);
-}
-
-#[test]
 fn unrestricted_grant_permits_every_field() {
-    // No `.fields(...)` → every field is permitted.
     assert!(matches!(
         ability(7, false).permitted_fields::<widget::Entity>(Action::Read, &model(7)),
         FieldSet::All

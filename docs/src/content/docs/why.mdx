@@ -1,9 +1,10 @@
 ---
 title: Why NestRS
-description: The thesis behind the framework, who it is for, and the six structural properties that follow from it.
+description: The thesis, the architecture — a modular monolith, deployed per workload — who NestRS is for, and the six structural properties that follow.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
+import Topology from '../../components/Topology.astro';
 
 ## The thesis
 
@@ -36,6 +37,75 @@ written slightly differently in two different files.
   The lineage explains the shape; the guarantees below are what you
   actually get.
 </Aside>
+
+## A modular monolith, deployed per workload
+
+The tagline's two adjectives are one architecture, and it has a name: **you
+write one modular monolith, and you deploy it as one binary per workload** — or
+as a single binary, from the same modules. Google built
+[Service Weaver](https://opensource.googleblog.com/2023/03/introducing-service-weaver-framework-for-writing-distributed-applications.html)
+for the same goal and put it in one line: "the development velocity of a
+monolith, with the scalability, security, and fault-tolerance of
+microservices". Its [HotOS paper](https://sigops.org/s/conferences/hotos/2023/papers/ghemawat.pdf)
+names the cause: microservices conflate *how code is written* with *how it is
+deployed*. NestRS is built on that separation.
+
+<Topology />
+
+**Write.** Your domain — entities, services, policy — lives once, in
+`crates/features/`, cut into modules whose boundaries the framework holds: a
+module reaches only what it imports, or the
+[access graph](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot)
+fails the boot. A call from one module to another is a Rust method call, with
+no endpoint and no serialization.
+
+**Run.** A workload is one operational job — serving the API, holding the
+sockets, issuing tokens, draining the queue; the
+[twelve-factor app](https://12factor.net/concurrency) calls it a process type.
+Each app under `apps/` is a thin composition root importing the edges it
+serves, and an edge it does not import is never mounted. A workload scales on
+its own signal, and a crash stays in its own binary. One app importing every
+edge is a plain monolith and a sound place to start: splitting it later edits
+composition roots, never a module. Merging two apps back is the same edit, once
+no two of their edges share a path — the boot refuses a duplicate and names
+both.
+
+**Deploy.** Every binary builds from one workspace into one image, and the
+[Publish chart](/publish/#deploy-it) runs each app from it with its own command.
+Your machine runs the same binaries with `nestrs run dev`.
+
+**Between binaries, the queue and the database.** Where Service Weaver's
+runtime turned a method call into an RPC, NestRS links a module into every
+binary that uses it — `users` is served by the API, the WebSocket server and
+the MCP assistant alike — and binaries coordinate through the data they share.
+That removes the costs Service Weaver's own motivation lists: no endpoint
+between binaries, no API frozen between them, and a cross-binary change is one
+commit the compiler checks whole. What crosses between them — a table, a queue
+payload — is a type in the shared crate, compiled into both sides. An app may
+still call another over HTTP with its own client, but the framework carries
+none of that call, from its authentication to its retries, and never makes it
+look like a method call.
+
+**The line is the database.** Per workload is the shape NestRS proposes, and
+one binary is the same modules in one process. Binaries that share a database
+belong in one workspace: they release together from one commit, so every
+contract between them is a type the compiler checks. Each still connects as
+its own database user, through its own `<PREFIX>_SEAORM__URL`, with only the
+rights it needs: nothing in the framework changes the schema at boot, so only
+the migration job holds the owner's. An app that needs a
+database of its own is simpler as a project of its own — its own workspace,
+repository and release. What it shares with the first goes through a library
+crate both depend on, so the compiler still checks each project against the
+contract, or through the queue. Each project pins its own version of that
+library, and its semver says when the two have drifted; the framework versions
+its own queue envelope
+([wire-format mismatch](/queue/wire-format/)), and
+[split deployment](/security/authentication/split-deployment/) weighs one
+database against several.
+
+Service Weaver itself
+[stopped development](https://groups.google.com/g/serviceweaver/c/GzVg_WRfdsM)
+in December 2024; the separation it argued for outlives it.
 
 ## Who it is for
 
@@ -104,9 +174,10 @@ pub struct UsersController {
 ### 2. Secure by default
 
 Once the [security modules](/security/) are imported, every read through the
-data layer is filtered, every mutating write is gated, and every response body
-is masked. A feature does not opt in to authn and authz; it opts out by not
-importing them.
+data layer is filtered, every mutating write is gated, and every operation declaring
+`#[authorize]` on an entity answers rows judged for its caller. A route declaring none reads no
+row, and one no guard identifying a caller covers refuses the boot unless it says
+`#[public]`.
 
 Security is **structural**, not vigilant: forgetting a check is a category
 error the framework prevents, not a bug a code reviewer has to catch.
@@ -116,8 +187,9 @@ error the framework prevents, not a bug a code reviewer has to catch.
 A mutating HTTP request installs a transactional [executor](/database/repo-and-executor/)
 before the handler runs. The service reaches the database only through
 [`Repo`](/database/repo-and-executor/), which picks up that executor
-automatically — commit on `2xx`/`3xx`, rollback otherwise. Worker contexts
-install a per-attempt transaction on the same code path.
+automatically — commit on `2xx`/`3xx`, rollback otherwise. A GraphQL mutation
+is one transaction whose root fields each roll back on their own answer, and
+worker contexts install a per-attempt transaction on the same code path.
 
 ```rust title="crates/features/src/users/service.rs"
 // Ambient executor — no per-method ceremony.
@@ -150,14 +222,14 @@ a worker imports the queue adapter; an API imports HTTP, GraphQL, and WS.
   - mcp/
 </FileTree>
 
-See [Modules — Extract a feature](/fundamentals/modules/#extract-a-feature)
+See [Modules — A feature of its own](/fundamentals/modules/#a-feature-of-its-own)
 for the composition rule and the reference layout.
 
 ### 5. Wiring verified at boot
 
 The dependency-injection graph is not resolved by reflection. Every module
 records its imports and its providers' dependencies at compile time; at startup,
-`App::build()` walks the graph and fails with a clear error if a provider
+`App::builder().build()` walks the graph and fails with a clear error if a provider
 injects something its module cannot reach.
 
 A misconfigured import is a startup error naming the missing dependency, not
@@ -169,22 +241,22 @@ a `Cannot resolve` at first request. See
 Capabilities ship as separate crates and integrate via discovery gated on
 module reachability. A binary that imports only the queue adapter does not
 mount HTTP routes or GraphQL resolvers — even when those files live in the
-same shared feature crate. One codebase, multiple deployable shapes.
+same shared feature crate. One codebase, one binary per
+[workload](#a-modular-monolith-deployed-per-workload).
 
 On the [benchmarks page](/benchmarks/), the same service — idiomatic on both
-sides, byte-identical contract — measures at **×2.5** the throughput of
-NestJS on Fastify (its best case), **×4.2** on Express, in **~25× less RAM**,
-cold-starting **~23× faster**.
+sides, byte-identical contract — against NestJS 12.4 on `node:http`, its fastest
+adapter: **×1.3** the throughput on a bare hello world, **×2** once a guard, an
+interceptor or a request body is in the path, a p99 two to thirteen times lower,
+in **~17× less RAM**, cold-starting **~20× faster**.
 
-Six guarantees are worth what checks them. **2,000+ tests** cover the framework
+Six guarantees are worth what checks them. **2,500+ tests** cover the framework
 workspace, and the end-to-end suites run against live Postgres, Redis and S3
-rather than mocks — wiring bugs are the ones unit tests never see. The 120+ pages
-on this site are linted against the framework's own source, so a page that
-contradicts the code fails the build instead of shipping.
+rather than mocks — wiring bugs are the ones unit tests never see.
 
 ## What this is not
 
-- **Not an HTTP layer.** NestRS sits *on top of* `hyper` / `tokio` / `poem` —
+- **Not an HTTP layer.** NestRS sits *on top of* `hyper` / `tokio` —
   it gives them structure, it does not replace them.
 - **Not a thin convenience layer.** The framework's value is in the cross-cutting
   guarantees (authz, transactions, masking, boot-time wiring). A controller-only

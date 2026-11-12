@@ -1,15 +1,14 @@
 ---
 title: Responses
 description: "Json<T>, status + body tuples, and the three response-shaping attributes — #[http_code], #[response_header], #[redirect]."
-tier: basics
 sidebar:
   order: 4
 ---
 
 A handler picks a return type, and the framework turns it into the
 response. `String`, `&'static str`, `Json<T>`, a `(StatusCode, Body)`
-tuple — anything that implements [poem](https://docs.rs/poem)'s
-`IntoResponse` is a valid return. When the status, a header, or a
+pair, a built `Response` — anything that implements `nest_rs::http`'s
+`IntoResponse` is a valid return, and so is a `Result` of one. When the status, a header, or a
 redirect is the only thing changing, three attribute macros sit beside
 the verb attribute and shape the response without touching the handler
 body.
@@ -17,14 +16,14 @@ body.
 ## Returning typed JSON
 
 `Json<T>` is the everyday case — serializes `T`, sets
-`Content-Type: application/json`, and feeds the OpenAPI document with
+`Content-Type: application/json; charset=utf-8`, and feeds the OpenAPI document with
 the same JSON schema:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::input;
+use nest_rs::core::output;
+use nest_rs::http::Json;
 
-#[input]
+#[output]
 struct GreetReply {
     greeting: String,
 }
@@ -35,14 +34,14 @@ async fn me(&self) -> Json<GreetReply> {
 }
 ```
 
-## Status + body tuples
+## Status + body pairs
 
-Tuples up to `(StatusCode, Headers, Body)` are valid responses — useful
-when one route returns `202 Accepted` and another stays on the default
-`200`:
+A `(StatusCode, T)` pair answers `T` under that status, which the handler
+computes on each call — useful when one call returns `202 Accepted` and another
+stays on `200`:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::poem::http::StatusCode;
+use nest_rs::http::StatusCode;
 
 #[post("/queue")]
 async fn enqueue(&self) -> (StatusCode, &'static str) {
@@ -50,8 +49,40 @@ async fn enqueue(&self) -> (StatusCode, &'static str) {
 }
 ```
 
-For anything richer than a static body, prefer `Json<T>` so the OpenAPI
-document picks up the shape.
+The OpenAPI document cannot name a status the handler computes, so it lists
+the [`2XX` range](/openapi/operations/#a-status-the-handler-computes) with `T`'s
+schema when `T` is a `Json<_>`, [the media type `T` writes](/openapi/operations/#bodies-that-are-not-json)
+when it is text or bytes, here `text/plain`, and a bare `StatusCode` the range
+alone. A status that never varies is a [`#[http_code(N)]`](#http_coden), which the
+document names.
+
+## A create names what it created
+
+A `201` names what it created (RFC 9110 §15.3.2), and `Created<T>` says both in
+the return type:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+use nest_rs::http::{Created, Json, Result};
+
+#[post("/posts")]
+async fn create(&self, Json(input): Json<CreatePost>) -> Result<Created<Json<Post>>> {
+    let post = self.svc.create(input).await?;
+    Ok(Created::at(post.id, Json(post)))
+}
+```
+
+`Created::at(id, body)` answers `201` with `Location: <collection>/<id>`, the
+collection being the path the caller addressed — global prefix and version
+included, the client-controlled `Host` never named — and the id one
+percent-encoded path segment, whatever it holds. The header is written
+whoever answers it — a route, a [self-mount](/extending/transport/#serving-http-from-a-package)'s
+entry, a route registered by hand — and the [OpenAPI document](/openapi/) reads
+the status, the `Location` and the body off the return type, alias included:
+no `#[http_code(201)]`, no `#[api(response = …)]`, no `&Request` taken for its
+path. The
+[`#[crud]` create](/database/crud/) answers the same type. A list that pages
+answers `Paginated<T>` alike, its `Link` to the next page
+([Pagination](/database/pagination/)).
 
 ## Shape a response declaratively
 
@@ -60,14 +91,13 @@ thing changing is the status, a header, or a redirect, three attribute
 macros sit beside the verb attribute:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::{http_code, response_header, redirect};
-use nest_rs::http::poem::web::Json;
+use nest_rs::http::{Json, Result, http_code, redirect, response_header};
 
-#[post("/posts")]
-#[http_code(201)]
+#[post("/posts/import")]
+#[http_code(202)]
 #[response_header("x-cache-status", "miss")]
-async fn create(&self, body: Valid<Json<CreatePost>>) -> Json<Post> {
-    Json(self.svc.create(body.into_inner()))
+async fn import(&self, Json(input): Json<ImportPosts>) -> Result<Json<ImportTicket>> {
+    Ok(Json(self.svc.import(input).await?))
 }
 
 #[get("/old-path")]
@@ -79,22 +109,28 @@ async fn moved(&self) {}
 
 Overrides the response status on the **success path**. `N` must be in
 `100..=999` and is validated at compile time. When the handler returns a
-`Result` and yields `Err`, the shaper short-circuits: the error's own
-`ResponseError` status stands and `#[http_code]` never touches it — so a
-`201` handler that errors still returns the error's `4xx`/`5xx`, not
-`201`. Mutually exclusive with `#[redirect]` — the two macros cannot both
+`Result` and yields `Err`, the shaper short-circuits: the status the error
+answers stands and `#[http_code]` never touches it — so a
+`202` handler that errors still returns the error's `4xx`/`5xx`, not
+`202`. A `Result` is known by its type, not its spelling: `nest_rs::http::Result<T>`
+renamed on import, or a `type Outcome<T> = Result<T, MyError>`, short-circuits
+the same way. Mutually exclusive with `#[redirect]` — the two macros cannot both
 decorate the same handler.
 
 ### `#[response_header("name", "value")]`
 
-Appends a header to the response. Repeatable; stack as many as the route
-needs. Two checks run at compile time:
+Sets a header on the response, over any value the handler set; `set-cookie` alone
+is appended. Repeatable; stack as many as the route needs. Two checks run at compile time:
 
 - the header name must be lowercase ASCII (the HTTP/2 / HTTP/3 grammar);
 - the value must be printable ASCII (no CR, LF, or NUL).
 
 A typo (`Cache-Control` instead of `cache-control`, a stray newline in
 the value) is caught by `cargo build`, never at runtime.
+
+A header the route sets wins over the transport's default for it: a
+[security header](/http/cors/#default-security-headers) or `Server:`
+is written only on a response that sets none.
 
 ### `#[redirect("url"[, status])]`
 
@@ -115,22 +151,22 @@ practice:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
 #[post("/posts")]
-#[http_code(201)]
 #[response_header("x-cache-status", "miss")]
 #[response_header("link", "</posts>; rel=collection")]
-async fn create(&self, body: Valid<Json<CreatePost>>) -> Json<Post> {
-    Json(self.svc.create(body.into_inner()))
+async fn create(&self, Json(input): Json<CreatePost>) -> Result<Created<Json<Post>>> {
+    let post = self.svc.create(input).await?;
+    Ok(Created::at(post.id, Json(post)))
 }
 ```
 
-The handler returns `Json<Post>`; `#[http_code(201)]` rewrites the status
-from `200` to `201`; the two `#[response_header]` attributes append their
-headers. `#[redirect]` cannot stack with `#[http_code]` — they decide the
-same facet (the response status) two different ways.
+The handler answers `201` with the post and its `Location`; the two
+`#[response_header]` attributes set their headers. `#[redirect]` cannot
+stack with `#[http_code]` — they decide the same facet (the response status)
+two different ways.
 
 A handler that returns a `Result` keeps its error contract intact: on
 `Err`, the shaper short-circuits before `#[http_code]` runs, so the
-error's `ResponseError` status and body survive unchanged. `#[http_code]`
+error's status and body survive unchanged. `#[http_code]`
 only ever rewrites the success status.
 
 ## When not to reach for a shaper
@@ -141,16 +177,23 @@ whether an entity already existed, the headers depend on the resolved
 user — go back to a plain tuple return and let the handler decide:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::poem::http::StatusCode;
-use nest_rs::http::poem::IntoResponse;
+use nest_rs::http::{Created, IntoResponse, Json, Response, Result};
 
 #[post("/posts")]
-async fn upsert(&self, body: Valid<Json<CreatePost>>) -> Result<impl IntoResponse> {
-    let (post, created) = self.svc.upsert(body.into_inner()).await?;
-    let status = if created { StatusCode::CREATED } else { StatusCode::OK };
-    Ok((status, Json(post)))
+async fn upsert(&self, Json(input): Json<CreatePost>) -> Result<Response> {
+    let (post, created) = self.svc.upsert(input).await?;
+    Ok(match created {
+        true => Created::at(post.id, Json(post)).into_response(),
+        false => Json(post).into_response(),
+    })
 }
 ```
+
+A `Created` turned into a `Response` keeps its `Location`: the route still
+writes it. What the document cannot read off a `Response` is the status, so
+such a route documents
+[the `2XX` range](/openapi/operations/#a-status-the-handler-computes), and no
+`Location`.
 
 The shapers are best when the value is the same on every call — that's
 why they live on the attribute line, not in the handler body.
@@ -158,7 +201,7 @@ why they live on the attribute line, not in the handler body.
 ## Going further
 
 - [Errors](/http/errors/) — when the handler returns `Err(...)`:
-  `ResponseError`, `ProblemDetails`, RFC 9457.
+  `ToProblem`, `ProblemDetails`, RFC 9457.
 - [Controllers & routes](/http/controllers/) — back to the route table.
 - [OpenAPI](/openapi/) — `Json<T>` and the response shape feed the
   generated spec automatically.

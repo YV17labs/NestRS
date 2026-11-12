@@ -14,20 +14,18 @@ categories = ["web-programming::http-server"]
 [dependencies]
 nest-rs-core.workspace = true
 # `OpenApiModule` owns its `#[config]` `OpenApiConfig` (namespace `openapi`),
-# loaded from `NESTRS_OPENAPI__*`; serde + validator back its derives.
+# loaded from `<PREFIX>_OPENAPI__*`; serde backs its derives.
 nest-rs-config.workspace = true
 serde.workspace = true
-validator.workspace = true
 # OpenApiModule self-mounts over HTTP via HttpEndpointMeta and reads the
 # discovered HttpControllerMeta — the same pattern GraphqlModule uses. No cycle:
 # nest-rs-http does not depend on us.
 nest-rs-http.workspace = true
-poem.workspace = true
 # Generates the component schemas from the `Json<T>` payload types `#[routes]`
 # captured. `openapi3()` settings emit `$ref`s at `#/components/schemas/...`.
 schemars.workspace = true
 serde_json.workspace = true
-# `emit_document` writes the spec on a blocking task so the boot/config path
+# `emit` writes the document on a blocking task so the boot/config path
 # never runs synchronous filesystem IO on the executor.
 tokio.workspace = true
 # One boot event when the documentation endpoints are disabled by config, so an
@@ -37,12 +35,21 @@ tracing.workspace = true
 [dev-dependencies]
 # The integration suite boots a real app and reads `/api-json` back, which is
 # what separates it from the mount-table unit tests in `src/module.rs`.
-nest-rs-testing = { path = "../nest-rs-testing" }
-tokio = { workspace = true, features = ["macros", "rt"] }
-# A global deny-all guard, to prove the documentation edges are `Exempt` — the
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http"] }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+futures-util.workspace = true
+# A global deny-all guard, to prove the documentation edges are public — the
 # exposure that makes `enabled = false` the production posture.
 nest-rs-guards = { path = "../nest-rs-guards" }
-# `figment::Jail` isolates `NESTRS_ENV` for the one config branch that reads the
+# The framework guards whose declared statuses a route's document lists.
+nest-rs-authn = { path = "../nest-rs-authn" }
+nest-rs-throttler = { path = "../nest-rs-throttler" }
+# The class gate `#[authorize]` adds to a route's chain, which the document lists.
+nest-rs-authz = { path = "../nest-rs-authz", features = ["http"] }
+# An `#[expose]`d entity's rows, whose schema a route's document references
+# whatever its posture names.
+nest-rs-seaorm = { path = "../nest-rs-seaorm" }
+# `figment::Jail` isolates `<PREFIX>_ENV` for the one config branch that reads the
 # *process* environment rather than a `ConfigService`.
 figment = { workspace = true, features = ["test"] }
 

@@ -1,53 +1,75 @@
-//! Guard effectiveness across the three Layer-System scopes — **handler**,
-//! **controller**, and **global** (`use_guards_global`) — plus multi-guard
-//! ordering and unguarded (public) routes, driven end-to-end through the HTTP
-//! harness. One `#[test]` per scenario; the fixtures are tiny inline
-//! controllers, no product entities and no database.
+//! Guard effectiveness across the three scopes — **handler**, **controller**
+//! and **global** — plus multi-guard ordering and `#[public]` routes.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::HandlerMetadata;
-use nest_rs_http::{Ctx, Reflector, async_trait, controller, routes};
-use nest_rs_testing::TestApp;
-use poem::Request;
-use poem::http::StatusCode;
+use nest_rs_core::{Ambient, AmbientValue, Layer, async_trait, injectable, module};
+use nest_rs_graphql::async_graphql::Result as GqlResult;
+use nest_rs_graphql::{GraphqlModule, operations, resolver};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_health::HealthModule;
+use nest_rs_http::StatusCode;
+use nest_rs_http::{HttpView, controller, routes};
+use nest_rs_testing::{HeadlessApp, TestApp};
 use tokio::sync::Mutex;
+
+use crate::refused_wiring;
 
 /// Denies every request with `403 Forbidden`.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyGuard;
-
-impl Layer for DenyGuard {}
 
 #[async_trait]
 impl Guard for DenyGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("forbidden"))
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for DenyGuard {}
+impl GuardFor<HttpView> for DenyGuard {}
 
 /// Denies with `401 Unauthorized` — paired with [`DenyGuard`] to observe order.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct ChallengeGuard;
-
-impl Layer for ChallengeGuard {}
 
 #[async_trait]
 impl Guard for ChallengeGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::unauthorized("unauthorized"))
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for ChallengeGuard {}
-
-// --- handler + controller scope ----------------------------------------------
+impl GuardFor<HttpView> for ChallengeGuard {}
 
 #[controller(path = "/h")]
 struct HandlerScope;
@@ -61,6 +83,7 @@ impl HandlerScope {
     }
 
     #[get("/open")]
+    #[public]
     async fn open(&self) -> &'static str {
         "ok"
     }
@@ -112,19 +135,19 @@ async fn guard_on_a_controller_protects_every_route() {
     }
 }
 
-// --- global scope -------------------------------------------------------------
-
 #[controller(path = "/g")]
 struct PublicEverywhere;
 
 #[routes]
 impl PublicEverywhere {
     #[get("/a")]
+    #[public]
     async fn a(&self) -> &'static str {
         "ok"
     }
 
     #[get("/b")]
+    #[public]
     async fn b(&self) -> &'static str {
         "ok"
     }
@@ -133,16 +156,17 @@ impl PublicEverywhere {
 #[module(providers = [DenyGuard, PublicEverywhere])]
 struct PublicModule;
 
+#[module(imports = [PublicModule], providers = [GlobalGuards<(DenyGuard,)>])]
+struct AGlobalGuardProtectsEveryRouteWithoutUseGuardsApp;
+
 #[tokio::test]
 async fn a_global_guard_protects_every_route_without_use_guards() {
     let app = TestApp::builder()
-        .module::<PublicModule>()
-        .use_guards_global([guard::<DenyGuard>()])
+        .module::<AGlobalGuardProtectsEveryRouteWithoutUseGuardsApp>()
         .build()
         .await
         .expect("boots with a global guard");
 
-    // No handler here carries `#[use_guards]`, yet the global guard denies all.
     for path in ["/g/a", "/g/b"] {
         app.http()
             .get(path)
@@ -154,10 +178,6 @@ async fn a_global_guard_protects_every_route_without_use_guards() {
 
 #[tokio::test]
 async fn without_a_global_guard_the_same_routes_stay_open() {
-    // The default-derived `DenyGuard` provider stays registered, but with no
-    // `use_guards_global` call no `GuardSpecs` is seeded, so the global chain
-    // is empty — `RouteShaper` runs no global, no controller, no
-    // method guards, and the route stays open.
     let app = TestApp::builder()
         .module::<PublicModule>()
         .build()
@@ -169,16 +189,7 @@ async fn without_a_global_guard_the_same_routes_stay_open() {
     }
 }
 
-// --- dedup across scopes ------------------------------------------------------
-//
-// Scope is a *declaration* concern: a guard named at several scopes belongs to
-// one pool, is deduplicated by `TypeId`, and executes **exactly once** per
-// request. A *denying* guard cannot prove "once" — a 403 looks identical whether
-// the guard ran one time or five. So these two tests use a *counting* guard that
-// increments a process-global counter and then admits: the response is always
-// `200` and the counter is the assertion surface, making the dedup real coverage
-// rather than a tautology. (The full seven-combination sweep lives in
-// `layer_pool.rs`; these keep the guards-file coverage honest.)
+// A denying guard cannot prove it ran once, so the dedup tests count and admit.
 
 /// One process-global counter shared by the two counting tests, so they are
 /// serialized behind [`GATE`] to keep their reads deterministic.
@@ -187,20 +198,32 @@ static GATE: Mutex<()> = Mutex::const_new(());
 
 /// Counts every execution, then admits — the count, not the status, is asserted.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingGuard;
-
-impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         COUNTER.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for CountingGuard {}
+impl GuardFor<HttpView> for CountingGuard {}
 
 #[controller(path = "/dedup")]
 #[use_guards(CountingGuard)]
@@ -228,7 +251,6 @@ async fn the_same_guard_at_controller_and_method_scope_executes_once() {
     let _gate = GATE.lock().await;
     let app = TestApp::for_module::<DedupModule>().await.expect("boots");
 
-    // Controller scope only: one declaration, one execution.
     COUNTER.store(0, Ordering::SeqCst);
     app.http()
         .get("/dedup/c-only")
@@ -241,8 +263,6 @@ async fn the_same_guard_at_controller_and_method_scope_executes_once() {
         "a controller-scope guard runs exactly once",
     );
 
-    // Controller *and* method scope: two declarations of the same `TypeId`,
-    // deduped to a single execution. A broken dedup would count 2 here.
     COUNTER.store(0, Ordering::SeqCst);
     app.http()
         .get("/dedup/c-and-m")
@@ -271,17 +291,16 @@ impl GlobalDedupController {
 #[module(providers = [CountingGuard, GlobalDedupController])]
 struct GlobalDedupModule;
 
+#[module(imports = [GlobalDedupModule], providers = [GlobalGuards<(CountingGuard,)>])]
+struct GlobalGuardRedeclaredPerMethodIsDedupedToOneExecutionApp;
+
 #[tokio::test]
 async fn global_guard_redeclared_per_method_is_deduped_to_one_execution() {
     let _gate = GATE.lock().await;
     COUNTER.store(0, Ordering::SeqCst);
 
-    // Global declares `CountingGuard`; the method re-declares it. The per-route
-    // shaper composes global + method and dedups by `TypeId` (broadest scope
-    // wins), so the guard runs once — a broken dedup would count 2.
     let app = TestApp::builder()
-        .module::<GlobalDedupModule>()
-        .use_guards_global([guard::<CountingGuard>()])
+        .module::<GlobalGuardRedeclaredPerMethodIsDedupedToOneExecutionApp>()
         .build()
         .await
         .expect("boots with a global guard");
@@ -297,8 +316,6 @@ async fn global_guard_redeclared_per_method_is_deduped_to_one_execution() {
         "a guard declared global + method is deduped to one execution",
     );
 }
-
-// --- ordering -----------------------------------------------------------------
 
 #[controller(path = "/order")]
 struct OrderScope;
@@ -320,8 +337,6 @@ struct OrderModule;
 async fn the_first_listed_guard_runs_before_the_second() {
     let app = TestApp::for_module::<OrderModule>().await.expect("boots");
 
-    // ChallengeGuard is listed first; it short-circuits with 401, so DenyGuard's
-    // 403 is never reached. A 403 here would mean the order was inverted.
     app.http()
         .get("/order/x")
         .send()
@@ -329,43 +344,48 @@ async fn the_first_listed_guard_runs_before_the_second() {
         .assert_status(StatusCode::UNAUTHORIZED);
 }
 
-// --- #[public] bypasses an active global guard --------------------------------
-//
-// A `#[public]` route attaches a `Public` marker to its route metadata. The
-// framework never skips a guard on its behalf — a guard *reads* the marker (via
-// `Reflector::is_public`) and decides what public means for it. `AuthnGuard` uses
-// exactly this to let an anonymous request through a public route; here a
-// minimal guard distills that posture: admit when public, deny otherwise. The
-// global guard runs post-routing in the `RouteShaper`, so the marker is already
-// attached by the time it reads it.
+// The framework never skips a guard for `#[public]`: a guard reads the posture
+// (`cx.reflector().is_public()`) and decides what public means for it.
 
 /// Denies every request *unless* the route is `#[public]`, in which case it
 /// admits with no principal — the `AuthnGuard` posture, distilled.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct PublicAwareGuard;
-
-impl Layer for PublicAwareGuard {}
 
 #[async_trait]
 impl Guard for PublicAwareGuard {
-    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
-        if Reflector::new(req).is_public() {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        if cx.reflector().is_public() {
             return Ok(());
         }
         Err(Denial::forbidden("forbidden"))
     }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
 }
 
-impl HttpGuard for PublicAwareGuard {}
+impl GuardFor<HttpView> for PublicAwareGuard {}
 
 #[controller(path = "/pub")]
 struct PublicScope;
 
 #[routes]
 impl PublicScope {
-    // Handler fn names generate module-global types, so keep them unique across
-    // the file (`pub_*`); the URL paths stay `/open` and `/closed`.
+    // Handler fn names generate module-global types, so they are unique across
+    // the file.
     #[get("/open")]
     #[public]
     async fn pub_open(&self) -> &'static str {
@@ -381,24 +401,23 @@ impl PublicScope {
 #[module(providers = [PublicAwareGuard, PublicScope])]
 struct PublicBypassModule;
 
+#[module(imports = [PublicBypassModule], providers = [GlobalGuards<(PublicAwareGuard,)>])]
+struct APublicRouteBypassesAnActiveGlobalGuardApp;
+
 #[tokio::test]
 async fn a_public_route_bypasses_an_active_global_guard() {
     let app = TestApp::builder()
-        .module::<PublicBypassModule>()
-        .use_guards_global([guard::<PublicAwareGuard>()])
+        .module::<APublicRouteBypassesAnActiveGlobalGuardApp>()
         .build()
         .await
         .expect("boots with a global guard");
 
-    // The global guard runs post-routing, reads `#[public]`, and admits — the
-    // public route answers 200 without a principal.
     app.http()
         .get("/pub/open")
         .send()
         .await
         .assert_status_is_ok();
 
-    // The sibling route carries no `#[public]`, so the same global guard denies.
     app.http()
         .get("/pub/closed")
         .send()
@@ -406,75 +425,313 @@ async fn a_public_route_bypasses_an_active_global_guard() {
         .assert_status(StatusCode::FORBIDDEN);
 }
 
-// --- Ctx<T> round-trip: guard attaches, handler reads back --------------------
-//
-// A guard may attach request-scoped context (the authenticated principal is the
-// canonical case) by inserting it into the request extensions; a handler reads
-// it back with `Ctx<T>`. This pins that hand-off end-to-end.
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Principal(String);
-
-/// Reads `x-user` (defaulting to `anon`) and attaches it as a `Principal` for
-/// the handler to read back through `Ctx<Principal>`.
+/// Admits every caller and declares no phase, as a rate limit does.
 #[injectable]
-#[derive(Default)]
-struct AttachPrincipalGuard;
-
-impl Layer for AttachPrincipalGuard {}
+#[derive(Default, Layer)]
+struct NoPhaseGuard;
 
 #[async_trait]
-impl Guard for AttachPrincipalGuard {
-    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
-        let who = req
-            .headers()
-            .get("x-user")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("anon")
-            .to_owned();
-        req.extensions_mut().insert(Principal(who));
+impl Guard for NoPhaseGuard {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for AttachPrincipalGuard {}
+impl GuardFor<HttpView> for NoPhaseGuard {}
+
+#[controller(path = "/no-phase")]
+struct NoPhaseScope;
+
+#[routes]
+impl NoPhaseScope {
+    #[get("/x")]
+    #[use_guards(NoPhaseGuard)]
+    async fn under_no_phase(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(providers = [NoPhaseGuard, NoPhaseScope])]
+struct NoPhaseModule;
+
+#[tokio::test]
+async fn a_route_under_a_guard_declaring_no_phase_refuses_the_boot() {
+    let Err(refused) = TestApp::for_module::<NoPhaseModule>().await else {
+        panic!("the route would answer every caller with no posture said");
+    };
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains("/no-phase/x") && chain.contains("#[public]"),
+        "the refusal names the route and its remedy: {chain}",
+    );
+}
+
+#[controller(path = "/declared")]
+struct DeclaredPhaseScope;
+
+#[routes]
+impl DeclaredPhaseScope {
+    #[get("/identifies")]
+    #[use_guards(SessionGuard)]
+    async fn under_authentication(&self) -> &'static str {
+        "admitted"
+    }
+
+    #[get("/authorizes")]
+    #[use_guards(PolicyGuard)]
+    async fn under_authorization(&self) -> &'static str {
+        "admitted"
+    }
+}
+
+#[module(providers = [SessionGuard, PolicyGuard, DeclaredPhaseScope])]
+struct DeclaredPhaseModule;
+
+/// The refusal reads the phase a guard declares, never what it checks: both guards
+/// here admit an anonymous caller, and the app boots.
+#[tokio::test]
+async fn a_route_under_a_guard_declaring_its_phase_boots_however_little_it_checks() {
+    let app = TestApp::for_module::<DeclaredPhaseModule>()
+        .await
+        .expect("a declared phase is all the boot reads");
+
+    for path in ["/declared/identifies", "/declared/authorizes"] {
+        app.http().get(path).send().await.assert_status_is_ok();
+    }
+}
+
+#[module(imports = [HealthModule], providers = [GlobalGuards<(DenyGuard,)>])]
+struct ProbesUnderADenyingPool;
+
+#[module(imports = [HealthModule], providers = [GlobalGuards<(PublicAwareGuard,)>])]
+struct ProbesUnderAPoolReadingThePosture;
+
+/// `/health/*` are `#[public]`, and `#[public]` strips no guard: a pool's own guard
+/// answers an orchestrator's probe unless it reads the posture.
+#[tokio::test]
+async fn a_pool_guard_runs_on_the_public_health_probes() {
+    let denying = TestApp::for_module::<ProbesUnderADenyingPool>()
+        .await
+        .expect("boots");
+    let reading = TestApp::for_module::<ProbesUnderAPoolReadingThePosture>()
+        .await
+        .expect("boots");
+
+    for probe in ["/health/live", "/health/ready", "/health/startup"] {
+        denying
+            .http()
+            .get(probe)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        reading.http().get(probe).send().await.assert_status_is_ok();
+    }
+}
+
+struct PublicStatusPageModule;
+
+static PUBLIC_STATUS_PAGE: nest_rs_core::Handler =
+    nest_rs_http::declare_endpoint::<PublicStatusPageModule>(
+        "PublicStatusPageModule",
+        "/status",
+        nest_rs_core::Posture::Public,
+    );
+
+impl nest_rs_core::Module for PublicStatusPageModule {
+    fn register(
+        builder: nest_rs_core::ContainerBuilder,
+        _: nest_rs_core::Registering<Self>,
+    ) -> nest_rs_core::ContainerBuilder {
+        builder.provide_meta(nest_rs_http::HttpEndpointMeta::new(
+            &PUBLIC_STATUS_PAGE,
+            "/status",
+            "status",
+            |_, routes| {
+                routes.route(
+                    nest_rs_http::Method::GET,
+                    "/status",
+                    nest_rs_http::endpoint_fn(|_req| async {
+                        Ok(nest_rs_http::Response::builder().body("up"))
+                    }),
+                );
+            },
+        ))
+    }
+}
+
+#[controller(path = "/under-the-pool")]
+struct UnderThePoolScope;
+
+#[routes]
+impl UnderThePoolScope {
+    #[get("/route")]
+    async fn under_the_pool(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(
+    imports = [PublicStatusPageModule],
+    providers = [UnderThePoolScope, GlobalGuards<(DenyGuard,)>],
+)]
+struct NoGuardStageUnderADenyingPool;
+
+/// The pool denies the route, so it is running: what answers beside it had no guard
+/// stage for it to run in.
+#[tokio::test]
+async fn a_pool_guard_reaches_neither_a_public_self_mount_nor_what_the_router_answers() {
+    let app = TestApp::for_module::<NoGuardStageUnderADenyingPool>()
+        .await
+        .expect("boots");
+
+    app.http()
+        .get("/under-the-pool/route")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    app.http()
+        .get("/status")
+        .send()
+        .await
+        .assert_text("up")
+        .await;
+    app.http()
+        .get("/nowhere")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    app.http()
+        .post("/under-the-pool/route")
+        .send()
+        .await
+        .assert_status(StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Tenant(String);
+
+impl AmbientValue for Tenant {}
+
+/// Reads `x-tenant` (defaulting to `anon`) and attaches it as a `Tenant` for
+/// the rest of the request: a route handler reads it through `Ambient<Tenant>`, a
+/// resolver from the ambient context.
+#[injectable]
+#[derive(Default, Layer)]
+struct TenantGuard;
+
+#[async_trait]
+impl Guard for TenantGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        let tenant = HttpView::of(cx)?
+            .request()
+            .header("x-tenant")
+            .unwrap_or("anon")
+            .to_owned();
+        cx.attach(Tenant(tenant));
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for TenantGuard {}
 
 #[controller(path = "/ctx")]
-#[use_guards(AttachPrincipalGuard)]
+#[use_guards(TenantGuard)]
 struct CtxScope;
 
 #[routes]
 impl CtxScope {
-    // `Ctx<Principal>` extracts the value the guard attached; its presence is
-    // what arms the round-trip — remove the guard and this rejects with 500.
     #[get("/whoami")]
-    async fn whoami(&self, principal: Ctx<Principal>) -> String {
-        principal.into_inner().0
+    async fn whoami(&self, tenant: Ambient<Tenant>) -> String {
+        tenant.into_inner().0
     }
 }
 
-#[module(providers = [AttachPrincipalGuard, CtxScope])]
+#[module(providers = [TenantGuard, CtxScope])]
 struct CtxModule;
 
 #[tokio::test]
 async fn a_guard_attached_context_is_read_back_by_the_handler() {
     let app = TestApp::for_module::<CtxModule>().await.expect("boots");
 
-    // The guard reads `x-user` and attaches it; the handler echoes what `Ctx`
-    // hands back — proving the value survived guard → handler.
     let resp = app
         .http()
         .get("/ctx/whoami")
-        .header("x-user", "alice")
+        .header("x-tenant", "acme")
         .send()
         .await;
     resp.assert_status_is_ok();
-    resp.assert_text("alice").await;
+    resp.assert_text("acme").await;
 
-    // Default branch: no header ⇒ the guard attaches `anon`, still round-tripped.
     let anon = app.http().get("/ctx/whoami").send().await;
     anon.assert_status_is_ok();
     anon.assert_text("anon").await;
+}
+
+#[resolver]
+struct TenantResolver;
+
+#[operations]
+impl TenantResolver {
+    #[query]
+    #[public]
+    async fn tenant(&self) -> GqlResult<String> {
+        Ok(nest_rs_core::ambient::<Tenant>().map_or_else(String::new, |tenant| tenant.0.clone()))
+    }
+}
+
+#[module(
+    imports = [GraphqlModule],
+    providers = [TenantGuard, TenantResolver],
+)]
+struct TenantGraphqlModule;
+
+#[module(imports = [TenantGraphqlModule], providers = [GlobalGuards<(TenantGuard,)>])]
+struct AGuardAttachedContextOnTheGraphqlRequestIsReadByAResolverApp;
+
+/// The `/graphql` request runs the pool once, in band; what it attached is
+/// ambient for every field the request resolves.
+#[tokio::test]
+async fn a_guard_attached_context_on_the_graphql_request_is_read_by_a_resolver() {
+    let app = TestApp::builder()
+        .module::<AGuardAttachedContextOnTheGraphqlRequestIsReadByAResolverApp>()
+        .build()
+        .await
+        .expect("a resolver under a pooled guard boots");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .header("x-tenant", "acme")
+        .body_json(&serde_json::json!({ "query": "{ tenant }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.expect("a body");
+    assert!(body.contains(r#""tenant":"acme""#), "{body}");
 }
 
 #[controller(path = "/ctx-bare")]
@@ -482,10 +739,10 @@ struct CtxUnguarded;
 
 #[routes]
 impl CtxUnguarded {
-    // No guard attaches `Principal`, so `Ctx<Principal>` cannot resolve.
     #[get("/whoami")]
-    async fn bare_whoami(&self, principal: Ctx<Principal>) -> String {
-        principal.into_inner().0
+    #[public]
+    async fn bare_whoami(&self, tenant: Ambient<Tenant>) -> String {
+        tenant.into_inner().0
     }
 }
 
@@ -499,11 +756,538 @@ async fn a_missing_context_is_a_bare_500_without_leaking_the_rust_type() {
         .expect("boots");
 
     let resp = app.http().get("/ctx-bare/whoami").send().await;
-    resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
-    // The Rust type name belongs in the logs, never the response body.
+    resp.assert_status(nest_rs_http::StatusCode::INTERNAL_SERVER_ERROR);
     let body = resp.0.into_body().into_string().await.expect("body");
     assert!(
-        !body.contains("Principal"),
+        !body.contains("Tenant"),
         "the response body must not leak the context type name: {body:?}"
     );
+}
+
+/// Attaches the principal: an authentication-phase guard.
+#[injectable]
+#[derive(Default, Layer)]
+struct SessionGuard;
+
+#[async_trait]
+impl Guard for SessionGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for SessionGuard {}
+
+/// Reads the principal: an authorization-phase guard.
+#[injectable]
+#[derive(Default, Layer)]
+struct PolicyGuard;
+
+#[async_trait]
+impl Guard for PolicyGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for PolicyGuard {}
+
+#[controller(path = "/misordered")]
+struct MisorderedScope;
+
+#[routes]
+impl MisorderedScope {
+    #[get("/x")]
+    #[use_guards(PolicyGuard, SessionGuard)]
+    async fn x(&self) -> &'static str {
+        "unreachable"
+    }
+}
+
+#[module(providers = [SessionGuard, PolicyGuard, MisorderedScope])]
+struct MisorderedModule;
+
+#[tokio::test]
+async fn a_route_whose_method_scope_lists_authorization_first_fails_the_boot_naming_both() {
+    let Err(refused) = TestApp::for_module::<MisorderedModule>().await else {
+        panic!("the route would answer 500 on every request instead");
+    };
+    let chain = format!("{refused:#}");
+    assert!(
+        chain.contains("PolicyGuard") && chain.contains("SessionGuard"),
+        "the refusal names both guards: {chain}",
+    );
+    assert!(
+        chain.contains("GET /misordered/x") && chain.contains("MisorderedScope"),
+        "…and the route they are misordered on, its whole path and its controller: {chain}",
+    );
+}
+
+#[module(providers = [SessionGuard, PolicyGuard])]
+struct PhasedGuardsModule;
+
+#[module(imports = [PhasedGuardsModule], providers = [GlobalGuards<(PolicyGuard, SessionGuard)>])]
+struct AGlobalPoolListingAuthorizationFirstFailsTheBootOfAnAppServingNoHttpApp;
+
+#[tokio::test]
+async fn a_global_pool_listing_authorization_first_fails_the_boot_of_an_app_serving_no_http() {
+    let result = HeadlessApp::builder()
+        .module::<AGlobalPoolListingAuthorizationFirstFailsTheBootOfAnAppServingNoHttpApp>()
+        .build_headless()
+        .await;
+    let (registry, chain) = refused_wiring(
+        result,
+        "the app would boot with a pool that answers 500 wherever it runs",
+    );
+    assert_eq!(registry, "GlobalGuards", "{chain}");
+    assert!(
+        chain.contains("PolicyGuard") && chain.contains("SessionGuard"),
+        "the refusal names both guards: {chain}",
+    );
+}
+
+static FRESH_SESSION_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+/// An authentication-phase guard that counts its runs, so a replay is seen.
+#[injectable]
+#[derive(Default, Layer)]
+struct FreshSessionGuard;
+
+#[async_trait]
+impl Guard for FreshSessionGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authentication
+    }
+
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        FRESH_SESSION_RUNS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for FreshSessionGuard {}
+
+#[controller(path = "/replayed")]
+struct ReplayedScope;
+
+#[routes]
+impl ReplayedScope {
+    #[get("/x")]
+    #[force_guards(FreshSessionGuard)]
+    async fn x(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [FreshSessionGuard, PolicyGuard, ReplayedScope])]
+struct ReplayedModule;
+
+#[module(imports = [ReplayedModule], providers = [GlobalGuards<(FreshSessionGuard, PolicyGuard)>])]
+struct AForcedAuthenticationReplayAfterTheGlobalPoolBootsAndRunsAgainApp;
+
+#[tokio::test]
+async fn a_forced_authentication_replay_after_the_global_pool_boots_and_runs_again() {
+    let app = TestApp::builder()
+        .module::<AForcedAuthenticationReplayAfterTheGlobalPoolBootsAndRunsAgainApp>()
+        .build()
+        .await
+        .unwrap_or_else(|err| panic!("a replay is no misorder: {err:#}"));
+
+    app.http()
+        .get("/replayed/x")
+        .send()
+        .await
+        .assert_status_is_ok();
+    assert_eq!(
+        FRESH_SESSION_RUNS.load(Ordering::SeqCst),
+        2,
+        "the global run, then the replay after the authorization guard",
+    );
+}
+
+/// A guard's `cx.require::<T>()` answers by cause: the principal it declares
+/// expecting, absent where a guard attaching it ran and admitted a visitor, is
+/// the caller's `401`, on every edge; nothing attaching it refuses the boot.
+mod required_principal {
+    use nest_rs_core::{Posture, UnitContext, UnitView};
+    use nest_rs_graphql::GraphqlView;
+    use nest_rs_guards::{GuardPhase, PrincipalClaim};
+    use nest_rs_http::EndpointGuards;
+    use nest_rs_mcp::{McpError, McpView, mcp, tools};
+    use nest_rs_ws::{WsClient, WsModule, gateway, messages};
+    use serde_json::json;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct Claims;
+
+    impl AmbientValue for Claims {}
+
+    /// Attaches [`Claims`] for a caller sending `x-user`; admits the rest where
+    /// the site takes a visitor, refuses them elsewhere.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Authn;
+
+    #[async_trait]
+    impl Guard for Authn {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            nest_rs_core::__private::set_actor_id("caller");
+            if HttpView::of(cx)?.request().header("x-user").is_some() {
+                cx.attach(Claims);
+                return Ok(());
+            }
+            match cx.reflector().posture() {
+                Posture::Public | Posture::InBand => Ok(()),
+                _ => Err(Denial::unauthorized("a credential is required")),
+            }
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        fn produced_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Claims>())
+        }
+    }
+
+    impl GuardFor<HttpView> for Authn {}
+
+    /// One decision on every edge: the caller's claims, read and required.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct NeedsClaims;
+
+    #[async_trait]
+    impl Guard for NeedsClaims {
+        fn phase(&self) -> nest_rs_guards::GuardPhase {
+            nest_rs_guards::GuardPhase::Authorization
+        }
+
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            cx.require::<Claims>()?;
+            Ok(())
+        }
+
+        fn expected_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Claims>())
+        }
+    }
+
+    impl<V: UnitView> GuardFor<V> for NeedsClaims {}
+
+    #[controller(path = "/required")]
+    #[use_guards(Authn)]
+    struct RequiredController;
+
+    #[routes]
+    impl RequiredController {
+        #[get("/open")]
+        #[public]
+        #[use_guards(NeedsClaims)]
+        async fn open(&self) -> &'static str {
+            "reached"
+        }
+
+        #[get("/gated")]
+        #[use_guards(NeedsClaims)]
+        async fn gated(&self) -> &'static str {
+            "reached"
+        }
+    }
+
+    #[resolver]
+    struct RequiredResolver;
+
+    #[operations]
+    impl RequiredResolver {
+        #[query]
+        #[public]
+        #[use_guards(NeedsClaims)]
+        async fn required(&self) -> i32 {
+            1
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [
+            Authn,
+            NeedsClaims,
+            RequiredController,
+            RequiredResolver,
+            EndpointGuards<GraphqlView, (Authn,)>,
+        ],
+    )]
+    struct RequiredModule;
+
+    async fn app() -> TestApp {
+        TestApp::for_module::<RequiredModule>()
+            .await
+            .expect("boots")
+    }
+
+    #[tokio::test]
+    async fn a_visitor_a_public_route_admitted_answers_401_never_a_wiring_500() {
+        let app = app().await;
+        app.http()
+            .get("/required/open")
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        app.http()
+            .get("/required/open")
+            .header("x-user", "ada")
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_guard_writes_one_check_and_a_gated_route_refuses_at_authentication() {
+        let app = app().await;
+        app.http()
+            .get("/required/gated")
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        app.http()
+            .get("/required/gated")
+            .header("x-user", "ada")
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_visitor_in_band_graphql_admitted_answers_unauthenticated() {
+        let app = app().await;
+        let refused: serde_json::Value = app
+            .http()
+            .post("/graphql")
+            .body_json(&json!({ "query": "{ required }" }))
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize();
+        assert_eq!(
+            refused["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
+            "{refused}",
+        );
+        let served: serde_json::Value = app
+            .http()
+            .post("/graphql")
+            .header("x-user", "ada")
+            .body_json(&json!({ "query": "{ required }" }))
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize();
+        assert_eq!(served["data"]["required"], 1, "{served}");
+    }
+
+    async fn boot_refusal<M: nest_rs_core::Module + 'static>() -> String {
+        match TestApp::for_module::<M>().await {
+            Ok(_) => panic!("nothing attaches the principal the guard requires"),
+            Err(err) => format!("{err:#}"),
+        }
+    }
+
+    fn names_the_gap(said: &str) {
+        assert!(
+            said.contains("NeedsClaims") && said.contains("Claims"),
+            "names the guard and the principal: {said}",
+        );
+    }
+
+    #[controller(path = "/unwired")]
+    struct UnwiredRouteController;
+
+    #[routes]
+    impl UnwiredRouteController {
+        #[get("/")]
+        #[use_guards(NeedsClaims)]
+        async fn route(&self) -> &'static str {
+            "unreachable"
+        }
+    }
+
+    #[module(providers = [NeedsClaims, UnwiredRouteController])]
+    struct UnwiredRouteModule;
+
+    #[tokio::test]
+    async fn a_route_nothing_attaches_the_required_principal_on_refuses_the_boot() {
+        names_the_gap(&boot_refusal::<UnwiredRouteModule>().await);
+    }
+
+    #[controller(path = "/unwired-open")]
+    struct UnwiredPublicRouteController;
+
+    #[routes]
+    impl UnwiredPublicRouteController {
+        #[get("/")]
+        #[public]
+        #[use_guards(NeedsClaims)]
+        async fn route(&self) -> &'static str {
+            "unreachable"
+        }
+    }
+
+    #[module(providers = [NeedsClaims, UnwiredPublicRouteController])]
+    struct UnwiredPublicRouteModule;
+
+    #[tokio::test]
+    async fn a_public_route_is_refused_it_too_where_only_a_visitor_could_ever_arrive() {
+        names_the_gap(&boot_refusal::<UnwiredPublicRouteModule>().await);
+    }
+
+    #[resolver]
+    struct UnwiredResolver;
+
+    #[operations]
+    impl UnwiredResolver {
+        #[query]
+        #[public]
+        #[use_guards(NeedsClaims)]
+        async fn unwired(&self) -> i32 {
+            1
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [NeedsClaims, UnwiredResolver])]
+    struct UnwiredFieldModule;
+
+    #[tokio::test]
+    async fn a_graphql_field_nothing_attaches_the_required_principal_on_refuses_the_boot() {
+        names_the_gap(&boot_refusal::<UnwiredFieldModule>().await);
+    }
+
+    #[gateway(path = "/ws/unwired")]
+    struct UnwiredGateway;
+
+    #[messages]
+    impl UnwiredGateway {
+        #[subscribe_message("ping")]
+        #[use_guards(NeedsClaims)]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "unreachable".into()
+        }
+
+        #[subscribe_message("open")]
+        #[public]
+        async fn open(&self, _client: &WsClient) -> String {
+            "the line opening the connection".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [NeedsClaims, UnwiredGateway])]
+    struct UnwiredMessageModule;
+
+    #[tokio::test]
+    async fn a_message_nothing_attaches_the_required_principal_on_refuses_the_boot() {
+        names_the_gap(&boot_refusal::<UnwiredMessageModule>().await);
+    }
+
+    #[gateway(path = "/ws/wired")]
+    #[use_guards(Authn)]
+    struct WiredGateway;
+
+    #[messages]
+    impl WiredGateway {
+        #[subscribe_message("ping")]
+        #[use_guards(NeedsClaims)]
+        async fn ping(&self, _client: &WsClient) -> String {
+            "served".into()
+        }
+    }
+
+    #[module(imports = [WsModule], providers = [Authn, NeedsClaims, WiredGateway])]
+    struct WiredMessageModule;
+
+    #[tokio::test]
+    async fn a_message_reads_the_principal_its_upgrade_attached() {
+        TestApp::for_module::<WiredMessageModule>()
+            .await
+            .expect("the upgrade's guard attaches it");
+    }
+
+    #[mcp(path = "/mcp/unwired")]
+    #[derive(Clone, Default)]
+    struct UnwiredTool;
+
+    #[tools]
+    impl UnwiredTool {
+        /// Answer.
+        #[tool]
+        #[use_guards(NeedsClaims)]
+        async fn answer(&self) -> Result<String, McpError> {
+            Ok("unreachable".to_owned())
+        }
+    }
+
+    #[module(providers = [NeedsClaims, UnwiredTool])]
+    struct UnwiredOperationModule;
+
+    #[tokio::test]
+    async fn an_mcp_operation_nothing_attaches_the_required_principal_on_refuses_the_boot() {
+        names_the_gap(&boot_refusal::<UnwiredOperationModule>().await);
+    }
+
+    #[module(providers = [Authn, NeedsClaims, UnwiredTool, EndpointGuards<McpView, (Authn,)>])]
+    struct WiredOperationModule;
+
+    #[tokio::test]
+    async fn an_mcp_operation_reads_the_principal_its_endpoint_guards_attached() {
+        TestApp::for_module::<WiredOperationModule>()
+            .await
+            .expect("the endpoint's guard attaches it");
+    }
 }

@@ -1,0 +1,87 @@
+error[E0277]: a row crosses no wire: `secret::Model` holds every column of its table, the ones no reply answers included
+  --> tests/integration/diagnostics/seaorm/route_answering_an_unexposed_row.rs:39:35
+   |
+39 |     fn one(&self) -> Json<secret::Model> {
+   |                                   ^^^^^ this answers a `Model`
+   |
+help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for `secret::Model`
+  --> tests/integration/diagnostics/seaorm/route_answering_an_unexposed_row.rs:18:5
+   |
+18 |     pub struct Model {
+   |     ^^^^^^^^^^^^^^^^
+   = note: answer the type `#[expose]` builds from the row (`From<&Model>`), or a DTO naming the columns it answers: a derive on a `Model` opens no wire
+note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
+  --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
+   |
+   | impl<T: sea_orm::ModelTrait> RowProbe<T> {
+   |     /// A row: refused, by a bound no type meets.
+   |     pub fn answered(&self)
+   |     where
+   |         T: CrossesAWire,
+   |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`
+
+error[E0277]: a row crosses no wire: `secret::Model` holds every column of its table, the ones no reply answers included
+  --> tests/integration/diagnostics/seaorm/route_answering_an_unexposed_row.rs:45:52
+   |
+45 |     async fn all(&self) -> Result<Json<Vec<secret::Model>>, HttpError> {
+   |                                                    ^^^^^ this answers a `Model`
+   |
+help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for `secret::Model`
+  --> tests/integration/diagnostics/seaorm/route_answering_an_unexposed_row.rs:18:5
+   |
+18 |     pub struct Model {
+   |     ^^^^^^^^^^^^^^^^
+   = note: answer the type `#[expose]` builds from the row (`From<&Model>`), or a DTO naming the columns it answers: a derive on a `Model` opens no wire
+note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
+  --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
+   |
+   | impl<T: sea_orm::ModelTrait> RowProbe<T> {
+   |     /// A row: refused, by a bound no type meets.
+   |     pub fn answered(&self)
+   |     where
+   |         T: CrossesAWire,
+   |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`
+
+error[E0277]: a row crosses no wire: `secret::Model` holds every column of its table, the ones no reply answers included
+  --> tests/integration/diagnostics/seaorm/route_answering_an_unexposed_row.rs:51:44
+   |
+51 |     fn maybe(&self) -> Json<Option<secret::Model>> {
+   |                                            ^^^^^ this answers a `Model`
+   |
+help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for `secret::Model`
+  --> tests/integration/diagnostics/seaorm/route_answering_an_unexposed_row.rs:18:5
+   |
+18 |     pub struct Model {
+   |     ^^^^^^^^^^^^^^^^
+   = note: answer the type `#[expose]` builds from the row (`From<&Model>`), or a DTO naming the columns it answers: a derive on a `Model` opens no wire
+note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
+  --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
+   |
+   | impl<T: sea_orm::ModelTrait> RowProbe<T> {
+   |     /// A row: refused, by a bound no type meets.
+   |     pub fn answered(&self)
+   |     where
+   |         T: CrossesAWire,
+   |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`
+
+error[E0277]: a row crosses no wire: `secret::Model` holds every column of its table, the ones no reply answers included
+  --> tests/integration/diagnostics/seaorm/route_answering_an_unexposed_row.rs:57:30
+   |
+57 |     #[api(response = secret::Model)]
+   |                              ^^^^^ this answers a `Model`
+   |
+help: the trait `nest_rs::core::__private::CrossesAWire` is not implemented for `secret::Model`
+  --> tests/integration/diagnostics/seaorm/route_answering_an_unexposed_row.rs:18:5
+   |
+18 |     pub struct Model {
+   |     ^^^^^^^^^^^^^^^^
+   = note: answer the type `#[expose]` builds from the row (`From<&Model>`), or a DTO naming the columns it answers: a derive on a `Model` opens no wire
+note: required by a bound in `nest_rs::core::__private::RowProbe::<T>::answered`
+  --> $WORKSPACE/crates/nest-rs-core/src/row_probe.rs
+   |
+   | impl<T: sea_orm::ModelTrait> RowProbe<T> {
+   |     /// A row: refused, by a bound no type meets.
+   |     pub fn answered(&self)
+   |     where
+   |         T: CrossesAWire,
+   |            ^^^^^^^^^^^^ required by this bound in `RowProbe::<T>::answered`

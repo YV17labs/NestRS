@@ -1,0 +1,11 @@
+error: #[derive(PrincipalIdentity)] goes on a struct — the claims a strategy authenticates — whose fields `#[principal(…)]` marks
+ --> tests/integration/diagnostics/authn/principal_identity_on_an_enum.rs:7:10
+  |
+7 | pub enum Caller {
+  |          ^^^^^^
+
+error: #[principal] names the role its field plays — `#[principal(actor)]`, `#[principal(tenant)]` or `#[principal(scopes)]`, written on that field rather than on the struct
+  --> tests/integration/diagnostics/authn/principal_identity_on_an_enum.rs:13:1
+   |
+13 | #[principal(actor)]
+   | ^^^^^^^^^^^^^^^^^^^

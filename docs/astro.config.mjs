@@ -2,14 +2,14 @@ import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
+import starlightLinksValidator from 'starlight-links-validator';
 import mermaid from 'astro-mermaid';
-import remarkGfm from 'remark-gfm';
 import rehypeExternalLinks from 'rehype-external-links';
 import { REDIRECTS } from './src/redirects.mjs';
 import { DEFAULT_DESCRIPTION } from './src/brand.mjs';
 
 // GitHub Pages: nestrs.dev (custom domain, base /). Local dev defaults match.
-// CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
+// CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs.yml.
 const base = process.env.ASTRO_BASE || '/';
 const site = process.env.ASTRO_SITE || 'https://nestrs.dev';
 const asset = (path) => `${base}${path.replace(/^\//, '')}`;
@@ -80,9 +80,6 @@ export default defineConfig({
   base,
   // One entry per moved/deleted/renamed page (audit §2.8.B). No 404 for a URL
   // that ever shipped.
-  // Declared in `src/redirects.mjs` so the docs linter's `link` rule reads the
-  // same list: a retired route is resolvable exactly because it redirects, and
-  // a second copy would make that true for one reader and false for the other.
   redirects: REDIRECTS,
   // GFM tables/strikethrough/task-lists must be enabled for .mdx. Since
   // @astrojs/mdx@7 the processor carries that — the top-level `markdown.gfm`
@@ -90,7 +87,6 @@ export default defineConfig({
   markdown: {
     processor: unified({
       gfm: true,
-      remarkPlugins: [remarkGfm],
       // External links open in a new tab (with rel="noopener noreferrer") so a
       // reader following e.g. the SeaORM link keeps the docs open. Internal links
       // are left untouched.
@@ -148,12 +144,13 @@ export default defineConfig({
         { tag: 'meta', attrs: { name: 'twitter:image:alt', content: ogImageAlt } },
       ],
       plugins: [
+        starlightLinksValidator({ errorOnLocalLinks: false }),
         starlightLlmsTxt({
           projectName: 'NestRS',
           description:
             'The Rust framework for modular, scalable backends: declarative, multi-transport, boot-time wiring checks, scoped data access by composition.',
           details:
-            'NestRS sits on top of hyper/tokio/poem. It is decorator-driven (procedural macros: #[module], #[controller], #[resolver], #[gateway], #[processor], #[scheduled], #[mcp]), with a flat type-id DI container verified at boot (the "access graph"), an ambient data context that installs a request-scoped executor and ability, row-level filtering and response masking via ability-based authorization, and per-binary subsets through module-gated discovery. NestRS is opinionated about layout and naming, and #[module] carries no "controllers" list, so a type\'s name is the only thing that says what it is for: read /architecture/ first and follow it when writing or reviewing NestRS code. A generated project commits the same rules as AGENTS.md at its root.',
+            'NestRS sits on top of hyper/tokio. It is decorator-driven (procedural macros: #[module], #[controller], #[resolver], #[gateway], #[processor], #[scheduled], #[mcp]), with a flat type-id DI container verified at boot (the "access graph"), an ambient data context that installs a request-scoped executor and ability, row-level filtering and response masking via ability-based authorization, and per-binary subsets through module-gated discovery. NestRS is opinionated about layout and naming, and #[module] carries no "controllers" list, so a type\'s name is the only thing that says what it is for: read /architecture/ first and follow it when writing or reviewing NestRS code. A generated project commits the same rules as AGENTS.md at its root.',
           // The plugin's own default is `['index*']`; naming any value replaces
           // it, so the index has to be restated or it loses its lead position.
           promote: ['index*', 'architecture'],
@@ -254,15 +251,22 @@ export default defineConfig({
           label: 'Start here',
           items: [
             { label: 'Introduction', slug: 'index' },
+            { label: "What's new in 7.0", slug: 'whats-new' },
             { label: 'Why NestRS', slug: 'why' },
             { label: 'Why not axum?', slug: 'why-not-axum' },
             { label: 'Benchmarks', slug: 'benchmarks' },
             { label: 'Coming from NestJS', slug: 'coming-from-nestjs' },
+            { label: 'What runs differently from NestJS', slug: 'coming-from-nestjs/what-runs-differently' },
             { label: 'Getting started', slug: 'getting-started' },
-            { label: 'CLI', slug: 'cli' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
+            { label: 'Semver policy', slug: 'semver' },
+            // Last in the group a returning reader opens first: the one page a
+            // 6.x project follows to 7.0, beside the orientation it no longer
+            // needs, rather than under Reference, three screens down.
+            { label: 'Upgrading from 6.x', slug: 'upgrading' },
           ],
         },
+        { label: 'CLI', items: [{ autogenerate: { directory: 'cli' } }] },
         { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
         {
           // `architecture` sits last, not first: it is the group's deep
@@ -281,6 +285,9 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'http' } },
             { label: 'OpenAPI', slug: 'openapi' },
+            { label: 'OpenAPI operations', slug: 'openapi/operations' },
+            { label: 'OpenAPI configuration', slug: 'openapi/configuration' },
+            { label: 'Typed TypeScript clients', slug: 'openapi/clients' },
           ],
         },
         { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },
@@ -291,6 +298,7 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'database' } },
             { label: 'File storage', slug: 'storage' },
+            { label: 'Uploads and downloads', slug: 'storage/transfers' },
           ],
         },
         {
@@ -318,7 +326,12 @@ export default defineConfig({
           items: [
             { autogenerate: { directory: 'queue' } },
             { label: 'Scheduling', slug: 'schedule' },
+            { label: 'Running a tick', slug: 'schedule/ticks' },
+            { label: 'Firing once across replicas', slug: 'schedule/once' },
+            { label: 'Writing an occurrence lock', slug: 'schedule/writing-a-lock' },
             { label: 'Events', slug: 'events' },
+            { label: 'Event dispatch', slug: 'events/dispatch' },
+            { label: 'Event streams', slug: 'events/streams' },
           ],
         },
         { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
@@ -329,8 +342,11 @@ export default defineConfig({
             { label: 'Server-Timing', slug: 'server-timing' },
             { autogenerate: { directory: 'health' } },
             { label: 'Rate limiting', slug: 'rate-limiting' },
+            { label: 'Rate-limit buckets', slug: 'rate-limiting/buckets' },
+            { label: 'Writing a rate-limit store', slug: 'rate-limiting/writing-a-store' },
           ],
         },
+        { label: 'Extending NestRS', items: [{ autogenerate: { directory: 'extending' } }] },
         {
           label: 'Reference',
           items: [

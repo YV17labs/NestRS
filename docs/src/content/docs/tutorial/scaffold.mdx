@@ -9,18 +9,19 @@ import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
 
 You add the **`blog`** app to your workspace with the [`nestrs` CLI](/cli/) —
 the same tool from [Getting started](/getting-started/). By the end of this
-page, `nestrs run dev blog` listens on the port pinned in `module.rs` and
-answers `Hello World` on `GET /` — the scaffold proves itself before you write
-a line.
+page, `nestrs run dev blog` listens on the port written into the app's own
+`.env` and answers `Hello World` on `GET /` — the scaffold proves itself before
+you write a line.
 
 <Aside type="note">
 The tutorial is **workspace-only**: shared features under `crates/features/`,
 thin apps under `apps/*`. Run every command from **your** workspace root
 (the monorepo you scaffolded in [Getting started](/getting-started/), or a
-fresh one). This repository hosts **Publish** only — use
+fresh one). Once `blog` joins `hello` there, the workspace has two apps, so a
+generator wiring one is told which: `--app blog`. This repository hosts
+**Publish** only — use
 [`nestrs new blog`](/cli/#add-an-app-to-an-existing-workspace) to create
-`apps/blog/`; compare your tree with the tutorial feature exemplar in
-[`crates/features/src/posts/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/posts).
+`apps/blog/`.
 </Aside>
 
 ## Create the app
@@ -35,8 +36,8 @@ From the workspace root:
    nestrs new blog
    ```
 
-   Inside an existing workspace this writes `apps/blog/` and picks the
-   **next free HTTP port** in `module.rs` (see
+   Inside an existing workspace this writes `apps/blog/` and the
+   **next free HTTP port** into `apps/blog/.env` (see
    [`nestrs new blog`](/cli/#add-an-app-to-an-existing-workspace) in the CLI
    docs). The command refuses to overwrite if the folder already exists.
 
@@ -46,10 +47,10 @@ From the workspace root:
    nestrs run dev blog
    ```
 
-3. Hit the root route — use the port from `apps/blog/src/module.rs`.
+3. Hit the root route — use the port from `apps/blog/.env`.
 
    ```bash frame="terminal"
-   $ curl -i http://localhost:3005/
+   $ curl -i http://localhost:3001/
    HTTP/1.1 200 OK
 
    Hello World
@@ -57,20 +58,18 @@ From the workspace root:
 
 </Steps>
 
-Need the full CLI surface — layout detection, `--check`, generators?
-See the [CLI reference](/cli/).
-
 ## What the CLI created
 
 `nestrs new blog` does not ask you to hand-edit the root `Cargo.toml`
 members list — workspace apps are discovered from `apps/*`. It writes a
 **thin** app plus the feature behind that greeting: `main.rs` boots the
-framework, `module.rs` composes transports and imports one feature module, and
+framework, `module.rs` imports one feature module's HTTP adapter, and
 there is no `controller.rs` or `service.rs` in the app crate — those live in
 `crates/features/`, which is where `posts` lands from the next page onward.
 
 <FileTree>
 - apps/blog/
+  - .env the port
   - Cargo.toml
   - src/
     - lib.rs
@@ -92,67 +91,89 @@ there is no `controller.rs` or `service.rs` in the app crate — those live in
 The `blog` feature is a placeholder with one job: proving the wiring works
 end to end on the first run. Delete it once `posts` is serving something real.
 
-```toml title="apps/blog/Cargo.toml (from the demo)"
+```toml title="apps/blog/Cargo.toml"
 [package]
 name = "blog"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
 features.workspace = true
-nest-rs.workspace = true
-tokio.workspace = true
+nest-rs = { workspace = true, features = ["opentelemetry"] }
 anyhow.workspace = true
 
 [dev-dependencies]
-nest-rs.workspace = true
+nest-rs = { workspace = true, features = ["testing"] }
+tokio.workspace = true
+
+[lints]
+workspace = true
 ```
 
-One `nest-rs` line, and it stays one for the rest of this tutorial: the
+One `nest-rs` dependency, and it stays one for the rest of this tutorial: the
 capabilities arrive as **features** on it (`[workspace.dependencies]` in the
-root manifest is where the list lives). `tokio` and `anyhow` are there because
-`main.rs` writes them.
+root manifest is where the list lives). The app adds `opentelemetry`, which its
+`main` installs; the dev-dependency adds `testing`, the harness, to the tests
+alone, so no release binary carries it. `anyhow` is there because `main.rs`
+writes it, and `tokio` only for the tests, which write `#[tokio::test]`:
+`#[nest_rs::main]` builds the runtime `main` runs on itself.
 
-The root module is where transports come in. `HttpModule::for_root` pins
-the listen port in code — not in `.env`:
+The root module lists the edges the app serves. `BlogHttpModule`, the
+feature's HTTP adapter, lists a controller, which brings `HttpModule`, so the app
+names no transport: it would write `HttpModule::for_root(..)` only to pin a setting in
+code. Every `<PREFIX>_HTTP__*` setting comes from the environment — the listen
+port from the app's own `.env`:
 
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
 
 use features::blog::BlogHttpModule;
 
 #[module(
     imports = [
-        HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
         BlogHttpModule,
     ],
 )]
 pub struct BlogModule;
 ```
 
-The reference workspace pins `3005` for `blog`. When you scaffold with
-`nestrs new blog`, the CLI picks the next free port — yours may differ
-if other apps already exist in the workspace.
+```bash title="apps/blog/.env" frame="terminal"
+NESTRS_HTTP__PORT=3001
+NESTRS_AUTHN__ISSUER=http://localhost:3001
+NESTRS_AUTHN__AUDIENCE=http://localhost:3001
+```
+
+`nestrs new blog` picks the next free port: `3001` beside `hello`'s `3000`,
+and another if other apps already hold it. Its origin is also the issuer and
+the audience of the tokens `blog` mints and accepts once its routes
+authenticate, from [Expose over HTTP](/tutorial/http/): every token names both,
+and the app does not start without them. The workspace's own `.env*` files are
+shared by every app; `apps/blog/.env` is read over them under the
+`development` and `test` profiles, so a value that is `blog`'s alone lives
+there ([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
 
 `BlogModule` has no `providers = [...]` list. A root module composes
-feature modules and lets each own its providers — the
+feature modules and lets each own its providers; what a root provides itself
+is app-wide — the
 [reference root](https://github.com/YV17labs/NestRS/blob/main/demo/apps/api/src/module.rs)
-carries only `imports`. Note the two `BlogModule`s: this one is the app's
-composition root, and `features::blog::BlogModule` is the feature's own. Two
-crates, no collision — the app only ever names the `…HttpModule` edge.
+lists one, `GlobalInterceptors<(AuditInterceptor,)>`, the audit trail around every
+route it serves. Note the
+two `BlogModule`s: this one is the app's composition root, and
+`features::blog::BlogModule` is the feature's own. Two crates, no collision —
+the app only ever names the `…HttpModule` edge.
 
 ```rust title="apps/blog/src/main.rs"
 use anyhow::Result;
-use nest_rs::config::Environment;
 use nest_rs::core::App;
+use nest_rs::opentelemetry::OpenTelemetry;
 
 use blog::BlogModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
-    let _environment = Environment::init();
+    let _otel = OpenTelemetry::init()?;
 
     App::builder()
         .module::<BlogModule>()
@@ -163,12 +184,20 @@ async fn main() -> Result<()> {
 }
 ```
 
-`App::builder()` runs the four boot phases — seeds, collect, factories,
-register — verifies the access graph, then `.run()` blocks on the
-transports. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
+`OpenTelemetry::init()` is the app's whole telemetry: it installs the
+console, and an OTLP exporter for each signal the deployment's `OTEL_*`
+point at — none on your machine, where the console is all there is. It stays
+the first line of `main`, so its guard flushes what is left when `main`
+returns; there is no module to import for it, and nothing for a test to call
+([OpenTelemetry](/opentelemetry/)). `App::builder()` runs the four boot phases
+— seeds, collect, factories, register — verifies the access graph, then
+`.run()` blocks on the transports. `#[nest_rs::main]` builds the runtime all of it runs on, and once
+`run` returns it ends the process within the
+[shutdown budget](/fundamentals/shutdown/#the-way-down) rather than waiting on
+whatever the way down abandoned. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
 for the tests in [Test it end to end](/tutorial/testing/)), a smoke test that
 asserts the greeting, and an **empty** `tests/e2e/main.rs`. The e2e suite has to
-exist even while empty: `nestrs run test unit` filters on `not binary(e2e)`, and
+exist even while empty: `nestrs run test integration` filters on `not binary(e2e)`, and
 nextest rejects a filterset naming a binary the workspace does not have.
 
 ## Run it again
@@ -181,17 +210,18 @@ nextest rejects a filterset naming a binary the workspace does not have.
    $ nestrs run dev blog
        Compiling blog v0.1.0
         Running `target/debug/blog`
-   INFO nest_rs::routes: mounted route controller="BlogController" method="GET" path="/" handler="hello"
-   DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
+   INFO nest_rs::app: app starting app="blog" version="0.1.0" framework="7.0.0"
+   INFO nest_rs::routes: mounted host="BlogController" method="hello" verb="GET" path="/"
+   INFO nest_rs::app: app ready transports="http" addresses="0.0.0.0:3001"
    ```
 
-   The route table prints on every boot, and the `DEBUG` line shows the port
-   from your `module.rs`.
+   The route table prints on every boot, and `app ready` shows the port
+   from your `apps/blog/.env`.
 
 2. In another terminal:
 
    ```bash frame="terminal"
-   $ curl -i http://localhost:3005/
+   $ curl -i http://localhost:3001/
    HTTP/1.1 200 OK
 
    Hello World
@@ -205,14 +235,11 @@ That `200` is the checkpoint: the transport is mounted, the DI graph resolved,
 the access graph passed, and a controller reached your browser. Everything after
 this page replaces the greeting with real work.
 
-<Aside type="tip">
-`nestrs run dev blog` runs under `bacon` and restarts on every save.
-</Aside>
-
 ## What you have now
 
 - A `blog` app under `apps/blog/`, scaffolded by `nestrs new blog`.
-- A `BlogModule` that activates the HTTP transport and imports one feature.
+- A `BlogModule` that imports one feature's HTTP adapter, which brings the
+  HTTP transport.
 - A `blog` feature answering `Hello World` on `/` — proof the framework boots
   and serves end to end.
 

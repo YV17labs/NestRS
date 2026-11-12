@@ -6,6 +6,7 @@ use nest_rs::core::injectable;
 use nest_rs::ws::{WsServer, serde_json};
 use parking_lot::Mutex;
 
+use crate::Subject;
 use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 
 const HISTORY_CAPACITY: usize = 256;
@@ -31,9 +32,13 @@ impl ChatService {
         self.present.load(Ordering::Relaxed)
     }
 
-    pub fn record(&self, message: SendMessageDto) -> Result<ChatMessageDto, serde_json::Error> {
+    pub fn record(
+        &self,
+        author: Subject,
+        message: SendMessageDto,
+    ) -> Result<ChatMessageDto, serde_json::Error> {
         let stored = ChatMessageDto {
-            author: message.author,
+            author,
             text: message.text,
         };
         let mut history = self.history.lock();
@@ -46,8 +51,7 @@ impl ChatService {
 
         let reached = self.server.broadcast("message", &stored)?;
         tracing::debug!(
-            target: "features::chat",
-            author = %stored.author,
+            target: crate::chat::TARGET,
             total,
             reached,
             "chat message recorded and broadcast",
@@ -71,12 +75,16 @@ mod tests {
             history: Mutex::new(VecDeque::new()),
             present: AtomicUsize::new(0),
         };
+        let ada = Subject::User(uuid::Uuid::now_v7());
         let stored = svc
-            .record(SendMessageDto {
-                author: "ada".into(),
-                text: "hello".into(),
-            })
+            .record(
+                ada.clone(),
+                SendMessageDto {
+                    text: "hello".into(),
+                },
+            )
             .expect("broadcast serializes a two-field DTO");
+        assert_eq!(stored.author, ada);
         assert_eq!(stored.text, "hello");
         assert_eq!(svc.history().len(), 1);
     }

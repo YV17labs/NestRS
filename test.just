@@ -1,0 +1,95 @@
+set allow-duplicate-variables
+
+nextest := "cargo nextest run --workspace --no-fail-fast"
+
+# Where nest-rs-redis's e2e finds Valkey: the URL CI sets, else the dev
+# container's one server. With the `valkey-sentinel` or `valkey-cluster` dev
+# container open, uncomment its line.
+redis_url := env_var_or_default("NESTRS_REDIS__URL", "rediss://valkey-standalone:6379")
+# redis_url := "rediss-sentinel://valkey-sentinel-1:26379?node=valkey-sentinel-2:26379&node=valkey-sentinel-3:26379&sentinelServiceName=nestrs"
+# redis_url := "rediss-cluster://valkey-cluster-1:6379?node=valkey-cluster-2:6379&node=valkey-cluster-3:6379"
+
+# Exported on the suite's shared database, `DB_SHARED` in its `main.rs`, which
+# refuses any other: the variable outranks what an app pins, so a URL naming
+# none would file the suite's jobs on database 0, development's.
+shared_redis_url := replace_regex(redis_url, '^([^/]+//[^/?]+)(/[^?]*)?', '$1/16')
+
+# Its tests that hold on one topology alone sit in a module named for it; a
+# failover in a `failover` module, and every node requiring a client certificate
+# in a `mutual_tls` one.
+topology := if redis_url =~ '^rediss?-sentinel://' { "sentinel" } else if redis_url =~ '^rediss?-cluster://' { "cluster" } else { "standalone" }
+redis := "binary_id(nest-rs-redis::e2e)"
+elsewhere := redis + " and test(/(^|::)(standalone|sentinel|cluster)::/) and not test(/(^|::)" + topology + "::/)"
+alone := redis + " and test(/(^|::)" + topology + "::(failover|mutual_tls)::/)"
+
+# The Postgres nest-rs-seaorm's e2e runs on: the dev container's one server,
+# which asks no client certificate. With the `postgres-mutual-tls` dev
+# container open, uncomment its line: the `mutual_tls` tests, which need a
+# server letting a role in on a certificate alone, run there and nowhere else.
+postgres := "server"
+# postgres := "mutual-tls"
+unasked := if postgres == "mutual-tls" { "none()" } else { "binary_id(nest-rs-seaorm::e2e) and test(/^mutual_tls::/)" }
+
+# What a kernel decorator's key says in a build lacking the capability it reaches:
+# `#[wire_enum(graphql)]` on no feature at all, which the workspace's one feature
+# union cannot reach.
+kernel_alone := "cargo nextest run -p nest-rs-macro-hygiene --no-default-features --test integration --no-fail-fast"
+
+# What a decorator says in a build lacking the features an attribute pulls
+# in: the refusal suite on `graphql` alone, which the union cannot reach either.
+graphql_alone := kernel_alone + " --features graphql"
+
+# What `#[expose(..., graphql)]` says in a build with `seaorm` and no `graphql`,
+# the front door's own shape, which the union cannot reach either.
+seaorm_alone := kernel_alone + " --features seaorm"
+
+# What a binary without OTLP export refuses: nest-rs-opentelemetry built
+# without its `otlp` feature, the console alone, which the union turns on.
+console_alone := "cargo nextest run -p nest-rs-opentelemetry --no-default-features --no-fail-fast"
+
+# Every test: unit, integration, e2e and the doc examples
+all: && doc
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export NESTRS_REDIS__URL='{{shared_redis_url}}'
+    {{nextest}} -E 'not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
+    {{graphql_alone}}
+    {{seaorm_alone}}
+    {{kernel_alone}}
+    {{console_alone}} --lib --test integration
+    # A failover moves the primaries every other test runs on, and a node
+    # requiring a client certificate refuses their connections: last, one at a time.
+    if [ "{{topology}}" != standalone ]; then
+        {{nextest}} --test-threads 1 -E '{{alone}}'
+    fi
+
+# The `#[cfg(test)]` modules in each crate's `src/`
+unit:
+    {{nextest}} --lib --bins
+    {{console_alone}} --lib
+
+# The in-process suites under each crate's `tests/`, no service needed
+integration:
+    {{nextest}} -E 'kind(test) and not binary(e2e)'
+    {{graphql_alone}}
+    {{seaorm_alone}}
+    {{kernel_alone}}
+    {{console_alone}} --test integration
+
+# The `tests/e2e` suites, against Postgres, Valkey and S3
+e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export NESTRS_REDIS__URL='{{shared_redis_url}}'
+    {{nextest}} -E 'binary(e2e) and not ({{elsewhere}}) and not ({{alone}}) and not ({{unasked}})'
+    if [ "{{topology}}" != standalone ]; then
+        {{nextest}} --test-threads 1 -E '{{alone}}'
+    fi
+
+# Coverage of the nextest suite, per file; doctests count on nightly only
+cov:
+    cargo llvm-cov nextest --workspace --no-fail-fast
+
+# The examples in the docs
+doc:
+    cargo test --workspace --doc --no-fail-fast

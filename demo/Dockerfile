@@ -1,40 +1,11 @@
 # syntax=docker/dockerfile:1.7
-#
-# Multi-stage build for the demo (product) workspace.
-#
-# Build context is the PARENT (`nestrs/`), not `demo/`: this workspace reaches
-# the framework through `../crates`, so the build must see both trees. Build
-# from one level up:
-#
-#   cd ..  &&  docker build -f demo/Dockerfile -t nestrs .
-#
-# Every binary crate under `demo/apps/` is compiled in the builder and shipped
-# in the runtime image, plus `migrate` — the schema is an app of its own, run to
-# completion before the others. `seed` is deliberately left out: it writes demo
-# fixtures, which a production image has no business being able to do. It stays
-# a local command (`nestrs run db seed`).
-#
-# Which binary runs is chosen at `docker run` time by overriding the entrypoint:
-#
-#   docker run --rm -p 3002:3002 nestrs                # runs api (default)
-#   docker run --rm -p 3001:3001 nestrs /usr/local/bin/auth
-#
-# Stages:
-#   1. chef    — rust toolchain + cargo-chef, shared by planner & builder
-#   2. planner — produces a recipe describing the workspace dependency graph
-#   3. builder — cooks deps (cacheable), then compiles the shipped binaries
-#   4. runtime — distroless, non-root, minimal attack surface
-#
-# Security choices:
-#   - Runtime image is `gcr.io/distroless/cc-debian13:nonroot`: no shell, no
-#     package manager, runs as UID 65532 (nonroot) by default.
-#   - Rust version and cargo-chef version are pinned (override via --build-arg).
-#   - Only the release binaries land in the runtime — sources, target/, and
-#     build tooling are dropped between stages.
-#   - No HEALTHCHECK directive: rely on Kubernetes liveness/readiness probes
-#     exposed at /health/{live,ready,startup}.
+# Build from the repository root: the demo reaches the framework through ../crates.
+#   docker build -f demo/Dockerfile -t nestrs .
+#   docker run --rm -p 3002:3002 -e NESTRS_HTTP__PORT=3002 nestrs                       # default: api
+#   docker run --rm -p 3001:3001 -e NESTRS_HTTP__PORT=3001 nestrs /usr/local/bin/auth
+# A container names its port: the production profile reads no apps/<app>/.env.
 
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.100
 ARG CARGO_CHEF_VERSION=0.1.77
 
 # --- chef ---------------------------------------------------------------------
@@ -44,8 +15,6 @@ RUN cargo install cargo-chef --locked --version ${CARGO_CHEF_VERSION}
 WORKDIR /app
 
 # --- planner ------------------------------------------------------------------
-# Cargo commands run from `/app/demo`, the product workspace root (the parent
-# context also carries `../crates`, the framework — see the header).
 FROM chef AS planner
 COPY . .
 WORKDIR /app/demo
@@ -54,14 +23,16 @@ RUN cargo chef prepare --recipe-path recipe.json
 # --- builder ------------------------------------------------------------------
 FROM chef AS builder
 COPY --from=planner /app/demo/recipe.json /app/demo/recipe.json
+# The recipe holds this workspace alone, and it reaches the framework by path.
+COPY Cargo.toml /app/
+COPY crates /app/crates
 WORKDIR /app/demo
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --locked --recipe-path recipe.json
 COPY . /app
-RUN cargo build --release --workspace --exclude seed --bins
-# Collect every binary that was built into a single dir so the runtime stage can
-# copy them without enumerating each one.
+RUN cargo build --release --locked --workspace --exclude seed --bins
+# The cook built an empty binary for every member, `seed` among them.
 RUN mkdir -p /out && \
-    find target/release -maxdepth 1 -type f -executable -exec cp {} /out/ \;
+    find target/release -maxdepth 1 -type f -executable ! -name seed -exec cp {} /out/ \;
 
 # --- runtime ------------------------------------------------------------------
 FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
@@ -75,7 +46,6 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 COPY --from=builder --chown=nonroot:nonroot /out/ /usr/local/bin/
 
-EXPOSE 3002
 USER nonroot:nonroot
-# Default app — override at runtime: `docker run ... /usr/local/bin/<app>`
-ENTRYPOINT ["/usr/local/bin/api"]
+# A CMD, so the binary a `docker run` names replaces it; an ENTRYPOINT would take it as an argument.
+CMD ["/usr/local/bin/api"]

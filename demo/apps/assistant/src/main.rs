@@ -1,12 +1,12 @@
 use anyhow::Result;
-use nest_rs::config::Environment;
 use nest_rs::core::App;
+use nest_rs::opentelemetry::OpenTelemetry;
 
 use assistant::AssistantModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
-    let _environment = Environment::init();
+    let _otel = OpenTelemetry::init()?;
 
     App::builder()
         .module::<AssistantModule>()

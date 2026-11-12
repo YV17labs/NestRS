@@ -2,30 +2,31 @@ use std::sync::Arc;
 
 use nest_rs::core::injectable;
 use nest_rs::events::EventBus;
+use nest_rs::queue::Jobs;
 use nest_rs::seaorm::{
-    Creatable, CreateModel, CrudService, Deletable, Repo, ServiceError, Updatable,
+    Creatable, CrudService, Deletable, Repo, RepoError, ServiceError, Updatable,
 };
-use sea_orm::IntoActiveModel;
-use sea_orm::Set;
-use uuid::Uuid;
+use sea_orm::{IntoActiveModel, Set};
 
 use super::entities::post::{CreatePost, Entity as Posts, Model, Post, PostStatus, UpdatePost};
 use super::entities::publication;
 use super::error::PostError;
 use super::event::PostPublishedEvent;
+use super::store::PublicationStore;
+use crate::notifications::{NotifyCommand, NotifyQueue};
 
 #[injectable]
 pub struct PostsService {
     #[inject]
     bus: Arc<EventBus>,
+    #[inject]
+    jobs: Arc<Jobs>,
+    #[inject]
+    publications: Arc<PublicationStore>,
 }
 
 impl CrudService for PostsService {
     type Entity = Posts;
-
-    fn soft_delete_column() -> Option<super::entities::post::Column> {
-        Some(super::entities::post::Column::DeletedAt)
-    }
 }
 
 impl Creatable for PostsService {
@@ -39,27 +40,7 @@ impl Updatable for PostsService {
 impl Deletable for PostsService {}
 
 impl PostsService {
-    pub async fn create_in_org(
-        &self,
-        input: CreatePost,
-        org_id: Uuid,
-        author_id: Uuid,
-    ) -> Result<Post, ServiceError> {
-        let mut active = input.into_active_model();
-        active.org_id = Set(org_id);
-        active.author_id = Set(author_id);
-        active.status = Set(PostStatus::Draft);
-        let model = self.create_from_active(active).await?;
-        tracing::debug!(
-            target: "features::posts",
-            id = %model.id,
-            %org_id,
-            "post created",
-        );
-        Ok(Post::from(&model))
-    }
-
-    pub async fn publish(&self, model: Model, actor_id: Uuid) -> Result<Post, PostError> {
+    pub async fn publish(&self, model: Model) -> Result<Post, PostError> {
         if model.status == PostStatus::Published {
             return Err(PostError::AlreadyPublished { id: model.id });
         }
@@ -73,33 +54,32 @@ impl PostsService {
             .await
             .map_err(ServiceError::from)?;
 
-        let conn = Repo::<publication::Entity>::conn().map_err(ServiceError::from)?;
-        Repo::<publication::Entity>::insert_unscoped(
-            publication::ActiveModel {
-                id: Set(Uuid::now_v7()),
+        let notification = NotifyCommand {
+            org_id,
+            message: format!("Post \"{}\" was published", published.title),
+        };
+        let receipt = self.jobs.push(NotifyQueue, notification).await?;
+
+        self.publications
+            .create(publication::ActiveModel {
                 post_id: Set(post_id),
-                actor_id: Set(actor_id),
-                published_at: Set(chrono::Utc::now().fixed_offset()),
-            },
-            &conn,
-        )
-        .await
-        .map_err(ServiceError::from)?;
+                ..Default::default()
+            })
+            .await
+            .map_err(|err| match err {
+                RepoError::UniqueViolation(_) => PostError::AlreadyPublished { id: post_id },
+                other => PostError::Service(other.into()),
+            })?;
 
         tracing::debug!(
-            target: "features::posts",
+            target: crate::posts::TARGET,
             id = %post_id,
             %org_id,
+            job_id = %receipt.id(),
             "post published",
         );
         let post = Post::from(&published);
-        self.bus
-            .emit(PostPublishedEvent {
-                post_id,
-                org_id,
-                post: post.clone(),
-            })
-            .await;
+        self.bus.emit(PostPublishedEvent { post: published }).await;
         Ok(post)
     }
 }

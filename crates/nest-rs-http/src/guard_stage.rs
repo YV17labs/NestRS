@@ -1,0 +1,1276 @@
+//! The HTTP guard stage: each guard's [`Guard::check_http`] on a request,
+//! read through the edge's [`HttpView`], then the site's class gates, as the
+//! pipeline's [`GuardStage`]; and a [`Denial`] rendered as the RFC 9457
+//! problem the edge answers, unless the guard refusing it wrote its own error
+//! into the view ([`HttpView::respond`]).
+//!
+//! What the guards attach is ambient once the whole stage passed, for the rest
+//! of the unit; a self-mount's stage also keeps it on the request for work the
+//! mount runs off its task ([`attached_pending`]).
+
+use std::any::TypeId;
+use std::sync::Arc;
+
+use futures_util::future::BoxFuture;
+use http::{HeaderValue, StatusCode, header};
+use nest_rs_core::__private::{
+    GuardStage, Pending, ResolvedLayer, install_pending, new_unit_context, pending_of,
+    take_pending, withhold_from_reads,
+};
+use nest_rs_core::{AmbientValue, DenialDocument, Failure, Handler, UnitContext};
+use nest_rs_guards::__private::{
+    NeededPrincipal, RefusalMark, Refused, denial_code, denial_of, identifying_guard, produces,
+    required_principal_absent,
+};
+use nest_rs_guards::{Denial, Guard, RequiredScopes};
+
+use crate::ambient::RejectedCredential;
+use crate::problem::ProblemDetails;
+use crate::request::Request;
+use crate::response::{IntoResponse, Response};
+use crate::shaper::GateFn;
+use crate::view::HttpView;
+
+/// What a request's guard stages attached so far, held on the request between a
+/// stage and the work its endpoint runs off its task.
+#[derive(Clone, Default)]
+struct Attached(Pending);
+
+/// `denial`, raised by `guard` on the request `cx` runs: the principal it requires,
+/// absent behind a credential a `#[public]` route set aside, answers the `401` that
+/// credential earned, as an [`Ambient`](nest_rs_core::Ambient) parameter does.
+fn refused_by(
+    name: &'static str,
+    guard: &dyn Guard,
+    denial: Denial,
+    cx: &UnitContext<'_>,
+) -> Refused {
+    let earned = required_principal_absent(&denial, guard)
+        .and_then(|principal| earned_by_a_rejected_credential(cx, principal));
+    Refused::by(name, guard, earned.unwrap_or(denial))
+}
+
+/// The `401` a credential a `#[public]` route set aside earned, on its way to a
+/// `principal` the request now lacks.
+fn earned_by_a_rejected_credential(cx: &UnitContext<'_>, principal: TypeId) -> Option<Denial> {
+    cx.switch_to::<HttpView>()?
+        .request()
+        .extensions()
+        .get::<RejectedCredential>()
+        .filter(|rejected| rejected.principal == principal)
+        .map(RejectedCredential::denial)
+}
+
+/// Run each of `guards`' [`check_http`](Guard::check_http), in order, on the
+/// unit `cx` describes, then refuse a caller they admitted without the
+/// `needed` principal, then run each of the site's class `gates` on the same
+/// unit. The first refusal stops the stage.
+async fn run_guards(
+    guards: &[ResolvedLayer<dyn Guard>],
+    needed: Option<&NeededPrincipal>,
+    gates: &[GateFn],
+    cx: &mut UnitContext<'_>,
+) -> Result<(), Refused> {
+    for entry in guards {
+        // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
+        // blanket would nest a second boxed future per check.
+        let guard = entry.layer.as_ref();
+        if let Err(denial) = guard.check_http(cx).await {
+            return Err(refused_by(entry.name, guard, denial, cx));
+        }
+        // An answer is a refusal's own: one a guard that admitted left is never
+        // served for a later refusal.
+        if let Some(view) = cx.switch_to_mut::<HttpView>() {
+            drop(view.take_response());
+        }
+    }
+    if let Some(needed) = needed
+        && let Some(refused) = needed.refused(cx, |principal| {
+            earned_by_a_rejected_credential(cx, principal)
+        })
+    {
+        return Err(refused);
+    }
+    for gate in gates {
+        gate(cx).map_err(|refused| Refused::Filed(denial_of(&refused)))?;
+    }
+    Ok(())
+}
+
+/// The guard stage of an HTTP site: its guards, then its class gates, as the
+/// pipeline runs a site's guard stage.
+pub(crate) struct HttpGuardStage {
+    guards: Vec<ResolvedLayer<dyn Guard>>,
+    needed: Option<NeededPrincipal>,
+    gates: Vec<GateFn>,
+    kind: StageKind,
+}
+
+/// What a stage does beside its guards once they passed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StageKind {
+    /// A route.
+    Route {
+        /// Neither its posture names a subject nor a shaper is armed on it, so
+        /// its reads are withheld what its guards attached.
+        withheld: bool,
+    },
+    /// A self-mount's request: what the guards attached is also kept on the
+    /// request, for the units the mount runs off its task.
+    SelfMount,
+}
+
+/// The statuses a guard may declare it refuses with: a refusal answers an
+/// error, and a route's document files a declared status over what else it says
+/// of that status, its success included.
+const REFUSAL_STATUSES: std::ops::RangeInclusive<u16> = 400..=599;
+
+/// Refuse a guard declaring a status no refusal answers, on a `#[public]` route
+/// or on any other.
+fn refuse_a_declared_non_error(guards: &[ResolvedLayer<dyn Guard>]) -> anyhow::Result<()> {
+    for entry in guards {
+        let declared = [
+            entry.layer.denial_statuses(false),
+            entry.layer.denial_statuses(true),
+        ];
+        if let Some(status) = declared
+            .into_iter()
+            .flatten()
+            .find(|status| !REFUSAL_STATUSES.contains(status))
+        {
+            anyhow::bail!(
+                "the guard `{}` declares `{status}` among what it refuses a request with: \
+                 `Guard::denial_statuses` takes the error statuses a refusal answers, from \
+                 {} to {}",
+                nest_rs_core::__private::shorten(entry.name),
+                REFUSAL_STATUSES.start(),
+                REFUSAL_STATUSES.end(),
+            );
+        }
+    }
+    Ok(())
+}
+
+impl HttpGuardStage {
+    /// The stage running `guards`, then `gates`; a guard declaring a status no
+    /// refusal answers refuses it.
+    pub(crate) fn new(
+        guards: Vec<ResolvedLayer<dyn Guard>>,
+        gates: Vec<GateFn>,
+        kind: StageKind,
+    ) -> anyhow::Result<Self> {
+        refuse_a_declared_non_error(&guards)?;
+        Ok(Self {
+            guards,
+            needed: None,
+            gates,
+            kind,
+        })
+    }
+
+    /// The guard producing a principal the unit cannot run without — the one its
+    /// handler reads, or one a later guard requires — whose absence on a
+    /// `#[public]` route is the caller's `401`.
+    fn producing_a_needed_principal(&self) -> Option<&ResolvedLayer<dyn Guard>> {
+        self.needed
+            .as_ref()
+            .map(NeededPrincipal::guard)
+            .or_else(|| {
+                self.guards
+                    .iter()
+                    .filter_map(|entry| entry.layer.expected_principal())
+                    .filter(|claim| !claim.or_visitor)
+                    .find_map(|claim| {
+                        self.guards
+                            .iter()
+                            .find(|entry| produces(entry, claim.type_id))
+                    })
+            })
+    }
+
+    /// The stage refusing, once its guards passed, a caller they admitted
+    /// without the `needed` principal.
+    pub(crate) fn needing(self, needed: Option<NeededPrincipal>) -> Self {
+        Self { needed, ..self }
+    }
+
+    /// What the stage records once its guards passed.
+    fn passed(&self, cx: &mut UnitContext<'_>) {
+        match self.kind {
+            StageKind::Route { withheld: true } => withhold_from_reads(cx),
+            StageKind::Route { withheld: false } => {}
+            StageKind::SelfMount => {
+                let mut pending = pending_of(cx).clone();
+                // A unit the mount carries off its task marks the request's
+                // unit when its own guards refuse it.
+                if let Some(mark) = nest_rs_core::ambient::<RefusalMark>() {
+                    pending.attach(mark);
+                }
+                if let Ok(view) = HttpView::of(cx) {
+                    let extensions = view.request_mut().extensions_mut();
+                    match extensions.get_mut::<Attached>() {
+                        Some(Attached(earlier)) => earlier.merge(pending),
+                        None => {
+                            extensions.insert(Attached(pending));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl GuardStage for HttpGuardStage {
+    fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
+        Box::pin(async move {
+            match run_guards(&self.guards, self.needed.as_ref(), &self.gates, cx).await {
+                Ok(()) => {
+                    self.passed(cx);
+                    Ok(())
+                }
+                Err(refused) => {
+                    let denial = refused.into_denial(DENIED, cx);
+                    Err(answer(cx, denial))
+                }
+            }
+        })
+    }
+
+    /// What each guard declares, the chain the stage runs, and what its class
+    /// gates refuse: one whose ability lacks the grant or its scope anywhere, and
+    /// at a gated site a caller no principal backs, unless a guard of the chain
+    /// already answers that `401` in its own terms.
+    fn denials(&self, public: bool) -> Vec<(u16, DenialDocument)> {
+        let mut denials: Vec<(u16, DenialDocument)> = self
+            .guards
+            .iter()
+            .flat_map(|entry| {
+                let document = entry.layer.denial_document();
+                let statuses = entry.layer.denial_statuses(public);
+                statuses.iter().map(move |status| (*status, document))
+            })
+            .collect();
+        if public
+            && let Some(entry) = self.producing_a_needed_principal()
+            && !denials.iter().any(|(status, _)| *status == 401)
+        {
+            denials.push((401, entry.layer.denial_document()));
+        }
+        if !self.gates.is_empty() {
+            denials.push((403, DenialDocument::PROBLEM));
+            if !public && !denials.iter().any(|(status, _)| *status == 401) {
+                denials.push((401, DenialDocument::PROBLEM));
+            }
+        }
+        denials.sort_by_key(|(status, _)| *status);
+        denials
+    }
+
+    fn covers(&self) -> bool {
+        identifying_guard(&self.guards).is_some()
+    }
+}
+
+/// The stage of a gated self-mount carrying in-band units with no guard at its
+/// request: every request is refused, and filed.
+pub(crate) struct DeniedStage {
+    path: String,
+}
+
+impl DeniedStage {
+    /// Refuse every request to the self-mount at `path`.
+    pub(crate) fn new(path: String) -> Self {
+        Self { path }
+    }
+}
+
+impl GuardStage for DeniedStage {
+    fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
+        tracing::warn!(
+            target: nest_rs_core::target::LAYERS,
+            path = self.path.as_str(),
+            "request denied: the endpoint runs no guard at its request",
+        );
+        let denied = answer(
+            cx,
+            Denial::unauthorized("no guard admits requests to this endpoint"),
+        );
+        Box::pin(std::future::ready(Err(denied)))
+    }
+}
+
+/// The refused unit's answer, and the unit failed with `denial`, answered, so
+/// no exception filter maps it: the error a refusing guard wrote into its view
+/// in its protocol's own words (RFC 6749 §5.2's `400 invalid_client`, which no
+/// denial renders), else `denial` rendered.
+pub(crate) fn answer(cx: &mut UnitContext<'_>, denial: Denial) -> Failure {
+    match HttpView::of(cx) {
+        Ok(view) => {
+            let response = match view.take_response() {
+                Some(own) if crate::site::is_error(&own) => own,
+                _ => denial_response(&denial),
+            };
+            Failure::from(denial).answered(view.respond(response))
+        }
+        Err(viewless) => Failure::from(viewless),
+    }
+}
+
+/// `inner` behind `chain`, run as the guard stage of a site `handler` declares
+/// and nothing else: the seam a guard stage's own tests drive a request
+/// through, as a self-mount's request runs it.
+///
+/// Refused as a route is when it mounts: `handler` declares two `#[meta]`
+/// values of one type at one level.
+pub fn behind_guards(
+    handler: &'static Handler,
+    chain: Vec<ResolvedLayer<dyn Guard>>,
+    inner: crate::endpoint::BoxEndpoint,
+) -> anyhow::Result<crate::endpoint::BoxEndpoint> {
+    behind_stage(handler, chain, StageKind::SelfMount, inner)
+}
+
+/// `inner` behind `chain`, run as a `kind` guard stage of a site `handler`
+/// declares and nothing else.
+fn behind_stage(
+    handler: &'static Handler,
+    chain: Vec<ResolvedLayer<dyn Guard>>,
+    kind: StageKind,
+    inner: crate::endpoint::BoxEndpoint,
+) -> anyhow::Result<crate::endpoint::BoxEndpoint> {
+    use nest_rs_core::__private::{GlobalLayers, SiteDeclaration, SiteLayers, compose_site};
+
+    let stage: Arc<dyn GuardStage> = Arc::new(HttpGuardStage::new(chain, Vec::new(), kind)?);
+    let declared = SiteDeclaration {
+        layers: SiteLayers::default,
+        global: GlobalLayers::NONE,
+        guard_stage: None,
+        class_gate: None,
+    };
+    let chains = compose_site(
+        &nest_rs_core::Container::default(),
+        handler,
+        &declared,
+        Some(stage),
+    )?;
+    let tail = crate::site::EndpointTail::new(inner, &chains);
+    Ok(crate::endpoint::BoxEndpoint::new(
+        crate::site::SiteEndpoint::new(handler, chains, None, tail),
+    ))
+}
+
+/// Run `guards`' HTTP entry on `req`, the unit `handler` declares, as the
+/// transport's stage runs them, keeping what they attach on the request
+/// ([`attached`]): the seam a guard's tests check a request through.
+///
+/// A refusal is filed here, as on a route, and comes back as raised.
+pub async fn check_request<'g>(
+    handler: &'static Handler,
+    guards: impl IntoIterator<Item = (&'static str, &'g dyn Guard)>,
+    req: &mut Request,
+) -> Result<(), Denial> {
+    let earlier = pending_in(req.extensions());
+    let taken = std::mem::replace(req, Request::builder().finish());
+    let mut view = HttpView::new(taken);
+    let checked = install_pending(earlier, async {
+        let mut cx = new_unit_context(handler, &mut view, None, None);
+        for (name, guard) in guards {
+            if let Err(denial) = guard.check_http(&mut cx).await {
+                return Err(refused_by(name, guard, denial, &cx).into_denial(DENIED, &cx));
+            }
+        }
+        Ok(take_pending(&mut cx))
+    })
+    .await;
+    *req = view.into_request();
+    let pending = checked?;
+    let attached = req.extensions_mut();
+    match attached.get_mut::<Attached>() {
+        Some(Attached(earlier)) => earlier.merge(pending),
+        None => {
+            attached.insert(Attached(pending));
+        }
+    }
+    Ok(())
+}
+
+/// What `req`'s guard stages attached so far, to install around what runs
+/// after them — later stages, work that leaves the request's task (an MCP
+/// operation).
+pub fn attached_pending(req: &Request) -> Pending {
+    pending_in(req.extensions())
+}
+
+/// What the guard stages recorded in `extensions` attached so far.
+fn pending_in(extensions: &http::Extensions) -> Pending {
+    extensions
+        .get::<Attached>()
+        .map_or_default(|attached| attached.0.clone())
+}
+
+/// The `T` one of `req`'s guard stages attached.
+pub fn attached<T: AmbientValue>(req: &Request) -> Option<Arc<T>> {
+    req.extensions().get::<Attached>()?.0.get::<T>()
+}
+
+/// The line a guard's denial of an HTTP request is filed as, on the guard's
+/// target.
+const DENIED: &str = "guard denied the request";
+
+/// A [`Denial`] as the HTTP response the edge answers: the RFC 9457
+/// `application/problem+json` envelope under the `code` the denial's class
+/// carries on every edge, a `4xx` reason as its `detail`, a `5xx` its class's
+/// document with no `detail`, so no internal text leaks.
+pub fn denial_to_http_response(denial: Denial) -> Response {
+    denial_response(&denial)
+}
+
+/// [`denial_to_http_response`], the denial kept.
+pub(crate) fn denial_response(denial: &Denial) -> Response {
+    let status =
+        StatusCode::from_u16(denial.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut problem = ProblemDetails::about_blank(status).with_code(denial_code(denial));
+    if status.is_client_error() {
+        problem = problem.with_detail(denial.message().to_owned());
+    }
+    let mut response = problem.into_response();
+    // RFC 6750 §3/§3.1: a rejected credential names its code. Not gated on the
+    // status: `insufficient_scope` lives at `403`, and `bearer_error` is already
+    // `None` wherever no challenge is due.
+    match denial.bearer_error() {
+        Some(crate::challenge::INSUFFICIENT_SCOPE) => {
+            crate::challenge::stamp_insufficient_scope(&mut response, denial.required_scopes());
+        }
+        Some(code) => crate::challenge::stamp_bearer_error(&mut response, code),
+        None => {}
+    }
+    // RFC 6585 §4 for a rate limit, RFC 9110 §15.6.4 for an unavailable
+    // dependency: the wait, in delay-seconds, whenever it is known.
+    if let Some(retry_after_secs) = denial.retry_after_secs() {
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(retry_after_secs));
+    }
+    // The scopes ride as an extension: the challenge also names the RFC 9728
+    // metadata document, which only the oauth-resource interceptor knows.
+    if let Some(required) = required_scopes(denial) {
+        response.extensions_mut().insert(required);
+    }
+    response
+}
+
+/// The evidence a scope denial carries to the edge, or `None` when there is
+/// none to carry — an empty set says no more than a bare `403`, so no transport
+/// emits a challenge for it.
+fn required_scopes(denial: &Denial) -> Option<RequiredScopes> {
+    let required = denial.required_scopes();
+    (!required.is_empty()).then(|| RequiredScopes::new(required.to_vec()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, meta_value};
+    use nest_rs_core::async_trait;
+    use nest_rs_core::{ChallengeScheme, Layer, LayerSite, Posture, UnitContext};
+
+    use super::*;
+    use crate::endpoint::{BoxEndpoint, Endpoint};
+
+    /// The guards of a composed chain, as `check_request` takes them.
+    fn erased(
+        chain: &[ResolvedLayer<dyn Guard>],
+    ) -> impl Iterator<Item = (&'static str, &dyn Guard)> {
+        chain.iter().map(|entry| (entry.name, entry.layer.as_ref()))
+    }
+
+    /// `inner` behind a site running `chain` as its guard stage, a `kind`
+    /// stage, and nothing else.
+    fn guarded(
+        chain: Vec<ResolvedLayer<dyn Guard>>,
+        kind: StageKind,
+        inner: impl Endpoint,
+    ) -> impl Endpoint {
+        behind_stage(&ROUTE, chain, kind, BoxEndpoint::new(inner))
+            .expect("a route declaring each type once composes")
+    }
+
+    #[tokio::test]
+    async fn unauthorized_denial_renders_problem_json() {
+        let resp = denial_to_http_response(Denial::unauthorized("missing bearer token"));
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .map(|v| v.as_bytes()),
+            Some(b"application/problem+json".as_slice()),
+        );
+        let bytes = resp.into_body().into_bytes().await.expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(json["status"], 401);
+        assert_eq!(json["title"], "Unauthorized");
+        assert_eq!(json["detail"], "missing bearer token");
+    }
+
+    /// Every denial's document carries the code its class is known by on
+    /// every edge, an insufficient scope's included, which its `403` alone
+    /// would name `FORBIDDEN`.
+    #[tokio::test]
+    async fn every_denial_names_the_code_its_class_is_known_by() {
+        for denial in [
+            Denial::unauthorized("missing bearer token"),
+            Denial::invalid_credential("the token expired", "invalid_token"),
+            Denial::forbidden("not yours"),
+            Denial::insufficient_scope(["posts:write"], "narrow"),
+            Denial::rate_limited(30, "slow down"),
+            Denial::unavailable(Some(7), "store at 10.0.0.1 down"),
+            Denial::internal("redis at 10.0.3.7 refused"),
+        ] {
+            let class = denial_code(&denial).as_str();
+            let resp = denial_to_http_response(denial.clone());
+            let bytes = resp.into_body().into_bytes().await.expect("body");
+            let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+            assert_eq!(json["code"], class, "{denial:?}: {json}");
+            assert!(!json.to_string().contains("10.0."), "{json}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_limited_denial_keeps_retry_after_on_problem_json() {
+        let resp = denial_to_http_response(Denial::rate_limited(30, "slow down"));
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers()
+                .get(header::RETRY_AFTER)
+                .map(|v| v.as_bytes()),
+            Some(b"30".as_slice()),
+        );
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .map(|v| v.as_bytes()),
+            Some(b"application/problem+json".as_slice()),
+        );
+    }
+
+    #[tokio::test]
+    async fn insufficient_scope_carries_the_required_scopes_to_the_edge() {
+        // The transport edge is what turns these into the RFC 6750 challenge;
+        // losing them here would leave a client a bare 403 it cannot act on.
+        let resp = denial_to_http_response(Denial::insufficient_scope(
+            ["posts:write"],
+            "this token may not write posts",
+        ));
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            resp.extensions()
+                .get::<RequiredScopes>()
+                .map(RequiredScopes::as_slice),
+            Some(["posts:write".to_owned()].as_slice()),
+        );
+        assert_eq!(
+            Denial::insufficient_scope(["posts:write"], "narrow").bearer_error(),
+            Some(crate::challenge::INSUFFICIENT_SCOPE),
+            "the denial names the code the challenge writes",
+        );
+        assert_eq!(
+            resp.headers()[header::WWW_AUTHENTICATE],
+            r#"Bearer error="insufficient_scope", scope="posts:write""#,
+            "RFC 6750 §3: the challenge names the scope the request needs",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_scope_denial_naming_nothing_is_an_ordinary_forbidden() {
+        // A deployment may refuse without naming its internals; `scope=""`
+        // would be a malformed challenge, so the edge must see no marker.
+        let resp = denial_to_http_response(Denial::insufficient_scope(
+            Vec::<String>::new(),
+            "forbidden",
+        ));
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(resp.extensions().get::<RequiredScopes>().is_none());
+    }
+
+    #[tokio::test]
+    async fn internal_denial_is_a_500_problem_without_leaking_detail() {
+        let resp = denial_to_http_response(Denial::internal("panic: secret config missing"));
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let text = crate::testing::text(resp).await;
+        assert!(
+            !text.contains("secret config"),
+            "a 5xx denial must not leak internal detail: {text}",
+        );
+        let document: serde_json::Value = serde_json::from_str(&text).expect("problem json");
+        assert_eq!(document, crate::testing::internal_document());
+    }
+
+    /// The HTTP half: `503` (RFC 9110 §15.6.4), `Retry-After` when known, and
+    /// the class's document of a 5xx rather than the reason.
+    #[tokio::test]
+    async fn an_unavailable_dependency_is_a_503_with_its_known_wait() {
+        let unavailable = serde_json::json!({
+            "type": "about:blank",
+            "title": "Service Unavailable",
+            "status": 503,
+            "code": "UNAVAILABLE",
+        });
+        let resp =
+            denial_to_http_response(Denial::unavailable(Some(7), "authentication unavailable"));
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp.headers()
+                .get(header::RETRY_AFTER)
+                .map(|v| v.as_bytes()),
+            Some(b"7".as_slice()),
+        );
+        let document: serde_json::Value =
+            serde_json::from_str(&crate::testing::text(resp).await).expect("problem json");
+        assert_eq!(document, unavailable);
+        let unknown =
+            denial_to_http_response(Denial::unavailable(None, "authentication unavailable"));
+        assert_eq!(unknown.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(unknown.headers().get(header::RETRY_AFTER).is_none());
+        let document: serde_json::Value =
+            serde_json::from_str(&crate::testing::text(unknown).await).expect("problem json");
+        assert_eq!(document, unavailable);
+    }
+
+    /// The HTTP half of a rate limit, pinned beside the in-band edges' wait:
+    /// one number, one unit.
+    #[tokio::test]
+    async fn the_http_edge_reports_the_wait_as_a_header() {
+        let resp = denial_to_http_response(Denial::rate_limited(42, "too many requests"));
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers()
+                .get(header::RETRY_AFTER)
+                .map(|v| v.as_bytes()),
+            Some(b"42".as_slice()),
+        );
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Tenant(&'static str);
+
+    impl AmbientValue for Tenant {}
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Throttle(u32);
+
+    struct Controller;
+
+    fn declared() -> MetaLevels {
+        MetaLevels {
+            host: vec![meta_value(Throttle(100))],
+            method: vec![meta_value(Throttle(10))],
+        }
+    }
+
+    static ROUTE: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::REQUEST,
+        host: TypeId::of::<Controller>(),
+        host_name: "Controller",
+        method: "route",
+        address: "/x",
+        posture: Posture::Public,
+        meta: declared,
+    });
+
+    /// Attaches the tenant its request names, and inserts its own `Throttle`
+    /// where a guard could once shadow the declared one.
+    #[derive(Layer)]
+    struct TenantGuard;
+
+    #[async_trait]
+    impl Guard for TenantGuard {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let request = HttpView::of(cx)?.request_mut();
+            let tenant = match request.header("x-tenant") {
+                Some("acme") => "acme",
+                _ => return Err(Denial::forbidden("an unknown tenant")),
+            };
+            request.extensions_mut().insert(Throttle(1));
+            cx.attach(Tenant(tenant));
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    /// Reads, in a later stage of the same request, what the first attached
+    /// and what the site declared.
+    #[derive(Layer)]
+    struct Witness;
+
+    #[async_trait]
+    impl Guard for Witness {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let tenant = cx.ambient::<Tenant>().map(|tenant| tenant.0);
+            let throttle = cx.reflector().get::<Throttle>().map(|throttle| throttle.0);
+            match (tenant, throttle, cx.reflector().is_public()) {
+                (Some("acme"), Some(10), true) => Ok(()),
+                seen => Err(Denial::internal(format!("saw {seen:?}"))),
+            }
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    fn chain<G: Guard>(guard: G) -> Vec<ResolvedLayer<dyn Guard>> {
+        vec![ResolvedLayer {
+            type_id: TypeId::of::<G>(),
+            name: std::any::type_name::<G>(),
+            source: LayerSite::Global,
+            layer: Arc::new(guard),
+        }]
+    }
+
+    /// Declares what an unreachable dependency and a refused tenant answer, on
+    /// every route.
+    #[derive(Layer)]
+    struct Busy;
+
+    #[async_trait]
+    impl Guard for Busy {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[503, 403]
+        }
+    }
+
+    fn statuses(stage: &HttpGuardStage, public: bool) -> Vec<u16> {
+        stage
+            .denials(public)
+            .into_iter()
+            .map(|(status, _)| status)
+            .collect()
+    }
+
+    #[test]
+    fn a_stage_declares_what_each_guard_does_in_ascending_order() {
+        let mut guards = chain(Witness);
+        guards.extend(chain(Busy));
+        let stage = HttpGuardStage::new(guards, Vec::new(), StageKind::Route { withheld: true })
+            .expect("a guard declaring errors composes");
+        assert_eq!(statuses(&stage, false), [401, 403, 403, 503]);
+        assert_eq!(statuses(&stage, true), [403, 503]);
+    }
+
+    /// Challenges `Basic`, and answers in its protocol's own words.
+    #[derive(Layer)]
+    struct ChallengesBasic;
+
+    #[async_trait]
+    impl Guard for ChallengesBasic {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[401]
+        }
+
+        fn denial_document(&self) -> DenialDocument {
+            DenialDocument::answering(
+                ChallengeScheme::Basic,
+                crate::controller::schema_of::<String>,
+            )
+        }
+    }
+
+    /// A gate refusing a caller no principal backs is reached only past the
+    /// chain's own `401`, so it adds no scheme the chain does not challenge with.
+    #[test]
+    fn a_class_gate_implies_no_401_beside_a_guard_declaring_one() {
+        let admit: GateFn = |_| Ok(());
+        let stage = HttpGuardStage::new(
+            chain(ChallengesBasic),
+            vec![admit],
+            StageKind::Route { withheld: true },
+        )
+        .expect("a guard declaring errors composes");
+
+        let denials = stage.denials(false);
+
+        let unauthorized: Vec<ChallengeScheme> = denials
+            .iter()
+            .filter(|(status, _)| *status == 401)
+            .map(|(_, document)| document.challenge)
+            .collect();
+        assert_eq!(unauthorized, [ChallengeScheme::Basic]);
+        assert_eq!(statuses(&stage, false), [401, 403]);
+    }
+
+    #[test]
+    fn a_stage_running_a_class_gate_declares_what_the_gate_refuses() {
+        let admit: GateFn = |_| Ok(());
+        let stage =
+            HttpGuardStage::new(Vec::new(), vec![admit], StageKind::Route { withheld: true })
+                .expect("a stage with no guard declares nothing");
+        assert_eq!(
+            statuses(&stage, false),
+            [401, 403],
+            "an anonymous caller, and one without the grant or its scope"
+        );
+        assert_eq!(
+            statuses(&stage, true),
+            [403],
+            "a public site reads the visitor's grants"
+        );
+    }
+
+    fn tenant_request() -> Request {
+        tenant("acme")
+    }
+
+    fn tenant(name: &'static str) -> Request {
+        Request::builder()
+            .header(
+                http::HeaderName::from_static("x-tenant"),
+                HeaderValue::from_static(name),
+            )
+            .finish()
+    }
+
+    #[tokio::test]
+    async fn a_later_stage_reads_what_an_earlier_one_attached_and_never_a_shadow() {
+        let mut req = tenant_request();
+        check_request(&ROUTE, erased(&chain(TenantGuard)), &mut req)
+            .await
+            .expect("the tenant is known");
+        check_request(&ROUTE, erased(&chain(Witness)), &mut req)
+            .await
+            .expect("the second stage reads the first one's tenant and the declared throttle");
+
+        let seen = install_pending(attached_pending(&req), async {
+            nest_rs_core::ambient::<Tenant>()
+        })
+        .await;
+        assert_eq!(seen.as_deref(), Some(&Tenant("acme")));
+        assert_eq!(attached::<Tenant>(&req).as_deref(), Some(&Tenant("acme")));
+        assert!(
+            nest_rs_core::ambient::<Tenant>().is_none(),
+            "nothing is ambient outside what the endpoint runs under it",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_stage_attaches_nothing() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut req = tenant("globex");
+        let denial = check_request(&ROUTE, erased(&chain(TenantGuard)), &mut req)
+            .await
+            .expect_err("an unknown tenant is refused");
+        assert_eq!(denial.http_status(), 403);
+        assert!(attached::<Tenant>(&req).is_none());
+        let event = logs.expect_one("nest_rs::layers", "guard denied the request");
+        assert_eq!(
+            event.field("guard").as_deref(),
+            Some("TenantGuard"),
+            "the line names the guard that refused, got {:?}",
+            event.fields,
+        );
+        assert_eq!(
+            event.field("error"),
+            None,
+            "a forbidden caller is no failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_guarded_site_runs_its_tail_under_what_the_stage_attached() {
+        let inner = crate::endpoint_fn(|_req: Request| async {
+            let tenant = nest_rs_core::ambient::<Tenant>()
+                .map(|tenant| tenant.0)
+                .unwrap_or("none");
+            Ok(Response::builder().body(tenant))
+        });
+        let guarded = guarded(chain(TenantGuard), StageKind::SelfMount, inner);
+
+        let admitted = guarded.call(tenant_request()).await.expect("answers");
+        assert_eq!(
+            admitted.into_body().into_string().await.expect("a body"),
+            "acme"
+        );
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let refused = guarded
+            .call(Request::builder().finish())
+            .await
+            .expect("answers");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let event = logs.expect_one("nest_rs::layers", "guard denied the request");
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("status").as_deref(), Some("403"));
+    }
+
+    /// What a store refusing the connection reports, the cause a guard keeps.
+    #[derive(Debug)]
+    struct ConnectionRefused;
+
+    impl std::fmt::Display for ConnectionRefused {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the identity store refused the connection")
+        }
+    }
+
+    impl std::error::Error for ConnectionRefused {}
+
+    /// Cannot evaluate the request: its identity store is down.
+    #[derive(Layer)]
+    struct StoreDown;
+
+    #[async_trait]
+    impl Guard for StoreDown {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Err(
+                Denial::unavailable(None, "the identity store did not answer")
+                    .with_source(ConnectionRefused),
+            )
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    const STORE_DOWN_CHAIN: &str =
+        "the identity store did not answer: the identity store refused the connection";
+
+    #[tokio::test]
+    async fn a_route_denial_keeping_its_cause_files_the_chain_and_answers_without_it() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let inner =
+            crate::endpoint_fn(|_req: Request| async { Ok(Response::builder().body("reached")) });
+        let guarded = guarded(
+            chain(StoreDown),
+            StageKind::Route { withheld: false },
+            inner,
+        );
+
+        let refused = guarded
+            .call(Request::builder().finish())
+            .await
+            .expect("answers");
+        assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = refused.into_body().into_string().await.expect("a body");
+        assert!(
+            !body.contains("refused"),
+            "the cause stays on the server: {body}"
+        );
+        let event = logs.expect_one("nest_rs::layers", "guard denied the request");
+        assert_eq!(event.field("status").as_deref(), Some("503"));
+        assert_eq!(event.field("error").as_deref(), Some(STORE_DOWN_CHAIN));
+    }
+
+    #[tokio::test]
+    async fn an_in_band_request_stage_files_a_denials_chain() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let denial = check_request(
+            &ROUTE,
+            erased(&chain(StoreDown)),
+            &mut Request::builder().finish(),
+        )
+        .await
+        .expect_err("the store is down");
+        assert_eq!(denial.http_status(), 503);
+        let event = logs.expect_one("nest_rs::layers", "guard denied the request");
+        assert_eq!(event.field("error").as_deref(), Some(STORE_DOWN_CHAIN));
+    }
+
+    /// Admits every request and attaches nothing.
+    #[derive(Layer)]
+    struct Admitting;
+
+    #[async_trait]
+    impl Guard for Admitting {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    /// Refuses in its protocol's own words: the answer `status` carries,
+    /// written into the view, beside the denial every edge reads.
+    #[derive(Layer)]
+    struct OwnWords(StatusCode);
+
+    #[async_trait]
+    impl Guard for OwnWords {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let own = Response::builder()
+                .status(self.0)
+                .content_type(HeaderValue::from_static("application/json"))
+                .body(r#"{"error":"invalid_client"}"#);
+            drop(HttpView::of(cx)?.respond(own));
+            Err(Denial::unauthorized("the client did not authenticate"))
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    /// Writes an answer, then admits.
+    #[derive(Layer)]
+    struct AdmitsAnswering;
+
+    #[async_trait]
+    impl Guard for AdmitsAnswering {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let stray = Response::builder()
+                .status(StatusCode::IM_A_TEAPOT)
+                .body("stray");
+            drop(HttpView::of(cx)?.respond(stray));
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    /// Refuses every request with a plain denial.
+    #[derive(Layer)]
+    struct Refusing;
+
+    #[async_trait]
+    impl Guard for Refusing {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Err(Denial::forbidden("not here"))
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    fn unreached() -> impl Endpoint {
+        crate::endpoint_fn(|_req: Request| async { Ok(Response::builder().body("reached")) })
+    }
+
+    /// A guard's refusal written as its protocol's error is what the client
+    /// reads, on a route as on a self-mount's request — RFC 6749 §5.2's token
+    /// endpoint answering `400 invalid_client`, a status no denial has.
+    #[tokio::test]
+    async fn a_guard_refusing_in_its_own_words_is_answered_with_them() {
+        for kind in [StageKind::Route { withheld: false }, StageKind::SelfMount] {
+            for status in [StatusCode::BAD_REQUEST, StatusCode::SERVICE_UNAVAILABLE] {
+                let refused = guarded(chain(OwnWords(status)), kind, unreached())
+                    .call(Request::builder().finish())
+                    .await
+                    .expect("answers");
+                assert_eq!(refused.status(), status, "{kind:?}");
+                assert_eq!(
+                    refused.headers()[header::CONTENT_TYPE],
+                    "application/json",
+                    "{kind:?}"
+                );
+                assert_eq!(
+                    refused.into_body().into_string().await.expect("a body"),
+                    r#"{"error":"invalid_client"}"#,
+                );
+            }
+        }
+    }
+
+    /// An answer that refuses nothing never stands for a refusal: the denial
+    /// is rendered.
+    #[tokio::test]
+    async fn a_refusal_written_as_a_success_is_rendered_as_its_denial() {
+        let refused = guarded(
+            chain(OwnWords(StatusCode::OK)),
+            StageKind::Route { withheld: false },
+            unreached(),
+        )
+        .call(Request::builder().finish())
+        .await
+        .expect("answers");
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            refused.headers()[header::CONTENT_TYPE],
+            "application/problem+json"
+        );
+    }
+
+    /// What a guard that admitted wrote is no refusal, so a later guard's
+    /// denial is rendered, never that answer.
+    #[tokio::test]
+    async fn an_answer_a_guard_that_admitted_left_is_never_served() {
+        let mut guards = chain(AdmitsAnswering);
+        guards.extend(chain(Refusing));
+        let refused = guarded(guards, StageKind::Route { withheld: false }, unreached())
+            .call(Request::builder().finish())
+            .await
+            .expect("answers");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+        let admitted = guarded(
+            chain(AdmitsAnswering),
+            StageKind::Route { withheld: false },
+            unreached(),
+        )
+        .call(Request::builder().finish())
+        .await
+        .expect("answers");
+        assert_eq!(admitted.status(), StatusCode::OK);
+        assert_eq!(
+            admitted.into_body().into_string().await.expect("a body"),
+            "reached"
+        );
+    }
+
+    /// Whether what a withholding route runs after `chain` sees the marker.
+    async fn withheld(chain: Vec<ResolvedLayer<dyn Guard>>, req: Request) -> bool {
+        let rest = crate::endpoint_fn(|_req| async {
+            let marked =
+                nest_rs_core::ambient::<nest_rs_core::__private::ReadsWithheld>().is_some();
+            Ok(Response::builder().body(if marked { "withheld" } else { "bare" }))
+        });
+        let answer = guarded(chain, StageKind::Route { withheld: true }, rest)
+            .call(req)
+            .await
+            .expect("answers");
+        answer.into_body().into_string().await.expect("a body") == "withheld"
+    }
+
+    #[tokio::test]
+    async fn a_withholding_route_marks_only_a_unit_carrying_something_to_withhold() {
+        assert!(
+            !withheld(chain(Admitting), Request::builder().finish()).await,
+            "its guard attached nothing",
+        );
+        assert!(
+            withheld(chain(TenantGuard), tenant_request()).await,
+            "what its guard attached is withheld",
+        );
+        let carried = nest_rs_core::with_ambient(
+            Arc::new(Tenant("acme")),
+            withheld(chain(Admitting), Request::builder().finish()),
+        )
+        .await;
+        assert!(carried, "what the unit carried in is withheld too");
+    }
+
+    #[tokio::test]
+    async fn a_self_mounts_stage_keeps_what_it_attached_on_the_request_for_its_off_task_work() {
+        let inner = crate::endpoint_fn(|req: Request| async move {
+            let kept = attached::<Tenant>(&req).map_or("none", |tenant| tenant.0);
+            Ok(Response::builder().body(kept))
+        });
+        let answer = guarded(chain(TenantGuard), StageKind::SelfMount, inner)
+            .call(tenant_request())
+            .await
+            .expect("answers");
+        assert_eq!(
+            answer.into_body().into_string().await.expect("a body"),
+            "acme"
+        );
+    }
+
+    fn throttled_twice() -> MetaLevels {
+        MetaLevels {
+            host: Vec::new(),
+            method: vec![meta_value(Throttle(10)), meta_value(Throttle(20))],
+        }
+    }
+
+    static THROTTLED_TWICE: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::REQUEST,
+        host: TypeId::of::<Controller>(),
+        host_name: "Controller",
+        method: "throttled_twice",
+        address: "/twice",
+        posture: Posture::Public,
+        meta: throttled_twice,
+    });
+
+    /// Declares what it refuses with, on a route that is not `#[public]` and on
+    /// one that is.
+    #[derive(Layer)]
+    struct Declares {
+        gated: &'static [u16],
+        public: &'static [u16],
+    }
+
+    #[async_trait]
+    impl Guard for Declares {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+
+        fn denial_statuses(&self, public: bool) -> &'static [u16] {
+            if public { self.public } else { self.gated }
+        }
+    }
+
+    fn behind_declared(declared: Declares, kind: StageKind) -> anyhow::Result<BoxEndpoint> {
+        let inner = crate::endpoint_fn(|_req: Request| async { Ok(Response::default()) });
+        behind_stage(&ROUTE, chain(declared), kind, BoxEndpoint::new(inner))
+    }
+
+    #[test]
+    fn a_guard_declaring_a_status_outside_the_errors_is_refused_at_every_site() {
+        for kind in [StageKind::Route { withheld: true }, StageKind::SelfMount] {
+            for outside in [&[100_u16][..], &[200], &[302], &[399], &[600], &[403, 204]] {
+                for declared in [
+                    Declares {
+                        gated: outside,
+                        public: &[],
+                    },
+                    Declares {
+                        gated: &[],
+                        public: outside,
+                    },
+                ] {
+                    let Err(refused) = behind_declared(declared, kind) else {
+                        panic!("{outside:?} declared as a refusal on a {kind:?} site");
+                    };
+                    let said = refused.to_string();
+                    assert!(said.contains("`Declares`"), "{said}");
+                    assert!(said.contains("400 to 599"), "{said}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_guard_declaring_an_error_status_composes() {
+        for declared in [&[400_u16, 599][..], &[401, 403, 429, 500, 503], &[]] {
+            let declared = Declares {
+                gated: declared,
+                public: declared,
+            };
+            behind_declared(declared, StageKind::SelfMount)
+                .unwrap_or_else(|refused| panic!("{refused}"));
+        }
+    }
+
+    #[test]
+    fn a_site_declaring_two_values_of_one_type_is_refused_rather_than_guarded() {
+        let inner = crate::endpoint_fn(|_req: Request| async {
+            Ok(Response::builder().body("unreachable"))
+        });
+        let Err(refused) = behind_guards(&THROTTLED_TWICE, Vec::new(), BoxEndpoint::new(inner))
+        else {
+            panic!("the site would serve with a value read by nothing");
+        };
+        let refused = refused
+            .downcast_ref::<nest_rs_core::DuplicateMetaError>()
+            .expect("the composition's own refusal");
+        assert!(refused.type_name.ends_with("::Throttle"), "{refused}");
+        assert_eq!(refused.declared_on, "Controller::throttled_twice");
+    }
+}

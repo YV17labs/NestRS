@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `#[hooks]` runs on a provider built once for the app, and `ThingsController` is an edge host, built at mount: move these methods to a plain `#[injectable]` provider
+  --> tests/integration/diagnostics/http/hooks_on_a_controller.rs:16:1
+   |
+16 | #[hooks]
+   | ^^^^^^^^ evaluation of `_` failed here

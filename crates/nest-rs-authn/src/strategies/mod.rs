@@ -1,7 +1,5 @@
-//! Ready-made [`Strategy`](crate::Strategy) implementations. Each is
-//! generic over a caller-chosen parameter (claims type, configuration)
-//! so apps register the concrete instances they need directly in their own
-//! `<Feature>Module`.
+//! Ready-made [`Strategy`](crate::Strategy) implementations, generic over a
+//! caller-chosen parameter (claims type, configuration).
 
 mod jwt;
 

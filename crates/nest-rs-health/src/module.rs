@@ -1,77 +1,120 @@
-//! [`HealthModule`] — mounts the probe routes and resolves [`HealthConfig`].
-//!
-//! [`HealthConfig`] loads from `NESTRS_HEALTH__*` by default (importing
-//! `HealthModule` is enough); [`HealthModule::for_root`] supplies a base for
-//! those variables to overlay, so a ceiling pinned in code is still overridable
-//! per field by the deployment (see `nest_rs_config::Config`).
+//! [`HealthModule`] — mounts the probe routes, resolves [`HealthConfig`],
+//! fills the indicator registry at the kernel's wiring step, and hands the
+//! service's container back at its close step.
 
-use std::future::Future;
-use std::pin::Pin;
+use std::any::TypeId;
 
 use nest_rs_config::{ConfigModule, ConfigSetup};
-use nest_rs_core::{Container, LifecycleHook, LifecyclePhase, module};
+use nest_rs_core::__private::{ModuleDescriptor, ProbeRuntime};
+use nest_rs_core::{Container, ContainerBuilder, Module, ReachableProviders, Registering, module};
+use nest_rs_http::HttpModule;
 
 use crate::config::HealthConfig;
 use crate::controller::HealthController;
+use crate::indicator::HealthIndicator;
 use crate::service::HealthService;
 
 #[module(
-    imports = [ConfigModule::for_feature::<HealthConfig>()],
+    imports = [nest_rs_config::__private::feature::<HealthConfig>(), HttpModule, HealthWiring],
     providers = [
         HealthService,
         HealthController,
     ],
 )]
-/// Provides the health probe endpoints. Import it to mount `/health` and let
+/// Provides the health probe endpoints, over the [`HttpModule`] it imports
+/// bare. Import it to mount `/health` and let
 /// any reachable provider contribute `#[liveness]`/`#[readiness]`/`#[startup]`
-/// indicators.
+/// indicators, and any imported module attach an
+/// [`IndicatorEntry`](crate::IndicatorEntry).
 pub struct HealthModule;
 
 impl HealthModule {
-    /// `None` ⇒ load [`HealthConfig`] from `NESTRS_HEALTH__*` over its defaults;
-    /// `Some(cfg)` makes `cfg` the base those variables overlay. Either way the
-    /// probe routes are mounted, so this is a drop-in replacement for importing
-    /// the bare [`HealthModule`].
-    pub fn for_root(config: impl Into<Option<HealthConfig>>) -> HealthSetup {
+    /// Pin `config` as the base `<PREFIX>_HEALTH__*` overlays, per field; the
+    /// bare import reads those variables over [`HealthConfig`]'s defaults.
+    pub fn for_root(config: HealthConfig) -> HealthSetup {
         ConfigModule::setup(config)
     }
 }
 
 /// [`DynamicModule`](nest_rs_core::DynamicModule) returned by
-/// [`HealthModule::for_root`]: resolves [`HealthConfig`] (env over the pinned
-/// base), then brings the base [`HealthModule`] wiring (the service and the
-/// controller). Pin-and-recurse is the whole behaviour, so it is a
-/// [`ConfigSetup`] rather than a type of its own.
+/// [`HealthModule::for_root`].
 pub type HealthSetup = ConfigSetup<HealthModule, HealthConfig>;
 
-// Stash the assembled container on `HealthService` so its `probe()` can
-// resolve indicator providers at request time. The `EventsModule` uses the
-// same lifecycle-hook seam to wire its discovered handlers — see
-// `crates/nest-rs-events/src/module.rs`.
-// Infra hook self-gates inside `install_container` (no-op when the service is
-// absent), so it opts out of the inert-hook warn with `present: |_| true`.
 nest_rs_core::inventory::submit! {
-    LifecycleHook {
-        phase: LifecyclePhase::OnApplicationBootstrap,
-        provider: "HealthModule",
-        method: "install_container",
-        origin: module_path!(),
-        present: |_| true,
-        run: install_container,
+    ProbeRuntime {
+        import: "nest_rs::health::HealthModule",
+        attached: serves_probes,
+        hosts: indicator_hosts,
     }
 }
 
-fn install_container(
-    container: &Container,
-) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
-    Box::pin(async move {
-        if let Some(svc) = container.get::<HealthService>() {
-            // Before the registry is put to work: two reachable indicators
-            // claiming one name on one probe fail the boot naming both hosts,
-            // because the fold that follows would silently keep one verdict.
-            crate::service::check_indicator_names(container)?;
-            svc.install_container(container.clone());
-        }
-        Ok(())
-    })
+/// Whether the app mounts the probes: `HealthModule` registers their service.
+fn serves_probes(container: &Container) -> bool {
+    container.get::<HealthService>().is_some()
+}
+
+/// Every `#[indicators]` host this binary links, named as the module listing
+/// it names it.
+fn indicator_hosts() -> Vec<(&'static str, TypeId)> {
+    nest_rs_core::inventory::iter::<HealthIndicator>()
+        .filter_map(|indicator| {
+            let host = indicator.host_type_id();
+            let listed = nest_rs_core::inventory::iter::<ModuleDescriptor>()
+                .flat_map(|module| module.providers)
+                .find(|provider| (provider.provider)() == host)?;
+            Some((listed.name, host))
+        })
+        .collect()
+}
+
+/// Attaches the indicator wiring and the close that undoes it: `#[module]`
+/// takes only imports and providers, so this hand-written module carries the
+/// steps for [`HealthModule`].
+struct HealthWiring;
+
+impl Module for HealthWiring {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+            .provide_wiring("nest_rs::health::indicators", wire_indicators)
+            .provide_close::<HealthService, _, _>(|svc| async move {
+                svc.release_container();
+                Ok(())
+            })
+    }
+}
+
+/// Hand the service the assembled container and the indicators it runs — the
+/// decorated methods and the entries modules attached — once they are known
+/// to answer under distinct names.
+fn wire_indicators(container: &Container) -> anyhow::Result<()> {
+    if let Some(svc) = container.get::<HealthService>() {
+        let reachable = ReachableProviders::of(container, crate::service::INDICATORS)?;
+        let indicators = crate::service::wired(container, &reachable);
+        // The report's fold by name would silently keep one of two verdicts.
+        crate::service::check_names(&indicators)?;
+        svc.install(container, &reachable, indicators);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indicators_wired_over_a_container_no_app_sealed_are_refused_naming_their_reader() {
+        let by_hand = Container::builder()
+            .provide(HealthService::default())
+            .build()
+            .expect("the container builds");
+
+        let Err(refused) = wire_indicators(&by_hand) else {
+            panic!("an ungated discovery is refused, never served whole");
+        };
+
+        let ungated = refused
+            .downcast_ref::<nest_rs_core::UngatedDiscoveryError>()
+            .unwrap_or_else(|| panic!("not the ungated refusal: {refused:#}"));
+        assert_eq!(ungated.reader, "indicator");
+    }
 }

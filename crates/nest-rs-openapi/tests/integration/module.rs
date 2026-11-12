@@ -1,26 +1,18 @@
 //! Covers `src/module.rs` — the composition contract `OpenApiModule` publishes.
-//!
-//! One import, no `main.rs` wiring, two endpoints. Every assertion here is a
-//! sentence the module's own documentation makes, checked against a booted app
-//! rather than against the mount table: the document describes the routes that
-//! are actually linked in, `enabled = false` serves nothing, and the endpoints
-//! are reachable **without authentication** — the exposure that makes the
-//! disable switch matter in production.
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::poem::web::Multipart;
+use nest_rs_config::Surface;
+use nest_rs_core::{Layer, async_trait, injectable, input, module};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_http::Multipart;
+use nest_rs_http::StatusCode;
 use nest_rs_http::{
-    ApiVersioning, Header, HttpConfig, HttpModule, async_trait, controller, input, routes,
+    ApiVersioning, Created, Header, HttpConfig, HttpModule, HttpSecurityHeaders, Json, Paginated,
+    controller, routes,
 };
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
 use nest_rs_testing::TestApp;
-use poem::Request;
-use poem::http::StatusCode;
 use serde_json::Value;
 
-/// A route with something to document, so "the document describes the app" is
-/// an observation rather than an assumption about an empty `paths` object.
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct TokenForm {
     grant_type: String,
@@ -32,40 +24,67 @@ struct WidgetsController;
 #[routes]
 impl WidgetsController {
     #[get("/")]
+    #[public]
     async fn list(&self) -> String {
         "[]".into()
     }
 
-    /// A route whose response *is* a header. `#[crud]`'s create is the other
-    /// producer of `Location`, and it needs an entity and a live database — this
-    /// one exercises the same `sets_location` path from decorator to served
-    /// document with neither.
     #[get("/legacy")]
+    #[public]
     #[redirect("/widgets", 301)]
     async fn legacy(&self) {}
 
-    /// The three shapes a document used to say nothing about: the headers a
-    /// handler reads, a `multipart/form-data` body, and a success body that is
-    /// not JSON. All three are decorator-to-document paths, so a unit test on
-    /// the composer proves only half of each.
-    /// A form-encoded body — the shape RFC 6749 requires of an OAuth token
-    /// endpoint, and the one `request_body` recognised neither as a body nor as
-    /// an error: the operation was published with no `requestBody` at all.
+    #[get("/feed")]
+    #[public]
+    #[response_header("cache-control", "no-store")]
+    async fn feed(&self) -> String {
+        "[]".into()
+    }
+
+    #[get("/catalog")]
+    #[public]
+    #[api(description = "Use `GET /widgets`.", deprecated = "2026-10-08")]
+    async fn catalog(&self) -> String {
+        "[]".into()
+    }
+
     #[post("/token")]
-    async fn token(&self, body: nest_rs_http::poem::web::Form<TokenForm>) -> String {
+    #[public]
+    async fn token(&self, body: nest_rs_http::Form<TokenForm>) -> String {
         body.0.grant_type
     }
 
     #[post("/import")]
+    #[public]
     #[api(multipart = ImportForm, response_content_type = "text/csv")]
     async fn import(&self, trace: Header<Trace>, form: Multipart) -> String {
         let _ = form;
         trace.into_inner().request_id
     }
+
+    #[post("/")]
+    #[public]
+    async fn create(&self) -> nest_rs_http::Result<Created<Json<Widget>>> {
+        Ok(Created::at(
+            7,
+            Json(Widget {
+                name: "gear".into(),
+            }),
+        ))
+    }
+
+    #[get("/pages")]
+    #[public]
+    async fn pages(&self) -> nest_rs_http::Result<Paginated<Json<Vec<Widget>>>> {
+        Ok(Paginated::new(Json(Vec::new()), 20, None::<u32>))
+    }
 }
 
-/// A required header and an optional one, so the served document has both
-/// `required` answers to show.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+struct Widget {
+    name: String,
+}
+
 #[input]
 struct Trace {
     #[serde(rename = "X-Request-Id")]
@@ -74,35 +93,100 @@ struct Trace {
     retry: Option<u32>,
 }
 
-/// The parts of the `multipart/form-data` body `import` reads — the form's
-/// shape is declared, because no extractor states it.
 #[input]
 struct ImportForm {
     #[schemars(extend("format" = "binary"))]
     file: String,
 }
 
-/// The config is **pinned** rather than read from `NESTRS_OPENAPI__*`: the
-/// unpinned default is deliberately environment-dependent (off outside a dev
-/// profile), so a suite that let the ambient environment decide would assert
-/// one thing on a laptop and another on a build agent.
-fn openapi(enabled: bool) -> OpenApiSetup {
+fn openapi(enabled: Surface) -> OpenApiSetup {
     OpenApiModule::for_root(OpenApiConfig {
         enabled,
         title: "Widget API".into(),
         version: "9.9.9".into(),
-        // Left off explicitly: an enabled emit would write `openapi.json` into
-        // whatever directory the test runner happens to be in.
-        emit_document: false,
         ..OpenApiConfig::default()
     })
 }
 
-#[module(imports = [openapi(true)], providers = [WidgetsController])]
+#[module(imports = [openapi(Surface::Open)], providers = [WidgetsController])]
 struct DocumentedApp;
 
-#[module(imports = [openapi(false)], providers = [WidgetsController])]
+#[module(imports = [openapi(Surface::Closed)], providers = [WidgetsController])]
 struct UndocumentedApp;
+
+#[module(imports = [OpenApiModule], providers = [WidgetsController])]
+struct UnpinnedApp;
+
+/// One field pinned, as the docs teach: the documentation stays a development
+/// surface.
+fn pinned_over_the_profile() -> OpenApiSetup {
+    OpenApiModule::for_root(OpenApiConfig {
+        title: "Profile API".into(),
+        ..OpenApiConfig::default()
+    })
+}
+
+#[module(imports = [pinned_over_the_profile()], providers = [WidgetsController])]
+struct PinnedOverTheProfileApp;
+
+#[tokio::test]
+async fn the_test_profile_serves_the_documentation_unpinned_or_pinned_over_the_default() {
+    let unpinned = TestApp::for_module::<UnpinnedApp>().await.expect("boots");
+    for path in ["/api-json", "/api"] {
+        unpinned.http().get(path).send().await.assert_status_is_ok();
+    }
+
+    let pinned = TestApp::for_module::<PinnedOverTheProfileApp>()
+        .await
+        .expect("boots");
+    let resp = pinned.http().get("/api-json").send().await;
+    resp.assert_status_is_ok();
+    let document: Value = resp.json().await.value().deserialize();
+    assert_eq!(document["info"]["title"], "Profile API");
+}
+
+/// A feature configuring the module as the app does.
+#[module(imports = [OpenApiModule], providers = [WidgetsController])]
+struct ConfiguringWidgetsModule;
+
+/// A feature declaring the dependency bare.
+#[module(imports = [OpenApiModule], providers = [WidgetsController])]
+struct BareWidgetsModule;
+
+#[module(imports = [OpenApiModule, ConfiguringWidgetsModule])]
+struct TwiceConfiguredApp;
+
+#[module(imports = [BareWidgetsModule, OpenApiModule])]
+struct BareBesideTheConfiguredApp;
+
+/// The document mounts once and answers, imported by `M`.
+async fn mounts_once<M: nest_rs_core::Module>() {
+    let app = TestApp::for_module::<M>()
+        .await
+        .unwrap_or_else(|refused| panic!("one document for both imports: {refused:#}"));
+
+    assert_eq!(
+        nest_rs_core::Discovery::new(app.container())
+            .meta::<nest_rs_http::HttpEndpointMeta>()
+            .len(),
+        1
+    );
+    app.http()
+        .get("/api-json")
+        .send()
+        .await
+        .assert_status_is_ok();
+}
+
+#[tokio::test]
+async fn two_imports_mount_the_documentation_once() {
+    mounts_once::<TwiceConfiguredApp>().await;
+}
+
+#[tokio::test]
+async fn a_bare_import_beside_the_configured_one_mounts_the_documentation_once() {
+    mounts_once::<BareBesideTheConfiguredApp>().await;
+}
 
 #[tokio::test]
 async fn the_documented_import_serves_a_document_describing_the_app() {
@@ -116,10 +200,7 @@ async fn the_documented_import_serves_a_document_describing_the_app() {
     let body = resp.0.into_body().into_bytes().await.expect("a body");
     let doc: Value = serde_json::from_slice(&body).expect("/api-json is JSON");
 
-    // `3.1.x`, not an exact string: the patch digit tracks the spec revision
-    // schemars emits, and pinning it would turn a harmless upstream bump into a
-    // failing suite. The `3.1` line is the contract — a `3.0` document would be
-    // a different format for every consumer.
+    // The patch digit follows upstream; `3.1` is the contract.
     let version = doc["openapi"].as_str().expect("an openapi version");
     assert!(
         version.starts_with("3.1."),
@@ -135,9 +216,6 @@ async fn the_documented_import_serves_a_document_describing_the_app() {
         "the document describes the controller actually linked in: {doc}",
     );
 
-    // R10: a header the framework knows it sends must be declared, or the
-    // generated client never reads it — the gap the throttler's `Retry-After`
-    // had already closed for its `429`, left open on the success side.
     let moved = &doc["paths"]["/widgets/legacy"]["get"]["responses"]["301"];
     assert_eq!(
         moved["headers"]["Location"]["schema"]["format"], "uri-reference",
@@ -151,6 +229,74 @@ async fn the_documented_import_serves_a_document_describing_the_app() {
     );
 }
 
+/// A typed answer says its status and its headers through the return type,
+/// with no `#[http_code]` and no `#[api(response = …)]` beside it.
+#[tokio::test]
+async fn a_created_and_a_paginated_answer_document_their_status_their_header_and_their_body() {
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+    let resp = app.http().get("/api-json").send().await;
+    resp.assert_status_is_ok();
+    let doc: Value = resp.json().await.value().deserialize();
+
+    let created = &doc["paths"]["/widgets"]["post"]["responses"];
+    assert!(created.get("200").is_none(), "{created}");
+    assert_eq!(
+        created["201"]["headers"]["Location"]["schema"]["format"], "uri-reference",
+        "{created}",
+    );
+    assert!(
+        created["201"]["content"]["application/json"]["schema"].is_object(),
+        "the body inside `Created` is documented: {created}",
+    );
+
+    let page = &doc["paths"]["/widgets/pages"]["get"]["responses"]["200"];
+    assert!(page["headers"]["Link"].is_object(), "{page}");
+    assert!(
+        page["content"]["application/json"]["schema"].is_object(),
+        "the body inside `Paginated` is documented: {page}",
+    );
+}
+
+#[tokio::test]
+async fn a_public_route_states_its_opening_and_the_headers_it_always_sends() {
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+    let resp = app.http().get("/api-json").send().await;
+    let body = resp.0.into_body().into_bytes().await.expect("a body");
+    let doc: Value = serde_json::from_slice(&body).expect("/api-json is JSON");
+    let feed = &doc["paths"]["/widgets/feed"]["get"];
+
+    assert_eq!(
+        feed["security"],
+        serde_json::json!([]),
+        "`#[public]` is an explicit opening in the document too: {feed}",
+    );
+    let header = &feed["responses"]["200"]["headers"]["cache-control"];
+    assert_eq!(header["schema"]["const"], "no-store", "{feed}");
+
+    let served = app.http().get("/widgets/feed").send().await;
+    served.assert_header("cache-control", "no-store");
+}
+
+#[tokio::test]
+async fn a_deprecated_route_says_so_in_the_document_and_on_every_answer() {
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+    let resp = app.http().get("/api-json").send().await;
+    let body = resp.0.into_body().into_bytes().await.expect("a body");
+    let doc: Value = serde_json::from_slice(&body).expect("/api-json is JSON");
+    let catalog = &doc["paths"]["/widgets/catalog"]["get"];
+    assert_eq!(catalog["deprecated"], true, "{catalog}");
+    assert_eq!(
+        catalog["responses"]["200"]["headers"]["Deprecation"]["schema"]["const"], "@1791417600",
+        "{catalog}",
+    );
+
+    let served = app.http().get("/widgets/catalog").send().await;
+    served.assert_status_is_ok();
+    served.assert_header("deprecation", "@1791417600");
+    let current = app.http().get("/widgets/feed").send().await;
+    assert!(current.0.headers().get("deprecation").is_none());
+}
+
 #[tokio::test]
 async fn the_document_describes_headers_multipart_bodies_and_streamed_responses() {
     let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
@@ -159,8 +305,6 @@ async fn the_document_describes_headers_multipart_bodies_and_streamed_responses(
     let doc: Value = serde_json::from_slice(&body).expect("/api-json is JSON");
     let import = &doc["paths"]["/widgets/import"]["post"];
 
-    // One `in: header` parameter per property of the DTO, `required` read off
-    // the schema — an `Option<_>` field is a header the caller may omit.
     let headers: Vec<(&str, bool)> = import["parameters"]
         .as_array()
         .expect("the operation has parameters")
@@ -183,7 +327,6 @@ async fn the_document_describes_headers_multipart_bodies_and_streamed_responses(
         "a required header is a 400 the operation can produce: {import}",
     );
 
-    // The body arrives as a form, and the form's parts are typed.
     let form = &import["requestBody"]["content"]["multipart/form-data"]["schema"];
     assert!(
         form["$ref"] == "#/components/schemas/ImportForm" || form.is_object(),
@@ -194,7 +337,6 @@ async fn the_document_describes_headers_multipart_bodies_and_streamed_responses(
         "and a file part is typed as one",
     );
 
-    // The success body is not JSON, and the document says what it is.
     let ok = &import["responses"]["200"]["content"];
     assert_eq!(
         ok["text/csv"]["schema"]["type"], "string",
@@ -208,28 +350,79 @@ async fn the_document_describes_headers_multipart_bodies_and_streamed_responses(
 
 #[tokio::test]
 async fn the_swagger_ui_and_its_assets_are_served() {
-    // The UI is only useful if its bundled assets resolve; they hang off `/api/`
-    // *relative* to the docs path, which is why the two must stay siblings.
     let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
 
-    app.http().get("/api").send().await.assert_status_is_ok();
-    app.http()
-        .get("/api/swagger-ui-bundle.js")
-        .send()
+    let page = app.http().get("/api").send().await;
+    page.assert_status_is_ok();
+    let policy = page
+        .0
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .expect("the page states its own policy")
+        .to_owned();
+    assert!(
+        policy.contains("script-src 'self'") && policy.contains("connect-src 'self'"),
+        "{policy}",
+    );
+    for asset in [
+        "/api/swagger-ui-bundle.js",
+        "/api/swagger-ui-standalone-preset.js",
+        "/api/swagger-initializer.js",
+        "/api/swagger-ui.css",
+    ] {
+        app.http().get(asset).send().await.assert_status_is_ok();
+    }
+}
+
+/// The policy a deployment sets for every response the app serves.
+const DEPLOYMENT_POLICY: &str = "default-src 'self'";
+
+#[module(
+    imports = [
+        openapi(Surface::Open),
+        HttpModule::for_root(HttpConfig {
+            security_headers: HttpSecurityHeaders {
+                content_security_policy: Some(DEPLOYMENT_POLICY.into()),
+                ..HttpSecurityHeaders::default()
+            },
+            ..HttpConfig::default()
+        }),
+    ],
+    providers = [WidgetsController],
+)]
+struct StrictPolicyApp;
+
+/// A deployment's global policy is the default: the documentation page keeps
+/// its own, stricter one, and a response stating none gets the deployment's.
+#[tokio::test]
+async fn the_openapi_ui_keeps_its_csp_under_a_global_one() {
+    let app = TestApp::for_module::<StrictPolicyApp>()
         .await
-        .assert_status_is_ok();
-    app.http()
-        .get("/api/swagger-ui.css")
-        .send()
-        .await
-        .assert_status_is_ok();
+        .expect("boots");
+
+    let page = app.http().get("/api").send().await;
+    page.assert_status_is_ok();
+    let stated: Vec<_> = page
+        .0
+        .headers()
+        .get_all("content-security-policy")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect();
+    assert_eq!(stated.len(), 1, "one policy, the page's own: {stated:?}");
+    assert!(
+        stated[0].contains("script-src 'self'") && stated[0].contains("frame-ancestors 'none'"),
+        "{stated:?}",
+    );
+
+    let widgets = app.http().get("/widgets").send().await;
+    widgets.assert_status_is_ok();
+    widgets.assert_header("content-security-policy", DEPLOYMENT_POLICY);
 }
 
 #[tokio::test]
 async fn disabled_serves_neither_endpoint() {
-    // The production posture. The unit tests prove the mount table is empty;
-    // this proves the consequence a deployment actually cares about — that no
-    // anonymous caller can read the schema.
     let app = TestApp::for_module::<UndocumentedApp>()
         .await
         .expect("a disabled module still boots — it is an opt-out, not an error");
@@ -245,7 +438,7 @@ async fn disabled_serves_neither_endpoint() {
 
 #[module(
     imports = [
-        openapi(true),
+        openapi(Surface::Open),
         HttpModule::for_root(HttpConfig {
             versioning: ApiVersioning::Header,
             default_version: Some("9".into()),
@@ -258,9 +451,6 @@ struct MisversionedApp;
 
 #[tokio::test]
 async fn a_default_version_nothing_declares_fails_the_boot() {
-    // The default version is what `/api-json` describes under a non-URI
-    // strategy, so one nothing declares publishes an empty document — a wiring
-    // mistake that reads to every client as "this deployment serves nothing".
     let err = TestApp::for_module::<MisversionedApp>()
         .await
         .err()
@@ -276,36 +466,33 @@ async fn a_default_version_nothing_declares_fails_the_boot() {
     );
 }
 
-/// Refuses every caller, registered globally — the strictest posture an app can
-/// declare.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyEveryone;
-
-impl Layer for DenyEveryone {}
 
 #[async_trait]
 impl Guard for DenyEveryone {
-    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
         Err(Denial::unauthorized("no"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for DenyEveryone {}
+impl GuardFor<nest_rs_http::HttpView> for DenyEveryone {}
 
-#[module(imports = [openapi(true)], providers = [WidgetsController, DenyEveryone])]
+#[module(imports = [openapi(Surface::Open)], providers = [WidgetsController, DenyEveryone])]
 struct GuardedApp;
+
+#[module(imports = [GuardedApp], providers = [GlobalGuards<(DenyEveryone,)>])]
+struct TheDocumentationEndpointsIgnoreTheGlobalGuardChainApp;
 
 #[tokio::test]
 async fn the_documentation_endpoints_ignore_the_global_guard_chain() {
-    // `EdgePosture::Exempt`, stated as a consequence rather than a comment: an
-    // app that denies every request still publishes its full schema to anyone.
-    // That is the documented behaviour and the whole reason `enabled = false`
-    // exists — if this ever starts returning 401, the disable switch stopped
-    // being the only thing standing between a schema and the public.
     let app = TestApp::builder()
-        .module::<GuardedApp>()
-        .use_guards_global([guard::<DenyEveryone>()])
+        .module::<TheDocumentationEndpointsIgnoreTheGlobalGuardChainApp>()
         .build()
         .await
         .expect("boots");
@@ -323,14 +510,13 @@ async fn the_documentation_endpoints_ignore_the_global_guard_chain() {
         .assert_status_is_ok();
 }
 
-/// A versioned controller mounted at the root, which is the shape that reaches
-/// every address in the app.
 #[controller(path = "/", version = "1")]
 struct RootCatchAllController;
 
 #[routes]
 impl RootCatchAllController {
-    #[get("/*rest")]
+    #[get("/{*rest}")]
+    #[public]
     async fn anything(&self) -> String {
         "root-catch-all".into()
     }
@@ -338,7 +524,7 @@ impl RootCatchAllController {
 
 #[module(
     imports = [
-        openapi(true),
+        openapi(Surface::Open),
         HttpModule::for_root(HttpConfig {
             versioning: ApiVersioning::Header,
             default_version: Some("1".into()),
@@ -349,16 +535,6 @@ impl RootCatchAllController {
 )]
 struct CatchAllApp;
 
-/// The document's own address is not the module's mount path.
-///
-/// `OpenApiModule` nests at `/api` and serves `/api-json` — a **sibling**, not a
-/// child. The version selector's neutrality list was built as "the endpoint's
-/// path, plus its subtree", so `/api-json` was in neither, and a versioned root
-/// catch-all with a deployment default answered the document's address with its
-/// own body: `200`, wrong payload, nothing logged.
-///
-/// Every path the module registers is now declared, so this asks the module
-/// rather than inferring from one corner of it.
 #[tokio::test]
 async fn a_versioned_root_catch_all_does_not_swallow_the_documents_own_addresses() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -366,19 +542,10 @@ async fn a_versioned_root_catch_all_does_not_swallow_the_documents_own_addresses
         .await
         .expect("boots with a versioned root controller beside the documentation");
 
-    // The same catch-all is a path OpenAPI has no template for, so it is left
-    // out of the document rather than published verbatim — a generated client
-    // once called `/blobs/*rest` as a literal URL. The route still serves, so
-    // nothing about the omission is observable from the app; the warn is the
-    // whole notice the author gets.
-    // Two: the document is rendered per selected version, and the catch-all is
-    // omitted from each. One line per rendering is the honest count — the
-    // author has to fix one route either way.
     let omitted = logs.find(
         "nest_rs::openapi",
-        "route omitted from the document: an OpenAPI path template is one whole \
-         segment, so a catch-all, an unnamed pattern, or a literal sharing a \
-         segment with a parameter cannot be described",
+        "route omitted from the document: an OpenAPI path template names one \
+         segment's value, so a catch-all or a literal brace cannot be described",
     );
     assert!(
         !omitted.is_empty(),
@@ -387,7 +554,8 @@ async fn a_versioned_root_catch_all_does_not_swallow_the_documents_own_addresses
     );
     for event in &omitted {
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("handler").as_deref(), Some("anything"));
+        assert_eq!(event.field("method").as_deref(), Some("anything"));
+        assert!(event.field("host").is_some(), "{:?}", event.fields);
         assert!(
             event.field("path").is_some_and(|p| p.contains("*rest")),
             "the event names the path it could not template, got {:?}",
@@ -406,18 +574,11 @@ async fn a_versioned_root_catch_all_does_not_swallow_the_documents_own_addresses
         );
     }
 
-    // And the catch-all still serves everything that is genuinely its own.
     let resp = app.http().get("/anything-else").send().await;
     resp.assert_status_is_ok();
     resp.assert_text("root-catch-all").await;
 }
 
-/// `Form<T>` is a request body, and the document said the route had none.
-///
-/// `request_body` matched `Json<T>`, `#[api(multipart = T)]` and a bare
-/// `Multipart` parameter; a form-encoded body matched nothing and there was no
-/// refusal either, so the operation reached a generated client as a `POST` with
-/// nothing to send.
 #[tokio::test]
 async fn a_form_encoded_body_is_described_as_one() {
     let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
@@ -448,20 +609,12 @@ async fn a_form_encoded_body_is_described_as_one() {
     );
 }
 
-/// A committed `openapi.json` refreshed as a side effect of a run — the same
-/// dev-loop convenience the GraphQL SDL emit is — pointed at a directory that
-/// does not exist.
-///
-/// It must not stop a boot: the app serves the document at `/api-json` whether
-/// or not the file was written, and an operator running in a read-only image
-/// wants the app up. Which leaves nothing else to notice that the committed
-/// document has silently stopped tracking the routes — every client generated
-/// from it drifts from the app one release at a time.
 #[module(
     imports = [
         OpenApiModule::for_root(OpenApiConfig {
-            emit_document: true,
-            document_path: unwritable_document_path(),
+            enabled: Surface::Open,
+            emit: Surface::Open,
+            emit_path: unwritable_document_path(),
             ..OpenApiConfig::default()
         }),
     ],
@@ -477,9 +630,7 @@ fn unwritable_document_path() -> std::path::PathBuf {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_document_emit_that_cannot_write_warns_and_still_serves() {
-    // Global: the write is offloaded to `spawn_blocking` so a synchronous write
-    // never stalls the boot executor, which puts the event on another thread —
-    // the one shape a thread-local capture is structurally blind to.
+    // Global: the write runs on a `spawn_blocking` thread a thread-local capture cannot see.
     let logs = nest_rs_testing::LogCapture::install_global();
 
     let app = TestApp::for_module::<UnwritableDocumentApp>()
@@ -489,7 +640,6 @@ async fn a_document_emit_that_cannot_write_warns_and_still_serves() {
     let resp = app.http().get("/api-json").send().await;
     resp.assert_status_is_ok();
 
-    // The blocking pool runs on its own threads; give it a moment to land.
     for _ in 0..200 {
         if !logs
             .find(nest_rs_openapi::TARGET, "failed to write OpenAPI document")
@@ -520,4 +670,178 @@ async fn a_document_emit_that_cannot_write_warns_and_still_serves() {
         "the success line and the failure line are exclusive: {:#?}",
         logs.events(),
     );
+}
+
+// A relative `emit_path` is the app crate's, the one `#[nest_rs_core::main]`
+// expanded in, whatever directory the process runs from.
+
+/// Relative and per-process: no directory is named until the boot resolves it.
+fn relative_document_path() -> std::path::PathBuf {
+    format!("nest_rs_openapi_relative_{}.json", std::process::id()).into()
+}
+
+fn landed_document_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_document_path())
+}
+
+#[module(
+    imports = [
+        OpenApiModule::for_root(OpenApiConfig {
+            enabled: Surface::Open,
+            emit: Surface::Open,
+            emit_path: relative_document_path(),
+            ..OpenApiConfig::default()
+        }),
+    ],
+    providers = [WidgetsController],
+)]
+struct RelativeDocumentApp;
+
+/// Where a pin of the path alone writes the document, per process.
+fn by_profile_document_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "nest_rs_openapi_by_profile_{}.json",
+        std::process::id()
+    ))
+}
+
+/// One field pinned: the documentation and its emit stay the profile's.
+#[module(
+    imports = [
+        OpenApiModule::for_root(OpenApiConfig {
+            emit_path: by_profile_document_path(),
+            ..OpenApiConfig::default()
+        }),
+    ],
+    providers = [WidgetsController],
+)]
+struct EmitPathPinnedApp;
+
+#[test]
+fn a_pin_over_the_default_serves_nothing_in_a_deployment() {
+    for profile in ["staging", "production", ""] {
+        in_profile(profile, || async {
+            let logs = nest_rs_testing::LogCapture::install();
+            let app = TestApp::for_module::<PinnedOverTheProfileApp>()
+                .await
+                .unwrap_or_else(|refused| panic!("{profile:?} boots: {refused:#}"));
+            for path in ["/api-json", "/api"] {
+                app.http()
+                    .get(path)
+                    .send()
+                    .await
+                    .assert_status(StatusCode::NOT_FOUND);
+            }
+            logs.expect_none(
+                nest_rs_openapi::TARGET,
+                "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+            );
+        });
+    }
+}
+
+#[test]
+fn a_pin_over_the_default_writes_the_document_under_development() {
+    let path = Removed(by_profile_document_path());
+    in_profile("development", || async {
+        let _app = TestApp::for_module::<EmitPathPinnedApp>()
+            .await
+            .expect("the documentation boots");
+        nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+            std::fs::read_to_string(&path.0).is_ok_and(|text| text.ends_with('\n'))
+        })
+        .await;
+    });
+}
+
+/// Removes its file when dropped, so a failed run leaves none in the crate.
+struct Removed(std::path::PathBuf);
+
+impl Drop for Removed {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[nest_rs_core::main]
+async fn boot_emitting_relatively() {
+    let _app = TestApp::for_module::<RelativeDocumentApp>()
+        .await
+        .expect("the documentation boots and emits its document");
+    // The write runs on a blocking thread; its last byte is the newline.
+    nest_rs_testing::wait_until(std::time::Duration::from_secs(5), || {
+        std::fs::read_to_string(landed_document_path()).is_ok_and(|text| text.ends_with('\n'))
+    })
+    .await;
+}
+
+#[test]
+fn a_relative_emit_path_lands_in_the_crate_main_expanded_in() {
+    let elsewhere =
+        std::env::temp_dir().join(format!("nest_rs_openapi_cwd_{}", std::process::id()));
+    std::fs::create_dir_all(&elsewhere).expect("a working directory of its own");
+    std::env::set_current_dir(&elsewhere).expect("the process runs from it");
+    let landed = Removed(landed_document_path());
+
+    boot_emitting_relatively();
+    // `main`'s panic hook outlives it, reporting to a console nothing drains.
+    drop(std::panic::take_hook());
+
+    let document: Value = serde_json::from_str(
+        &std::fs::read_to_string(&landed.0)
+            .expect("the document lands beside the manifest of the crate `main` expanded in"),
+    )
+    .expect("the whole document");
+    assert!(document["paths"]["/widgets"].is_object(), "{document}");
+    assert!(
+        !elsewhere.join(relative_document_path()).exists(),
+        "never under the working directory",
+    );
+    let _ = std::fs::remove_dir_all(&elsewhere);
+}
+
+/// The documentation pinned open outside a dev profile is honoured, and the
+/// boot mounting it says so.
+#[test]
+fn a_pin_opening_the_documentation_in_production_is_said_at_boot() {
+    let logs = in_profile("production", || async {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<DocumentedApp>()
+            .await
+            .unwrap_or_else(|refused| panic!("an explicit opening is honoured: {refused:#}"));
+        app.http()
+            .get("/api-json")
+            .send()
+            .await
+            .assert_status_is_ok();
+        logs
+    });
+    let event = logs.expect_one(
+        nest_rs_openapi::TARGET,
+        "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("environment").as_deref(), Some("production"));
+}
+
+/// Runs `boot` in a process that declares `profile`, which the boot reads off
+/// the process environment `figment::Jail` scopes.
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn in_profile<F: std::future::Future>(profile: &str, boot: impl FnOnce() -> F) -> F::Output {
+    let mut out = None;
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(nest_rs_config::Environment::var_name(), profile);
+        out = Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(boot()),
+        );
+        Ok(())
+    });
+    out.expect("the jailed boot ran")
 }

@@ -1,12 +1,9 @@
 ---
 title: Lifecycle
-description: "Hook into the moments an app comes alive and winds down — #[hooks] tags async methods for the init and shutdown phases the framework drains in order."
-tier: all-options
+description: "Hook into the moments an app comes alive and winds down — #[hooks] tags methods for the init and shutdown phases the framework drains in order."
 sidebar:
   order: 4
 ---
-
-import { Aside } from '@astrojs/starlight/components';
 
 A binary has a beginning and an end. Between the container being built
 and the first request served, providers may need to warm a cache, open
@@ -25,26 +22,30 @@ transports stop.
 use nest_rs::core::{hooks, injectable};
 
 #[injectable]
-#[derive(Default)]
 pub struct BlogService;
 
 #[hooks]
 impl BlogService {
     #[on_application_bootstrap]
     async fn warm(&self) -> anyhow::Result<()> {
-        tracing::info!(target: "features::blog", entries = 0, "cache warmed");
+        tracing::info!(target: crate::blog::TARGET, entries = 0, "cache warmed");
         Ok(())
     }
 
     #[on_application_shutdown]
     async fn flush(&self) {
-        tracing::info!(target: "features::blog", pending = 0, "buffers flushed");
+        tracing::info!(target: crate::blog::TARGET, pending = 0, "buffers flushed");
     }
 }
 ```
 
-The `#[hooks]` block is separate from the one `#[injectable]` decorates
-— a provider keeps its primary `impl` for methods, and adds a second,
+`crate::blog::TARGET` is the log target the feature declares at the top of
+`blog/mod.rs` once it logs — `pub const TARGET: &str = "features::blog";`, one
+constant the feature's files name, never a literal each one retypes. A
+generated port emits nothing, so it starts without one.
+
+The `#[hooks]` block is an `impl` of its own, beside the struct `#[injectable]`
+decorates — a provider keeps its primary `impl` for methods, and adds a second,
 hook-only `impl` the macro scans. The phase attributes
 (`#[on_application_bootstrap]`, …) need no import; `#[hooks]` consumes
 them.
@@ -75,11 +76,11 @@ impl ProviderResidency for MyHandWrittenProvider {
 
 A fourth shape is your composition rather than a contradiction, so it warns
 at boot instead. A host the container holds under some *other* key has
-nothing under `Foo` itself — bound as `providers = [Foo as dyn Trait]`,
-imported through a `for_root`, or registered by hand under a name. Move the methods to a provider listed under its own type.
-Listing the same host twice is **not** the repair it looks like: each
-binding runs the constructor, so the hooks fire on one instance while
-everything injecting `Arc<dyn Trait>` holds another.
+nothing under `Foo` itself — imported through a `for_root`, or registered by
+hand under a name or a trait. Move the methods to a provider listed under its
+own type. A host bound as `providers = [Foo as dyn Trait]` is not one of them:
+the binding holds its one `Foo` under its own type too, so the hooks run on the
+instance every `Arc<dyn Trait>` consumer holds.
 
 ## The five phases
 
@@ -88,7 +89,7 @@ order:
 
 | Phase | Attribute | When |
 |-------|-----------|------|
-| **Module init** | `#[on_module_init]` | After the container is built and transports configured, before serving. |
+| **Module init** | `#[on_module_init]` | After the container is built, its registries wired and transports configured, before serving. |
 | **Application bootstrap** | `#[on_application_bootstrap]` | After every module-init hook has run, still before serving. |
 | **Module destroy** | `#[on_module_destroy]` | After the transports stop. |
 | **Before shutdown** | `#[before_application_shutdown]` | After every module-destroy hook has run. |
@@ -100,11 +101,24 @@ both run against the assembled container. The two names exist so you
 can express "everyone's `on_module_init` finishes before anyone's
 `on_application_bootstrap` starts": late hooks see the side effects of
 early ones. The three shutdown phases give the same staged unwind in
-reverse-intent order.
+reverse-intent order: each module tears its own down, dependents first, then
+`before_application_shutdown` does what spans modules, then
+`on_application_shutdown` runs last, before the resources close.
+
+**They start once every transport has stopped**, never at the signal: a
+request, a job or a socket message still running uses the providers they tear
+down, so none is torn down under it. The one exception is a transport still
+serving past the bound it states: the kernel abandons it there, and the hooks
+start anyway ([the way down](/fundamentals/shutdown/#the-way-down)). Work due at the signal itself —
+stop starting new work, end a loop — waits on
+[`stopping()`](/fundamentals/app-state/#where-the-app-stands) instead, and taking the replica out of
+the load balancer is the platform's
+([leaving the load balancer first](/fundamentals/shutdown/#leaving-the-load-balancer-first)).
 
 ## Method shape
 
-A hook method is **`async fn`** and takes `&self`. Its return is either:
+A hook method takes `&self`, and is an `async fn` or a plain `fn` — only
+an `async fn` is awaited. Its return is either:
 
 - **nothing** — the hook is infallible (`async fn flush(&self)`), or
 - **`Result<(), E>`** where `E: Into<anyhow::Error>` — the hook can
@@ -119,76 +133,162 @@ async fn drain(&self) { /* ... */ }                                  // infallib
 ```
 
 A hook that needs another provider **injects it** — there is no
-attribute to declare "run after `OtherService`'s hook." Cross-provider
-init dependencies are expressed through the DI graph, not the lifecycle
-registry.
+attribute to declare "run after `OtherService`'s hook." The injection is
+the declaration: the DI graph orders the hooks, as the next section shows.
 
 ## Ordering and failure
 
-Within a phase, hooks run **sequentially** in `(provider, method)` name
-order — stable across builds, never parallel. The two halves of the
-lifecycle treat failure differently, and deliberately:
+Within a phase, hooks run **one at a time, dependencies first**: a
+provider's hooks run after the hooks of every provider it injects, at
+any depth. The three shutdown phases run in the **exact reverse**, so a
+repository flushes before the pool it writes through closes, and a
+client a service used at init is still connected while that service
+tears down.
 
-- **Init is strict.** `on_module_init` then `on_application_bootstrap`
-  run one hook at a time; the **first error aborts boot** with a
-  message naming the provider, method, and phase. Nothing is listening
-  yet, so a failed warm-up never leaves a half-started server accepting
-  traffic.
-- **Shutdown is exhaustive.** The three teardown phases run every hook
-  even if one fails — a failure is logged at `error` on the
-  `nest_rs::lifecycle` target and the next hook still runs, so one
-  provider's botched cleanup can't skip another's.
+```rust title="crates/features/src/posts/service.rs"
+use std::sync::Arc;
+
+use nest_rs::core::{hooks, injectable};
+
+use crate::blog::BlogService;
+
+#[injectable]
+pub struct PostsService {
+    #[inject]
+    blog: Arc<BlogService>,
+}
+
+#[hooks]
+impl PostsService {
+    #[on_application_bootstrap]
+    async fn warm(&self) { /* ... */ }
+
+    #[on_application_shutdown]
+    async fn flush(&self) { /* ... */ }
+}
+```
+
+`PostsService` injects `BlogService`, so its `warm` runs once
+`BlogService::warm` has returned, and its `flush` runs before
+`BlogService::flush` starts.
+
+Hosts the graph does not order follow the composition, the same way in
+every build: an imported module's hosts run before the module importing
+it, imports in the order `imports = [...]` lists them, then each module's
+`providers = [...]` from left to right. A host no module lists — a value
+seeded with `provide`, a factory's output, a provider a hand-written
+`Module` registers — runs before every listed one at init and after them
+at shutdown, and those hosts run among themselves by type name, then
+module path. A host's own hooks run in the order its `impl` declares
+them; spread over several `impl` blocks, they follow the module each
+block sits in, then that order, then the method name, so keep them in
+one `impl` to choose. For every host a module lists, names never decide:
+renaming it moves nothing.
+
+A provider reached only through `Container::get` has no edge in the
+graph, so nothing orders its hooks against yours. Inject it to order it.
+
+The two halves of the lifecycle treat failure differently, and
+deliberately:
+
+- **Init is strict, and runs once.** `on_module_init` then
+  `on_application_bootstrap` run one hook at a time; the **first error
+  aborts boot** with a message naming the hook's module, provider,
+  method, and phase.
+  Nothing is listening yet, so a failed warm-up never leaves a
+  half-started server accepting traffic. `App::init()` and `App::run()`
+  share the phases: whichever comes second skips them, and after an init
+  that failed both return `InitFailedError` without running a hook again.
+- **A failed boot still tears down.** What the hooks that did run took — a
+  lease, a discovery registration, a connection — would otherwise leak until
+  it expired, so an init that fails, panics or is stopped by a signal runs the
+  three shutdown phases, in reverse, for **every** host, then closes the
+  resources, before it returns its own error. One `warn` on
+  `nest_rs::lifecycle` opens it, `the boot failed after init hooks ran:
+  running the shutdown hooks`, naming the failed hook. So write a shutdown
+  hook to tolerate an init that never ran: `if let Some(..)` on what the init
+  would have filled, never an `expect`.
+- **Shutdown is exhaustive.** The three teardown phases start every hook
+  even if one fails or panics — either is logged at `error` on the
+  `nest_rs::lifecycle` target, naming the hook, and the next hook still
+  runs, so one provider's botched cleanup can't skip another's. (At init a
+  panic aborts the boot like an error does, with the same sentence naming
+  the hook.)
+- **Shutdown is bounded — once, for all of it.** The three phases share one
+  five-second budget (`SHUTDOWN_HOOKS_TIMEOUT`), not five seconds each: a
+  hook still waiting when it is spent is abandoned — dropped where it waits,
+  so what it had not done stays undone — and a `warn` names its phase,
+  provider, method and module. Every hook after it still starts, and is
+  polled once: one that finishes without waiting (a count logged, a buffer
+  handed to a channel) finishes, one that waits is abandoned at once, with
+  its own `warn`. The bound reaches a hook that awaits; one that blocks its
+  thread is past any timer's reach.
+
+The budget is one of the bounded steps on [the way down](/fundamentals/shutdown/#the-way-down), and it
+is sized against their sum. A bound per hook could not hold a sum — four hooks
+that hang would spend twenty seconds — which is why it is a budget.
 
 ```text frame="terminal"
-Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migrations
+Error: the `#[on_module_init]` hook `MigrationGuard::check` in `api::migrations` failed
+
+Caused by:
+    pending migrations
 ```
 
-## Where it sits in the run
+## A hook is a unit of work
 
-`App::run` walks a fixed sequence. The hooks bracket the serving window:
+Each hook runs as one `lifecycle.hook` unit of work, the way a request or a
+scheduled tick does. It gets a trace of its own — a hook has no caller — and
+files one line on `nest_rs::operation` when it ends, with its `phase`,
+`host`, `method`, `origin` and `outcome`. A shutdown hook abandoned at the
+budget, or an init hook a signal stopped, files `outcome="cancelled"`.
 
+It also gets the data context a tick gets. With `SeaOrmDatabaseModule`
+imported, a hook runs in one transaction, opened on its first data-layer touch,
+committed when it returns `Ok` and rolled back on an error, a panic or an
+abandonment at the budget. So a hook reaches the database through its service and `Repo`, like
+any handler:
+
+```rust title="crates/features/src/users/service.rs (from the demo)"
+#[hooks]
+impl UsersService {
+    #[on_application_shutdown]
+    async fn report(&self) -> Result<()> {
+        let count = Repo::<Users>::scoped(Action::Read).count().await?;
+        tracing::debug!(target: crate::users::TARGET, count, "users present at shutdown");
+        Ok(())
+    }
+}
 ```
-build container
-→ attach + configure transports
-→ on_module_init            ┐ strict — first error aborts boot
-→ on_application_bootstrap  ┘
-→ serve (until SIGINT / SIGTERM, or a transport errors)
-→ on_module_destroy            ┐
-→ before_application_shutdown  │ exhaustive — every hook runs, errors logged
-→ on_application_shutdown      ┘
-```
 
-Shutdown is triggered by `SIGINT` / `SIGTERM` (a shared cancellation
-token cancels every transport), or by the first transport that errors —
-which cancels the rest, then runs the teardown phases.
-
-<Aside type="tip">
-A test harness can drive the init phases without serving: `App::init()`
-runs `on_module_init` then `on_application_bootstrap` against the built
-container, so an e2e test exercises the same startup the server
-performs.
-</Aside>
+A hook is system work: no ability is attached, so `Repo` reads unscoped, as a
+job does. A commit that fails is the hook's error, so at init it aborts the
+boot. An event the hook emits waits for its commit, and each listener runs in a
+transaction of its own. Shutdown hooks run before the pool closes, so they have
+it too. With no database binding imported, a hook runs bare.
 
 ## Common things a hook does
 
 - **Init** — warm a cache, verify migrations applied, register with a
   service discovery backend, prime a connection pool, assert an
   external dependency is reachable (fail boot if not).
-- **Shutdown** — flush a buffer, drain in-flight work, deregister from
-  discovery, emit a final metric or report.
+- **Shutdown** — flush a buffer, deregister from discovery, emit a final
+  metric or report, all of it inside the five-second budget. Draining
+  in-flight work belongs to a transport's own window, which a deployment
+  sets.
 
 The `UsersService` in the Publish workspace uses
-`#[on_application_shutdown]` to log how many users exist at teardown —
-a one-method `#[hooks]` block beside the service's main `impl`.
+`#[on_application_shutdown]` to count its users through `Repo` at teardown —
+a one-method `#[hooks]` block beside the service's main `impl`, shown
+[above](#a-hook-is-a-unit-of-work).
 
 ## Going further
 
+- [Shutdown](/fundamentals/shutdown/) — every bounded step from the signal to
+  the exit, the shutdown hooks' budget among them.
+- [App state](/fundamentals/app-state/) — the sequence `App::run` walks, and
+  [a program that runs it without serving](/fundamentals/app-state/#running-without-serving).
 - [Providers](/fundamentals/providers/) — the things that own hooks;
   built once, shared as `Arc<T>`.
-- [Modules](/fundamentals/modules/) — the composition tree the hooks
-  drain across.
-- [Interceptors](/fundamentals/interceptors/) — per-request wrapping, the
-  other side of "code that runs around your handler" (lifecycle is
-  per-process, interceptors are per-request).
-- [Testing / e2e](/testing/e2e/) — booting the real `AppModule`, where
+- [Testing / e2e](/testing/e2e/) — booting the real `ApiModule`, where
   `App::init()` drives the init phases.

@@ -17,19 +17,23 @@ request.
 | Concern | Target | Default level |
 |---|---|---|
 | Operation log — one line per unit of work, every edge | `nest_rs::operation` | `info` |
-| HTTP span | `nest_rs::http` | `info` |
+| HTTP span | `nest_rs::http` | `info`; the chain a `5xx` answer withholds — any error's, a framework error's included — at `error` (`warn` behind a `503`) |
 | MCP operations | `nest_rs::mcp` | `info` |
 | Route / endpoint mounting (boot) | `nest_rs::routes` | `info` |
 | ORM queries | `nest_rs::orm` | `trace` |
-| Layer composition (per-route guard/pipe/… chains) | `nest_rs::layers` | `trace` for the per-route effective-chain dump; `debug` for the redundant multi-scope lint (HTTP deduped once, WS per gateway); `warn` for actionable posture smells (reversed authn/authz order, denials, **routes with no guard and no `#[public]` when no global pool is active**) |
+| Relation dataloaders (`#[expose(…, graphql)]` batches) | `nest_rs::loader` | `debug` |
+| Layer composition (per-route guard/pipe/… chains) | `nest_rs::layers` | `trace` for the per-route effective-chain dump; `debug` for the redundant multi-scope lint (HTTP deduped once, WS per gateway); `warn` for actionable posture smells (reversed authn/authz order, the denials of a guard declaring no target, **a gated endpoint denying every request for want of a guard**) |
+| A guard's denials | the guard's own (`Guard::target`) | `warn`, `error` for a `500`: one `guard denied the …` per denial, filed by the edge, with the `reason` the denial names |
 | Authn / Authz | `nest_rs::authn` / `nest_rs::authz` | `info` (denials `warn`) |
-| OAuth client | `nest_rs::oauth::client` | `info` (callback refusals `warn`) |
+| OAuth client | `nest_rs::oauth::client` | `info` (callback refusals `warn`, a redirect no header can carry `error`) |
+| OAuth authorization server (token endpoint) | `nest_rs::oauth::server` | `warn` for each client `ClientAuthenticationGuard` refuses, its reason the strategy's and its cause naming the method; the cause a `server_error` withholds is filed on `nest_rs::http` |
 | RFC 9728 discovery | `nest_rs::oauth::resource` | `info` (boot misconfiguration `warn`) |
 | WebSocket events | `nest_rs::ws` | `info` |
 | GraphQL execution and subscriptions | `nest_rs::graphql` | `info` |
 | Queue / Schedule | `nest_rs::queue` / `nest_rs::schedule` | `info` |
-| Redis connection (the one handle the queue, worker and rate-limit store share) | `nest_rs::redis` | `warn` per connect attempt while the boot budget runs |
-| Module lifecycle | `nest_rs::module` | `info` |
+| Redis connection (the `RedisConnection` the queue, the worker, the rate-limit store and the schedule's lock share, one per instance, each line carrying its `instance`) | `nest_rs::redis` | `warn` per connect attempt while the boot budget runs |
+| Module registration | `nest_rs::module` | `info` |
+| Lifecycle hooks (`#[hooks]`) | `nest_rs::lifecycle` | `error` for a hook that failed or panicked, `warn` for one abandoned at the budget |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) | `info` |
 
 Controllers, resolvers, gateways log at `info` on success. Services keep
@@ -38,11 +42,56 @@ job enqueued, a file transcoded — earns `info`. `Repo` at `trace`. **Access de
 appear under the default `info` filter. A production deploy should respect
 `info` — no per-request `debug!` on the hot path.
 
+## The libraries the framework wires
+
+The framework's subscribers write the events of every library in the process,
+and a few of them quote what a client sent, or a secret, below some level. A
+line never carries either, so each of those libraries is clamped: its events
+are written from the level below which it quotes nothing at most. A clamp only
+narrows `RUST_LOG`, never opens what it closes: under `warn`, `tungstenite`
+writes its warnings and nothing below, and under `nest_rs=debug` no library
+writes at all.
+
+| Library | Written from | Below that, it quotes |
+|---|---|---|
+| `rmcp` | nothing (`off`) | a client's `initialize` params, notifications and cancel reasons (`info`); its `Host` and protocol-version headers (`warn`); the session id it named, when the session store fails (`error`); each tool call's arguments and reply (`debug`, `trace`) |
+| `h2` | `error` | a PING's opaque data (`warn`); a GOAWAY's debug data (`debug`) |
+| `rustls` | `error` | a client's SNI (`warn`); its whole ClientHello (`trace`) |
+| `sqlx_postgres` | `error` | a malformed `.pgpass` line, password included, and an unknown connection parameter's value (`warn`) |
+| `sea_orm` | `debug` | its `connect` span's whole connection options, the URL's password included (`trace`): a span's fields reach your exporter whatever the console prints |
+| `tungstenite` | `info` | a close frame's reason (`debug`); every message (`trace`) |
+| `opentelemetry-otlp` | `info` | the export URL, whose userinfo or query may carry a collector's credential, and the collector's error body (`debug`) |
+
+A directive naming the library — or one of its modules — replaces its clamp,
+because `EnvFilter` keeps the later of two directives for one target and yours
+come after the framework's: `RUST_LOG=info,rmcp=debug` writes rmcp's debug
+lines, and with them what the table says they quote, so keep it to a
+development run. Under the clamp, one `/mcp` denial files one line, the
+framework's: rmcp's own `response error` is a `warn`, and a `Host` rmcp refuses
+is said by the mount, without the value. The mount also says, on
+`nest_rs::mcp` and without the session a client named, each failure rmcp's own
+lines reported: a session call that failed (`mcp session manager failed`,
+`error`, its `call`), a stream that could not resume (`warn`), and a failure of
+your `SessionStore` (`mcp session store failed`, `error` for a load rmcp
+answers `500`, `warn` for a store or a delete it carries on past). Two stay
+rmcp's alone: why a session's handshake failed in its worker — the session is
+closed, and a call still waiting on it is said as a failed session call — and
+an event store's persist failures, which the mount never reaches: it opens no
+event store. The statement log
+`<PREFIX>_SEAORM__SQLX_LOGGING` turns on is `sqlx::query`'s and stays open — it
+writes each statement's SQL, its values bound apart.
+
+Two of `EnvFilter`'s rules reach a clamp. A directive matches every target its
+name begins with, so `rustls=error` also holds rustls-platform-verifier's
+warnings, which `rustls_platform_verifier=warn` opens alone. And a span
+directive (`[audited]=debug`) opens what runs inside the span it names, a
+clamped library's events included.
+
 ## Structured fields
 
 ```rust title="crates/features/src/users/service.rs"
 tracing::info!(
-    target: "features::users",
+    target: crate::users::TARGET,
     user_id = %id,
     "creating user",
 );
@@ -92,7 +141,7 @@ DEBUG features::posts: creating post title="hello" trace_id=01a01569ae687353bc03
 ```
 
 ```json
-{"timestamp":"2026-08-18T15:07:22.601081Z","level":"DEBUG","fields":{"message":"creating post","title":"hello"},"target":"features::posts","trace_id":"01a01569ae697a718f7e41c79e0eefe6","span_id":"39d4f26e5d048754","actor_id":"01a0112ce24e75509be691162cbbab1f"}
+{"timestamp":"2026-08-18T15:07:22.601081Z","level":"DEBUG","fields":{"message":"creating post","title":"hello"},"target":"features::posts","trace_id":"01a01569ae697a718f7e41c79e0eefe6","span_id":"39d4f26e5d048754","trace_flags":"01","actor_id":"01a0112ce24e75509be691162cbbab1f"}
 ```
 
 This owes nothing to a collector, an exporter or this crate: the trace context is
@@ -104,12 +153,12 @@ not change the shape of a line.
 
 A line carries **no span attributes and no span names**. That is worth stating, because the alternative looks harmless and is not. A
 service runs under the HTTP request's span, so rendering span state put the
-request's method, path, client address and user agent on every line the
+request's method, path and user agent on every line the
 service emitted. The line stopped being about what the service did. Nested work made it worse, printing one
 `trace_id` per level:
 
 ```text frame="terminal"
-DEBUG http.request{otel.kind="server" trace_id=01a014ec…a4 span_id=5fcb…b7 http.request.method=POST url.path="/posts" client.address=127.0.0.1}:mcp.operation{otel.kind="server" trace_id=01a014ec…a4 span_id=b0c0…72}: features::posts: creating post title="hello"
+DEBUG http.request{otel.kind="server" trace_id=01a014ec…a4 span_id=5fcb…b7 http.request.method=POST url.path="/posts"}:mcp.operation{otel.kind="server" trace_id=01a014ec…a4 span_id=b0c0…72}: features::posts: creating post title="hello"
 ```
 
 Reading the context instead of the scope is what makes the line self-contained,
@@ -126,92 +175,35 @@ its handler returned; the framework re-installs the request around it, so those
 lines carry the ids too.
 
 Span structure itself is untouched — nesting is normal, and it is what the OTLP
-export builds its tree from.
+export builds its tree from. And since no line prints a span's fields, the
+console never formats them: an attribute the export reads costs the console
+nothing.
 
 ## Every unit of work files one line
 
-The ids relate lines to each other; they do not say what the work **was**. That
-is a separate line, one per unit of work, on the shared target `nest_rs::operation`
-— and every edge files one, not just HTTP:
-
-| Edge | Canonical name | Names |
-|---|---|---|
-| HTTP request | `http.request` | method, path, status, bytes, client |
-| WS message | `ws.message` | event, `conn_id` |
-| WS socket open | `ws.connect` | `conn_id` |
-| WS socket close | `ws.disconnect` | `conn_id` |
-| Scheduled tick | `schedule.tick` | provider, method |
-| Queue job | `queue.job` | queue, processor, `job_id`, attempt |
-| MCP operation | `mcp.operation` | the JSON-RPC method |
-| GraphQL operation | `graphql.operation` | role, operation |
-| GraphQL subscription | `graphql.subscription` | the connection is the unit |
-| Event dispatch | `events.dispatch` | event, listener |
-
-**The name is `<edge>.<unit>`, and it is the same string the operation's span
-carries.** It is declared once, by the crate that owns the edge, as
-`<crate>::unit::<UNIT>` — `nest_rs_http::unit::REQUEST`,
-`nest_rs_ws::unit::MESSAGE`, `nest_rs_queue::unit::JOB`, and so on. It is
-then read three times: by the span, by the log record's event name (what an
-OTLP exporter reports as `event.name`), and by the message a console prints. The *grammar* is
-`nest_rs_core::operation_log`'s; the names are not, for the same reason a span
-target is not — a unit name says which edge did the work, and the kernel does
-not know the edges exist. There used to be
-two vocabularies for these eight things — the spans said `http.request` while
-the lines said `request served` — so an operator learned the set twice and a
-query could pick the wrong one.
-
-Every one carries `duration_ms`, and every one but HTTP carries `outcome`
-(`ok` / `error` / `panic`) — a request has `status`, which says how it ended more
-precisely than three words could. So one query answers "what did this deployment
-do", and "what failed" is `outcome != ok` or `status >= 400`.
-
-```text frame="terminal"
-INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=127 duration_ms=0.103 client_ip=127.0.0.1 forwarded=false user_agent="curl/8.14.1" trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b
-INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
-```
-
-**The target is the toggle.** `NESTRS_LOG=info,nest_rs::operation=off` silences the
-whole family at once, which is why no edge carries a config flag for it.
-`NESTRS_HTTP__ACCESS_LOG` predates the family and stays, as an app's pinned
-config rather than a deployment's filter — it is one edge's line, not the
-family's.
-
-**It was `nest_rs::access` through 5.1**, so a filter, runbook or dashboard
-still naming the old string matches nothing. That string also matched something
-it never meant to: `EnvFilter` compares a directive's target with `starts_with`
-on the raw string rather than by `::` segment, so `nest_rs::access=off` **also**
-silenced `nest_rs::access_graph` — the boot warning naming resolvers unreachable
-from the GraphQL schema. A deployment that quieted its access log lost that
-diagnostic with nothing on the console to say so. Neither old name survives:
-that warning is `nest_rs::graphql`'s now, filed by the crate that owns the
-resolver registry. `nest_rs::operation` prefixes no other target, and a test
-fails the day one prefixes another.
-
-### Following one operation across two processes
-
-A scheduled tick in the `api` binary enqueues a job; the `worker` binary picks it
-up ninety seconds later. One `trace_id`, two `span_id`s — the job is a child of
-the tick, across a process boundary:
-
-```text frame="terminal"
-DEBUG features::audio: enqueued transcode job file="track-1787069801760.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
- INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
-DEBUG features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
- INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
-```
-
-The first two lines are the `api`'s, the last two the `worker`'s. Nothing was
-configured for that: the producer seals its trace context into the queue
-envelope, the consumer continues from it.
+The ids relate lines to each other; what the work **was** is one more line per
+unit of work, on `nest_rs::operation`, which every edge files:
+[The operation log](/opentelemetry/operation-log/).
 
 ## Text vs JSON
 
-The console layer ships both formats. Default is `text` (pretty for dev). For
-prod, set:
+The console layer ships both formats, and the declared profile picks one:
+`text` under `<PREFIX>_ENV=development` or `test`, `json` under any other —
+production and an undeclared process alike, whatever the cargo build profile.
+Either is set on the process when a run wants the other:
 
 ```bash
-NESTRS_LOG_FORMAT=json
+NESTRS_LOG_FORMAT=text
 ```
+
+A value that is neither stops the boot, naming the variable: a typo never
+falls back to the profile's default in silence.
+
+`text` is coloured only where stdout is a terminal. Piped to a reader — a
+`logfmt` parser, `grep`, a container's log driver — or written to a file, a
+line carries no escape code to strip, and `NO_COLOR` set to anything but
+empty turns the colour off on a terminal too, as
+[no-color.org](https://no-color.org) asks.
 
 Both are the framework's own formatters, and they say the same thing: JSON puts
 `trace_id`, `span_id` and `actor_id` at the **top level** of the record, where a
@@ -235,36 +227,46 @@ NESTRS_LOG_SOURCE_LOCATION=true
 Each event then carries the emitting `file:line`:
 
 ```text frame="terminal"
-DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs: layer declared at multiple scopes…
+DEBUG nest_rs::layers: crates/nest-rs-core/src/layer_chain.rs:702: redundant layer declaration deduped…
 ```
 
 Off by default — it widens every line and leaks source paths, so it stays out
-of production. Turn it on in `.env.development` (next to `NESTRS_LOG=debug`) so
+of production. Turn it on in `.env.development` (next to `RUST_LOG=debug`) so
 it is live while developing and off everywhere else, or pin it explicitly with
-`OpenTelemetryConfig::with_log_source_location(true)`.
+`log_source_location: true` in the `OpenTelemetryConfig` `init_with` takes,
+which `<PREFIX>_LOG_SOURCE_LOCATION` still overrides.
 
-## Access log
+## A console that stalls
 
-**The access log belongs to `nest-rs-http`, not to this crate.** Method, path,
-status, duration, client, `trace_id`, `span_id` and `actor_id` are what the transport
-knows about a request it served — no collector, no exporter and no propagator is
-involved, so none is required. It emits one event per request on
-`nest_rs::operation`, at end-of-body, with byte-accurate `bytes`:
+Under `#[nest_rs::main]` the console is written by a thread of its own,
+`nestrs-log`, through a queue of 16 384 lines (`CONSOLE_QUEUE_LINES`), so no
+task waits on stdout. It writes in batches: a line that wakes it waits up to
+2 ms for the lines filed after it, and they leave in one write, so a busy app
+pays one write for many lines. When stdout stops taking lines — a full pipe, a
+container log driver that stalled — the queue fills, and a line that finds it
+full is dropped rather than waited for: the app keeps answering. Once a
+second, while lines were dropped, one `warn` says how many since the process
+started:
 
 ```text frame="terminal"
-INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16 client_ip=127.0.0.1 forwarded=false
+ WARN nest_rs::app: log lines dropped while the console was stalled dropped=83617
 ```
 
-`actor_id` joins the line once an authn guard resolved a principal, and is
-absent above because nobody was authenticated — which is why that request is a
-`401`. `trace_id` and `span_id` are the transport's own W3C trace context and
-need no collector to exist. That is the shape of the whole relationship: the
-observability stack **enriches** what is exported and never owns what this line
-can say.
+That line takes the same queue; if it is dropped too, the next one carries the
+larger count. A line stdout refuses outright — its reader gone — is counted the
+same way, and the first refusal is said on stderr. Every exit
+`#[nest_rs::main]` controls — `main` returning, a panic leaving it, a second
+signal — waits until every line queued before it is written, within one second
+(`CONSOLE_FLUSH_TIMEOUT`, the last step of
+[the way down](/fundamentals/shutdown/#the-way-down)); past it the rest is lost,
+and one line on stderr says so. A hard kill loses what was queued, as it would
+with any writer.
 
-Toggle it with `NESTRS_HTTP__ACCESS_LOG=false`. That silences the line only —
-the trace is still started, still reported as `traceresponse`, and still carried
-into the response body, because everything else is filed under it.
+A process that does not run on `#[nest_rs::main]` — a test binary — writes
+stdout directly, so a failing test keeps its last lines. A deployment that needs
+every line ships them through the [OTel logs bridge](#otel-logs-bridge), which
+the queue does not touch. A line your code prints itself with `println!` skips
+the queue, so it can appear before log lines filed earlier.
 
 ## OTel logs bridge
 

@@ -1,83 +1,80 @@
 //! `#[use_guards]` on a `#[resolver]` impl — end-to-end through the in-process
 //! harness.
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::async_graphql::{Context, Result};
-use nest_rs_graphql::{
-    GraphqlContextSeed, GraphqlModule, GraphqlOperationContext, SeedLifetime, async_trait,
-    operations, resolver,
-};
-use nest_rs_guards::{Denial, GraphqlGuard, Guard, HttpGuard, guard};
-use nest_rs_http::async_trait as http_async_trait;
+use nest_rs_core::{AmbientValue, Layer, async_trait, injectable, module};
+use nest_rs_graphql::async_graphql::{Context, Result, Result as GqlResult};
+use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, SeedLifetime, operations, resolver};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_http::StatusCode;
 use nest_rs_testing::TestApp;
-use poem::Request;
-use poem::http::StatusCode;
 
 #[derive(Clone)]
 struct Role(String);
 
+impl AmbientValue for Role {}
+
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RoleHeaderGuard;
 
-impl Layer for RoleHeaderGuard {}
-
-#[http_async_trait]
+#[async_trait]
 impl Guard for RoleHeaderGuard {
-    async fn check_http(&self, req: &mut Request) -> std::result::Result<(), Denial> {
-        if let Some(role) = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_owned())
-        {
-            req.extensions_mut().insert(Role(role));
+    async fn check_http(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        let request = nest_rs_http::HttpView::of(cx)?.request();
+        if let Some(role) = request.header("x-role").map(str::to_owned) {
+            cx.attach(Role(role));
         }
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for RoleHeaderGuard {}
+impl GuardFor<nest_rs_http::HttpView> for RoleHeaderGuard {}
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RequireAdmin;
 
-nest_rs_graphql::inventory::submit! {
-    GraphqlContextSeed {
-        lifetime: SeedLifetime::Connection,
-        owner_type_id: || Some(std::any::TypeId::of::<RequireAdmin>()),
-        seed: |req, _container, gql| match req.extensions().get::<Role>() {
-            Some(role) => gql.data(role.clone()),
+nest_rs_core::inventory::submit! {
+    GraphqlContextSeed::new(
+        Some(std::any::TypeId::of::<RequireAdmin>),
+        SeedLifetime::Connection,
+        |_req, _container, gql| match nest_rs_core::ambient::<Role>() {
+            Some(role) => gql.data(Role::clone(&role)),
             None => gql,
         },
-    }
+    )
 }
-
-impl Layer for RequireAdmin {}
 
 #[async_trait]
 impl Guard for RequireAdmin {
-    async fn check_graphql(
+    async fn check(
         &self,
-        op: &GraphqlOperationContext<'_>,
+        cx: &mut nest_rs_core::UnitContext<'_>,
     ) -> std::result::Result<(), Denial> {
-        match op.data_opt::<Role>() {
+        match cx.ambient::<Role>() {
             Some(role) if role.0 == "admin" => Ok(()),
             _ => Err(Denial::forbidden("forbidden")),
         }
     }
 }
 
-impl GraphqlGuard for RequireAdmin {}
+impl GuardFor<nest_rs_graphql::GraphqlView> for RequireAdmin {}
 
 #[resolver]
 #[use_guards(RequireAdmin)]
 struct GuardedResolver;
 
-// `secret` has no `&Context` of its own — the macro injects one to run the
-// guard. `whoami` already declares one; the macro reuses it (the path the
-// `#[crud]`-generated ops follow).
+// `secret` has no `&Context`, so the macro injects one; `whoami`'s is reused.
 #[operations]
 impl GuardedResolver {
     #[query]
@@ -89,20 +86,19 @@ impl GuardedResolver {
     #[query]
     #[public]
     async fn whoami(&self, ctx: &Context<'_>) -> Result<String> {
-        Ok(ctx
-            .data_opt::<Role>()
-            .map(|r| r.0.clone())
-            .unwrap_or_default())
+        Ok(ctx.data_opt::<Role>().map_or_default(|r| r.0.clone()))
     }
 }
 
-#[module(imports = [GraphqlModule::for_root(None)], providers = [RequireAdmin, RoleHeaderGuard, GuardedResolver])]
+#[module(imports = [GraphqlModule], providers = [RequireAdmin, RoleHeaderGuard, GuardedResolver])]
 struct GuardedModule;
+
+#[module(imports = [GuardedModule], providers = [GlobalGuards<(RoleHeaderGuard,)>])]
+struct BootApp;
 
 async fn boot() -> TestApp {
     TestApp::builder()
-        .module::<GuardedModule>()
-        .use_guards_global([guard::<RoleHeaderGuard>()])
+        .module::<BootApp>()
         .build()
         .await
         .expect("the schema boots and mounts at /graphql")
@@ -130,8 +126,6 @@ async fn resolver_guard_allows_an_admin() {
         "classified",
     );
 
-    // Reuse path: the guard runs on an op declaring its own `&Context`, and
-    // the body still sees the seeded role.
     let who = app
         .http()
         .post("/graphql")
@@ -171,16 +165,12 @@ async fn resolver_guard_denies_a_non_admin() {
         "a non-admin is forbidden by the resolver guard",
     );
 
-    // GraphQL answers a denial with `200 OK` and an error frame, so the HTTP
-    // status carries nothing an operator can alert on. This event is the
-    // structural floor `deny_http` has on the other side: every denial visible
-    // at `warn`+ whatever the individual guard chose to log.
+    // A denial answers `200 OK`, so this event is what an operator alerts on.
     let event = logs.expect_one("nest_rs::layers", "guard denied the operation");
     assert_eq!(event.level, "warn");
-    assert!(
-        event
-            .field("guard")
-            .is_some_and(|g| g.contains("RequireAdmin")),
+    assert_eq!(
+        event.field("guard").as_deref(),
+        Some("RequireAdmin"),
         "the event names the guard that refused, got {:?}",
         event.fields,
     );
@@ -197,4 +187,759 @@ async fn resolver_guard_denies_a_non_admin() {
         anon_json.value().object().get_opt("errors").is_some(),
         "an anonymous request is forbidden by the resolver guard",
     );
+}
+
+// The chain runs whatever an operation returns, in every role: a query (async
+// and sync), a subscription and a field resolver.
+
+/// Refuses every GraphQL operation it is asked about.
+#[injectable]
+#[derive(Default, Layer)]
+struct DenyAll;
+
+#[async_trait]
+impl Guard for DenyAll {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Err(Denial::forbidden("denied by the resolver-scope guard"))
+    }
+}
+
+impl GuardFor<nest_rs_graphql::GraphqlView> for DenyAll {}
+impl GuardFor<nest_rs_http::HttpView> for DenyAll {}
+
+/// Counts the GraphQL operations it is asked about, and lets each through.
+#[injectable]
+#[derive(Default, Layer)]
+struct CountingGuard {
+    seen: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl Guard for CountingGuard {
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl GuardFor<nest_rs_graphql::GraphqlView> for CountingGuard {}
+impl GuardFor<nest_rs_http::HttpView> for CountingGuard {}
+
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+#[graphql(complex)]
+struct Shelf {
+    id: i32,
+}
+
+/// Extended only by [`SealedResolver`], and produced only by
+/// [`ShelfResolver`]'s root — async-graphql takes one `#[ComplexObject]` per type.
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+#[graphql(complex)]
+struct Vault {
+    id: i32,
+}
+
+/// What [`SealedResolver::sealed_search`] answers — named like a `Result`, and
+/// an object.
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+struct SealedSearchResult {
+    hits: i32,
+}
+
+#[resolver]
+struct ShelfResolver;
+
+#[operations]
+impl ShelfResolver {
+    #[query]
+    #[public]
+    async fn shelves(&self) -> Vec<Shelf> {
+        (1..=3).map(|id| Shelf { id }).collect()
+    }
+
+    #[query]
+    #[public]
+    async fn vaults(&self) -> Vec<Vault> {
+        (1..=3).map(|id| Vault { id }).collect()
+    }
+
+    #[query]
+    #[public]
+    async fn open_count(&self) -> i32 {
+        7
+    }
+
+    #[field_resolver]
+    async fn label(&self, parent: &Shelf) -> String {
+        format!("shelf-{}", parent.id)
+    }
+}
+
+#[resolver]
+#[use_guards(DenyAll)]
+struct SealedResolver;
+
+#[operations]
+impl SealedResolver {
+    #[query]
+    #[public]
+    async fn sealed_count(&self) -> i32 {
+        42
+    }
+
+    #[query]
+    #[public]
+    async fn sealed_secrets(&self) -> Vec<String> {
+        vec!["classified".into()]
+    }
+
+    #[query]
+    #[public]
+    fn sealed_sync(&self) -> i32 {
+        42
+    }
+
+    #[query]
+    #[public]
+    async fn sealed_fallible(&self) -> Result<i32> {
+        Ok(42)
+    }
+
+    /// A payload whose name ends in `Result`: a value, and guarded like one.
+    #[query]
+    #[public]
+    async fn sealed_search(&self) -> SealedSearchResult {
+        SealedSearchResult { hits: 42 }
+    }
+
+    /// A `Result` renamed on import: fallible, and guarded like one.
+    #[query]
+    #[public]
+    async fn sealed_aliased(&self) -> GqlResult<i32> {
+        Ok(42)
+    }
+
+    #[subscription]
+    #[public]
+    fn sealed_ticks(
+        &self,
+    ) -> impl nest_rs_graphql::async_graphql::futures_util::Stream<Item = i32> {
+        nest_rs_graphql::async_graphql::futures_util::stream::iter([42])
+    }
+
+    /// Extends a type another resolver's root produces, so the field runs this
+    /// resolver's guards itself.
+    #[field_resolver]
+    async fn sealed_note(&self, parent: &Vault) -> String {
+        format!("classified-{}", parent.id)
+    }
+}
+
+#[module(
+    imports = [GraphqlModule],
+    providers = [DenyAll, CountingGuard, ShelfResolver, SealedResolver],
+)]
+struct ChainModule;
+
+#[module(imports = [ChainModule], providers = [GlobalGuards<(DenyAll,)>])]
+struct DenyAllPoolModule;
+
+#[module(imports = [ChainModule], providers = [GlobalGuards<(CountingGuard,)>])]
+struct CountingPoolModule;
+
+async fn chain_app<M: nest_rs_core::Module + 'static>() -> TestApp {
+    TestApp::builder()
+        .module::<M>()
+        .build()
+        .await
+        .expect("the schema boots and mounts at /graphql")
+}
+
+async fn query(app: &TestApp, document: &str) -> serde_json::Value {
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": document }))
+        .send()
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let text = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a GraphQL response body");
+    serde_json::from_str(&text).expect("a GraphQL response is JSON")
+}
+
+fn assert_denied(body: &serde_json::Value, field: &str) {
+    let rendered = body.to_string();
+    assert!(
+        !rendered.contains("classified") && !rendered.contains("42"),
+        "`{field}` served its data past a deny-all guard: {rendered}",
+    );
+    let errors = body["errors"].as_array().cloned().unwrap_or_default();
+    assert!(
+        errors.iter().any(|e| e["extensions"]["code"] == "FORBIDDEN"
+            && e["path"][e["path"]
+                .as_array()
+                .map_or(0, |p| p.len().saturating_sub(1))]
+                == field),
+        "`{field}` answers the guard's denial as a field error: {rendered}",
+    );
+}
+
+#[tokio::test]
+async fn a_resolver_guard_runs_on_every_operation_whatever_it_returns() {
+    let app = chain_app::<ChainModule>().await;
+    for field in [
+        "sealedCount",
+        "sealedSecrets",
+        "sealedSync",
+        "sealedFallible",
+        "sealedAliased",
+    ] {
+        let body = query(&app, &format!("{{ {field} }}")).await;
+        assert_denied(&body, field);
+    }
+    let body = query(&app, "{ sealedSearch { hits } }").await;
+    assert_denied(&body, "sealedSearch");
+    let body = query(&app, "{ vaults { id sealedNote } }").await;
+    assert_denied(&body, "sealedNote");
+}
+
+#[tokio::test]
+async fn a_resolver_guard_runs_on_a_bare_stream_subscription() {
+    let app = chain_app::<ChainModule>().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("sealed", "subscription { sealedTicks }");
+    let message = socket
+        .next_message()
+        .await
+        .expect("the subscription answers");
+    let rendered = message.to_string();
+    assert!(
+        rendered.contains("denied by the resolver-scope guard") && !rendered.contains("42"),
+        "the subscription is refused before it streams: {rendered}",
+    );
+}
+
+#[tokio::test]
+async fn an_app_wide_guard_runs_on_a_bare_return_operation() {
+    let app = chain_app::<DenyAllPoolModule>().await;
+    let body = query(&app, "{ openCount }").await;
+    let rendered = body.to_string();
+    assert!(
+        !rendered.contains('7') && rendered.contains("FORBIDDEN"),
+        "the app-wide guard refuses a bare-return operation: {rendered}",
+    );
+}
+
+#[tokio::test]
+async fn the_app_wide_pool_runs_once_per_root_field_not_per_parent() {
+    let app = chain_app::<CountingPoolModule>().await;
+    let body = query(&app, "{ shelves { id label } }").await;
+    assert_eq!(
+        body["data"]["shelves"][2]["label"], "shelf-3",
+        "the field resolver answers: {body}",
+    );
+    let counter = app
+        .container()
+        .get::<CountingGuard>()
+        .expect("the counting guard is a provider of the booted app");
+    assert_eq!(
+        counter.seen.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "one root field, three parents: the pool ran once",
+    );
+}
+
+/// A field resolver runs once per parent, and its guard's refusal is one fact: one
+/// line per operation however many parents repeat it, each keeping its error.
+#[tokio::test]
+async fn a_field_resolvers_refusal_under_every_parent_files_one_line() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = chain_app::<ChainModule>().await;
+    let body = query(&app, "{ vaults { id sealedNote } }").await;
+    let errors = body["errors"].as_array().cloned().unwrap_or_default();
+    assert_eq!(errors.len(), 3, "each parent keeps its refusal: {body}");
+    let filed = logs.find(nest_rs_core::target::LAYERS, "guard denied the operation");
+    assert_eq!(filed.len(), 1, "one line for the operation: {filed:#?}");
+
+    let _ = query(&app, "{ vaults { id sealedNote } }").await;
+    let filed = logs.find(nest_rs_core::target::LAYERS, "guard denied the operation");
+    assert_eq!(
+        filed.len(),
+        2,
+        "the next operation files its own: {filed:#?}"
+    );
+}
+
+/// A site that composes on its first dispatch: a guard no module provides is
+/// never dropped from the chain — the operation is refused, opaquely.
+mod unresolvable {
+    use std::any::TypeId;
+
+    use nest_rs_core::async_trait;
+    use nest_rs_core::{Container, Layer, injectable, module};
+    use nest_rs_graphql::GraphqlConfig;
+    use nest_rs_graphql::async_graphql::{Executor, Request, Result};
+    use nest_rs_graphql::{operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_testing::LogCapture;
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct NeverProvided;
+
+    #[async_trait]
+    impl Guard for NeverProvided {
+        async fn check(
+            &self,
+            _cx: &mut nest_rs_core::UnitContext<'_>,
+        ) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<nest_rs_graphql::GraphqlView> for NeverProvided {}
+
+    #[resolver]
+    #[use_guards(NeverProvided)]
+    struct OrphanGuardedResolver;
+
+    #[operations]
+    impl OrphanGuardedResolver {
+        #[query]
+        #[public]
+        async fn orphan_secret(&self) -> Result<String> {
+            Ok("classified".into())
+        }
+    }
+
+    #[module(providers = [OrphanGuardedResolver])]
+    struct OrphanModule;
+
+    #[tokio::test]
+    async fn an_operation_whose_guard_no_module_provides_is_refused_opaquely_and_says_why() {
+        // Built by hand, so the access graph does not refuse first.
+        let container = Container::builder()
+            .provide(GraphqlConfig::default())
+            .provide(nest_rs_http::HttpConfig::default())
+            .import::<OrphanModule>()
+            .provide(nest_rs_core::__private::reachable_providers([
+                TypeId::of::<OrphanGuardedResolver>(),
+            ]))
+            .build()
+            .expect("the container builds");
+        let schema =
+            nest_rs_graphql::__private::compose_schema(container, &GraphqlConfig::default())
+                .expect("the seeded set gates the schema");
+        let logs = LogCapture::install();
+
+        let response = schema.execute(Request::new("{ orphanSecret }")).await;
+
+        let json = serde_json::to_value(&response).expect("a response serializes");
+        let body = json.to_string();
+        assert!(
+            !body.contains("classified"),
+            "the operation never ran without its guard: {body}",
+        );
+        assert_eq!(response.errors.len(), 1, "one field error: {body}");
+        assert_eq!(
+            response.errors[0].message,
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+            "opaque to the client: {body}",
+        );
+        assert_eq!(
+            json["errors"][0]["extensions"]["code"],
+            nest_rs_core::code::INTERNAL.as_str(),
+            "under the internal class: {body}",
+        );
+        assert!(
+            !body.contains("NeverProvided"),
+            "the client never reads the wiring: {body}",
+        );
+        let event = logs.expect_one(
+            "nest_rs::layers",
+            "a layer the site declares is provided by no imported module",
+        );
+        assert_eq!(event.level, "error");
+        assert_eq!(
+            event.field("layer").as_deref(),
+            Some("NeverProvided"),
+            "the line names the layer: {:?}",
+            event.fields,
+        );
+        assert!(
+            event
+                .field("site")
+                .is_some_and(|site| site.contains("orphan_secret")),
+            "…and the site: {:?}",
+            event.fields,
+        );
+    }
+}
+
+/// A site's composed chain lives with its container: dropping the app drops the
+/// guards its operations ran.
+mod owned_chain {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use nest_rs_core::async_trait;
+    use nest_rs_core::{Layer, injectable, module};
+    use nest_rs_graphql::async_graphql::Result;
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardFor};
+    use nest_rs_http::StatusCode;
+    use nest_rs_testing::TestApp;
+
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct CountsItsDrop;
+
+    impl Drop for CountsItsDrop {
+        fn drop(&mut self) {
+            DROPPED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait]
+    impl Guard for CountsItsDrop {
+        async fn check(
+            &self,
+            _cx: &mut nest_rs_core::UnitContext<'_>,
+        ) -> std::result::Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<nest_rs_graphql::GraphqlView> for CountsItsDrop {}
+
+    #[resolver]
+    #[use_guards(CountsItsDrop)]
+    struct CountedResolver;
+
+    #[operations]
+    impl CountedResolver {
+        #[query]
+        #[public]
+        async fn counted(&self) -> Result<String> {
+            Ok("counted".into())
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [CountsItsDrop, CountedResolver],
+    )]
+    struct CountedModule;
+
+    #[tokio::test]
+    async fn dropping_the_app_drops_the_guards_its_operations_composed() {
+        let app = TestApp::for_module::<CountedModule>().await.expect("boots");
+        let resp = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ counted }" }))
+            .send()
+            .await;
+        resp.assert_status(StatusCode::OK);
+        assert!(
+            resp.0
+                .into_body()
+                .into_string()
+                .await
+                .expect("a body")
+                .contains("counted"),
+            "the guarded field resolved",
+        );
+        assert_eq!(DROPPED.load(Ordering::SeqCst), 0, "the app is alive");
+
+        drop(app);
+
+        assert_eq!(
+            DROPPED.load(Ordering::SeqCst),
+            1,
+            "no `static` keeps the composed chain, so the guard went with its app",
+        );
+    }
+}
+
+/// A pooled guard deciding on the HTTP request: in `check_http`, its `check`
+/// admitting, it gates the `/graphql` request and every field it carries
+/// answers; in `check`, it runs on each field too, which has no HTTP view.
+mod request_decided {
+    use nest_rs_core::async_trait;
+    use nest_rs_core::{Layer, UnitContext, injectable, module};
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_guards::{Denial, GlobalGuards, Guard};
+    use nest_rs_http::{HttpView, StatusCode};
+    use nest_rs_testing::{LogCapture, TestApp, TestResponse};
+    use serde_json::{Value, json};
+
+    fn keyed(cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        match HttpView::of(cx)?.request().header("x-api-key") {
+            Some(_) => Ok(()),
+            None => Err(Denial::unauthorized("missing key")),
+        }
+    }
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct KeyAtTheRequest;
+
+    #[async_trait]
+    impl Guard for KeyAtTheRequest {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct KeyAtTheUnit;
+
+    #[async_trait]
+    impl Guard for KeyAtTheUnit {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            keyed(cx)
+        }
+    }
+
+    #[resolver]
+    struct PingResolver;
+
+    #[operations]
+    impl PingResolver {
+        #[query]
+        #[public]
+        async fn ping(&self) -> i32 {
+            1
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [KeyAtTheRequest, KeyAtTheUnit, PingResolver],
+    )]
+    struct KeyModule;
+
+    #[module(imports = [KeyModule], providers = [GlobalGuards<(KeyAtTheRequest,)>])]
+    struct RequestKeyPoolModule;
+
+    #[module(imports = [KeyModule], providers = [GlobalGuards<(KeyAtTheUnit,)>])]
+    struct UnitKeyPoolModule;
+
+    async fn boot<M: nest_rs_core::Module + 'static>() -> TestApp {
+        TestApp::builder()
+            .module::<M>()
+            .build()
+            .await
+            .expect("boots")
+    }
+
+    async fn ping(app: &TestApp, key: Option<&str>) -> TestResponse {
+        let request = app.http().post("/graphql");
+        let request = match key {
+            Some(key) => request.header("x-api-key", key),
+            None => request,
+        };
+        request
+            .body_json(&json!({ "query": "{ ping }" }))
+            .send()
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_pooled_guard_deciding_in_check_http_gates_the_request_and_admits_its_fields() {
+        let app = boot::<RequestKeyPoolModule>().await;
+
+        let admitted = ping(&app, Some("k")).await;
+        admitted.assert_status(StatusCode::OK);
+        let body: Value = admitted.json().await.value().deserialize();
+        assert_eq!(body, json!({ "data": { "ping": 1 } }));
+
+        ping(&app, None)
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_pooled_guard_reading_the_request_in_check_refuses_each_field_opaquely() {
+        let logs = LogCapture::install();
+        let app = boot::<UnitKeyPoolModule>().await;
+
+        for _ in 0..2 {
+            let refused = ping(&app, Some("k")).await;
+            refused.assert_status(StatusCode::OK);
+            let body: Value = refused.json().await.value().deserialize();
+            assert_eq!(body["data"], Value::Null, "{body}");
+            assert_eq!(
+                body["errors"][0]["extensions"]["code"], "INTERNAL",
+                "{body}"
+            );
+        }
+
+        let denials = logs.find("nest_rs::layers", "guard denied the operation");
+        assert_eq!(denials.len(), 2, "each refused field is filed");
+        for denial in denials {
+            assert_eq!(denial.level, "error");
+            assert_eq!(denial.field("status").as_deref(), Some("500"));
+            assert_eq!(denial.field("unit").as_deref(), Some("graphql.field"));
+            assert_eq!(denial.field("guard").as_deref(), Some("KeyAtTheUnit"));
+            assert!(
+                denial
+                    .field("error")
+                    .is_some_and(|chain| chain.contains("decide the request in `check_http`")),
+                "the edge's line says the edit: {denial:?}"
+            );
+        }
+        logs.expect_none(
+            "nest_rs::http",
+            "a guard read the HTTP request of a unit with no HTTP view",
+        );
+    }
+}
+
+/// A field's chain read after what its request ran: its guards run behind the
+/// request's, so an authentication guard behind an authorization guard is refused
+/// across the two.
+mod phase_order {
+    use nest_rs_core::{Layer, UnitContext, async_trait, injectable, module};
+    use nest_rs_graphql::{GraphqlModule, GraphqlView, operations, resolver};
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase};
+    use nest_rs_http::{EndpointGuards, HttpView};
+    use nest_rs_testing::TestApp;
+
+    use super::GqlResult;
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Identifies;
+
+    #[async_trait]
+    impl Guard for Identifies {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<GraphqlView> for Identifies {}
+
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Authorizes;
+
+    #[async_trait]
+    impl Guard for Authorizes {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authorization
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for Authorizes {}
+    impl GuardFor<GraphqlView> for Authorizes {}
+
+    #[resolver]
+    #[use_guards(Authorizes, Identifies)]
+    struct MisorderedResolver;
+
+    #[operations]
+    impl MisorderedResolver {
+        #[query]
+        #[public]
+        async fn misordered(&self) -> GqlResult<i32> {
+            Ok(0)
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [Authorizes, Identifies, MisorderedResolver],
+    )]
+    struct MisorderedFieldModule;
+
+    #[resolver]
+    #[use_guards(Identifies)]
+    struct AfterItsRequestResolver;
+
+    #[operations]
+    impl AfterItsRequestResolver {
+        #[query]
+        #[public]
+        async fn after_its_request(&self) -> GqlResult<i32> {
+            Ok(0)
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule],
+        providers = [
+            Authorizes,
+            Identifies,
+            EndpointGuards<GraphqlView, (Authorizes,)>,
+            AfterItsRequestResolver,
+        ],
+    )]
+    struct AfterItsRequestModule;
+
+    /// `boot` refused for an authentication guard after an authorization guard, naming
+    /// the two.
+    fn assert_misordered(boot: nest_rs_core::anyhow::Result<TestApp>) {
+        let Err(refused) = boot else {
+            panic!("the misordered chain booted");
+        };
+        let refused = format!("{refused:#}");
+        assert!(
+            refused.contains("Identifies") && refused.contains("Authorizes"),
+            "{refused}",
+        );
+        assert!(refused.contains("after authorization guard"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_field_listing_authentication_after_authorization_refuses_the_boot() {
+        assert_misordered(TestApp::for_module::<MisorderedFieldModule>().await);
+    }
+
+    #[tokio::test]
+    async fn a_field_authenticating_after_its_requests_authorization_refuses_the_boot() {
+        assert_misordered(TestApp::for_module::<AfterItsRequestModule>().await);
+    }
 }

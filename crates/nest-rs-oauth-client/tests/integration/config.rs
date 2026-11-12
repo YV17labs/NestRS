@@ -13,6 +13,8 @@ pub(crate) fn valid_config() -> OAuthClientConfig {
         redirect_url: "https://app.example/callback".into(),
         userinfo_url: "https://provider.example/userinfo".into(),
         scopes: vec!["read:user".into()],
+        authorization_parameters: nest_rs_oauth_client::AuthorizationParameters::default(),
+        tls: nest_rs_config::ClientTls::default(),
     }
 }
 
@@ -37,7 +39,7 @@ fn missing_client_id_fails_validation() {
 fn empty_config_fails_at_client_construction() {
     assert!(matches!(
         OAuthClient::new(OAuthClientConfig::default()),
-        Err(AuthError::Failed(_))
+        Err(AuthError::Failed { .. })
     ));
 }
 

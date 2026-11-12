@@ -14,61 +14,72 @@ categories = ["web-programming", "asynchronous"]
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-graphql-macros.workspace = true
-# The ORM-agnostic ambient-executor seam. Every GraphQL operation is a POST, so
-# the HTTP boundary hands even a pure query a transaction; the endpoint routes
-# an operation it has proven read-only onto `Executor::non_transactional`
-# instead. No ORM is named — with no executor installed the lookup is a no-op.
+# The ORM-agnostic unit-of-work port: each operation runs as a unit of its own
+# through the binding the mount resolves (`run_unit`), and each mutation root
+# field in an `atomic` block of it. No ORM is named — with no binding an
+# operation runs bare.
 nest-rs-database.workspace = true
 # `GraphqlModule` owns its `#[config]` `GraphqlConfig` (namespace `graphql`),
-# loaded from `NESTRS_GRAPHQL__*`; `validator` backs its `#[validate]` derive.
+# loaded from `<PREFIX>_GRAPHQL__*`; `validator` backs its `#[validate]` derive.
 nest-rs-config.workspace = true
 # The `/graphql` endpoint round-trips operation variables through JSON to run
-# global variable pipes (`transform_graphql_variables`) over them.
+# the global pipes over them (`ArgumentKind::Variables`).
 serde_json.workspace = true
 validator.workspace = true
 # GraphqlModule self-mounts over HTTP via HttpEndpointMeta — this crate serves
 # GraphQL on the HTTP transport. No cycle: nest-rs-http does not depend on us.
-nest-rs-http.workspace = true
+# `websocket` is the graphql-ws socket's handshake and frames.
+nest-rs-http = { workspace = true, features = ["websocket"] }
 async-graphql.workspace = true
-# `#[crud]`-generated create/update ops validate their input through the
-# re-exported `ValidateProbe` (global validation, the NestJS `ValidationPipe`
-# analog); re-exported so a crud consumer needs no direct nest-rs-pipes dep.
+# The value a parsed document's arguments hold, which async-graphql names in
+# its AST and does not re-export: what a document copies is read off it in place.
+async-graphql-value.workspace = true
+# Every operation's argument is checked against the rules its type declares
+# through the re-exported `ValidateProbe`, so a resolver's crate needs no
+# nest-rs-pipes dep of its own; a refusal renders from its `PipeError`.
 nest-rs-pipes.workspace = true
-# Re-exported as `nest_rs_graphql::async_trait` for implementors of the async
-# guard seams (`Guard::check_graphql`, operation guards) — boxed like
-# `nest-rs-guards`' HTTP `Guard`.
+# The async seams it implements and declares.
 async-trait.workspace = true
-# Re-exported so the GraphqlModule mount code can name the poem integration
-# through the framework, keeping it out of every app's manifest.
-async-graphql-poem.workspace = true
+# The edge runs its guards itself: the pool at the request, each field's chain,
+# the federation gate; it renders a denial in GraphQL's error form.
+nest-rs-guards.workspace = true
+# The graphql-ws loop is this crate's own — the one place a socket's end can
+# enter the protocol — so it splits the socket and reads both halves as streams;
+# `io` reads a multipart request's body as the `AsyncRead` async-graphql parses.
+futures-util = { workspace = true, features = ["io"] }
 # Re-exported so `#[resolver]`-generated `inventory::submit!` resolves through
 # the framework without apps depending on `inventory` directly.
 inventory.workspace = true
-poem.workspace = true
 # GraphqlModule logs the boot-time SDL emit through the framework's tracing.
 tracing.workspace = true
-# A DataLoader batch is spawned onto the runtime; the fallback spawner (no
-# `BatchContext` bound) names `tokio::spawn` directly.
+# A DataLoader batch is spawned onto the runtime, under what its request
+# carries into it.
 tokio.workspace = true
+# A root field's line is filed by a hand-written future around its unit, so a
+# debug build holds the field's own future once.
+pin-project-lite.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 # Boot the schema in-process and fire GraphQL requests at it (the ContextSeed
-# bridge test). nest-rs-http/nest-rs-core are already runtime deps above.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql"] }
-# `#[resolver]` macro emits paths to `::nest_rs_guards::run_global_graphql_guards`,
-# so any test using `#[resolver]` needs the crate in scope. Dev-dep cycle is
-# allowed by Cargo (nest-rs-guards depends on us as a normal dep).
-nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
-# The layer-pool test asserts the transport-edge interceptor pool covers the
-# `/graphql` self-mount. Same allowed dev-dep cycle as nest-rs-guards.
-nest-rs-interceptors = { path = "../nest-rs-interceptors" }
+# tests). nest-rs-http/nest-rs-core are already runtime deps above. `ws`
+# binds a real port: the graphql-ws socket's way down — `complete`, then the
+# Close frame — exists only over a real upgrade, and so does the shutdown window
+# a DataLoader batch is stopped at.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "http", "ws"] }
+# The close codes a socket the suites open ends with, as an app names them.
+nest-rs-ws = { path = "../nest-rs-ws" }
 # `test-util` (not part of tokio's `full`) pauses time, so the socket-lifetime
 # ceiling is asserted against a four-hour deadline in microseconds instead of
 # being approximated by a wall-clock sleep nobody would keep honest.
 tokio = { workspace = true, features = ["test-util"] }
 serde_json.workspace = true
-# Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
-trybuild.workspace = true
+# `figment::Jail` isolates `<PREFIX>_ENV` for the profile a `Surface` reads from
+# the *process* environment rather than a `ConfigService`.
+figment = { workspace = true, features = ["test"] }
+# The thread's CPU clock, which std lacks: a cost a test compares is read on
+# it, since a thread waiting for a core accrues none.
+libc.workspace = true
 
 [lints]
 workspace = true

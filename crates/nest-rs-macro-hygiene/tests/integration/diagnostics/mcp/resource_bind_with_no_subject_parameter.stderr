@@ -1,0 +1,5 @@
+error: `bind = Service` needs a parameter of type `Authorized<Action, E>` to receive the bound subject — the action in the type must match the one in the attribute (e.g. `#[authorize(Update, bind = FilesService)]` ⇒ `Authorized<Update, FileEntity>`)
+  --> tests/integration/diagnostics/mcp/resource_bind_with_no_subject_parameter.rs:42:14
+   |
+42 |     async fn note(&self, id: uuid_free::Id) -> Result<String, McpError> {
+   |              ^^^^

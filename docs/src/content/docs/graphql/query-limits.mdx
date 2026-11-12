@@ -1,7 +1,6 @@
 ---
 title: Query limits
-description: Bound query depth and complexity at the schema level — two ceilings that catch the recursive bomb, the wide sweep, and volumetric fanout before a resolver runs.
-tier: all-options
+description: "Depth and complexity ceilings that catch the recursive bomb, the wide sweep, fanout and fragment repeats before a resolver runs."
 sidebar:
   order: 8
 ---
@@ -9,8 +8,8 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A GraphQL endpoint accepts whatever the client asks for. Without a
-ceiling, three shapes of query can take a production app down before
-auth even runs:
+ceiling, five shapes of query can take a production app down, the first
+four before a resolver even runs:
 
 - **Recursive** — `{ a { a { a { … 50 levels … } } } }`. Tiny payload,
   massive resolve work.
@@ -18,19 +17,31 @@ auth even runs:
 - **Volumetric fanout** — `{ users { posts { comments { … } } } }`
   where every step is `has_many`. Three levels of page-sized fanout
   multiply out per parent.
+- **Fragment repeats** — `fragment A on Query { ...B ...B }` at each of
+  a few dozen levels. Under a kilobyte of text, billions of selections to
+  read before any ceiling answers.
+- **Rows' copies** — `query($v: String) { rows { f(x: $v) } }`. Each row
+  reads its arguments again, so 1,000 rows of a 1 MiB variable held a
+  gigabyte at once, scoring 2.
 
 nestrs wraps async-graphql's two validation visitors that cover the
-three vectors. Both are on by default; tune the ceilings to your
-traffic.
+first three, and [counts the other two before anything runs](#what-fragments-and-variables-multiply).
+All of it is on by default; tune the ceilings to your
+traffic. A subscription socket has bounds of its own — its message size,
+its wait for `connection_init` and the operations it runs at once — on
+[Subscriptions](/graphql/subscription-socket/#configuration).
 
 ## The two ceilings
 
 | Limit | Catches | Config field | Env var |
 |---|---|---|---|
-| Depth | Recursive | `max_depth` | `NESTRS_GRAPHQL__MAX_DEPTH` |
-| Complexity | Wide + fanout (with per-field annotations) | `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` |
+| Depth | Recursive | `max_depth` | `<PREFIX>_GRAPHQL__MAX_DEPTH` |
+| Complexity | Wide + fanout (with per-field annotations) | `max_complexity` | `<PREFIX>_GRAPHQL__MAX_COMPLEXITY` |
 
-Both are on by default (`max_depth = 15`, `max_complexity = 2000`).
+Both are on by default (`max_depth = 15`, `max_complexity = 2000`). Each holds
+to a range, refused at boot outside it: `max_depth` from `1` to `33`, past which
+async-graphql's own recursion bound refuses a document whatever the limit says,
+and `max_complexity` from `1` to ten million.
 Keep both — depth alone misses wide queries, complexity alone misses
 queries that depth-bomb the parser before the visitor even runs.
 
@@ -45,7 +56,7 @@ use nest_rs::graphql::{GraphqlConfig, GraphqlModule};
         ..Default::default()
     }),
 ])]
-pub struct AppModule;
+pub struct ApiModule;
 ```
 
 ```bash title=".env.production"
@@ -74,18 +85,22 @@ The visitor sums a score across every selected field. The default
 scoring is async-graphql's: each field contributes `1 +
 child_complexity` (one for the field itself, plus the sum of its
 selected sub-fields). A flat wide query of 500 fields scores 500;
-a 4-level relation chain scores roughly 4.
+a 4-level relation chain scores roughly 4. The score reads the document that
+runs: copies of one field GraphQL merges into one, a mutation's root field or a
+list of lists selected twice, count once, as they run once
+([where a failed field's `null` lands](/graphql/partial-results/#where-a-failed-fields-null-lands)).
 
 The **per-field override** is where complexity becomes a real
 anti-DoS mechanism. The `#[expose]` macro applies one
-automatically — see below.
+automatically — see [field complexity](/graphql/field-complexity/).
 
 Typical production value: **1000 to 5000**, tuned from observed
 legitimate queries. The check is **strict `>`** — `max_complexity =
 1000` admits a query scoring exactly 1000; pin 999 to reject it.
-Setting `max_depth = Some(0)` or `max_complexity = Some(0)` **fails at
+Pinning `max_depth = Some(0)` or `max_complexity = Some(0)` **fails at
 boot** with a config error: `0` would block every query, so `None` is
-the way to disable a check.
+the way to disable a check in code, and `0` its spelling from the
+environment (`<PREFIX>_GRAPHQL__MAX_DEPTH=0`).
 
 <Aside type="caution">
 **Introspection has a cost.** Apollo's full `IntrospectionQuery`
@@ -97,107 +112,71 @@ schema after you raise complexity limits, measure introspection
 against your real schema before tightening further.
 </Aside>
 
-## The auto-emitted `HasMany` factor
+## What fragments and variables multiply
 
-A `HasMany` relation resolves a **page** of children per parent. With
-async-graphql's default scoring, that field costs 1 — no penalty for the
-fanout, even though a hundred rows resolve.
+A visitor scores a document by walking it, and a fragment is walked again at
+each of its spreads, so a walk can cost far more than the document weighs: 1,068
+bytes held a release build for ten seconds, on a worker no request timeout can
+interrupt. nestrs counts what a document adds to its own text first, once per
+fragment and once per variable, in time linear in the document:
 
-`#[expose]` patches that automatically, using the page the client asked
-for rather than a guessed constant:
+- **A fragment spread again** adds what it expands to. Those additions are held
+  to `max_complexity`, whatever the visitor would score them: a `__typename` or
+  an unknown fragment counts one here, and nothing there.
+- **A reference to a variable** copies its value and scans the operation's
+  definitions for its own, so `[$v, $v, …]` costs the references times the value,
+  and no score reads a list. What the operation a request runs copies and scans,
+  as its fragments expand it, is held to twice what the request may carry:
+  `max_body_bytes` on a `POST`, `max_message_bytes` on a graphql-ws socket. A value
+  counts what its text weighs and a step of a scan a byte, so every variable may be
+  referred to twice. There is no key of its own to tune.
+- **A field below a list** reads its arguments again at each row, every row's copy
+  held at once while the rows resolve together, so `query($v: String) { rows { f(x:
+  $v) } }` over 1,000 rows and a 1 MiB `$v` peaked past a gigabyte, scoring 2. What
+  the fields a list stands above read, their own arguments, their fragments' and each
+  reference's value, is held to `max_list_argument_bytes` (`<PREFIX>_GRAPHQL__MAX_LIST_ARGUMENT_BYTES`),
+  4 KiB by default, from `1` to a gibibyte, `None` or `0` off: a cursor, a page size
+  and a filter at each of several connections stay far below it. A root field, or a
+  field only objects stand above, reads its arguments once, so a mutation's large
+  input is never counted. The schema's types are read only for a document whose
+  fields below another field read past the bound.
+- **A response key repeated** looks each of its arguments up in the other's, so two
+  selections holding thousands cost their square. Each field's arguments, squared,
+  are held to that same limit, which the few a schema declares never come near.
+- **A fragment no operation spreads** is refused unread, in validation's words:
+  async-graphql's rules would otherwise recurse through it, and a long enough
+  chain of them overflows the stack.
+- **A document rewritten as GraphQL collects it**
+  ([where a failed field's `null` lands](/graphql/partial-results/#where-a-failed-fields-null-lands))
+  copies a condition on a union once per member, or copies merged into a field per
+  type, each copy around the next: 434 bytes nesting ten such conditions would add
+  millions of fields. What the rewrite copies, past what it takes out, is held to
+  the same limits as it writes it: its fields to `max_complexity`, their arguments'
+  text to twice what the request may carry.
 
-```rust title="from the macro expansion"
-#[graphql(complexity = "first.unwrap_or(20) as usize * child_complexity")]
-async fn users(&self, …, first: Option<u64>, after: Option<String>)
-    -> Connection<String, User> { … }
+A document past a limit answers as one past `max_complexity` does:
+
+```json
+{ "errors": [{ "message": "Query is too complex." }], "data": null }
 ```
 
-So `users(first: 5)` scores a twentieth of `users(first: 100)`, and three
-levels of `HasMany` (`organizations → teams → members`) left at the
-default page size score `20³`. Tune the ceiling, not the formula — the
-formula is hard-wired across the framework so the calibration story stays
-the same app-wide. The `20` mirrors `nest_rs_seaorm::DEFAULT_PAGE_SIZE`.
-
-`BelongsTo` resolvers keep async-graphql's default `1 +
-child_complexity` — they load at most one parent row, and an ability
-denial drops that to zero, so no fanout penalty is needed. That means
-`HasMany` and `BelongsTo` use **asymmetric base scoring** by default
-(multiplicative vs additive); the asymmetry is the point.
-
-## Override on the field
-
-`#[expose(complexity = …)]` overrides the auto-emitted factor:
-
-```rust title="crates/features/src/orgs/entity.rs"
-#[expose(name = "Org", service = …, graphql)]
-#[sea_orm::model]
-pub struct Model {
-    #[expose]
-    pub id: Uuid,
-    #[expose]
-    pub name: String,
-
-    #[sea_orm(has_many)]
-    #[expose(complexity = "20 * child_complexity")]
-    pub users: HasMany<crate::users::Entity>,
-}
-```
-
-Two shapes:
-
-- **Literal** — `#[expose(complexity = 5)]` pins a fixed score.
-- **Expression** — `#[expose(complexity = "20 * child_complexity")]`
-  uses async-graphql's expression grammar with the reserved
-  `child_complexity` variable, plus **the field's own arguments**. An
-  auto-emitted `HasMany` takes `first: Option<u64>` and
-  `after: Option<String>`, so `first.unwrap_or(20) as usize *
-  child_complexity` is available there; every other field has no
-  arguments to name, and an unknown name is an unbound identifier that
-  fails the expansion.
-
-The override applies to any exposed field, scalar or relation:
-
-```rust title="cost an expensive computed scalar"
-#[expose(name = "Report", service = …, graphql)]
-pub struct Model {
-    #[expose]
-    pub id: Uuid,
-    /// Aggregates 24h of metric points server-side.
-    #[expose(complexity = 50)]
-    pub rolling_avg: f64,
-}
-```
+A document spreading each fragment once adds nothing, so what it scores stays the
+visitor's to say. One fragment under several parents, or the full
+`IntrospectionQuery`, sits far below the default: a three-field document pays 30 ns
+for the check, one with a variable 75 ns and one with three fragments 233 ns.
 
 <Aside type="caution">
-**`complexity` needs an exposed field.** An unexposed field (no
-`#[expose]`) has no wire-DTO column AND no auto-emitted resolver —
-nowhere for `#[graphql(complexity = …)]` to land. The macro rejects a
-`complexity` override on a field that isn't otherwise exposed at compile
-time. To attach a cost to a hand-rolled field resolver, leave the
-relation unexposed and put `#[graphql(complexity = …)]` directly on the
-`#[field_resolver]` method instead.
+**`None` turns the score off, not the count.** With `max_complexity: None` a
+fragment's repeats stop at ten million, the most the setting may say: past that
+one document is a denial of service rather than a read, and a walk that long
+holds a worker for seconds.
 </Aside>
 
-### Argument-aware expressions
+## Field complexity
 
-An expression that reads a GraphQL argument only resolves when the field
-**declares that argument**. The auto-emitted `HasMany` declares `first`
-and `after`, which is why its default formula can be argument-aware at
-all. A hand-written `#[field_resolver]` taking its own arguments does the
-same with a regular `#[graphql(complexity = …)]`:
-
-```rust title="the entity, then the resolver"
-// No #[expose] => no auto-emission; own it on the resolver.
-#[sea_orm(has_many)]
-pub posts: HasMany<crate::posts::Entity>,
-
-// in the resolver file:
-#[ComplexObject]
-impl User {
-    #[graphql(complexity = "limit as usize * child_complexity")]
-    async fn recent_posts(&self, limit: u32) -> Vec<Post> { … }
-}
-```
+A `HasMany` relation `#[expose]` writes scores its page — `first` times what each
+row costs — and any exposed field or `#[field_resolver]` may name its own score.
+[Field complexity](/graphql/field-complexity/) is the formula and the override.
 
 ## On the wire
 
@@ -228,12 +207,37 @@ any other validation error.
    smaller literal, and an expensive computed scalar a larger one.
 
 <Aside type="tip">
-**Complexity scoring runs before authn.** The validation visitor
-fires during async-graphql's parse pipeline, which runs before guards.
-That means a depth or complexity violation rejects the query with no
-principal involved — the right behaviour for anti-DoS, since
-unauthenticated scrapers shouldn't even hit the auth chain.
+**Complexity scoring runs before every field's guards.** The validation visitor
+fires when async-graphql validates the document, inside the endpoint: after the
+guards the `/graphql` request runs, before any field's guard, pipe or resolver.
+A depth or complexity violation costs one request's guards and one parse, the
+right behaviour for anti-DoS.
 </Aside>
+
+## Limits
+
+- **A count is no score.** A document repeating its fragments, whose fields the
+  schema scores under one each — `#[expose(complexity = 0)]`, a literal pinning a
+  parent over its children, a `first: 1` relation — can be refused for its repeats
+  where its score alone would pass. Raise `max_complexity`, which holds both.
+- **A rewrite counts its copies, though one runs.** Copies merged into a field per
+  type, or a union's condition copied per member, each count, where a value runs
+  its own type's alone; and the rewrite is counted at its largest, before a merge
+  inside a copy per type folds a repeat away. Such a document can be refused below
+  what runs: select the field once per type yourself.
+- **One unused fragment at a time.** A document holding several, or another
+  validation error beside one, reads the first in its text alone, where validation
+  would have listed them all.
+- **A list's rows are bounded by what one row copies, not by how many there are.**
+  How many rows a list answers is known only once it ran, so a page of 100,000 rows
+  each reading 4 KiB still holds 400 MB of copies at once. Score the list by its rows
+  with [a `complexity`](/graphql/field-complexity/#the-auto-emitted-hasmany-factor), which `#[expose]` writes for
+  a relation, and page what a field answers.
+- **A value is counted as text, and held in memory as values.** A list of a million
+  small numbers fills a 2 MB body, and may be referred to twice as any variable may:
+  that request peaks at 233 MiB, 160 MiB of it before any copy, where a count of what
+  values take in memory would refuse a body the transport admits. Lower
+  `max_body_bytes` to lower both.
 
 ## Underlying library
 
@@ -248,15 +252,19 @@ for the full reference.
 
 ## Reference
 
-- `crates/nest-rs-graphql/src/config.rs` — the two `Option<usize>`
-  config fields and their env parsing.
+- `crates/nest-rs-graphql/src/config.rs` — the `Option<usize>` limits
+  `max_depth`, `max_complexity` and `max_list_argument_bytes`, and their env
+  parsing.
 - `crates/nest-rs-graphql/src/resolver.rs` — `build_schema` applies
   the limits to the `SchemaBuilder` before `.finish()`.
-- `crates/nest-rs-resource-macros/src/relations.rs` — the
-  `DEFAULT_HAS_MANY_COMPLEXITY` constant and the
+- `crates/nest-rs-graphql/src/document_cost.rs` — what a document's
+  fragments and variables add, and what a list's rows copy, counted before
+  anything walks them.
+- `crates/nest-rs-seaorm-macros/src/relations.rs` — the
+  `DEFAULT_HAS_MANY_COMPLEXITY` constant; `attr.rs` beside it — the
   `#[expose(complexity = …)]` parsing.
 
 ## Going further
 
-- [Configuration](/graphql/configuration/) — where `max_depth` and `max_complexity` are set.
+- [Configuration](/graphql/configuration/) — where `max_depth`, `max_complexity` and `max_list_argument_bytes` are set.
 - [Relations](/graphql/relations/) — the auto-emitted `HasMany` connection and its complexity formula.

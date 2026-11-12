@@ -1,81 +1,81 @@
-//! `#[mcp]` + `#[tools]` — the tool host mounts on the HTTP transport, so its
-//! expansion names the container, the endpoint meta and the mount resolution.
-//! None of those is a crate a tool host declares.
+//! `#[mcp]` + `#[tools]`, through the umbrella alone: the layers a host and
+//! an operation bind, a `Scoped<T>` and an `Ambient<T>` parameter, an error of the
+//! domain's own type, an operation stating no posture, and a resource read
+//! through its template beside the listing, one binding its subject by id.
 //!
-//! It now also names the **request layers**: the per-operation guard chain
-//! (`nest-rs-guards`) and the per-argument pipe carrier (`nest-rs-pipes`). Both
-//! are unconditional in the expansion of a decorated operation, and neither
-//! appears in this crate's manifest — which is the whole assertion.
-//!
-//! The sharper half of the witness is what is **not** written below. rmcp's own
-//! `#[tool_router]` / `#[tool_handler]` / `#[prompt]` family expands to bare
-//! `rmcp::` paths resolved against the *call site*, which used to force a
-//! `use nest_rs::mcp::rmcp;` into every host file. `#[tools]` now emits those
-//! inside a private module that carries the import itself, so this
-//! file names neither `rmcp` nor `ServerHandler` nor a router — and if that ever
-//! regresses, this crate needs a second dependency and stops compiling, which is
-//! the whole point of it.
-//!
-//! `#[authorize(Action, Entity)]` is deliberately *not* witnessed here: it needs
-//! a real entity, which is the same reason this crate does not consume
-//! `#[crud]`/`#[expose]`. Its expansion is proved by `nest-rs-mcp`'s own suite
-//! and by `demo/`.
+//! rmcp's `#[tool_router]`/`#[tool_handler]`/`#[prompt]` expand to bare `rmcp::`
+//! paths resolved at the call site; this file names no `rmcp`, so it stops
+//! compiling if `#[tools]` ever stops carrying that import itself.
 
-use nest_rs::core::Layer;
-use nest_rs::guards::{Denial, Guard, McpGuard, async_trait};
-use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Role};
-use nest_rs::mcp::{McpError, McpOperationContext, Parameters, Valid, input, mcp, tools};
+use nest_rs::core::{Ambient, Layer, Scoped, UnitContext, async_trait, input};
+use nest_rs::guards::{Denial, Guard, GuardFor};
+use nest_rs::mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
+use nest_rs::mcp::{Json, McpError, McpView, Parameters, mcp, tools};
 
-/// The typed input a tool takes. `#[input]` carries the `serde`, `schemars` and
-/// `validator` derives with their `crate = ` overrides, so this file declares
-/// none of them — and `Valid<HygieneArgs>` below is what makes the last one
-/// load-bearing.
+use crate::pipeline::{HygieneUnitAudit, HygieneUnitRefusal};
+
+/// The typed input a tool takes, held to its rules by the operation.
 #[input]
 pub struct HygieneArgs {
-    /// Echoed straight back — the payload is irrelevant, the derives are not.
     #[validate(length(min = 1))]
     pub value: String,
 }
 
-/// A guard bound per operation, so the expansion's chain call has something real
-/// to resolve. `#[injectable]` and the `Guard`/`Layer` pair both come from the
-/// umbrella; a host binding a guard declares no layer crate of its own.
+/// A guard bound per operation, so the expansion's chain call resolves.
 #[nest_rs::core::injectable]
+#[derive(Layer)]
 pub struct HygieneGuard;
-
-impl Layer for HygieneGuard {}
 
 #[async_trait]
 impl Guard for HygieneGuard {
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl McpGuard for HygieneGuard {}
+impl GuardFor<McpView> for HygieneGuard {}
 
-/// A host serving both halves of the decorator surface: tools and prompts, with
-/// a host-scope guard the way a controller or a resolver declares one.
+const STAMP: &str = "Answer with this sentence.";
+
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
+/// Built once per operation's request, read through a `Scoped<T>` parameter.
+#[nest_rs::core::injectable(scope = request)]
+#[derive(Default)]
+pub struct HygieneBasket;
+
+/// What a domain answers when it refuses: no MCP type names it.
+#[derive(Debug)]
+pub struct HygieneRefused;
+
+impl std::fmt::Display for HygieneRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("refused")
+    }
+}
+
+impl std::error::Error for HygieneRefused {}
+
+/// Tools, prompts and resources, under a host-scope guard, interceptor and
+/// exception filter.
 #[mcp(path = "/hygiene")]
+#[meta(HygieneLimit(100))]
 #[use_guards(HygieneGuard)]
+#[use_interceptors(HygieneUnitAudit)]
+#[use_exception_filters(HygieneUnitRefusal)]
 #[derive(Clone, Default)]
 pub struct HygieneTool;
 
-/// One authored block feeds both of rmcp's routers.
-///
-/// The two operations also witness the two ways a description is stated: `echo`
-/// declares it as an argument — the form `demo/` and every scaffold use, and the
-/// only one available to a codebase that carries no comments — and `greet` lets
-/// the doc comment fall through. An operation stating neither does not compile.
+/// A description stated three ways: an argument (`echo`), the doc comment
+/// (`greet`) and a constant (`stamp`).
 #[tools]
 impl HygieneTool {
     #[tool(description = "Echo the argument back.")]
     #[public]
-    async fn echo(
-        &self,
-        Parameters(args): Parameters<Valid<HygieneArgs>>,
-    ) -> Result<String, McpError> {
-        Ok(args.into_inner().value)
+    #[meta(HygieneLimit(10))]
+    async fn echo(&self, Parameters(args): Parameters<HygieneArgs>) -> Result<String, McpError> {
+        Ok(args.value)
     }
 
     /// A prompt with no arguments.
@@ -87,5 +87,162 @@ impl HygieneTool {
             Role::User,
             "hello",
         )]))
+    }
+
+    #[tool(description = STAMP)]
+    #[public]
+    fn stamp(&self) -> Result<String, McpError> {
+        Ok(STAMP.into())
+    }
+
+    #[tool(description = "Answer at once.")]
+    #[public]
+    fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".into())
+    }
+
+    #[tool(description = "Answer as the guards covering it decide.")]
+    fn covered(&self) -> Result<String, McpError> {
+        Ok("covered".into())
+    }
+
+    /// The host's guard re-run on this operation alone.
+    #[tool(description = "Answer once the guard ran again.")]
+    #[public]
+    #[force_guards(HygieneGuard)]
+    fn again(&self) -> Result<String, McpError> {
+        Ok("again".into())
+    }
+
+    #[tool(description = "Say who is calling.")]
+    #[public]
+    async fn operator(
+        &self,
+        operator: Ambient<crate::operator::HygieneOperator>,
+    ) -> Result<String, McpError> {
+        Ok(operator.into_inner().0)
+    }
+
+    #[tool(description = "Read this request's basket.")]
+    #[public]
+    #[use_interceptors(HygieneUnitAudit)]
+    #[use_exception_filters(HygieneUnitRefusal)]
+    async fn basket(&self, basket: Scoped<HygieneBasket>) -> Result<String, HygieneRefused> {
+        let _ = &*basket;
+        Err(HygieneRefused)
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[tool(description = "Count what the caller may read.")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn count(&self) -> Result<String, McpError> {
+        Ok("0".into())
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[tool(description = "Count what a caller with no credential may read.")]
+    #[public(nest_rs::authz::Read, crate::entity::Entity)]
+    fn public_count(&self) -> Result<String, McpError> {
+        Ok("0".into())
+    }
+
+    #[cfg(feature = "authz")]
+    #[tool(description = "Read the export's state, open to any caller.")]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export(&self) -> Result<String, McpError> {
+        Ok("open".into())
+    }
+
+    #[cfg(feature = "authz")]
+    #[tool(description = "Start the export.")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export(&self) -> Result<String, McpError> {
+        Ok("queued".into())
+    }
+
+    #[cfg(feature = "authz")]
+    #[resource(template = "hygiene-export://{id}", description = "Read one export.")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn exported(&self, id: u32) -> Result<Option<Json<HygieneArgs>>, McpError> {
+        Ok(Some(Json(HygieneArgs {
+            value: id.to_string(),
+        })))
+    }
+
+    #[resources]
+    #[public]
+    async fn values(&self) -> Result<Vec<Resource>, McpError> {
+        Ok(vec![Resource::new("hygiene://one", "one")])
+    }
+
+    /// A value read back through its template, beside this request's basket.
+    #[resource(template = "hygiene://{value}", title = "A value")]
+    #[public]
+    #[use_guards(HygieneGuard)]
+    #[use_interceptors(HygieneUnitAudit)]
+    async fn value(
+        &self,
+        value: String,
+        basket: Scoped<HygieneBasket>,
+    ) -> Result<Option<Json<HygieneArgs>>, McpError> {
+        let _ = &*basket;
+        Ok(Some(Json(HygieneArgs { value })))
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[resource(template = "hygiene-count://{id}", description = "Count one row.")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn counted(&self, id: u32) -> Result<String, McpError> {
+        Ok(id.to_string())
+    }
+
+    #[cfg(all(feature = "http", feature = "seaorm"))]
+    #[resource(
+        template = "hygiene-note://{id}",
+        description = "Read one note, loaded."
+    )]
+    #[authorize(nest_rs::authz::Read, bind = crate::crud::HygieneCrudService)]
+    fn note(
+        &self,
+        note: nest_rs::seaorm::Authorized<nest_rs::authz::Read, crate::entity::Entity>,
+    ) -> Result<String, McpError> {
+        Ok(note.into_inner().id.to_string())
+    }
+
+    #[cfg(all(feature = "http", feature = "seaorm"))]
+    #[resource(
+        template = "hygiene-public-note://{id}",
+        description = "Read one note, loaded for any caller."
+    )]
+    #[public(nest_rs::authz::Read, bind = crate::crud::HygieneCrudService)]
+    fn public_note(
+        &self,
+        note: nest_rs::seaorm::Authorized<nest_rs::authz::Read, crate::entity::Entity>,
+    ) -> Result<String, McpError> {
+        Ok(note.into_inner().id.to_string())
+    }
+
+    /// An operation compiled out takes its wrapper, route and guard with it.
+    #[cfg(any())]
+    #[tool(description = "Not in this build.")]
+    #[public]
+    #[use_guards(crate::does_not_exist::Guard)]
+    async fn compiled_out(&self, input: crate::does_not_exist::Input) -> Result<String, McpError> {
+        crate::does_not_exist::answer(input)
+    }
+
+    #[cfg_attr(all(), cfg(any()))]
+    #[tool(description = "Not in this build either.")]
+    #[public]
+    fn compiled_out_by_cfg_attr(&self) -> Result<crate::does_not_exist::Output, McpError> {
+        crate::does_not_exist::answer()
+    }
+
+    /// A duplicate tool name under an excluding condition is not a duplicate route.
+    #[cfg(any())]
+    #[tool(name = "ping", description = "Answer at once, elsewhere.")]
+    #[public]
+    fn ping_elsewhere(&self) -> Result<String, McpError> {
+        Ok("pong".into())
     }
 }

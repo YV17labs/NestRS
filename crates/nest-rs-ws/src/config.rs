@@ -1,96 +1,165 @@
 //! [`WsConfig`] — WebSocket transport options resolved at boot.
 //!
-//! Today a single field, [`max_connection`](WsConfig::max_connection): a ceiling
-//! on how long one socket may stay open. It is a **security** control, not a
-//! resource knob. A WS connection captures its principal/ability **once** at the
-//! upgrade and replays them for every message; `exp` is checked only at that
-//! upgrade. Without a ceiling a socket therefore keeps its privileges after the
-//! bearer token has expired, the user has logged out, or the grant was revoked —
-//! until the peer happens to disconnect. The ceiling bounds that stale-privilege
-//! window: the server closes the socket when it elapses, forcing a fresh upgrade
-//! (and with it a fresh authn/authz check).
+//! [`max_connection`](WsConfig::max_connection) is a **security** control: a
+//! connection captures its principal and ability once at the upgrade, where `exp`
+//! is checked, so the ceiling bounds how long a revoked or expired credential
+//! keeps a live socket's privileges.
 //!
-//! Dual-path like every `nest-rs-*` config: settable via `NESTRS_WS__*` env vars
-//! (`NESTRS_WS__MAX_CONNECTION_SECS`) **and** the pinned struct passed to
-//! [`WsModule::for_root`](crate::WsModule::for_root). `0` (env) / `None` (struct)
-//! means **unlimited** — the pre-ceiling behaviour, kept opt-in preservable.
+//! [`message_timeout`](WsConfig::message_timeout) bounds what one message may
+//! hold its socket for: the read loop answers one message at a time.
+//! [`connect_timeout`](WsConfig::connect_timeout) and
+//! [`disconnect_timeout`](WsConfig::disconnect_timeout) bound the connection
+//! hooks the same way, each unit by its own deadline.
+//!
+//! [`ping_interval`](WsConfig::ping_interval) and
+//! [`ping_timeout`](WsConfig::ping_timeout) bound what a peer gone without a
+//! close holds: a socket's TCP connection reports nothing of a peer that
+//! vanished, so the socket asks with a Ping (RFC 6455 §5.5.2) and drops a peer
+//! that sends nothing back.
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::config;
+use nest_rs_http::{
+    MAX_CONNECTION_BOUNDS, MAX_MESSAGE_BYTES_BOUNDS, PING_INTERVAL_BOUNDS, PING_TIMEOUT_BOUNDS,
+    UNIT_TIMEOUT_BOUNDS,
+};
 
-/// Default socket-lifetime ceiling: 4 hours. Long enough not to disrupt a normal
-/// interactive session, short enough to bound how long a revoked or expired
-/// credential keeps a live socket's privileges.
-const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
-
-/// Default per-message byte cap: 64 KiB. Applied at the WebSocket *protocol*
-/// layer so an oversize frame is refused while reading rather than after
-/// tungstenite buffers it whole (its own default is 64 MiB — a ~1000×
-/// amplification, WS-I1).
+/// Default per-message byte cap: 64 KiB, against tungstenite's own 64 MiB.
 pub(crate) const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
-/// WebSocket transport options resolved at boot (namespace `ws`). See the
-/// module docs for why the socket-lifetime ceiling is a security control.
+/// WebSocket transport options resolved at boot (namespace `ws`).
 #[config(namespace = "ws")]
 #[derive(Clone, Debug)]
 pub struct WsConfig {
-    /// Maximum lifetime of a single WebSocket connection. When it elapses the
-    /// server closes the socket through the normal disconnect path, so the peer
-    /// must re-upgrade — re-running authn/authz and re-checking token `exp`.
-    /// `None` ⇒ unlimited (the pre-ceiling behaviour). Read from
-    /// `NESTRS_WS__MAX_CONNECTION_SECS` (whole seconds; `0` ⇒ unlimited);
-    /// defaults to 4 hours.
+    /// Maximum lifetime of a single WebSocket connection; the peer must then
+    /// re-upgrade, re-running authn/authz. `None` ⇒ unlimited. Read from
+    /// `<PREFIX>_WS__MAX_CONNECTION_SECS`, whole seconds from 1 to 86400 or `0`
+    /// for unlimited; defaults to 4 hours,
+    /// [`nest_rs_http::DEFAULT_MAX_CONNECTION`].
+    #[config(bounds = MAX_CONNECTION_BOUNDS)]
     pub max_connection: Option<Duration>,
     /// Maximum bytes accepted for a single inbound message, enforced at the
-    /// WebSocket protocol layer (both `max_message_size` and `max_frame_size`)
-    /// so buffering is bounded *before* a giant frame is fully read (WS-I1).
-    /// Read from `NESTRS_WS__MAX_MESSAGE_BYTES`; defaults to 64 KiB.
-    #[validate(range(min = 1, message = "must be at least 1 byte"))]
+    /// protocol layer so a giant frame is refused before it is buffered. Read
+    /// from `<PREFIX>_WS__MAX_MESSAGE_BYTES`, from 1 to a gibibyte
+    /// ([`MAX_MESSAGE_BYTES_BOUNDS`]) — refused outside, from the environment
+    /// and from the pinned struct alike; defaults to 64 KiB.
+    #[config(bounds = MAX_MESSAGE_BYTES_BOUNDS)]
     pub max_message_bytes: usize,
+    /// Wall-clock deadline for one message — its guards, pipes and handler —
+    /// counted once its envelope is decoded; past it the message's work is
+    /// dropped and rolled back, its client is answered an error frame, and the
+    /// socket goes on serving. `None` ⇒ no deadline. Read from
+    /// `<PREFIX>_WS__MESSAGE_TIMEOUT_SECS`, whole seconds from 1 to 3600 or `0`
+    /// for none — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 20 seconds,
+    /// [`nest_rs_http::DEFAULT_UNIT_TIMEOUT`]. A deadline past the HTTP
+    /// shutdown window, or none, is said at boot with a `warn`.
+    #[config(bounds = UNIT_TIMEOUT_BOUNDS)]
+    pub message_timeout: Option<Duration>,
+    /// Wall-clock deadline for the `#[on_connect]` hook; past it the hook's
+    /// work is dropped and rolled back, and the socket is closed unserved with
+    /// 1011, as when the hook panics. `None` ⇒ no deadline. Read from
+    /// `<PREFIX>_WS__CONNECT_TIMEOUT_SECS`, on `message_timeout`'s range and
+    /// with its default, 20 seconds.
+    #[config(bounds = UNIT_TIMEOUT_BOUNDS)]
+    pub connect_timeout: Option<Duration>,
+    /// Wall-clock deadline for the `#[on_disconnect]` hook; past it the hook's
+    /// work is dropped and rolled back, and the close goes on. `None` ⇒ no
+    /// deadline. Read from `<PREFIX>_WS__DISCONNECT_TIMEOUT_SECS`, on
+    /// `message_timeout`'s range and with its default, 20 seconds.
+    #[config(bounds = UNIT_TIMEOUT_BOUNDS)]
+    pub disconnect_timeout: Option<Duration>,
+    /// How long the peer may send nothing before the socket sends it a Ping
+    /// (RFC 6455 §5.5.2), which a client answers as it reads; any frame from
+    /// the peer counts, so a peer that talks is never pinged, and one that only
+    /// listens is pinged however busy its socket is. `None` ⇒ no Ping,
+    /// and a peer gone without a close holds its socket to
+    /// [`max_connection`](Self::max_connection). Read from
+    /// `<PREFIX>_WS__PING_INTERVAL_SECS`, whole seconds from 1 to 3600 or `0`
+    /// for none — refused outside, from the environment and from the pinned
+    /// struct alike; defaults to 20 seconds, [`nest_rs_http::DEFAULT_PING_INTERVAL`].
+    #[config(bounds = PING_INTERVAL_BOUNDS)]
+    pub ping_interval: Option<Duration>,
+    /// How long a Ping waits for any frame back; past it the peer is taken for
+    /// gone and its socket dropped without a Close, its disconnect hook run. A
+    /// peer that vanished is so released within the interval and this timeout
+    /// of its last frame. Read from `<PREFIX>_WS__PING_TIMEOUT_SECS`, whole
+    /// seconds from 1 to 3600, never off — refused outside, from the
+    /// environment and from the pinned struct alike; defaults to 20 seconds,
+    /// [`nest_rs_http::DEFAULT_PING_TIMEOUT`].
+    #[config(bounds = PING_TIMEOUT_BOUNDS)]
+    pub ping_timeout: Duration,
 }
 
 impl Default for WsConfig {
     fn default() -> Self {
         Self {
-            max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
+            max_connection: Some(nest_rs_http::DEFAULT_MAX_CONNECTION),
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            message_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
+            connect_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
+            disconnect_timeout: Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT),
+            ping_interval: Some(nest_rs_http::DEFAULT_PING_INTERVAL),
+            ping_timeout: nest_rs_http::DEFAULT_PING_TIMEOUT,
         }
     }
 }
 
 impl WsConfig {
-    /// Pin the socket-lifetime ceiling in code.
-    pub fn with_max_connection(mut self, ttl: Duration) -> Self {
-        self.max_connection = Some(ttl);
-        self
-    }
-}
-
-impl Config for WsConfig {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let max_connection = env.seconds("MAX_CONNECTION_SECS", base.max_connection)?;
-        let max_message_bytes = env
-            .parse::<usize>("MAX_MESSAGE_BYTES")?
-            .unwrap_or(base.max_message_bytes);
-        Ok(Self {
-            max_connection,
-            max_message_bytes,
-        })
+    /// One boot `warn` for the gateway at `path` per unit whose deadline is off
+    /// or outlasts the HTTP shutdown `window`: a unit admitted just before a
+    /// stop can then be cut unanswered. Not a refusal — a deployment may accept
+    /// it knowingly.
+    pub(crate) fn warn_when_units_outlast_the_window(&self, window: Duration, path: &str) {
+        for (unit, timeout) in [
+            (crate::unit::MESSAGE, self.message_timeout),
+            (crate::unit::CONNECT, self.connect_timeout),
+            (crate::unit::DISCONNECT, self.disconnect_timeout),
+        ] {
+            if timeout.is_some_and(|timeout| timeout <= window) {
+                continue;
+            }
+            tracing::warn!(
+                target: crate::TARGET,
+                path,
+                unit = unit.name(),
+                timeout_ms = timeout.map_or(0, |timeout| timeout.as_millis()),
+                shutdown_timeout_ms = window.as_millis(),
+                "a websocket unit's deadline outlasts the shutdown window: one admitted just \
+                 before a stop can be cut unanswered",
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_config::{Config, ConfigService};
+
     use super::*;
 
-    // The dual-path rule is framework-wide, not an HTTP special case: a pinned
-    // `WsConfig` still takes its overrides per field from `NESTRS_WS__*`.
+    /// A socket's ceiling and a message's deadline default to the values the
+    /// HTTP transport they ride on exports, never a copy of them.
+    #[test]
+    fn the_defaults_are_the_transports_own() {
+        let d = WsConfig::default();
+        assert_eq!(d.max_connection, Some(nest_rs_http::DEFAULT_MAX_CONNECTION));
+        for timeout in [d.message_timeout, d.connect_timeout, d.disconnect_timeout] {
+            assert_eq!(timeout, Some(nest_rs_http::DEFAULT_UNIT_TIMEOUT));
+        }
+    }
+
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         let pinned = WsConfig {
             max_connection: Some(Duration::from_secs(60)),
             max_message_bytes: 999,
+            message_timeout: Some(Duration::from_secs(5)),
+            connect_timeout: Some(Duration::from_secs(6)),
+            disconnect_timeout: Some(Duration::from_secs(7)),
+            ping_interval: Some(Duration::from_secs(8)),
+            ping_timeout: Duration::from_secs(9),
         };
         let cfg = WsConfig::from_env(
             &ConfigService::with_vars("ws", [("MAX_MESSAGE_BYTES", "2048")]),
@@ -103,22 +172,179 @@ mod tests {
             Some(Duration::from_secs(60)),
             "and the field the env is silent about keeps the pin",
         );
+        assert_eq!(cfg.message_timeout, Some(Duration::from_secs(5)));
+
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("MESSAGE_TIMEOUT_SECS", "45")]),
+            cfg,
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.message_timeout, Some(Duration::from_secs(45)));
+        assert_eq!(cfg.max_message_bytes, 2048, "the other pins hold");
     }
 
     #[test]
-    fn default_bounds_the_socket_to_four_hours() {
-        // A bounded default is deliberate: the stale-privilege window is capped
-        // unless an operator opts back into unlimited.
+    fn a_zero_message_timeout_reads_as_none() {
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("MESSAGE_TIMEOUT_SECS", "0")]),
+            Default::default(),
+        )
+        .expect("ok");
+        assert_eq!(cfg.message_timeout, None, "`0` is the off sentinel");
+    }
+
+    #[test]
+    fn a_message_timeout_outside_its_range_is_refused_naming_its_variable() {
+        let var = nest_rs_config::var_name("ws", "MESSAGE_TIMEOUT_SECS");
+        let refused = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("MESSAGE_TIMEOUT_SECS", "3601")]),
+            Default::default(),
+        )
+        .expect_err("past an hour")
+        .to_string();
+        assert!(
+            refused.contains(&var)
+                && refused.contains("must be at most 3600 seconds, or 0 to turn it off"),
+            "{refused}"
+        );
+        let pinned = WsConfig::from_env(
+            &ConfigService::with_vars("ws", []),
+            WsConfig {
+                message_timeout: Some(Duration::ZERO),
+                ..WsConfig::default()
+            },
+        )
+        .expect_err("a pinned zero")
+        .to_string();
+        assert!(
+            pinned.contains(&var) && pinned.contains("`None` turns it off"),
+            "{pinned}"
+        );
+    }
+
+    /// The "default is ordered" half of the deadline rule, as HTTP's request
+    /// timeout holds it: a unit admitted just before a stop is answered inside
+    /// the window.
+    #[test]
+    fn every_default_unit_timeout_fits_the_default_shutdown_window() {
+        let config = WsConfig::default();
+        let window = nest_rs_http::HttpConfig::default().shutdown_timeout;
+        for timeout in [
+            config.message_timeout,
+            config.connect_timeout,
+            config.disconnect_timeout,
+        ] {
+            let timeout = timeout.expect("every unit is bounded by default");
+            assert!(
+                timeout <= window,
+                "{timeout:?} outlasts the {window:?} window"
+            );
+        }
+    }
+
+    #[test]
+    fn each_hook_deadline_reads_its_own_variable_and_refuses_outside_its_range() {
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars(
+                "ws",
+                [
+                    ("CONNECT_TIMEOUT_SECS", "3"),
+                    ("DISCONNECT_TIMEOUT_SECS", "0"),
+                ],
+            ),
+            Default::default(),
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.connect_timeout, Some(Duration::from_secs(3)));
+        assert_eq!(cfg.disconnect_timeout, None, "`0` is the off sentinel");
         assert_eq!(
-            WsConfig::default().max_connection,
-            Some(Duration::from_secs(4 * 60 * 60)),
+            cfg.message_timeout,
+            WsConfig::default().message_timeout,
+            "a hook's deadline is its own"
+        );
+        for setting in ["CONNECT_TIMEOUT_SECS", "DISCONNECT_TIMEOUT_SECS"] {
+            let var = nest_rs_config::var_name("ws", setting);
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", [(setting, "3601")]),
+                Default::default(),
+            )
+            .expect_err("past an hour")
+            .to_string();
+            assert!(refused.contains(&var), "{refused}");
+        }
+    }
+
+    /// A socket pings a silent peer, and drops one that sends nothing back, on
+    /// the values the HTTP transport exports for every socket edge.
+    #[test]
+    fn a_socket_pings_on_the_transports_defaults() {
+        let d = WsConfig::default();
+        assert_eq!(d.ping_interval, Some(nest_rs_http::DEFAULT_PING_INTERVAL));
+        assert_eq!(d.ping_timeout, nest_rs_http::DEFAULT_PING_TIMEOUT);
+    }
+
+    #[test]
+    fn each_ping_setting_reads_its_own_variable_and_the_interval_turns_off_at_zero() {
+        let cfg = WsConfig::from_env(
+            &ConfigService::with_vars(
+                "ws",
+                [("PING_INTERVAL_SECS", "45"), ("PING_TIMEOUT_SECS", "10")],
+            ),
+            Default::default(),
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.ping_interval, Some(Duration::from_secs(45)));
+        assert_eq!(cfg.ping_timeout, Duration::from_secs(10));
+
+        let off = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("PING_INTERVAL_SECS", "0")]),
+            Default::default(),
+        )
+        .expect("the overlay resolves");
+        assert_eq!(off.ping_interval, None, "`0` is the off sentinel");
+        assert_eq!(off.ping_timeout, nest_rs_http::DEFAULT_PING_TIMEOUT);
+    }
+
+    /// A second to an hour each, naming the variable; the timeout has no off, so
+    /// a zero from either side is refused.
+    #[test]
+    fn the_ping_settings_are_held_to_their_ranges_from_either_side() {
+        for (setting, raw) in [
+            ("PING_INTERVAL_SECS", "3601"),
+            ("PING_TIMEOUT_SECS", "3601"),
+            ("PING_TIMEOUT_SECS", "0"),
+        ] {
+            let var = nest_rs_config::var_name("ws", setting);
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", [(setting, raw)]),
+                Default::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(refused.contains(&var), "{refused}");
+        }
+        let pinned = WsConfig::from_env(
+            &ConfigService::with_vars("ws", []),
+            WsConfig {
+                ping_interval: Some(Duration::ZERO),
+                ..WsConfig::default()
+            },
+        )
+        .expect_err("a pinned zero interval")
+        .to_string();
+        assert!(
+            pinned.contains(&nest_rs_config::var_name("ws", "PING_INTERVAL_SECS"))
+                && pinned.contains("`None` turns it off"),
+            "{pinned}"
         );
     }
 
     #[test]
-    fn with_max_connection_pins_the_ceiling_in_code() {
-        let cfg = WsConfig::default().with_max_connection(Duration::from_secs(600));
-        assert_eq!(cfg.max_connection, Some(Duration::from_secs(600)));
+    fn default_bounds_the_socket_to_four_hours() {
+        assert_eq!(
+            WsConfig::default().max_connection,
+            Some(Duration::from_secs(4 * 60 * 60)),
+        );
     }
 
     #[test]
@@ -163,6 +389,49 @@ mod tests {
         assert_eq!(cfg.max_message_bytes, 1_048_576);
     }
 
+    /// One byte to a gibibyte, from the environment and from a pin, naming the
+    /// variable and its range and never the value it was given.
+    #[test]
+    fn the_message_cap_is_held_to_its_range_from_either_side() {
+        let var = nest_rs_config::var_name("ws", "MAX_MESSAGE_BYTES");
+        for (raw, said) in [
+            ("0", "must be at least 1 — "),
+            ("1073741825", "must be at most 1073741824 — "),
+        ] {
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", [("MAX_MESSAGE_BYTES", raw)]),
+                WsConfig::default(),
+            )
+            .expect_err("outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains(said),
+                "{refused}"
+            );
+            assert!(!refused.contains("1073741825"), "{refused}");
+        }
+        for (pinned, said) in [
+            (0, "below the 1 it must be at least"),
+            ((1 << 30) + 1, "above the 1073741824 it must be at most"),
+        ] {
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", []),
+                WsConfig {
+                    max_message_bytes: pinned,
+                    ..WsConfig::default()
+                },
+            )
+            .expect_err("a pin outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var)
+                    && refused.contains("`WsConfig::max_message_bytes` set in code")
+                    && refused.contains(said),
+                "{refused}"
+            );
+        }
+    }
+
     #[test]
     fn from_env_rejects_an_unparseable_ceiling() {
         assert!(
@@ -173,5 +442,36 @@ mod tests {
             .is_err(),
             "non-numeric must surface as a boot error — no silent default",
         );
+    }
+
+    #[test]
+    fn a_ceiling_outside_its_range_is_refused_from_either_side() {
+        let var = nest_rs_config::var_name("ws", "MAX_CONNECTION_SECS");
+        let from_env = WsConfig::from_env(
+            &ConfigService::with_vars("ws", [("MAX_CONNECTION_SECS", "86401")]),
+            Default::default(),
+        )
+        .expect_err("past a day")
+        .to_string();
+        assert!(
+            from_env.contains(&var)
+                && from_env.contains("must be at most 86400 seconds, or 0 to turn it off"),
+            "{from_env}"
+        );
+        for pinned in [Duration::MAX, Duration::ZERO] {
+            let refused = WsConfig::from_env(
+                &ConfigService::with_vars("ws", []),
+                WsConfig {
+                    max_connection: Some(pinned),
+                    ..WsConfig::default()
+                },
+            )
+            .expect_err("a pinned ceiling outside the range")
+            .to_string();
+            assert!(
+                refused.contains(&var) && refused.contains("`None` turns it off"),
+                "{refused}"
+            );
+        }
     }
 }

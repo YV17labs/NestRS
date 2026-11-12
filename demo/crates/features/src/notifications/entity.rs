@@ -1,14 +1,14 @@
-use nest_rs::resource::expose;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
-#[expose(name = "Notification", service = super::service::NotificationsService)]
+#[expose(
+    name = "Notification",
+    service = super::service::NotificationsService,
+    timestamps
+)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "notification",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "notification")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
@@ -20,5 +20,3 @@ pub struct Model {
     #[expose]
     pub created_at: DateTimeWithTimeZone,
 }
-
-impl ActiveModelBehavior for ActiveModel {}

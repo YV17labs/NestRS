@@ -1,102 +1,88 @@
-//! WebSocket gateway decorator macros. Generated code uses absolute paths so
-//! this crate does not depend on the surface crates.
+//! WebSocket gateway decorator macros, re-exported by `nest-rs-ws`.
 //!
 //! `#[subscribe_message("event")]`, `#[on_connect]`, `#[on_disconnect]` are
-//! inert attributes consumed by `#[messages]`, same shape as the HTTP verb
-//! attributes consumed by `#[routes]`.
+//! inert attributes consumed by `#[messages]`.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
 mod gateway;
 mod messages;
 
-/// `#[gateway(path = "/ws")]` — the `@WebSocketGateway` analog. Generates
-/// `from_container`, `pub const PATH` / `pub const VERSION`, and the inherent
-/// helpers `#[messages]` reads back.
+/// `#[gateway(path = "/ws")]` generates a hidden constructor, `pub const PATH`
+/// / `pub const VERSION`, and the inherent helpers `#[messages]` reads back.
 ///
-/// `version = "1"` mounts the gateway at `/v1/ws` instead of `/ws` — the same
-/// declaration `#[controller]` takes, resolved through the same
-/// `nest_rs_http::version_path`, because a gateway's mount is an address a
-/// client selects. Two gateways may share a `path` under different versions;
-/// two on the same path *and* version fail boot naming both.
+/// `version = "1"` mounts the gateway at `/v1/ws` instead of `/ws`, as
+/// `#[controller]` does. Two gateways may share a `path` under different
+/// versions; two on the same path *and* version fail boot naming both.
 ///
 /// `namespace = MarkerType` mounts against `WsServer<MarkerType>` — a
 /// self-provided isolated registry. Omitted, uses `Global` from `WsModule`.
 ///
 /// `#[use_guards(...)]` on the struct = connection-level guards, run on the
-/// HTTP upgrade request so a rejected handshake never opens the socket. The
-/// `Discoverable` impl is emitted by `#[messages]` (it needs the message
-/// table).
+/// HTTP upgrade request so a rejected handshake never opens the socket.
+/// `#[use_interceptors(...)]`, `#[use_exception_filters(...)]` and
+/// `#[use_pipes(...)]` on the struct run around, and over the `data` of, each
+/// of its messages. A `#[meta(EXPR)]` on the struct is declared for every
+/// message and hook.
 ///
 /// # Expands to
 ///
-/// The struct unchanged, plus inherent items: `PATH`, `VERSION`,
-/// `from_container`, `__nestrs_mount_path` (the two folded through
-/// `version_path`), `__nestrs_injected` (inject keys + connection guards),
-/// `__nestrs_registry` / `__nestrs_provide_registry` (resolve/provide the
-/// `WsServer<Ns>`), and `__nestrs_gateway_layers` (wraps the endpoint with the
-/// connection-level guard chain, deduped against the global chain). No
-/// `Discoverable` here — `#[messages]` emits it.
-///
-/// ```ignore
-/// pub struct ChatGateway { /* … */ }
-/// impl ChatGateway {
-///     pub const PATH: &'static str = "/ws";
-///     pub const VERSION: Option<&'static str> = Some("1");
-///     pub fn __nestrs_mount_path() -> String { /* "/v1/ws" */ }
-///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* … */ }
-///     pub fn __nestrs_injected() -> Vec<TypeId> { /* … */ }
-///     pub fn __nestrs_registry(c) -> Arc<::nest_rs_ws::WsServer<Ns>> { /* … */ }
-///     pub fn __nestrs_provide_registry(b) -> ContainerBuilder { /* … */ }
-///     pub fn __nestrs_gateway_layers<E>(c, ep) -> BoxEndpoint { /* guard layers */ }
-/// }
-/// ```
+/// The struct unchanged, plus `PATH`, `VERSION`, a hidden constructor,
+/// and the hidden helpers `#[messages]` reads. `#[messages]` emits the
+/// `Discoverable` impl.
 #[proc_macro_attribute]
 pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(gateway::gateway(args, input).into()).into()
 }
 
-/// Bind a `#[gateway]` impl block's message handlers. Each
-/// `#[subscribe_message("event")]` method handles `{ "event": "...", "data":
-/// ... }`; the owned parameter is deserialized from `data`, the return value
+/// Each `#[subscribe_message("event")]` method handles `{ "event": "...", "data":
+/// ... }`; the payload parameter is deserialized from `data`, the return value
 /// serialized back under the same event (`()` => no reply).
 ///
-/// Each handler declares an access posture — `#[authorize(Action, Entity)]` or
-/// `#[public]` — and the expansion runs, in order: the per-message guard chain,
-/// the class gate the posture emits, the argument pipes, the call, and the reply
-/// mask. Mandatory, so a message nobody decided a posture for does not compile.
+/// A handler's parameters are read by their shape, since a macro reads tokens:
+/// a reference is the `&WsClient`, a type named `Scoped` a request-scoped
+/// provider (`nest_rs_core::Scoped`, resolved by a function of `nest_rs_ws`
+/// that returns that type, so a namesake does not compile), a type named
+/// `Ambient` what a guard attached (`nest_rs_core::Ambient`, the upgrade's guards'
+/// or the message's, resolved the same way), and the one other parameter the
+/// payload. A miss of either answers the opaque error frame, the type filed at
+/// `error`.
 ///
-/// `#[use_guards(...)]` beside a handler binds per-message guards that the
-/// Layer System dedups against the global chain. `#[on_connect]` /
-/// `#[on_disconnect]` are the lifecycle-hook analogs — `&self` with an
-/// optional `&WsClient`.
+/// A handler a guard identifying its caller covers — the gateway's, the app's pool,
+/// its own — needs no access posture; `#[authorize(Action, Subject)]` adds the gate
+/// and opens the message's reads to the caller's ability, `#[public]` says a caller
+/// with no credential is admitted, reading nothing a grant guards, and
+/// `#[public(Action, Subject)]` says it and names what that caller reads, with the
+/// same gate. Each wire row a reply carries was judged for its caller where it was
+/// built. The boot refuses a message no
+/// such guard covers that says none of them, a gateway running no such guard at its
+/// upgrade with no `#[public]` message, and a `#[public]` behind an upgrade that
+/// identifies its caller. Each message runs as a site of the pipeline, in order:
+/// the guard stage (the app's pool, the message's guards, the class gate the
+/// posture emits), the exception filters and the interceptors (the message's
+/// and the gateway's beside the app's), the data pipes, the argument pipes and the
+/// call.
 ///
-/// Emits `Gateway` (dispatcher + hooks) and `Discoverable` — the latter
-/// attaches an `HttpEndpointMeta` so the gateway self-mounts on the HTTP
-/// transport at its effective path (`PATH`, with `VERSION` folded in).
+/// `#[use_guards(...)]` beside a handler binds for that message, deduped
+/// against the app's pool: the gateway's guards run at the upgrade.
+/// `#[use_interceptors(...)]`, `#[use_exception_filters(...)]` and
+/// `#[use_pipes(...)]` beside it bind for it, deduped against the gateway's and
+/// the app's.
+/// `#[on_connect]` / `#[on_disconnect]` are the lifecycle hooks — `&self` with
+/// an optional `&WsClient`. `#[meta(EXPR)]` (repeatable) on a handler declares a
+/// value for it, read over the gateway's of the same type; beside a hook, which
+/// runs no layer to read it, it is refused.
 ///
 /// # Expands to
 ///
-/// The impl unchanged, an `impl Gateway` whose `dispatch` matches the event
-/// name to the right handler (deserializing `data`, serializing the reply) and
-/// carries the `on_connect`/`on_disconnect` overrides, and an `impl
-/// Discoverable` whose `register` attaches an `HttpEndpointMeta` that
-/// self-mounts at `__nestrs_mount_path()` and composes the per-event guard
-/// chains (global + per-message, deduped) once at mount.
-///
-/// ```ignore
-/// #[::nest_rs_ws::async_trait]
-/// impl ::nest_rs_ws::Gateway for ChatGateway {
-///     async fn dispatch(&self, client, event, data) -> ::nest_rs_ws::WsReply {
-///         match event { "send" => { /* deser data → call handler → reply */ } _ => unknown }
-///     }
-///     async fn on_connect(&self, client) { /* … */ }    // if present
-/// }
-/// impl ::nest_rs_core::Discoverable for ChatGateway {
-///     fn register(b) -> ContainerBuilder { /* attach_meta::<_, HttpEndpointMeta>(… self-mount at PATH …) */ }
-/// }
-/// ```
+/// The impl unchanged, a `static` site per message, an `impl Gateway` whose
+/// handle matches the event name to its handler, whose gate lookup matches it
+/// to its posture's class gate, and which carries the lifecycle hooks, and an
+/// `impl Discoverable` attaching the `HttpEndpointMeta` that
+/// self-mounts the gateway at `PATH` with `VERSION` folded in, and the wiring
+/// that checks the gateway at boot.
 #[proc_macro_attribute]
 pub fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(messages::messages(args, input).into()).into()

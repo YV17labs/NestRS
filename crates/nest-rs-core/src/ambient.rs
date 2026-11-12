@@ -1,0 +1,827 @@
+//! The ambient context: what a unit of work carries for the code it calls, how
+//! far each value travels when the unit continues on another future, and
+//! [`Ambient<T>`], what a guard attached read as a handler's parameter on every
+//! edge.
+//!
+//! The values ride inside the request context's one task-local, a few inline
+//! before a spill, so adding one is one allocation and reading one is a scan
+//! of a handful of `TypeId`s (`.claude/decisions/ambient-carry.md`).
+
+use std::any::{Any, TypeId};
+use std::fmt;
+use std::future::Future;
+use std::ops::Deref;
+use std::sync::Arc;
+
+use tokio::time::Instant;
+
+use crate::error::MissingAmbientError;
+use crate::request_scope;
+
+/// A value a unit carries for the code it calls, and how far it travels.
+///
+/// Implementing it is the visible line that lets a type travel: nothing is
+/// ambient until its type says so, a guard's principal type included.
+///
+/// ```
+/// use std::sync::Arc;
+/// use nest_rs_core::{AmbientValue, ambient, with_ambient};
+///
+/// struct Tenant(&'static str);
+///
+/// impl AmbientValue for Tenant {}
+///
+/// # #[nest_rs_core::main]
+/// # async fn main() {
+/// with_ambient(Arc::new(Tenant("acme")), async {
+///     assert_eq!(ambient::<Tenant>().map(|tenant| tenant.0), Some("acme"));
+/// })
+/// .await;
+/// assert!(ambient::<Tenant>().is_none());
+/// # }
+/// ```
+pub trait AmbientValue: Any + Send + Sync {
+    /// What crosses into `into`: the value itself (the default, everywhere but
+    /// a job's envelope and an answer), a narrower value, or nothing.
+    fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
+        (!matches!(into, Continuation::Envelope | Continuation::Answer)).then_some(self)
+    }
+
+    /// What a captured value is where its capture is re-entered inside another
+    /// running unit, read there: the value itself (the default), a narrower
+    /// value, or nothing. A value that grants returns none wider than what the
+    /// running unit already holds.
+    fn reenter(self: Arc<Self>) -> Option<Arc<Self>> {
+        Some(self)
+    }
+}
+
+/// Where a unit continues once the future that accepted it is no longer the
+/// one running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Continuation {
+    /// Its streaming response body (`#[sse]`, a download), polled after the
+    /// handler returned.
+    Body,
+    /// A DataLoader batch it triggers, run on another task while it waits.
+    /// Shared by every field of the request that loads through the loader, so
+    /// it carries the request unit's values, never a nested field's.
+    Batch,
+    /// A task it hands work to with `TaskContext`, which may outlive it.
+    Task,
+    /// Work it holds for its commit: `after_commit`, an emitted event's
+    /// listeners.
+    Commit,
+    /// The next units of a connection it opened: a socket's messages, a
+    /// graphql-ws operation.
+    Connection,
+    /// A job it pushes: nothing crosses but the envelope's own keys.
+    Envelope,
+    /// The answer it returned, resolved once it returned, inside the unit that
+    /// dispatched it: a GraphQL root field's selection set, a subscription's
+    /// items. Only what judges the rows it answers crosses, merged over what
+    /// resolves it; nothing else does unless its `carry` says so.
+    Answer,
+}
+
+/// The running unit's `T`, when it carries one.
+pub fn ambient<T: AmbientValue>() -> Option<Arc<T>> {
+    request_scope::current_request_ctx(|ctx| ctx.ambient.get::<T>()).flatten()
+}
+
+/// Whether the running unit carries an ambient value of the type `type_id` names.
+pub(crate) fn carries(type_id: TypeId) -> bool {
+    request_scope::current_request_ctx(|ctx| ctx.ambient.holds_type(type_id)).unwrap_or(false)
+}
+
+/// Whether the running unit carries an ambient value of any type.
+pub(crate) fn carries_ambient() -> bool {
+    request_scope::current_request_ctx(|ctx| !ctx.ambient.is_empty()).unwrap_or(false)
+}
+
+/// Run `fut` with `value` added to what the running unit carries, replacing
+/// the `T` it carried for `fut` alone.
+pub fn with_ambient<T: AmbientValue, F: Future>(
+    value: Arc<T>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    with_ambient_from(move || value, fut)
+}
+
+/// [`with_ambient`] with the value `make` returns where `fut` first runs, so it
+/// can read what the unit carries there.
+pub fn with_ambient_from<T: AmbientValue, F: Future>(
+    make: impl FnOnce() -> Arc<T>,
+    fut: F,
+) -> impl Future<Output = F::Output> {
+    request_scope::install(
+        move || {
+            let mut added = Entries::default();
+            added.set(Entry::of(make()));
+            added
+        },
+        fut,
+    )
+}
+
+/// When the running unit must end by, on tokio's clock, the clock
+/// [`UnitContext::deadline`](crate::UnitContext::deadline) reads. A
+/// [`Batch`](Continuation::Batch), which the unit waits on, keeps it; every
+/// other continuation drops it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Deadline(pub Instant);
+
+impl AmbientValue for Deadline {
+    fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
+        (into == Continuation::Batch).then_some(self)
+    }
+}
+
+/// Ambient on a unit whose posture names no subject, or a connection hook: an
+/// ability its guards attached is withheld from its reads, which no posture named,
+/// so such a unit reads nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadsWithheld;
+
+impl AmbientValue for ReadsWithheld {}
+
+/// A value as the map holds it.
+type Erased = Arc<dyn Any + Send + Sync>;
+
+/// How one erased value crosses a continuation: its type's own `carry`.
+type CarryFn = fn(Erased, Continuation) -> Option<Erased>;
+
+/// How one erased value is re-entered: its type's own `reenter`.
+type ReenterFn = fn(Erased) -> Option<Erased>;
+
+/// One ambient value, with the `carry` and `reenter` of the type it was added
+/// as.
+#[derive(Clone)]
+pub(crate) struct Entry {
+    id: TypeId,
+    value: Erased,
+    carry: CarryFn,
+    reenter: ReenterFn,
+}
+
+impl Entry {
+    pub(crate) fn of<T: AmbientValue>(value: Arc<T>) -> Self {
+        Self {
+            id: TypeId::of::<T>(),
+            value,
+            carry: carry_erased::<T>,
+            reenter: reenter_erased::<T>,
+        }
+    }
+
+    /// The same value's entry, holding `value` in its place.
+    fn holding(&self, value: Erased) -> Self {
+        Self {
+            id: self.id,
+            value,
+            carry: self.carry,
+            reenter: self.reenter,
+        }
+    }
+}
+
+/// `T::carry` behind the erased value, monomorphised where the value was added
+/// so the map stays object-safe.
+fn carry_erased<T: AmbientValue>(value: Erased, into: Continuation) -> Option<Erased> {
+    let typed = value.downcast::<T>().ok()?;
+    let carried: Erased = T::carry(typed, into)?;
+    Some(carried)
+}
+
+/// `T::reenter` behind the erased value, as [`carry_erased`].
+fn reenter_erased<T: AmbientValue>(value: Erased) -> Option<Erased> {
+    let typed = value.downcast::<T>().ok()?;
+    let reentered: Erased = T::reenter(typed)?;
+    Some(reentered)
+}
+
+/// How many values ride inside the context's own allocation.
+const INLINE: usize = 4;
+
+/// The values one unit carries, at most one per type.
+#[derive(Clone, Default)]
+pub(crate) struct Entries {
+    /// Filled front to back, never emptied in place.
+    inline: [Option<Entry>; INLINE],
+    spill: Vec<Entry>,
+}
+
+impl Entries {
+    pub(crate) fn get<T: AmbientValue>(&self) -> Option<Arc<T>> {
+        let id = TypeId::of::<T>();
+        let held = self.iter().find(|held| held.id == id)?;
+        Arc::clone(&held.value).downcast::<T>().ok()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inline[0].is_none()
+    }
+
+    /// Whether a value of the type `id` names is held.
+    pub(crate) fn holds_type(&self, id: TypeId) -> bool {
+        self.iter().any(|held| held.id == id)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &Entry> {
+        self.inline.iter().flatten().chain(&self.spill)
+    }
+
+    /// Add `entry`, replacing the value of its type.
+    pub(crate) fn set(&mut self, entry: Entry) {
+        match self
+            .inline
+            .iter_mut()
+            .flatten()
+            .chain(&mut self.spill)
+            .find(|held| held.id == entry.id)
+        {
+            Some(held) => *held = entry,
+            None => self.push(entry),
+        }
+    }
+
+    /// Whether `entry`'s very value is already the one held for its type.
+    pub(crate) fn holds(&self, entry: &Entry) -> bool {
+        self.iter()
+            .any(|held| held.id == entry.id && Arc::ptr_eq(&held.value, &entry.value))
+    }
+
+    /// What crosses into `into`, each value through its own `carry`; `None`
+    /// when every value crosses unchanged.
+    pub(crate) fn carried(&self, into: Continuation) -> Option<Self> {
+        self.mapped(|entry| (entry.carry)(Arc::clone(&entry.value), into))
+    }
+
+    /// What a capture holding these values installs inside the running unit,
+    /// each value through its own `reenter`, called there; `None` when every
+    /// value is re-entered unchanged.
+    pub(crate) fn reentered(&self) -> Option<Self> {
+        self.mapped(|entry| (entry.reenter)(Arc::clone(&entry.value)))
+    }
+
+    /// Whether `other` holds the very values these are, and no other.
+    pub(crate) fn alike(&self, other: &Self) -> bool {
+        self.len() == other.len() && other.iter().all(|entry| self.holds(entry))
+    }
+
+    /// What crosses into an [`Answer`](Continuation::Answer) that `opened_in`, the
+    /// values of the unit these were opened in, does not hold already: what the
+    /// unit's own stages attached. `None` when nothing does.
+    pub(crate) fn answered(&self, opened_in: Option<&Self>) -> Option<Self> {
+        let mut crossing = Self::default();
+        for entry in self.iter() {
+            let Some(value) = (entry.carry)(Arc::clone(&entry.value), Continuation::Answer) else {
+                continue;
+            };
+            let entry = entry.holding(value);
+            if !opened_in.is_some_and(|held| held.holds(&entry)) {
+                crossing.push(entry);
+            }
+        }
+        (!crossing.is_empty()).then_some(crossing)
+    }
+
+    /// Each value as `map` returns it, or dropped; `None` when every value is
+    /// returned unchanged.
+    fn mapped(&self, map: impl Fn(&Entry) -> Option<Erased>) -> Option<Self> {
+        let mut changed = false;
+        let mut mapped = Self::default();
+        for entry in self.iter() {
+            match map(entry) {
+                Some(value) => {
+                    changed |= !Arc::ptr_eq(&value, &entry.value);
+                    mapped.push(entry.holding(value));
+                }
+                None => changed = true,
+            }
+        }
+        changed.then_some(mapped)
+    }
+
+    /// Add an entry whose type is not held yet.
+    fn push(&mut self, entry: Entry) {
+        match self.inline.iter_mut().find(|slot| slot.is_none()) {
+            Some(slot) => *slot = Some(entry),
+            None => self.spill.push(entry),
+        }
+    }
+}
+
+/// What a stage attached to its unit, made ambient once the whole stage has
+/// passed, so a denied unit installs nothing.
+#[derive(Clone, Default)]
+pub struct Pending(Entries);
+
+impl Pending {
+    /// Record `value`, replacing a `T` recorded earlier.
+    pub fn attach<T: AmbientValue>(&mut self, value: Arc<T>) {
+        self.0.set(Entry::of(value));
+    }
+
+    /// The `T` recorded, if any.
+    pub fn get<T: AmbientValue>(&self) -> Option<Arc<T>> {
+        self.0.get::<T>()
+    }
+
+    /// Whether nothing was recorded.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether a value of the type `id` names was recorded.
+    pub(crate) fn holds_type(&self, id: TypeId) -> bool {
+        self.0.holds_type(id)
+    }
+
+    /// Record everything `later` recorded, each replacing a value of its type
+    /// recorded here: a later stage of the same unit attaching on top.
+    pub fn merge(&mut self, later: Pending) {
+        let Entries { inline, spill } = later.0;
+        for entry in inline.into_iter().flatten().chain(spill) {
+            self.0.set(entry);
+        }
+    }
+}
+
+impl fmt::Debug for Pending {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pending")
+            .field("values", &self.0.len())
+            .finish()
+    }
+}
+
+/// Run `fut` with everything `pending` recorded made ambient, in one install.
+pub fn install_pending<F: Future>(pending: Pending, fut: F) -> impl Future<Output = F::Output> {
+    request_scope::install(move || pending.0, fut)
+}
+
+/// A handler's parameter reading the `T` a guard attached to its unit with
+/// `UnitContext::attach` — the principal an
+/// authentication guard verified, or what a guard after it derived from it.
+///
+/// One parameter on every edge: an HTTP route, a GraphQL operation or field
+/// resolver, a WebSocket message and an MCP operation each read it from the
+/// unit's ambient context once its guards passed, and the edges carrying
+/// operations leave it out of the arguments their protocol describes. Absent,
+/// the unit fails: the guard that attaches `T` did not run there, a wiring
+/// defect the edge answers opaquely and files at `error`, naming the type —
+/// but on an HTTP route where an authentication guard refused a presented
+/// credential, which answers the `401` it deferred.
+///
+/// `T` is cloned out of the ambient context, so attach a value that is cheap to
+/// clone. A guard reads what an earlier one attached with
+/// `UnitContext::require`, and code a handler
+/// calls with [`ambient`].
+pub struct Ambient<T>(pub T);
+
+impl<T> Ambient<T> {
+    /// Take ownership of the attached value.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> Deref for Ambient<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+/// The `Ambient<T>` the running unit carries, or the error naming the type it
+/// lacks: what every edge's parameter reads before answering a miss its own
+/// way.
+pub fn attached<T: AmbientValue + Clone>() -> Result<Ambient<T>, MissingAmbientError> {
+    ambient::<T>()
+        .map(|value| Ambient(T::clone(&value)))
+        .ok_or_else(MissingAmbientError::of::<T>)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::request_scope::{RequestContinuation, with_request_scope};
+    use crate::{Correlation, TaskContext, current_trace_id};
+
+    /// A package's value, crossing with the default `carry`.
+    #[derive(Debug, PartialEq)]
+    struct Tenant(&'static str);
+
+    impl AmbientValue for Tenant {}
+
+    /// A value that narrows on the way out: a handle stepping down to its pool.
+    #[derive(Debug, PartialEq)]
+    enum Handle {
+        Transaction,
+        Pool,
+    }
+
+    impl AmbientValue for Handle {
+        fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
+            match into {
+                Continuation::Body | Continuation::Batch | Continuation::Commit => {
+                    Some(Arc::new(Handle::Pool))
+                }
+                _ => None,
+            }
+        }
+    }
+
+    const EVERY: [Continuation; 7] = [
+        Continuation::Body,
+        Continuation::Batch,
+        Continuation::Task,
+        Continuation::Commit,
+        Continuation::Connection,
+        Continuation::Envelope,
+        Continuation::Answer,
+    ];
+
+    /// What a `T` reads as on the far side of `into`, captured inside `fut`'s
+    /// values.
+    async fn across<T: AmbientValue>(value: Arc<T>, into: Continuation) -> Option<Arc<T>> {
+        let carried = with_request_scope(None, Correlation::minted(None), async {
+            with_ambient(value, async { RequestContinuation::capture(into) }).await
+        })
+        .await
+        .expect("a unit is running where it was captured");
+        carried.enter(ambient::<T>)
+    }
+
+    #[tokio::test]
+    async fn a_later_stage_replaces_what_it_attaches_again_and_keeps_the_rest() {
+        let mut first = Pending::default();
+        first.attach(Arc::new(Tenant("acme")));
+        first.attach(Arc::new(Handle::Transaction));
+        let mut later = Pending::default();
+        later.attach(Arc::new(Tenant("globex")));
+        first.merge(later);
+
+        let seen =
+            install_pending(first, async { (ambient::<Tenant>(), ambient::<Handle>()) }).await;
+        assert_eq!(seen.0.as_deref(), Some(&Tenant("globex")));
+        assert_eq!(seen.1.as_deref(), Some(&Handle::Transaction));
+    }
+
+    #[tokio::test]
+    async fn a_value_is_read_where_it_was_added_and_nowhere_else() {
+        assert!(ambient::<Tenant>().is_none(), "no unit, no value");
+        let seen = with_ambient(Arc::new(Tenant("acme")), async { ambient::<Tenant>() }).await;
+        assert_eq!(seen.as_deref(), Some(&Tenant("acme")));
+        assert!(
+            ambient::<Tenant>().is_none(),
+            "the value goes with its scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_unit_carries_ambient_once_a_value_is_added() {
+        assert!(!carries_ambient(), "no unit, nothing carried");
+        let seen = with_request_scope(None, Correlation::minted(None), async {
+            let bare = carries_ambient();
+            let added = with_ambient(Arc::new(Tenant("acme")), async { carries_ambient() }).await;
+            (bare, added)
+        })
+        .await;
+        assert_eq!(
+            seen,
+            (false, true),
+            "a unit carries nothing until a value is added"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_nested_value_shadows_the_outer_one_and_restores_it() {
+        with_ambient(Arc::new(Tenant("outer")), async {
+            let inner =
+                with_ambient(Arc::new(Tenant("inner")), async { ambient::<Tenant>() }).await;
+            assert_eq!(inner.as_deref(), Some(&Tenant("inner")));
+            assert_eq!(ambient::<Tenant>().as_deref(), Some(&Tenant("outer")));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_install_built_as_an_argument_merges_into_what_runs_around_it() {
+        let correlation = Correlation::minted(None);
+        let trace = correlation.trace_id();
+        let inner = with_ambient(Arc::new(Handle::Transaction), async {
+            (current_trace_id(), ambient::<Tenant>(), ambient::<Handle>())
+        });
+        let unit = with_request_scope(
+            None,
+            correlation,
+            with_ambient(Arc::new(Tenant("acme")), inner),
+        );
+        let (seen, tenant, handle) = unit.await;
+        assert_eq!(seen, Some(trace));
+        assert_eq!(tenant.as_deref(), Some(&Tenant("acme")));
+        assert_eq!(handle.as_deref(), Some(&Handle::Transaction));
+    }
+
+    #[tokio::test]
+    async fn adding_a_value_keeps_the_units_correlation_and_its_other_values() {
+        let correlation = Correlation::minted(None);
+        let trace = correlation.trace_id();
+        with_request_scope(None, correlation, async {
+            with_ambient(Arc::new(Tenant("acme")), async {
+                with_ambient(Arc::new(Handle::Transaction), async {
+                    assert_eq!(current_trace_id(), Some(trace));
+                    assert_eq!(ambient::<Tenant>().as_deref(), Some(&Tenant("acme")));
+                    assert_eq!(ambient::<Handle>().as_deref(), Some(&Handle::Transaction));
+                })
+                .await;
+            })
+            .await;
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn more_values_than_ride_inline_spill_and_stay_readable() {
+        struct A;
+        struct B;
+        struct C;
+        struct D;
+        struct E;
+        impl AmbientValue for A {}
+        impl AmbientValue for B {}
+        impl AmbientValue for C {}
+        impl AmbientValue for D {}
+        impl AmbientValue for E {}
+
+        let mut pending = Pending::default();
+        pending.attach(Arc::new(A));
+        pending.attach(Arc::new(B));
+        pending.attach(Arc::new(C));
+        pending.attach(Arc::new(D));
+        pending.attach(Arc::new(E));
+        pending.attach(Arc::new(Tenant("sixth")));
+        install_pending(pending, async {
+            assert!(ambient::<A>().is_some() && ambient::<D>().is_some());
+            assert!(ambient::<E>().is_some(), "the fifth value spilled");
+            assert_eq!(ambient::<Tenant>().as_deref(), Some(&Tenant("sixth")));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_default_value_crosses_every_continuation_but_a_jobs_envelope_and_an_answer() {
+        for into in EVERY {
+            let crossed = across(Arc::new(Tenant("acme")), into).await;
+            match into {
+                Continuation::Envelope | Continuation::Answer => {
+                    assert!(crossed.is_none(), "{into:?}");
+                }
+                _ => assert_eq!(crossed.as_deref(), Some(&Tenant("acme")), "{into:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_narrowing_value_crosses_as_what_its_carry_returns() {
+        for into in EVERY {
+            let crossed = across(Arc::new(Handle::Transaction), into).await;
+            match into {
+                Continuation::Body | Continuation::Batch | Continuation::Commit => {
+                    assert_eq!(crossed.as_deref(), Some(&Handle::Pool), "{into:?}");
+                }
+                _ => assert!(crossed.is_none(), "{into:?} drops it"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_deadline_crosses_into_a_batch_alone() {
+        let deadline = Deadline(Instant::now() + Duration::from_secs(5));
+        for into in EVERY {
+            let crossed = across(Arc::new(deadline), into).await;
+            match into {
+                Continuation::Batch => assert_eq!(crossed.as_deref(), Some(&deadline)),
+                _ => assert!(crossed.is_none(), "{into:?} drops it"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_request_scope_crosses_into_a_body_a_task_and_a_commit_alone() {
+        let scope = Arc::new(crate::RequestScope::new(
+            crate::Container::builder()
+                .build()
+                .expect("the container builds"),
+        ));
+        for into in EVERY {
+            let carried =
+                with_request_scope(Some(Arc::clone(&scope)), Correlation::minted(None), async {
+                    RequestContinuation::capture(into)
+                })
+                .await
+                .expect("a unit is running where it was captured");
+            let crossed = carried.enter(crate::current_request_scope);
+            match into {
+                Continuation::Body | Continuation::Task | Continuation::Commit => assert!(
+                    crossed.is_some_and(|crossed| Arc::ptr_eq(&crossed, &scope)),
+                    "{into:?} resolves from the request's own scope",
+                ),
+                Continuation::Batch
+                | Continuation::Connection
+                | Continuation::Envelope
+                | Continuation::Answer => assert!(
+                    crossed.is_none(),
+                    "{into:?} resolves from no scope of the request's",
+                ),
+            }
+        }
+    }
+
+    /// A value that grants: re-entered inside another unit, it keeps the lower
+    /// of its own and the one that unit holds.
+    #[derive(Debug, PartialEq)]
+    struct Clearance(u8);
+
+    impl AmbientValue for Clearance {
+        fn reenter(self: Arc<Self>) -> Option<Arc<Self>> {
+            match ambient::<Clearance>() {
+                Some(running) if running.0 < self.0 => Some(running),
+                _ => Some(self),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_capture_re_entered_inside_another_unit_holds_what_each_value_reenters_as() {
+        let (captured, task) = with_ambient(
+            Arc::new(Clearance(9)),
+            with_ambient(Arc::new(Tenant("acme")), async {
+                (
+                    RequestContinuation::capture(Continuation::Commit).expect("installed"),
+                    TaskContext::capture(Continuation::Commit),
+                )
+            }),
+        )
+        .await;
+        let read = || {
+            (
+                ambient::<Clearance>().map(|clearance| clearance.0),
+                ambient::<Tenant>().map(|tenant| tenant.0),
+            )
+        };
+        let lower = || Arc::new(Clearance(1));
+
+        let ran = [
+            with_ambient(lower(), captured.scope(async { read() })).await,
+            with_ambient(lower(), async { captured.enter(read) }).await,
+            with_ambient(lower(), task.carry(async { read() })).await,
+            with_ambient(Arc::new(Clearance(10)), captured.scope(async { read() })).await,
+            captured.scope(async { read() }).await,
+        ];
+
+        assert_eq!(
+            ran,
+            [
+                (Some(1), Some("acme")),
+                (Some(1), Some("acme")),
+                (Some(1), Some("acme")),
+                (Some(9), Some("acme")),
+                (Some(9), Some("acme")),
+            ],
+            "scope, enter and carry re-enter alike; a higher clearance and no unit keep the captured one",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_capture_takes_what_the_unit_carries_when_it_is_captured() {
+        let carried = with_ambient(Arc::new(Tenant("acme")), async {
+            TaskContext::capture(Continuation::Task)
+        })
+        .await;
+        assert!(ambient::<Tenant>().is_none());
+        let seen = tokio::spawn(carried.carry(async { ambient::<Tenant>() }))
+            .await
+            .expect("the task runs");
+        assert_eq!(seen.as_deref(), Some(&Tenant("acme")));
+    }
+
+    #[tokio::test]
+    async fn a_nested_units_value_never_reaches_a_batch() {
+        let request = Correlation::minted(None);
+        let request_trace = request.trace_id();
+        let request_span = request.span_id();
+        let scope = Arc::new(crate::RequestScope::new(
+            crate::Container::builder()
+                .build()
+                .expect("the container builds"),
+        ));
+        let batch = with_request_scope(Some(Arc::clone(&scope)), request.clone(), async {
+            with_ambient(Arc::new(Handle::Transaction), async {
+                with_request_scope(Some(scope), request.child(), async {
+                    with_ambient(Arc::new(Tenant("the field's own")), async {
+                        assert_eq!(
+                            ambient::<Tenant>().as_deref(),
+                            Some(&Tenant("the field's own"))
+                        );
+                        RequestContinuation::capture(Continuation::Batch)
+                    })
+                    .await
+                })
+                .await
+            })
+            .await
+        })
+        .await
+        .expect("captured inside a unit");
+
+        batch.enter(|| {
+            assert!(
+                ambient::<Tenant>().is_none(),
+                "the field's attachment stays with the field",
+            );
+            assert_eq!(
+                ambient::<Handle>().as_deref(),
+                Some(&Handle::Pool),
+                "the request's own value crosses, through its carry",
+            );
+            assert_eq!(current_trace_id(), Some(request_trace));
+            assert_eq!(
+                crate::current_span_id(),
+                Some(request_span),
+                "a batch is the request's, not the field's",
+            );
+            assert!(
+                crate::current_request_scope().is_none(),
+                "a batch opens no request scope"
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn a_nested_unit_inherits_what_its_parent_carries() {
+        with_ambient(Arc::new(Tenant("acme")), async {
+            let seen = with_request_scope(None, Correlation::minted(None), async {
+                ambient::<Tenant>()
+            })
+            .await;
+            assert_eq!(seen.as_deref(), Some(&Tenant("acme")));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_pending_value_is_ambient_only_once_installed() {
+        let mut pending = Pending::default();
+        pending.attach(Arc::new(Tenant("acme")));
+        assert_eq!(pending.get::<Tenant>().as_deref(), Some(&Tenant("acme")));
+        assert!(ambient::<Tenant>().is_none(), "recorded is not installed");
+        let seen = install_pending(pending, async { ambient::<Tenant>() }).await;
+        assert_eq!(seen.as_deref(), Some(&Tenant("acme")));
+    }
+
+    #[tokio::test]
+    async fn adding_the_value_already_carried_installs_nothing_new() {
+        let tenant = Arc::new(Tenant("acme"));
+        with_ambient(Arc::clone(&tenant), async {
+            let before = RequestContinuation::capture(Continuation::Task).expect("installed");
+            with_ambient(Arc::clone(&tenant), async {
+                let after = RequestContinuation::capture(Continuation::Task).expect("installed");
+                assert!(after.is_same(&before), "the same value reuses the context");
+            })
+            .await;
+        })
+        .await;
+    }
+
+    #[derive(Clone)]
+    struct Principal(&'static str);
+
+    impl AmbientValue for Principal {}
+
+    #[tokio::test]
+    async fn an_attached_value_is_read() {
+        let read = with_ambient(Arc::new(Principal("ada")), async {
+            attached::<Principal>().map(Ambient::into_inner)
+        })
+        .await;
+        assert_eq!(read.ok().map(|principal| principal.0), Some("ada"));
+    }
+
+    #[test]
+    fn a_missing_value_names_its_type() {
+        let Err(missing) = attached::<Principal>() else {
+            panic!("nothing attached a principal");
+        };
+        assert!(missing.value.ends_with("::Principal"), "{}", missing.value);
+    }
+}

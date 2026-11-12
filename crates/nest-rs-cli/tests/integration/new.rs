@@ -2,17 +2,14 @@
 //! one.
 
 use crate::harness::{
-    assert_env_example_points_test_overrides_somewhere_loaded, run_ok, write_fake_workspace,
+    assert_env_example_points_test_overrides_somewhere_loaded, files_under, run_ok,
+    write_fake_workspace,
 };
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
-/// R9-2: `cov` used to be the one recipe a fresh project could not run —
-/// `cargo-llvm-cov` was outside the bootstrap and the LLVM tools it shells out
-/// to were pinned nowhere, so the recipe's own comment told the developer to run
-/// two installs by hand. Both halves are wired now, and that sentence is the
-/// defect this asserts is gone: a scaffold that asks for a manual step has not
-/// delivered "one command".
+/// The `cov` recipe asks for no manual install.
 #[track_caller]
 fn assert_cov_asks_for_no_manual_install(test_just: &str) {
     assert!(test_just.contains("cov:"), "{test_just}");
@@ -33,17 +30,8 @@ fn assert_cov_asks_for_no_manual_install(test_just: &str) {
 }
 
 /// `just --list` renders the **last** comment line above a recipe and nothing
-/// else, so a two-line explanation leaves `nestrs run test` describing the
-/// recipe with whatever fragment happened to wrap last — `cov` read
-/// `# entirely — set LLVM_COV / LLVM_PROFDATA there.` and `e2e` read
-/// `# `--no-tests=pass` keeps this green until you write the first one.`. The
-/// summary therefore goes at the *bottom* of a block, however odd that reads in
-/// the file.
-///
-/// Asserted as the property rather than per recipe: the line `just` renders must
-/// open a sentence, which it does when the block is one line or when the line
-/// before it closed one. A recipe that grows a second comment line later is
-/// covered without anyone remembering this.
+/// else, so that line must open a sentence: the block is one line, or the line
+/// before it closed one.
 #[track_caller]
 fn assert_every_recipe_is_listed_by_a_whole_sentence(test_just: &str) {
     let lines: Vec<&str> = test_just.lines().map(str::trim).collect();
@@ -64,17 +52,9 @@ fn assert_every_recipe_is_listed_by_a_whole_sentence(test_just: &str) {
     }
 }
 
-/// The generated `rust-toolchain.toml` is what makes `nestrs run lint` and
-/// `nestrs run test cov` work on a project minutes old, and it does so silently:
-/// `clippy` and `rustfmt` happen to be in rustup's default profile, so a
-/// scaffold declaring nothing works on most machines and fails on a minimal one
-/// with an error naming rustup rather than the recipe. `llvm-tools-preview` is
-/// the one nobody has by default, and it is pinned here rather than installed
-/// per machine because `llvm-profdata` only reads a `.profraw` written by the
-/// LLVM that rustc was built with — the component has to follow `channel`.
-///
-/// Asserted on the written file rather than on the const: a component silently
-/// dropped from the list is exactly the drift nothing else here would catch.
+/// `clippy` and `rustfmt` are in rustup's default profile only by chance, and
+/// `llvm-tools-preview` must follow `channel`: `llvm-profdata` reads only a
+/// `.profraw` from the LLVM rustc was built with.
 #[track_caller]
 fn assert_toolchain_pins_what_the_recipes_shell_out_to(root: &std::path::Path) {
     let toolchain = fs::read_to_string(root.join("rust-toolchain.toml")).unwrap();
@@ -89,32 +69,22 @@ fn assert_toolchain_pins_what_the_recipes_shell_out_to(root: &std::path::Path) {
 }
 
 /// `AGENTS.md` is the only place a generated project states its layout and
-/// naming rules — a tree of four files teaches nothing about the fifth. A
-/// scaffold that drops it hands the next contributor, human or agent, a blank
-/// slate, and the conventions get re-derived differently in every project.
-///
-/// Asserts the load-bearing parts rather than the prose: the layout section, the
-/// four naming levels, the provider procedure, the reserved vocabulary, the
-/// crate-type table, and a fully rendered span target (an unsubstituted
-/// placeholder would ship as advice).
+/// Asserts the load-bearing parts rather than the prose, and a fully rendered
+/// span target.
 #[track_caller]
 fn assert_agents_md_carries_the_conventions(root: &std::path::Path) {
     let agents = fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md is scaffolded");
     assert!(agents.contains("## Layout — two homes"), "{agents}");
-    // Claude Code reads CLAUDE.md and nothing else, so the conventions reach it
-    // only through the import. A symlink would need Developer Mode on Windows.
+    // Claude Code reads CLAUDE.md alone; a symlink would need Developer Mode on
+    // Windows.
     let claude = fs::read_to_string(root.join("CLAUDE.md")).expect("CLAUDE.md is scaffolded");
     assert!(claude.contains("@AGENTS.md"), "{claude}");
-    // Assert on a heading the conventions actually carry: a marker that appears
-    // in neither file passes whatever either one grows into.
+    // A marker that appears in neither file passes whatever either grows into.
     assert!(
         !claude.contains("## Reserved vocabulary"),
         "CLAUDE.md is the pointer — duplicating the conventions is what drifts:\n{claude}"
     );
     for rule in [
-        // The five naming levels, the decision procedure, and the two rules a
-        // generated project cannot infer from four files: what a name may not
-        // be, and what happens when a role repeats.
         "## Names — five levels",
         "## Modules — two files, two jobs",
         "## Providers — three questions",
@@ -163,11 +133,13 @@ fn new_workspace_greenfield() {
         root.join("crates/features/src/hello/http/controller.rs")
             .is_file()
     );
-    // The default app and demo feature are both named `hello`.
     assert!(root.join("apps/hello/src/module.rs").is_file());
     assert!(!root.join("apps/hello/src/controller.rs").exists());
-    // The scaffolded smoke test needs no live infra ⇒ `integration` suite,
-    // with an empty `e2e` suite beside it so the nextest filtersets resolve.
+    assert_the_app_s_main_installs_telemetry(&root.join("apps/hello"));
+    // The greeting logs nothing, so its feature declares no log target.
+    let hello = fs::read_to_string(root.join("crates/features/src/hello/mod.rs")).unwrap();
+    assert!(!hello.contains("TARGET"), "{hello}");
+    // An empty `e2e` suite beside it so the nextest filtersets resolve.
     assert!(root.join("apps/hello/tests/integration/main.rs").is_file());
     assert!(root.join("apps/hello/tests/e2e/main.rs").is_file());
     let smoke = fs::read_to_string(root.join("apps/hello/tests/integration/main.rs")).unwrap();
@@ -175,17 +147,14 @@ fn new_workspace_greenfield() {
         !smoke.contains("with_test_telemetry"),
         "that builder method is behind an optional feature the scaffold does not enable"
     );
-    // The db verbs name these two crates in every recipe.
     assert!(root.join("crates/migrations/src/bin/migrate.rs").is_file());
     assert!(root.join("crates/migrations/src/migrator.rs").is_file());
     assert!(root.join("crates/seed/src/main.rs").is_file());
     assert_agents_md_carries_the_conventions(&root);
-    // No Dockerfile ships in workspace mode, so nothing to ignore for.
     assert!(!root.join(".dockerignore").exists());
     assert!(root.join("Justfile").is_file());
     let justfile = fs::read_to_string(root.join("Justfile")).unwrap();
     assert!(justfile.contains("dev app=\"hello\""));
-    // `build --all` is a conditional on the single `build` recipe, not a separate recipe.
     assert!(!justfile.contains("build-all"));
     assert!(justfile.contains(r#"if app == "--all""#));
     assert!(justfile.contains("mod test"));
@@ -205,10 +174,22 @@ fn new_workspace_greenfield() {
     let module = fs::read_to_string(root.join("apps/hello/src/module.rs")).unwrap();
     assert!(module.contains("HelloHttpModule"));
     assert!(module.contains("features::hello"));
-    assert!(module.contains("port: 3000"));
+    assert_the_app_s_own_settings(&root.join("apps/hello"), 3000);
 
+    // The service URLs are read in development and test, so `nestrs run db up`
+    // and the e2e suites work out of the box; production reads none.
     let env = fs::read_to_string(root.join(".env")).unwrap();
     assert!(!env.contains("NESTRS_HTTP__PORT"));
+    assert!(!env.contains("://"), "{env}");
+    for profile in [".env.development", ".env.test"] {
+        let file = fs::read_to_string(root.join(profile)).unwrap();
+        assert!(file.contains("NESTRS_SEAORM__URL=postgres://"), "{file}");
+        assert!(file.contains("NESTRS_REDIS__URL=redis://"), "{file}");
+    }
+    assert!(
+        db_just.contains("export NESTRS_ENV := \"development\""),
+        "the db recipes read `.env.development`: {db_just}"
+    );
     assert_env_example_points_test_overrides_somewhere_loaded(&root);
 
     let cargo = fs::read_to_string(root.join("Cargo.toml")).unwrap();
@@ -216,16 +197,8 @@ fn new_workspace_greenfield() {
     assert_feature_code_can_log_and_fail(&cargo, &root);
 }
 
-/// R12 L-1: the workspace shipped `tracing-subscriber` in the root manifest and
-/// no `tracing` anywhere — so the crate the developer actually writes in could
-/// configure logging and not emit a line. Thirteen docs pages write `tracing::`
-/// in feature code and none says to add it; the same page adds
-/// `-> anyhow::Result<()>` on a `#[hooks]` method, and `anyhow` was missing from
-/// the features crate too. Both are the developer's *own* source naming its own
-/// crate (`CLAUDE.md`: the manifest names what the source names), so the
-/// scaffold declares them rather than the umbrella re-exporting them.
-///
-/// Text-level here; `tests/e2e/scaffold.rs` compiles a feature that uses both.
+/// The features crate declares `tracing` and `anyhow`: the docs write both in
+/// feature code. Text-level here; `scaffold.rs` compiles a feature that uses both.
 fn assert_feature_code_can_log_and_fail(workspace: &str, root: &std::path::Path) {
     let features = fs::read_to_string(root.join("crates/features/Cargo.toml")).unwrap();
     for dep in ["anyhow", "tracing"] {
@@ -260,15 +233,11 @@ fn new_app_inside_nestrs_workspace() {
     let app = dir.path().join("apps/demo-api");
     assert!(app.join("src/module.rs").is_file());
     assert!(app.join("src/main.rs").is_file());
-    // Logic never lands in an app crate — the greeting is a feature.
     assert!(!app.join("src/controller.rs").exists());
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert!(module.contains("HttpConfig { port: 3000"));
-    assert!(!module.contains("for_root(None)"));
+    assert_the_app_s_own_settings(&app, 3000);
 
-    // The norm: an app added to a workspace gets its own `hello` feature, so it
-    // answers on `/` the first time it runs rather than 404ing.
     let feature = dir.path().join("crates/features/src/demo_api");
     assert!(feature.join("service.rs").is_file());
     let controller = fs::read_to_string(feature.join("http/controller.rs")).unwrap();
@@ -283,15 +252,13 @@ fn new_app_inside_nestrs_workspace() {
 
     let lib = fs::read_to_string(dir.path().join("crates/features/src/lib.rs")).unwrap();
     assert!(lib.contains("pub mod demo_api;"), "features lib.rs: {lib}");
-    // The pre-existing feature declaration survives the edit.
     assert!(lib.contains("pub mod users;"), "features lib.rs: {lib}");
 
-    // A smoke test ships with the greeting it asserts.
     assert!(app.join("tests/integration/main.rs").is_file());
 }
 
 /// `nestrs new posts` where a `posts` feature already exists would clobber
-/// product code. Refuse instead — the app name is free to change.
+/// product code.
 #[test]
 fn new_app_refuses_to_reuse_an_existing_feature_name() {
     let dir = tempfile::tempdir().unwrap();
@@ -313,9 +280,10 @@ fn new_app_picks_next_http_port() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     fs::create_dir_all(dir.path().join("apps/auth/src")).unwrap();
+    fs::write(dir.path().join("apps/auth/src/module.rs"), "HttpModule").unwrap();
     fs::write(
-        dir.path().join("apps/auth/src/module.rs"),
-        "HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() })",
+        dir.path().join("apps/auth/.env"),
+        "NESTRS_HTTP__PORT=3001\n",
     )
     .unwrap();
 
@@ -331,8 +299,7 @@ fn new_app_picks_next_http_port() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let module = fs::read_to_string(dir.path().join("apps/blog/src/module.rs")).unwrap();
-    assert!(module.contains("HttpConfig { port: 3002"));
+    assert_the_app_s_own_settings(&dir.path().join("apps/blog"), 3002);
 }
 
 #[test]
@@ -380,22 +347,58 @@ fn new_workspace_app_scaffold() {
     assert!(dir.path().join(".gitignore").is_file());
     assert!(dir.path().join("compose.yml").is_file());
 
-    // The committed `.env` points at the compose services (T26): the DB URL is
-    // active so `nestrs run db up` works out of the box; the port stays code.
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
     assert!(!env.contains("NESTRS_HTTP__PORT"));
-    assert!(env.contains("NESTRS_SEAORM__URL=postgres://"));
 
-    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert!(module.contains("HttpConfig { port: 3000"));
-    assert!(!module.contains("OpenTelemetryModule"));
+    assert_the_app_s_main_installs_telemetry(&app);
+    assert_the_app_s_own_settings(&app, 3000);
 }
 
-/// B8: the scaffolded smoke test booted the app **root**, so the moment a
-/// resource was wired the way `g resource` instructs, the root imported
-/// `SeaOrmDatabaseModule`, the connection opened during `build()`, and the suite
-/// three separate places define as infrastructure-free failed on a 30 s pool
-/// timeout. It must boot the narrowest module that serves the greeting.
+/// `apps.md`: a deployed app exports OTLP, so `main` holds the one line that
+/// installs the exporter and the app's manifest the feature that builds it;
+/// the root imports no module for it, and its suite calls nothing.
+#[track_caller]
+fn assert_the_app_s_main_installs_telemetry(app: &Path) {
+    let main = fs::read_to_string(app.join("src/main.rs")).unwrap();
+    assert!(
+        main.contains("    let _otel = OpenTelemetry::init()?;\n"),
+        "{main}"
+    );
+    assert!(
+        main.contains("use nest_rs::opentelemetry::OpenTelemetry;"),
+        "{main}"
+    );
+    let manifest = fs::read_to_string(app.join("Cargo.toml")).unwrap();
+    assert!(
+        manifest.contains(r#"nest-rs = { workspace = true, features = ["opentelemetry"] }"#),
+        "{manifest}"
+    );
+    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(!module.contains("OpenTelemetryModule"), "{module}");
+}
+
+/// The port sits in the app's own `.env`, never pinned in code: a pin would cut
+/// the app's whole HTTP namespace off the cascade. The root names no transport,
+/// which its HTTP adapter imports. Beside it, the issuer and the audience every
+/// token the app mints or verifies names (RFC 9068 §2.2, §4): its own origin,
+/// so an app that grows a guard boots with nothing more to write.
+#[track_caller]
+fn assert_the_app_s_own_settings(app: &Path, port: u16) {
+    let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(!module.contains("HttpModule::for_root"), "{module}");
+    assert!(!module.contains("HttpConfig"), "{module}");
+    let own = fs::read_to_string(app.join(".env")).unwrap();
+    for setting in [
+        format!("NESTRS_HTTP__PORT={port}\n"),
+        format!("NESTRS_AUTHN__ISSUER=http://localhost:{port}\n"),
+        format!("NESTRS_AUTHN__AUDIENCE=http://localhost:{port}\n"),
+    ] {
+        assert!(own.contains(&setting), "{setting}{own}");
+    }
+}
+
+/// The smoke test boots the narrowest module that serves the greeting, so a
+/// wired `SeaOrmDatabaseModule` never reaches it.
 #[test]
 fn the_scaffolded_smoke_test_boots_the_feature_not_the_app_root() {
     let dir = tempfile::tempdir().unwrap();
@@ -413,16 +416,234 @@ fn the_scaffolded_smoke_test_boots_the_feature_not_the_app_root() {
     );
 }
 
-/// P3 / G15, inverted: `validator` used to need a pin matching the framework's
-/// own major, because a `#[config]` struct derived `Validate` at the call site
-/// and two copies of the trait in one graph read as "you wrote the impl wrong".
-/// `#[config]` now carries the derive and points it back through the framework,
-/// so the scaffold must **not** write the entry at all — a pin here would put a
-/// second copy back in the graph, which is the defect it was invented to avoid.
+/// `#[config]` carries the `Validate` derive through the framework, so the
+/// scaffold writes no `validator` entry: a pin would put a second copy in the
+/// graph.
 #[test]
 fn the_scaffold_leaves_validator_to_the_framework() {
     let dir = tempfile::tempdir().unwrap();
     run_ok(dir.path(), &["new", "acme"]);
     let cargo = fs::read_to_string(dir.path().join("acme/Cargo.toml")).unwrap();
     assert!(!cargo.contains("validator"), "{cargo}");
+}
+
+/// The libraries the transport runs on are its own, and so was the library it
+/// replaced: no manifest the scaffold writes names one, so an app reaches HTTP
+/// through `nest-rs` alone.
+#[test]
+fn no_generated_manifest_names_the_server_library() {
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+    let root = dir.path().join("acme");
+    run_ok(&root, &["new", "blog"]);
+
+    let files = files_under(&root);
+    let manifests: Vec<_> = files
+        .iter()
+        .filter(|(path, _)| path.file_name().is_some_and(|name| name == "Cargo.toml"))
+        .collect();
+    assert!(manifests.len() > 3, "{:?}", files.keys());
+    for (manifest, bytes) in manifests {
+        let text = String::from_utf8_lossy(bytes);
+        for library in ["poem", "hyper", "multer", "async-compression"] {
+            assert!(!text.contains(library), "{}: {text}", manifest.display());
+        }
+    }
+}
+
+/// Raw SQL is the injection class, so a new workspace's clippy names every call
+/// writing it where it is written, beside `Repo`'s refusal when it runs, each saying
+/// what to write, and says where the opening goes when a derive expands to one.
+#[test]
+fn a_new_workspace_refuses_raw_sql_through_its_clippy_config() {
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+
+    let written = fs::read_to_string(dir.path().join("acme/clippy.toml")).unwrap();
+    assert!(
+        written.contains("the opening goes on the module holding the entity"),
+        "{written}",
+    );
+    let config = written.parse::<toml_edit::DocumentMut>().unwrap();
+    let held = |key: &str| -> Vec<String> {
+        config[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                let entry = entry.as_inline_table().unwrap();
+                let reason = entry.get("reason").and_then(|reason| reason.as_str());
+                assert!(
+                    reason.is_some_and(|reason| reason.contains("open it with #[expect]")),
+                    "{entry}",
+                );
+                entry
+                    .get("path")
+                    .and_then(|path| path.as_str())
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    };
+    assert_eq!(
+        held("disallowed-methods"),
+        [
+            "sea_query::Expr::cust",
+            "sea_query::Expr::cust_with_values",
+            "sea_query::Expr::cust_with_expr",
+            "sea_query::Expr::cust_with_exprs",
+            "sea_query::Expr::Custom",
+            "sea_query::Expr::CustomWithExpr",
+            "sea_query::Expr::custom_keyword",
+            "sea_query::Keyword::Custom",
+            "sea_query::Func::cust",
+            "sea_query::Func::cast_as",
+            "sea_query::ExprTrait::cast_as",
+            "sea_query::ExprTrait::as_enum",
+            "sea_query::Expr::AsEnum",
+            "sea_query::Expr::Constant",
+            "sea_query::OptionEnum::None",
+            "sea_query::ArrayType::Enum",
+            "sea_query::BinOper::Custom",
+            "sea_query::PgFunc::json_exists",
+            "sea_query::PgFunc::json_value",
+            "sea_query::PgFunc::json_query",
+            "sea_query::PgFunc::json_table",
+            "sea_query::Order::Field",
+            "sea_query::SelectStatement::order_by_customs",
+            "sea_query::SelectStatement::order_by_customs_with_nulls",
+            "sea_query::UpdateStatement::order_by_customs",
+            "sea_query::UpdateStatement::order_by_customs_with_nulls",
+            "sea_query::DeleteStatement::order_by_customs",
+            "sea_query::DeleteStatement::order_by_customs_with_nulls",
+            "sea_query::OnConflict::constraint",
+            "sea_query::WindowStatement::order_by_customs",
+            "sea_query::WindowStatement::order_by_customs_with_nulls",
+            "sea_query::WindowStatement::partition_by_custom",
+            "sea_query::OverStatement::partition_by_customs",
+            "sea_query::OrderedStatement::order_by_customs",
+            "sea_query::OrderedStatement::order_by_customs_with_nulls",
+        ],
+    );
+    assert_eq!(held("disallowed-types"), ["sea_query::Enum"]);
+
+    // A migration is DDL an operator runs: the crate's own file replaces that one.
+    let migrations = fs::read_to_string(dir.path().join("acme/crates/migrations/clippy.toml"))
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    assert!(migrations.is_empty(), "{migrations}");
+}
+
+/// A value its type marks `#[must_use]` is never discarded in a new workspace:
+/// the root denies `clippy::let_underscore_must_use`, and every member the CLI
+/// writes inherits it, a second app included.
+#[test]
+fn every_member_of_a_new_workspace_refuses_a_discarded_must_use_value() {
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+    let root = dir.path().join("acme");
+    run_ok(&root, &["new", "blog"]);
+
+    let manifest = |path: &str| {
+        fs::read_to_string(root.join(path))
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap()
+    };
+    let workspace = manifest("Cargo.toml");
+    let denied = ["workspace", "lints", "clippy", "let_underscore_must_use"]
+        .iter()
+        .try_fold(workspace.as_item(), |item, key| item.get(key))
+        .and_then(toml_edit::Item::as_str);
+    assert_eq!(denied, Some("deny"), "{workspace}");
+    for member in [
+        "crates/features/Cargo.toml",
+        "crates/migrations/Cargo.toml",
+        "crates/seed/Cargo.toml",
+        "apps/hello/Cargo.toml",
+        "apps/blog/Cargo.toml",
+    ] {
+        let doc = manifest(member);
+        let inherits = doc
+            .get("lints")
+            .and_then(|lints| lints.get("workspace"))
+            .and_then(toml_edit::Item::as_bool);
+        assert_eq!(inherits, Some(true), "{member}: {doc}");
+    }
+}
+
+/// A workspace an older `nestrs new` wrote declares no lints, and inheriting a
+/// table that does not exist fails the build: what the CLI adds to it inherits
+/// none.
+#[test]
+fn what_joins_a_workspace_declaring_no_lints_inherits_none() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    run_ok(dir.path(), &["new", "blog"]);
+    run_ok(
+        dir.path(),
+        &[
+            "g",
+            "migration",
+            "create_widget",
+            "-p",
+            dir.path().to_str().unwrap(),
+        ],
+    );
+
+    for member in [
+        "apps/blog/Cargo.toml",
+        "crates/migrations/Cargo.toml",
+        "crates/seed/Cargo.toml",
+    ] {
+        let manifest = fs::read_to_string(dir.path().join(member)).unwrap();
+        assert!(!manifest.contains("[lints]"), "{member}: {manifest}");
+    }
+}
+
+/// The test harness is a dev-dependency of each app, never a feature of the
+/// workspace's `nest-rs`: a release build of any app links none of it.
+#[test]
+fn the_test_harness_reaches_the_test_suites_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+    let root = dir.path().join("acme");
+    run_ok(&root, &["new", "blog"]);
+
+    let manifest = |path: &str| {
+        fs::read_to_string(root.join(path))
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap()
+    };
+    let features = |doc: &toml_edit::DocumentMut, table: &[&str]| -> Vec<String> {
+        let entry = table
+            .iter()
+            .try_fold(doc.as_item(), |item, key| item.get(key))
+            .and_then(|table| table.get("nest-rs"))
+            .unwrap_or_else(|| panic!("`{}` names `nest-rs`", table.join(".")));
+        entry
+            .get("features")
+            .and_then(toml_edit::Item::as_array)
+            .map_or_default(|list| {
+                list.iter()
+                    .filter_map(|f| f.as_str().map(str::to_owned))
+                    .collect()
+            })
+    };
+
+    let workspace = manifest("Cargo.toml");
+    assert!(
+        !features(&workspace, &["workspace", "dependencies"]).contains(&"testing".to_owned()),
+        "the workspace's `nest-rs` reaches every release build: {workspace}"
+    );
+    for app in ["apps/hello/Cargo.toml", "apps/blog/Cargo.toml"] {
+        let doc = manifest(app);
+        assert_eq!(
+            features(&doc, &["dev-dependencies"]),
+            ["testing"],
+            "{app} enables the harness for its suites: {doc}"
+        );
+    }
 }

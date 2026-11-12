@@ -1,9 +1,10 @@
 //! `scope_for` denies every row on request-scoped executors without an
-//! ability — asserted against **executed** queries on live Postgres, not
-//! rendered SQL strings.
+//! ability, asserted on executed queries rather than rendered SQL.
 
 use nest_rs_authz::Action;
-use nest_rs_seaorm::{Executor, scope_for, with_request_executor};
+use nest_rs_database::__private::{with_job_executor, with_request_executor};
+use nest_rs_seaorm::__private::SeaOrmExecutor;
+use nest_rs_seaorm::scope_for;
 use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter};
 
 mod widget {
@@ -11,21 +12,18 @@ mod widget {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "scope_probe_widgets")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: i32,
         pub name: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/// Connect and make sure the probe table exists with its two rows. The DDL +
-/// seed are serialized in Postgres, not per process — nextest gives each test
-/// its own, so concurrent `CREATE TABLE IF NOT EXISTS` would race the catalog.
 async fn db() -> DatabaseConnection {
     let conn = crate::harness::connect().await;
     crate::harness::setup_shared_table(
@@ -46,7 +44,7 @@ async fn db() -> DatabaseConnection {
 async fn request_scope_without_ability_denies_all_rows() {
     let conn = db().await;
 
-    with_request_executor(Executor::Pool(conn.clone()), async {
+    with_request_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         let rows = widget::Entity::find()
             .filter(scope_for::<widget::Entity>(Action::Read))
             .all(&conn)
@@ -65,7 +63,7 @@ async fn request_scope_without_ability_denies_all_rows() {
 async fn job_scope_without_ability_remains_unscoped() {
     let conn = db().await;
 
-    nest_rs_seaorm::with_job_executor(Executor::Pool(conn.clone()), async {
+    with_job_executor(SeaOrmExecutor::Pool(conn.clone()).into(), async {
         let rows = widget::Entity::find()
             .filter(scope_for::<widget::Entity>(Action::Read))
             .all(&conn)

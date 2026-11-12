@@ -1,12 +1,9 @@
 ---
 title: Messages
-description: "The JSON envelope, the #[subscribe_message] signature, and the Result/Err return contract that ships error frames."
-tier: basics
+description: "The JSON envelope, the #[subscribe_message] signature, the typed payload a message decodes, and the layers each message runs."
 sidebar:
   order: 2
 ---
-
-import { Aside } from '@astrojs/starlight/components';
 
 Every frame in and out of a gateway rides one shape:
 
@@ -19,6 +16,40 @@ That's it — no separate ack channel, no second protocol for errors,
 no per-event wire format to negotiate. One envelope handles
 fire-and-forget, request/response, server pushes, and error replies.
 
+The envelope is a JSON object, and only an object: an array is never read
+by position, so `["message", {…}]` is no `message`. A frame that is no
+envelope is answered on the `error` event, saying where it failed, or what
+kind of value it was and what was expected, and never what it held:
+
+```json
+{ "event": "error", "data": { "error": "invalid envelope at `event`: missing", "code": "INVALID_ARGUMENT" } }
+{ "event": "error", "data": { "error": "invalid envelope: invalid type: a sequence, expected an object with `event` and `data`", "code": "INVALID_ARGUMENT" } }
+```
+
+A message past `max_message_bytes` closes the socket `1009 Message Too Big`, at
+the protocol layer, before anything reads it. A binary frame carries no
+envelope, and a text frame that layer let through at the boundary is not read:
+each is answered on the `error` event under the class HTTP names for the same
+refusal, as RFC 6455's close codes 1003 and 1009 name it:
+
+```json
+{ "event": "error", "data": { "error": "binary frames are not supported", "code": "UNSUPPORTED_MEDIA_TYPE" } }
+{ "event": "error", "data": { "error": "message too large", "code": "CONTENT_TOO_LARGE" } }
+```
+
+Each is a message all the same: its `ws.message` line files `outcome="error"`
+under `event="_OTHER"`, since no handler declared what it named. An event no
+handler serves is answered on the event it sent, `unknown event` under the
+`NOT_FOUND` class.
+
+What a route's `404` runs, each of these runs too: the
+[unit stage](/fundamentals/interceptors/) and the app's exception filters, around
+that answer and under the message's deadline, so an audit interceptor reads the
+frame that goes out and a catch-all shapes it. Nothing there is a handler's, so no
+guard, no handler-stage interceptor and no unit of work run, nor what the gateway
+binds for its messages. A layer reads `_OTHER` as the event, never the client's
+word.
+
 ## A handler signature
 
 `#[subscribe_message("event")]` binds a method to that event name in the
@@ -28,114 +59,94 @@ envelope:
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
-    #[public]
     async fn on_message(&self, msg: SendMessageDto) -> ChatMessageDto {
         self.svc.record(msg)
     }
 }
 ```
 
-The macro reads three things from the signature:
+The macro reads five things from the signature:
 
 - **The event name** — the literal in `#[subscribe_message(...)]`.
-- **The payload type** — the first non-receiver, non-`&WsClient`
-  argument. Deserialized from `envelope.data` with `serde`.
-- **The return type** — drives the reply, per the contract below.
+- **The payload type** — the one argument that is neither `&WsClient`, a
+  `Scoped<T>` nor an `Ambient<T>`. Deserialized from `envelope.data` with `serde`.
+- **The request-scoped providers** — each `Scoped<T>` argument, resolved from
+  the message's own scope (below).
+- **What a guard attached** — each `Ambient<T>` argument, read from what the
+  upgrade's guards and the message's own attached, as a route reads it; a
+  `#[public]` message reading the principal a guard of its chain produces
+  refuses a caller that guard did not identify `UNAUTHENTICATED`.
+- **The return type** — drives the reply, per [the return contract](/websockets/replies/).
 
 A `&WsClient` parameter is the [per-connection handle](/websockets/rooms/);
-it can appear in any position alongside the payload.
+it can appear in any position alongside the payload. The macro tells the four
+apart by their shape — a reference, a type named `Scoped`, a type named
+`Ambient`, anything else — since it reads tokens, not types; a `Scoped` or an `Ambient`
+of another crate does not compile.
 
-The `#[public]` above is the message's **access posture**, and it is not
-optional — see the next section.
+### Request-scoped providers
 
-## Every message declares its posture
-
-Each `#[subscribe_message]` carries exactly one of two attributes, and a
-message that carries neither **does not compile**:
+A message is a request of its own: an `#[injectable(scope = request)]` provider
+is built once per message and shared by everything that message runs, and a
+handler takes it as a parameter:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
-#[subscribe_message("message")]
-#[public]                          // no gate, no mask
-async fn on_message(&self, msg: SendMessageDto) -> ChatMessageDto { /* ... */ }
+use nest_rs::core::Scoped;
 
-#[subscribe_message("users.list")]
-#[authorize(Read, users::Entity)]  // class gate + reply mask, both emitted
-async fn list(&self) -> Result<Vec<User>, ServiceError> {
-    Ok(self.svc.list().await?.iter().map(User::from).collect())
+#[subscribe_message("seq")]
+async fn seq(&self, seq: Scoped<RequestSeq>) -> u64 {
+    seq.value()
 }
 ```
 
-This is the same rule a `#[query]` and a `#[tool]` carry, for the same
-reason: silence is not a decision. A handler nobody thought about the
-access of must not ship rows no ability ever filtered.
+`Scoped<T>` is part of the boot's access contract, as an `#[inject]` field is:
+a `T` no module the gateway's module imports offers fails the boot, naming it.
+With no request-scoped provider anywhere in the app, every message shares one
+scope, which has nothing to build.
 
-**`#[authorize(Action, Entity)]` emits two things you would otherwise
-write by hand.** Before the payload is even deserialized, a class-level
-gate asks the caller's ambient `Ability` whether it may perform `Action`
-on `Entity`; a refusal is an error frame and the body never runs. After
-the handler returns, the reply is masked — rows the ability refuses are
-dropped, columns a field grant withholds are stripped. **You write no
-masking call.**
+## A message's posture
 
-**`#[public]` is a declaration, not a shortcut.** Unlike an HTTP route
-there is no anonymous fast path to take on WebSockets; what `#[public]`
-buys is the statement that the posture was decided. The guards bound on
-the gateway struct and beside the message still run.
-
-<Aside type="caution" title="A masked message returns a literal `Result`">
-The reply shape is decided **syntactically** on the return type, so a
-`Result` behind an alias (`type ServiceResult<T> = Result<T, MyError>`)
-reads as an ordinary value and would be masked as the `Result` itself —
-a success-shaped frame carrying `{"Ok": …}`. Writing `#[authorize]` on a
-handler that does not return a literal `Result` is therefore a named
-compile error. Use `unmasked` to keep the gate and mask in the body:
-`#[authorize(Read, users::Entity, unmasked)]`.
-</Aside>
-
-### What the mask does, and what it does not
-
-The mask acts on the **serialized** reply. A withheld column is
-absent from the frame — the same thing the HTTP response shaper does to a
-body, because a WS envelope promises no schema that a missing key would
-violate. This is where WebSockets differ from GraphQL and MCP, which
-reconstruct the operation's return type and fail the operation when a
-stripped key was required.
-
-Two cases stay fail-closed, and both are wiring or data faults rather
-than policy: **no ambient ability** (nothing decided what the caller may
-read — most often `AuthzWsModule` was never imported), and a body that
-cannot be reconciled with the entity at all. Both answer an error frame
-and log a `warn` on `nest_rs::authz`.
+A message under its gateway's `#[use_guards]`, the app's pool or a guard of its
+own needs no posture: the guards decide, as on a route. `#[public]` opens one on
+purpose, and `#[authorize(Action, Entity)]` gates it and judges each row it
+answers — [Message posture](/websockets/posture/).
 
 ## The payload
 
-Whatever you put in `data` arrives in your handler typed. The macro
-calls `serde_json::from_value` under the hood:
+Whatever you put in `data` arrives in your handler typed, and held to the
+rules its type declares. The macro decodes it through the edge's own reader under the
+hood:
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
-#[derive(serde::Deserialize)]
+#[input]
 struct SendMessageDto {
-    author: String,
     text: String,
 }
 
 #[subscribe_message("message")]
-#[public]
 async fn on_message(&self, msg: SendMessageDto) { /* ... */ }
 ```
 
+The payload carries what the client decides, and nothing the server
+already knows: who sent the message is the caller the upgrade authenticated,
+read as an `Ambient<Claims>` parameter, never an `author` field the client could
+fill with someone else's name. `#[input]` refuses a field the
+type does not declare, so such a payload is an error frame.
+
 A malformed payload (wrong shape, missing fields) is treated as a
 dispatch error: the connection stays open, the client receives an error
-frame on the same event name (see below). Richer checks bind a
-[pipe](/fundamentals/pipes/) on the payload argument: `Valid<T>` runs
-`validator` rules, `Piped<P, T>` names a custom transform — a rejection
-is an error frame, and the handler body never runs.
+frame on the same event name ([error frames](/websockets/replies/)), naming where
+the payload failed and never its value —
+``invalid payload for `message` at `text`: missing``. A
+payload type declaring `validator` rules is held to them as it decodes, and a
+custom transform binds a [pipe](/fundamentals/pipes/) on the payload argument,
+`Piped<P>` — either rejection is an error frame, and the handler body never
+runs.
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("trim")]
-#[public]
-async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
-    name.into_inner()
+async fn trim_handler(&self, Piped(name): Piped<Trim>) -> String {
+    name
 }
 ```
 
@@ -144,7 +155,6 @@ A handler that takes no payload accepts `null` or a missing `data` key
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("history")]
-#[public]
 async fn history(&self) -> Vec<ChatMessageDto> {
     self.svc.history()
 }
@@ -157,150 +167,68 @@ async fn history(&self) -> Vec<ChatMessageDto> {
 
 ## The return contract
 
-The macro inspects the handler's return type at parse time and picks
-the reply behavior:
+The handler's return type picks the reply: `()` none, `T` one frame on the
+event, `Result` an error frame for an `Err`, whose type decides what the client
+reads — [Replies and error frames](/websockets/replies/).
 
-| Return type | Wire effect |
-|---|---|
-| `()` | No reply frame. Fire-and-forget. |
-| `T` | One frame: `{"event":"<event>","data":<T serialized>}`. |
-| `Result<(), E>` | `Ok(())` → silent. `Err(e)` → error frame (see below). |
-| `Result<T, E>` | `Ok(t)` → reply with `t`. `Err(e)` → error frame. |
+## Interceptors, filters and pipes
 
-The error frame is shaped like any other envelope:
+A message runs through the same [pipeline](/fundamentals/interceptors/) a route
+does, outermost first: the unit stage (`#[interceptor(stage = unit)]`), the
+guard stage — the app's pool, the message's `#[use_guards]`, then the class
+gate its posture declares — the exception filters (the message's, the
+gateway's, the app's), the handler stage (the app's interceptors, the
+gateway's, the message's), and last the message itself: its data pipes, its
+payload's own pipe, and the call.
 
-```json
-{ "event": "send", "data": { "error": "text must not be empty" } }
-```
+Bound on the `#[gateway]` struct, a layer runs around every message of the
+gateway; bound beside a `#[subscribe_message]`, around that one. Each runs once
+per message, whichever scopes list it:
 
-The string comes from `e.to_string()` — i.e. the `Display` impl of your
-error type. A rejection that carries **structured** detail adds an `errors`
-member beside it — a `Valid<T>` payload names the offending fields, the same way
-the HTTP body does:
+```rust title="crates/features/src/catalog/ws/gateway.rs"
+use std::sync::Arc;
 
-```json
-{
-  "event": "validated",
-  "data": {
-    "error": "invalid payload for `validated`: validation failed",
-    "errors": {
-      "text": [{ "code": "length", "message": "text must not be empty", "params": { "min": 1 } }]
+use nest_rs::ws::{gateway, messages};
+
+#[gateway(path = "/ws/catalog")]
+#[use_guards(AuthnGuard)]
+#[use_interceptors(Timing)]
+#[use_exception_filters(OutOfStockFilter)]
+pub struct CatalogGateway {
+    #[inject]
+    svc: Arc<CatalogService>,
+}
+
+#[messages]
+impl CatalogGateway {
+    #[subscribe_message("buy")]
+    #[use_pipes(StripUnknownFields)]
+    async fn buy(&self, order: OrderDto) -> Result<ReceiptDto, OutOfStock> {
+        self.svc.buy(order).await
     }
-  }
 }
 ```
 
-Each entry is `{ code, message, params }`. `params` carries the rule's own
-bounds — `min`, `max`, the regex name — so a client renders "at least 1
-character" without parsing prose; the rejected **value** is stripped, so a
-too-short password never rides back out. `message` is `null` unless the
-`#[validate]` rule set one.
+An exception filter reads the handler's error by its type and answers the
+client in place of the frame the error would have answered — a
+`Caught::Problem` as `{ "error": …, "code": … }`, or a reply it
+writes through `WsView::respond`. The message still failed, so whatever it
+wrote rolls back, and [its span](/opentelemetry/logs/) still says who failed. An
+interceptor reads the message through `WsView` — its
+connection, its event, its `data` — and the reply once the rest of the message
+ran; one may answer the message itself with `WsView::respond` and skip the
+rest.
 
-`errors` is **absent**, not `null`, when the failure had nothing structured to
-say, so a client can branch on its presence. Every refused dispatch lands a
-`warn!` on the `nest_rs::ws` target alongside the frame — a pipe rejection, a
-payload that does not deserialize, an unknown event, and a handler-returned
-`Err` alike — so a denied dispatch shows up in logs without extra
-instrumentation.
+The [global pipes](/fundamentals/global-pipes/) the app lists fold over every
+message's `data`, after its guards and its gate; `#[use_pipes]` adds pipes for
+one gateway or one message, each once. A rejection is an error frame, as a
+payload's own pipe's is.
 
-A type **alias** over `Result` behaves the same. `pub type ServiceResult<T> =
-Result<T, MyError>` produces the identical error frame and the identical
-`warn`: the decision is made on the type, so however the return is spelled,
-an `Err` never reaches the reply `data`.
-
-<Aside type="caution" title="`Display` reaches the client — `Opaque` is the way out">
-The frame carries `e.to_string()`, so the frame is the one place a typed
-error's `Display` becomes a client-visible string. Avoid
-`#[error(transparent)]` over an ORM or `sqlx` error whose message can echo
-a query.
-
-When the failure is one the client is owed no explanation for, do not rely
-on the error type being polite — say so:
-
-```rust title="crates/features/src/chat/ws/gateway.rs"
-use nest_rs::ws::Opaque;
-
-#[subscribe_message("users.list")]
-#[authorize(Read, users::Entity)]
-async fn list(&self) -> Result<Vec<User>, WsError> {
-    let rows = self.svc.list().await.opaque()?;   // real error → the log
-    Ok(rows.iter().map(User::from).collect())
-}
-```
-
-`.opaque()?` logs the real error at `error` on `nest_rs::ws` — the operator
-loses nothing — and hands the client a constant. The same trait exists on
-GraphQL and MCP, spelled the same way. A rejection the client *can* act on
-is the opposite case and travels as itself.
-</Aside>
-
-## Three handler patterns
-
-**Fire-and-forget** — record state, broadcast a derived event later,
-no reply to the sender:
-
-```rust title="crates/features/src/chat/ws/gateway.rs"
-#[subscribe_message("typing")]
-#[public]
-async fn typing(&self, msg: SendMessageDto, client: &WsClient) {
-    let _ = client.broadcast("typing", &msg);
-}
-```
-
-The handler returns `()`, so no envelope flows back to the sender on
-this event. The `client.broadcast(...)` call pushes a server→client
-event on a different event name — see [Rooms](/websockets/rooms/).
-
-**Request/response** — the client asks, the server answers on the same
-event:
-
-```rust title="crates/features/src/chat/ws/gateway.rs"
-#[subscribe_message("presence")]
-#[public]
-async fn presence(&self) -> usize {
-    self.svc.present()
-}
-```
-
-```text frame="terminal"
-> {"event":"presence","data":null}
-< {"event":"presence","data":1}
-```
-
-The return value is serialized straight into `data`. Clients
-correlate by event name; if you need multiple in-flight requests of the
-same kind, include an `id` field in the payload and echo it in the
-response.
-
-**Explicit failure** — the operation can fail and the client needs to
-see why:
-
-```rust title="crates/features/src/chat/ws/gateway.rs"
-#[derive(thiserror::Error, Debug)]
-enum SendError {
-    #[error("text must not be empty")]
-    Empty,
-    #[error("rate limited")]
-    RateLimit,
-}
-
-#[subscribe_message("send")]
-#[public]
-async fn send(&self, msg: SendMessageDto) -> Result<ChatMessageDto, SendError> {
-    if msg.text.is_empty() {
-        return Err(SendError::Empty);
-    }
-    Ok(self.svc.record(msg))
-}
-```
-
-```text frame="terminal"
-> {"event":"send","data":{"author":"ada","text":""}}
-< {"event":"send","data":{"error":"text must not be empty"}}
-```
-
-The wire shape stays the same envelope — clients branch on the presence of
-`data.error`, and read `data.errors` when they need to point at a field.
+The connection hooks run no layer yet: `#[use_interceptors]` and
+`#[use_exception_filters]` beside `#[on_connect]` are named compile errors, as
+are a guard (the upgrade's guards admitted the socket), a pipe (a hook has no
+payload), a `#[meta]` value (no layer would read it) and a posture (no gate stands
+before a hook, so it reads nothing a grant guards).
 
 ## The envelope itself
 
@@ -317,7 +245,9 @@ assert_eq!(parsed.event, "ping");
 
 A missing `data` key decodes to `serde_json::Value::Null`, so older
 clients sending bare `{"event":"ping"}` still hit handlers that take no
-payload.
+payload. Only an object decodes: `serde_json::from_str::<WsEnvelope>` refuses
+an array as it refuses a string, rather than reading its items as the
+fields.
 
 ## Reference
 

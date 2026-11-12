@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: an `#[sse]` route's posture names a subject no table holds: an entity's posture opens reads whose rows the stream writes after the route's unit ended, where no ability is left to judge them. Declare the capability with `#[subject]` on a unit struct and gate the stream with `#[authorize(Action, ThatSubject)]` or `#[public(Action, ThatSubject)]`, then load what it needs inside the handler
+  --> tests/integration/diagnostics/http/authorize_on_an_sse_route.rs:34:23
+   |
+34 |     #[authorize(Read, post::Entity)]
+   |                       ^^^^ evaluation of `<FeedController as nest_rs::core::Discoverable>::register::{closure#0}::_` failed here

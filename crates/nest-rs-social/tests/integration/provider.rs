@@ -2,12 +2,11 @@
 //! `authorize`/`exchange` delegate to the configured `client()`.
 
 use nest_rs_authn::{JwtOptions, JwtService};
+use nest_rs_http::{IntoResponse as _, header};
 use nest_rs_oauth_client::{OAuthClient, OAuthClientConfig, TokenSet};
 use nest_rs_social::{ProfileFuture, SocialProfile, SocialProvider};
 
-/// A provider that keeps the default `authorize`/`exchange` and implements only
-/// `profile` — the shape a real first-party provider takes, so exercising its
-/// `authorize` proves the default delegates to `client()`.
+/// A provider keeping the default `authorize`/`exchange`, as a first-party one does.
 struct StubProvider {
     client: OAuthClient,
 }
@@ -33,6 +32,8 @@ fn oauth_config() -> OAuthClientConfig {
         redirect_url: "https://app.example/callback".into(),
         userinfo_url: "https://provider.example/userinfo".into(),
         scopes: vec!["read".into()],
+        authorization_parameters: Default::default(),
+        tls: nest_rs_config::ClientTls::default(),
     }
 }
 
@@ -41,19 +42,25 @@ fn default_authorize_delegates_to_the_configured_client() {
     let provider = StubProvider {
         client: OAuthClient::new(oauth_config()).expect("valid client"),
     };
-    let jwt =
-        JwtService::new(JwtOptions::new("social-int-tests-padded-to-32-bytes")).expect("hmac jwt");
+    let mut options = JwtOptions::new("social-int-tests-padded-to-32-bytes");
+    options.issuer = Some(crate::APP.into());
+    options.audience = Some(crate::APP.into());
+    let jwt = JwtService::new(options).expect("hmac jwt");
 
     let authorization = provider
-        .authorize(&jwt)
+        .authorize(&jwt, None)
         .expect("the trait default drives the shared flow through client()");
 
     assert!(
         authorization
-            .url
+            .url()
             .starts_with("https://provider.example/authorize"),
         "redirect must hit the client's configured provider, got {}",
-        authorization.url,
+        authorization.url(),
     );
-    assert!(!authorization.transaction.is_empty());
+    let answered = authorization.into_response();
+    assert!(
+        answered.headers().contains_key(header::SET_COOKIE),
+        "the transaction leaves on the redirect",
+    );
 }

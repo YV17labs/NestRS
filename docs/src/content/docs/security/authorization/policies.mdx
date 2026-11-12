@@ -1,7 +1,6 @@
 ---
 title: Policies
 description: AbilityBuilder turns subjects, actions, predicates, and fields into one Ability — the same AST renders SQL and runs in memory.
-tier: basics
 sidebar:
   order: 2
 ---
@@ -10,15 +9,15 @@ import { Aside } from '@astrojs/starlight/components';
 
 A policy is a function from a principal to an `Ability`. The function
 runs per request — `AbilityFactory::define` is called once after
-authn, the returned `Ability` lives in the request's task-local and
-extensions. This page covers the builder API: subjects, actions,
+authn, and the guard attaches the returned `Ability`, ambient for the
+rest of the request. This page covers the builder API: subjects, actions,
 conditional rules, restricted fields, denials.
 
 Predicates compile through a single `Predicate` AST that lowers to
 [SeaORM](https://docs.rs/sea-orm)'s `Condition` for the SQL filter
-and matches in-memory for the by-id check and the response mask.
+and matches in-memory for the by-id check and each wire row's judgement.
 One AST, two interpreters — the rows the query returns and the rows
-the response check accepts cannot diverge.
+a reply may answer cannot diverge.
 
 ## A minimal policy
 
@@ -27,7 +26,6 @@ use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
 #[injectable]
-#[derive(Default)]
 pub struct AuthzAbility;
 
 impl AbilityFactory for AuthzAbility {
@@ -57,12 +55,64 @@ impl<E: sea_orm::EntityTrait> Subject for E {}
 
 So a SeaORM entity (`user::Entity`, `org::Entity`) is the canonical
 subject — the bridge isolates the ORM coupling to one impl block.
-Introducing a second data layer moves one impl, not the engine.
+Introducing a second data layer moves one impl, not the engine. A
+capability no table holds is the other kind, which `#[subject]` declares
+([below](#subjects-no-table-holds)).
 
-`Subject` is used as a type-system guardrail in `Authorize<A, S>` and
-in the `condition_for::<E>` calls. Subjects are keyed by `TypeId`
+`Subject` is used as a type-system guardrail in a posture's
+`#[authorize(A, S)]` and `#[public(A, S)]` and in the `condition_for::<E>` calls. Subjects are keyed by `TypeId`
 under the hood; `Action::Manage` on a subject acts as a wildcard for
 every other action on that same subject.
+
+### Subjects no table holds
+
+Some decisions are about a capability, not rows: may this caller transcode
+audio, export the org's reports, trigger a reindex? Declare the capability
+with `#[subject]` on a unit struct, beside the feature that owns it:
+
+```rust title="crates/features/src/audio/transcoding.rs"
+use nest_rs::authz::subject;
+
+#[subject]
+pub struct Transcoding;
+```
+
+A rule grants it whole, with the scope a token must carry when the
+capability is delegated:
+
+```rust title="crates/features/src/authz/ability.rs"
+if actor.is_admin() {
+    ab.can(Action::Manage, Transcoding)
+        .requires_scope(AUDIO_TRANSCODE);
+}
+```
+
+and every operation that exercises it declares the posture on it —
+`#[authorize(Manage, Transcoding)]` on an HTTP route, an `#[sse]` stream,
+a GraphQL field, a WebSocket message or an MCP tool alike. It is the
+same [class gate](/security/authorization/#one-class-gate-on-every-edge)
+as on an entity, with the same refusals and the same RFC 6750 scope
+challenge. The subject has no model, so the reply goes out as written, and
+the unit reads under the caller's ability as one naming an entity does: what
+its body reads through `Repo` is filtered by the caller's grants, and each wire
+row it answers is judged for that caller where it is built. A visitor's reads
+stay closed there, since a capability names no rows a visitor may read.
+
+The type system keeps the two kinds apart. `when` and `fields` narrow an
+entity's rows and columns, so a subject no table holds refuses them; so
+does `cannot`, because the class gate is that subject's one layer and a
+grant you do not write is already the denial. Each is bounded on
+`RowSubject`, which every entity is, and a capability is told why:
+
+```text
+error[E0277]: `Exporting` has no rows to deny or narrow: `cannot`, `when` and `fields` take a SeaORM entity
+   = note: a capability `#[subject]` declares has no rows: a grant covers it
+           whole, and a grant not written is its denial
+```
+
+Don't borrow an entity for a capability (`Manage` on `org::Entity` to mean
+"may transcode"): a rule on the entity then grants or withholds the
+capability by accident, and a grep for the capability finds nothing.
 
 ## Actions
 
@@ -75,14 +125,24 @@ pub enum Action { Read, Create, Update, Delete, Manage }
 `Manage` is the action wildcard — a grant on `Manage` matches every
 other action on the same subject. Each variant has a type marker
 (`Read`, `Create`, `Update`, `Delete`, `Manage`) implementing
-`ActionMarker`, so routes can name an action as a type parameter
-(`Authorize<Read, user::Entity>`).
+`ActionMarker`, so a posture can name an action as a type
+(`#[authorize(Read, user::Entity)]`).
 
 A grant on `Read` does not imply `Update`. A grant on `Manage` does.
 
 ```rust title="crates/features/src/authz/ability.rs"
 ab.can(Action::Manage, org::Entity); // covers Read, Create, Update, Delete
 ```
+
+A site gated on `Manage` asks for all of it: `#[authorize(Manage, E)]` passes only
+where `Read`, `Create`, `Update` and `Delete` would each pass. So `cannot(Read, E)`
+beside `can(Manage, E)` refuses a site gated on `Read` and a site gated on `Manage`,
+and leaves the other three open; four separate grants pass it; `cannot(Manage, E)`
+refuses all five. A caller barred from reading a thing does not manage it.
+
+The rows follow the same reading: `condition_for::<E>(Action::Manage)` and
+`Ability::can` hold a row to every action's rules. What such a site answers shows what
+the caller may `Read`, and a write in its body reads the write's own action.
 
 ## Rules — grant, condition, fields
 
@@ -101,124 +161,29 @@ ab.can(Action::Read, user::Entity)
 | `.can(action, subject)` | Begin a grant |
 | `.cannot(action, subject)` | Begin a denial — a matching denial overrides a matching grant |
 | `.when(\|p\| ...)` | Constrain the rule to rows matching the predicate |
-| `.fields([col, ...])` | Restrict the response mask to these columns |
+| `.fields([col, ...])` | Restrict a grant to these columns: what a reply shows, and what a write sets |
+| `.requires_scope(scope)` | Withhold a grant from a token without the scope ([Scopes](/security/authorization/scopes/)) |
 
 Skip `.when` and the rule is unconditional. Skip `.fields` and every
-field is permitted.
+field is permitted. A denial takes `.when` alone: it hides rows, never
+columns, and holds whatever the token carries, so
+`cannot(..).fields(..)` and `cannot(..).requires_scope(..)` do not
+compile.
 
 The closure handed to `when` receives a `PredicateBuilder<E>` typed
 to the rule's entity, so column references are type-checked at compile
 time. A rule scoped to `user::Entity` cannot accidentally reference
 `org::Column::Id`.
 
-## Predicates — the shared AST
-
-```rust title="nest_rs::authz::Predicate"
-pub enum Predicate<E: EntityTrait> {
-    Always,
-    Eq(E::Column, Value),
-    In(E::Column, Vec<Value>),
-    Cmp(E::Column, CmpOp, Value),   // Ne / Lt / Lte / Gt / Gte
-    IsNull(E::Column, bool),        // IS NULL / IS NOT NULL
-    And(Vec<Predicate<E>>),
-    Or(Vec<Predicate<E>>),
-    Not(Box<Predicate<E>>),
-    Related(RelatedPredicate),      // condition on a related entity
-}
-```
-
-`PredicateBuilder` exposes the constructors:
-
-```rust title="crates/features/src/authz/ability.rs"
-ab.can(Action::Read, user::Entity).when(|p| {
-    p.all([
-        p.eq(user::Column::OrgId, actor.org_id),
-        p.any([
-            p.eq(user::Column::Role, "admin"),
-            p.eq(user::Column::Id, actor.sub),
-        ]),
-    ])
-});
-```
-
-| Builder method | Variant | Use |
-|---------------|---------|-----|
-| `p.eq(col, value)` | `Eq` | Column equals value |
-| `p.ne(col, value)` | `Cmp` | Column differs from value |
-| `p.lt / p.lte / p.gt / p.gte(col, value)` | `Cmp` | Ordered comparison |
-| `p.is_null(col)` / `p.is_not_null(col)` | `IsNull` | Nullness test |
-| `p.is_in(col, [v, ...])` | `In` | Column in list |
-| `p.all([...])` | `And` | Every part matches |
-| `p.any([...])` | `Or` | At least one part matches |
-| `p.not(inner)` | `Not` | Negation |
-| `p.related::<R, _>(rel, \|r\| ...)` | `Related` | Condition on a related entity — see below |
-
-`Predicate::Always` is the default — a rule with no `.when` admits
-every row. An empty `p.any([])` matches nothing (SQL `FALSE`); an
-empty `p.all([])` matches every row (SQL `TRUE`). The same identities
-hold for the SQL lowering and the in-memory check.
-
-## Relational scoping
-
-Some entities carry no tenant column of their own — a `message`
-belongs to a conversation, and the conversation carries the `org_id`.
-`p.related` scopes `E` by a condition on a related entity `R`, reached
-through a variant of `E`'s SeaORM `Relation` enum; the closure builds
-the sub-condition with `R`'s own typed columns:
-
-```rust title="crates/features/src/authz/ability.rs"
-// `message` has no `org_id`; its tenant is the parent conversation's.
-ab.can(Action::Read, message::Entity).when(|p| {
-    p.related::<conversation::Entity, _>(
-        message::Relation::Conversation,
-        |c| c.eq(conversation::Column::OrgId, org_id),
-    )
-});
-```
-
-The SQL lowering is a semi-join: `belongs_to` / `has_one` becomes an
-uncorrelated `IN (subquery)`, `has_many` a correlated `EXISTS`. A
-relation's custom `on_condition` is folded into the subquery so the
-scope is never widened past the join.
-
-Two boot-time guards close the gap that type erasure opens — both
-panic at rule-definition time, never a silently-wrong filter:
-
-- the relation must point at `R` (its target table is checked);
-- the relation must be single-column — a tenant key is one column by
-  design; denormalize it onto the child rather than scoping through a
-  composite key.
-
-One consequence for the read-back path: the in-memory check cannot
-traverse the relation without loading the parent, so row visibility
-for a relational rule is decided **in SQL** everywhere — including
-the by-id binding and create paths, which re-check against the same
-lowered condition (see
-[By-id binding](/security/authorization/by-id-binding/)).
-
-## Field grants
-
-`.fields([cols])` restricts the response mask to a set of columns. A
-rule without `.fields` permits every field. The masker unions the
-permitted fields across every matching grant — so an admin grant
-with no `.fields` clears the field restriction even if a narrower
-grant existed.
-
-```rust title="crates/features/src/authz/ability.rs"
-ab.can(Action::Read, user::Entity)
-    .when(|p| p.eq(user::Column::OrgId, actor.org_id))
-    .fields([user::Column::Id, user::Column::Name]);
-```
-
-A member reads `id` and `name`; the masker drops every other column
-from the response — including columns the wire DTO exposes that the
-member should not see.
+What `when` takes is on [Predicates](/security/authorization/predicates/),
+and what `fields` grants, to a reply and to a write, on
+[Field grants](/security/authorization/field-grants/).
 
 ## A real match-on-role example
 
 The exemplar in `crates/features/src/authz/ability.rs`:
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
@@ -229,6 +194,9 @@ impl AbilityFactory for AuthzAbility {
             ab.can(Action::Manage, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Manage, org::Entity);
+            ab.can(Action::Manage, Transcoding)
+                .requires_scope(constants::AUDIO_TRANSCODE);
+            // …
         } else {
             ab.can(Action::Read, user::Entity)
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id))
@@ -237,7 +205,9 @@ impl AbilityFactory for AuthzAbility {
                 .when(|p| p.eq(user::Column::OrgId, actor.org_id));
             ab.can(Action::Read, org::Entity)
                 .when(|p| p.eq(org::Column::Id, actor.org_id));
+            // …
         }
+        // …
     }
 }
 ```
@@ -245,7 +215,9 @@ impl AbilityFactory for AuthzAbility {
 What this buys:
 
 - **Admin** reads and manages every user in their org; reads and
-  manages every org unconditionally.
+  manages every org unconditionally; may transcode audio when the token
+  carries `audio:transcode` (a [subject no table
+  holds](#subjects-no-table-holds)).
 - **Member** reads users in their org but only `id` and `name`; can
   create users in their org; reads their own org only.
 - **No role at all** (or unknown role) falls into the member branch
@@ -268,6 +240,21 @@ The SQL pre-filter for `Read` becomes
 `(OR of grant conditions) AND NOT (OR of deny conditions)`. The
 in-memory check refuses if any denial matches even when grants do.
 
+A denial with no `.when` — or with one that holds for every row by its
+shape, such as `p.all([])` — matches every row, so the class gate refuses
+the action outright, on every edge, before a handler, a query or an entity
+hook runs:
+
+```rust title="crates/features/src/authz/ability.rs"
+ab.can(Action::Manage, user::Entity)
+    .when(|p| p.eq(user::Column::OrgId, actor.org_id));
+ab.cannot(Action::Create, user::Entity);
+```
+
+This caller reads, updates and deletes the users of their org, and a
+`POST /users` answers a plain `403` — the same answer whatever the
+token's scopes, since no scope lifts a denial.
+
 <Aside type="note">
 The framework's authz engine is **ability-based**, but a rule's evaluation
 is independent of every other rule's. There is no inheritance, no
@@ -281,13 +268,15 @@ chain.
 
 Always in `crates/features/src/authz/ability.rs`. The factory is the
 **single source of truth** for the app's authorization rules — HTTP,
-GraphQL, WS, and MCP transports all bridge to the same `AuthzAbility`.
+GraphQL, WS, and MCP transports all build the same `AuthzAbility`.
 Spreading policy across handlers is the drift the framework prevents.
 
 ## Going further
 
+- [Predicates](/security/authorization/predicates/) — the AST a rule's `when`
+  builds, and scoping through a relation.
+- [Field grants](/security/authorization/field-grants/) — what `.fields(...)`
+  shows a reply and lets a write set.
 - [Row-level filtering](/security/authorization/row-level-filtering/)
   — how the predicate lowers to SQL.
-- [Response masking](/security/authorization/response-masking/) —
-  how `.fields(...)` reaches the response body.
 - [Authorization](/security/authorization/) — the engine overview.

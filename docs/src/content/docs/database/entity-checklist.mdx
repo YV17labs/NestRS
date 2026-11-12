@@ -1,13 +1,12 @@
 ---
 title: Entity checklist
 description: "Every decision one #[expose]d entity asks of you, one line each, each pointing at the page that explains it."
-tier: basics
 sidebar:
   order: 3
 ---
 
 One `#[expose]` declaration feeds the REST body, the GraphQL type, the OpenAPI
-schema, the CRUD inputs and the response mask. That is the framework's densest
+schema, the CRUD inputs and each wire row's judgement. That is the framework's densest
 payoff and its densest set of choices — and they are documented across four
 pages, because each belongs beside the mechanism it drives.
 
@@ -26,8 +25,8 @@ from [Entities](/database/entities/).
 | `name` | What is this type called on the wire? Bare, no suffix | [Entities](/database/entities/) |
 | `service` | Which `CrudService` owns it? Omit for a read-only exposure with none | [CRUD](/database/crud/) |
 | `graphql` | Does it appear in the schema, or is it HTTP-only? | [GraphQL](/graphql/) |
-| `timestamps` | Should `created_at` / `updated_at` be maintained for you? | [Entities](/database/entities/) |
-| `soft_delete` | Does `DELETE` tombstone the row instead of erasing it? | [CRUD](/database/crud/) |
+| `timestamps` | Should `created_at` / `updated_at` be maintained for you? | [Lifecycle columns](/database/lifecycle/) |
+| `soft_delete` | Does `DELETE` tombstone the row instead of erasing it? | [Lifecycle columns](/database/lifecycle/#soft-delete-and-timestamps) |
 | `complex` | Does the wire type need a hand-written `#[ComplexObject]` field resolver? | [Field resolvers](/graphql/field-resolvers/) |
 
 ## On each field
@@ -37,27 +36,27 @@ from [Entities](/database/entities/).
 | `#[expose]` | Does this column cross the wire at all? Silence means hidden | [Entities](/database/entities/) |
 | `input(create, update)` | May a client *write* it, and on which operation? | [CRUD](/database/crud/) |
 | `validate(…)` | What makes a value of it invalid at the edge? | [Pipes](/fundamentals/pipes/) |
+| `default = …` | Is it a constant the server decides, stored when an insert leaves it unset? | [Entity inputs](/database/inputs/#write-side--inputs-and-validation) |
 | `via = "…"` | On a `has_many`, which of the child's foreign keys does it follow? | [Entities](/database/entities/) |
-| `complexity = …` | Does resolving it cost more than a column read? | [Query limits](/graphql/query-limits/) |
+| `complexity = …` | Does resolving it cost more than a column read? | [Field complexity](/graphql/field-complexity/) |
 
 An enum column takes [`#[wire_enum]`](/database/entities/#enum-columns) — it
 carries the wire derives, so the field can be `#[expose]`d like any scalar.
 
 ## What fails on its own, and how loudly
 
-Two of the traps on this page announce themselves. Neither is a compile error,
-and the difference matters when you are deciding what to test:
+One trap on this page announces itself at compile time, the other only at
+runtime, and the difference matters when you are deciding what to test:
 
-- **A hidden column with no default** surfaces as a **runtime 500** on the first
-  masked response, not at build time. Reconstructing the model for masking needs
-  a value for every unexposed column; the macro supplies one for safe scalars
-  and deliberately emits nothing for a hidden `Uuid`, timestamp, `Decimal` or
-  enum without `Default`, so `wire_to_model` fails closed. Give those an explicit
-  [`#[wire_default(…)]`](/security/authorization/response-masking/).
-- **A half-wired soft delete fails the boot**, naming the entity and the
-  service — in one direction. The entity flag without
-  `CrudService::soft_delete_column` is caught; the service opting in without the
-  entity flag registers nothing and is not. See [CRUD](/database/crud/).
+- **A grant withholding a column no `null` answers** is refused when the
+  ability builds, naming the column: a grant on `Read` may leave out only an
+  `Option` column or one
+  [`#[expose(nullable)]`](/security/authorization/response-masking/#what-a-grant-may-withhold--exposenullable)
+  declares. A unit test building each role's ability catches it before a request
+  does.
+- **A unique column on a `soft_delete` table** answers `409` for a value every
+  read calls free, when its index is a full one: index it `WHERE deleted_at IS
+  NULL`. See [Lifecycle columns](/database/lifecycle/#soft-delete-and-timestamps).
 
 ## The two you carry yourself
 
@@ -66,11 +65,13 @@ opt-in, so a column added by a later migration never leaks by omission — the
 failure direction is the safe one. The remaining risk is the reverse: an
 `#[expose]` written by habit on a column that should not travel.
 
-**Does any ability rule predicate on a column you did not expose?** Masking
-rebuilds the row from the wire body and fills unexposed columns with a
-placeholder, so such a rule is evaluated against the placeholder rather than the
-value and masks the wrong fields. Nothing catches this — see
-[Response masking](/security/authorization/response-masking/).
+**Does a push carry the row, or a wire row someone else built?** A wire row is
+judged on its whole row where it is built, hidden columns included, so a rule
+reading one decides it. A subscription builds its rows as the socket polls its
+stream, each judged for its subscriber: carry the `Model` on the event and build
+the wire row in the stream — a wire row the publisher built answers no
+subscriber, see
+[A row answers the caller who judged it](/security/authorization/response-masking/#a-row-answers-the-caller-who-judged-it).
 
 ## Going further
 

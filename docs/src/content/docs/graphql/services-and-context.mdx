@@ -1,0 +1,154 @@
+---
+title: Services and context
+description: "What an operation reaches beyond its arguments — the service it injects, the caller a guard attached, a request-scoped provider, a batch loader."
+sidebar:
+  order: 3.1
+---
+
+An operation's arguments are what the client sent. Everything else it reaches —
+the service that owns the data, the principal a guard verified, a provider built
+for this request, a batch loader — is the resolver's to declare, as a field or a
+parameter, and never a schema argument.
+
+## Injecting a service
+
+Reach the service through the resolver struct, then call into it —
+this is the same shape every adapter uses:
+
+```rust title="crates/features/src/users/graphql/resolver.rs"
+use std::sync::Arc;
+use nest_rs::graphql::async_graphql::Result;
+use nest_rs::authz::{Create, Read};
+use nest_rs::graphql::{operations, resolver};
+use nest_rs::seaorm::{Authorized, Creatable, ServiceError};
+
+use crate::authz::AuthzGuard;
+use crate::users::{CreateUser, Entity as UserEntity, User, UsersService};
+
+#[resolver]
+#[use_guards(AuthzGuard)]
+pub struct UsersResolver {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[operations]
+impl UsersResolver {
+    #[query]
+    #[authorize(Read, bind = UsersService)]
+    async fn user(&self, user: Authorized<Read, UserEntity>) -> User {
+        User::from(&*user)
+    }
+
+    #[mutation]
+    #[authorize(Create, UserEntity)]
+    async fn create_user(&self, input: CreateUser) -> Result<User> {
+        let user = self
+            .svc
+            .create(input)
+            .await
+            .map_err(ServiceError::from)?;
+        Ok(User::from(&user))
+    }
+}
+```
+
+`CreateUser`'s rules run before the body, as they do for the generated
+`create_user`: the edge holds every argument it decodes to them, so
+`Creatable::create` has nothing left to check. It takes the caller's org from
+the `Create` grant that pins it, so the mutation reads no principal. The service
+stays the single audited choke point to the database. The resolver only
+translates between the wire shape and the service —
+`#[authorize(Action, Entity)]` is each operation's access posture,
+gating the call against the ambient ability, each row it answers judged
+for the caller as it is built. The `#[use_guards(AuthzGuard)]` binding on the
+struct scopes each operation to the caller's ability. Authentication runs
+at the `/graphql` request, through the
+[endpoint guards](/security/authorization/endpoint-guards/)
+`AuthzGraphqlModule` declares, and `AuthnGuard` checks HTTP requests only,
+so binding it on a resolver is a compile error rather than a check that
+passes every operation. The feature's `UsersGraphqlModule`
+imports `AuthzGraphqlModule`, which provides `AuthzGuard` (omit it and
+boot fails naming the missing guard). See [Database / CRUD](/database/crud/)
+for the service contract and [Security](/security/) for the guard wiring.
+
+## Reading the request context
+
+What the request needs beyond the document is a parameter, as on a route, and no
+schema argument:
+
+- **What a guard attached** is `Ambient<T>` — the principal the endpoint's
+  guards verified, or what a guard bound on the field derived from it. Absent,
+  the field answers the opaque internal error and the type is filed at
+  `error`: the guard that attaches it did not run there.
+- **A request-scoped provider** is `Scoped<T>`, and the boot checks its
+  provider like an `#[inject]`ed one — see
+  [Provider scopes](/fundamentals/provider-scopes/).
+- **A batch loader** is `&DataLoader<L>`, and the boot refuses a field whose
+  loader's owner the app does not import — see
+  [Dataloaders](/database/dataloaders/#reading-a-loader).
+
+The caller's `Ability` is none of them: the field's unit carries it, the one its
+class gate checked, and every read and wire row under it see that one.
+
+An optional `ctx: &Context<'_>`, the first argument after `&self`, reaches what
+async-graphql itself offers: the selection a field looks ahead at, a header to
+set. The boot reads no body, so a type read off it by hand and absent from the
+request answers the opaque internal error, the type filed at `error`.
+
+```rust title="crates/features/src/profile/graphql/resolver.rs"
+use nest_rs::core::Scoped;
+use nest_rs::graphql::{operations, resolver};
+
+#[query]
+#[public]
+async fn visits(&self, counter: Scoped<crate::VisitCounter>) -> u32 {
+    counter.bump()
+}
+```
+
+```rust title="crates/features/src/posts/graphql/resolver.rs"
+use nest_rs::authz::Update;
+use nest_rs::core::ambient;
+use nest_rs::graphql::operations;
+use nest_rs::seaorm::Authorized;
+
+use crate::Claims;
+use crate::posts::{Entity as PostEntity, Post, PostAuthorGuard, PostError, PostsService};
+
+#[operations]
+impl PostsResolver {
+    #[mutation]
+    #[authorize(Update, bind = PostsService)]
+    #[use_guards(PostAuthorGuard)]
+    async fn publish_post(&self, post: Authorized<Update, PostEntity>) -> Result<Post, PostError> {
+        self.svc.publish(post.into_inner()).await
+    }
+
+    #[query]
+    #[public]
+    async fn greeting(&self) -> String {
+        match ambient::<Claims>() {
+            Some(claims) => format!("hello, {:?}", claims.sub),
+            None => "hello, visitor".to_owned(),
+        }
+    }
+}
+```
+
+`#[authorize]` refuses an anonymous caller before the method runs, and
+`PostAuthorGuard`, bound on the field, reads the claims the endpoint's guards
+verified (see [Endpoint guards](/security/authorization/endpoint-guards/)) and
+refuses a token naming no user. A `#[public]` operation also admits
+anonymous callers, for whom no guard attached any: it reads
+`nest_rs::core::ambient::<Claims>()` and decides, as `greeting` does. An
+`Ambient<Claims>` there serves an identified caller alone: an anonymous call is
+refused `UNAUTHENTICATED`, filed as the denial of the guard that attaches the claims.
+
+## Going further
+
+- [Queries and mutations](/graphql/queries-mutations/) — the operation itself,
+  its arguments and its return.
+- [Endpoint guards](/security/authorization/endpoint-guards/) — what the
+  `/graphql` request authenticates before any field runs.
+- [Dataloaders](/database/dataloaders/) — the batch loader a field reads.

@@ -1,13 +1,9 @@
 use std::sync::Arc;
 
-use async_graphql::{Context, Result};
-use nest_rs::authz::{Create, Read};
 use nest_rs::graphql::{crud, resolver};
-use nest_rs::seaorm::graphql::bind;
 
-use crate::Claims;
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
+use crate::users::UsersService;
 
 #[resolver]
 #[use_guards(AuthzGuard)]
@@ -16,28 +12,5 @@ pub struct UsersResolver {
     svc: Arc<UsersService>,
 }
 
-#[crud(
-    service = svc,
-    entity = UserEntity,
-    output = User,
-    create = CreateUser,
-    update = UpdateUser,
-)]
-impl UsersResolver {
-    #[mutation]
-    #[authorize(Create, UserEntity)]
-    async fn create_user(&self, ctx: &Context<'_>, input: CreateUser) -> Result<User> {
-        let actor = ctx.data::<Claims>()?;
-        let user = self.svc.create_in_org(input, actor.org_id).await?;
-        Ok(User::from(&user))
-    }
-
-    #[query]
-    #[authorize(Read, UserEntity)]
-    async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<Read, UsersService>(ctx, &id)
-            .await?
-            .as_ref()
-            .map(User::from))
-    }
-}
+#[crud(service = UsersService)]
+impl UsersResolver {}

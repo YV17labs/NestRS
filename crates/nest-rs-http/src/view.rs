@@ -1,0 +1,230 @@
+//! [`HttpView`], the HTTP edge's view of the request it dispatches.
+
+use nest_rs_core::__private::new_unit_context;
+use nest_rs_core::{Handler, ServedAddress, Settled, UnitContext, UnitView};
+use nest_rs_guards::Denial;
+
+use crate::request::Request;
+use crate::response::Response;
+
+/// The HTTP edge's view of one request: what a guard reads through
+/// [`HttpView::of`] — the request, head and body — the route it matched, and,
+/// once the unit answered, the response a layer around it reads or rewrites.
+///
+/// A guard that reads the body sets it back for the handler:
+///
+/// ```
+/// use nest_rs_core::{Layer, UnitContext, async_trait};
+/// use nest_rs_guards::{Denial, Guard, GuardFor};
+/// use nest_rs_http::HttpView;
+///
+/// #[derive(Layer)]
+/// struct SignedBody;
+///
+/// #[async_trait]
+/// impl Guard for SignedBody {
+///     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+///         let request = HttpView::of(cx)?.request_mut();
+///         let body = request
+///             .take_body()
+///             .into_bytes()
+///             .await
+///             .map_err(|_| Denial::unauthorized("an unreadable body"))?;
+///         let signed = request.header("x-signature").is_some() && !body.is_empty();
+///         request.set_body(body);
+///         signed.ok_or_else(|| Denial::unauthorized("an unsigned body"))
+///     }
+/// }
+///
+/// impl GuardFor<HttpView> for SignedBody {}
+/// ```
+///
+/// An interceptor reads the answer once the rest of the unit ran, or answers
+/// instead of it:
+///
+/// ```
+/// use nest_rs_core::{Interceptor, Layer, Next, Outcome, UnitContext, async_trait};
+/// use nest_rs_http::{HeaderValue, HttpView, Response, StatusCode};
+///
+/// #[derive(Layer)]
+/// struct Maintenance;
+///
+/// #[async_trait]
+/// impl Interceptor for Maintenance {
+///     async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+///         let http = HttpView::of(cx)?;
+///         if http.request().header("x-maintenance").is_some() {
+///             let closed = Response::builder()
+///                 .status(StatusCode::SERVICE_UNAVAILABLE)
+///                 .finish();
+///             return Ok(http.respond(closed));
+///         }
+///         let outcome = next.run(cx).await;
+///         if let Some(response) = HttpView::of(cx)?.response_mut() {
+///             response
+///                 .headers_mut()
+///                 .insert("x-served-by", HeaderValue::from_static("api"));
+///         }
+///         outcome
+///     }
+/// }
+/// ```
+pub struct HttpView {
+    request: Request,
+    response: Option<Response>,
+}
+
+impl UnitView for HttpView {
+    fn served_address(&self) -> Option<ServedAddress<'_>> {
+        Some(ServedAddress::route(
+            self.request.verb(),
+            self.request.route(),
+        ))
+    }
+}
+
+impl HttpView {
+    /// The view of `request`, as the edge builds it for a unit.
+    pub(crate) fn new(request: Request) -> Self {
+        Self {
+            request,
+            response: None,
+        }
+    }
+
+    /// The request back, once the stage that read it is over.
+    pub(crate) fn into_request(self) -> Request {
+        self.request
+    }
+
+    /// The response the unit answered, taken by the edge that writes it.
+    pub(crate) fn take_response(&mut self) -> Option<Response> {
+        self.response.take()
+    }
+
+    /// The HTTP view of `cx`, or an opaque [`Denial::internal`] when an HTTP
+    /// entry ran on a unit with no HTTP view — a wiring defect, never a client's
+    /// doing — whose source says the edit, on the line the edge files for it.
+    pub fn of<'c>(cx: &'c mut UnitContext<'_>) -> Result<&'c mut HttpView, Denial> {
+        cx.switch_to_mut::<HttpView>().ok_or_else(|| {
+            Denial::internal("an HTTP check ran on a unit the HTTP edge did not dispatch")
+                .with_source(VIEWLESS_HINT)
+        })
+    }
+
+    /// The request: its head, its extensions and what the connection knows of
+    /// it, for the whole unit — an exception filter, or an interceptor once the
+    /// rest of the unit ran, reads them as a guard does — and its body until a
+    /// reader takes it, the handler at the latest.
+    pub fn request(&self) -> &Request {
+        &self.request
+    }
+
+    /// The request, to read its body or set it back.
+    pub fn request_mut(&mut self) -> &mut Request {
+        &mut self.request
+    }
+
+    /// The template the router matched, as registered (`/users/{id}`), or
+    /// `None` on a request no route matched.
+    pub fn route(&self) -> Option<&str> {
+        self.request.route()
+    }
+
+    /// The response the unit answered, once the rest of it ran or a layer
+    /// answered through [`respond`](Self::respond).
+    pub fn response(&self) -> Option<&Response> {
+        self.response.as_ref()
+    }
+
+    /// The response the unit answered, to rewrite a header or its body.
+    pub fn response_mut(&mut self) -> Option<&mut Response> {
+        self.response.as_mut()
+    }
+
+    /// Answer the unit with `response`, in place of whatever it held: the proof
+    /// an interceptor that answers instead of running the rest returns.
+    ///
+    /// A guard refusing in its protocol's own words — RFC 6749 §5.2's
+    /// `400 invalid_client`, which no [`Denial`] renders — writes its error
+    /// here and returns its denial: the guard stage serves a `4xx` or `5xx` it
+    /// finds, and renders the denial otherwise. What a guard that admits writes
+    /// is never served.
+    pub fn respond(&mut self, response: Response) -> Settled {
+        self.response = Some(response);
+        nest_rs_core::__private::settled()
+    }
+}
+
+/// `f`'s answer over a unit context on `request`'s view, as the unit `handler`
+/// declares — what a fold an endpoint runs on its request, a global pipe,
+/// reads. The request is the view's while `f` runs, then back in place.
+pub fn with_view<R>(
+    handler: &'static Handler,
+    request: &mut Request,
+    f: impl FnOnce(&UnitContext<'_>) -> R,
+) -> R {
+    let mut view = HttpView::new(std::mem::replace(request, Request::builder().finish()));
+    let answer = f(&new_unit_context(handler, &mut view, None, None));
+    *request = view.into_request();
+    answer
+}
+
+/// The edit a guard reading the HTTP request in `check` has: `check` runs on
+/// every edge's unit, `check_http` on the HTTP request alone.
+const VIEWLESS_HINT: &str = "decide the request in `check_http`, and admit in `check`: \
+     `check` runs on each unit of every edge — a GraphQL field, a WebSocket message, an MCP \
+     operation — and `check_http` on the HTTP request that carries them";
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use nest_rs_core::__private::{
+        HandlerDeclaration, MetaLevels, declare_handler, new_unit_context,
+    };
+    use nest_rs_core::{Handler, Posture};
+
+    use super::*;
+
+    struct Routes;
+
+    static ROUTE: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::REQUEST,
+        host: TypeId::of::<Routes>(),
+        host_name: "Routes",
+        method: "route",
+        address: "/x",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    struct Socket;
+
+    impl UnitView for Socket {}
+
+    #[test]
+    fn a_unit_the_http_edge_dispatched_reads_its_request() {
+        let mut view = HttpView::new(Request::builder().uri("/x".parse().unwrap()).finish());
+        let mut cx = new_unit_context(&ROUTE, &mut view, None, None);
+        let request = HttpView::of(&mut cx).expect("an HTTP view").request();
+        assert_eq!(request.uri().path(), "/x");
+    }
+
+    #[test]
+    fn a_unit_with_another_view_is_refused_opaquely_with_the_edit_on_its_source() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut view = Socket;
+        let mut cx = new_unit_context(&ROUTE, &mut view, None, None);
+        let refused = HttpView::of(&mut cx).err().expect("no HTTP view");
+        assert_eq!(refused.http_status(), 500);
+        assert!(
+            nest_rs_core::error_message(&refused).contains("check_http"),
+            "the chain the edge files says the edit: {refused:?}"
+        );
+        logs.expect_none(
+            "nest_rs::http",
+            "a guard read the HTTP request of a unit with no HTTP view",
+        );
+    }
+}

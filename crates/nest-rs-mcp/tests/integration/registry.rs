@@ -1,46 +1,32 @@
-//! `src/registry.rs` + `src/composite.rs`: several `#[mcp]` hosts, one endpoint.
-//!
-//! The MCP spec namespaces tools **per endpoint** and every shipped client
-//! config points at a single URL, so a product exposing several domains over
-//! MCP needs all their tools on one path. That is what makes the merge a
-//! framework concern rather than a convenience: without it a product has to
-//! fold every domain into one god-host, inverting the one-adapter-per-feature
-//! layout the rules mandate.
-//!
-//! This is the **composition witness** `CLAUDE.md` § *Shipping a new
-//! capability* step 5 requires: two modules, each with its own `#[mcp]`
-//! provider on one path, booted through `TestApp` and driven over the real
-//! streamable-HTTP endpoint.
+//! `src/registry.rs` + `src/composite.rs`: several `#[mcp]` hosts, one endpoint —
+//! the capability's composition witness.
 
 use std::sync::Arc;
 
 use nest_rs_core::{Discovery, module};
+use nest_rs_guards::GlobalGuards;
 use nest_rs_http::HttpEndpointMeta;
+use nest_rs_mcp::__private::hosts_on;
 use nest_rs_mcp::model::{
-    CallToolRequestParams, CallToolResponse, GetPromptResult, Implementation, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, PromptMessage, ProtocolVersion,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CompleteRequestParams, CompleteResult,
+    ContentBlock, GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation,
+    ListPromptsResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
+    PromptMessage, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
+    ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
 };
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
+use nest_rs_mcp::rmcp::{prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router};
 use nest_rs_mcp::service::{RequestContext, RoleServer};
 use nest_rs_mcp::{
-    AllowAllMcpGuard, CallToolResult, ContentBlock, DEFAULT_PATH, McpError, McpIdentity, McpModule,
-    McpOperationGuard, McpOptions, McpSetup, ServerHandler, hosts_on, mcp, prompt, prompt_handler,
-    prompt_router, tool, tool_handler, tool_router,
+    DEFAULT_PATH, McpAccess, McpError, McpIdentity, McpModule, McpSetup, ServerHandler, mcp, tools,
 };
 use nest_rs_testing::mcp::{call_method, call_tool, initialize, open_session, result};
 use nest_rs_testing::{LogCapture, TestApp};
 
-/// The endpoint both `audio`-shaped and `posts`-shaped hosts below mount on:
-/// the prefix itself, which is where a bare `#[mcp]` lands and where a client
-/// config points. Spelled out rather than read from `McpConfig` on purpose — a
-/// test that computed it from the same source as the code would pass through a
-/// change to the default.
+/// Where a bare `#[mcp]` lands. Spelled out, not read from the crate: a test
+/// computing it from the code's own source would pass through a change to it.
 const SHARED: &str = "/mcp";
-
-// --- two features, one endpoint --------------------------------------------
 
 /// Stands in for a feature that serves tools only.
 #[mcp]
@@ -59,8 +45,8 @@ impl AlphaTool {
 
 #[tool_handler]
 impl ServerHandler for AlphaTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Alpha instructions.")
     }
 }
@@ -95,8 +81,8 @@ impl BetaTool {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for BetaTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -129,9 +115,7 @@ impl ServerHandler for BetaTool {
     }
 }
 
-/// Each host lives in its own module — the adapter shape the rules mandate,
-/// which is exactly what the merge exists to keep possible.
-#[module(providers = [AlphaTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [AlphaTool])]
 struct AlphaMcpModule;
 
 #[module(providers = [BetaTool])]
@@ -144,6 +128,46 @@ async fn shared_app() -> TestApp {
     TestApp::for_module::<SharedEndpointApp>()
         .await
         .expect("two #[mcp] hosts on one path boot")
+}
+
+#[module(
+    imports = [
+        AlphaMcpModule,
+        nest_rs_http::HttpModule::for_root(nest_rs_http::HttpConfig {
+            shutdown_timeout: std::time::Duration::from_secs(1),
+            ..nest_rs_http::HttpConfig::default()
+        }),
+    ],
+)]
+struct ShortWindowApp;
+
+/// The sentence a mount files for a deadline the window cannot hold.
+const OUTLASTS_THE_WINDOW: &str = "the operation timeout outlasts the shutdown window: an \
+                                   operation admitted just before a stop can be cut unanswered";
+
+#[tokio::test]
+async fn an_operation_deadline_past_the_shutdown_window_is_said_once_per_endpoint_at_boot() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<ShortWindowApp>()
+        .await
+        .expect("a short window boots");
+
+    let said = logs.expect_one(nest_rs_mcp::TARGET, OUTLASTS_THE_WINDOW);
+    assert_eq!(said.level, "warn");
+    assert_eq!(said.field("path").as_deref(), Some(SHARED));
+    assert_eq!(said.field("operation_timeout_ms").as_deref(), Some("20000"));
+    assert_eq!(said.field("shutdown_timeout_ms").as_deref(), Some("1000"));
+    drop(app);
+}
+
+#[tokio::test]
+async fn an_operation_deadline_inside_the_window_is_not_worth_a_word() {
+    let logs = LogCapture::install();
+    let _app = shared_app().await;
+    assert!(
+        logs.find(nest_rs_mcp::TARGET, OUTLASTS_THE_WINDOW)
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -179,8 +203,7 @@ async fn both_tool_sets_answer_on_one_endpoint() {
     let beta = call_tool(app.http(), SHARED, "beta_ping", None).await;
     assert!(
         beta.contains("beta here"),
-        "the second module's tool answers on the *same* path — this is the whole \
-         point of the chantier: {beta}",
+        "the second module's tool answers on the *same* path: {beta}",
     );
 }
 
@@ -203,10 +226,6 @@ async fn tools_list_is_the_union_of_every_host() {
     );
 }
 
-/// A merged endpoint is not tools-only: prompts and resources contributed by one
-/// host stay reachable beside another host's tools, and the capability
-/// declaration advertises the union — a client that reads `tools` alone would
-/// never ask for the rest.
 #[tokio::test]
 async fn prompts_and_resources_survive_the_merge() {
     let app = shared_app().await;
@@ -241,6 +260,461 @@ async fn prompts_and_resources_survive_the_merge() {
     );
 }
 
+const PROMPTS: &str = "/mcp/prompts";
+
+#[mcp(path = "/mcp/prompts")]
+#[derive(Clone, Default)]
+struct OpeningPrompts;
+
+#[tools]
+impl OpeningPrompts {
+    /// Open a note.
+    #[prompt]
+    #[public]
+    async fn opening(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "opening body",
+        )]))
+    }
+}
+
+#[mcp(path = "/mcp/prompts")]
+#[derive(Clone, Default)]
+struct ClosingPrompts;
+
+#[tools]
+impl ClosingPrompts {
+    /// Close a note.
+    #[prompt]
+    #[public]
+    async fn closing(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "closing body",
+        )]))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [OpeningPrompts, ClosingPrompts])]
+struct PromptsApp;
+
+/// rmcp's refusal of a prompt its host does not declare is no answer for the
+/// path: the next host serves its own, and a prompt no host declares is
+/// refused by kind, listing every host's prompts and never the name sent.
+#[tokio::test]
+async fn a_prompt_reaches_its_host_past_another_host_s_refusal() {
+    let app = TestApp::for_module::<PromptsApp>()
+        .await
+        .expect("two prompt hosts on one path boot");
+    let session = open_session(app.http(), PROMPTS, None).await;
+    let get = |name: &'static str| {
+        call_method(
+            app.http(),
+            PROMPTS,
+            &session,
+            None,
+            "prompts/get",
+            json!({ "name": name }),
+        )
+    };
+
+    let closing = get("closing").await;
+    assert!(closing.contains("closing body"), "{closing}");
+
+    let unknown = get("marked-prompt").await;
+    assert!(!unknown.contains("marked"), "{unknown}");
+    let refused = result(&unknown);
+    assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
+    assert_eq!(
+        refused["error"]["data"]["available_prompts"],
+        json!(["opening", "closing"]),
+        "{refused}"
+    );
+}
+
+/// One `#[tools]` host on `$path` serving the prompt `$name`, whose body
+/// answers `$answer`.
+macro_rules! prompt_host {
+    ($host:ident, $path:literal, $name:ident, $answer:expr) => {
+        #[mcp(path = $path)]
+        #[derive(Clone, Default)]
+        struct $host;
+
+        #[tools]
+        impl $host {
+            /// A note.
+            #[prompt]
+            #[public]
+            async fn $name(&self) -> Result<GetPromptResult, McpError> {
+                $answer
+            }
+        }
+    };
+}
+
+/// Its prompt is gone: what a host serving it answers, in a code that also
+/// means *not found*.
+fn the_note_is_gone(note: &str) -> Result<GetPromptResult, McpError> {
+    Err(McpError::resource_not_found(
+        format!("the {note} note is gone"),
+        None,
+    ))
+}
+
+fn opening_note() -> Result<GetPromptResult, McpError> {
+    Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+        Role::User,
+        "opening body",
+    )]))
+}
+
+const NOTES: &str = "/mcp/notes";
+
+prompt_host!(NotesOpening, "/mcp/notes", opening, opening_note());
+prompt_host!(
+    NotesClosing,
+    "/mcp/notes",
+    closing,
+    the_note_is_gone("closing")
+);
+
+/// Writes rmcp's handler by hand, with no `prompt_router()`: the mount's index
+/// cannot read it, so its own listing says what it serves.
+#[mcp(path = "/mcp/notes")]
+#[derive(Clone)]
+struct DraftNotes;
+
+impl ServerHandler for DraftNotes {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_prompts().build())
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, McpError> {
+        Ok(ListPromptsResult::with_all_items(vec![Prompt::new(
+            "draft",
+            Some("A draft."),
+            None,
+        )]))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResponse, McpError> {
+        match request.name.as_str() {
+            "draft" => Err(McpError::resource_not_found("the draft note is gone", None)),
+            _ => Err(McpError::method_not_found::<
+                rmcp::model::GetPromptRequestMethod,
+            >()),
+        }
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [NotesOpening, NotesClosing, DraftNotes])]
+struct NotesApp;
+
+const NOTES_REVERSED: &str = "/mcp/notes-reversed";
+
+prompt_host!(
+    ReversedClosing,
+    "/mcp/notes-reversed",
+    closing,
+    the_note_is_gone("closing")
+);
+prompt_host!(
+    ReversedOpening,
+    "/mcp/notes-reversed",
+    opening,
+    opening_note()
+);
+
+#[module(imports = [crate::open_mcp()], providers = [ReversedClosing, ReversedOpening])]
+struct ReversedNotesApp;
+
+/// `prompts/get` on `path`, answered through `session`.
+async fn get_prompt(app: &TestApp, path: &str, session: &str, name: &str) -> serde_json::Value {
+    result(
+        &call_method(
+            app.http(),
+            path,
+            session,
+            None,
+            "prompts/get",
+            json!({ "name": name }),
+        )
+        .await,
+    )
+}
+
+/// A prompt is answered by the host declaring it, whatever that host says —
+/// a code meaning *not found* included, which another host's refusal used to
+/// outrank — and in either host order; a host the mount's index cannot read
+/// is asked through its own listing.
+#[tokio::test]
+async fn a_prompt_is_answered_by_the_host_declaring_it_whatever_it_answers() {
+    let app = TestApp::for_module::<NotesApp>()
+        .await
+        .expect("three prompt hosts on one path boot");
+    let session = open_session(app.http(), NOTES, None).await;
+
+    let opening = get_prompt(&app, NOTES, &session, "opening").await;
+    assert!(opening.to_string().contains("opening body"), "{opening}");
+    for (name, said) in [
+        ("closing", "the closing note is gone"),
+        ("draft", "the draft note is gone"),
+    ] {
+        let answered = get_prompt(&app, NOTES, &session, name).await;
+        assert_eq!(answered["error"]["code"], json!(-32002), "{answered}");
+        assert_eq!(answered["error"]["message"], json!(said), "{answered}");
+    }
+
+    let unknown = get_prompt(&app, NOTES, &session, "marked-prompt").await;
+    assert!(!unknown.to_string().contains("marked"), "{unknown}");
+    assert_eq!(unknown["error"]["code"], json!(-32602), "{unknown}");
+    assert_eq!(
+        unknown["error"]["data"]["available_prompts"],
+        json!(["opening", "closing", "draft"]),
+        "every host's prompts, as prompts/list on the path lists them: {unknown}",
+    );
+
+    let reversed = TestApp::for_module::<ReversedNotesApp>()
+        .await
+        .expect("two prompt hosts on one path boot");
+    let session = open_session(reversed.http(), NOTES_REVERSED, None).await;
+    let closing = get_prompt(&reversed, NOTES_REVERSED, &session, "closing").await;
+    assert_eq!(
+        closing["error"]["message"],
+        json!("the closing note is gone"),
+        "{closing}"
+    );
+}
+
+const TASKS: &str = "/mcp/tasks";
+task_host!(FirstTasks, "/mcp/tasks", "start_first");
+task_host!(SecondTasks, "/mcp/tasks", "start_second");
+
+#[module(imports = [crate::open_mcp()], providers = [FirstTasks, SecondTasks])]
+struct TasksApp;
+
+const LONE_TASKS: &str = "/mcp/lone-tasks";
+task_host!(LoneTasks, "/mcp/lone-tasks", "start_lone");
+
+#[module(imports = [crate::open_mcp()], providers = [LoneTasks])]
+struct LoneTasksApp;
+
+/// rmcp's `TaskManager` refuses a task it does not hold as `unknown task:
+/// <id>`, the id the client sent: it is answered by kind on every `tasks/*`
+/// method, through a lone host or several.
+#[tokio::test]
+async fn a_task_no_host_holds_is_refused_without_its_id() {
+    let shared = TestApp::for_module::<TasksApp>()
+        .await
+        .expect("two task hosts on one path boot");
+    let lone = TestApp::for_module::<LoneTasksApp>()
+        .await
+        .expect("a task host boots");
+    for (app, path) in [(&shared, TASKS), (&lone, LONE_TASKS)] {
+        let session = crate::tasks_session(app, path, None).await;
+        for (method, params) in [
+            ("tasks/get", json!({ "taskId": "marked-task" })),
+            (
+                "tasks/update",
+                json!({ "taskId": "marked-task", "inputResponses": {} }),
+            ),
+            ("tasks/cancel", json!({ "taskId": "marked-task" })),
+        ] {
+            let body = call_method(app.http(), path, &session, None, method, params).await;
+            assert!(!body.contains("marked"), "{path} {method}: {body}");
+            let refused = result(&body);
+            assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                json!("unknown task"),
+                "{refused}"
+            );
+            assert_eq!(
+                refused["error"]["data"],
+                json!({ "code": "NOT_FOUND" }),
+                "{refused}"
+            );
+        }
+    }
+}
+
+/// A host refusing a task it does not hold is no answer for the path: the
+/// host holding it answers.
+#[tokio::test]
+async fn a_task_reaches_the_host_holding_it_past_another_host_s_refusal() {
+    let app = TestApp::for_module::<TasksApp>()
+        .await
+        .expect("two task hosts on one path boot");
+    let session = crate::tasks_session(&app, TASKS, None).await;
+    let started = result(
+        &call_method(
+            app.http(),
+            TASKS,
+            &session,
+            None,
+            "tools/call",
+            json!({ "name": "start_second", "arguments": {} }),
+        )
+        .await,
+    );
+    let task = started["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the started task's id: {started}"))
+        .to_owned();
+
+    let got = result(
+        &call_method(
+            app.http(),
+            TASKS,
+            &session,
+            None,
+            "tasks/get",
+            json!({ "taskId": task }),
+        )
+        .await,
+    );
+    assert_eq!(got["result"]["taskId"], json!(task), "{got}");
+}
+
+/// Two hosts on `$path`: `$none` serves no method a test asks — rmcp's
+/// `-32601`, completion included, as a host written without them answers —
+/// and `$all` serves each, refusing a resource and a logger it does not hold
+/// and having nothing to complete.
+macro_rules! serving_hosts {
+    ($path:literal, $none:ident, $all:ident) => {
+        #[mcp(path = $path)]
+        #[derive(Clone)]
+        struct $none;
+
+        impl ServerHandler for $none {
+            async fn complete(
+                &self,
+                _request: CompleteRequestParams,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<CompleteResult, McpError> {
+                Err(McpError::method_not_found::<
+                    rmcp::model::CompleteRequestMethod,
+                >())
+            }
+        }
+
+        #[mcp(path = $path)]
+        #[derive(Clone)]
+        struct $all;
+
+        impl ServerHandler for $all {
+            async fn read_resource(
+                &self,
+                _request: ReadResourceRequestParams,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<ReadResourceResponse, McpError> {
+                Err(McpError::resource_not_found("unknown resource", None))
+            }
+
+            #[expect(
+                deprecated,
+                reason = "rmcp still routes the deprecated methods for legacy protocol versions"
+            )]
+            async fn set_level(
+                &self,
+                _request: rmcp::model::SetLevelRequestParams,
+                _context: RequestContext<RoleServer>,
+            ) -> Result<(), McpError> {
+                Err(McpError::resource_not_found("unknown logger", None))
+            }
+        }
+    };
+}
+
+const SERVING_LAST: &str = "/mcp/serving-last";
+serving_hosts!("/mcp/serving-last", ServingNoneFirst, ServingAllLast);
+
+#[module(imports = [crate::open_mcp()], providers = [ServingNoneFirst, ServingAllLast])]
+struct ServingLastApp;
+
+const SERVING_FIRST: &str = "/mcp/serving-first";
+serving_hosts!("/mcp/serving-first", ServingNoneLast, ServingAllFirst);
+
+#[module(imports = [crate::open_mcp()], providers = [ServingAllFirst, ServingNoneLast])]
+struct ServingFirstApp;
+
+/// A host that does not serve a method (`-32601`) never answers for one that
+/// does, in either host order: a resource or a logger the serving host
+/// refuses is its refusal, and its empty completion the answer.
+#[tokio::test]
+async fn a_host_serving_no_method_never_answers_for_one_serving_it() {
+    let serving_last = TestApp::for_module::<ServingLastApp>()
+        .await
+        .expect("two hosts on one path boot");
+    let serving_first = TestApp::for_module::<ServingFirstApp>()
+        .await
+        .expect("two hosts on one path boot");
+    assert_eq!(
+        hosts_on(serving_first.container(), SERVING_FIRST)
+            .iter()
+            .map(|meta| meta.host())
+            .collect::<Vec<_>>(),
+        ["ServingAllFirst", "ServingNoneLast"],
+    );
+    for (app, path) in [
+        (&serving_last, SERVING_LAST),
+        (&serving_first, SERVING_FIRST),
+    ] {
+        let session = open_session(app.http(), path, None).await;
+        let session = session.as_str();
+        let call = |method: &'static str, params: serde_json::Value| async move {
+            result(&call_method(app.http(), path, session, None, method, params).await)
+        };
+
+        for (method, params, said) in [
+            (
+                "resources/read",
+                json!({ "uri": "serving://gone" }),
+                "unknown resource",
+            ),
+            (
+                "logging/setLevel",
+                json!({ "level": "info" }),
+                "unknown logger",
+            ),
+        ] {
+            let refused = call(method, params).await;
+            assert_eq!(
+                refused["error"]["code"],
+                json!(-32002),
+                "{path} {method}: {refused}"
+            );
+            assert_eq!(
+                refused["error"]["message"],
+                json!(said),
+                "{path} {method}: {refused}"
+            );
+        }
+        let completed = call(
+            "completion/complete",
+            json!({
+                "ref": { "type": "ref/prompt", "name": "any" },
+                "argument": { "name": "a", "value": "" },
+            }),
+        )
+        .await;
+        assert_eq!(
+            completed["result"]["completion"]["values"],
+            json!([]),
+            "{path}: {completed}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn initialize_advertises_the_union_of_capabilities_and_instructions() {
     let app = shared_app().await;
@@ -261,25 +735,13 @@ async fn initialize_advertises_the_union_of_capabilities_and_instructions() {
     );
 }
 
-// --- the endpoint's own identity ---------------------------------------------
-//
-// An MCP endpoint is one server to every client that reaches it: the protocol
-// carries one `serverInfo` and one `instructions`, on `initialize` and on
-// `server/discover` alike — the same shape `new McpServer({name, version})`
-// builds in the TypeScript SDK and a FastMCP parent keeps when it mounts
-// children. Two owners answer for it, and neither can shadow the other: the app
-// names itself once, and at most one host on a path refines that for its own
-// endpoint.
-
-/// The app naming itself once — what every endpoint it exposes reports unless a
-/// host on that endpoint says otherwise.
+/// The app naming itself once, for every endpoint no host on it refines.
 fn app_identity() -> McpSetup {
-    McpModule::for_root(McpOptions {
-        server: Some(
-            McpIdentity::new("composition-witness", "9.9.9")
-                .title("Composition witness")
-                .instructions("Endpoint instructions."),
-        ),
+    McpModule::for_root(McpIdentity {
+        name: Some("composition-witness".into()),
+        version: Some("9.9.9".into()),
+        title: Some("Composition witness".into()),
+        instructions: Some("Endpoint instructions.".into()),
         ..Default::default()
     })
 }
@@ -329,8 +791,6 @@ async fn the_app_identity_is_what_a_shared_endpoint_reports() {
     );
 }
 
-/// Every operation still routes across both hosts: naming the app is a
-/// declaration, not a takeover.
 #[tokio::test]
 async fn declaring_an_identity_changes_nothing_about_routing() {
     let app = TestApp::for_module::<DeclaredEndpointApp>()
@@ -345,14 +805,9 @@ async fn declaring_an_identity_changes_nothing_about_routing() {
     );
 }
 
-// --- a host declaring for its own endpoint ------------------------------------
-
-/// The path `OwnedTool` lands on — its own second endpoint, written whole.
 const OWNED: &str = "/mcp/owned";
 
-/// A feature whose endpoint stands apart. It renames the server — but
-/// deliberately not the version, which is the binary's and which a shared
-/// feature library cannot know, nor the instructions, which describe the server.
+/// Renames its endpoint; the version and instructions stay the app's.
 #[mcp(path = "/mcp/owned", name = "witness-owned")]
 #[derive(Clone)]
 struct OwnedTool;
@@ -367,20 +822,18 @@ impl OwnedTool {
 
 #[tool_handler]
 impl ServerHandler for OwnedTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Host blurb nobody should read.")
     }
 }
 
-#[module(providers = [OwnedTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [OwnedTool])]
 struct OwnedMcpModule;
 
 #[module(imports = [OwnedMcpModule, app_identity()])]
 struct OwnedEndpointApp;
 
-/// The whole point of declaring at the host: a feature names the endpoint it
-/// owns, in the file that serves it, and inherits everything it cannot know.
 #[tokio::test]
 async fn a_host_declares_its_own_endpoint_and_inherits_the_rest() {
     let app = TestApp::for_module::<OwnedEndpointApp>()
@@ -414,16 +867,201 @@ async fn a_host_declares_its_own_endpoint_and_inherits_the_rest() {
     );
 }
 
-/// A host may name its endpoint in an app that named itself — but not in one
-/// that did not, because the version would then be nobody's.
+/// An endpoint nobody named reports the binary's package, as `#[nest_rs::main]`
+/// and the harness publish it — never the SDK's own name, and with no word at
+/// boot.
+#[tokio::test]
+async fn an_endpoint_nobody_named_reports_the_binarys_name_and_version() {
+    let logs = LogCapture::install();
+    let app = shared_app().await;
+    assert!(
+        logs.find("nest_rs::mcp", SDK_DEFAULT_IDENTITY).is_empty()
+            && logs.find("nest_rs::mcp", UNDECLARED_IDENTITY).is_empty(),
+        "the binary named it: {:#?}",
+        logs.events(),
+    );
+    let body = initialize(app.http(), SHARED, None).await;
+    let advertised = &result(&body)["result"];
+
+    assert_eq!(
+        advertised["serverInfo"]["name"].as_str(),
+        Some(env!("CARGO_PKG_NAME")),
+        "{advertised}",
+    );
+    assert_eq!(
+        advertised["serverInfo"]["version"].as_str(),
+        Some(env!("CARGO_PKG_VERSION")),
+        "{advertised}",
+    );
+    assert_eq!(
+        advertised["serverInfo"]["description"].as_str(),
+        Some(env!("CARGO_PKG_DESCRIPTION")),
+        "{advertised}",
+    );
+}
+
+/// The `server/discover` request of a stateless client, which opens no session.
+async fn discover(client: &nest_rs_testing::TestClient, path: &str) -> String {
+    let version = nest_rs_mcp::model::ProtocolVersion::LATEST;
+    nest_rs_testing::mcp::post_message_with(
+        client,
+        path,
+        None,
+        None,
+        &[
+            ("mcp-protocol-version", version.as_str()),
+            ("mcp-method", "server/discover"),
+        ],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": { "_meta": {
+                "io.modelcontextprotocol/protocolVersion": version.as_str(),
+                "io.modelcontextprotocol/clientInfo": { "name": "nest-rs-testing", "version": "0" },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            } },
+        }),
+    )
+    .await
+    .0
+    .into_body()
+    .into_string()
+    .await
+    .expect("a discover response body")
+}
+
+/// A lone host is served verbatim but for the name nobody gave it: over
+/// `initialize` and `discover`, the endpoint reports the binary's package.
+#[tokio::test]
+async fn a_lone_host_nobody_named_reports_the_binarys_name_and_version() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<AlphaOnlyApp>()
+        .await
+        .expect("one host boots");
+    assert!(
+        logs.find("nest_rs::mcp", SDK_DEFAULT_IDENTITY).is_empty(),
+        "the binary named it: {:#?}",
+        logs.events(),
+    );
+
+    let body = initialize(app.http(), SHARED, None).await;
+    let initialized = &result(&body)["result"]["serverInfo"];
+    let body = discover(app.http(), SHARED).await;
+    let discovered = &result(&body)["result"]["_meta"]["io.modelcontextprotocol/serverInfo"];
+
+    for (method, info) in [("initialize", initialized), ("discover", discovered)] {
+        assert_eq!(
+            (info["name"].as_str(), info["version"].as_str()),
+            (
+                Some(env!("CARGO_PKG_NAME")),
+                Some(env!("CARGO_PKG_VERSION"))
+            ),
+            "{method}: {info}",
+        );
+    }
+}
+
+/// No app identity declared, so the host's name stands on the binary's version.
 #[module(imports = [OwnedMcpModule])]
 struct UnbackedNameApp;
 
 #[tokio::test]
+async fn a_host_naming_its_endpoint_stands_on_the_binarys_version() {
+    let app = TestApp::for_module::<UnbackedNameApp>()
+        .await
+        .expect("the binary's version backs the host's name");
+    let body = initialize(app.http(), OWNED, None).await;
+    let advertised = &result(&body)["result"];
+
+    assert_eq!(
+        advertised["serverInfo"]["name"].as_str(),
+        Some("witness-owned")
+    );
+    assert_eq!(
+        advertised["serverInfo"]["version"].as_str(),
+        Some(env!("CARGO_PKG_VERSION")),
+        "{advertised}",
+    );
+}
+
+/// Names nothing, so the app's own declaration is what is refused.
+#[mcp(path = "/mcp/unbacked")]
+#[derive(Clone)]
+struct UnclaimingTool;
+
+#[tool_router]
+impl UnclaimingTool {
+    #[tool(description = "Answers.")]
+    async fn unbacked_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("pong")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for UnclaimingTool {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+}
+
+#[module(imports = [
+    McpModule::for_root((McpAccess::Public, McpIdentity {
+        name: Some("witness-app".into()),
+        ..Default::default()
+    })),
+], providers = [UnclaimingTool])]
+struct LoneNameApp;
+
+#[module(imports = [
+    McpModule::for_root((McpAccess::Public, McpIdentity {
+        version: Some("1.2.3".into()),
+        ..Default::default()
+    })),
+], providers = [UnclaimingTool])]
+struct LoneVersionApp;
+
+/// With no binary, a lone field of the app's says who stated it and what to
+/// write: no host stated this one.
+#[tokio::test]
+async fn an_apps_lone_name_and_lone_version_fail_boot_naming_the_app() {
+    let Err(err) = nest_rs_core::App::builder()
+        .module::<LoneNameApp>()
+        .build()
+        .await
+    else {
+        panic!("a name with no version anywhere must not boot");
+    };
+    let err = format!("{err:#}");
+    assert!(
+        err.contains("The app's McpIdentity") && err.contains("witness-app"),
+        "{err}"
+    );
+    assert!(!err.contains("<none>"), "{err}");
+
+    let Err(err) = nest_rs_core::App::builder()
+        .module::<LoneVersionApp>()
+        .build()
+        .await
+    else {
+        panic!("a version with no name anywhere must not boot");
+    };
+    let err = format!("{err:#}");
+    assert!(err.contains("/mcp/unbacked"), "{err}");
+    assert!(err.contains("McpIdentity {"), "{err}");
+}
+
+/// A process no `#[nest_rs::main]` nor harness named — a container built by
+/// hand — has no version behind a host's name.
+#[tokio::test]
 async fn a_name_with_no_version_behind_it_fails_boot() {
-    let err = match TestApp::for_module::<UnbackedNameApp>().await {
+    let err = match nest_rs_core::App::builder()
+        .module::<UnbackedNameApp>()
+        .build()
+        .await
+    {
         Ok(_) => panic!("a named endpoint with no version anywhere must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -431,16 +1069,12 @@ async fn a_name_with_no_version_behind_it_fails_boot() {
         "the failure names the host and what it called itself: {err}",
     );
     assert!(
-        err.contains("McpIdentity::new"),
+        err.contains("McpIdentity {"),
         "…and carries the remedy at the seam that fixes it: {err}",
     );
 }
 
-// --- two hosts declaring one endpoint ----------------------------------------
-
-/// A peer of `OwnedTool` on the same path, also declaring. One endpoint reports
-/// one `serverInfo`, so this is the ambiguity the framework refuses to resolve
-/// silently.
+/// A peer of `OwnedTool` on the same path, also declaring.
 #[mcp(path = "/mcp/owned", name = "witness-contender")]
 #[derive(Clone)]
 struct ContendingTool;
@@ -464,13 +1098,11 @@ struct ContendingMcpModule;
 #[module(imports = [OwnedMcpModule, ContendingMcpModule, app_identity()])]
 struct ContestedDeclarationApp;
 
-/// Picking one silently would put the endpoint's name back where declaring it
-/// was meant to take it from: import order.
 #[tokio::test]
 async fn two_hosts_declaring_one_endpoint_fail_boot() {
     let err = match TestApp::for_module::<ContestedDeclarationApp>().await {
         Ok(_) => panic!("two hosts naming one endpoint must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -480,19 +1112,14 @@ async fn two_hosts_declaring_one_endpoint_fail_boot() {
     assert!(err.contains(OWNED), "…and the endpoint they contest: {err}",);
 }
 
-// --- a declaration that reaches nothing ---------------------------------------
-
 #[module(imports = [app_identity()])]
 struct OrphanDeclarationApp;
 
-/// A declaration is a statement about a real server. With no `#[mcp]` host in
-/// the app it would otherwise do nothing at all — the one answer a declaration
-/// must never silently get.
 #[tokio::test]
 async fn an_identity_no_host_serves_fails_boot() {
     let err = match TestApp::for_module::<OrphanDeclarationApp>().await {
         Ok(_) => panic!("an identity declared with no host at all must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -501,52 +1128,74 @@ async fn an_identity_no_host_serves_fails_boot() {
     );
 }
 
-// --- two apps' worth of identity, and a path that means the same thing --------
-
-/// A second, disagreeing `for_root`. The app identity carries no path, so no
-/// per-path check can see this one: without its own check, `declared_server`
-/// would take whichever the import graph reached first and the endpoint's name
-/// would depend on `imports = [..]` order — the accident the seam removes.
+/// A second `for_root` naming another identity: an app reports one
+/// `serverInfo`, so the boot refuses before any transport configures.
 #[module(imports = [
     AlphaMcpModule,
     app_identity(),
-    McpModule::for_root(McpOptions {
-        server: Some(McpIdentity::new("second-witness", "0.0.1")),
+    McpModule::for_root(McpIdentity {
+        name: Some("second-witness".into()),
+        version: Some("0.0.1".into()),
         ..Default::default()
     }),
 ])]
 struct ContestedServerApp;
 
 #[tokio::test]
-async fn two_disagreeing_server_identities_fail_boot() {
-    let err = match TestApp::for_module::<ContestedServerApp>().await {
-        Ok(_) => panic!("two different server identities must not boot"),
-        Err(err) => err.to_string(),
+async fn two_server_identities_fail_the_boot_naming_both_imports() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<ContestedServerApp>()
+        .build()
+        .await
+    else {
+        panic!("two server identities must not boot");
     };
-
+    let contested = refused
+        .downcast_ref::<nest_rs_core::ContestedDeclarationError>()
+        .unwrap_or_else(|| panic!("refused as a contest, before any transport: {refused:#}"));
+    assert_eq!(contested.type_name, std::any::type_name::<McpIdentity>());
+    assert_eq!(
+        contested.first,
+        "`app_identity(..)` at `imports[1]` of `ContestedServerApp`"
+    );
+    assert_eq!(
+        contested.second,
+        "`McpModule::for_root(..)` at `imports[2]` of `ContestedServerApp`"
+    );
+    let said = format!("{refused:#}");
     assert!(
-        err.contains("composition-witness") && err.contains("second-witness"),
-        "the failure names both claimants: {err}",
+        !said.contains("composition-witness") && !said.contains("second-witness"),
+        "the refusal names the imports, never the values: {said}",
     );
 }
 
-/// Importing one `for_root` twice is not a conflict — `DynamicModule`
-/// registration is deliberately not deduplicated, so the same declaration
-/// arriving twice must stay silent.
+/// One pin, one site: the same identity imported twice is still declared
+/// twice.
 #[module(imports = [AlphaMcpModule, app_identity(), app_identity()])]
 struct RepeatedServerApp;
 
 #[tokio::test]
-async fn the_same_identity_declared_twice_is_not_a_conflict() {
-    TestApp::for_module::<RepeatedServerApp>()
+async fn the_same_identity_declared_twice_fails_the_boot_naming_both_imports() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<RepeatedServerApp>()
+        .build()
         .await
-        .expect("one declaration imported twice boots");
+    else {
+        panic!("one identity declared at two sites must not boot");
+    };
+    let contested = refused
+        .downcast_ref::<nest_rs_core::ContestedDeclarationError>()
+        .unwrap_or_else(|| panic!("refused as a contest: {refused:#}"));
+    assert_eq!(
+        (contested.first.as_str(), contested.second.as_str()),
+        (
+            "`app_identity(..)` at `imports[1]` of `RepeatedServerApp`",
+            "`app_identity(..)` at `imports[2]` of `RepeatedServerApp`",
+        )
+    );
 }
 
-/// `/mcp/` and `/mcp` are one endpoint to a client and two strings here. Left
-/// alone they would each claim a mount, and poem's `Route::nest` panics on the
-/// duplicate rather than reporting it — so the trailing slash is normalized
-/// away and the host simply joins its peers.
+/// `/mcp/` and `/mcp` are one endpoint, mounted once.
 #[mcp(path = "/mcp/")]
 #[derive(Clone)]
 struct TrailingSlashTool;
@@ -593,10 +1242,6 @@ async fn a_trailing_slash_names_the_same_endpoint() {
     );
 }
 
-// --- nobody naming it at all --------------------------------------------------
-
-/// A host that names itself is a whole server on its own path — the shape every
-/// MCP SDK builds — so the framework has nothing to say about it.
 #[mcp(path = "/named")]
 #[derive(Clone)]
 struct SelfNamedTool;
@@ -611,20 +1256,20 @@ impl SelfNamedTool {
 
 #[tool_handler]
 impl ServerHandler for SelfNamedTool {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info = Implementation::new("standalone-host", "1.2.3");
         info
     }
 }
 
-#[module(providers = [SelfNamedTool])]
+#[module(imports = [crate::open_mcp()], providers = [SelfNamedTool])]
 struct SelfNamedModule;
 
 #[tokio::test]
 async fn a_lone_host_that_names_itself_needs_no_declaration() {
     let logs = LogCapture::install();
-    let _app = TestApp::for_module::<SelfNamedModule>()
+    let app = TestApp::for_module::<SelfNamedModule>()
         .await
         .expect("one self-named host boots");
 
@@ -634,24 +1279,28 @@ async fn a_lone_host_that_names_itself_needs_no_declaration() {
         "a lone host that named itself is a complete endpoint: {:#?}",
         logs.events(),
     );
+    let body = initialize(app.http(), "/named", None).await;
+    let info = &result(&body)["result"]["serverInfo"];
+    assert_eq!(
+        (info["name"].as_str(), info["version"].as_str()),
+        (Some("standalone-host"), Some("1.2.3")),
+        "its own name stands over the binary's: {info}",
+    );
 }
 
-/// The two messages the check below carries — one per fact, because a single
-/// message covering both would contradict its own `reports_as` field the moment
-/// a host had named itself.
 const SDK_DEFAULT_IDENTITY: &str = "an MCP endpoint introduces itself with the SDK's own name and \
      version — neither its hosts nor the app named it";
 const UNDECLARED_IDENTITY: &str = "several MCP hosts share an endpoint whose identity nobody \
      declared — it reports the first host's";
 
-/// rmcp's `ServerInfo::new` leaves `serverInfo` at the **SDK's** build identity,
-/// so an endpoint nobody named introduces itself to every client as `rmcp`, at
-/// rmcp's version. Nothing fails, which is exactly why it has to be said out
-/// loud at boot.
+/// rmcp's `ServerConfig::new` leaves `serverInfo` at the SDK's own identity,
+/// and nothing fails, in a process no `#[nest_rs::main]` nor harness named.
 #[tokio::test]
 async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
     let logs = LogCapture::install();
-    let _app = TestApp::for_module::<AlphaOnlyApp>()
+    let _app = nest_rs_core::App::builder()
+        .module::<AlphaOnlyApp>()
+        .build()
         .await
         .expect("one host boots");
 
@@ -661,7 +1310,7 @@ async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
     assert_eq!(
         event.field("reports_as"),
         Some(
-            ServerInfo::new(ServerCapabilities::default())
+            ServerConfig::new(ServerCapabilities::default())
                 .server_info
                 .name
         ),
@@ -669,15 +1318,22 @@ async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
          own constructor, so it cannot drift from the rmcp the framework built \
          against",
     );
+    let hint = event.field("hint").unwrap_or_default();
+    assert!(
+        hint.contains("#[nest_rs::main]") && hint.contains("McpIdentity {"),
+        "no binary named this process, so starting it from main is a remedy: {hint}",
+    );
 }
 
 #[tokio::test]
 async fn an_undeclared_shared_endpoint_is_reported_at_boot() {
     let logs = LogCapture::install();
-    let _app = shared_app().await;
+    let _app = nest_rs_core::App::builder()
+        .module::<SharedEndpointApp>()
+        .build()
+        .await
+        .expect("two #[mcp] hosts on one path boot");
 
-    // Neither Alpha nor Beta names itself, so the SDK-default fact is the true
-    // one here — and it is the only message emitted.
     let event = logs.expect_one("nest_rs::mcp", SDK_DEFAULT_IDENTITY);
     assert_eq!(event.level, "warn");
     assert_eq!(
@@ -687,10 +1343,6 @@ async fn an_undeclared_shared_endpoint_is_reported_at_boot() {
     );
 }
 
-/// The other branch, and the reason there are two messages: with hosts that
-/// *did* name themselves, the endpoint answers with whichever registered first.
-/// Reporting that as "introduces itself as the SDK" would be contradicted by the
-/// event's own `reports_as` field.
 #[mcp(path = "/mcp/self-named-peers")]
 #[derive(Clone)]
 struct FirstNamedTool;
@@ -705,8 +1357,8 @@ impl FirstNamedTool {
 
 #[tool_handler]
 impl ServerHandler for FirstNamedTool {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info = Implementation::new("first-peer", "1.0.0");
         info
     }
@@ -726,8 +1378,8 @@ impl SecondNamedTool {
 
 #[tool_handler]
 impl ServerHandler for SecondNamedTool {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info = Implementation::new("second-peer", "1.0.0");
         info
     }
@@ -750,6 +1402,16 @@ async fn self_named_peers_are_told_the_endpoint_reports_the_first() {
         Some("first-peer"),
         "the message and the field say the same thing",
     );
+    let hint = event.field("hint").unwrap_or_default();
+    assert!(
+        hint.contains("#[mcp(name") && hint.contains("McpIdentity {"),
+        "a binary identity already backs a host's name, so either declaration \
+         settles the endpoint: {hint}",
+    );
+    assert!(
+        !hint.contains("#[nest_rs::main]"),
+        "…and the binary, already in force, names no peer that named itself: {hint}",
+    );
     assert!(
         logs.find("nest_rs::mcp", SDK_DEFAULT_IDENTITY).is_empty(),
         "…and the fact that is *not* true here is not claimed: {:#?}",
@@ -757,24 +1419,17 @@ async fn self_named_peers_are_told_the_endpoint_reports_the_first() {
     );
 }
 
-// --- a host that declares no router ------------------------------------------
-
-/// Where the hand-written host and its router-backed peer share a mount.
 const MANUAL: &str = "/manual";
 
-/// A host that hand-writes `call_tool`/`list_tools` instead of using
-/// `#[tool_router]`. `#[mcp]` must sit on it unchanged: the expansion asks
-/// `<Self>::tool_router()` for the statically-known names, and with no inherent
-/// one the empty `DefaultToolRouter` fallback answers. Its tools are still
-/// served — the merge offers an unclaimed name to each host in turn — they are
-/// simply not *statically* known.
+/// Hand-writes `call_tool`/`list_tools`: `DefaultToolRouter` answers its static
+/// names empty, and the merge offers an unclaimed name to each host in turn.
 #[mcp(path = "/manual")]
 #[derive(Clone)]
 struct ManualTool;
 
 impl ServerHandler for ManualTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn list_tools(
@@ -819,16 +1474,11 @@ impl RoutedTool {
 #[tool_handler]
 impl ServerHandler for RoutedTool {}
 
-#[module(providers = [ManualTool, RoutedTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [ManualTool, RoutedTool])]
 struct MixedHostModule;
 
-/// The gap this pins is the one the merge could hide. `#[mcp]` reads a host's
-/// tool names through rmcp's default `tool_router()`; a host that keeps its
-/// router under another name — rmcp's own answer for a host with many tools —
-/// declares none, so `check_duplicate_tools` has no candidate names for it and
-/// a clash between two such hosts would go unreported. The framework does not
-/// get to fail silently there: it says so at boot, naming the hosts and the
-/// remedy.
+/// A host with no `tool_router()` gives `check_duplicate_tools` no names, so a
+/// clash through it goes unchecked: said at boot instead.
 #[tokio::test]
 async fn a_host_the_boot_check_cannot_read_is_reported_at_boot() {
     let logs = LogCapture::install();
@@ -867,10 +1517,6 @@ async fn a_host_without_a_tool_router_still_serves_beside_one_that_has() {
     );
 }
 
-// --- distinct paths stay distinct -------------------------------------------
-
-/// Where `OtherTool` lands: a second endpoint beside the default, the shape a
-/// product reaches for when one feature deserves its own URL.
 const OTHER: &str = "/mcp/other";
 
 #[mcp(path = "/mcp/other")]
@@ -894,10 +1540,6 @@ struct OtherMcpModule;
 #[module(imports = [AlphaMcpModule, BetaMcpModule, OtherMcpModule])]
 struct TwoPathApp;
 
-/// Grouping is **by path**. An app that deliberately serves a second endpoint
-/// keeps it separate — merging every `#[mcp]` host in the process would destroy
-/// the per-endpoint namespacing the spec gives, and `demo` mounts two paths for
-/// exactly that reason.
 #[tokio::test]
 async fn a_second_path_is_a_second_endpoint() {
     let app = TestApp::for_module::<TwoPathApp>()
@@ -923,12 +1565,69 @@ async fn a_second_path_is_a_second_endpoint() {
     );
 }
 
-// --- module gating -----------------------------------------------------------
+/// Every endpoint address a pooled guard saw a request run as, in order. Each
+/// test runs in its own process.
+static ADDRESSES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
 
-/// Only `AlphaMcpModule` is imported, so `BetaTool` is linked into this binary
-/// but never registered. Per-app subsets are the whole point of module gating,
-/// and here it is structural: metadata is attached from `register`, which never
-/// runs for a provider no imported module owns.
+/// Admits every request, recording the address of the site it runs as.
+#[nest_rs_core::injectable]
+#[derive(Default, nest_rs_core::Layer)]
+struct AddressWitness;
+
+#[nest_rs_core::async_trait]
+impl nest_rs_guards::Guard for AddressWitness {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> Result<(), nest_rs_guards::Denial> {
+        let address = cx.handler().address();
+        ADDRESSES
+            .lock()
+            .expect("only this guard writes it")
+            .push(address);
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> Result<(), nest_rs_guards::Denial> {
+        Ok(())
+    }
+}
+
+impl nest_rs_guards::GuardFor<nest_rs_http::HttpView> for AddressWitness {}
+
+/// The two paths, gated: their requests run the pool.
+#[module(providers = [AlphaTool, BetaTool, OtherTool, AddressWitness])]
+struct WitnessedTwoPathApp;
+
+#[module(imports = [WitnessedTwoPathApp], providers = [GlobalGuards<(AddressWitness,)>])]
+struct EachEndpointRunsItsRequestsAsItsOwnPathApp;
+
+/// A guard keying on the site's address tells two endpoints apart.
+#[tokio::test]
+async fn each_endpoint_runs_its_requests_as_its_own_path() {
+    let app = TestApp::builder()
+        .module::<EachEndpointRunsItsRequestsAsItsOwnPathApp>()
+        .build()
+        .await
+        .expect("two paths boot under a global pool");
+
+    for path in [SHARED, OTHER] {
+        app.http().post(path).send().await;
+    }
+    assert_eq!(
+        *ADDRESSES.lock().expect("only the witness writes it"),
+        [SHARED, OTHER],
+    );
+}
+
+/// `BetaTool` is linked into this binary but its module is not imported.
 #[module(imports = [AlphaMcpModule])]
 struct AlphaOnlyApp;
 
@@ -951,8 +1650,6 @@ async fn an_unimported_host_contributes_nothing() {
         "a host whose module the app does not import stays inert: {body}",
     );
 }
-
-// --- the one new failure mode the merge introduces ----------------------------
 
 #[mcp(path = "/clash")]
 #[derive(Clone)]
@@ -987,15 +1684,11 @@ impl ServerHandler for SecondClashingTool {}
 #[module(providers = [FirstClashingTool, SecondClashingTool])]
 struct ClashingModule;
 
-/// MCP addresses a tool by bare name within an endpoint, so two hosts claiming
-/// one name make the loser unreachable — and *which* one loses depends on
-/// registration order. That is a boot error naming both, never a runtime
-/// surprise. The invariant could not even be expressed before the merge.
 #[tokio::test]
 async fn a_duplicate_tool_name_on_one_path_fails_boot() {
     let err = match TestApp::for_module::<ClashingModule>().await {
         Ok(_) => panic!("two hosts claiming one tool name must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -1008,14 +1701,86 @@ async fn a_duplicate_tool_name_on_one_path_fails_boot() {
     );
 }
 
-// --- where a host lands -------------------------------------------------------
-//
-// A `#[mcp]` path is the whole URL path, and omitting it takes the framework's
-// default — a client is configured with a URL, not a prefix plus a segment.
+prompt_host!(
+    FirstClashingPrompt,
+    "/prompt-clash",
+    shared_prompt,
+    opening_note()
+);
+prompt_host!(
+    SecondClashingPrompt,
+    "/prompt-clash",
+    shared_prompt,
+    opening_note()
+);
 
-/// The default is what an app that writes no path gets — including an app that
-/// never imports `McpModule` at all, which is why it lives on the crate rather
-/// than in configuration.
+#[module(providers = [FirstClashingPrompt, SecondClashingPrompt])]
+struct ClashingPromptModule;
+
+/// A prompt is routed to the host declaring it, so a second claim would be
+/// unreachable: the boot refuses it, as it refuses a tool's.
+#[tokio::test]
+async fn a_duplicate_prompt_name_on_one_path_fails_boot() {
+    let err = match TestApp::for_module::<ClashingPromptModule>().await {
+        Ok(_) => panic!("two hosts claiming one prompt name must not boot"),
+        Err(err) => format!("{err:#}"),
+    };
+
+    assert!(
+        err.contains("duplicate MCP prompt name") && err.contains("shared_prompt"),
+        "the failure names the contested prompt: {err}",
+    );
+    assert!(
+        err.contains("FirstClashingPrompt") && err.contains("SecondClashingPrompt"),
+        "…and both owning providers: {err}",
+    );
+}
+
+/// A host reading notes through one template on a shared path.
+macro_rules! note_host {
+    ($host:ident, $text:literal) => {
+        #[mcp(path = "/template-clash")]
+        #[derive(Clone, Default)]
+        struct $host;
+
+        #[tools]
+        impl $host {
+            /// A note.
+            #[resource(template = "note://{id}")]
+            #[public]
+            async fn note(&self, id: u32) -> Result<String, McpError> {
+                Ok(format!("{} {id}", $text))
+            }
+        }
+    };
+}
+
+note_host!(FirstNotes, "first");
+note_host!(SecondNotes, "second");
+
+#[module(providers = [FirstNotes, SecondNotes])]
+struct ClashingTemplateModule;
+
+/// The first host to find a row would answer for every URI the template
+/// writes, the second's never read: the boot refuses it, as it refuses a
+/// tool's name.
+#[tokio::test]
+async fn a_duplicate_resource_template_on_one_path_fails_boot() {
+    let err = match TestApp::for_module::<ClashingTemplateModule>().await {
+        Ok(_) => panic!("two hosts reading one template must not boot"),
+        Err(err) => format!("{err:#}"),
+    };
+
+    assert!(
+        err.contains("duplicate MCP resource template name") && err.contains("note://{id}"),
+        "the failure names the contested template: {err}",
+    );
+    assert!(
+        err.contains("FirstNotes") && err.contains("SecondNotes"),
+        "…and both owning providers: {err}",
+    );
+}
+
 #[tokio::test]
 async fn a_bare_host_serves_the_default_endpoint() {
     let app = TestApp::for_module::<AlphaOnlyApp>()
@@ -1035,9 +1800,6 @@ async fn a_bare_host_serves_the_default_endpoint() {
     );
 }
 
-/// A second endpoint is a second path, written whole — and it does not have to
-/// sit under the first. Nothing nests below an MCP mount, so a host is free to
-/// name any URL its clients will be configured with.
 #[tokio::test]
 async fn a_declared_path_is_served_verbatim() {
     let app = TestApp::for_module::<TwoPathApp>()
@@ -1051,7 +1813,6 @@ async fn a_declared_path_is_served_verbatim() {
     );
 }
 
-/// Every MCP mount an app assembled, as the transport sees it.
 fn mcp_mount_paths(app: &TestApp) -> Vec<String> {
     Discovery::new(app.container())
         .meta::<HttpEndpointMeta>()
@@ -1061,17 +1822,8 @@ fn mcp_mount_paths(app: &TestApp) -> Vec<String> {
         .collect()
 }
 
-// --- one endpoint, one handshake ----------------------------------------------
-//
-// A client negotiates the protocol version **once per endpoint**, so hosts that
-// share a path share whatever the merge advertises: their intersection. That is
-// the only answer a single handshake can give, and it silently narrows what a
-// host declared — a host built against a newer version finds its endpoint
-// speaking an older one because a peer it never heard of mounted beside it.
-
 const VERSIONS: &str = "/mcp/versions";
 
-/// Two versions apart. Alone it would advertise both.
 #[mcp(path = "/mcp/versions")]
 #[derive(Clone)]
 struct LegacyVersionsTool;
@@ -1091,8 +1843,7 @@ impl ServerHandler for LegacyVersionsTool {
     }
 }
 
-/// Its peer, overlapping in exactly one version — so the endpoint boots, and
-/// the newest version this host declared is not the one it gets.
+/// Overlaps `LegacyVersionsTool` in exactly one version.
 #[mcp(path = "/mcp/versions")]
 #[derive(Clone)]
 struct ModernVersionsTool;
@@ -1112,7 +1863,7 @@ impl ServerHandler for ModernVersionsTool {
     }
 }
 
-#[module(providers = [LegacyVersionsTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [LegacyVersionsTool])]
 struct LegacyVersionsModule;
 
 #[module(providers = [ModernVersionsTool])]
@@ -1135,20 +1886,14 @@ async fn hosts_that_disagree_on_the_protocol_boot_on_their_intersection_and_say_
     );
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("path").as_deref(), Some(VERSIONS));
-    // Both names, because neither host is at fault on its own: the narrowing is
-    // a property of the pair, and an operator reading one name would go looking
-    // for a bug in a host that declared exactly what it needed.
     let hosts = event.field("hosts").unwrap_or_default();
     assert!(
         hosts.contains("LegacyVersionsTool") && hosts.contains("ModernVersionsTool"),
         "the event names both hosts sharing the endpoint, got {hosts:?}",
     );
 
-    // The endpoint answers, which is the half `initialize` can show: rmcp
-    // exempts the handshake itself from the `supported_protocol_versions` check
-    // (`uses_inline_negotiation` is false for an `InitializeRequest`), so what
-    // comes back is the version the client asked for, not the intersection.
-    // Asserting on it would be asserting rmcp's lifecycle.
+    // rmcp exempts `initialize` from the `supported_protocol_versions` check, so
+    // it answers the version asked for, not the intersection.
     let handshake = initialize(app.http(), VERSIONS, None).await;
     assert!(
         result(&handshake)["result"]["capabilities"].is_object(),
@@ -1156,8 +1901,6 @@ async fn hosts_that_disagree_on_the_protocol_boot_on_their_intersection_and_say_
     );
 }
 
-/// A lone host advertises what it declared — the check has to be about the
-/// pair, or every app that pins a protocol version warns at boot.
 #[module(providers = [ModernVersionsTool])]
 struct LoneVersionModule;
 
@@ -1177,10 +1920,6 @@ async fn a_host_alone_on_its_path_narrows_nothing() {
     );
 }
 
-/// Its twin, and the reason the warning is only a warning: hosts with *nothing*
-/// in common describe an endpoint that can complete no handshake at all. Every
-/// client would fail at `initialize`, which is a boot fact — so it is refused at
-/// boot rather than discovered by a client.
 #[mcp(path = "/mcp/incompatible")]
 #[derive(Clone)]
 struct AncientOnlyTool;
@@ -1232,7 +1971,7 @@ struct IncompatibleVersionsApp;
 async fn hosts_with_no_protocol_in_common_fail_boot_naming_both() {
     let err = match TestApp::for_module::<IncompatibleVersionsApp>().await {
         Ok(_) => panic!("an endpoint no client can handshake with must not boot"),
-        Err(err) => err.to_string(),
+        Err(err) => format!("{err:#}"),
     };
 
     assert!(
@@ -1245,18 +1984,8 @@ async fn hosts_with_no_protocol_in_common_fail_boot_naming_both() {
     );
 }
 
-// --- a cursor the merge cannot honour -----------------------------------------
-//
-// Pagination is per host, and the merged page is not. A cursor names a position
-// in *one* host's listing, so following it would return that host's next page
-// with none of its peers' entries — and every entry already merged in, again.
-// The merge therefore drops it, which turns a truncated listing into one that
-// looks complete: a client sees no `nextCursor` and stops asking.
-
 const PAGED: &str = "/mcp/paged";
 
-/// A host with more resources than it returns at once — a perfectly ordinary
-/// host, which is the point: it did nothing wrong and cannot know it is sharing.
 #[mcp(path = "/mcp/paged")]
 #[derive(Clone)]
 struct PagedResourcesTool;
@@ -1271,8 +2000,8 @@ impl PagedResourcesTool {
 
 #[tool_handler]
 impl ServerHandler for PagedResourcesTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
@@ -1293,8 +2022,6 @@ impl ServerHandler for PagedResourcesTool {
     }
 }
 
-/// Its peer. Nothing about it is unusual either — sharing the path is the whole
-/// of what the two of them did.
 #[mcp(path = "/mcp/paged")]
 #[derive(Clone)]
 struct UnpagedResourcesTool;
@@ -1309,8 +2036,8 @@ impl UnpagedResourcesTool {
 
 #[tool_handler]
 impl ServerHandler for UnpagedResourcesTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
@@ -1330,7 +2057,7 @@ impl ServerHandler for UnpagedResourcesTool {
     }
 }
 
-#[module(providers = [PagedResourcesTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [PagedResourcesTool])]
 struct PagedResourcesModule;
 
 #[module(providers = [UnpagedResourcesTool])]
@@ -1357,9 +2084,7 @@ async fn a_dropped_cursor_names_the_host_whose_listing_is_truncated() {
     )
     .await;
     let listed = &result(&body)["result"];
-    // Distinct schemes on purpose: with `paged://one` and `unpaged://one` the
-    // first check was free — `"unpaged://one".contains("paged://one")` is true —
-    // so dropping the paginating host's entries entirely still passed.
+    // Distinct schemes: `"unpaged://one".contains("paged://one")` would pass vacuously.
     assert!(
         body.contains("paged://one"),
         "the paginating host's entries reach the merged page: {body}",
@@ -1389,16 +2114,14 @@ async fn a_dropped_cursor_names_the_host_whose_listing_is_truncated() {
         event.fields,
     );
     assert_eq!(
-        event.field("method").as_deref(),
+        event.field("mcp_method").as_deref(),
         Some("resources/list"),
         "…on the listing method that truncated: {:?}",
         event.fields,
     );
 }
 
-/// The same host alone: its cursor is its own and a client can still follow it,
-/// so nothing is dropped and nothing is said.
-#[module(providers = [PagedResourcesTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+#[module(imports = [crate::open_mcp()], providers = [PagedResourcesTool])]
 struct LonePagedModule;
 
 #[tokio::test]
@@ -1427,4 +2150,493 @@ async fn a_lone_host_keeps_the_cursor_it_returned() {
         "nest_rs::mcp",
         "an MCP host on a shared path returned a pagination cursor — the merged page drops it",
     );
+}
+
+/// A value whose expression hides its type from `#[tools]`.
+struct Tag;
+
+impl Tag {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[mcp(path = "/mcp/tagged")]
+#[derive(Clone, Default)]
+struct TaggedTwiceTools;
+
+#[tools]
+impl TaggedTwiceTools {
+    /// Answer with a constant.
+    #[tool]
+    #[public]
+    #[meta(Tag::new())]
+    #[meta(Tag::new())]
+    async fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [TaggedTwiceTools])]
+struct TaggedTwiceModule;
+
+/// Every operation's site is composed at the boot's wiring step, so one that
+/// would run with a value read by nothing refuses the app, not its first call.
+#[tokio::test]
+async fn two_values_of_one_hidden_type_on_a_tool_fail_the_boot_naming_it_and_the_operation() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<TaggedTwiceModule>()
+        .build()
+        .await
+    else {
+        panic!("the operation would run with a value read by nothing");
+    };
+    let duplicate = refused
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<nest_rs_core::DuplicateMetaError>())
+        .unwrap_or_else(|| panic!("the site's own refusal: {refused:#}"));
+    assert_eq!(duplicate.type_name, std::any::type_name::<Tag>());
+    assert_eq!(duplicate.declared_on, "TaggedTwiceTools::ping");
+}
+
+/// A host the boot never served over HTTP still has its endpoint checked: two
+/// hosts naming one tool on one path refuse the app whatever it serves.
+#[tokio::test]
+async fn an_endpoints_checks_run_in_an_app_serving_no_http() {
+    let Err(refused) = nest_rs_core::App::builder()
+        .module::<ClashingModule>()
+        .build()
+        .await
+    else {
+        panic!("two tools under one name on one path would leave one unreachable");
+    };
+    let said = format!("{refused:#}");
+    assert!(said.contains("duplicate MCP tool name"), "{said}");
+}
+
+/// Each prompt a host serves is a `mounted` line of its own, naming the host,
+/// the method and the prompt, never a list joined into one field.
+#[tokio::test]
+async fn each_operation_mounts_on_a_line_of_its_own() {
+    let logs = LogCapture::install();
+    let _app = TestApp::for_module::<PromptsApp>()
+        .await
+        .expect("two prompt hosts on one path boot");
+
+    let mounted: Vec<(Option<String>, Option<String>, Option<String>)> = logs
+        .find(nest_rs_http::target::ROUTES, "mounted")
+        .into_iter()
+        .filter(|line| line.field("path").as_deref() == Some(PROMPTS))
+        .map(|line| {
+            (
+                line.field("host"),
+                line.field("method"),
+                line.field("prompt"),
+            )
+        })
+        .collect();
+    for (host, method) in [("OpeningPrompts", "opening"), ("ClosingPrompts", "closing")] {
+        assert!(
+            mounted.contains(&(
+                Some(host.to_owned()),
+                Some(method.to_owned()),
+                Some(method.to_owned())
+            )),
+            "{mounted:?}"
+        );
+    }
+    assert!(
+        logs.find(nest_rs_http::target::ROUTES, "mounted mcp host")
+            .is_empty()
+    );
+}
+
+/// What the boot says of an endpoint's operations: HTTP's grammar where the
+/// endpoint authenticates before any operation runs, the posture mandatory
+/// where the app opened it.
+mod posture {
+    use nest_rs_core::{Layer, Module, UnitContext, async_trait, injectable, module};
+    use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor, GuardPhase};
+    use nest_rs_http::{EndpointGuards, HttpView};
+    use nest_rs_mcp::{McpError, McpView, mcp, tools};
+    use nest_rs_testing::TestApp;
+    use nest_rs_testing::mcp::call_tool;
+
+    /// Admits every request and decides nothing about who is calling, as a rate
+    /// limit does.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Throttle;
+
+    #[async_trait]
+    impl Guard for Throttle {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            nest_rs_core::__private::set_actor_id("throttled");
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for Throttle {}
+    impl GuardFor<McpView> for Throttle {}
+
+    /// Declares it establishes who the caller is.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Authenticate;
+
+    #[async_trait]
+    impl Guard for Authenticate {
+        async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            nest_rs_core::__private::set_actor_id("authenticated");
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+    }
+
+    impl GuardFor<HttpView> for Authenticate {}
+
+    /// A tool stating no posture, a prompt and a resource stating none, on a
+    /// path of its own.
+    #[mcp(path = "/mcp/undeclared")]
+    #[derive(Clone, Default)]
+    struct UndeclaredTool;
+
+    #[tools]
+    impl UndeclaredTool {
+        /// Answer.
+        #[tool]
+        async fn answer(&self) -> Result<String, McpError> {
+            Ok("answered".to_owned())
+        }
+
+        /// Draft.
+        #[prompt]
+        async fn draft(&self) -> Result<nest_rs_mcp::model::GetPromptResult, McpError> {
+            Ok(nest_rs_mcp::model::GetPromptResult::new(vec![]))
+        }
+
+        /// A file.
+        #[resource(template = "file://{name}")]
+        async fn file(&self, name: String) -> Result<String, McpError> {
+            Ok(name)
+        }
+
+        /// Stated, so the refusal leaves it out.
+        #[tool]
+        #[public]
+        async fn stated(&self) -> Result<String, McpError> {
+            Ok("stated".to_owned())
+        }
+
+        /// A guard beside it decides nothing about a visitor here: only the
+        /// posture says what an opened endpoint admits.
+        #[tool]
+        #[use_guards(Throttle)]
+        async fn guarded(&self) -> Result<String, McpError> {
+            Ok("guarded".to_owned())
+        }
+    }
+
+    #[module(imports = [crate::open_mcp()], providers = [Throttle, UndeclaredTool])]
+    struct OpenedUndeclaredModule;
+
+    async fn refusal<M: Module + 'static>() -> String {
+        match TestApp::for_module::<M>().await {
+            Ok(_) => panic!("the app must not boot"),
+            Err(err) => format!("{err:#}"),
+        }
+    }
+
+    async fn answers<M: Module + 'static>(path: &str, tool: &str, said: &str) {
+        let app = TestApp::for_module::<M>().await.expect("the app boots");
+        let body = call_tool(app.http(), path, tool, None).await;
+        assert!(body.contains(said), "{body}");
+    }
+
+    #[tokio::test]
+    async fn an_operation_of_an_opened_endpoint_declaring_no_posture_refuses_the_boot() {
+        let said = refusal::<OpenedUndeclaredModule>().await;
+        for named in ["answer", "draft", "file://{name}", "guarded"] {
+            assert!(said.contains(named), "names every such unit: {said}");
+        }
+        assert!(!said.contains("stated"), "{said}");
+        assert!(
+            said.contains("McpAccess::Public")
+                && said.contains("#[authorize")
+                && said.contains("#[public]"),
+            "says why and names both postures: {said}",
+        );
+    }
+
+    #[module(imports = [OpenedUndeclaredPoolModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct OpenedUndeclaredPooledApp;
+
+    #[module(imports = [crate::open_mcp()], providers = [Throttle, UndeclaredTool])]
+    struct OpenedUndeclaredPoolModule;
+
+    #[tokio::test]
+    async fn the_pool_covers_nothing_on_an_opened_endpoint() {
+        let said = refusal::<OpenedUndeclaredPooledApp>().await;
+        assert!(
+            said.contains("answer"),
+            "no guard runs at its request: {said}"
+        );
+    }
+
+    /// The same operations under an authenticating pool: `stated` says `#[public]`,
+    /// which refuses the boot there, so it stands apart.
+    #[mcp(path = "/mcp/covered")]
+    #[derive(Clone, Default)]
+    struct CoveredTool;
+
+    #[tools]
+    impl CoveredTool {
+        /// Answer.
+        #[tool]
+        async fn answer(&self) -> Result<String, McpError> {
+            Ok("answered".to_owned())
+        }
+    }
+
+    #[module(providers = [Authenticate, CoveredTool])]
+    struct PooledModule;
+
+    #[module(imports = [PooledModule], providers = [GlobalGuards<(Authenticate,)>])]
+    struct PooledApp;
+
+    #[tokio::test]
+    async fn an_operation_under_the_pool_needs_no_posture() {
+        answers::<PooledApp>("/mcp/covered", "answer", "answered").await;
+    }
+
+    #[module(providers = [Authenticate, CoveredTool, EndpointGuards<McpView, (Authenticate,)>])]
+    struct DeclaredModule;
+
+    #[tokio::test]
+    async fn an_operation_under_the_endpoint_guards_needs_no_posture() {
+        answers::<DeclaredModule>("/mcp/covered", "answer", "answered").await;
+    }
+
+    #[module(providers = [Throttle, UndeclaredTool])]
+    struct LimitedByThePoolModule;
+
+    #[module(imports = [LimitedByThePoolModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct LimitedByThePoolApp;
+
+    /// A rate limit identifies no one, so an operation under it alone is an opening
+    /// nothing says.
+    #[tokio::test]
+    async fn an_operation_under_a_pool_that_identifies_no_one_refuses_the_boot_naming_each() {
+        let said = refusal::<LimitedByThePoolApp>().await;
+        for named in ["answer", "draft", "file://{name}", "guarded"] {
+            assert!(said.contains(named), "names every such unit: {said}");
+        }
+        assert!(!said.contains("stated"), "that one opened itself: {said}");
+        assert!(
+            said.contains("phase()") && said.contains("GuardPhase::Authentication"),
+            "a guard of one's own declaring no phase is told: {said}",
+        );
+    }
+
+    #[module(providers = [Throttle, UndeclaredTool, EndpointGuards<McpView, (Throttle,)>])]
+    struct LimitedByTheEndpointModule;
+
+    #[tokio::test]
+    async fn endpoint_guards_that_identify_no_one_cover_no_operation() {
+        let said = refusal::<LimitedByTheEndpointModule>().await;
+        assert!(said.contains("answer"), "{said}");
+    }
+
+    /// Under a rate limit, a guard of its own covers an operation: its `check`
+    /// runs there, and fails closed for a caller its request never identified.
+    #[mcp(path = "/mcp/limited/own-guard")]
+    #[derive(Clone, Default)]
+    struct OwnGuardTool;
+
+    #[tools]
+    impl OwnGuardTool {
+        /// Guarded.
+        #[tool]
+        #[use_guards(Policy)]
+        async fn guarded(&self) -> Result<String, McpError> {
+            Ok("guarded".to_owned())
+        }
+    }
+
+    /// Decides who may call, on the operation.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Policy;
+
+    #[async_trait]
+    impl Guard for Policy {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authorization
+        }
+    }
+
+    impl GuardFor<McpView> for Policy {}
+
+    #[module(providers = [Throttle, Policy, OwnGuardTool])]
+    struct OwnGuardModule;
+
+    #[module(imports = [OwnGuardModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct OwnGuardApp;
+
+    #[tokio::test]
+    async fn a_guard_of_its_own_covers_an_operation_under_a_limit() {
+        answers::<OwnGuardApp>("/mcp/limited/own-guard", "guarded", "guarded").await;
+    }
+
+    #[mcp(path = "/mcp/public")]
+    #[derive(Clone, Default)]
+    struct PublicTool;
+
+    #[tools]
+    impl PublicTool {
+        /// Open.
+        #[tool]
+        #[public]
+        async fn open(&self) -> Result<String, McpError> {
+            Ok("a visitor reads this".to_owned())
+        }
+
+        /// Stated none.
+        #[tool]
+        async fn covered(&self) -> Result<String, McpError> {
+            Ok("covered".to_owned())
+        }
+    }
+
+    #[module(providers = [Authenticate, PublicTool, EndpointGuards<McpView, (Authenticate,)>])]
+    struct BehindAuthenticationModule;
+
+    #[tokio::test]
+    async fn public_behind_an_authenticating_endpoint_refuses_the_boot_it_can_open_nothing() {
+        let said = refusal::<BehindAuthenticationModule>().await;
+        assert!(
+            said.contains("open") && said.contains("Authenticate"),
+            "names the operation and the guard: {said}",
+        );
+        assert!(!said.contains("covered"), "{said}");
+        assert!(said.contains("drop `#[public]`"), "{said}");
+        assert!(said.contains("McpAccess::Public"), "{said}");
+    }
+
+    #[module(providers = [Authenticate, PublicTool])]
+    struct PoolAuthenticatesModule;
+
+    #[module(imports = [PoolAuthenticatesModule], providers = [GlobalGuards<(Authenticate,)>])]
+    struct PoolAuthenticatesApp;
+
+    #[tokio::test]
+    async fn the_pools_authentication_refuses_a_public_operation_as_endpoint_guards_do() {
+        let said = refusal::<PoolAuthenticatesApp>().await;
+        assert!(said.contains("Authenticate"), "{said}");
+    }
+
+    #[module(providers = [PublicTool])]
+    struct ClosedModule;
+
+    #[tokio::test]
+    async fn public_on_an_endpoint_denying_every_request_refuses_the_boot() {
+        let said = refusal::<ClosedModule>().await;
+        assert!(
+            said.contains("open") && said.contains("McpAccess::Public"),
+            "the opening is the endpoint's: {said}",
+        );
+    }
+
+    #[module(providers = [UndeclaredTool2])]
+    struct ClosedUndeclaredModule;
+
+    #[mcp(path = "/mcp/closed")]
+    #[derive(Clone, Default)]
+    struct UndeclaredTool2;
+
+    #[tools]
+    impl UndeclaredTool2 {
+        /// Stated none.
+        #[tool]
+        async fn covered(&self) -> Result<String, McpError> {
+            Ok("covered".to_owned())
+        }
+    }
+
+    /// Closed, so nothing it says could open it: the boot says so once, and every
+    /// request is refused.
+    #[tokio::test]
+    async fn a_gated_endpoint_with_no_guard_stays_deny_all_for_a_unit_declaring_nothing() {
+        let app = TestApp::for_module::<ClosedUndeclaredModule>()
+            .await
+            .expect("it boots");
+        app.http()
+            .post("/mcp/closed")
+            .send()
+            .await
+            .assert_status(nest_rs_http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[module(imports = [crate::open_mcp()], providers = [PublicTool2])]
+    struct OpenedPublicModule;
+
+    #[mcp(path = "/mcp/opened")]
+    #[derive(Clone, Default)]
+    struct PublicTool2;
+
+    #[tools]
+    impl PublicTool2 {
+        /// Open.
+        #[tool]
+        #[public]
+        async fn open(&self) -> Result<String, McpError> {
+            Ok("a visitor reads this".to_owned())
+        }
+    }
+
+    #[mcp(path = "/mcp/throttled")]
+    #[derive(Clone, Default)]
+    struct ThrottledPublicTool;
+
+    #[tools]
+    impl ThrottledPublicTool {
+        /// Open.
+        #[tool]
+        #[public]
+        async fn open(&self) -> Result<String, McpError> {
+            Ok("a visitor reads this, throttled".to_owned())
+        }
+    }
+
+    #[module(providers = [Throttle, ThrottledPublicTool])]
+    struct ThrottledPublicModule;
+
+    #[module(imports = [ThrottledPublicModule], providers = [GlobalGuards<(Throttle,)>])]
+    struct ThrottledPublicApp;
+
+    #[tokio::test]
+    async fn public_on_an_opened_endpoint_admits_a_visitor() {
+        answers::<OpenedPublicModule>("/mcp/opened", "open", "a visitor reads this").await;
+    }
+
+    #[tokio::test]
+    async fn public_behind_a_guard_that_identifies_no_one_stays_an_opening() {
+        answers::<ThrottledPublicApp>("/mcp/throttled", "open", "a visitor reads this, throttled")
+            .await;
+    }
 }

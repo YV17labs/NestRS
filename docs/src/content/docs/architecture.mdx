@@ -1,13 +1,13 @@
 ---
 title: Architecture and naming
-description: "Where a file goes and what it may be called: four naming levels, two kinds of module file, and a three-question test for naming any provider."
+description: "Where a file goes and what it may be called: five naming levels, two kinds of module file, and a three-question test for naming any provider."
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
 NestRS is opinionated about layout, and the opinions are worth knowing early:
 they are what let you open someone else's feature and find the service without
-looking. This page is the whole model — four naming levels, what a module file
+looking. This page is the whole model — five naming levels, what a module file
 is, and how to decide what to call a provider when the answer is not obvious.
 
 One thing shapes everything below. `#[module]` carries two lists, `imports` and
@@ -15,11 +15,12 @@ One thing shapes everything below. `#[module]` carries two lists, `imports` and
 therefore cannot say what a given type is *for*. **The name has to.** Naming is
 not decoration here; it is the only place that information lives.
 
-## Four levels of name, and none overflows
+## Five levels of name, and none overflows
 
 | Level | Named for | Where it appears |
 |---|---|---|
 | **Project** | your product | the repository and the workspace, and nowhere else |
+| **Family** | the **standard** that names its members | a shared crate-name prefix, and the first level of every path, span target and config namespace its members own — `nest_rs::oauth::client`, `<PREFIX>_OAUTH__CLIENT__*` |
 | **Crate** | what it holds | `crates/<crate>/`, and the root of every span target it emits |
 | **App** | what it **serves** | `apps/<app>/`, the binary, `<App>Module` |
 | **Module** | its **domain** | `<module>/`, `<Module>Module` |
@@ -64,7 +65,7 @@ feature's `mod.rs` re-exports is what the rest of the workspace can reach;
 everything else stays `pub(crate)` or private, and a type nobody can name is a
 type nobody can inject.
 
-```rust title="crates/features/src/users/mod.rs (from the demo)"
+```rust title="crates/features/src/users/mod.rs"
 mod entity;
 mod module;
 mod service;
@@ -81,7 +82,7 @@ decision about your feature's surface, not plumbing.
 
 There is never a `*_module.rs`: one `#[module]` per file, one `module.rs` per
 folder. Two modules in a feature means two folders — which is exactly what a
-[transport adapter](/fundamentals/modules/#extract-a-feature) is.
+[transport adapter](/fundamentals/modules/#a-feature-of-its-own) is.
 
 ## Naming a provider — three questions
 
@@ -101,8 +102,8 @@ flowchart TD
 the framework reads without injecting — an entity, a `#[config]`, a DTO the
 validator walks — or plain vocabulary: an enum, a type alias, a set of
 constants. Neither needs a module of its own. **Only a type injected by type
-does**, which is why a social provider reached through its registry has no
-module while a service has one.
+does**, which is why a social provider reached through its registry sits in no
+`providers` list while a service does.
 
 **Who calls it?** If the framework calls it *because of what it is*, the role
 word is a dispatch contract and the vocabulary is closed: you pick from the
@@ -127,9 +128,10 @@ The file is named for the role, never for the type.
 | Event listener host | `events/listener.rs` |
 | Entity | `entity.rs` / `entities/` |
 | Guard / Strategy / Pipe | `guard.rs` / `strategy.rs` / `pipe.rs` |
-| Interceptor / Filter / Exception filter | `interceptor.rs` / `filter.rs` / `exception_filter.rs` |
+| Interceptor / Exception filter | `interceptor.rs` / `exception_filter.rs` |
 | Module config | `config.rs` |
-| Domain error / Constants | `error.rs` / `constants.rs` |
+| An edge's view of its unit | `view.rs`, at the edge crate's root |
+| Error types / Constants | `error.rs` / `constants.rs` |
 
 An adapter role carries its folder: `schedule/tasks.rs`, never `tasks.rs` at the
 module root, and a transport-specific guard belongs to its adapter too —
@@ -142,8 +144,14 @@ a module applies to itself whatever the edge sits flat at the module root — an
 a crate whose whole subject *is* one layer keeps it at the crate root, since
 there is no second adapter for a folder to separate it from.
 
+The view is the one row no module holds: it belongs to an edge crate. That
+crate's view of the unit it dispatches, what a layer reads of it, is
+`<Edge>View` in `view.rs` at its root — the crate's subject and the file, read
+together.
+
 Shared test doubles are the one file that sits at a crate's root rather than in
-a module: `testing.rs`, behind `#[cfg(test)]`, doubles and nothing else.
+a module: `testing.rs`, behind `#[cfg(test)]` or a `test-support` feature where another crate's suite reads
+them, doubles and nothing else.
 
 A primitive role wins over `Service` **only when the framework is the sole
 caller and the file holds no domain logic**. A `tasks.rs` earns its name when
@@ -153,7 +161,7 @@ never renames a service.
 
 ## The name everything else takes
 
-The table above covers what the framework dispatches to. Everything else — a
+The table above covers the files named for a role. Everything else — a
 custom provider, an enum, a value object, a set of constants — is named by one
 rule:
 
@@ -164,8 +172,16 @@ already in the crates you import. The kind is the subject in
 neither word has to add one. The file names the kind in
 `redis/src/connection.rs` → `RedisConnection` and `events/src/bus.rs` →
 `EventBus`, and the type prepends the subject. The folder names it in
-`pipes/src/pipes/validation.rs` → `ValidationPipe`, and the file names the
+`authn/src/strategies/jwt.rs` → `JwtStrategy`, and the file names the
 subject.
+
+A [`#[subject]`](/security/authorization/policies/#subjects-no-table-holds) —
+a capability no table holds — follows the same rule. One named for what it
+grants is a file of its own, `audio/transcoding.rs` → `Transcoding`. The one
+named for its port, which `nestrs g` gates a GraphQL operation or an MCP tool on
+over a port with no entity, is `subject.rs`: `cities/subject.rs` → `City`, the
+folder naming the subject and the file its kind, since `blog/blog.rs` would be a
+module inside its namesake.
 
 **One shape is refused, and only one: a stem that appears nowhere in what the
 file declares.** No example of it appears above, and that is the point — the
@@ -181,13 +197,14 @@ outside: both names read perfectly well alone, and only the pair is wrong.
 Everything short of that passes, and the tolerance is deliberate. The shared
 word may come from the folder rather than the file — `throttler/store.rs` holds
 `RedisThrottler`, because a binding file names the seam and the type names the
-thing that fills it. An inflection is the same word, and so is a word in the
+thing that fills it — and a folder reaches its singular, read the way `nestrs g`
+reads it: `cities/subject.rs` holds `City`. An inflection is the same word, and so is a word in the
 middle: `scope.rs` holds `Scoped`, `token.rs` holds `AccessTokenRequest`.
 
 A file whose principal export is **not** a type is a namespace instead, and
 owes nothing above: `queue/src/consume.rs` exports `consume::discover` and
-`consume::attempt`, and the `Attempt` it also declares is that procedure's
-vocabulary rather than the file's subject. The stem names what a caller
+`consume::attempt`, and the `Delivery` and `AttemptOutcome` it also declares are
+that procedure's vocabulary rather than the file's subject. The stem names what a caller
 *calls*, and the call site reads it as part of the name. A file whose subject
 *is* a type owes the pairing.
 
@@ -203,11 +220,15 @@ there.
 |---|---|---|
 | `services/`, `strategies/`, `pipes/` | bare: `input.rs` | `InputService` |
 | `entities/` | bare: `user.rs` | `User` |
-| `dtos/`, `commands/`, `events/` | suffixed: `login_dto.rs` | `LoginDto` |
+| `dtos/`, `commands/` | suffixed: `login_dto.rs` | `LoginDto` |
 
 A provider's role is already spelled by its folder and its type, so the file
 does not spell it a third time. A transfer object is read far from its folder —
 in a handler signature — so it keeps the suffix at both ends.
+
+Events take no plural folder, because `events/` is the edge that holds the
+listener. One event payload is `event.rs`; several sit flat at the port as
+`<fact>_event.rs` — `post_published_event.rs`.
 
 Two services in one module is a last resort. Extracting a factory or an enum
 leaves the count at one, and that is the common case.
@@ -236,7 +257,9 @@ other crate composes on it, and it composes on none of them*. A `core` that
 fails that test is a `shared` wearing a better word.
 
 Module names themselves avoid the structural vocabulary, because reusing one
-makes every path ambiguous:
+makes every path ambiguous — and a family's word, whose first level belongs to
+its members, so a module there would read as one of them in every path, span
+target and variable:
 
 ```
 structure   apps  crates  features  src  tests
@@ -244,12 +267,14 @@ roles       mod  module  service  controller  resolver  gateway  tool
             processor  tasks  listener  guard  strategy  pipe  config
             interceptor  filter
             entity  error  constants  testing
-singulars   dto  command  event
-plurals     services  entities  dtos  commands  events  strategies  pipes
+singulars   dto  command  event  subject
+plurals     services  entities  dtos  commands  strategies  pipes
 edges       http  graphql  ws  queue  schedule  mcp  events
+families    oauth
 ```
 
-A module about desktop applications is `programs/`, not `apps/`.
+A module about desktop applications is `programs/`, not `apps/`; the module
+that signs your users in is `sign_in/`, not `oauth/`.
 
 ## The rules travel with your code
 
@@ -266,8 +291,9 @@ way to get the same effect.
 
 - **[Modules](/fundamentals/modules/)** — how imports compose, and the
   boot-time access graph that rejects a provider reaching outside its module.
-- **[Providers](/fundamentals/providers/)** — scopes, `provide_dyn`, and hiding
-  an implementation behind a trait.
+- **[Providers](/fundamentals/providers/)** — what the container builds, and
+  [hiding an implementation](/fundamentals/provider-traits/) behind a trait with
+  `as dyn Trait`.
 - **[CLI](/cli/)** — the generators that write this layout, including the wiring
   edits a copy cannot carry.
 - **[Coming from NestJS](/coming-from-nestjs/)** — how `@Module` maps onto

@@ -5,33 +5,80 @@ use nest_rs_core::Container;
 use crate::EventBus;
 
 /// Link-time inventory entry submitted by `#[listeners]` for each
-/// `#[on_event]`-tagged method. [`crate::EventsModule`] drains the registry at
-/// bootstrap and filters by
-/// [`ReachableProviders`](::nest_rs_core::ReachableProviders) so a method on a
-/// provider not reachable from the app's module tree is warned and skipped
-/// (boot `tracing::warn`, target `nest_rs::events`) — never silently dropped, so
-/// leftover code doesn't disappear without a trace.
+/// `#[on_event]`-tagged method; a method on a provider the app's module tree
+/// does not reach is warned and skipped when the boot wires the listeners.
 pub struct ListenerMethod {
-    /// `module_path!()` of the crate that declared it — read by
-    /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick the
-    /// report level, and emitted as a field so a skip line names a type the
-    /// developer can find.
-    pub origin: &'static str,
-    /// The listener method's name — the `method` field in the boot wire log.
-    pub name: &'static str,
-    /// `TypeId` of the host provider, matched against the reachable set to
-    /// module-gate this listener.
-    pub provider_type_id: fn() -> TypeId,
-    /// Position of this method **within its own `#[listeners]` block**. The
-    /// registry is link-ordered, which is stable per binary but reshuffles when
-    /// the code changes; combined with the provider's rank in
-    /// [`ProviderOrder`](::nest_rs_core::ProviderOrder) this restores the order
-    /// the developer wrote — providers as they appear in `providers = [...]`,
-    /// then methods as they appear in the block.
-    pub declaration_index: usize,
-    /// Resolves the provider from the assembled container and subscribes a
-    /// closure to the bus for the method's event type.
-    pub wire: fn(&Container, &EventBus),
+    origin: &'static str,
+    name: &'static str,
+    host_type_id: fn() -> TypeId,
+    declaration_index: usize,
+    wire: fn(&Container, &EventBus) -> anyhow::Result<()>,
+}
+
+impl ListenerMethod {
+    /// `module_path!()` of the crate that declared it, which picks the level a
+    /// skipped listener is reported at.
+    pub const fn origin(&self) -> &'static str {
+        self.origin
+    }
+
+    /// `Host::method`, as a boot refusal names the listener; a line says
+    /// the host and the method apart.
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// The host provider, as a line names it.
+    pub(crate) fn host(&self) -> &'static str {
+        self.name
+            .split_once("::")
+            .map_or(self.name, |(host, _)| host)
+    }
+
+    /// The method, as a line names it.
+    pub(crate) fn method(&self) -> &'static str {
+        self.name.split_once("::").map_or("", |(_, method)| method)
+    }
+
+    /// `TypeId` of the host provider, which a reader gates on
+    /// [`ReachableProviders`](::nest_rs_core::ReachableProviders) as the boot
+    /// does.
+    pub fn host_type_id(&self) -> TypeId {
+        (self.host_type_id)()
+    }
+
+    /// Position of this method within its own `#[listeners]` block; with the
+    /// provider's [`ProviderOrder`](::nest_rs_core::ProviderOrder) rank it
+    /// restores the written order the link-ordered registry loses.
+    pub(crate) const fn declaration_index(&self) -> usize {
+        self.declaration_index
+    }
+
+    /// Resolve the provider from the assembled container and subscribe a
+    /// closure to the bus for the method's event type, around the pipeline
+    /// its site composes; a layer the site binds and nothing provides refuses
+    /// it, and the boot with it.
+    pub(crate) fn wire(&self, container: &Container, bus: &EventBus) -> anyhow::Result<()> {
+        (self.wire)(container, bus)
+    }
+}
+
+/// The entry `#[listeners]` submits for one `#[on_event]` method; a
+/// hand-built entry is a test's, never an app's.
+pub const fn listener_method(
+    origin: &'static str,
+    name: &'static str,
+    host_type_id: fn() -> TypeId,
+    declaration_index: usize,
+    wire: fn(&Container, &EventBus) -> anyhow::Result<()>,
+) -> ListenerMethod {
+    ListenerMethod {
+        origin,
+        name,
+        host_type_id,
+        declaration_index,
+        wire,
+    }
 }
 
 ::nest_rs_core::inventory::collect!(ListenerMethod);

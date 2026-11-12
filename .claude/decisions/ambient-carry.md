@@ -1,0 +1,205 @@
+# One ambient context, and each value says how far it travels
+
+What a unit carries for the code it calls lives in four task-locals across
+three crates — the request context in `nest-rs-core`, the executor and its
+scope in `nest-rs-database`, the ability in `nest-rs-authz` — each carried by
+hand where a unit continues on another future. The carriers disagree: the
+after-commit hold re-installs the ability and the pool, `EventBus::emit`
+captures the correlation alone, seaorm's `LoaderScope` installs the ability
+around a DataLoader batch, and a streaming body re-enters the request context
+and the span only, so a `Repo` read inside an `#[sse]` stream finds no executor
+and no ability. A new value — a tenant, a deadline, a package's — needs every
+edge changed, and a carrier that misses it fails open for a tenant filter.
+
+**One map, in core.** The values ride inside the request context's existing
+`Arc` task-local, a few inline before a spill: one task-local, one allocation
+per install. A value travels only through `AmbientValue`, whose
+`carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>>` says what
+crosses each continuation — itself (the default, except into a job's
+envelope), a narrower value, or nothing. Implementing it is the visible line
+that lets a type travel: a guard's principal type opts in
+(`impl AmbientValue for Claims {}`), and nothing travels by default.
+
+**Six continuations**, where a unit goes on once the future that accepted it is
+no longer the one running: `Body` (a streaming response, polled after the
+handler returned), `Batch` (a DataLoader batch it waits on), `Task` (work handed
+to `TaskContext`, which may outlive it), `Commit` (work held for its commit:
+after-commit callbacks, an emitted event's listeners), `Connection` (the next
+units of a connection it opened: a socket's messages, a graphql-ws operation)
+and `Envelope` (a job it pushes).
+
+**A continuation that can outlive the transaction never holds it.** The
+executor steps down to a pool on `Body`, `Batch` and `Commit`: a body is polled
+after the commit, a batch serves every field of the request, and after-commit
+work runs once the transaction is gone. It is dropped on `Task`, where a
+detached write must open a unit of its own, and on `Connection`, where each
+message opens its own. One exception is planned: a mutation operation's
+batches run on the operation's own transaction, so its response reads its own
+writes, and are joined before the field's savepoint settles, so none outlives
+it. It lands with `feat/graphql-operation-unit`, or in 7.x, changing no API,
+if the join proves infeasible.
+
+**Nothing but the envelope's keys crosses into a job.** A job is system work,
+run later and possibly elsewhere: it carries `traceparent`, `tracestate`,
+`actor_id` — audit, never authorization — a tenant key and W3C `baggage`, and
+no ability, principal or package value. A `Deadline` crosses into a `Batch`
+alone, the one continuation the unit waits on.
+
+**A nested unit never leaks into its parent's batch.** A GraphQL root field
+installs a child context recording its parent, and a `Batch` capture takes the
+nearest unit that is not nested, so a loader shared by several fields carries
+none of one field's attachments. A WebSocket gateway captures the ambient at
+the upgrade — the ability its guards attached included — and re-installs it
+around each message and connection hook; a DataLoader spawner captures for
+`Batch` eagerly. Neither needs a bridge or a context provider of its own.
+
+**Reading is not deciding.** A service can read a principal through
+`ambient::<T>()`, as it reads a `Ctx<T>` handed to it today; the hard "no" on an
+authentication or authorization decision outside a guard stands, held by
+review, and the authentication pages say so.
+
+Prior art: OpenTelemetry's `Context` (immutable values the runtime
+propagates), .NET's `AsyncLocal`, Node's `AsyncLocalStorage` (NestJS's CLS).
+
+**Refused:**
+
+- **A task-local per crate**, the shape it replaces: a value needs a carrier at
+  every continuation of every edge, and a missing carrier fails silently.
+- **A second task-local beside the request context, or an `http::Extensions`
+  map in the kernel**: two installs per unit, and two places to look.
+- **A carrier registry** that each continuation consults: how far a value
+  travels is a property of its type, written beside it; a registry puts it a
+  module away, and a value nobody registered would cross nothing, silently.
+- **The pool handed to a detached task**: a write in a task that outlives its
+  unit would run outside any unit of work.
+- **A principal type that travels by default**: an opening is an explicit
+  line.
+- **A WebSocket ability bridge, or an `around_hook` on the socket context**: a
+  public type added and removed within 7.0, for what the `Connection` capture
+  does.
+
+**Status (2026-10-10): decided, not landed.** It lands with
+`feat/ambient-context`, which also turns the DataLoader's lazy capture into
+the eager `Batch` one; it appends an entry here where it departs.
+
+**2026-10-11 — landed, with four departures.** The map, the six
+continuations and the carry of every framework value ship as decided: a
+WebSocket gateway and a graphql-ws socket capture their upgrade for
+`Connection`, a DataLoader spawner captures for `Batch` where a field asks
+the loader, a route captures for `Body` where it returns a streaming body,
+and an executor holding work for its commit captures for `Commit` where the
+work is registered. `EventBus::emit` captures nothing: a dispatch held for
+the commit runs under its executor's capture, and one with nothing to wait
+for runs inside its emitter, on the emitter's executor. Where it departs:
+
+- **No guard attaches yet.** Today's HTTP guard has no context to attach
+  through, and making `AbilityGuard`'s ability ambient on every guarded route
+  would let a route that never armed the mask read rows; the guard contract
+  decides the two together. Until it lands the ability is ambient where
+  today's seams install it — the `Authorize` and `Bind` shapers, the GraphQL
+  and MCP bridges, `WsDataContext` per message — and every continuation
+  carries it from there. `UnitContext::attach` and the install of what a
+  stage attached are built, with no caller yet.
+- **The pool a continuation runs on is the executor's own** until the
+  unit-of-work port: the first-party driver hands it out through a hidden
+  trait item; under another driver a continuation runs with no executor, and
+  its reads fail closed.
+- **A graphql-ws socket keeps installing its own pool executor** — the
+  upgrade's capture drops the request's — as the socket's unit, until the port
+  opens one per operation.
+- **A nested unit is any unit opened inside another** (`with_request_scope`
+  while one runs): it inherits its parent's values and records the parent, so
+  a batch captured inside it carries the outermost unit's values and
+  identity, and runs in that unit's span, which the spawner holds from where
+  the request seeds its loaders. A capture is flat and holds no parent, so
+  nothing a continuation does not carry stays reachable through it.
+  `RequestContinuation::current` cloned the running context whole; in one
+  map a whole clone would hold the transaction, so it gave way to
+  `RequestContinuation::capture`.
+
+**2026-10-17 — the envelope carries.** A push now seals what crosses into a
+job: each ambient value through its own `carry` for `Envelope`, and of what
+crosses, the envelope writes its own keys — the tenant as `tenant_id`, the
+baggage a job came with as `baggage` — then the consumer makes them ambient
+again around the attempt. The tenant's `carry` crosses everywhere, the
+envelope included: a job runs for the tenant it was pushed for, and a record
+whose `tenant_id` names none is refused rather than run for none. A package
+value whose `carry` lets it into an envelope still crosses nothing, since the
+envelope writes no key for it; a key of its own is a wire change, decided like
+one.
+
+**2026-10-17 — the GraphQL operation is a unit, and its batches stay on the
+pool.** Each operation of a GraphQL document now runs as a unit of its own,
+nested in its request (or its socket), and a mutation's root fields each in an
+atomic block of it. Its loaders are seeded inside the operation, so the
+spawner reads the span to hold off the operation's unit rather than off the
+current span: a batch keeps the outermost unit's identity, and runs in that
+unit's span. The planned exception — a mutation operation's batches on its own
+transaction, joined before the field's block settles — does not land with
+it, and moves to 7.x, changing no API. Two things stand in its way beyond the
+join: a statement issued from inside a block on the operation's executor is
+refused, so a batch would run on the field's block, which a spawned task
+cannot share while the field awaits it; and a request-scoped DataLoader caches
+what it read, so a row a rolled-back field wrote would be served to the next
+field from the cache. Closing it takes a loader cache scoped to the block and
+a spawner that joins its batches before the block settles.
+
+**2026-10-30 — a principal's visible line is its derive.** A claims type
+derives its `AmbientValue` with its `PrincipalIdentity`
+(`#[derive(PrincipalIdentity)]`, `principal-identity-derived.md`): what a
+strategy answers must be ambient, so declaring the type a principal is the line
+that lets it travel, and the derive writes the empty impl with the default
+carry. Every other ambient value still implements the trait by hand.
+
+**2026-10-31 — the parameter takes the concept's word: `Ambient<T>`.** The
+type a handler reads a guard's value with was `Ctx<T>`, HTTP's name carried
+into core, beside `AmbientValue`, `ambient()`, `cx.ambient()` and
+`MissingAmbientError`: one concept, two words (`naming.md`). With the
+owner's agreement to break the API before 7.0 publishes ("Tout faire",
+2026-10-28), it is `nest_rs::core::Ambient<T>`, read off the vocabulary the
+rest of the concept already used, and each edge's reading lives in its
+`ambient.rs`. Renaming the vocabulary to `ctx` instead was refused: `ambient`
+names what the value is (carried for the code the unit calls), `ctx` only
+where a parameter sits.
+
+**2026-10-31 — a capture re-entered inside another unit never widens it.**
+`RequestContinuation::scope` and `enter` and `TaskContext::carry` installed
+their capture whole, in place of the running unit's context: a job's
+capture re-entered inside a request ran that request's work as a job,
+unscoped, and one caller's capture re-entered in another's request read under
+the first caller's ability. `AmbientValue` gains `reenter(self: Arc<Self>) ->
+Option<Arc<Self>>`, beside `carry`: where a capture is re-entered inside a
+running unit that does not carry exactly its values, each value passes its
+type's `reenter`, called there so it can read what that unit holds — itself
+by default, a narrower value, or nothing. The executor's tags no scope wider
+than the running unit's; the ability's is what `with_ability` would install
+there (`repo-hands-out-no-connection.md`, 2026-10-31); the tenant, an
+authorization input, is dropped inside a unit served for another tenant. Where no unit of work
+runs — a spawned task, a body polled after its handler, a settle's task — a
+capture continues its own unit and keeps every value, installed as captured
+where no context runs at all; a running unit carrying its very values
+installs it untouched, so the per-poll re-entries pay one task-local read.
+
+**2026-11-12 — the loaders cache nothing, so one obstacle stands.** The
+2026-10-17 entry gives as a second obstacle to a mutation's batches on its own
+transaction that a request-scoped DataLoader serves a rolled-back field's row
+from its cache. None does: `#[dataloader]` builds `DataLoader::new`, which
+caches no record, and a key two fields load is fetched twice (seen by a count
+of the batch function's calls, one set of loaders or two). Only the first
+obstacle stands, a batch spawned from inside a field's block that the field
+cannot share while it awaits it; closing it takes a spawner that joins its
+batches before the block settles.
+
+**Refused:**
+
+- **`reenter` folded into `carry` as a seventh `Continuation`.** `carry` runs
+  where the capture is taken, `reenter` where it is re-entered: two moments,
+  two methods.
+- **The running unit's values kept beside the capture's.** A capture
+  continues its own unit; a value only the running unit carries (the
+  `UnmaskedReply` marker) is honoured by the values that read it, the ability
+  through `current_ability`.
+- **The re-entry refused, or the capture dropped, inside another unit.** A
+  graphql-ws operation's unit is entered inside its socket's on every poll,
+  and a capture moved on purpose keeps working, only no wider than where it
+  runs.

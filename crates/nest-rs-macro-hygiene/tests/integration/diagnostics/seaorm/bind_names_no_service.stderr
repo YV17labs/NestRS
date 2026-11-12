@@ -1,0 +1,62 @@
+error[E0277]: `nest_rs::authz::Read` is not a resource service
+  --> tests/integration/diagnostics/seaorm/bind_names_no_service.rs:39:30
+   |
+39 |     #[authorize(Read, bind = Read)]
+   |                              ^^^^ expected a service implementing `CrudService`
+   |
+   = help: the trait `CrudService` is not implemented for `nest_rs::authz::Read`
+   = note: `#[crud(service = Service)]` and `#[authorize(Action, bind = Service)]` name a type implementing `CrudService`; beside `bind =`, the action comes first, so an action marker there is the two swapped
+help: the trait `CrudService` is implemented for `WidgetsService`
+  --> tests/integration/diagnostics/seaorm/bind_names_no_service.rs:29:1
+   |
+29 | impl CrudService for WidgetsService {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `nest_rs::seaorm::__private::http_bind`
+  --> $WORKSPACE/crates/nest-rs-seaorm/src/http/bind.rs
+   |
+   | pub async fn http_bind<A, S>(
+...
+   |     S: CrudService + 'static,
+   |        ^^^^^^^^^^^ required by this bound in `http_bind`
+
+error[E0277]: `nest_rs::authz::Read` is not a resource service
+  --> tests/integration/diagnostics/seaorm/bind_names_no_service.rs:40:33
+   |
+40 |     async fn get(&self, widget: Authorized<Read, widget::Entity>) -> String {
+   |                                 ^^^^^^^^^^ expected a service implementing `CrudService`
+   |
+   = help: the trait `CrudService` is not implemented for `nest_rs::authz::Read`
+   = note: `#[crud(service = Service)]` and `#[authorize(Action, bind = Service)]` name a type implementing `CrudService`; beside `bind =`, the action comes first, so an action marker there is the two swapped
+help: the trait `CrudService` is implemented for `WidgetsService`
+  --> tests/integration/diagnostics/seaorm/bind_names_no_service.rs:29:1
+   |
+29 | impl CrudService for WidgetsService {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `nest_rs::seaorm::__private::http_bind`
+  --> $WORKSPACE/crates/nest-rs-seaorm/src/http/bind.rs
+   |
+   | pub async fn http_bind<A, S>(
+...
+   |     S: CrudService + 'static,
+   |        ^^^^^^^^^^^ required by this bound in `http_bind`
+
+error[E0277]: `nest_rs::authz::Read` is not a resource service
+  --> tests/integration/diagnostics/seaorm/bind_names_no_service.rs:39:30
+   |
+39 |     #[authorize(Read, bind = Read)]
+   |                              ^^^^ expected a service implementing `CrudService`
+   |
+   = help: the trait `CrudService` is not implemented for `nest_rs::authz::Read`
+   = note: `#[crud(service = Service)]` and `#[authorize(Action, bind = Service)]` name a type implementing `CrudService`; beside `bind =`, the action comes first, so an action marker there is the two swapped
+help: the trait `CrudService` is implemented for `WidgetsService`
+  --> tests/integration/diagnostics/seaorm/bind_names_no_service.rs:29:1
+   |
+29 | impl CrudService for WidgetsService {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `nest_rs::seaorm::__private::bound_entity`
+  --> $WORKSPACE/crates/nest-rs-seaorm/src/service.rs
+   |
+   | pub const fn bound_entity<S, E>()
+   | where
+   |     S: CrudService,
+   |        ^^^^^^^^^^^ required by this bound in `bound_entity`

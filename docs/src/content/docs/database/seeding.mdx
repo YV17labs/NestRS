@@ -1,7 +1,6 @@
 ---
 title: Seeding
 description: Idempotent demo data via the seed crate — factories, the runner, nestrs run db seed.
-tier: all-options
 sidebar:
   order: 10
 ---
@@ -21,16 +20,18 @@ more than one table to fill.
 One factory per table, each a `seed(db)` function that inserts its demo rows
 and returns how many landed. Organizations use fixed UUIDs so other factories
 — and tests — can reference them by constant. The ids are UUID **v7** (version
-nibble `7`, variant `8`): the `Bind` / `#[crud]` by-id routes reject any
+nibble `7`, variant `8`): the bound (`bind = Service`) and `#[crud]` by-id routes reject any
 non-v7 path id, so a seeded row has to be v7 to be reachable by id.
 
-```rust title="crates/seed/src/factories/org.rs (from the demo)"
+```rust title="crates/seed/src/factories/org.rs (from the demo, abridged)"
+// …
 pub const ACME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 pub const GLOBEX: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_61b3);
 
 const DEMO_ORGS: [(Uuid, &str); 2] = [(ACME, "Acme"), (GLOBEX, "Globex")];
 
-pub async fn seed(db: &DatabaseConnection) -> Result<u64> {
+// …
+pub async fn seed(db: &DatabaseConnection) -> Result<u64, RepoError> {
     let mut inserted = 0;
     for (id, name) in DEMO_ORGS {
         let stmt = Query::insert()
@@ -49,17 +50,36 @@ Rows that depend on others reach for those constants. Demo users also use
 fixed ids — `user::ACME_AUTHOR` is the author of Acme posts — and conflict on
 the unique `email`:
 
-```rust title="crates/seed/src/factories/user.rs (from the demo)"
+```rust title="crates/seed/src/factories/user.rs (from the demo, abridged)"
 pub const ACME_AUTHOR: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac01);
+// …
 
-const DEMO: [(Uuid, Uuid, &str, &str, &str, Option<&str>); 7] = [
-    (ACME_AUTHOR, org::ACME, "Acme Author", "acme-user-1@example.test", "user", Some(DEMO_PASSWORD_HASH)),
-    // ...
+type DemoUser = (
+    Uuid,
+    Uuid,
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+);
+
+const DEMO: [DemoUser; 7] = [
+    // …
+    (
+        ACME_AUTHOR,
+        org::ACME,
+        "Acme Author",
+        "acme-user-1@example.test",
+        "user",
+        Some(DEMO_PASSWORD_HASH),
+    ),
+    // …
 ];
 ```
 
 The tuple is `(id, org, name, email, role, password_hash)` — an admin plus
-members per org — and the insert is `ON CONFLICT (email) DO NOTHING`.
+members per org — and the insert is `ON CONFLICT (email) WHERE deleted_at IS NULL DO NOTHING`,
+the predicate of the partial index the column is unique under.
 
 The password hash is a **pre-computed** argon2id PHC constant, not a fresh hash
 per run — re-hashing would emit a new salt each time and break idempotency.
@@ -67,8 +87,9 @@ per run — re-hashing would emit a new salt each time and break idempotency.
 Posts hang off the org and author constants. `post::WELCOME` is a stable id
 for the first Acme article:
 
-```rust title="crates/seed/src/factories/post.rs (from the demo)"
+```rust title="crates/seed/src/factories/post.rs (from the demo, abridged)"
 pub const WELCOME: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_b001);
+// …
 
 const DEMO: [(Uuid, Uuid, Uuid, &str, &str); 3] = [
     (
@@ -78,19 +99,22 @@ const DEMO: [(Uuid, Uuid, Uuid, &str, &str); 3] = [
         "Welcome to Publish",
         "Getting started with nestrs and the Publish demo app.",
     ),
-    // ...
+    // …
 ];
-
-// INSERT ... ON CONFLICT (id) DO NOTHING.
 ```
+
+Each row is inserted `ON CONFLICT (id) DO NOTHING`.
 
 ## The runner
 
 `seed::run` calls each factory in dependency order and sums the inserts —
-parents before children, so foreign keys resolve:
+parents before children, so foreign keys resolve. Each answers a `RepoError`,
+so a row the server refuses is said by its SQLSTATE and its constraint, never
+by the value its message quotes:
 
-```rust title="crates/seed/src/runner.rs (from the demo)"
-pub async fn run(db: &DatabaseConnection) -> Result<u64> {
+```rust title="crates/seed/src/runner.rs (from the demo, abridged)"
+// …
+pub async fn run(db: &DatabaseConnection) -> Result<u64, RepoError> {
     let mut inserted = 0;
     inserted += factories::org::seed(db).await?;
     inserted += factories::user::seed(db).await?;
@@ -109,7 +133,7 @@ nestrs run db reset    # fresh migrate, then seed
 `nestrs run db seed` runs the crate's `seed` binary. It connects through
 `nest_rs::seaorm::connect_from_env()` — the same connector
 [`migrate`](/database/migrations/#run-them) uses, resolving
-`NESTRS_SEAORM__*` through the `.env` cascade — then runs `seed::run` and
+`<PREFIX>_SEAORM__*` through the `.env` cascade — then runs `seed::run` and
 prints how many rows it inserted.
 
 Because `run` is a plain function, tests call it directly. The crate's e2e

@@ -1,6 +1,6 @@
-use nest_rs::resource::{expose, wire_enum};
+use nest_rs::core::wire_enum;
+use nest_rs::seaorm::expose;
 use sea_orm::entity::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[wire_enum(graphql)]
 #[derive(EnumIter, DeriveActiveEnum)]
@@ -22,10 +22,7 @@ pub enum PostStatus {
 )]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
-#[sea_orm(
-    table_name = "post",
-    model_attrs(derive(PartialEq, Serialize, Deserialize))
-)]
+#[sea_orm(table_name = "post")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
@@ -37,8 +34,9 @@ pub struct Model {
     #[expose(input(create, update), validate(length(min = 1)))]
     pub title: String,
     #[expose(input(create, update), validate(length(min = 1)))]
+    #[sea_orm(column_type = "Text")]
     pub body: String,
-    #[expose]
+    #[expose(default = PostStatus::Draft)]
     pub status: PostStatus,
     #[expose]
     pub created_at: DateTimeWithTimeZone,

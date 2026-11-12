@@ -1,44 +1,42 @@
 //! `#[meta(...)]` + `Reflector`: guard reads route metadata (the `@Roles`
 //! pattern), end-to-end through the HTTP harness.
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, HttpGuard};
-use nest_rs_http::HandlerMetadata;
-use nest_rs_http::{Reflector, async_trait, controller, routes};
+use nest_rs_core::{Layer, async_trait, injectable, module};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::StatusCode;
+use nest_rs_http::{HttpView, controller, routes};
 use nest_rs_testing::TestApp;
-use poem::Request;
-use poem::http::StatusCode;
 
 #[derive(Clone)]
 struct RequiredRoles(&'static [&'static str]);
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct RolesGuard;
-
-impl Layer for RolesGuard {}
 
 #[async_trait]
 impl Guard for RolesGuard {
-    async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
-        let required = Reflector::new(req)
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        let required = cx
+            .reflector()
             .get::<RequiredRoles>()
             .map(|r| r.0)
             .unwrap_or(&[]);
-        let caller = req
-            .headers()
-            .get("x-role")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if required.is_empty() || required.contains(&caller) {
-            Ok(())
-        } else {
-            Err(Denial::forbidden("forbidden"))
-        }
+        let caller = HttpView::of(cx)?.request().header("x-role").unwrap_or("");
+        (required.is_empty() || required.contains(&caller))
+            .ok_or_else(|| Denial::forbidden("forbidden"))
+    }
+
+    async fn check(&self, _cx: &mut nest_rs_core::UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for RolesGuard {}
+impl GuardFor<HttpView> for RolesGuard {}
 
 #[controller(path = "/")]
 struct AdminController;

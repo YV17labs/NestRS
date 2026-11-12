@@ -1,27 +1,36 @@
 ---
 title: Schedule
-description: In-process cron and interval jobs — declared as methods on any provider, activated by importing one module.
+description: In-process cron and interval jobs — declared as methods on any provider, activated by the schedule adapter that lists it.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 A scheduled job is **a method** on any `#[injectable]` provider, tagged with
 `#[every]`, `#[cron]`, or `#[after]` inside a `#[scheduled]` impl block.
-Importing `ScheduleModule` in your `AppModule` attaches the scheduler at
-boot.
+The decorator brings `ScheduleModule` to the schedule adapter listing the
+provider, which attaches the scheduler at boot, so an app importing the adapter
+runs its ticks.
 
-Triggers are validated **at compile time** (string literals) or **at boot**
-(`CronExpression` presets, IANA timezones); a bad value fails the boot
-naming the offending job.
+Triggers are validated **at compile time** (string literals, the IANA
+timezone included) or **at boot** (`CronExpression` presets); a bad preset
+fails the boot naming the offending job.
 
 `nest-rs-schedule` builds on [croner](https://docs.rs/croner) — the framework
-wraps it for cron expression parsing (5/6/7-field), with `chrono` /
-[`chrono-tz`](https://docs.rs/chrono-tz) for the optional IANA timezone.
+wraps it for cron expression parsing (5/6/7-field), with
+[`jiff`](https://docs.rs/jiff) for the optional IANA timezone.
 
 ## Install
 
 ```bash frame="terminal"
 cargo add nest-rs --features schedule
+```
+
+Every replica of an app runs its own scheduler, so four pods fire a job four
+times. A job that must fire **once** across them claims each occurrence in
+Redis — a second feature on the same page:
+
+```bash frame="terminal"
+cargo add nest-rs --features redis-schedule
 ```
 
 ## A first scheduled method
@@ -32,27 +41,32 @@ recurring job.
 
 ```rust title="crates/features/src/audio/schedule/tasks.rs (from the demo, abridged)"
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nest_rs::core::injectable;
-use nest_rs::schedule::scheduled;
+use nest_rs::schedule::{CronExpression, scheduled};
 
-use crate::audio::AudioService;
+use crate::audio::{AUDIO_QUEUE, AudioConfig, AudioService};
 
 #[injectable]
 pub struct AudioTasks {
     #[inject]
     svc: Arc<AudioService>,
+    #[inject]
+    config: Arc<AudioConfig>,
 }
 
 #[scheduled]
 impl AudioTasks {
-    #[every("5s")]
+    #[every("5s", replicas = "one")]
     async fn enqueue_transcode(&self) -> Result<()> {
-        let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await
+        if !self.config.seeds() {
+            return Ok(());
+        }
+        self.svc.seed_and_enqueue().await?;
+        Ok(())
     }
+    // …
 }
 ```
 
@@ -60,15 +74,22 @@ impl AudioTasks {
   `#[inject]` shape as any other service.
 - **`#[scheduled]`** on the impl block orchestrates the per-method trigger
   attributes and submits one cron entry per decorated method.
-- **`#[every("5s")]`** runs the method on a fixed interval. A failure
+- **`#[every("5s", replicas = "one")]`** runs the method on a fixed
+  interval, **once per occurrence across the app's replicas**. Every
+  replica of the API runs this scheduler, and the method stores a source
+  object and enqueues a transcode of it — work the deployment wants done
+  once, which three replicas left at the default would do three times. So
+  each occurrence is claimed through the app's occurrence lock and fires on
+  the one replica that wins it; see
+  [Firing once across replicas](/schedule/once/). A failure
   returns `Err`; it is logged and the schedule continues — one failed run
   never stops the job.
 - **The cron method is thin.** Its only job is to decide *when* and
-  *what payload* (here a synthetic file id). The enqueue plumbing —
-  the `JobProducer`, the queue name, the `TranscodeDto` shape —
-  lives inside `AudioService::enqueue_transcode`. The same service
-  call is used by the HTTP producer and by this scheduler, so there is
-  exactly one place where the "enqueue an audio job" decision lives.
+  *what payload* (here a synthetic file id). The plumbing — the object
+  store, the `Jobs` handle, the queue — lives inside
+  `AudioService::seed_and_enqueue`, which ends in the same
+  `enqueue_transcode` the HTTP producer calls, so there is exactly one
+  place where the "enqueue an audio job" decision lives.
 
 ## Several methods on the same provider
 
@@ -77,42 +98,28 @@ owns the deps once, and as many decorated methods as you need share them.
 Mix triggers freely:
 
 ```rust title="crates/features/src/audio/schedule/tasks.rs (from the demo, abridged)"
-use nest_rs::core::injectable;
-use nest_rs::schedule::{scheduled, CronExpression};
-
-use nest_rs::queue::QueueName;
-
-use crate::audio::AudioQueue;
-
-#[injectable]
-pub struct AudioTasks {
-    #[inject]
-    svc: Arc<AudioService>,
-}
-
 #[scheduled]
 impl AudioTasks {
-    #[every("5s")]
+    #[every("5s", replicas = "one")]
     async fn enqueue_transcode(&self) -> Result<()> {
-        let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await
+        // …
     }
 
     #[after("3s")]
     async fn warmup_on_boot(&self) -> Result<()> {
         tracing::info!(
-            target: "features::audio",
+            target: crate::audio::TARGET,
             phase = "warmup",
             "audio pipeline ready to enqueue",
         );
         Ok(())
     }
 
-    #[cron(CronExpression::EVERY_MINUTE)]
+    #[cron(CronExpression::EVERY_MINUTE, replicas = "each")]
     async fn heartbeat(&self) -> Result<()> {
         tracing::info!(
-            target: "features::audio",
-            queue = AudioQueue::NAME,
+            target: crate::audio::TARGET,
+            queue = AUDIO_QUEUE,
             "audio producer heartbeat",
         );
         Ok(())
@@ -126,10 +133,17 @@ same `AudioTasks` instance. Same `Arc<AudioService>`, three triggers, no
 ceremony. Each method calls into the service or logs; none of them
 build a queue payload or reach for a connection.
 
-<Aside type="caution">
-A single `#[scheduled]` impl block per struct (multiple would conflict at
-the discovery layer). Put every scheduled method of a service in the same
-block — same convention as `#[routes]`.
+**Each one declares how many replicas fire it, by what it does.** The seed
+is work the deployment does once, so `replicas = "one"`. The heartbeat says
+*this* process is alive, which is only true if every process says it, so
+`replicas = "each"` — the default, written out so the decision is read
+rather than inferred. And `#[after]` fires once per process by construction:
+it is a process's own warm-up, and takes no `replicas` at all.
+
+<Aside type="note">
+Keep every scheduled method of a service in one `#[scheduled]` block, the same
+convention as `#[routes]`: layers a block binds cover the methods in that block
+alone, so one block is one place to read them.
 </Aside>
 
 ## Triggers
@@ -139,12 +153,24 @@ block — same convention as `#[routes]`.
 | `#[every("30s")]`                             | Fixed interval (`ms`, `s`, `m`, `h`)     |
 | `#[after("10s")]`                             | One-shot — runs N after boot, then never |
 | `#[cron("0 */5 * * * *")]`                    | 6-field cron expression                  |
-| `#[cron(CronExpression::EVERY_5_SECONDS)]`    | Named preset (compile-time validated)    |
+| `#[cron(CronExpression::EVERY_5_SECONDS)]`    | Named preset (validated at boot)         |
 | `#[cron("0 9 * * MON", tz = "Europe/Paris")]` | Cron + named timezone (default UTC)      |
+| `#[every("5m", replicas = "one")]`            | Once per occurrence across replicas — see [Firing once across replicas](/schedule/once/) |
+| `#[every("1h", timeout = "30m")]`             | A run lasting past 30 minutes is cut — see [How long a run lasts](/schedule/ticks/#how-long-a-run-lasts) |
 
-A literal cron expression is validated at **compile time**; presets and
-timezones at boot. Either way, an invalid trigger fails the boot naming
-the job and the offending value — never silently skipped.
+A cron string literal and a `tz` name are validated at **compile time**; a
+`CronExpression` constant when the scheduler configures at boot, which fails
+naming the job and the offending value. An invalid trigger is never
+silently skipped.
+
+A `tz` name is read from one database, the IANA time zone database bundled
+with jiff (`jiff-tzdb`): the compiler checks the name against it and the
+scheduler reads the zone's rules from it, never from the host's
+`/usr/share/zoneinfo`, so an image built `FROM scratch` needs nothing installed.
+That copy is your lockfile's — `cargo update -p jiff-tzdb` brings the latest
+IANA release — and the job's boot line names the release it read
+(`tzdb="2026e"`).
+
 
 ## Wire it in
 
@@ -161,130 +187,106 @@ pub struct AudioScheduleModule;
 ```
 
 The module imports `AudioModule` because `AudioTasks` injects
-`Arc<AudioService>`. Forget the import and the access graph fails the
+`Arc<AudioService>`; the `AudioConfig` it injects too loads itself. Forget
+the import and the access graph fails the
 boot with a clear message naming `AudioService` as the missing
 dependency — the same Rust-visibility rule every other adapter follows.
+`#[scheduled]` brings `ScheduleModule`, which runs its ticks: the scheduler
+attaches once however many hosts bring it.
 
-The app activates the scheduler by importing `ScheduleModule` —
-`ScheduleModule` contributes the scheduler to `App::run` itself:
+The app imports the adapter and, since the seed fires once across replicas,
+the occurrence lock it claims through: `RedisScheduleModule`, which imports
+the `RedisModule` opening its connection. The lock is a backend the app chooses, so it
+stays at the root; leave it out and the boot fails, naming
+`AudioTasks::enqueue_transcode` and the binding to import.
 
-```rust title="apps/api/src/module.rs (from the demo)"
-use nest_rs::core::module;
-use nest_rs::schedule::ScheduleModule;
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
+use nest_rs::core::{GlobalInterceptors, module};
+// …
+use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
+// …
 use features::audio::{AudioHttpModule, AudioScheduleModule};
+// …
 
-#[module(imports = [
-    AudioHttpModule,
-    AudioScheduleModule,
-    ScheduleModule,
-])]
+#[module(
+    imports = [
+        // …
+        RedisQueueModule,
+        // …
+        RedisScheduleModule,
+        // …
+        AudioHttpModule,
+        AudioScheduleModule,
+    ],
+    // …
+)]
 pub struct ApiModule;
 ```
 
-```rust title="apps/api/src/main.rs (from the demo)"
-use nest_rs::core::App;
-use api::ApiModule;
+`main` carries no transport at all — every transport (`HttpModule` and
+`ScheduleModule` here, `QueueModule` in the worker) comes with the host that
+serves on it and attaches itself at boot.
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    App::builder()
-        .module::<ApiModule>()
-        .build()
-        .await?
-        .run()
-        .await
-}
-```
-
-`main` carries no transport at all — every transport (`HttpModule`,
-`ScheduleModule`, `RedisWorkerModule`) is imported in `ApiModule` and
-attaches itself at boot.
-
-**Without the `ScheduleModule` import, every `#[scheduled]` method
-compiles in but never ticks** — a deliberate choice: an HTTP-only app
-that links the `features` crate does not accidentally run a worker's
-schedule. The framework only ticks methods whose provider is reachable
-from the app's module tree.
+**An app ticks the methods its own modules reach, and no others**: an
+HTTP-only app that links the `features` crate imports no schedule adapter, so
+it never runs a worker's schedule.
 
 ## Run it
 
 ```bash frame="terminal"
 $ nestrs run dev api
 …
- INFO nest_rs::app: attached module-contributed transport transport="Scheduler"
- INFO nest_rs::schedule: scheduled job (interval) provider="AudioTasks" method="enqueue_transcode" interval_ms=5000
- INFO nest_rs::schedule: scheduled job (one-shot) provider="AudioTasks" method="warmup_on_boot" delay_ms=3000
- INFO nest_rs::schedule: scheduled job (cron) provider="AudioTasks" method="heartbeat" timezone="UTC"
+ INFO nest_rs::app: transport attached transport="schedule"
+ INFO nest_rs::schedule: mounted host="AudioTasks" method="enqueue_transcode" trigger="every" interval_ms=5000 replicas="one" key="features::AudioTasks::enqueue_transcode"
+ INFO nest_rs::schedule: mounted host="AudioTasks" method="warmup_on_boot" trigger="after" delay_ms=3000 replicas="each"
+ INFO nest_rs::schedule: mounted host="AudioTasks" method="heartbeat" trigger="cron" timezone="UTC" replicas="each"
  INFO features::audio: audio pipeline ready to enqueue phase="warmup" trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
- INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
-DEBUG features::audio: enqueued transcode job file="track-1787069801760.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
- INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+ INFO nest_rs::operation: schedule.tick host="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+DEBUG features::audio: enqueued transcode job queue="audio" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+ INFO nest_rs::operation: schedule.tick host="AudioTasks" method="enqueue_transcode" replicas="one" occurrence=1787069800000 outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
 ```
 
-The scheduler logs one line per job at boot, then stays quiet on a
-successful tick — the service logs are what you see running. A failed run
-adds one `scheduled job failed` line at `error`; the schedule keeps
-ticking.
-
-Every tick opens its own `scheduled job` span, so the lines your task
-writes are already correlated: a **fresh** `trace_id` each time (a clock
-has nothing upstream to continue) and no `actor_id` (nobody is being
-served). See [Correlation](/fundamentals/correlation/).
+The scheduler logs one `mounted` line per job at boot, its `trigger` the
+decorator that declared it (`every`, `after` or `cron`), then one
+`schedule.tick` line at
+`info` on `nest_rs::operation` for every tick it fires, whatever the tick came
+to — its `host`, `method`, `replicas`, `outcome` and `duration_ms`, and the
+`occurrence` a job firing once claimed. It is the same operation line every edge
+files once per unit of work, so `nest_rs::operation=off` in the log filter
+silences it with the others. A failed run adds one `scheduled job failed` line
+at `error`; the schedule keeps ticking.
 
 A bad cron **literal** never reaches boot — it fails `cargo build`:
 
 ```bash frame="terminal"
 $ nestrs run dev api
-error: invalid cron expression: Invalid pattern: Pattern must have between 5 and 7 fields.
-  --> crates/features/src/audio/schedule/tasks.rs:35:12
+error: #[cron]: "every monday" is not a cron expression: Invalid pattern: Pattern must have between 5 and 7 fields.
+  --> crates/features/src/audio/schedule/tasks.rs:40:12
    |
-35 |     #[cron("every monday")]
+40 |     #[cron("every monday")]
    |            ^^^^^^^^^^^^^^
 ```
 
-## The ambient data context
-
-A scheduled method has **no caller** — system work, intentionally. So **no
-ability** is installed and `Repo` reads are unscoped, which is correct for
-work with no principal to scope to.
-
-The executor is a **transaction per attempt**: it opens on the job's first
-`Repo` call, commits when the method returns `Ok` and rolls back otherwise,
-so a tick that failed halfway leaves nothing behind for the next one. Add
-`transactional = false` to the trigger — `#[every("30s", transactional =
-false)]`, and the same word on `#[cron]`, `#[after]` and `#[process]` — to
-run on the pool instead, which is right for a tick that brackets long work
-that is not the database's. See
-[Repo and the executor](/database/repo-and-executor/).
-
-```rust title="crates/features/src/posts/schedule/tasks.rs"
-#[injectable]
-pub struct CleanupTasks {
-    #[inject]
-    svc: Arc<PostsService>,
-}
-
-#[scheduled]
-impl CleanupTasks {
-    #[every("1h")]
-    async fn delete_expired(&self) -> Result<()> {
-        self.svc.delete_expired().await
-    }
-}
-```
-
-Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbing.
+What bounds and surrounds a run — its deadline, the layers around it, its
+transaction, its trace and its turn at shutdown — is [Running a tick](/schedule/ticks/).
 
 ## Reference
 
 - `crates/features/src/audio/schedule/tasks.rs` — the canonical multi-method exemplar.
+- `crates/features/src/notifications/schedule/tasks.rs` — a job firing once
+  across the worker's replicas, and `apps/worker/src/module.rs`, which binds its
+  lock.
 - `crates/nest-rs-schedule/` — `#[scheduled]`, `ScheduleModule`,
-  `Scheduler`, `CronExpression`, `Trigger`.
+  `Scheduler`, `CronExpression`, `Trigger`, `Replicas`, and the
+  `OccurrenceLock` port a job firing once claims through.
+- `crates/nest-rs-redis/src/schedule/` — `RedisScheduleModule` and
+  `RedisOccurrenceLock`, the Redis binding of that port.
 
 ## Going further
 
 - [Queue](/queue/) — pair a scheduled producer with a durable consumer
   for distributed work.
 - [OpenTelemetry](/opentelemetry/) — every schedule event is targeted on
-  `nest_rs::schedule`, carrying `provider` and `method` fields (plus
-  `interval_ms` / `delay_ms` / `timezone` on the boot lines).
+  `nest_rs::schedule`, carrying `host` and `method` fields (plus
+  `interval_ms` / `delay_ms` / `timezone` / `tzdb` on the boot lines, and the `key` a job
+  firing once claims under).

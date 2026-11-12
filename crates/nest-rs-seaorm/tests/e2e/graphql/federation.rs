@@ -1,86 +1,45 @@
-//! An `#[entity]` resolved by reference is scoped and masked like any other
-//! operation, against live Postgres.
-//!
-//! `_entities` is the one field a client never writes: the router hands it
-//! `{__typename, <key fields>}` for objects nobody named, and nothing in the
-//! document mentions the resolver behind it. So what has to be true is that the
-//! posture on it is real — that the row it hands back went through `Repo` under
-//! the caller's ability, and that a row the ability does not reach is not
-//! reachable *by key* either. Asserted here rather than in-process because the
-//! filter that matters is the `WHERE` the ability adds.
+//! An `#[entity]` resolved by reference is scoped and judged like any other
+//! operation: a row the ability does not reach is not reachable by key either.
 
 use nest_rs_authz::AbilityGuard;
-use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait, guard};
-use nest_rs_resource::WireModelDefaults;
+use nest_rs_core::{injectable, module};
+use nest_rs_graphql::GraphqlView;
+use nest_rs_graphql::async_graphql::{Context, Result as GqlResult};
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+use nest_rs_guards::GlobalGuards;
+use nest_rs_http::EndpointGuards;
 use nest_rs_seaorm::{
     Access, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError,
 };
 use nest_rs_testing::TestApp;
 use sea_orm::prelude::Uuid;
-use serde::{Deserialize, Serialize};
+
+use crate::always_authenticated::AlwaysAuthenticated;
 
 mod post {
+    use nest_rs_seaorm::expose;
     use sea_orm::entity::prelude::*;
-    use serde::{Deserialize, Serialize};
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
+    /// The federated type; its `@key` is the entity resolver's `id` argument.
+    #[expose(name = "Post", graphql)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "federated_probe_posts")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
         pub id: Uuid,
+        #[expose]
         pub title: String,
+        #[expose(nullable)]
         pub published: bool,
         pub secret: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
-}
-
-/// Stands in for what `#[expose]` emits: `secret` carries no exposure, so the
-/// mask strains it out of every value regardless of the grant.
-impl WireModelDefaults for post::Entity {
-    fn fill_wire_defaults(map: &mut serde_json::Map<String, serde_json::Value>) {
-        map.entry(String::from("secret"))
-            .or_insert_with(|| serde_json::Value::String(String::new()));
-    }
-
-    fn wire_keys() -> Option<&'static [&'static str]> {
-        Some(&["id", "title", "published"])
-    }
-}
-
-/// The federated type. Its `@key` is the entity resolver's `id` argument.
-///
-/// `crate = ` because this derive is the test's own, not one a decorator
-/// emitted: async-graphql resolves its paths from the call site, and this crate
-/// reaches it through `nest-rs-graphql`.
-/// `published` is `Option` because the field grant below masks it: GraphQL
-/// cannot ship a masked-out non-nullable field, so a maskable column is
-/// nullable on the wire or the whole operation fails closed.
-#[derive(SimpleObject, Serialize, Deserialize)]
-#[graphql(crate = "::nest_rs_graphql::async_graphql")]
-struct Post {
-    id: String,
-    title: String,
-    published: Option<bool>,
-}
-
-impl From<post::Model> for Post {
-    fn from(model: post::Model) -> Self {
-        Self {
-            id: model.id.to_string(),
-            title: model.title,
-            published: Some(model.published),
-        }
-    }
 }
 
 struct PostsService;
@@ -89,22 +48,17 @@ impl CrudService for PostsService {
     type Entity = post::Entity;
 }
 
-/// Grants exactly the published rows — so "the ability filtered this" and "the
-/// row does not exist" are two different states the assertions can tell apart.
-///
-/// The grant is also narrowed to two **columns**, and that half is what gives
-/// the mask something to strain: `secret` is stripped by the static expose set
-/// whether or not masking runs, so a test asserting only its absence passes
-/// against an entity resolver that never masks at all. `published` is exposed
-/// *and* withheld by the grant, so it can only be absent if the mask ran.
+/// Grants the published rows and two columns: `published` is exposed yet
+/// withheld, so only the row's judgement can leave it out (the expose set alone
+/// leaves out `secret`).
 #[injectable]
 #[derive(Default)]
 struct PublishedOnly;
 
 impl AbilityFactory for PublishedOnly {
-    type Actor = ();
+    type Actor = crate::Anyone;
 
-    fn define(&self, _actor: &(), ab: &mut AbilityBuilder) {
+    fn define(&self, _actor: &crate::Anyone, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, post::Entity)
             .when(|p| p.eq(post::Column::Published, true))
             .fields([post::Column::Id, post::Column::Title]);
@@ -113,49 +67,26 @@ impl AbilityFactory for PublishedOnly {
 
 type PostsAbilityGuard = AbilityGuard<PublishedOnly>;
 
-/// Authenticates every caller as the same principal. What is under test is the
-/// **ability**, not who the caller is — and on GraphQL a visitor ability
-/// deliberately cannot satisfy an `#[authorize]`, so a principal is what lets
-/// this file assert on the rule rather than on the absence of one.
-#[injectable]
-#[derive(Default)]
-struct AlwaysAuthenticated;
-
-impl Layer for AlwaysAuthenticated {}
-
-#[async_trait]
-impl Guard for AlwaysAuthenticated {
-    async fn check_http(&self, req: &mut poem::Request) -> Result<(), Denial> {
-        req.extensions_mut().insert(());
-        Ok(())
-    }
-}
-
-impl HttpGuard for AlwaysAuthenticated {}
-
-/// The subgraph's operation guard, aliased because a `providers = [...]` entry
-/// is one type path — a generic's comma would read as the next provider.
-type Bridge = GraphqlAbilityBridge<AlwaysAuthenticated, PostsAbilityGuard>;
-
 #[resolver]
 struct PostsResolver;
 
 #[operations]
 impl PostsResolver {
-    /// Resolved by reference. `#[authorize]` is what gates it and masks what it
-    /// returns; `access` is what puts the ability's `WHERE` on the read.
+    /// Resolved by reference. `#[authorize]` is what gates it and opens its read;
+    /// `access` is what puts the ability's `WHERE` on the read.
     #[entity]
     #[authorize(Read, post::Entity)]
-    async fn find_post_by_id(&self, _ctx: &Context<'_>, id: String) -> GqlResult<Option<Post>> {
+    async fn find_post_by_id(
+        &self,
+        _ctx: &Context<'_>,
+        id: String,
+    ) -> GqlResult<Option<post::Post>> {
         let Ok(key) = id.parse::<Uuid>() else {
             return Ok(None);
         };
         match PostsService.access(Action::Read, key).await {
-            Ok(Access::Found(model)) => Ok(Some(Post::from(model))),
-            // A row the ability does not reach is `Denied`; one that is not
-            // there is `Missing`. Neither is resolvable by key, and the router
-            // is told the same thing for both — an entity resolver that
-            // distinguished them would be an existence oracle keyed by id.
+            Ok(Access::Found(model)) => Ok(Some(post::Post::from(&model))),
+            // Answered alike: telling them apart is an existence oracle by id.
             Ok(Access::Denied | Access::Missing) => Ok(None),
             Err(err) => Err(nest_rs_graphql::async_graphql::Error::new(
                 ServiceError::from(err).to_string(),
@@ -167,7 +98,7 @@ impl PostsResolver {
 #[module(
     imports = [
         SeaOrmModule::for_root(SeaOrmConfig {
-            url: crate::harness::url(),
+            url: crate::harness::url().into(),
             ..Default::default()
             }),
             SeaOrmDatabaseModule,
@@ -180,7 +111,7 @@ impl PostsResolver {
         PublishedOnly,
         PostsAbilityGuard,
         AlwaysAuthenticated,
-        Bridge as dyn GraphqlOperationGuard,
+        EndpointGuards<GraphqlView, (AlwaysAuthenticated, PostsAbilityGuard)>,
         PostsResolver,
     ],
 )]
@@ -191,6 +122,12 @@ const REFERENCE: &str = r#"
       _entities(representations: $reps) { ... on Post { id title published } }
     }
 "#;
+
+#[module(
+    imports = [FederatedModule],
+    providers = [GlobalGuards<(AlwaysAuthenticated, PostsAbilityGuard)>],
+)]
+struct BootApp;
 
 async fn boot() -> TestApp {
     crate::harness::setup_shared_table(
@@ -209,8 +146,7 @@ async fn boot() -> TestApp {
     )
     .await;
     TestApp::builder()
-        .module::<FederatedModule>()
-        .use_guards_global([guard::<AlwaysAuthenticated>(), guard::<PostsAbilityGuard>()])
+        .module::<BootApp>()
         .build()
         .await
         .expect("the subgraph boots against live Postgres")
@@ -234,7 +170,7 @@ async fn resolve(app: &TestApp, id: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn a_row_the_ability_reaches_resolves_by_key_and_arrives_masked() {
+async fn a_row_the_ability_reaches_resolves_by_key_and_arrives_judged() {
     let app = boot().await;
     let body = resolve(&app, PUBLISHED).await;
     let entity = &body["data"]["_entities"][0];
@@ -245,8 +181,8 @@ async fn a_row_the_ability_reaches_resolves_by_key_and_arrives_masked() {
     );
     assert!(
         entity["published"].is_null(),
-        "and the mask strained the column the field grant withholds, exactly as \
-         it does on a `#[query]` — with no masking call anywhere in the entity \
+        "and the row's judgement withheld the column the field grant leaves out, \
+         exactly as on a `#[query]` — with no call anywhere in the entity \
          resolver's body, `#[authorize]` being the whole declaration: {body}",
     );
     assert!(

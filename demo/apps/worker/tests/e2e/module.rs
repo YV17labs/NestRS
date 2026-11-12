@@ -1,110 +1,114 @@
-use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::Duration;
 
-use nest_rs::core::{injectable, module};
-use nest_rs::queue::{JobProducerExt, processor, queue};
-use nest_rs::redis::{RedisConfig, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker};
-use nest_rs::testing::TestApp;
-use serde::{Deserialize, Serialize};
+use features::notifications::{Column, Entity, NotifyCommand, NotifyQueue};
+use features::testing::{RedisDatabase, connection};
+use nest_rs::core::module;
+use nest_rs::queue::{Jobs, PushReceipt, QueueWorker};
+use nest_rs::redis::RedisQueueModule;
+use nest_rs::schedule::Scheduler;
+use nest_rs::testing::HeadlessApp;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
+use uuid::Uuid;
 use worker::WorkerModule;
 
-fn redis_url() -> String {
-    std::env::var(nest_rs::config::var_name("redis", "URL"))
-        .unwrap_or_else(|_| "redis://127.0.0.1/".into())
+#[module(imports = [RedisQueueModule])]
+struct SuitesProducer;
+
+fn jobs(app: &HeadlessApp) -> Arc<Jobs> {
+    app.container()
+        .get::<Jobs>()
+        .expect("RedisQueueModule bound the jobs handle")
 }
 
-fn unique_tag() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("probe-{}-{}", std::process::id(), nanos)
+async fn notify(app: &HeadlessApp, org_id: Uuid) -> PushReceipt {
+    jobs(app)
+        .push(
+            NotifyQueue,
+            NotifyCommand {
+                org_id,
+                message: format!("for {org_id}"),
+            },
+        )
+        .await
+        .expect("enqueue a notification")
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct ProbeCommand {
-    tag: String,
+async fn notifications(conn: &DatabaseConnection, org_id: Uuid) -> u64 {
+    Entity::find()
+        .filter(Column::OrgId.eq(org_id))
+        .count(conn)
+        .await
+        .expect("count the org's notifications")
 }
-
-#[queue(name = "nestrs-e2e-probe", job = ProbeCommand)]
-struct ProbeQueue;
-
-static PROBE_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<String>> = OnceLock::new();
-
-#[injectable]
-#[derive(Default)]
-struct ProbeConsumer;
-
-#[processor]
-impl ProbeConsumer {
-    #[process(queue = ProbeQueue, retries = 0)]
-    async fn handle(&self, job: ProbeCommand) -> anyhow::Result<()> {
-        if let Some(tx) = PROBE_TX.get() {
-            let _ = tx.send(job.tag);
-        }
-        Ok(())
-    }
-}
-
-#[module(
-    imports = [RedisModule::for_root(RedisConfig { url: redis_url(), ..Default::default() }), RedisQueueModule],
-    providers = [ProbeConsumer],
-)]
-struct ProbeModule;
 
 #[tokio::test]
-async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
-    let worker = TestApp::builder()
+async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suites() {
+    let worker = HeadlessApp::builder()
         .module::<WorkerModule>()
+        .ephemeral_database::<migrations::Migrator>()
+        .provide(RedisDatabase::WorkerRuns.config())
         .build_headless()
         .await
-        .expect("WorkerModule boots and connects to Redis");
-    let worker_queue = worker
-        .spawn_transport(RedisWorker::new())
+        .expect("WorkerModule boots against the throwaway database and its own Redis database");
+    let queue = worker
+        .spawn_transport(QueueWorker::new())
         .await
-        .expect("WorkerModule's RedisWorker configures against Redis");
+        .expect("WorkerModule's QueueWorker configures against Redis");
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let _ = PROBE_TX.set(tx);
-
-    let app = TestApp::builder()
-        .module::<ProbeModule>()
+    let suites = HeadlessApp::builder()
+        .module::<SuitesProducer>()
         .build_headless()
         .await
-        .expect("ProbeModule boots and connects to Redis");
+        .expect("a producer boots on the suites' Redis database");
+    let foreign = Uuid::now_v7();
+    let foreign_job = notify(&suites, foreign).await;
+    let ours = Uuid::now_v7();
+    notify(&worker, ours).await;
 
-    let queue = app
-        .spawn_transport(RedisWorker::new())
-        .await
-        .expect("RedisWorker configures");
-
-    let tag = unique_tag();
-    let conn = app
-        .container()
-        .get::<RedisQueueProducer>()
-        .expect("RedisQueueModule bound the producer over the shared connection");
-    conn.push_to::<ProbeQueue>(ProbeCommand { tag: tag.clone() })
-        .await
-        .expect("enqueue onto the probe queue");
-
-    let saw_our_job = tokio::time::timeout(Duration::from_secs(15), async {
-        while let Some(received) = rx.recv().await {
-            if received == tag {
-                return true;
-            }
+    let conn = connection(worker.container());
+    let mut ran = false;
+    for _ in 0..60 {
+        if notifications(&conn, ours).await == 1 {
+            ran = true;
+            break;
         }
-        false
-    })
-    .await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let stolen = notifications(&conn, foreign).await;
 
-    queue.shutdown().await.expect("RedisWorker stops cleanly");
-    worker_queue
+    queue
         .shutdown()
         .await
-        .expect("WorkerModule's RedisWorker stops cleanly");
+        .expect("WorkerModule's QueueWorker stops cleanly");
+    let waiting = jobs(&suites)
+        .cancel(&foreign_job)
+        .await
+        .expect("the suites' database answers the cancel");
 
-    assert!(
-        matches!(saw_our_job, Ok(true)),
-        "the enqueued job was consumed end-to-end via Redis",
+    assert!(ran, "the worker ran the job enqueued on its own database");
+    assert_eq!(
+        (stolen, waiting),
+        (0, true),
+        "the worker ran a job enqueued on the suites' database"
     );
+}
+
+#[tokio::test]
+async fn worker_app_binds_the_lock_its_one_replica_purge_claims_through() {
+    let worker = HeadlessApp::builder()
+        .module::<WorkerModule>()
+        .ephemeral_database::<migrations::Migrator>()
+        .build_headless()
+        .await
+        .expect("WorkerModule boots against the throwaway database and Redis");
+    let scheduler = worker
+        .spawn_transport(Scheduler::new())
+        .await
+        .expect("the scheduler configures: the purge declared replicas = \"one\" has a lock");
+    scheduler
+        .shutdown()
+        .await
+        .expect("the scheduler stops cleanly");
 }

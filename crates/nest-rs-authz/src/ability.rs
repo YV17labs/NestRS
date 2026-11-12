@@ -1,220 +1,328 @@
 //! The compiled rule set for one actor, and the four reads the three
-//! authorization layers (gate, query filter, response mask) perform against it.
+//! authorization layers (gate, query filter, the judged wire row) perform against
+//! it.
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
-use sea_orm::EntityTrait;
-use sea_orm::sea_query::{Condition, Expr};
+use sea_orm::sea_query::Condition;
+use sea_orm::{EntityTrait, IdenStatic, Value};
 
 use crate::action::Action;
-use crate::predicate::Predicate;
+use crate::error::ColumnsRefused;
+use crate::predicate::{Predicate, Truth, no_row, nothing_invented};
 
-/// One place for the fail-closed masking warn, so every branch — HTTP, GraphQL,
-/// and the ambient [`Ability::mask`] — emits the identical queryable event
-/// (`target: "nest_rs::authz"`, same keys) instead of hand-copying it. A
-/// fail-closed branch that forgets to log is then the visible omission. Lives
-/// here (always compiled) rather than in `wire_mask` (gated behind the
-/// `http`/`graphql` transports) so the ambient `Ability::mask` can reach it in
-/// a feature-less build.
-pub(crate) fn warn_mask_failure(
-    entity: &'static str,
-    action: Action,
-    reason: &'static str,
-    detail: &'static str,
-    // The edge's own two, folded in rather than filed as a second line: an edge
-    // that needs extra context on this event needs it *on* this event, and a
-    // sibling line about the same occurrence is the duplicate "one event, said
-    // once" forbids. `tracing` drops a `None`, so an edge with nothing to add
-    // passes nothing and the field is simply absent.
-    transport: Option<&'static str>,
-    event: Option<&str>,
-    err: Option<&dyn std::fmt::Display>,
-) {
-    // Two arms rather than one, because `tracing` fixes an event's fields at
-    // the macro: an absent `error` has to be a different event, and the whole
-    // point of this function is that it is the *only* place either is worded.
-    match err {
-        Some(err) => tracing::warn!(
+/// The `(entity, action)` pairs whose pushed rows an undecidable rule already
+/// refused, so a stream refusing every item files one line, not one per item.
+static UNDECIDED_ON_PUSH: LazyLock<Mutex<HashSet<(TypeId, Action)>>> =
+    LazyLock::new(Mutex::default);
+
+/// The first time an undecidable rule refuses a pushed row of `E` for `action`
+/// in this process, say so: the subscriber sees nothing, and nothing else would.
+fn warn_undecidable_on_push<E: EntityTrait>(action: Action) {
+    let first = UNDECIDED_ON_PUSH
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert((TypeId::of::<E>(), action));
+    if first {
+        tracing::warn!(
             target: crate::TARGET,
-            entity,
-            action = ?action,
-            reason,
-            detail,
-            transport,
-            event,
-            error = %err,
-            "response masking failed",
-        ),
-        None => tracing::warn!(
-            target: crate::TARGET,
-            entity,
-            action = ?action,
-            reason,
-            detail,
-            transport,
-            event,
-            "response masking failed",
-        ),
+            entity = E::default().table_name(),
+            action = action.as_str(),
+            reason = "undecidable_on_push",
+            "an ability rule cannot be decided on a pushed value",
+        );
     }
 }
 
-/// Why a mask fell closed, as a value an incident query groups on.
-///
-/// **`reason` is one value space across this crate**, and it was two: the gate's
-/// exits reported machine tokens (`no_class_grant`, `insufficient_scope`) while
-/// the masking exits reported whole sentences, so a query that grouped denials
-/// by `reason` returned tokens from one half and prose from the other, and
-/// `no_ambient_ability` — which [`gate::reason`](crate::gate::reason)'s own doc
-/// says "every fail-closed exit reports … the masking paths alike" — matched no
-/// mask at all. The sentence is still there; it moved to `detail`, where the
-/// throttler and the inert-host report already put theirs.
-pub(crate) mod mask_reason {
-    /// Nothing installed an ability, so nothing decided what may be shown.
-    ///
-    /// **Declared here and aliased by [`gate::reason`](crate::gate::reason)**,
-    /// not the other way round, and the direction is a compilation fact rather
-    /// than a preference: `gate` is gated behind the in-band transports while
-    /// this module is always compiled — for the same reason
-    /// [`warn_mask_failure`](super::warn_mask_failure) is, which its own doc
-    /// states. Aliasing the gated one made a feature-less build fail to find
-    /// `crate::gate`, and only the scaffold e2e — which compiles a real
-    /// generated workspace — could see it.
-    pub const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
-    /// The value could not be turned into, or read back from, JSON.
-    pub const NOT_SERIALIZABLE: &str = "not_serializable";
-    /// The wire value and the entity model could not be reconciled, so the
-    /// mask had no model to apply.
-    ///
-    /// Gated exactly like the `wire_mask` module that reaches it: a constant
-    /// nothing reads *in this build* is not the defect a constant nothing reads
-    /// at all is, but saying so with a `cfg` keeps dead-code detection working
-    /// for the ones that really would be.
-    #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-    pub const IRRECONCILABLE: &str = "irreconcilable_wire_value";
-    /// The response carried no content type, so it could not be classified as
-    /// maskable at all. HTTP's alone — it is the one edge with a content type
-    /// to be missing.
-    #[cfg(feature = "http")]
-    pub const UNCLASSIFIED_BODY: &str = "unclassified_body";
-    // `field_not_granted` is deliberately **not** here: it is a *gate*'s verdict
-    // about a grant, not a mask's failure to run, and
-    // `gate::reason::FIELD_NOT_GRANTED` already owns it. A second constant for
-    // one value is the drift this module exists to remove.
+/// Where the rows under a check came from, which decides what a rule the
+/// in-memory check cannot decide means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Provenance {
+    /// A decorated reply: the unit read these rows through `Repo` under this
+    /// ability, for this action, whose SQL applied every rule. Visibility
+    /// trusts SQL; fields come from decided grants only.
+    Loaded,
+    /// A model the caller holds and checks itself ([`Ability::can`]), read for
+    /// this action or another, so no read is known to have applied this
+    /// action's rules: an undecidable grant grants nothing, an undecidable
+    /// denial denies, and no warn is filed — the caller hears `false`.
+    Held,
+    /// A subscription's item, built as its stream is polled, which no read under
+    /// the subscriber's ability filtered: an undecidable grant grants nothing, an
+    /// undecidable denial denies.
+    Pushed,
 }
 
-/// A rule whose relational predicate was malformed — [`PredicateBuilder::related`]
-/// rejected it (a composite key, or a relation not pointing at the declared
-/// related entity) and produced the [`Predicate::Deny`] sentinel. Raised by
-/// [`AbilityBuilder::build`] so the misconfiguration fails **loudly** at ability
-/// construction rather than silently.
-///
-/// Left unchecked this is a security defect on the denial side: a malformed
-/// `cannot(...)` lowers its condition to `1 = 0`, and the query pre-filter
-/// combines a denial as `grant AND NOT(deny)` — so `NOT(1 = 0)` is *true* and
-/// the restriction evaporates (fail-*open*). On the grant side the same
-/// sentinel is fail-closed (deny-all) but still hides a developer error, so
-/// both are surfaced.
-///
-/// [`PredicateBuilder::related`]: crate::predicate::PredicateBuilder::related
-/// [`Predicate::Deny`]: crate::predicate::Predicate::Deny
-/// [`AbilityBuilder::build`]: crate::AbilityBuilder::build
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "malformed authorization rule: the {kind} for `{action:?}` on `{subject}` uses an invalid \
-     relation predicate — the relation is composite-keyed or does not point at the related \
-     entity. Fix the `related(...)` call in your `AbilityFactory`."
-)]
-pub struct MalformedRuleError {
-    /// The action the faulty rule was declared for.
-    pub action: Action,
-    /// Type name of the subject entity the faulty rule scopes.
-    pub subject: &'static str,
-    /// `"grant"` (a `can`) or `"denial"` (a `cannot`) — a denial is the
-    /// fail-open case, a grant merely the silent one.
-    pub kind: &'static str,
-}
-
-/// Which fields of a subject may be read back in the response.
+/// Which columns of a subject a grant permits.
 #[derive(Default)]
+#[non_exhaustive]
 pub enum FieldSet {
-    /// No restriction — every field is permitted.
+    /// No restriction — every column is permitted.
     #[default]
     All,
-    /// Only these columns (named as they serialize) are permitted.
+    /// Only these columns, each as its `Column::as_str()` names it: the
+    /// database's name, which a wire row's judgement asks of each column it holds.
     Only(HashSet<&'static str>),
+}
+
+impl FieldSet {
+    /// Whether the set permits the column `Column::as_str()` names so.
+    pub fn permits(&self, column: &str) -> bool {
+        match self {
+            FieldSet::All => true,
+            FieldSet::Only(columns) => columns.contains(column),
+        }
+    }
+
+    /// Keep every field either set permits.
+    fn widen(&mut self, other: &FieldSet) {
+        match (&mut *self, other) {
+            (FieldSet::All, _) => {}
+            (_, FieldSet::All) => *self = FieldSet::All,
+            (FieldSet::Only(mine), FieldSet::Only(theirs)) => mine.extend(theirs.iter().copied()),
+        }
+    }
+
+    /// Keep only the fields both sets permit.
+    fn narrow(&mut self, other: &FieldSet) {
+        match (&mut *self, other) {
+            (_, FieldSet::All) => {}
+            (FieldSet::All, FieldSet::Only(theirs)) => *self = FieldSet::Only(theirs.clone()),
+            (FieldSet::Only(mine), FieldSet::Only(theirs)) => mine.retain(|f| theirs.contains(f)),
+        }
+    }
+
+    /// The fields both sets permit.
+    fn narrowed(mut self, other: &FieldSet) -> FieldSet {
+        self.narrow(other);
+        self
+    }
+
+    /// The same fields, in a set of its own.
+    fn copy_of(set: &FieldSet) -> FieldSet {
+        FieldSet::All.narrowed(set)
+    }
 }
 
 /// One grant or denial. The condition is precomputed at build time (the actor's
 /// values are known then); the typed [`Predicate`] is kept type-erased for the
-/// in-memory check, downcast at the call site where the subject type is known.
+/// in-memory check, downcast at the call site where the subject type is known,
+/// and absent from a rule no `when` narrowed, which holds for every row.
 pub(crate) struct Rule {
     pub(crate) inverted: bool,
     pub(crate) condition: Condition,
-    pub(crate) predicate: Box<dyn Any + Send + Sync>,
+    pub(crate) when: Option<When>,
     pub(crate) fields: FieldSet,
+}
+
+impl Rule {
+    /// The grant a row meets by meeting both: the two conditions conjoined, the
+    /// two `when`s, the columns both permit.
+    fn and(&self, other: &Rule) -> Rule {
+        let when = match (&self.when, &other.when) {
+            (None, None) => None,
+            (Some(when), None) | (None, Some(when)) => Some(when.clone()),
+            (Some(mine), Some(theirs)) => {
+                Some(When::Both(Arc::new(mine.clone()), Arc::new(theirs.clone())))
+            }
+        };
+        Rule {
+            inverted: false,
+            // Every part kept, an empty one included: sea-query renders an empty
+            // `any` as FALSE and a negated empty `all` as NOT TRUE. Two rules
+            // no `when` narrows conjoin into one, as the builder commits it.
+            condition: match when {
+                None => Condition::all(),
+                Some(_) => Condition::all()
+                    .add(self.condition.clone())
+                    .add(other.condition.clone()),
+            },
+            when,
+            fields: FieldSet::copy_of(&self.fields).narrowed(&other.fields),
+        }
+    }
+
+    /// The same rule, kept by a second ability.
+    fn duplicate(&self) -> Rule {
+        Rule {
+            inverted: self.inverted,
+            condition: self.condition.clone(),
+            when: self.when.clone(),
+            fields: FieldSet::copy_of(&self.fields),
+        }
+    }
+}
+
+/// The rows a rule's `when` narrows it to, its entity erased: the predicate a
+/// factory wrote, or two that [`Ability::intersection`] conjoined.
+#[derive(Clone)]
+pub(crate) enum When {
+    /// A `Predicate` of the rule's keyed subject.
+    Predicate(Arc<dyn Any + Send + Sync>),
+    /// Two narrowings a row meets only by meeting both.
+    Both(Arc<When>, Arc<When>),
+}
+
+impl When {
+    /// What it is on `model`, as SQL would compute it, or `None` when a
+    /// predicate is not the keyed subject's (see `predicate_of`).
+    fn decide<E: EntityTrait>(
+        &self,
+        model: &E::Model,
+        invented: &dyn Fn(E::Column) -> bool,
+    ) -> Option<Truth> {
+        match self {
+            When::Predicate(predicate) => {
+                predicate_of::<E>(&**predicate).map(|predicate| predicate.decide(model, invented))
+            }
+            When::Both(mine, theirs) => Some(Truth::all(
+                [
+                    mine.decide::<E>(model, invented)?,
+                    theirs.decide::<E>(model, invented)?,
+                ]
+                .into_iter(),
+            )),
+        }
+    }
+
+    /// The columns its conjunction pins by equality, and those it constrains
+    /// any other way; `false` when a predicate is not the keyed subject's.
+    fn pins<E: EntityTrait>(
+        &self,
+        pinned: &mut Vec<(E::Column, Value)>,
+        other: &mut Vec<E::Column>,
+    ) -> bool {
+        match self {
+            When::Predicate(predicate) => predicate_of::<E>(&**predicate)
+                .map(|predicate| predicate.pins(pinned, other))
+                .is_some(),
+            When::Both(mine, theirs) => {
+                mine.pins::<E>(pinned, other) && theirs.pins::<E>(pinned, other)
+            }
+        }
+    }
 }
 
 /// The authorization rules compiled for a single actor. Built by an
 /// [`AbilityFactory`](crate::AbilityFactory) and consumed by the access guard
 /// ([`can_class`](Ability::can_class)), the query pre-filter
-/// ([`condition_for`](Ability::condition_for)), and the response check/mask
-/// ([`can`](Ability::can) / [`permitted_fields`](Ability::permitted_fields)).
-#[derive(Default)]
+/// ([`condition_for`](Ability::condition_for)), and the judgement each wire row
+/// passes where it is built ([`can`](Ability::can) /
+/// [`permitted_fields`](Ability::permitted_fields)).
 pub struct Ability {
+    /// Which ability this is, minted once: a wire row judged under it names it,
+    /// and answers only where it is the one installed. A pointer would be reused
+    /// once this one is dropped.
+    id: u64,
     rules: HashMap<(Action, TypeId), Vec<Rule>>,
-    /// Scopes that would have unlocked a rule this actor's credential could not
-    /// reach — recorded when [`RuleSpec::requires_scope`] withholds one, so a
-    /// refusal can name what to ask for instead of being an opaque `403`.
+    /// What each grant this actor's credential could not reach lacks, in
+    /// declaration order — recorded when [`RuleSpec::requires_scope`] withholds
+    /// one, so a refusal can name what to ask for instead of being an opaque
+    /// `403`.
     ///
     /// [`RuleSpec::requires_scope`]: crate::RuleSpec::requires_scope
-    withheld: HashMap<(Action, TypeId), Vec<String>>,
+    withheld: HashMap<(Action, TypeId), Vec<Vec<String>>>,
     visitor: bool,
 }
 
+/// The next [`Ability::id`]: never `0`, and never one an earlier ability held.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+impl Default for Ability {
+    fn default() -> Self {
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            rules: HashMap::new(),
+            withheld: HashMap::new(),
+            visitor: false,
+        }
+    }
+}
+
 impl Ability {
+    /// Which ability this is: two hold one id only if they are one.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
     pub(crate) fn add_rule(&mut self, action: Action, subject: TypeId, rule: Rule) {
         self.rules.entry((action, subject)).or_default().push(rule);
     }
 
-    /// Record that a rule was withheld for lack of `scopes`. The rule itself is
-    /// never added — a withheld grant must not widen anything.
+    /// Record that a grant was withheld for lack of `scopes`. The grant itself
+    /// is never added — a withheld grant must not widen anything.
     pub(crate) fn withhold(&mut self, action: Action, subject: TypeId, scopes: Vec<String>) {
-        let entry = self.withheld.entry((action, subject)).or_default();
-        for scope in scopes {
-            if !entry.contains(&scope) {
-                entry.push(scope);
-            }
-        }
+        self.withheld
+            .entry((action, subject))
+            .or_default()
+            .push(scopes);
     }
 
-    /// The scopes that would have granted `action` on `subject`, had this
-    /// actor's credential carried them.
+    /// The scopes one grant of `action` on `subject` lacks: every one of them
+    /// is needed, and together with what the credential holds they suffice —
+    /// RFC 6750 §3's `scope`, what a client asks for next.
     ///
-    /// **Read this only after [`can_class`](Self::can_class) already said no.**
-    /// A withheld rule and a granted one can coexist — a narrow token may still
-    /// reach the subject by another rule — and in that case the operation is
-    /// allowed and there is nothing to ask for. Reading it as "the caller is
-    /// missing these scopes" without checking the gate first would report a
-    /// denial that never happened.
+    /// When several grants would have allowed it, the set is the one asking for
+    /// fewest, the action's own grant before the [`Action::Manage`] wildcard's and
+    /// the first declared among those asking as many. Never a union, which would make
+    /// a client ask for more than it needs.
     ///
-    /// Empty means the refusal was not about scope: the caller may not perform
-    /// this operation at all, and no wider token changes that.
+    /// At a site gated on [`Action::Manage`], which needs every action, the set is
+    /// the smallest lifting them all: one grant of each refused action, each scope
+    /// once, or a grant of the wildcard, which opens the four, when it asks for
+    /// fewer. Ties go to each action's own smallest grant. The search over those
+    /// choices is bounded; past its bound it keeps the smallest set it met.
+    ///
+    /// Read it only after [`can_class`](Self::can_class) said no: a withheld rule
+    /// and a granted one can coexist. Empty means the refusal was not about scope
+    /// — a denial no `when` narrows among them, which no scope lifts, or an
+    /// action no grant would open.
     pub fn missing_scopes(&self, action: Action, subject: TypeId) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        // Widened over the same keys as `rules_for`: a `Manage` rule is the
-        // action wildcard, so a scope withheld there is equally the answer to
-        // "why can't I read this?". Encoding that widening twice is how the
-        // refusal comes to name the wrong scopes.
-        for scope in keys_for(action, subject)
-            .filter_map(|key| self.withheld.get(&key))
-            .flatten()
-        {
-            if !out.contains(scope) {
-                out.push(scope.clone());
+        if self.denied_outright(action, subject) {
+            return Vec::new();
+        }
+        if action == Action::Manage {
+            return self.missing_scopes_of_every_action(subject);
+        }
+        fewest(
+            keys_for(action, subject)
+                .filter_map(|key| self.withheld.get(&key))
+                .flatten(),
+        )
+        .cloned()
+        .unwrap_or_default()
+    }
+
+    /// [`missing_scopes`](Self::missing_scopes) at a site gated on `Manage`, no
+    /// denial barring it.
+    fn missing_scopes_of_every_action(&self, subject: TypeId) -> Vec<String> {
+        let widest = self
+            .withheld
+            .get(&(Action::Manage, subject))
+            .and_then(|grants| fewest(grants.iter()));
+        let mut choices: Vec<&[Vec<String>]> = Vec::new();
+        let mut needs_the_wildcard = false;
+        for action in Action::CONCRETE {
+            if self.can_class(action, subject) {
+                continue;
+            }
+            match self.withheld.get(&(action, subject)) {
+                Some(own) if !own.is_empty() => choices.push(own),
+                _ if widest.is_some() => needs_the_wildcard = true,
+                _ => return Vec::new(),
             }
         }
-        out
+        if needs_the_wildcard {
+            return widest.cloned().unwrap_or_default();
+        }
+        let each = smallest_cover(&choices);
+        match widest {
+            Some(wildcard) if wildcard.len() < each.len() => wildcard.clone(),
+            _ => each,
+        }
     }
 
     pub(crate) fn mark_visitor(&mut self) {
@@ -225,25 +333,90 @@ impl Ability {
     /// [`AbilityFactory::define_visitor`](crate::AbilityFactory::define_visitor)
     /// — i.e. the caller is **anonymous**.
     ///
-    /// A grant is a grant on either branch, so the three enforcement layers
-    /// ignore this. It answers the *other* question, the one a transport whose
-    /// edge admits anonymous callers has to ask before running a gate: is there
-    /// a principal at all? On HTTP that is the route's own posture (a
-    /// non-`#[public]` route never reaches the visitor branch); on GraphQL,
-    /// where the single `/graphql` endpoint is `#[public]` and posture is
-    /// declared per operation, `graphql::authorize`
-    /// reads this so a `define_visitor` grant cannot satisfy an
-    /// `#[authorize(...)]` operation.
-    ///
-    /// Read it from a **guard** or from the gate a posture attribute emits, the
-    /// same rule [`can_class`](Self::can_class) follows — a check buried in a
-    /// service or a parameter type is an authorization decision outside the
-    /// three greppable sites.
+    /// The enforcement layers ignore it; a transport admitting anonymous callers
+    /// reads it so a `define_visitor` grant cannot satisfy an `#[authorize]`
+    /// operation. Read it from a guard, a posture attribute's gate or what opens a
+    /// unit's reads to its caller, only.
     pub fn is_visitor(&self) -> bool {
         self.visitor
     }
 
-    /// Rules relevant to `action` on `subject`: those keyed under the action
+    /// The rules both abilities allow: a subject granted where both grant it,
+    /// a row where both conditions admit it, a column where both expose it;
+    /// either's denial denies, and either's anonymity makes it anonymous.
+    pub(crate) fn intersection(&self, other: &Ability) -> Ability {
+        let mut both = Ability {
+            visitor: self.visitor || other.visitor,
+            ..Ability::default()
+        };
+        let keys: HashSet<(Action, TypeId)> = self
+            .rules
+            .keys()
+            .chain(other.rules.keys())
+            .copied()
+            .collect();
+        for key @ (action, subject) in keys {
+            for side in [self, other] {
+                for denial in side.rules.get(&key).into_iter().flatten() {
+                    if denial.inverted {
+                        both.add_rule(action, subject, denial.duplicate());
+                    }
+                }
+            }
+            // A query reads its action's rules and the wildcard's, so each
+            // pair of grants that query would meet lands under one key.
+            let wildcard = (Action::Manage, subject);
+            let pairs: &[_] = if action == Action::Manage {
+                &[(key, key)]
+            } else {
+                &[(key, key), (key, wildcard), (wildcard, key)]
+            };
+            for &(mine, theirs) in pairs {
+                for grant in self.grants_under(mine) {
+                    for their_grant in other.grants_under(theirs) {
+                        both.add_rule(action, subject, grant.and(their_grant));
+                    }
+                }
+            }
+        }
+        // A withheld grant is named only where the other side grants what it opens. The
+        // wildcards go last, landing on an action's key behind its own grants: the order
+        // breaks `missing_scopes`' ties, the action's own grant before a wildcard's asking
+        // for as many scopes.
+        for wildcards in [false, true] {
+            for (side, beside) in [(self, other), (other, self)] {
+                for (&(action, subject), scopes) in &side.withheld {
+                    if (action == Action::Manage) != wildcards {
+                        continue;
+                    }
+                    let opens: &[Action] = if wildcards && !beside.can_class(action, subject) {
+                        &Action::CONCRETE
+                    } else {
+                        std::slice::from_ref(&action)
+                    };
+                    for &opened in opens {
+                        if beside.can_class(opened, subject) {
+                            for lacking in scopes {
+                                both.withhold(opened, subject, lacking.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        both
+    }
+
+    /// The grants keyed under exactly `key`, the wildcard's not added.
+    fn grants_under(&self, key: (Action, TypeId)) -> impl Iterator<Item = &Rule> {
+        self.rules
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter(|rule| !rule.inverted)
+    }
+
+    /// Rules a concrete `action` reads on `subject`: those keyed under the action
     /// itself plus those under [`Action::Manage`] (the action wildcard).
     fn rules_for(&self, action: Action, subject: TypeId) -> impl Iterator<Item = &Rule> {
         keys_for(action, subject)
@@ -251,19 +424,90 @@ impl Ability {
             .flatten()
     }
 
-    /// Layer ① — the coarse, class-level gate the access guard/extractor uses:
-    /// is there *any* grant for this action on this subject? Optimistic —
-    /// instance conditions are enforced by layers ② and ③, not here.
+    /// The concrete actions a site gated on `action` holds a caller to. All four
+    /// for [`Action::Manage`], but where no rule names one of them: each then
+    /// reads the wildcard's rules alike, and `Read` says it for the others.
+    fn actions_at_site(&self, action: Action, subject: TypeId) -> &'static [Action] {
+        match action {
+            Action::Manage
+                if !Action::CONCRETE
+                    .iter()
+                    .any(|&concrete| self.rules.contains_key(&(concrete, subject))) =>
+            {
+                &[Action::Read]
+            }
+            _ => action.concrete(),
+        }
+    }
+
+    /// Layer ① — the coarse, class-level gate every edge's posture runs: is
+    /// there any grant for this action on this subject, and no denial that
+    /// holds for every row?
+    ///
+    /// A denial no `when` narrows matches every row, so it refuses here, before
+    /// anything runs for the caller. A grant's or a denial's `when` is left to
+    /// the rows: layers ② and ③ enforce it, not this gate.
+    ///
+    /// [`Action::Manage`] asks it of every concrete action: a denial of one
+    /// refuses it, four separate grants pass it.
     pub fn can_class(&self, action: Action, subject: TypeId) -> bool {
-        self.rules_for(action, subject).any(|rule| !rule.inverted)
+        self.actions_at_site(action, subject).iter().all(|&action| {
+            let mut granted = false;
+            for rule in self.rules_for(action, subject) {
+                if rule.inverted && rule.when.is_none() {
+                    return false;
+                }
+                granted |= !rule.inverted;
+            }
+            granted
+        })
+    }
+
+    /// Whether a denial no `when` narrows bars `action` on `subject`: it
+    /// matches every row, so no grant and no scope lifts it.
+    pub(crate) fn denied_outright(&self, action: Action, subject: TypeId) -> bool {
+        self.actions_at_site(action, subject).iter().any(|&action| {
+            self.rules_for(action, subject)
+                .any(|rule| rule.inverted && rule.when.is_none())
+        })
+    }
+
+    /// Whether some grant opens `action` on `subject` and none of them narrows its
+    /// columns: every row a read admits under this ability ships whole, and a write
+    /// it admits sets what it likes.
+    ///
+    /// [`Action::Manage`] asks it of every concrete action: one narrowed, or one no
+    /// grant opens, answers `false`.
+    pub fn grants_every_column(&self, action: Action, subject: TypeId) -> bool {
+        self.actions_at_site(action, subject).iter().all(|&action| {
+            let mut grants = self
+                .rules_for(action, subject)
+                .filter(|rule| !rule.inverted)
+                .peekable();
+            grants.peek().is_some() && grants.all(|rule| matches!(rule.fields, FieldSet::All))
+        })
     }
 
     /// Layer ② — the query pre-filter: `(OR of grant conditions) AND NOT (OR of
     /// denial conditions)`. With no grant the result matches nothing (`1 = 0`).
+    ///
+    /// [`Action::Manage`] conjoins every concrete action's, a row having to pass
+    /// each; where only `Manage` rules exist, that is this one condition.
     pub fn condition_for<E: EntityTrait>(&self, action: Action) -> Condition {
+        let subject = TypeId::of::<E>();
+        match self.actions_at_site(action, subject) {
+            [action] => self.condition_of(*action, subject),
+            every => every.iter().fold(Condition::all(), |all, &action| {
+                all.add(self.condition_of(action, subject))
+            }),
+        }
+    }
+
+    /// [`condition_for`](Self::condition_for) of one concrete action.
+    fn condition_of(&self, action: Action, subject: TypeId) -> Condition {
         let mut grant = Condition::any();
         let mut deny = Condition::any();
-        for rule in self.rules_for(action, TypeId::of::<E>()) {
+        for rule in self.rules_for(action, subject) {
             if rule.inverted {
                 deny = deny.add(rule.condition.clone());
             } else {
@@ -271,7 +515,7 @@ impl Ability {
             }
         }
         if grant.is_empty() {
-            return Condition::all().add(Expr::cust("1 = 0"));
+            return no_row();
         }
         let mut out = Condition::all().add(grant);
         if !deny.is_empty() {
@@ -280,158 +524,351 @@ impl Ability {
         out
     }
 
-    /// Layer ③ — instance check: at least one grant matches this model and no
-    /// denial does (a denial overrides).
-    pub fn can<E: EntityTrait>(&self, action: Action, model: &E::Model) -> bool {
-        self.evaluate::<E>(action, model).allowed
+    /// Layer ② for a write setting `columns`: the rows on which the grants of
+    /// `action` that match the row permit each of them, as a wire row's judgement
+    /// reads its columns off the union of the grants it meets. So `(OR of the grants
+    /// permitting one column) AND (… for each other) AND NOT (OR of denials)`, which
+    /// runs in the write's own statement, a relational rule exact, in no round trip.
+    ///
+    /// No grant permitting a column, no row could take the write, and
+    /// [`ColumnsRefused`] names each such column. A grant with no `.fields` permits
+    /// every column, so where none narrows this is
+    /// [`condition_for`](Self::condition_for), as it is for no column at all.
+    /// [`Action::Manage`] conjoins every concrete action's.
+    ///
+    /// ```
+    /// # use nest_rs_authz::{AbilityBuilder, Action};
+    /// # mod post {
+    /// #     use sea_orm::entity::prelude::*;
+    /// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #     #[sea_orm(table_name = "posts")]
+    /// #     pub struct Model {
+    /// #         #[sea_orm(primary_key)]
+    /// #         pub id: i32,
+    /// #         pub title: String,
+    /// #         pub status: String,
+    /// #     }
+    /// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// #     pub enum Relation {}
+    /// #     impl ActiveModelBehavior for ActiveModel {}
+    /// # }
+    /// let mut ab = AbilityBuilder::new();
+    /// ab.can(Action::Update, post::Entity).fields([post::Column::Title]);
+    /// let ability = ab.build()?;
+    ///
+    /// let writes = [post::Column::Title];
+    /// assert!(ability.condition_for_columns::<post::Entity>(Action::Update, &writes).is_ok());
+    ///
+    /// let writes = [post::Column::Title, post::Column::Status];
+    /// let refused = ability
+    ///     .condition_for_columns::<post::Entity>(Action::Update, &writes)
+    ///     .unwrap_err();
+    /// assert_eq!(refused.columns, ["status"]);
+    /// # Ok::<(), nest_rs_authz::MalformedRuleError>(())
+    /// ```
+    pub fn condition_for_columns<E: EntityTrait>(
+        &self,
+        action: Action,
+        columns: &[E::Column],
+    ) -> Result<Condition, ColumnsRefused> {
+        let subject = TypeId::of::<E>();
+        let columns: Vec<&'static str> = columns.iter().map(IdenStatic::as_str).collect();
+        match self.actions_at_site(action, subject) {
+            [action] => self.condition_of_columns(*action, subject, &columns),
+            every => every.iter().try_fold(Condition::all(), |all, &action| {
+                Ok(all.add(self.condition_of_columns(action, subject, &columns)?))
+            }),
+        }
     }
 
-    /// The single rule scan behind [`can`](Self::can),
-    /// [`permitted_fields`](Self::permitted_fields) and
-    /// [`mask_many`](Self::mask_many) — both answers come from the same
-    /// predicates, so computing them together is one pass instead of two per
-    /// row (the masked-list path used to evaluate every predicate twice).
+    /// [`condition_for_columns`](Self::condition_for_columns) of one concrete action.
+    fn condition_of_columns(
+        &self,
+        action: Action,
+        subject: TypeId,
+        columns: &[&'static str],
+    ) -> Result<Condition, ColumnsRefused> {
+        let grants: Vec<&Rule> = self
+            .rules_for(action, subject)
+            .filter(|rule| !rule.inverted)
+            .collect();
+        // Each distinct set of grants once: most columns share one.
+        let mut permitting: Vec<Vec<usize>> = Vec::new();
+        let mut refused = Vec::new();
+        for &column in columns {
+            let of_column: Vec<usize> = (0..grants.len())
+                .filter(|&grant| grants[grant].fields.permits(column))
+                .collect();
+            if of_column.is_empty() {
+                refused.push(column);
+            } else if !permitting.contains(&of_column) {
+                permitting.push(of_column);
+            }
+        }
+        if !refused.is_empty() {
+            return Err(ColumnsRefused { columns: refused });
+        }
+        if permitting.is_empty() {
+            return Ok(self.condition_of(action, subject));
+        }
+        let mut out = Condition::all();
+        for of_column in permitting {
+            out = out.add(of_column.iter().fold(Condition::any(), |any, &grant| {
+                any.add(grants[grant].condition.clone())
+            }));
+        }
+        let deny = self
+            .rules_for(action, subject)
+            .filter(|rule| rule.inverted)
+            .fold(Condition::any(), |any, rule| {
+                any.add(rule.condition.clone())
+            });
+        if !deny.is_empty() {
+            out = out.add(deny.not());
+        }
+        Ok(out)
+    }
+
+    /// The column values the grants of `action` on `E` pin by equality — CASL's
+    /// `rulesToFields`: what a fresh row must hold to fall in scope, which
+    /// `nest_rs::seaorm::Creatable` fills on a create where the input left a
+    /// column unset.
     ///
-    /// `pub(crate)` for the same reason: a caller needing *both* answers about
-    /// one row asks once here rather than calling `can` and then
-    /// `permitted_fields`.
-    pub(crate) fn evaluate<E: EntityTrait>(&self, action: Action, model: &E::Model) -> Verdict {
-        let mut granted = false;
-        let mut denied = false;
-        let mut unrestricted = false;
-        let mut fields: HashSet<&'static str> = HashSet::new();
-        for rule in self.rules_for(action, TypeId::of::<E>()) {
-            let Some(predicate) = predicate_of::<E>(rule) else {
-                // Unreachable type mismatch (see `predicate_of`) — fail
-                // closed: a broken denial denies, a broken grant never widens.
-                denied |= rule.inverted;
+    /// A column is kept only when every grant constraining it pins it with
+    /// `eq` to one value; a grant leaving it free admits any. Two grants
+    /// pinning it apart, or one constraining it any other way (`is_in`, a
+    /// comparison, a null test, inside `any` or `not`), leave it out, and the
+    /// scope check decides. A grant with no `when` and a denial pin nothing.
+    /// [`Action::Manage`] reads every concrete action's grants, a row having to
+    /// fall in each one's scope.
+    pub fn pinned_values<E: EntityTrait>(&self, action: Action) -> Vec<(E::Column, Value)> {
+        let mut agreed: Vec<(E::Column, Value)> = Vec::new();
+        let mut contested: Vec<E::Column> = Vec::new();
+        let mut pinned = Vec::new();
+        let subject = TypeId::of::<E>();
+        let rules = self
+            .actions_at_site(action, subject)
+            .iter()
+            .flat_map(|&action| self.rules_for(action, subject));
+        for rule in rules {
+            if rule.inverted {
+                continue;
+            }
+            let Some(when) = &rule.when else {
                 continue;
             };
-            if !predicate.matches(model) {
-                continue;
+            // Unreachable (see `predicate_of`): a rule this read cannot see
+            // pins nothing at all.
+            if !when.pins::<E>(&mut pinned, &mut contested) {
+                return Vec::new();
             }
-            if rule.inverted {
-                // A denial overrides every grant, whatever their order.
-                denied = true;
-                continue;
-            }
-            granted = true;
-            match &rule.fields {
-                FieldSet::All => unrestricted = true,
-                FieldSet::Only(cols) => {
-                    if !unrestricted {
-                        fields.extend(cols.iter().copied());
-                    }
+            for (column, value) in pinned.drain(..) {
+                match agreed.iter().find(|(held, _)| same_column(held, &column)) {
+                    Some((_, held)) if *held == value => {}
+                    Some(_) => contested.push(column),
+                    None => agreed.push((column, value)),
                 }
             }
         }
-        Verdict {
-            allowed: granted && !denied,
-            // Field grants are read from the matching grants alone — denials
-            // decide visibility, never which columns a visible row exposes.
-            fields: if unrestricted {
-                FieldSet::All
-            } else {
-                FieldSet::Only(fields)
-            },
-        }
+        agreed.retain(|(column, _)| !contested.iter().any(|c| same_column(c, column)));
+        agreed
     }
 
-    /// Layer ③ — serialize a model and strip the fields this ability does not
-    /// permit for `action`. Returns the masked JSON object. Combined with the
-    /// query pre-filter this is defence in depth: the filter keeps the wrong
-    /// rows out of the result, the mask keeps the wrong fields out of the body.
-    pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
-    where
-        E: EntityTrait,
-        E::Model: serde::Serialize,
-    {
-        self.mask_with::<E>(action, model, self.permitted_fields::<E>(action, model))
+    /// Layer ③ — instance check: at least one grant matches this model and no
+    /// denial does (a denial overrides), decided on the model alone, with no
+    /// query.
+    ///
+    /// The model cannot show a relation, nor compare two value types only the
+    /// database compares: a grant resting on one grants nothing here, and a
+    /// denial resting on one denies. Where such a rule decides, ask SQL with
+    /// `nest_rs::seaorm::Repo::can`, one indexed query under the action's own
+    /// condition.
+    ///
+    /// [`Action::Manage`] holds the model to every concrete action.
+    pub fn can<E: EntityTrait>(&self, action: Action, model: &E::Model) -> bool {
+        self.actions_at_site(action, TypeId::of::<E>())
+            .iter()
+            .all(|&action| {
+                self.evaluate::<E>(action, model, Provenance::Held, &nothing_invented)
+                    .allowed
+            })
     }
 
-    /// [`mask`](Self::mask) with the field verdict already known — the seam
-    /// [`mask_many`](Self::mask_many) and the per-item subscription path use so
-    /// a row's rules are evaluated once for "may I see it?" and "which
-    /// columns?" together.
-    pub(crate) fn mask_with<E>(
+    /// The single rule scan behind [`can`](Self::can),
+    /// [`permitted_fields`](Self::permitted_fields) and the judgement a wire row
+    /// passes where it is built: one pass yields both answers.
+    ///
+    /// A rule the row decides counts as SQL counts it, `UNKNOWN` included.
+    /// `invented` names the columns the row was given rather than read, and
+    /// `provenance` says what a rule left undecided means.
+    ///
+    /// A reply at a site gated on [`Action::Manage`] shows what the caller may
+    /// read, so `Manage` reads `Read`'s rules here; [`can`](Self::can) asks each
+    /// concrete action itself.
+    pub(crate) fn evaluate<E: EntityTrait>(
         &self,
         action: Action,
         model: &E::Model,
-        fields: FieldSet,
-    ) -> serde_json::Value
-    where
-        E: EntityTrait,
-        E::Model: serde::Serialize,
-    {
-        let mut json = match serde_json::to_value(model) {
-            Ok(json) => json,
-            // Practically unreachable for a SeaORM model, but fail *safe* (an
-            // empty body, never the unmasked model) and — unlike the previous
-            // silent `unwrap_or` — leave a queryable trace, matching the
-            // wire-mask paths. A hard fail-closed (500 / GraphQL error) would
-            // need `mask`'s signature to become `Result`, rippling through
-            // `mask_many` and both transports; logged `Null` is the surgical fix.
-            Err(err) => {
-                warn_mask_failure(
-                    std::any::type_name::<E>(),
-                    action,
-                    mask_reason::NOT_SERIALIZABLE,
-                    "model did not serialize",
-                    None,
-                    None,
-                    Some(&err),
-                );
-                return serde_json::Value::Null;
-            }
+        provenance: Provenance,
+        invented: &dyn Fn(E::Column) -> bool,
+    ) -> Verdict {
+        let action = match action {
+            Action::Manage => Action::Read,
+            concrete => concrete,
         };
-        if let FieldSet::Only(allowed) = fields
-            && let serde_json::Value::Object(map) = &mut json
-        {
-            map.retain(|key, _| allowed.contains(key.as_str()));
+        let mut granted = false;
+        let mut denied = false;
+        // The union of the decided grants' field sets: denials decide
+        // visibility, never which columns a visible row exposes.
+        let mut fields = FieldSet::Only(HashSet::new());
+        // The intersection of the undecided grants' field sets, `None` while
+        // there is none.
+        let mut undecided_grants: Option<FieldSet> = None;
+        let mut undecided_denial = false;
+        for rule in self.rules_for(action, TypeId::of::<E>()) {
+            let truth = match &rule.when {
+                None => Truth::True,
+                Some(when) => match when.decide::<E>(model, invented) {
+                    Some(truth) => truth,
+                    None => {
+                        // Unreachable type mismatch (see `predicate_of`) — fail
+                        // closed: a broken denial denies, a broken grant never widens.
+                        denied |= rule.inverted;
+                        continue;
+                    }
+                },
+            };
+            match (truth, rule.inverted) {
+                // `NOT UNKNOWN` is `UNKNOWN`, so SQL's filter drops a row its
+                // denial cannot compare as surely as one it matches.
+                (Truth::True | Truth::Unknown, true) => denied = true,
+                // Only `Loaded` reads the undecided grants' fields, and `can`
+                // (`Held`) reads no field at all: neither builds a set it drops.
+                (Truth::True, false) => {
+                    granted = true;
+                    if provenance != Provenance::Held {
+                        fields.widen(&rule.fields);
+                    }
+                }
+                (Truth::Undecidable, true) => undecided_denial = true,
+                (Truth::Undecidable, false) => {
+                    let shared = undecided_grants.get_or_insert(FieldSet::All);
+                    if provenance == Provenance::Loaded {
+                        shared.narrow(&rule.fields);
+                    }
+                }
+                (Truth::False, _) | (Truth::Unknown, false) => {}
+            }
         }
-        json
-    }
-
-    /// Layer ③ over a collection: drop the instances the actor may not see
-    /// ([`can`](Ability::can)) and mask the fields of those it may
-    /// ([`mask`](Ability::mask)).
-    pub fn mask_many<'m, E>(
-        &self,
-        action: Action,
-        models: impl IntoIterator<Item = &'m E::Model>,
-    ) -> Vec<serde_json::Value>
-    where
-        E: EntityTrait,
-        E::Model: serde::Serialize + 'm,
-    {
-        models
-            .into_iter()
-            .filter_map(|model| {
-                let verdict = self.evaluate::<E>(action, model);
-                verdict
-                    .allowed
-                    .then(|| self.mask_with::<E>(action, model, verdict.fields))
-            })
-            .collect()
+        match provenance {
+            // The row passed `(OR grants) AND NOT (OR denials)` in SQL, so when
+            // no decided grant matched, an undecided one did, and no denial did.
+            // Its fields are the narrowest set every undecided grant permits.
+            Provenance::Loaded => match undecided_grants {
+                Some(shared) if !granted => Verdict {
+                    allowed: !denied,
+                    fields: shared,
+                },
+                _ => Verdict {
+                    allowed: granted && !denied,
+                    fields,
+                },
+            },
+            Provenance::Held | Provenance::Pushed => {
+                // Refused by a rule the row cannot decide, and by nothing else:
+                // a decided grant met an undecided denial, or no grant was
+                // decided and an undecided one would have matched.
+                if provenance == Provenance::Pushed
+                    && !denied
+                    && ((granted && undecided_denial) || (!granted && undecided_grants.is_some()))
+                {
+                    warn_undecidable_on_push::<E>(action);
+                }
+                Verdict {
+                    allowed: granted && !denied && !undecided_denial,
+                    fields,
+                }
+            }
+        }
     }
 
     /// Layer ③ — the union of permitted fields across the grants that match this
     /// model. An unrestricted matching grant permits every field.
+    ///
+    /// A grant the row alone cannot decide widens nothing; when only such grants
+    /// admit the row, it keeps the fields every one of them permits.
+    /// [`Action::Manage`] reads [`Action::Read`]'s grants.
     pub fn permitted_fields<E: EntityTrait>(&self, action: Action, model: &E::Model) -> FieldSet {
-        self.evaluate::<E>(action, model).fields
+        self.evaluate::<E>(action, model, Provenance::Loaded, &nothing_invented)
+            .fields
     }
 }
 
-/// The rule-map keys an operation reads: the action itself, plus
-/// [`Action::Manage`] (the action wildcard) unless that *is* the action.
-///
-/// The single encoding of the wildcard's semantics — both the grant side
-/// ([`Ability::rules_for`]) and the refusal side ([`Ability::missing_scopes`])
-/// iterate it, so a change to the action lattice cannot widen one and not the
-/// other.
+/// The set asking for fewest scopes among `grants`, the first of those asking as many.
+fn fewest<'a>(grants: impl Iterator<Item = &'a Vec<String>>) -> Option<&'a Vec<String>> {
+    grants.min_by_key(|grant| grant.len())
+}
+
+/// How many partial unions [`smallest_cover`] extends before it keeps what it has: the
+/// refusal path pays a bounded search however many grants a factory declares.
+const COVER_STEPS: usize = 1024;
+
+/// The smallest union of one set from each of `choices`, each scope once, in the
+/// order the choices and their scopes come: each choice's fewest first, replaced only
+/// by a union asking for strictly fewer.
+fn smallest_cover(choices: &[&[Vec<String>]]) -> Vec<String> {
+    fn extend<'a>(
+        choices: &[&'a [Vec<String>]],
+        held: &mut Vec<&'a String>,
+        best: &mut Vec<&'a String>,
+        steps: &mut usize,
+    ) {
+        let Some((&first, rest)) = choices.split_first() else {
+            if held.len() < best.len() {
+                best.clone_from(held);
+            }
+            return;
+        };
+        for grant in first {
+            if *steps >= COVER_STEPS {
+                return;
+            }
+            *steps += 1;
+            let before = held.len();
+            for scope in grant {
+                if !held.contains(&scope) {
+                    held.push(scope);
+                }
+            }
+            if held.len() < best.len() {
+                extend(rest, held, best, steps);
+            }
+            held.truncate(before);
+        }
+    }
+
+    let mut best = Vec::new();
+    for grant in choices.iter().filter_map(|&grants| fewest(grants.iter())) {
+        for scope in grant {
+            if !best.contains(&scope) {
+                best.push(scope);
+            }
+        }
+    }
+    extend(choices, &mut Vec::new(), &mut best, &mut 0);
+    best.into_iter().cloned().collect()
+}
+
+/// The rule-map keys a concrete `action` reads: its own, then the wildcard's. A
+/// site gated on [`Action::Manage`] reads each concrete action, never this with
+/// `Manage` itself.
 fn keys_for(action: Action, subject: TypeId) -> impl Iterator<Item = (Action, TypeId)> {
-    let wildcard = (action != Action::Manage).then_some((Action::Manage, subject));
-    std::iter::once((action, subject)).chain(wildcard)
+    [(action, subject), (Action::Manage, subject)].into_iter()
+}
+
+/// Whether two columns are one: sea-orm's `Column` enums derive no `PartialEq`.
+fn same_column<C: IdenStatic>(a: &C, b: &C) -> bool {
+    a.as_str() == b.as_str()
 }
 
 /// What one rule scan concluded about a model: whether it is visible, and which
@@ -441,13 +878,10 @@ pub(crate) struct Verdict {
     pub(crate) fields: FieldSet,
 }
 
-/// Recover a rule's typed predicate. The downcast cannot fail in practice —
-/// the rule was stored under `TypeId::of::<E>()`, so its predicate is a
-/// `Predicate<E>` — but this is a per-request authz path, so a mismatch fails
-/// **closed** at the call sites (deny / no grant) instead of panicking,
-/// mirroring `Predicate::to_condition`'s defense-in-depth posture.
-fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
-    let predicate = rule.predicate.downcast_ref::<Predicate<E>>();
+/// Recover a rule's typed predicate. A mismatch cannot happen (rules are keyed
+/// by `TypeId::of::<E>()`), and fails closed at the call sites, never panics.
+fn predicate_of<E: EntityTrait>(predicate: &(dyn Any + Send + Sync)) -> Option<&Predicate<E>> {
+    let predicate = predicate.downcast_ref::<Predicate<E>>();
     if predicate.is_none() {
         tracing::error!(
             target: crate::TARGET,
@@ -460,20 +894,23 @@ fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
 
 #[cfg(test)]
 mod tests {
+    use nest_rs_guards::Scope;
+
     use super::*;
+    use crate::predicate::PredicateBuilder;
 
     mod widget {
         use sea_orm::entity::prelude::*;
 
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "widgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -481,33 +918,302 @@ mod tests {
     mod gadget {
         use sea_orm::entity::prelude::*;
 
-        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "gadgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
 
-    /// A rule keyed under one subject carrying another subject's predicate.
-    ///
-    /// `AbilityBuilder` cannot produce this — it stores the predicate under the
-    /// same `TypeId` it built it for — which is exactly why the branch needs a
-    /// test: nothing else will ever exercise it, and what it decides is whether
-    /// a mismatch **denies** or reads as an unrestricted grant. The second
-    /// would turn a framework bug into a silent authorization bypass, so the
-    /// answer is `None` (no grant) and a line loud enough to find.
+    mod org {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "orgs")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    mod post {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "posts")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            pub org_id: i32,
+            pub title: String,
+            /// The post this one replies to; `None` for a thread's root.
+            pub parent_id: Option<i32>,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {
+            #[sea_orm(
+                belongs_to = "super::org::Entity",
+                from = "Column::OrgId",
+                to = "super::org::Column::Id"
+            )]
+            Org,
+        }
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    fn a_post() -> post::Model {
+        post::Model {
+            id: 1,
+            org_id: 7,
+            title: "hello".into(),
+            parent_id: None,
+        }
+    }
+
+    fn in_org(id: i32) -> impl FnOnce(PredicateBuilder<post::Entity>) -> Predicate<post::Entity> {
+        move |p| p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, id))
+    }
+
+    /// How many of `rows` a reply to a read keeps: the verdict a judged wire row
+    /// refuses a row on.
+    fn kept(ability: &Ability, rows: &[post::Model]) -> usize {
+        rows.iter()
+            .filter(|row| {
+                ability
+                    .evaluate::<post::Entity>(
+                        Action::Read,
+                        row,
+                        Provenance::Loaded,
+                        &nothing_invented,
+                    )
+                    .allowed
+            })
+            .count()
+    }
+
+    /// The columns a narrowed set keeps, sorted; `None` for every column.
+    fn only(fields: FieldSet) -> Option<Vec<&'static str>> {
+        match fields {
+            FieldSet::All => None,
+            FieldSet::Only(cols) => {
+                let mut cols: Vec<_> = cols.into_iter().collect();
+                cols.sort_unstable();
+                Some(cols)
+            }
+        }
+    }
+
+    #[test]
+    fn a_relational_grant_widens_no_field_set_a_decided_grant_narrows() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .fields([post::Column::Title]);
+        b.can(Action::Read, post::Entity).when(in_org(7));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["title"]),
+        );
+    }
+
+    #[test]
+    fn undecided_grants_alone_give_the_fields_they_all_share() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .when(in_org(7))
+            .fields([post::Column::Id, post::Column::Title]);
+        b.can(Action::Read, post::Entity)
+            .when(in_org(8))
+            .fields([post::Column::Title, post::Column::OrgId]);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["title"]),
+            "either grant may be the one SQL matched, so only their common field is certain",
+        );
+    }
+
+    #[test]
+    fn a_relational_grant_alone_admits_a_loaded_row_whole() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity).when(in_org(7));
+        let ability = b.build().unwrap();
+
+        assert_eq!(kept(&ability, &[a_post()]), 1);
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            None,
+        );
+    }
+
+    #[test]
+    fn a_relational_denial_refuses_no_row_its_read_admitted() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity);
+        b.cannot(Action::Read, post::Entity).when(in_org(9));
+        let ability = b.build().unwrap();
+
+        assert_eq!(kept(&ability, &[a_post(), a_post()]), 2);
+    }
+
+    /// The model was read for some action, perhaps not this one, so no read is
+    /// known to have applied this action's denial: one the row cannot decide
+    /// denies.
+    #[test]
+    fn the_instance_check_counts_a_relational_denial_as_denying() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        b.cannot(Action::Update, post::Entity).when(in_org(9));
+        let ability = b.build().unwrap();
+
+        assert!(
+            !ability.can::<post::Entity>(Action::Update, &a_post()),
+            "the post may belong to org 9 for all the row shows",
+        );
+        assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
+    }
+
+    /// A row read for `Read` says nothing of `Update`'s relation, so the instance
+    /// check grants nothing on it, nor on its negation.
+    #[test]
+    fn the_instance_check_grants_nothing_on_a_relation_it_cannot_see() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity);
+        b.can(Action::Update, post::Entity).when(in_org(7));
+        b.can(Action::Delete, post::Entity).when(|p| {
+            p.not(p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, 9)))
+        });
+        let ability = b.build().unwrap();
+        let read_for_read = a_post();
+
+        assert!(ability.can::<post::Entity>(Action::Read, &read_for_read));
+        assert!(
+            !ability.can::<post::Entity>(Action::Update, &read_for_read),
+            "the post may belong to any org for all the row shows",
+        );
+        assert!(!ability.can::<post::Entity>(Action::Delete, &read_for_read));
+    }
+
+    /// A relation beside a column the row shows settles nothing that column
+    /// decides.
+    #[test]
+    fn the_instance_check_decides_what_the_row_shows_around_a_relation() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity).when(|p| {
+            p.any([
+                p.eq(post::Column::OrgId, 7),
+                p.related::<org::Entity, _>(post::Relation::Org, |o| o.eq(org::Column::Id, 8)),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert!(ability.can::<post::Entity>(Action::Update, &a_post()));
+        assert!(!ability.can::<post::Entity>(
+            Action::Update,
+            &post::Model {
+                org_id: 9,
+                ..a_post()
+            },
+        ));
+    }
+
+    /// An `i32` column against an `i64` bound is the database's to compare: a
+    /// reply trusts the read that compared it, the instance check grants
+    /// nothing on it.
+    #[test]
+    fn a_grant_across_two_value_types_is_trusted_only_to_a_read() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7_i64));
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can::<post::Entity>(Action::Read, &a_post()));
+        assert_eq!(kept(&ability, &[a_post()]), 1);
+    }
+
+    /// SQL renders `eq(parent_id, None)` as `IS NULL`, so it admitted a root
+    /// post through the narrow grant; deciding it `UNKNOWN` would leave the
+    /// relational grant's wider field set as the only one in sight.
+    #[test]
+    fn a_null_bound_grant_keeps_its_field_set_against_a_relational_one() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::ParentId, None::<i32>))
+            .fields([post::Column::Id, post::Column::Title]);
+        b.can(Action::Read, post::Entity).when(in_org(8));
+        let ability = b.build().unwrap();
+
+        assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["id", "title"]),
+        );
+    }
+
+    /// A push refused because no grant matched it says nothing about a rule
+    /// the row could not decide, and spends no warn.
+    #[test]
+    fn a_push_no_grant_admits_files_no_undecidable_warn() {
+        const UNDECIDABLE: &str = "an ability rule cannot be decided on a pushed value";
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.cannot(Action::Read, post::Entity).when(in_org(9));
+        let ability = b.build().unwrap();
+        let push = |org_id| {
+            let row = post::Model { org_id, ..a_post() };
+            ability
+                .evaluate::<post::Entity>(Action::Read, &row, Provenance::Pushed, &nothing_invented)
+                .allowed
+        };
+
+        assert!(!push(8));
+        logs.expect_none(crate::TARGET, UNDECIDABLE);
+
+        assert!(
+            !push(7),
+            "org 7's grant meets a denial the row cannot decide"
+        );
+        let event = logs.expect_one(crate::TARGET, UNDECIDABLE);
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("undecidable_on_push")
+        );
+    }
+
+    /// A rule keyed under one subject carrying another's — `AbilityBuilder` cannot build it.
     fn mismatched_rule() -> Rule {
         Rule {
             inverted: false,
             condition: Condition::all(),
-            predicate: Box::new(Predicate::<gadget::Entity>::Always),
+            when: Some(When::Predicate(Arc::new(
+                Predicate::<gadget::Entity>::Always,
+            ))),
             fields: FieldSet::All,
+        }
+    }
+
+    /// The one predicate a factory's rule narrows its rows by.
+    fn narrowing(rule: &Rule) -> &(dyn Any + Send + Sync) {
+        match &rule.when {
+            Some(When::Predicate(predicate)) => &**predicate,
+            _ => panic!("a rule narrowed by one predicate"),
         }
     }
 
@@ -517,7 +1223,7 @@ mod tests {
         let rule = mismatched_rule();
 
         assert!(
-            predicate_of::<widget::Entity>(&rule).is_none(),
+            predicate_of::<widget::Entity>(narrowing(&rule)).is_none(),
             "a predicate that is not this subject's grants nothing — reading it \
              as unrestricted is the one answer that opens rows",
         );
@@ -537,20 +1243,1443 @@ mod tests {
 
     #[test]
     fn a_predicate_of_the_keyed_subject_is_recovered_in_silence() {
-        // The other direction: every rule in every ability goes through this,
-        // so a check reading the wrong thing would deny the whole app.
         let logs = nest_rs_testing::LogCapture::install();
         let rule = Rule {
             inverted: false,
             condition: Condition::all(),
-            predicate: Box::new(Predicate::<widget::Entity>::Always),
+            when: Some(When::Predicate(Arc::new(
+                Predicate::<widget::Entity>::Always,
+            ))),
             fields: FieldSet::All,
         };
 
-        assert!(predicate_of::<widget::Entity>(&rule).is_some());
+        assert!(predicate_of::<widget::Entity>(narrowing(&rule)).is_some());
         logs.expect_none(
             "nest_rs::authz",
             "ability rule predicate does not match its keyed subject — failing closed",
         );
+    }
+
+    /// What a create would be filled with, by column name.
+    fn pins(ability: &Ability) -> Vec<(&'static str, sea_orm::Value)> {
+        pins_for(ability, Action::Create)
+    }
+
+    /// What `action`'s grants pin, by column name.
+    fn pins_for(ability: &Ability, action: Action) -> Vec<(&'static str, sea_orm::Value)> {
+        ability
+            .pinned_values::<post::Entity>(action)
+            .into_iter()
+            .map(|(column, value)| (column.as_str(), value))
+            .collect()
+    }
+
+    fn org(id: i32) -> (&'static str, sea_orm::Value) {
+        ("org_id", id.into())
+    }
+
+    #[test]
+    fn a_create_grant_pins_every_column_it_equates() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Create, post::Entity).when(|p| {
+            p.all([
+                p.eq(post::Column::OrgId, 7),
+                p.eq(post::Column::Title, "draft"),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), [org(7), ("title", "draft".into())]);
+    }
+
+    #[test]
+    fn the_manage_wildcard_pins_a_create_and_another_action_does_not() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "read"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), [org(7)]);
+    }
+
+    #[test]
+    fn a_grant_leaving_a_column_free_never_unpins_what_another_pins() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.can(Action::Create, post::Entity).when(|p| {
+            p.all([
+                p.eq(post::Column::OrgId, 7),
+                p.eq(post::Column::Title, "authored"),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), [org(7), ("title", "authored".into())]);
+    }
+
+    #[test]
+    fn grants_pinning_a_column_apart_leave_it_to_the_recheck() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.can(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 8));
+        b.can(Action::Create, post::Entity).when(|p| {
+            p.all([
+                p.eq(post::Column::Title, "one"),
+                p.eq(post::Column::Title, "two"),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), []);
+    }
+
+    #[test]
+    fn a_column_constrained_but_by_equality_is_never_pinned() {
+        type Constraint = fn(PredicateBuilder<post::Entity>) -> Predicate<post::Entity>;
+        let constraints: [Constraint; 5] = [
+            |p| p.is_in(post::Column::OrgId, [7, 8]),
+            |p| p.gte(post::Column::OrgId, 7),
+            |p| p.is_not_null(post::Column::OrgId),
+            |p| p.any([p.eq(post::Column::OrgId, 7)]),
+            |p| p.not(p.eq(post::Column::OrgId, 8)),
+        ];
+        for constraint in constraints {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Create, post::Entity)
+                .when(|p| p.eq(post::Column::OrgId, 7));
+            b.can(Action::Create, post::Entity).when(constraint);
+            let ability = b.build().unwrap();
+
+            assert_eq!(pins(&ability), []);
+        }
+    }
+
+    #[test]
+    fn a_denial_and_an_unconditional_grant_pin_nothing() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Create, post::Entity);
+        b.cannot(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 9));
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), []);
+    }
+
+    #[test]
+    fn a_relation_pins_nothing_and_leaves_an_equated_column_pinned() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Create, post::Entity).when(|p| {
+            p.all([
+                in_org(7)(PredicateBuilder::new()),
+                p.eq(post::Column::Title, "related"),
+            ])
+        });
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), [("title", "related".into())]);
+    }
+
+    #[test]
+    fn a_grant_withheld_for_its_scope_pins_nothing() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7))
+            .requires_scope(Scope::new("posts:write"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(pins(&ability), []);
+    }
+
+    /// The query `condition_for` lowers `action` on posts to, as Postgres reads it.
+    fn sql(ability: &Ability, action: Action) -> String {
+        use sea_orm::{DatabaseBackend, QueryFilter, QueryTrait};
+        post::Entity::find()
+            .filter(ability.condition_for::<post::Entity>(action))
+            .build(DatabaseBackend::Postgres)
+            .to_string()
+    }
+
+    fn posts() -> TypeId {
+        TypeId::of::<post::Entity>()
+    }
+
+    #[test]
+    fn an_intersection_grants_a_subject_only_where_both_do() {
+        let mut mine = crate::AbilityBuilder::new();
+        mine.can(Action::Read, post::Entity);
+        mine.can(Action::Read, widget::Entity);
+        let mut theirs = crate::AbilityBuilder::new();
+        theirs.can(Action::Read, post::Entity);
+        theirs.can(Action::Delete, post::Entity);
+        let both = mine.build().unwrap().intersection(&theirs.build().unwrap());
+
+        assert!(both.can_class(Action::Read, posts()));
+        assert!(!both.can_class(Action::Read, TypeId::of::<widget::Entity>()));
+        assert!(!both.can_class(Action::Delete, posts()));
+        assert!(sql(&both, Action::Delete).contains("1 = 0"));
+    }
+
+    #[test]
+    fn the_wildcard_meets_the_other_sides_action_and_nothing_more() {
+        let mut managing = crate::AbilityBuilder::new();
+        managing
+            .can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        let mut reading = crate::AbilityBuilder::new();
+        reading.can(Action::Read, post::Entity);
+        let (managing, reading) = (managing.build().unwrap(), reading.build().unwrap());
+
+        for both in [
+            managing.intersection(&reading),
+            reading.intersection(&managing),
+        ] {
+            assert!(both.can_class(Action::Read, posts()));
+            assert!(!both.can_class(Action::Delete, posts()));
+            assert!(!both.can_class(Action::Manage, posts()));
+            assert!(both.can::<post::Entity>(Action::Read, &a_post()));
+            assert!(!both.can::<post::Entity>(
+                Action::Read,
+                &post::Model {
+                    org_id: 8,
+                    ..a_post()
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn an_intersection_admits_a_row_both_conditions_admit() {
+        let mut in_org = crate::AbilityBuilder::new();
+        in_org
+            .can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        let mut titled = crate::AbilityBuilder::new();
+        titled
+            .can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "hello"));
+        let both = in_org
+            .build()
+            .unwrap()
+            .intersection(&titled.build().unwrap());
+
+        let read = |org_id, title: &str| {
+            let row = post::Model {
+                org_id,
+                title: title.into(),
+                ..a_post()
+            };
+            both.can::<post::Entity>(Action::Read, &row)
+        };
+        assert!(read(7, "hello"));
+        assert!(!read(7, "other"));
+        assert!(!read(8, "hello"));
+        let filter = sql(&both, Action::Read);
+        assert!(
+            filter.contains(r#""org_id" = 7"#) && filter.contains(r#""title" = 'hello'"#),
+            "{filter}"
+        );
+    }
+
+    #[test]
+    fn either_sides_denial_denies() {
+        let mut reading = crate::AbilityBuilder::new();
+        reading.can(Action::Read, post::Entity);
+        let mut barred = crate::AbilityBuilder::new();
+        barred.can(Action::Read, post::Entity);
+        barred
+            .cannot(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 8));
+        let (reading, barred) = (reading.build().unwrap(), barred.build().unwrap());
+
+        for both in [reading.intersection(&barred), barred.intersection(&reading)] {
+            assert!(both.can::<post::Entity>(Action::Read, &a_post()));
+            assert!(!both.can::<post::Entity>(
+                Action::Read,
+                &post::Model {
+                    org_id: 8,
+                    ..a_post()
+                }
+            ));
+            assert!(sql(&both, Action::Read).contains("NOT"));
+        }
+    }
+
+    #[test]
+    fn an_intersection_exposes_the_columns_both_expose() {
+        let mut mine = crate::AbilityBuilder::new();
+        mine.can(Action::Read, post::Entity)
+            .fields([post::Column::Title, post::Column::OrgId]);
+        let mut theirs = crate::AbilityBuilder::new();
+        theirs
+            .can(Action::Read, post::Entity)
+            .fields([post::Column::Title, post::Column::Id]);
+        let both = mine.build().unwrap().intersection(&theirs.build().unwrap());
+
+        assert_eq!(
+            only(both.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["title"]),
+        );
+    }
+
+    #[test]
+    fn a_relation_one_side_cannot_decide_stays_undecided_on_a_pushed_row() {
+        let mut related = crate::AbilityBuilder::new();
+        related.can(Action::Read, post::Entity).when(in_org(7));
+        let mut in_org = crate::AbilityBuilder::new();
+        in_org
+            .can(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        let both = related
+            .build()
+            .unwrap()
+            .intersection(&in_org.build().unwrap());
+
+        let verdict = |provenance| {
+            both.evaluate::<post::Entity>(Action::Read, &a_post(), provenance, &nothing_invented)
+                .allowed
+        };
+        assert!(verdict(Provenance::Loaded), "the read's SQL applied both");
+        assert!(!verdict(Provenance::Pushed), "no read applied the relation");
+    }
+
+    #[test]
+    fn an_intersection_pins_what_either_side_pins_unless_they_disagree() {
+        let creating = |column: post::Column, value: sea_orm::Value| {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Create, post::Entity)
+                .when(move |p| p.eq(column, value));
+            b.build().unwrap()
+        };
+        let in_org = creating(post::Column::OrgId, 7.into());
+
+        assert_eq!(
+            pins(&in_org.intersection(&creating(post::Column::Title, "draft".into()))),
+            [org(7), ("title", "draft".into())],
+        );
+        assert_eq!(
+            pins(&in_org.intersection(&creating(post::Column::OrgId, 8.into()))),
+            []
+        );
+    }
+
+    #[test]
+    fn a_visitor_on_either_side_is_a_visitor() {
+        let caller = crate::AbilityBuilder::new().build().unwrap();
+        let visitor = crate::AbilityBuilder::new().build_visitor().unwrap();
+
+        assert!(caller.intersection(&visitor).is_visitor());
+        assert!(visitor.intersection(&caller).is_visitor());
+        assert!(!caller.intersection(&caller).is_visitor());
+    }
+
+    #[test]
+    fn a_withheld_grant_is_named_only_where_the_other_side_grants() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut scoped = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        scoped
+            .can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:read"));
+        let scoped = scoped.build().unwrap();
+        let mut reading = crate::AbilityBuilder::new();
+        reading.can(Action::Read, post::Entity);
+        let nothing = crate::AbilityBuilder::new().build().unwrap();
+
+        assert_eq!(
+            scoped
+                .intersection(&reading.build().unwrap())
+                .missing_scopes(Action::Read, posts()),
+            ["posts:read"],
+        );
+        assert!(
+            scoped
+                .intersection(&nothing)
+                .missing_scopes(Action::Read, posts())
+                .is_empty(),
+            "the scope alone would not grant it",
+        );
+    }
+
+    /// A `when` as a factory writes one; `None` is a grant no `when` narrows.
+    type Shape = Option<fn(PredicateBuilder<post::Entity>) -> Predicate<post::Entity>>;
+
+    /// Every shape a grant's narrowing takes, the ones admitting no row or
+    /// every row without a column among them.
+    fn shapes() -> [Shape; 13] {
+        [
+            None,
+            Some(|p| p.all(Vec::new())),
+            Some(|p| p.any(Vec::new())),
+            Some(|p| p.not(p.all(Vec::new()))),
+            Some(|p| p.not(p.any(Vec::new()))),
+            Some(|p| p.eq(post::Column::OrgId, 7)),
+            Some(|p| p.not(p.eq(post::Column::OrgId, 7))),
+            Some(|p| p.is_in(post::Column::OrgId, [7, 8])),
+            Some(|p| p.is_in(post::Column::OrgId, Vec::<i32>::new())),
+            Some(|p| p.ne(post::Column::Title, "hello")),
+            Some(|p| p.gt(post::Column::Id, 1)),
+            Some(|p| p.is_null(post::Column::ParentId)),
+            Some(|p| {
+                p.any([
+                    p.eq(post::Column::OrgId, 8),
+                    p.eq(post::Column::Title, "hello"),
+                ])
+            }),
+        ]
+    }
+
+    /// The predicate `shape` narrows to, every row where it narrows nothing.
+    fn lowered(shape: Shape) -> Predicate<post::Entity> {
+        match shape {
+            Some(shape) => shape(PredicateBuilder::new()),
+            None => PredicateBuilder::new().all(Vec::new()),
+        }
+    }
+
+    /// An ability granting `Read` on posts where `shape` admits the row.
+    fn reading_where(shape: Shape) -> Ability {
+        let mut b = crate::AbilityBuilder::new();
+        match shape {
+            Some(shape) => {
+                b.can(Action::Read, post::Entity).when(shape);
+            }
+            None => {
+                b.can(Action::Read, post::Entity);
+            }
+        }
+        b.build().unwrap()
+    }
+
+    #[test]
+    fn an_intersection_keeps_a_grant_admitting_no_row_admitting_none() {
+        let in_org = reading_where(Some(|p| p.eq(post::Column::OrgId, 7)));
+        let every = reading_where(None);
+        for nothing in [
+            reading_where(Some(|p| p.any(Vec::new()))),
+            reading_where(Some(|p| p.not(p.all(Vec::new())))),
+        ] {
+            for wider in [&in_org, &every] {
+                for both in [nothing.intersection(wider), wider.intersection(&nothing)] {
+                    assert!(!both.can::<post::Entity>(Action::Read, &a_post()));
+                    let filter = sql(&both, Action::Read);
+                    assert!(
+                        filter.contains("FALSE") || filter.contains("NOT TRUE"),
+                        "the intersection reads rows its caller's grant admits none of: {filter}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_intersection_reads_as_the_conjunction_a_factory_would_write() {
+        let rows = [
+            a_post(),
+            post::Model {
+                org_id: 8,
+                ..a_post()
+            },
+            post::Model {
+                id: 2,
+                title: "other".into(),
+                parent_id: Some(1),
+                ..a_post()
+            },
+        ];
+        for mine in shapes() {
+            for theirs in shapes() {
+                let both = reading_where(mine).intersection(&reading_where(theirs));
+                let mut b = crate::AbilityBuilder::new();
+                b.can(Action::Read, post::Entity)
+                    .when(|p| p.all([lowered(mine), lowered(theirs)]));
+                let written = b.build().unwrap();
+
+                assert_eq!(
+                    sql(&both, Action::Read),
+                    sql(&written, Action::Read),
+                    "SQL reads the intersection as the conjunction",
+                );
+                for row in &rows {
+                    assert_eq!(
+                        both.can::<post::Entity>(Action::Read, row),
+                        written.can::<post::Entity>(Action::Read, row),
+                        "the instance check reads it as SQL does: {row:?}",
+                    );
+                }
+            }
+        }
+    }
+
+    /// CASL's canonical shape: an org-wide `Manage`, its `Create` clawed back.
+    fn managing_but_creating() -> crate::AbilityBuilder {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.cannot(Action::Create, post::Entity);
+        b
+    }
+
+    #[test]
+    fn a_denial_no_when_narrows_refuses_its_action_at_the_class_gate() {
+        let ability = managing_but_creating().build().unwrap();
+
+        assert!(!ability.can_class(Action::Create, posts()));
+        assert!(
+            ability.can_class(Action::Read, posts()),
+            "a denial of one action leaves the wildcard's others",
+        );
+        assert!(ability.can_class(Action::Update, posts()));
+    }
+
+    #[test]
+    fn a_denial_of_the_wildcard_refuses_every_action() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        b.can(Action::Read, post::Entity);
+        b.cannot(Action::Manage, post::Entity);
+        let ability = b.build().unwrap();
+
+        for action in [
+            Action::Read,
+            Action::Create,
+            Action::Update,
+            Action::Delete,
+            Action::Manage,
+        ] {
+            assert!(!ability.can_class(action, posts()), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_denial_a_when_narrows_leaves_the_class_gate_optimistic() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        b.cannot(Action::Create, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 9));
+        let ability = b.build().unwrap();
+
+        assert!(
+            ability.can_class(Action::Create, posts()),
+            "the rows decide a conditional denial, in SQL and on the model",
+        );
+    }
+
+    /// A `when` that holds for every row by construction narrows nothing: the
+    /// denial bars the class as one with no `when` does.
+    #[test]
+    fn a_denial_whose_when_holds_for_every_row_refuses_at_the_class_gate() {
+        type Rows = fn(PredicateBuilder<post::Entity>) -> crate::Predicate<post::Entity>;
+        let every_row: [(&str, Rows); 5] = [
+            ("an empty conjunction", |p| p.all([])),
+            ("the unconditional predicate", |_| crate::Predicate::Always),
+            ("a disjunction holding one", |p| {
+                p.any([p.eq(post::Column::OrgId, 9), p.all([])])
+            }),
+            ("a conjunction of them", |p| {
+                p.all([p.all([]), p.any([p.all([])])])
+            }),
+            ("the negation of an empty disjunction", |p| p.not(p.any([]))),
+        ];
+        for (shape, rows) in every_row {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Manage, post::Entity);
+            b.cannot(Action::Create, post::Entity).when(rows);
+            let ability = b.build().unwrap();
+
+            assert!(!ability.can_class(Action::Create, posts()), "{shape}");
+            assert!(ability.can_class(Action::Read, posts()), "{shape}");
+        }
+    }
+
+    #[test]
+    fn a_denial_whose_when_still_reads_a_column_stays_conditional() {
+        type Rows = fn(PredicateBuilder<post::Entity>) -> crate::Predicate<post::Entity>;
+        let some_rows: [Rows; 3] = [
+            |p| p.all([p.all([]), p.eq(post::Column::OrgId, 9)]),
+            |p| p.any([p.any([]), p.eq(post::Column::OrgId, 9)]),
+            |p| p.not(p.eq(post::Column::OrgId, 9)),
+        ];
+        for rows in some_rows {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Manage, post::Entity);
+            b.cannot(Action::Create, post::Entity).when(rows);
+            let ability = b.build().unwrap();
+
+            assert!(ability.can_class(Action::Create, posts()));
+        }
+    }
+
+    #[test]
+    fn a_denial_on_another_subject_refuses_nothing_here() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity);
+        b.cannot(Action::Read, widget::Entity);
+        let ability = b.build().unwrap();
+
+        assert!(ability.can_class(Action::Read, posts()));
+    }
+
+    #[test]
+    fn no_scope_lifts_a_denial_so_none_is_named() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Create, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        b.cannot(Action::Create, post::Entity);
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can_class(Action::Create, posts()));
+        assert!(
+            ability.missing_scopes(Action::Create, posts()).is_empty(),
+            "a wider token would be refused all the same",
+        );
+    }
+
+    #[test]
+    fn a_denial_of_any_action_refuses_a_site_gated_on_manage() {
+        for denied in Action::CONCRETE {
+            let mut b = crate::AbilityBuilder::new();
+            b.can(Action::Manage, post::Entity);
+            b.cannot(denied, post::Entity);
+            let ability = b.build().unwrap();
+
+            assert!(!ability.can_class(Action::Manage, posts()), "{denied:?}");
+            assert!(
+                ability.denied_outright(Action::Manage, posts()),
+                "{denied:?}: the refusal is the denial's, which no scope lifts",
+            );
+            assert!(ability.missing_scopes(Action::Manage, posts()).is_empty());
+            assert!(!ability.can::<post::Entity>(Action::Manage, &a_post()));
+            for other in Action::CONCRETE {
+                assert_eq!(
+                    ability.can_class(other, posts()),
+                    other != denied,
+                    "{denied:?} leaves {other:?} as it was",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_grant_of_every_action_passes_a_site_gated_on_manage_and_three_do_not() {
+        let mut b = crate::AbilityBuilder::new();
+        for action in Action::CONCRETE {
+            b.can(action, post::Entity);
+        }
+        let every = b.build().unwrap();
+        assert!(every.can_class(Action::Manage, posts()));
+        assert!(every.can::<post::Entity>(Action::Manage, &a_post()));
+
+        for absent in Action::CONCRETE {
+            let mut b = crate::AbilityBuilder::new();
+            for action in Action::CONCRETE {
+                if action != absent {
+                    b.can(action, post::Entity);
+                }
+            }
+            let ability = b.build().unwrap();
+
+            assert!(!ability.can_class(Action::Manage, posts()), "{absent:?}");
+            assert!(!ability.can::<post::Entity>(Action::Manage, &a_post()));
+            assert!(
+                sql(&ability, Action::Manage).contains("1 = 0"),
+                "{absent:?}: no grant, no row",
+            );
+        }
+    }
+
+    #[test]
+    fn the_wildcards_rules_alone_read_as_one_condition_at_a_site_gated_on_manage() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.cannot(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "draft"));
+        let ability = b.build().unwrap();
+
+        let rendered = sql(&ability, Action::Manage);
+        assert_eq!(rendered, sql(&ability, Action::Read));
+        assert_eq!(
+            rendered.matches(r#""org_id" = 7"#).count(),
+            1,
+            "one condition, not four: {rendered}",
+        );
+    }
+
+    #[test]
+    fn a_site_gated_on_manage_conjoins_the_condition_of_every_action() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.can(Action::Update, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 8));
+        b.cannot(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "draft"));
+        b.cannot(Action::Delete, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "pinned"));
+        let ability = b.build().unwrap();
+
+        let rendered = sql(&ability, Action::Manage);
+        assert!(
+            rendered.ends_with(concat!(
+                r#"WHERE "posts"."org_id" = 7 AND (NOT "posts"."title" = 'draft')"#,
+                r#" AND "posts"."org_id" = 7"#,
+                r#" AND ("posts"."org_id" = 8 OR "posts"."org_id" = 7)"#,
+                r#" AND ("posts"."org_id" = 7 AND (NOT "posts"."title" = 'pinned'))"#,
+            )),
+            "`Read`, `Create`, `Update` and `Delete`, each with its wildcard: {rendered}",
+        );
+
+        let (mine, draft, pinned, elsewhere) = (
+            a_post(),
+            post::Model {
+                title: "draft".into(),
+                ..a_post()
+            },
+            post::Model {
+                title: "pinned".into(),
+                ..a_post()
+            },
+            post::Model {
+                org_id: 8,
+                ..a_post()
+            },
+        );
+        assert!(ability.can::<post::Entity>(Action::Manage, &mine));
+        assert!(
+            !ability.can::<post::Entity>(Action::Manage, &draft),
+            "`Read` refuses it"
+        );
+        assert!(
+            !ability.can::<post::Entity>(Action::Manage, &pinned),
+            "`Delete` refuses it",
+        );
+        assert!(
+            !ability.can::<post::Entity>(Action::Manage, &elsewhere),
+            "only `Update` admits it",
+        );
+    }
+
+    #[test]
+    fn the_instance_check_of_manage_holds_every_action_to_the_row() {
+        let mut b = crate::AbilityBuilder::new();
+        for (action, org) in [
+            (Action::Read, 7),
+            (Action::Create, 7),
+            (Action::Update, 7),
+            (Action::Delete, 8),
+        ] {
+            b.can(action, post::Entity)
+                .when(move |p| p.eq(post::Column::OrgId, org));
+        }
+        let ability = b.build().unwrap();
+
+        assert!(ability.can_class(Action::Manage, posts()));
+        assert!(ability.can::<post::Entity>(Action::Read, &a_post()));
+        assert!(!ability.can::<post::Entity>(Action::Manage, &a_post()));
+    }
+
+    #[test]
+    fn a_reply_at_a_site_gated_on_manage_shows_what_the_caller_may_read() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .fields([post::Column::Id]);
+        b.can(Action::Read, post::Entity)
+            .fields([post::Column::Id, post::Column::Title]);
+        b.can(Action::Update, post::Entity)
+            .fields([post::Column::OrgId]);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Manage, &a_post())),
+            Some(vec!["id", "title"]),
+            "`Read`'s fields, the wildcard's among them, and never `Update`'s",
+        );
+    }
+
+    #[test]
+    fn a_row_read_refuses_is_refused_a_reply_at_a_site_gated_on_manage() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        b.cannot(Action::Read, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        let ability = b.build().unwrap();
+
+        for provenance in [Provenance::Loaded, Provenance::Pushed] {
+            let allowed = |org_id| {
+                let row = post::Model { org_id, ..a_post() };
+                ability
+                    .evaluate::<post::Entity>(Action::Manage, &row, provenance, &nothing_invented)
+                    .allowed
+            };
+            assert!(!allowed(7));
+            assert!(allowed(8));
+        }
+    }
+
+    #[test]
+    fn a_site_gated_on_manage_pins_what_every_action_pins() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(|p| p.eq(post::Column::OrgId, 7));
+        b.can(Action::Update, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "pinned"));
+        assert_eq!(
+            pins_for(&b.build().unwrap(), Action::Manage),
+            [org(7), ("title", sea_orm::Value::from("pinned"))],
+        );
+
+        let mut b = crate::AbilityBuilder::new();
+        for (action, org) in [
+            (Action::Read, 7),
+            (Action::Create, 8),
+            (Action::Update, 7),
+            (Action::Delete, 7),
+        ] {
+            b.can(action, post::Entity)
+                .when(move |p| p.eq(post::Column::OrgId, org));
+        }
+        assert!(
+            pins_for(&b.build().unwrap(), Action::Manage).is_empty(),
+            "two actions pinning it apart: no row holds both, and the re-check says so",
+        );
+    }
+
+    #[test]
+    fn the_wildcards_withheld_grant_alone_answers_a_site_gated_on_manage() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:read"));
+        b.can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:admin"));
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can_class(Action::Manage, posts()));
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, posts()),
+            ["posts:admin"],
+            "it opens all four at once, so nothing else is needed",
+        );
+    }
+
+    #[test]
+    fn an_actions_own_scope_answers_a_site_gated_on_manage_when_it_asks_no_more() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        for action in [Action::Read, Action::Create, Action::Update] {
+            b.can(action, post::Entity);
+        }
+        b.can(Action::Delete, post::Entity)
+            .requires_scope(Scope::new("posts:purge"));
+        b.can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:admin"));
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can_class(Action::Manage, posts()));
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, posts()),
+            ["posts:purge"],
+            "`Delete` is all it lacks, and the wildcard's grant is the wider of the two",
+        );
+    }
+
+    #[test]
+    fn a_site_gated_on_manage_names_what_each_refused_action_lacks() {
+        let granted: std::sync::Arc<[String]> = vec!["posts:read".to_owned()].into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:read"));
+        b.can(Action::Create, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        b.can(Action::Update, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        b.can(Action::Delete, post::Entity)
+            .requires_scope(Scope::new("posts:purge"));
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can_class(Action::Manage, posts()));
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, posts()),
+            ["posts:write", "posts:purge"],
+            "each needed, together sufficient, none twice, none already held",
+        );
+    }
+
+    /// Two grants may open one action — `posts:read`, or `posts:write`, which a token
+    /// writing posts reads them with — and the set lifting every action is the
+    /// smallest across those choices, not the union of each action's first.
+    #[test]
+    fn a_site_gated_on_manage_names_the_smallest_set_lifting_every_action() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        for action in [Action::Create, Action::Delete] {
+            b.can(action, post::Entity);
+        }
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:read"));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        b.can(Action::Update, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can_class(Action::Manage, posts()));
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, posts()),
+            ["posts:write"],
+            "`posts:write` alone opens `Read` and `Update`",
+        );
+    }
+
+    /// However many grants a factory declares, the refusal pays a bounded search, and
+    /// what it names past the bound still lifts every action.
+    #[test]
+    fn a_cover_search_past_its_bound_keeps_a_set_lifting_every_choice() {
+        let per_action: Vec<Vec<Vec<String>>> = Vec::from_fn(4, |action| {
+            (0..40)
+                .map(|at| vec![format!("a{action}:{at}")])
+                .chain([vec!["shared".to_owned()]])
+                .collect()
+        });
+        let choices: Vec<&[Vec<String>]> = per_action.iter().map(Vec::as_slice).collect();
+        let named = smallest_cover(&choices);
+        for grants in &choices {
+            assert!(
+                grants
+                    .iter()
+                    .any(|grant| grant.iter().all(|scope| named.contains(scope))),
+                "{named:?}",
+            );
+        }
+        assert_eq!(
+            named,
+            ["a0:0", "a1:0", "a2:0", "a3:0"],
+            "the bound met before the last grants, so each action's first stands",
+        );
+    }
+
+    /// The wildcard's grants are choices too, each opening all four: a later one
+    /// asking for less answers.
+    #[test]
+    fn a_site_gated_on_manage_weighs_every_grant_of_the_wildcard() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:admin"))
+            .requires_scope(Scope::new("org:admin"));
+        b.can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:owner"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            ability.missing_scopes(Action::Manage, posts()),
+            ["posts:owner"]
+        );
+    }
+
+    /// One action's set is its smallest too: the narrowest grant asks for least, its
+    /// own before the wildcard's when both ask as much.
+    #[test]
+    fn an_actions_missing_scopes_are_its_smallest_set() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:read"))
+            .requires_scope(Scope::new("org:member"));
+        b.can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:admin"));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:write"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            ability.missing_scopes(Action::Read, posts()),
+            ["posts:write"]
+        );
+    }
+
+    #[test]
+    fn no_scope_answers_a_site_gated_on_manage_an_action_no_grant_opens() {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut b = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        b.can(Action::Read, post::Entity)
+            .requires_scope(Scope::new("posts:read"));
+        let ability = b.build().unwrap();
+
+        assert!(!ability.can_class(Action::Manage, posts()));
+        assert!(
+            ability.missing_scopes(Action::Manage, posts()).is_empty(),
+            "a wider token would be refused all the same",
+        );
+    }
+
+    /// A credential withheld the wildcard's grant for `posts:admin`, intersected
+    /// with the ability `grants` builds.
+    fn withheld_beside(grants: fn(&mut crate::AbilityBuilder)) -> Ability {
+        let granted: std::sync::Arc<[String]> = Vec::new().into();
+        let mut scoped = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+        scoped
+            .can(Action::Manage, post::Entity)
+            .requires_scope(Scope::new("posts:admin"));
+        let mut beside = crate::AbilityBuilder::new();
+        grants(&mut beside);
+        scoped
+            .build()
+            .unwrap()
+            .intersection(&beside.build().unwrap())
+    }
+
+    #[test]
+    fn a_withheld_wildcard_is_named_for_each_action_the_other_side_grants() {
+        let both = withheld_beside(|b| {
+            b.can(Action::Read, post::Entity);
+        });
+        assert_eq!(both.missing_scopes(Action::Read, posts()), ["posts:admin"]);
+        assert!(
+            both.missing_scopes(Action::Create, posts()).is_empty(),
+            "the scope alone would not grant it",
+        );
+        assert!(
+            both.missing_scopes(Action::Manage, posts()).is_empty(),
+            "the scope alone opens `Read`, not every action",
+        );
+
+        let both = withheld_beside(|b| {
+            for action in Action::CONCRETE {
+                b.can(action, post::Entity);
+            }
+        });
+        assert_eq!(
+            both.missing_scopes(Action::Manage, posts()),
+            ["posts:admin"]
+        );
+        assert_eq!(
+            both.missing_scopes(Action::Delete, posts()),
+            ["posts:admin"]
+        );
+
+        let both = withheld_beside(|b| {
+            b.can(Action::Manage, post::Entity);
+            b.cannot(Action::Read, post::Entity);
+        });
+        assert_eq!(
+            both.missing_scopes(Action::Create, posts()),
+            ["posts:admin"],
+            "the other side's denial of `Read` leaves `Create` to the scope",
+        );
+        assert!(both.missing_scopes(Action::Read, posts()).is_empty());
+        assert!(both.missing_scopes(Action::Manage, posts()).is_empty());
+    }
+
+    /// The rule map's hasher differs per ability, so one run proves no order.
+    #[test]
+    fn an_intersection_names_an_actions_own_grant_before_the_wildcards() {
+        for _ in 0..32 {
+            let granted: std::sync::Arc<[String]> = Vec::new().into();
+            let mut scoped = crate::AbilityBuilder::new().with_granted_scopes(Some(granted));
+            scoped
+                .can(Action::Manage, post::Entity)
+                .requires_scope(Scope::new("posts:admin"));
+            scoped
+                .can(Action::Read, post::Entity)
+                .requires_scope(Scope::new("posts:read"));
+            let mut reading = crate::AbilityBuilder::new();
+            reading.can(Action::Read, post::Entity);
+            let both = scoped
+                .build()
+                .unwrap()
+                .intersection(&reading.build().unwrap());
+
+            assert_eq!(both.missing_scopes(Action::Read, posts()), ["posts:read"]);
+        }
+    }
+
+    #[test]
+    fn an_intersection_keeps_a_denial_no_when_narrows_whole() {
+        let mut reading = crate::AbilityBuilder::new();
+        reading.can(Action::Manage, post::Entity);
+        let (reading, barred) = (
+            reading.build().unwrap(),
+            managing_but_creating().build().unwrap(),
+        );
+
+        for both in [reading.intersection(&barred), barred.intersection(&reading)] {
+            assert!(!both.can_class(Action::Create, posts()));
+            assert!(both.can_class(Action::Update, posts()));
+        }
+    }
+
+    /// The `WHERE` a write of `columns` runs under.
+    fn write_scope(ability: &Ability, action: Action, columns: &[post::Column]) -> String {
+        use sea_orm::{DatabaseBackend, QueryFilter, QueryTrait};
+        let scope = ability
+            .condition_for_columns::<post::Entity>(action, columns)
+            .expect("a grant permits each column");
+        let sql = post::Entity::find()
+            .filter(scope)
+            .build(DatabaseBackend::Postgres)
+            .to_string();
+        sql.split_once(" WHERE ")
+            .map_or_default(|(_, scope)| scope.to_owned())
+    }
+
+    fn in_org_id(
+        org: i32,
+    ) -> impl FnOnce(PredicateBuilder<post::Entity>) -> Predicate<post::Entity> {
+        move |p| p.eq(post::Column::OrgId, org)
+    }
+
+    #[test]
+    fn a_write_no_grant_narrows_is_held_to_its_actions_condition_alone() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity).when(in_org_id(7));
+        b.can(Action::Update, post::Entity).when(in_org_id(8));
+        b.cannot(Action::Update, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "locked"));
+        let ability = b.build().unwrap();
+
+        assert!(ability.grants_every_column(Action::Update, posts()));
+        let columns = [post::Column::Title, post::Column::ParentId];
+        assert_eq!(
+            write_scope(&ability, Action::Update, &columns),
+            sql(&ability, Action::Update)
+                .split_once(" WHERE ")
+                .unwrap()
+                .1,
+        );
+    }
+
+    #[test]
+    fn a_write_setting_nothing_is_held_to_its_actions_condition_alone() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        let ability = b.build().unwrap();
+
+        assert!(!ability.grants_every_column(Action::Update, posts()));
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[]),
+            r#""posts"."org_id" = 7"#,
+            "never every row, for want of a column to hold it to",
+        );
+    }
+
+    #[test]
+    fn no_grant_of_a_subject_narrows_nothing_and_opens_nothing() {
+        let ability = crate::AbilityBuilder::new().build().unwrap();
+
+        assert!(!ability.grants_every_column(Action::Update, posts()));
+        assert_eq!(write_scope(&ability, Action::Update, &[]), "1 = 0");
+        let refused = ability
+            .condition_for_columns::<post::Entity>(Action::Update, &[post::Column::Title])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["title"]);
+    }
+
+    #[test]
+    fn a_column_no_grant_permits_is_refused_by_name_each_of_them() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        let ability = b.build().unwrap();
+
+        let refused = ability
+            .condition_for_columns::<post::Entity>(
+                Action::Update,
+                &[
+                    post::Column::OrgId,
+                    post::Column::Title,
+                    post::Column::ParentId,
+                ],
+            )
+            .unwrap_err();
+
+        assert_eq!(refused.columns, ["org_id", "parent_id"]);
+        assert_eq!(
+            refused.to_string(),
+            "no grant permits writing org_id, parent_id"
+        );
+    }
+
+    /// As a wire row's judgement reads its columns off the union of the grants it
+    /// meets, a write needs a grant the row meets for each column, never one for them all.
+    #[test]
+    fn two_grants_permitting_different_columns_conjoin_on_the_row() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(8))
+            .fields([post::Column::ParentId]);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::Title]),
+            r#""posts"."org_id" = 7"#,
+        );
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::ParentId]),
+            r#""posts"."org_id" = 8"#,
+        );
+        assert_eq!(
+            write_scope(
+                &ability,
+                Action::Update,
+                &[post::Column::Title, post::Column::ParentId],
+            ),
+            r#""posts"."org_id" = 7 AND "posts"."org_id" = 8"#,
+        );
+    }
+
+    #[test]
+    fn a_grant_with_no_field_list_permits_every_column_on_the_rows_it_meets() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        b.can(Action::Update, post::Entity).when(in_org_id(8));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::Title]),
+            r#""posts"."org_id" = 7 OR "posts"."org_id" = 8"#,
+            "either grant permits it",
+        );
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::ParentId]),
+            r#""posts"."org_id" = 8"#,
+            "only the wider grant does",
+        );
+    }
+
+    #[test]
+    fn two_columns_one_grant_permits_are_one_clause() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title, post::Column::ParentId]);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(
+                &ability,
+                Action::Update,
+                &[post::Column::Title, post::Column::ParentId],
+            ),
+            r#""posts"."org_id" = 7"#,
+        );
+    }
+
+    #[test]
+    fn a_denial_holds_over_a_write_a_grant_permits() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        b.cannot(Action::Update, post::Entity)
+            .when(|p| p.eq(post::Column::Title, "locked"));
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(&ability, Action::Update, &[post::Column::Title]),
+            r#""posts"."org_id" = 7 AND (NOT "posts"."title" = 'locked')"#,
+        );
+    }
+
+    #[test]
+    fn a_relational_grant_is_decided_in_the_statement() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, post::Entity)
+            .when(in_org(7))
+            .fields([post::Column::Title]);
+        let ability = b.build().unwrap();
+
+        let scope = write_scope(&ability, Action::Update, &[post::Column::Title]);
+        assert!(
+            scope.contains(r#"SELECT"#) && scope.contains(r#""orgs""#),
+            "{scope}"
+        );
+    }
+
+    /// `Manage` is every action, so a list on it limits a write as it does a read.
+    #[test]
+    fn a_wildcards_field_list_limits_a_write_and_an_actions_own_grant_widens_it() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        let narrowed = b.build().unwrap();
+
+        assert!(!narrowed.grants_every_column(Action::Update, posts()));
+        let refused = narrowed
+            .condition_for_columns::<post::Entity>(Action::Update, &[post::Column::ParentId])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["parent_id"]);
+
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity)
+            .when(in_org_id(7))
+            .fields([post::Column::Title]);
+        b.can(Action::Update, post::Entity).when(in_org_id(8));
+        let widened = b.build().unwrap();
+
+        assert_eq!(
+            write_scope(&widened, Action::Update, &[post::Column::ParentId]),
+            r#""posts"."org_id" = 8"#,
+        );
+    }
+
+    /// A write's reply reads that write's grant, so `Read`'s list narrows nothing
+    /// there: a write with no list of its own ships every exposed column.
+    #[test]
+    fn a_writes_reply_reads_its_own_grant_never_reads() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity).fields([post::Column::Id]);
+        b.can(Action::Update, post::Entity);
+        let ability = b.build().unwrap();
+
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Update, &a_post())),
+            None,
+        );
+        assert_eq!(
+            only(ability.permitted_fields::<post::Entity>(Action::Read, &a_post())),
+            Some(vec!["id"]),
+        );
+    }
+
+    /// `Manage` is every action, as on `can_class`: an action narrowed, or one no
+    /// grant opens, answers for the site, and each action's own answer stands.
+    #[test]
+    fn every_column_at_a_manage_site_is_every_actions() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity).when(in_org_id(7));
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(8))
+            .fields([post::Column::Title]);
+        let one_narrowed = b.build().unwrap();
+        assert!(!one_narrowed.grants_every_column(Action::Manage, posts()));
+        assert!(!one_narrowed.grants_every_column(Action::Update, posts()));
+        assert!(one_narrowed.grants_every_column(Action::Read, posts()));
+
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Manage, post::Entity);
+        let wildcard_alone = b.build().unwrap();
+        assert!(wildcard_alone.grants_every_column(Action::Manage, posts()));
+        assert!(wildcard_alone.grants_every_column(Action::Update, posts()));
+
+        let mut b = crate::AbilityBuilder::new();
+        for action in Action::CONCRETE {
+            b.can(action, post::Entity);
+        }
+        assert!(
+            b.build()
+                .unwrap()
+                .grants_every_column(Action::Manage, posts())
+        );
+
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Read, post::Entity);
+        let one_opened = b.build().unwrap();
+        assert!(!one_opened.grants_every_column(Action::Manage, posts()));
+        assert!(one_opened.grants_every_column(Action::Read, posts()));
+    }
+
+    #[test]
+    fn a_site_gated_on_manage_conjoins_every_actions_columns() {
+        let mut b = crate::AbilityBuilder::new();
+        for action in [Action::Read, Action::Create, Action::Delete] {
+            b.can(action, post::Entity).when(in_org_id(7));
+        }
+        b.can(Action::Update, post::Entity)
+            .when(in_org_id(8))
+            .fields([post::Column::Title]);
+        let ability = b.build().unwrap();
+
+        let refused = ability
+            .condition_for_columns::<post::Entity>(Action::Manage, &[post::Column::ParentId])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["parent_id"], "`Update` withholds it");
+
+        let scope = write_scope(&ability, Action::Manage, &[post::Column::Title]);
+        assert!(
+            scope.contains(r#""posts"."org_id" = 7"#) && scope.contains(r#""posts"."org_id" = 8"#),
+            "{scope}",
+        );
+    }
+
+    /// `with_ability` narrows: what either side withholds stays withheld.
+    #[test]
+    fn an_intersection_writes_only_what_both_permit() {
+        let mut wide = crate::AbilityBuilder::new();
+        wide.can(Action::Update, post::Entity);
+        let mut narrow = crate::AbilityBuilder::new();
+        narrow
+            .can(Action::Update, post::Entity)
+            .fields([post::Column::Title]);
+        let both = wide.build().unwrap().intersection(&narrow.build().unwrap());
+
+        assert!(!both.grants_every_column(Action::Update, posts()));
+        let refused = both
+            .condition_for_columns::<post::Entity>(Action::Update, &[post::Column::OrgId])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["org_id"]);
+        assert!(
+            both.condition_for_columns::<post::Entity>(Action::Update, &[post::Column::Title])
+                .is_ok()
+        );
+    }
+
+    mod renamed {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "renamed")]
+        pub(super) struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+            #[sea_orm(column_name = "display_title")]
+            pub headline: String,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub(super) enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    #[test]
+    fn a_grant_names_a_column_by_identity_and_a_refusal_as_the_table_does() {
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, renamed::Entity)
+            .fields([renamed::Column::Headline]);
+        let ability = b.build().unwrap();
+        assert!(
+            ability
+                .condition_for_columns::<renamed::Entity>(
+                    Action::Update,
+                    &[renamed::Column::Headline],
+                )
+                .is_ok()
+        );
+
+        let mut b = crate::AbilityBuilder::new();
+        b.can(Action::Update, renamed::Entity)
+            .fields([renamed::Column::Id]);
+        let refused = b
+            .build()
+            .unwrap()
+            .condition_for_columns::<renamed::Entity>(Action::Update, &[renamed::Column::Headline])
+            .unwrap_err();
+        assert_eq!(refused.columns, ["display_title"]);
     }
 }

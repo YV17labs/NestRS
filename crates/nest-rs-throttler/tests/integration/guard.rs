@@ -1,39 +1,57 @@
-//! [`ThrottlerGuard`] bound **globally** against a route's `#[meta(Throttle)]`
-//! (`src/guard.rs`) — the scope half of the contract, as opposed to the
-//! per-route wiring `wiring.rs` covers.
+//! [`ThrottlerGuard`] bound **globally** reads a route's `#[meta(Throttle)]`
+//! (`src/guard.rs`), and bounds its store by `HIT_TIMEOUT` on every edge.
 //!
-//! The class this closes: three doc comments and two documentation pages said a
-//! global guard "runs before routing has resolved a handler, so no route
-//! metadata is attached at that point" — from which a pooled `ThrottlerGuard`
-//! would silently fall back to the module default and a route's own
-//! `#[meta(Throttle)]` would mean nothing. Only a status code settles it, and
-//! nothing asserted one: the pool executes at the `RouteShaper`, which
-//! `#[routes]` wraps *inside* the `#[meta]` / `#[public]` route-data wrap, so
-//! every guard on the chain reads the same metadata whichever scope declared
-//! it.
-//!
-//! The module default is pinned generously (60/minute) on purpose: it is the
-//! only other limit in the app, so a `429` on the third request cannot come
-//! from anywhere but the route's own declaration — and the unmetered control
-//! route proves the pinned default really is that generous rather than the
-//! deployment's.
+//! The module default is pinned generously (60/minute), so a `429` on the third
+//! request can only come from the route's own declaration. The stalled stores
+//! run on paused time, so the eighteen seconds cost nothing; a store that errs
+//! or panics is refused for the window like one that never answers.
 
-use nest_rs_core::module;
-use nest_rs_guards::guard;
-use nest_rs_http::{controller, routes};
-use nest_rs_testing::TestApp;
-use nest_rs_throttler::{Throttle, ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
-use poem::http::StatusCode;
+use std::sync::Arc;
+use std::time::Duration;
+
+use nest_rs_core::{Collecting, ContainerBuilder, Module, Registering, async_trait, module};
+use nest_rs_guards::GlobalGuards;
+use nest_rs_http::StatusCode;
+use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
+use nest_rs_testing::{CapturedEvent, LogCapture, TestApp};
+use nest_rs_throttler::{
+    BACKEND_REMEDY, Decision, HIT_TIMEOUT, Throttle, ThrottlerConfig, ThrottlerGuard,
+    ThrottlerModule, ThrottlerStore, ThrottlerStoreError,
+};
+
+/// The one line a refusal of `reason` filed: the edge's, on the throttler's
+/// target.
+fn the_denial(logs: &LogCapture, reason: &str) -> CapturedEvent {
+    let mut lines = denials(logs, reason);
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected one `{reason}` denial on the throttler's target, captured: {:#?}",
+        logs.events(),
+    );
+    lines.remove(0)
+}
+
+/// Every line a refusal of `reason` filed.
+fn denials(logs: &LogCapture, reason: &str) -> Vec<CapturedEvent> {
+    logs.events()
+        .into_iter()
+        .filter(|line| line.target == nest_rs_throttler::TARGET)
+        .filter(|line| line.message.starts_with("guard denied the "))
+        .filter(|line| line.field("reason").as_deref() == Some(reason))
+        .collect()
+}
 
 #[controller(path = "/rated")]
 struct RatedController;
 
-// No `#[use_guards]` at either scope — the pool is the only thing that can
-// reach these routes, which is the whole point of the fixture.
+// No `#[use_guards]` at either scope: the pool alone reaches these routes, and
+// identifies no one, so each says what it opens.
 #[routes]
 impl RatedController {
     /// Two per minute, declared on the route and nowhere else.
     #[get("/strict")]
+    #[public]
     #[meta(Throttle::per_minute(2))]
     async fn strict(&self) -> &'static str {
         "ok"
@@ -41,7 +59,16 @@ impl RatedController {
 
     /// No `#[meta]` — the module default applies.
     #[get("/lenient")]
+    #[public]
     async fn lenient(&self) -> &'static str {
+        "ok"
+    }
+
+    /// Two per minute across every item: one route, one bucket.
+    #[get("/items/{id}")]
+    #[public]
+    #[meta(Throttle::per_minute(2))]
+    async fn item(&self) -> &'static str {
         "ok"
     }
 }
@@ -49,20 +76,27 @@ impl RatedController {
 #[module(
     imports = [
         ThrottlerModule::for_root(ThrottlerConfig {
-            limit: Some(60),
-            window_secs: Some(60),
+            limit: 60,
+            window: Duration::from_secs(60),
+            pseudonym_key: None,
         }),
     ],
     providers = [RatedController],
 )]
 struct RatedModule;
 
+/// The key the suite's stores outside the process count under — a fixture,
+/// never a secret.
+const PSEUDONYM_KEY: &str = "nest-rs-throttler integration pseudonym key";
+
+#[module(imports = [RatedModule], providers = [GlobalGuards<(ThrottlerGuard,)>])]
+struct ThrottledApp;
+
 /// The documented global wiring: the throttler in the app's imports, the guard
-/// in `use_guards_global`, nothing on the controller.
+/// in the root's `GlobalGuards`, nothing on the controller.
 async fn app() -> TestApp {
     TestApp::builder()
-        .module::<RatedModule>()
-        .use_guards_global([guard::<ThrottlerGuard>()])
+        .module::<ThrottledApp>()
         .build()
         .await
         .expect("importing ThrottlerModule provides the guard the pool names")
@@ -84,35 +118,112 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
         .await
         .assert_status_is_ok();
 
-    // The third request exceeds the route's `#[meta(Throttle::per_minute(2))]`
-    // and nothing else — the pinned module default is 60/minute. A `200` here
-    // would mean the pool ran with no route metadata attached.
+    // A `200` here would mean the pool ran with no route metadata attached.
     let denied = app.http().get("/rated/strict").send().await;
     denied.assert_status(StatusCode::TOO_MANY_REQUESTS);
     denied.assert_header_exist("retry-after");
 
-    // The `429` tells the client it was throttled; only the event says *whose*
-    // bucket filled. `CLAUDE.md` ranks a rate-limit denial with the security
-    // events an incident queries, so the route and the caller are two fields —
-    // never the composite store key, which an operator would have to split on
-    // U+001F to filter by either half.
-    let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+    // The route, never the composite store key, which holds the client's address.
+    let event = the_denial(&logs, "limit_exceeded");
     assert_eq!(event.level, "warn");
     assert!(
-        event
-            .field("route")
-            .is_some_and(|r| r.contains("/rated/strict")),
+        event.field("path").is_some_and(|r| r.contains("/strict")),
         "the event names the route on its own field, got {:?}",
         event.fields,
     );
-    assert!(
-        event.field("client").is_some(),
-        "the event names the caller on its own field, got {:?}",
+    assert_eq!(
+        event.field("client"),
+        None,
+        "the event names no client address, got {:?}",
         event.fields,
     );
     assert!(
-        event.field("retry_after").is_some(),
+        event.field("retry_after_ms").is_some(),
         "the event carries the wait it told the client about, got {:?}",
+        event.fields,
+    );
+}
+
+/// What five requests to a route allowing two answer from a listed proxy, each
+/// carrying a caller's own `X-Forwarded-For` line rotated and, after it, the
+/// header the proxy wrote.
+async fn a_caller_rotating_its_own_line_behind(proxy_writes: (&str, &str)) -> Vec<StatusCode> {
+    #[module(
+        imports = [
+            RatedModule,
+            HttpModule::for_root(HttpConfig {
+                trusted_proxies: vec!["10.0.0.1".parse().expect("an address")],
+                ..HttpConfig::default()
+            }),
+        ],
+        providers = [GlobalGuards<(ThrottlerGuard,)>],
+    )]
+    struct BehindAProxy;
+
+    let app = TestApp::builder()
+        .module::<BehindAProxy>()
+        .build()
+        .await
+        .expect("the app boots");
+    let mut answered = Vec::new();
+    for forged in 0..5 {
+        let response = app
+            .http()
+            .get("/rated/strict")
+            .peer_addr("10.0.0.1:40000".parse().unwrap())
+            .header("x-forwarded-for", format!("198.51.100.{forged}"))
+            .header(proxy_writes.0, proxy_writes.1)
+            .send()
+            .await;
+        answered.push(response.0.status());
+    }
+    answered
+}
+
+/// What the caller rotates mints no bucket, behind a proxy adding its own line
+/// after the caller's, and behind one writing `X-Real-IP` alone and passing the
+/// caller's line through (nginx's `proxy_set_header X-Real-IP $remote_addr`).
+#[tokio::test]
+async fn a_caller_rotating_its_own_forwarding_line_mints_no_bucket() {
+    for proxy_writes in [
+        ("x-forwarded-for", "203.0.113.7"),
+        ("x-real-ip", "203.0.113.7"),
+    ] {
+        assert_eq!(
+            a_caller_rotating_its_own_line_behind(proxy_writes).await,
+            [
+                StatusCode::OK,
+                StatusCode::OK,
+                StatusCode::TOO_MANY_REQUESTS,
+                StatusCode::TOO_MANY_REQUESTS,
+                StatusCode::TOO_MANY_REQUESTS,
+            ],
+            "behind a proxy writing {proxy_writes:?}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_bucket_key_is_the_declared_template() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = app().await;
+
+    for item in ["/rated/items/1", "/rated/items/2"] {
+        app.http().get(item).send().await.assert_status_is_ok();
+    }
+    // A third item, never asked for: the budget is the route's, not the path's.
+    app.http()
+        .get("/rated/items/3")
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+    let event = the_denial(&logs, "limit_exceeded");
+    assert!(
+        event
+            .field("path")
+            .is_some_and(|route| route.ends_with("/items/{id}")),
+        "the bucket is named as the route declares it, got {:?}",
         event.fields,
     );
 }
@@ -121,10 +232,8 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
 async fn a_route_with_no_metadata_falls_back_to_the_module_default() {
     let app = app().await;
 
-    // Same pooled guard, same three requests, no `#[meta]` on the route: the
-    // pinned 60/minute applies, so nothing is refused. This is what makes the
-    // sibling test's `429` attributable to the metadata rather than to a low
-    // default the deployment (or a stray `NESTRS_THROTTLER__LIMIT`) supplied.
+    // What makes the sibling test's `429` attributable to the metadata rather
+    // than to a low default the deployment supplied.
     for _ in 0..3 {
         app.http()
             .get("/rated/lenient")
@@ -134,40 +243,352 @@ async fn a_route_with_no_metadata_falls_back_to_the_module_default() {
     }
 }
 
-// --- the three edges an HTTP-only guard left unmetered -----------------------
-//
-// `/graphql` and `/mcp` are `EdgePosture::Exempt` and a WS message runs after
-// the upgrade's chain has returned, so none of the three is reachable from an
-// HTTP-scope binding at any scope. A `ThrottlerGuard` that implemented only
-// `check_http` therefore rate-limited nothing there — including the
-// anonymous-reachable `/graphql` mount — while compiling, reading as a
-// protection, and (before the capability markers) not even refusing the
-// binding.
-//
-// Each module below binds the guard where a developer would, which is also the
-// only witness its capability marker has: `#[operations]`, `#[tools]` and
-// `#[messages]` emit a bound against `GraphqlGuard` / `McpGuard` / `WsGuard`, so
-// an unattested guard is a compile error at the `#[use_guards]` line.
+/// A store that never answers — a backend holding every command, a network
+/// dropping them without a reset.
+#[derive(Default)]
+struct StalledStore;
 
-/// One request per minute, so the *second* call is the assertion and the first
-/// proves the site was reachable at all.
-#[cfg(any(feature = "graphql", feature = "mcp", feature = "ws"))]
-fn one_per_minute() -> ThrottlerConfig {
-    ThrottlerConfig {
-        limit: Some(1),
-        window_secs: Some(60),
+#[async_trait]
+impl ThrottlerStore for StalledStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        std::future::pending().await
     }
 }
 
-#[cfg(feature = "graphql")]
+/// A store that answers just inside the guard's bound, as a store running out
+/// its own budget does.
+#[derive(Default)]
+struct SlowStore;
+
+#[async_trait]
+impl ThrottlerStore for SlowStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        tokio::time::sleep(HIT_TIMEOUT - Duration::from_millis(1)).await;
+        Ok(Decision::allowed())
+    }
+}
+
+/// What the failing store's backend says, which the guard's line carries.
+const STORE_FAILURE: &str = "the counter's backend refused the connection";
+
+/// A store that cannot count and says why — its backend refusing the
+/// connection.
+#[derive(Default)]
+struct FailingStore;
+
+#[async_trait]
+impl ThrottlerStore for FailingStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        Err(ThrottlerStoreError::new(std::io::Error::other(
+            STORE_FAILURE,
+        )))
+    }
+}
+
+/// Binds `S` the way a store's own module does: a declared factory carrying the
+/// port's remedy.
+struct StoreModule<S>(std::marker::PhantomData<S>);
+
+impl<S: ThrottlerStore + Default> Module for StoreModule<S> {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder
+            .provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(BACKEND_REMEDY, |_| async {
+                Ok(Arc::new(S::default()) as Arc<dyn ThrottlerStore>)
+            })
+    }
+}
+
+/// A store whose `hit` unwinds — a poisoned lock, an `unwrap` on its client's
+/// error.
+#[derive(Default)]
+struct PanickingStore;
+
+#[async_trait]
+impl ThrottlerStore for PanickingStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        panic!("the store's client unwound")
+    }
+}
+
+type StalledStoreModule = StoreModule<StalledStore>;
+type SlowStoreModule = StoreModule<SlowStore>;
+type FailingStoreModule = StoreModule<FailingStore>;
+type PanickingStoreModule = StoreModule<PanickingStore>;
+
+/// The line says what the refusal cannot: that the store never answered, and
+/// which store it was.
+fn assert_the_store_was_waited_out(logs: &LogCapture, unit: &str) {
+    let cause = the_denial(logs, "store_timeout");
+    assert_eq!(cause.level, "warn");
+    assert_eq!(cause.field("unit").as_deref(), Some(unit));
+    let chain = cause.field("error").unwrap_or_default();
+    assert!(
+        chain.contains("the throttler store `StalledStore` did not answer"),
+        "the line names the store behind the trait object, got {:?}",
+        cause.fields,
+    );
+    assert!(
+        chain.contains(&format!("{} ms", HIT_TIMEOUT.as_millis())),
+        "…and how long it was waited on, got {chain}",
+    );
+    assert_no_limit_was_exceeded(logs);
+}
+
+/// A store that could not count exceeded no limit: the cause line is the one
+/// line, never followed by the over-limit one.
+fn assert_no_limit_was_exceeded(logs: &LogCapture) {
+    let exceeded = denials(logs, "limit_exceeded");
+    assert!(exceeded.is_empty(), "{exceeded:#?}");
+}
+
+/// The window the stalled-store apps pin, and so the `Retry-After` a refusal for
+/// a store that cannot answer carries.
+const WINDOW_SECS: u64 = 60;
+
+/// The HTTP edge the stalled-store apps mount, with its request timeout at the
+/// default — the budget the guard's bound has to answer inside.
+fn edge() -> HttpConfig {
+    HttpConfig {
+        port: 0,
+        ..Default::default()
+    }
+}
+
+/// Await `unit` on the paused clock for twice the bound and no longer, so a
+/// guard that stopped bounding its store fails here rather than hang.
+async fn within_twice_the_bound<T>(unit: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(HIT_TIMEOUT * 2, unit)
+        .await
+        .unwrap_or_else(|_| panic!("no answer within twice HIT_TIMEOUT ({HIT_TIMEOUT:?})"))
+}
+
+#[controller(path = "/stalled")]
+#[use_guards(ThrottlerGuard)]
+struct StalledController;
+
+#[routes]
+impl StalledController {
+    #[get("/ping")]
+    #[public]
+    async fn ping(&self) -> &'static str {
+        "pong"
+    }
+}
+
+#[module(
+    imports = [
+        HttpModule::for_root(edge()),
+        ThrottlerModule::for_root(ThrottlerConfig {
+            limit: 60,
+            window: Duration::from_secs(WINDOW_SECS),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
+        }),
+        StalledStoreModule,
+    ],
+    providers = [StalledController],
+)]
+struct StalledHttpModule;
+
+#[module(
+    imports = [
+        HttpModule::for_root(edge()),
+        ThrottlerModule::for_root(ThrottlerConfig {
+            limit: 60,
+            window: Duration::from_secs(WINDOW_SECS),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
+        }),
+        SlowStoreModule,
+    ],
+    providers = [StalledController],
+)]
+struct SlowHttpModule;
+
+#[module(
+    imports = [
+        HttpModule::for_root(edge()),
+        ThrottlerModule::for_root(ThrottlerConfig {
+            limit: 60,
+            window: Duration::from_secs(WINDOW_SECS),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
+        }),
+        PanickingStoreModule,
+    ],
+    providers = [StalledController],
+)]
+struct PanickingHttpModule;
+
+#[module(
+    imports = [
+        HttpModule::for_root(edge()),
+        ThrottlerModule::for_root(ThrottlerConfig {
+            limit: 60,
+            window: Duration::from_secs(WINDOW_SECS),
+            pseudonym_key: Some(PSEUDONYM_KEY.into()),
+        }),
+        FailingStoreModule,
+    ],
+    providers = [StalledController],
+)]
+struct FailingHttpModule;
+
+/// The line says which store failed, on which edge, and why, and holds no
+/// part of the bucket's key — the caller's address is in it. The store itself
+/// says nothing: the denial's line, at `warn`, is the one line.
+fn assert_the_store_failure_was_said(logs: &LogCapture, unit: &str) {
+    let said = the_denial(logs, "store_failed");
+    assert_eq!(said.level, "warn");
+    assert_eq!(said.field("unit").as_deref(), Some(unit));
+    assert!(
+        said.field("error")
+            .is_some_and(|error| error.contains("the throttler store `FailingStore` failed")),
+        "the line names the store behind the trait object, got {:?}",
+        said.fields,
+    );
+    assert!(
+        said.field("error")
+            .is_some_and(|error| error.contains(STORE_FAILURE)),
+        "the line carries the store's own failure, got {:?}",
+        said.fields,
+    );
+    assert!(
+        said.field("key").is_none() && said.fields.values().all(|value| !value.contains('\u{1f}')),
+        "the line holds no bucket key, got {:?}",
+        said.fields,
+    );
+    assert_no_limit_was_exceeded(logs);
+}
+
+/// A store that says it could not count is refused for the window, fail
+/// closed — the one answer the guard gives for a store's failure, whatever
+/// the store would have chosen.
+#[tokio::test]
+async fn a_store_that_fails_is_refused_for_the_window_and_said_once() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<FailingHttpModule>()
+        .await
+        .expect("a custom store bound the documented way boots");
+
+    let refused = app.http().get("/stalled/ping").send().await;
+
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    refused.assert_header("retry-after", WINDOW_SECS.to_string());
+    assert_the_store_failure_was_said(&logs, "http.request");
+}
+
+/// The line a store that unwound is filed under: the guard's, at `error`.
+const PANICKED: &str = "throttler store panicked; denying (fail-closed)";
+
+/// A store that unwinds is a store that could not count: the caller is refused
+/// for the window, as past the bound, where it used to be dropped unanswered.
+#[tokio::test]
+async fn a_store_that_panics_is_refused_for_the_window_and_said_once() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<PanickingHttpModule>()
+        .await
+        .expect("a custom store bound the documented way boots");
+
+    let refused = app.http().get("/stalled/ping").send().await;
+
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    refused.assert_header("retry-after", WINDOW_SECS.to_string());
+    let said = logs.expect_one(nest_rs_throttler::TARGET, PANICKED);
+    assert_eq!(said.level, "error");
+    assert_eq!(said.field("transport").as_deref(), Some("http"));
+    assert_eq!(
+        said.field("store").as_deref(),
+        Some("PanickingStore"),
+        "the line names the store behind the trait object, got {:?}",
+        said.fields,
+    );
+    assert_eq!(
+        said.field(nest_rs_core::panic::FIELD).as_deref(),
+        Some("the store's client unwound"),
+    );
+    assert_no_limit_was_exceeded(&logs);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_store_that_never_answers_is_refused_at_the_bound_over_http() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<StalledHttpModule>()
+        .await
+        .expect("a custom store bound the documented way boots");
+
+    let sent = tokio::time::Instant::now();
+    let refused = within_twice_the_bound(app.http().get("/stalled/ping").send()).await;
+    let waited = sent.elapsed();
+
+    // A `503` here is the edge's request timeout answering first: the guard's
+    // bound would be past it.
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    refused.assert_header("retry-after", WINDOW_SECS.to_string());
+    assert!(
+        waited >= HIT_TIMEOUT,
+        "refused at the bound, not before: {waited:?}"
+    );
+    let timeout = edge()
+        .request_timeout
+        .expect("the HTTP edge bounds a request by default");
+    assert!(
+        waited < timeout,
+        "…and before the edge's own request timeout: {waited:?}"
+    );
+    assert_the_store_was_waited_out(&logs, "http.request");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_store_answering_inside_the_bound_is_waited_for() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<SlowHttpModule>()
+        .await
+        .expect("a custom store bound the documented way boots");
+
+    within_twice_the_bound(app.http().get("/stalled/ping").send())
+        .await
+        .assert_status_is_ok();
+    logs.expect_none(
+        nest_rs_throttler::TARGET,
+        "throttler store did not answer within the guard's timeout; denying (fail-closed)",
+    );
+}
+
+#[test]
+fn the_bound_answers_before_the_http_edge_times_a_request_out() {
+    let timeout = HttpConfig::default()
+        .request_timeout
+        .expect("the HTTP edge bounds a request by default");
+    assert!(HIT_TIMEOUT < timeout, "{HIT_TIMEOUT:?} vs {timeout:?}");
+}
+
+// Each module below binds the guard where a developer would — the only witness
+// of its `GuardFor` declaration, since `#[operations]`, `#[tools]` and
+// `#[messages]` bind every guard they name on their edge's view — and pins the
+// site's budget with `#[meta(Throttle::per_minute(1))]` under a module default
+// no test reaches: a second call refused is the site's metadata honoured.
+
+/// A default no test reaches, so a refusal is the site's own budget.
+fn generous() -> ThrottlerConfig {
+    ThrottlerConfig {
+        limit: 1_000,
+        window: Duration::from_secs(60),
+        pseudonym_key: Some(PSEUDONYM_KEY.into()),
+    }
+}
+
 mod graphql {
     use nest_rs_core::module;
     use nest_rs_graphql::async_graphql::Result as GraphqlResult;
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_testing::TestApp;
-    use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
+    use nest_rs_throttler::{Throttle, ThrottlerGuard, ThrottlerModule};
 
-    use super::one_per_minute;
+    use super::{
+        StalledStoreModule, assert_the_store_was_waited_out, edge, generous, within_twice_the_bound,
+    };
 
     #[resolver]
     #[use_guards(ThrottlerGuard)]
@@ -177,19 +598,37 @@ mod graphql {
     impl RatedResolver {
         #[query]
         #[public]
+        #[meta(Throttle::per_minute(1))]
         async fn tick(&self) -> GraphqlResult<String> {
+            Ok("ok".to_owned())
+        }
+
+        #[query]
+        #[public]
+        async fn tock(&self) -> GraphqlResult<String> {
             Ok("ok".to_owned())
         }
     }
 
     #[module(
         imports = [
-            GraphqlModule::for_root(None),
-            ThrottlerModule::for_root(one_per_minute()),
+            GraphqlModule,
+            ThrottlerModule::for_root(generous()),
         ],
         providers = [RatedResolver],
     )]
     struct RatedGraphqlModule;
+
+    #[module(
+        imports = [
+            nest_rs_http::HttpModule::for_root(edge()),
+            GraphqlModule,
+            ThrottlerModule::for_root(generous()),
+            StalledStoreModule,
+        ],
+        providers = [RatedResolver],
+    )]
+    struct StalledGraphqlModule;
 
     async fn app() -> TestApp {
         TestApp::for_module::<RatedGraphqlModule>()
@@ -197,10 +636,10 @@ mod graphql {
             .expect("a resolver binding ThrottlerGuard boots")
     }
 
-    async fn tick(app: &TestApp) -> String {
+    async fn query(app: &TestApp, field: &str) -> String {
         app.http()
             .post("/graphql")
-            .body_json(&serde_json::json!({ "query": "{ tick }" }))
+            .body_json(&serde_json::json!({ "query": format!("{{ {field} }}") }))
             .send()
             .await
             .0
@@ -211,19 +650,17 @@ mod graphql {
     }
 
     #[tokio::test]
-    async fn a_second_operation_inside_the_window_is_refused() {
+    async fn a_second_operation_inside_the_field_s_window_is_refused() {
         let logs = nest_rs_testing::LogCapture::install();
         let app = app().await;
 
-        let first = tick(&app).await;
+        let first = query(&app, "tick").await;
         assert!(
             first.contains("\"tick\":\"ok\""),
             "the field resolves inside the budget: {first}",
         );
 
-        // The gate is the whole point: `/graphql` is `Exempt`, so before this
-        // entry existed the operation ran however many times a client asked.
-        let second = tick(&app).await;
+        let second = query(&app, "tick").await;
         assert!(
             second.contains("Too Many Requests"),
             "the second operation inside the window is refused: {second}",
@@ -232,33 +669,37 @@ mod graphql {
             !second.contains("\"tick\":\"ok\""),
             "…and the resolver body never ran: {second}",
         );
+        for _ in 0..3 {
+            let other = query(&app, "tock").await;
+            assert!(
+                other.contains("\"tock\":\"ok\""),
+                "a field pinning no budget counts under the module default: {other}",
+            );
+        }
 
-        let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+        let event = super::the_denial(&logs, "limit_exceeded");
         assert_eq!(event.level, "warn");
         assert_eq!(
-            event.field("transport").as_deref(),
-            Some("graphql"),
-            "the family shares one message, so the edge is a field an operator \
+            event.field("unit").as_deref(),
+            Some("graphql.field"),
+            "two edges share the message, so the unit is a field an operator \
              filters on, got {:?}",
             event.fields,
         );
         assert_eq!(
-            event.field("operation").as_deref(),
+            event.field("field").as_deref(),
             Some("tick"),
             "the bucket is the field's, so the field is what the line names, \
              got {:?}",
             event.fields,
         );
         assert!(
-            event.field("retry_after").is_some(),
+            event.field("retry_after_ms").is_some(),
             "the event carries the wait, got {:?}",
             event.fields,
         );
 
-        // Said once per process, with the remedy, and **only for an anonymous
-        // caller** — which this fixture is. An authenticated one keys on its
-        // actor and shares nothing; keying every caller together was a limiter
-        // one client could turn into a denial of service for the rest.
+        // Only for an anonymous caller, which this fixture is.
         let degraded = logs.expect_one(
             nest_rs_throttler::TARGET,
             "rate-limit keying degraded to a shared bucket",
@@ -269,17 +710,40 @@ mod graphql {
             Some("graphql_anonymous_operation_shares_a_bucket"),
         );
     }
+
+    /// A query's, which the HTTP edge would otherwise have answered with a `503`;
+    /// a subscription's fields have no such timeout at all.
+    #[tokio::test(start_paused = true)]
+    async fn a_store_that_never_answers_refuses_the_field_at_the_bound() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<StalledGraphqlModule>()
+            .await
+            .expect("a resolver over a custom store boots");
+
+        let refused = within_twice_the_bound(query(&app, "tick")).await;
+
+        assert!(
+            refused.contains("Too Many Requests"),
+            "a store that cannot answer refuses the field: {refused}",
+        );
+        assert!(
+            !refused.contains("\"tick\":\"ok\""),
+            "…and the resolver body never ran: {refused}",
+        );
+        assert_the_store_was_waited_out(&logs, "graphql.field");
+    }
 }
 
-#[cfg(feature = "mcp")]
 mod mcp {
     use nest_rs_core::module;
-    use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, mcp, tools};
+    use nest_rs_mcp::{McpError, mcp, tools};
     use nest_rs_testing::TestApp;
     use nest_rs_testing::mcp::call_tool;
-    use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
+    use nest_rs_throttler::{Throttle, ThrottlerGuard, ThrottlerModule};
 
-    use super::one_per_minute;
+    use super::{
+        StalledStoreModule, assert_the_store_was_waited_out, edge, generous, within_twice_the_bound,
+    };
 
     const PATH: &str = "/mcp/rated";
 
@@ -293,22 +757,51 @@ mod mcp {
         /// Answer with a constant — the assertions are about what ran around it.
         #[tool]
         #[public]
+        #[meta(Throttle::per_minute(1))]
         async fn tick(&self) -> Result<String, McpError> {
+            Ok("ok".to_owned())
+        }
+
+        /// The same, under the module default.
+        #[tool]
+        #[public]
+        async fn tock(&self) -> Result<String, McpError> {
             Ok("ok".to_owned())
         }
     }
 
-    // `AllowAllMcpGuard` is the endpoint's deliberate opt-out: without an
-    // operation guard `/mcp` is deny-all, and a `401` would hide whether the
-    // per-operation chain ran at all.
+    // With no guard at its request `/mcp` is deny-all, and a `401` would hide
+    // whether the per-operation chain ran at all: the endpoint is opened.
     #[module(
-        imports = [ThrottlerModule::for_root(one_per_minute())],
-        providers = [RatedTool, AllowAllMcpGuard as dyn McpOperationGuard],
+        imports = [
+            nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpAccess::Public),
+            ThrottlerModule::for_root(generous()),
+        ],
+        providers = [RatedTool],
     )]
     struct RatedMcpModule;
 
+    // `sse-stream` re-arms its keep-alive from the real clock, which a paused one
+    // leaves behind at every jump.
+    #[module(
+        imports = [
+            nest_rs_http::HttpModule::for_root(edge()),
+            nest_rs_mcp::McpModule::for_root((
+                nest_rs_mcp::McpAccess::Public,
+                nest_rs_mcp::McpConfig {
+                    sse_keep_alive: None,
+                    ..Default::default()
+                },
+            )),
+            ThrottlerModule::for_root(generous()),
+            StalledStoreModule,
+        ],
+        providers = [RatedTool],
+    )]
+    struct StalledMcpModule;
+
     #[tokio::test]
-    async fn a_second_tool_call_inside_the_window_is_refused() {
+    async fn a_second_tool_call_inside_the_tool_s_window_is_refused() {
         let logs = nest_rs_testing::LogCapture::install();
         let app = TestApp::for_module::<RatedMcpModule>()
             .await
@@ -325,24 +818,24 @@ mod mcp {
             second.contains("Too Many Requests"),
             "the second call inside the window is refused: {second}",
         );
+        for _ in 0..3 {
+            let other = call_tool(app.http(), PATH, "tock", None).await;
+            assert!(
+                !other.contains("Too Many Requests"),
+                "a tool pinning no budget counts under the module default: {other}",
+            );
+        }
 
-        let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+        let event = super::the_denial(&logs, "limit_exceeded");
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("transport").as_deref(), Some("mcp"));
+        assert_eq!(event.field("unit").as_deref(), Some("mcp.operation"));
         assert_eq!(
-            event.field("operation").as_deref(),
+            event.field("tool").as_deref(),
             Some("tick"),
             "the bucket is the operation's, got {:?}",
             event.fields,
         );
-        assert_eq!(
-            event.field("kind").as_deref(),
-            Some("tool"),
-            "…and the kind beside it, because a tool and a prompt may share a \
-             name and are two addresses, got {:?}",
-            event.fields,
-        );
-        assert!(event.field("retry_after").is_some());
+        assert!(event.field("retry_after_ms").is_some());
 
         let degraded = logs.expect_one(
             nest_rs_throttler::TARGET,
@@ -354,21 +847,44 @@ mod mcp {
             Some("mcp_anonymous_operation_shares_a_bucket"),
         );
     }
+
+    /// The call answers over a stream, after the handler the HTTP request timeout
+    /// covers has returned: the guard's bound is the only one the operation has.
+    #[tokio::test(start_paused = true)]
+    async fn a_store_that_never_answers_refuses_the_tool_call_at_the_bound() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<StalledMcpModule>()
+            .await
+            .expect("an #[mcp] host over a custom store boots");
+
+        let refused = within_twice_the_bound(call_tool(app.http(), PATH, "tick", None)).await;
+
+        assert!(
+            refused.contains("Too Many Requests"),
+            "a store that cannot answer refuses the call: {refused}",
+        );
+        assert_the_store_was_waited_out(&logs, "mcp.operation");
+    }
 }
 
-#[cfg(feature = "ws")]
 mod ws {
-    use nest_rs_core::module;
-    use nest_rs_guards::Guard;
+    use std::any::TypeId;
+
+    use nest_rs_core::__private::{
+        HandlerDeclaration, MetaLevels, declare_handler, new_unit_context,
+    };
+    use nest_rs_core::{Handler, Peer, Posture, UnitView, module};
+    use nest_rs_guards::__private::Refused;
+    use nest_rs_guards::{Denial, Guard};
     use nest_rs_testing::TestApp;
-    use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
-    use nest_rs_ws::{WsClient, WsModule, gateway, messages};
+    use nest_rs_throttler::{Throttle, ThrottlerGuard, ThrottlerModule};
+    use nest_rs_ws::{WsModule, gateway, messages};
 
-    use super::one_per_minute;
+    use super::{
+        FailingStoreModule, StalledStoreModule, assert_the_store_failure_was_said,
+        assert_the_store_was_waited_out, generous, within_twice_the_bound,
+    };
 
-    /// The binding a developer writes, and the compile witness for `WsGuard`:
-    /// `#[messages]` bounds every per-message guard on it, so this file would
-    /// not build if `ThrottlerGuard` stopped attesting the edge.
     #[gateway(path = "/ws/rated")]
     struct RatedGateway;
 
@@ -377,72 +893,282 @@ mod ws {
         #[subscribe_message("tick")]
         #[use_guards(ThrottlerGuard)]
         #[public]
+        #[meta(Throttle::per_minute(1))]
         async fn tick(&self) -> &'static str {
+            "ok"
+        }
+
+        #[subscribe_message("tock")]
+        #[use_guards(ThrottlerGuard)]
+        #[public]
+        async fn tock(&self) -> &'static str {
             "ok"
         }
     }
 
     #[module(
-        imports = [WsModule, ThrottlerModule::for_root(one_per_minute())],
+        imports = [WsModule, ThrottlerModule::for_root(generous())],
         providers = [RatedGateway],
     )]
     struct RatedWsModule;
 
-    /// The message chain is frozen at mount, behind a real socket the harness
-    /// has no driver for — `TestApp` drives HTTP, GraphQL and MCP, and a WS
-    /// gateway only through its upgrade. So the boot proves the wiring (the
-    /// access graph resolves the guard, the mount succeeds) and the entry is
-    /// then exercised on the guard the container actually built, rather than on
-    /// one this test hand-assembled over a store nothing configured.
+    #[module(
+        imports = [
+            WsModule,
+            ThrottlerModule::for_root(generous()),
+            StalledStoreModule,
+        ],
+        providers = [RatedGateway],
+    )]
+    struct StalledWsModule;
+
+    #[module(
+        imports = [
+            WsModule,
+            ThrottlerModule::for_root(generous()),
+            FailingStoreModule,
+        ],
+        providers = [RatedGateway],
+    )]
+    struct FailingWsModule;
+
     #[tokio::test]
-    async fn a_second_message_on_one_connection_is_refused() {
+    async fn a_second_message_on_one_connection_inside_the_event_s_window_is_refused() {
         let logs = nest_rs_testing::LogCapture::install();
-        let app = TestApp::for_module::<RatedWsModule>()
+        let app = TestApp::builder()
+            .module::<RatedWsModule>()
+            .build_ws()
             .await
-            .expect("a #[subscribe_message] binding ThrottlerGuard boots");
-        let guard = app
-            .container()
-            .get::<ThrottlerGuard>()
-            .expect("ThrottlerModule registers the guard as global infrastructure");
+            .expect("a #[subscribe_message] binding ThrottlerGuard boots on a real port");
+        let mut socket = app.socket("/ws/rated").connect().await;
 
-        let client = WsClient::for_test();
-        let data = serde_json::Value::Null;
+        socket.send("tick", serde_json::Value::Null).await;
+        let first = socket.next_envelope().await;
+        assert_eq!(first["data"], "ok", "inside the budget: {first}");
 
-        guard
-            .check_ws_message(&client, "tick", &data)
-            .await
-            .expect("the first message on this connection is inside the budget");
+        socket.send("tick", serde_json::Value::Null).await;
+        let refused = socket.next_envelope().await;
+        assert_eq!(
+            refused["event"], "tick",
+            "the refusal answers its event: {refused}"
+        );
+        assert_eq!(refused["data"]["error"], "Too Many Requests", "{refused}");
+        assert_eq!(refused["data"]["code"], "RATE_LIMITED", "{refused}");
 
-        // A WS message is dispatched after the upgrade returned, so nothing an
-        // HTTP-scope binding does can meter this.
-        guard
-            .check_ws_message(&client, "tick", &data)
-            .await
-            .expect_err("the second message inside the window is refused");
+        for _ in 0..3 {
+            socket.send("tock", serde_json::Value::Null).await;
+            let other = socket.next_envelope().await;
+            assert_eq!(
+                other["data"], "ok",
+                "an event pinning no budget counts under the module default: {other}",
+            );
+        }
 
-        // The event is half the bucket: a flood of `tick` must not spend the
-        // budget of every other message the gateway serves.
-        guard
-            .check_ws_message(&client, "other", &data)
-            .await
-            .expect("a different event on the same connection has its own bucket");
-
-        let event = logs.expect_one(nest_rs_throttler::TARGET, "rate limit exceeded");
+        let event = super::the_denial(&logs, "limit_exceeded");
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("transport").as_deref(), Some("ws"));
+        assert_eq!(event.field("unit").as_deref(), Some("ws.message"));
         assert_eq!(
             event.field("event").as_deref(),
             Some("tick"),
             "the event names the unit, got {:?}",
             event.fields,
         );
-        assert_eq!(
-            event.field("client").as_deref(),
-            Some(client.id().to_string()).as_deref(),
-            "…and the connection as the caller half — the peer address that \
-             keyed the upgrade is gone by the time a message runs, got {:?}",
+        assert!(
+            event
+                .field("conn_id")
+                .is_some_and(|connection| connection.parse::<u64>().is_ok()),
+            "…and the connection the bucket is keyed on, a number this process \
+             minted for the socket — never the peer's address, got {:?}",
             event.fields,
         );
-        assert!(event.field("retry_after").is_some());
+        assert_eq!(event.field("client"), None, "got {:?}", event.fields);
+        assert!(event.field("retry_after_ms").is_some());
+
+        app.shutdown().await.expect("the transport stops cleanly");
+    }
+
+    struct Gateway;
+
+    /// A message of the `tick` event, as `#[messages]` declares it.
+    static TICK: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_ws::unit::MESSAGE,
+        host: TypeId::of::<Gateway>(),
+        host_name: "Gateway",
+        method: "tick",
+        address: "tick",
+        posture: Posture::Public,
+        meta: MetaLevels::default,
+    });
+
+    struct Message;
+
+    impl UnitView for Message {}
+
+    /// The guard's entry on one message of connection `7`, its refusal filed,
+    /// as the gateway's per-message table runs it: no socket, so time can be
+    /// paused.
+    async fn check_a_message(guard: &ThrottlerGuard) -> Result<(), Denial> {
+        let mut view = Message;
+        let mut cx = new_unit_context(&TICK, &mut view, Some(Peer::new(None, Some(7))), None);
+        match guard.check(&mut cx).await {
+            Ok(()) => Ok(()),
+            Err(denial) => Err(Refused::by("ThrottlerGuard", guard, denial)
+                .into_denial("guard denied the message", &cx)),
+        }
+    }
+
+    /// No request timeout reaches a socket's messages at all.
+    #[tokio::test(start_paused = true)]
+    async fn a_store_that_never_answers_refuses_the_message_at_the_bound() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<StalledWsModule>()
+            .await
+            .expect("a #[subscribe_message] over a custom store boots");
+        let guard = app
+            .container()
+            .get::<ThrottlerGuard>()
+            .expect("ThrottlerModule registers the guard as global infrastructure");
+
+        let sent = tokio::time::Instant::now();
+        let refused = within_twice_the_bound(check_a_message(&guard))
+            .await
+            .expect_err("a store that cannot answer refuses the message");
+
+        assert!(sent.elapsed() >= nest_rs_throttler::HIT_TIMEOUT);
+        assert_eq!(
+            refused.http_status(),
+            429,
+            "refused as a rate limit, the one refusal a store that cannot answer gives",
+        );
+        assert_the_store_was_waited_out(&logs, "ws.message");
+    }
+
+    /// A store that says it could not count refuses the message as a rate
+    /// limit, the refusal the edge frames for its client.
+    #[tokio::test]
+    async fn a_store_that_fails_refuses_the_message() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<FailingWsModule>()
+            .await
+            .expect("a #[subscribe_message] over a custom store boots");
+        let guard = app
+            .container()
+            .get::<ThrottlerGuard>()
+            .expect("ThrottlerModule registers the guard as global infrastructure");
+
+        let refused = check_a_message(&guard)
+            .await
+            .expect_err("a store that cannot count refuses the message");
+
+        assert_eq!(refused.http_status(), 429);
+        assert_the_store_failure_was_said(&logs, "ws.message");
+    }
+}
+
+/// A self-mount the pool gates at its edge, keyed like a route: on the template
+/// its registration declared, never on the path a caller addressed.
+mod self_mount {
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler};
+    use nest_rs_core::{ContainerBuilder, Discoverable, Handler, Posture, module};
+
+    use nest_rs_core::{Layer, UnitContext, async_trait, injectable};
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase};
+    use nest_rs_http::StatusCode;
+    use nest_rs_http::{HttpEndpointMeta, HttpView, Method, Response, endpoint_fn};
+    use nest_rs_testing::{LogCapture, TestApp};
+    use nest_rs_throttler::{ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
+
+    /// What covers a gated mount, which a rate limit alone does not.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct Identified;
+
+    #[async_trait]
+    impl Guard for Identified {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for Identified {}
+
+    struct Files;
+
+    static FILES: Handler = declare_handler(HandlerDeclaration {
+        unit: nest_rs_http::unit::REQUEST,
+        host: std::any::TypeId::of::<Files>(),
+        host_name: "Files",
+        method: "",
+        address: "/files",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    impl Discoverable for Files {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.attach_meta::<Self, HttpEndpointMeta>(
+                HttpEndpointMeta::new(&FILES, "/files", "files", |_c, routes| {
+                    routes.route(
+                        Method::GET,
+                        "/files/{*name}",
+                        endpoint_fn(|_| async { Ok(Response::builder().body("file")) }),
+                    );
+                })
+                .owned_by("Files"),
+            )
+        }
+    }
+
+    #[module(
+        imports = [
+            ThrottlerModule::for_root(ThrottlerConfig {
+                limit: 2,
+                window: std::time::Duration::from_secs(60),
+                pseudonym_key: None,
+            }),
+        ],
+        providers = [Identified, Files],
+    )]
+    struct FilesModule;
+
+    #[module(
+        imports = [FilesModule],
+        providers = [nest_rs_guards::GlobalGuards<(Identified, ThrottlerGuard)>],
+    )]
+    struct TheThrottlerBucketsASelfMountByItsTemplateApp;
+
+    #[tokio::test]
+    async fn the_throttler_buckets_a_self_mount_by_its_template() {
+        let logs = LogCapture::install();
+        let app = TestApp::builder()
+            .module::<TheThrottlerBucketsASelfMountByItsTemplateApp>()
+            .build()
+            .await
+            .expect("boots");
+
+        for file in ["/files/a.txt", "/files/b.txt"] {
+            app.http().get(file).send().await.assert_status_is_ok();
+        }
+        app.http()
+            .get("/files/c.txt")
+            .send()
+            .await
+            .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+        let event = super::the_denial(&logs, "limit_exceeded");
+        assert_eq!(
+            event.field("path").as_deref(),
+            Some("/files/{*name}"),
+            "the template it matched: {:?}",
+            event.fields,
+        );
+        let mounted = logs.expect_one("nest_rs::routes", "mounted endpoint");
+        for join in ["host", "path"] {
+            assert_eq!(event.field(join), mounted.field(join), "{join}");
+        }
     }
 }

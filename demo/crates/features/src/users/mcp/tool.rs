@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use nest_rs::authz::Read;
-use nest_rs::mcp::{Json, McpError, Opaque, mcp, tools};
-use nest_rs::seaorm::CrudService;
+use nest_rs::mcp::{Json, mcp, tools};
+use nest_rs::seaorm::{CrudService, ServiceError};
 
 use crate::users::{Entity as UserEntity, PersonDto, UsersService};
 
@@ -19,9 +19,9 @@ impl UsersTool {
         description = "List the people the caller is allowed to see. Scoped to the caller's \
                        organization."
     )]
-    #[authorize(Read, UserEntity, unmasked)]
-    async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, McpError> {
-        let rows = CrudService::list(&*self.svc).await.opaque()?;
+    #[authorize(Read, UserEntity)]
+    async fn list_people(&self) -> Result<Json<Vec<PersonDto>>, ServiceError> {
+        let rows = self.svc.list().await?;
 
         Ok(Json(
             rows.into_iter()
@@ -31,23 +31,5 @@ impl UsersTool {
                 })
                 .collect(),
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::any::TypeId;
-
-    use nest_rs::core::Discoverable;
-
-    use super::UsersTool;
-    use crate::users::UsersService;
-
-    #[test]
-    fn mcp_tool_declares_its_injected_service_for_the_access_graph() {
-        assert!(
-            UsersTool::injected().contains(&TypeId::of::<UsersService>()),
-            "the MCP tool's injected UsersService is recorded for the access graph",
-        );
     }
 }

@@ -1,6 +1,7 @@
 //! Shared fixtures: a fake workspace on disk, a fake app crate inside it, and
 //! the `nestrs` invocation every test drives the binary through.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,9 +45,9 @@ pub(crate) fn write_fake_app(root: &Path, name: &str) -> PathBuf {
     .unwrap();
     fs::write(
         app.join("src/module.rs"),
-        "use nest_rs_core::module;\nuse nest_rs_http::{HttpConfig, HttpModule};\n\n\
+        "use nest_rs_core::module;\nuse nest_rs_http::HttpModule;\n\n\
          #[module(\n    imports = [\n        \
-         HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),\n    ],\n)]\n\
+         HttpModule,\n    ],\n)]\n\
          pub struct AppModule;\n",
     )
     .unwrap();
@@ -65,12 +66,71 @@ pub(crate) fn run_ok(dir: &Path, args: &[&str]) -> String {
         "args {args:?} stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    String::from_utf8_lossy_owned(output.stdout)
+}
+
+/// Run `nestrs <args...>` with cwd at `dir`, asserting failure, and hand back
+/// what it printed on stderr.
+pub(crate) fn run_err(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "args {args:?} succeeded: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy_owned(output.stderr)
+}
+
+/// Move a `g resource` port's service into `services/articles.rs`, renamed
+/// `ArticlesService`, and every reference to it after it: a shape
+/// `architecture.md` allows, which no generator writes.
+pub(crate) fn move_service_into_a_folder(port: &Path) {
+    fs::create_dir_all(port.join("services")).unwrap();
+    let service = fs::read_to_string(port.join("service.rs"))
+        .unwrap()
+        .replace("super::entity::", "super::super::entity::");
+    fs::write(port.join("services/articles.rs"), service).unwrap();
+    fs::remove_file(port.join("service.rs")).unwrap();
+    fs::write(
+        port.join("services/mod.rs"),
+        "mod articles;\n\npub use articles::PostsService;\n",
+    )
+    .unwrap();
+    for (file, bytes) in files_under(port) {
+        let moved = String::from_utf8(bytes)
+            .unwrap()
+            .replace("mod service;", "mod services;")
+            .replace("service::PostsService", "services::PostsService")
+            .replace("PostsService", "ArticlesService");
+        fs::write(port.join(file), moved).unwrap();
+    }
+}
+
+/// Every file under `root`, by its path below it, with its bytes: what a
+/// refused generator leaves unchanged.
+pub(crate) fn files_under(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                let bytes = fs::read(&path).unwrap();
+                files.insert(path.strip_prefix(root).unwrap().to_path_buf(), bytes);
+            }
+        }
+    }
+    files
 }
 
 /// The scaffolded `.env.example` sends a test override to a file the cascade
-/// actually loads under `NESTRS_ENV=test` (see `templates::shared::ENV_EXAMPLE`
-/// for why the wrong answer fails silently).
+/// loads under `NESTRS_ENV=test`.
 pub(crate) fn assert_env_example_points_test_overrides_somewhere_loaded(root: &Path) {
     let example = fs::read_to_string(root.join(".env.example")).unwrap();
     assert!(
@@ -99,22 +159,54 @@ pub(crate) fn write_fake_migrations_crate(root: &Path) {
     fs::write(dir.join("m20260101_000000_init.rs"), "// init\n").unwrap();
 }
 
-/// The framework variable name the *generated* project will carry, built the
-/// way the CLI builds it.
-///
-/// **The CLI is a binary crate**, so its suite cannot call
-/// `context::var_name` / `context::env_prefix` the way every other crate here
-/// calls the thing it tests — there is no `[lib]` to import. So the mirror is
-/// mirrored once more, here, rather than at each assertion: a literal
-/// `"NESTRS_AUTHN__SECRET"` in a test asserts the *default* prefix and fails
-/// the moment the suite runs under `NESTRS_ENV_PREFIX=ACME`, which is the run
-/// that proves a rename reaches everything. Third copy of one join, and it is
-/// reported as such — `context::ENV_PREFIX_VAR` is spelled here because it is
-/// the one name no prefix renames, which `CLAUDE.md` sanctions per crate.
-pub fn scaffolded_var(namespace: &str, key: &str) -> String {
-    let prefix = std::env::var("NESTRS_ENV_PREFIX")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "NESTRS".to_owned());
-    format!("{prefix}_{}__{key}", namespace.to_uppercase())
+/// The one migration `crates/migrations/src` holds under `name`, by its
+/// stem and its contents.
+pub(crate) fn migration_named(root: &Path, name: &str) -> (String, String) {
+    let dir = root.join("crates/migrations/src");
+    let found: Vec<PathBuf> = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(&format!("_{name}.rs")))
+        })
+        .collect();
+    assert_eq!(found.len(), 1, "one `{name}` migration: {found:?}");
+    let stem = found[0].file_stem().unwrap().to_string_lossy().into_owned();
+    (stem, fs::read_to_string(&found[0]).unwrap())
 }
+
+/// The one value of `var` that `file` assigns, read the way the cascade reads it.
+pub(crate) fn assigned(file: &Path, var: &str) -> Option<String> {
+    let body = fs::read_to_string(file).ok()?;
+    let mut values = body
+        .lines()
+        .filter_map(|line| line.strip_prefix(var)?.strip_prefix('='))
+        .map(str::to_owned);
+    let value = values.next();
+    assert!(
+        values.next().is_none(),
+        "{} assigns {var} twice",
+        file.display()
+    );
+    value
+}
+
+/// RFC 7518 §3.2: an HS256 key carries at least the hash's 256 bits.
+pub(crate) fn assert_256_bit_hex(secret: &str) {
+    assert!(
+        secret.len() == 64
+            && secret
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+        "a secret is 64 lowercase hex characters: {secret:?}",
+    );
+}
+
+/// The bootstrap variable that renames every other, as the CLI spells it.
+pub(crate) use nest_rs_cli::ENV_PREFIX_VAR;
+
+/// The framework variable name the *generated* project will carry — the CLI's
+/// own derivation, read from its library rather than mirrored here.
+pub(crate) use nest_rs_cli::scaffolded_var;

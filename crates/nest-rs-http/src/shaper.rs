@@ -1,34 +1,31 @@
 //! Per-route, type-directed response shaping.
 //!
-//! A route whose handler declares a masking extractor (in practice the
-//! `Authorize<_, _>` gate or the `Bind<_, _>` binding) runs inside a
-//! [`ResponseShaping`]: the extractor's crate captures what it needs off the
-//! request, installs ambient state around the handler, and rewrites the body
-//! before it ships.
+//! A route declaring a shaping type, a parameter's or the posture's, runs inside a
+//! [`ResponseShaping`]: the type's crate captures what it needs off the request,
+//! installs ambient state around the handler, and may rewrite the body before it
+//! ships. The `Authorize<_, _>` an `#[authorize]` or a `#[public(Action, Subject)]`
+//! emits declares the class gate alone and captures nothing: each wire row a reply
+//! carries was judged where it was built.
 //!
-//! **Arming is a question for the compiler, not for the macro.** `#[routes]`
-//! cannot see through a renamed import (`use Authorize as Az`), so it does not
-//! try: it hands every handler parameter's *type* to [`ShaperProbe`], and the
-//! compiler answers whether that type implements [`RouteResponseShaper`]. The
-//! name the developer chose can no longer change the answer — which is what
-//! makes the arm alias-proof.
-//!
-//! The trait is implemented outside this crate (`nest_rs_authz::http`,
-//! `nest_rs_seaorm::http`) so the HTTP surface stays unaware of any specific
-//! shaper.
+//! `#[routes]` cannot see through a renamed import, so it hands the posture's type
+//! and every handler parameter's to [`ShaperProbe`], and the compiler answers
+//! whether that type implements [`RouteResponseShaper`].
 
-use std::cell::Cell;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 
-use poem::http::StatusCode;
-use poem::{Endpoint, Error, IntoResponse, Request, Response, Result};
+use futures_util::FutureExt as _;
+use futures_util::future::Either;
 
-/// The handler's future, as a [`ResponseShaping`] receives it. Boxed because
-/// the shaping step is selected by value (a function pointer picked per
-/// parameter type) rather than by monomorphising the whole endpoint — one
-/// allocation, on armed routes only.
+use crate::endpoint::Endpoint;
+use crate::error::Result;
+use crate::request::Request;
+use crate::response::Response;
+use crate::route_site::RouteWrapper;
+
+/// The handler's future, as a [`ResponseShaping`] receives it; boxed on armed
+/// routes only.
 pub type RouteFuture<'a> = Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
 
 /// A shaper's request-independent half: whatever [`RouteResponseShaper::capture`]
@@ -45,6 +42,27 @@ pub trait ResponseShaping: Send + 'static {
 ///
 /// `#[routes]` arms this by *type*: see the module docs.
 pub trait RouteResponseShaper {
+    /// The class gate a route declaring this type runs — `nest_rs_authz`'s
+    /// `class_gate` for its `Authorize` — on the unit the route's guard stage
+    /// checked, right after its guards: a refusal is answered as the denial it
+    /// carries, before any interceptor or filter the route declares, so a layer
+    /// that answers on the handler's behalf never answers a caller it refuses.
+    #[expect(
+        clippy::type_complexity,
+        reason = "the pipeline's class gate written out, so a tier-1 signature names no hidden alias"
+    )]
+    const GATE: Option<
+        for<'b> fn(
+            &mut nest_rs_core::UnitContext<'b>,
+        ) -> std::result::Result<(), nest_rs_core::Failure>,
+    > = None;
+
+    /// Whether a route declaring this type arms its `capture`, which its record
+    /// reads as `HttpRouteMeta::names_an_entity`. `false` for a type that only
+    /// declares [`GATE`](Self::GATE) — a posture on a subject with no rows — whose
+    /// `capture` never runs and which an `#[sse]` route may declare.
+    const SHAPES: bool = true;
+
     /// Snapshot what the shaper needs off the request before the handler takes
     /// ownership of it, or `None` to leave this request's response untouched.
     fn capture(req: &Request) -> Option<Box<dyn ResponseShaping>>;
@@ -54,13 +72,17 @@ pub trait RouteResponseShaper {
 /// shaper can be *selected* by the compiler and *carried* by a value.
 pub type CaptureFn = fn(&Request) -> Option<Box<dyn ResponseShaping>>;
 
+/// A route's class gate, as [`RouteResponseShaper::GATE`] declares it: the
+/// pipeline's own.
+pub type GateFn = nest_rs_core::__private::ClassGate;
+
 /// Asks the compiler whether `T` is a [`RouteResponseShaper`].
 ///
 /// Both arms below answer `select()`; the inherent one is reachable only when
 /// its bound holds, and inherent methods win over trait methods at the same
-/// autoref step. So [`shaper_of`](crate::shaper_of) answers `Some` exactly when
-/// `T: RouteResponseShaper`, decided after name resolution — the property the
-/// old path-segment scan could not have.
+/// autoref step. So [`__shaper_of`](crate::__shaper_of) answers `Some` exactly when
+/// `T: RouteResponseShaper` shapes, decided after name resolution, and
+/// [`__gate_of`](crate::__gate_of) the gate such a type declares, shaping or not.
 pub struct ShaperProbe<T>(PhantomData<fn() -> T>);
 
 impl<T> Default for ShaperProbe<T> {
@@ -77,9 +99,14 @@ impl<T> ShaperProbe<T> {
 }
 
 impl<T: RouteResponseShaper> ShaperProbe<T> {
-    /// The armed arm.
+    /// The armed arm: the type's capture step, unless it only gates.
     pub fn select(&self) -> Option<CaptureFn> {
-        Some(T::capture)
+        T::SHAPES.then_some(T::capture as CaptureFn)
+    }
+
+    /// The class gate the armed type declares.
+    pub fn gate(&self) -> Option<GateFn> {
+        T::GATE
     }
 }
 
@@ -89,10 +116,17 @@ impl<T: RouteResponseShaper> ShaperProbe<T> {
 pub trait UnshapedProbe {
     /// No shaper for this parameter.
     fn select(&self) -> Option<CaptureFn>;
+
+    /// No class gate for this parameter.
+    fn gate(&self) -> Option<GateFn>;
 }
 
 impl<T> UnshapedProbe for &ShaperProbe<T> {
     fn select(&self) -> Option<CaptureFn> {
+        None
+    }
+
+    fn gate(&self) -> Option<GateFn> {
         None
     }
 }
@@ -101,176 +135,131 @@ impl<T> UnshapedProbe for &ShaperProbe<T> {
 /// the selection: the extra `&` is what makes the two [`ShaperProbe`] arms
 /// resolve in the right order, so writing the call out by hand invites a
 /// `needless_borrow` "fix" that would quietly disarm the fallback.
-///
-/// Emitted by `#[routes]`, once per handler parameter — a cross-crate seam, not
-/// public API.
 #[doc(hidden)]
 #[macro_export]
-macro_rules! shaper_of {
+macro_rules! __shaper_of {
     ($ty:ty) => {{
-        #[allow(unused_imports)]
-        use $crate::UnshapedProbe as _;
-        #[allow(clippy::needless_borrow)]
-        let __nestrs_probe = &$crate::ShaperProbe::<$ty>::new();
+        #[allow(
+            unused_imports,
+            reason = "the trait is in scope for autoref specialisation, which no lint sees"
+        )]
+        use $crate::__private::UnshapedProbe as _;
+        #[allow(
+            clippy::needless_borrow,
+            reason = "the extra borrow is what orders the two probe arms"
+        )]
+        let __nestrs_probe = &$crate::__private::ShaperProbe::<$ty>::new();
         __nestrs_probe.select()
     }};
 }
 
-/// Wrap `inner` with the route's shaping seam. Emitted by `#[routes]` for every
-/// handler: `shaper` is the type-directed selection over the parameter list,
-/// and `probe` names the route when it carries extractors (see [`MaskProbe`]).
-pub fn shaped<E>(
-    inner: E,
-    shaper: Option<CaptureFn>,
-    probe: Option<&'static str>,
-) -> ShapedEndpoint<E> {
-    ShapedEndpoint {
-        inner,
-        shaper,
-        probe,
-    }
+/// The class gate one parameter type declares, or `None`; selected like
+/// [`__shaper_of`](crate::__shaper_of), by the same two probe arms.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __gate_of {
+    ($ty:ty) => {{
+        #[allow(
+            unused_imports,
+            reason = "the trait is in scope for autoref specialisation, which no lint sees"
+        )]
+        use $crate::__private::UnshapedProbe as _;
+        #[allow(
+            clippy::needless_borrow,
+            reason = "the extra borrow is what orders the two probe arms"
+        )]
+        let __nestrs_probe = &$crate::__private::ShaperProbe::<$ty>::new();
+        __nestrs_probe.gate()
+    }};
 }
 
-/// The route's shaping seam: applies the armed [`ResponseShaping`], or runs the
-/// [`MaskProbe`] cross-check when nothing armed.
+/// Wrap `inner` with the route's shaping seam. Emitted by `#[routes]` for every
+/// handler: `shaper` is the type-directed selection over the parameter list.
+pub fn shaped<E>(inner: E, shaper: Option<CaptureFn>) -> ShapedEndpoint<E> {
+    ShapedEndpoint { inner, shaper }
+}
+
+/// The route's shaping seam: applies the armed [`ResponseShaping`], if any.
 pub struct ShapedEndpoint<E> {
     inner: E,
     shaper: Option<CaptureFn>,
-    probe: Option<&'static str>,
 }
 
-impl<E> ShapedEndpoint<E>
-where
-    E: Endpoint + Send + Sync,
-    E::Output: IntoResponse,
-{
-    async fn plain(&self, req: Request) -> Result<Response> {
-        self.inner.call(req).await.map(IntoResponse::into_response)
-    }
-
-    async fn probed(&self, req: Request, route: &'static str) -> Result<Response> {
-        let (marked, resp) = MASK_PROBE
-            .scope(Cell::new(false), async {
-                let resp = self.plain(req).await;
-                (MASK_PROBE.with(Cell::get), resp)
-            })
-            .await;
-        let resp = resp?;
-        if marked && resp.status().is_success() {
-            tracing::error!(
-                target: crate::target::HTTP,
-                route = route,
-                "a masking extractor ran but no response shaper armed on this route — \
-                 declare it as a handler parameter (a nested or hand-rolled extractor \
-                 is invisible to the type-directed arm); failing closed",
-            );
-            return Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR));
-        }
-        Ok(resp)
-    }
-}
-
-impl<E> Endpoint for ShapedEndpoint<E>
-where
-    E: Endpoint + Send + Sync,
-    E::Output: IntoResponse,
-{
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> Result<Response> {
-        match self.shaper.and_then(|capture| capture(&req)) {
-            Some(shaping) => {
-                let inner: RouteFuture<'_> = Box::pin(self.plain(req));
-                shaping.apply(inner).await
-            }
-            None => match self.probe {
-                Some(route) => self.probed(req, route).await,
-                None => self.plain(req).await,
-            },
-        }
-    }
-}
-
-tokio::task_local! {
-    /// The per-request masking probe (see [`MaskProbe`]). A task-local `Cell`
-    /// instead of a request extension: zero heap allocation per request, and
-    /// extractors run inside the endpoint's own task so the scope provably
-    /// covers them — the same pattern as the ambient executor and ability.
-    static MASK_PROBE: Cell<bool>;
-}
-
-/// The run-time backstop behind the type-directed arm.
+/// `handler`'s answer, its streaming body continuing under what the handler
+/// ran under, shaped by `shaping` when one is armed.
 ///
-/// The arm answers on a *parameter's type*, so it covers every way a masking
-/// extractor is normally written, renamed imports included. What it cannot see
-/// is an extractor reached indirectly — one nested inside another extractor, or
-/// a hand-rolled `FromRequest` that runs the gate itself. Those routes arm
-/// nothing, so they run inside a probe scope
-/// ([`ShapedEndpoint`]): a [`mark`](MaskProbe::mark) on a success response
-/// fails the request closed instead of shipping unmasked fields.
-pub struct MaskProbe;
+/// Not an `async fn`, nor a block awaiting `handler`: either keeps the future
+/// it is handed beside the one it awaits, so each would double the handler's
+/// future, and a debug build reserves every copy on the polling thread's stack.
+fn shape<'a>(
+    handler: impl Future<Output = Result<Response>> + Send + 'a,
+    shaping: Option<Box<dyn ResponseShaping>>,
+) -> impl Future<Output = Result<Response>> + Send + 'a {
+    let plain = handler.map(|resp| resp.map(crate::response_body::continue_body));
+    match shaping {
+        Some(shaping) => Either::Left(shaping.apply(Box::pin(plain))),
+        None => Either::Right(plain),
+    }
+}
 
-impl MaskProbe {
-    /// Record that a masking extractor ran on this request. Called by the
-    /// extractors themselves; outside a probe scope (an armed route, another
-    /// transport) this is a no-op.
-    pub fn mark() {
-        let _ = MASK_PROBE.try_with(|marked| marked.set(true));
+impl<E: Endpoint> Endpoint for ShapedEndpoint<E> {
+    async fn call(&self, req: Request) -> Result<Response> {
+        let shaping = self.shaper.and_then(|capture| capture(&req));
+        shape(self.inner.call(req), shaping).await
+    }
+}
+
+impl<W: RouteWrapper> RouteWrapper for ShapedEndpoint<W> {
+    async fn call(&self, req: &mut Request) -> Result<Response> {
+        let shaping = self.shaper.and_then(|capture| capture(req));
+        shape(self.inner.call(req), shaping).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use http::StatusCode;
 
-    use poem::handler;
-    use poem::test::TestClient;
+    use crate::endpoint::endpoint_fn;
+    use crate::testing::{Holding, get};
+    use crate::{HeaderName, HeaderValue};
 
     use super::*;
 
-    #[handler]
-    fn marks_and_succeeds() -> &'static str {
-        MaskProbe::mark();
-        "unmasked body"
+    fn plain() -> impl Endpoint {
+        endpoint_fn(|_req| async { Ok(Response::builder().body("ok")) })
     }
 
-    #[handler]
-    fn plain() -> &'static str {
-        "ok"
+    /// `ep`'s answer to a request, `x-tag` set when `tag` is.
+    async fn answer(ep: &impl Endpoint, tag: Option<&'static str>) -> Result<Response> {
+        let mut req = Request::builder();
+        if let Some(tag) = tag {
+            req = req.header(
+                HeaderName::from_static("x-tag"),
+                HeaderValue::from_static(tag),
+            );
+        }
+        ep.call(req.finish()).await
+    }
+
+    async fn text(resp: Result<Response>) -> (StatusCode, String) {
+        let resp = resp.expect("answers");
+        let status = resp.status();
+        (
+            status,
+            resp.into_body().into_string().await.expect("a body"),
+        )
     }
 
     #[tokio::test]
-    async fn a_marked_probe_on_success_fails_closed() {
-        let logs = nest_rs_testing::LogCapture::install();
-        let ep = shaped(marks_and_succeeds, None, Some("GET /users"));
-        let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-
-        // The 500 is deliberately opaque, so the event is the only place the
-        // cause exists — and the cause is a *code* mistake, not an outage: the
-        // route runs a masking extractor the type-directed arm never saw, so it
-        // would have shipped unmasked columns. Without the route in the fields
-        // an operator has a bare 500 and no way back to the handler.
-        let event = logs.expect_one(
-            "nest_rs::http",
-            "a masking extractor ran but no response shaper armed on this route — \
-             declare it as a handler parameter (a nested or hand-rolled extractor \
-             is invisible to the type-directed arm); failing closed",
+    async fn an_unarmed_route_passes_the_response_through() {
+        let ep = shaped(plain(), None);
+        assert_eq!(
+            text(answer(&ep, None).await).await,
+            (StatusCode::OK, "ok".into())
         );
-        assert_eq!(event.level, "error");
-        assert_eq!(event.field("route").as_deref(), Some("GET /users"));
     }
 
-    #[tokio::test]
-    async fn an_unmarked_probe_passes_the_response_through() {
-        let ep = shaped(plain, None, Some("GET /health"));
-        let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_text("ok").await;
-    }
-
-    /// A shaper reads the request before the handler consumes it, wraps the
-    /// handler, and rewrites the body — the three things `#[routes]` relies on.
     struct Shout;
 
     struct Shouting(String);
@@ -280,7 +269,7 @@ mod tests {
             Box::pin(async move {
                 let resp = inner.await?;
                 let body = resp.into_body().into_string().await.unwrap_or_default();
-                Ok(format!("{}:{}", self.0, body.to_uppercase()).into_response())
+                Ok(Response::builder().body(format!("{}:{}", self.0, body.to_uppercase())))
             })
         }
     }
@@ -292,80 +281,162 @@ mod tests {
         }
     }
 
-    /// Stands in for every handler parameter that is not a shaper.
     struct NotAShaper;
 
     #[tokio::test]
     async fn the_probe_selects_a_shaper_by_type_and_nothing_else() {
         assert!(
-            shaper_of!(Shout).is_some(),
+            __shaper_of!(Shout).is_some(),
             "a RouteResponseShaper arms the route",
         );
         assert!(
-            shaper_of!(NotAShaper).is_none(),
+            __shaper_of!(NotAShaper).is_none(),
             "any other parameter type leaves it unarmed",
         );
-        // The name the parameter is written under is not part of the answer.
+        // An alias, as a renamed import would be.
         type Renamed = Shout;
-        assert!(shaper_of!(Renamed).is_some());
+        assert!(__shaper_of!(Renamed).is_some());
     }
 
     #[tokio::test]
     async fn an_armed_shaper_wraps_the_handler_and_rewrites_the_body() {
-        let ep = shaped(plain, shaper_of!(Shout), None);
-        let resp = TestClient::new(ep)
-            .get("/")
-            .header("x-tag", "seen")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("seen:OK").await;
+        let ep = shaped(plain(), __shaper_of!(Shout));
+        assert_eq!(
+            text(answer(&ep, Some("seen")).await).await,
+            (StatusCode::OK, "seen:OK".into())
+        );
     }
 
     #[tokio::test]
     async fn a_capture_that_declines_leaves_the_response_untouched() {
-        // No `x-tag`: the shaper captures nothing, so the route falls through
-        // to the unshaped path rather than half-applying.
-        let ep = shaped(plain, shaper_of!(Shout), None);
-        let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status_is_ok();
-        resp.assert_text("ok").await;
+        let ep = shaped(plain(), __shaper_of!(Shout));
+        assert_eq!(
+            text(answer(&ep, None).await).await,
+            (StatusCode::OK, "ok".into())
+        );
     }
 
-    #[tokio::test]
-    async fn an_armed_route_runs_no_probe_scope() {
-        // The probe is the fallback net, not a second layer: an armed route
-        // must not pay for it, and a `mark` inside one must not fail it closed.
-        static RAN: AtomicBool = AtomicBool::new(false);
+    struct Gated;
 
-        #[handler]
-        fn marks() -> &'static str {
-            MaskProbe::mark();
-            RAN.store(true, Ordering::SeqCst);
-            "ok"
+    impl RouteResponseShaper for Gated {
+        const GATE: Option<GateFn> = Some(|cx| {
+            let passes = crate::HttpView::of(cx)?
+                .request()
+                .header("x-pass")
+                .is_some();
+            match passes {
+                true => Ok(()),
+                false => Err(nest_rs_guards::Denial::forbidden("no pass").into()),
+            }
+        });
+
+        fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
+            None
         }
-
-        let ep = shaped(marks, shaper_of!(Shout), Some("GET /armed"));
-        let resp = TestClient::new(ep)
-            .get("/")
-            .header("x-tag", "seen")
-            .send()
-            .await;
-        resp.assert_status_is_ok();
-        resp.assert_text("seen:OK").await;
-        assert!(RAN.load(Ordering::SeqCst), "the handler ran");
     }
 
-    /// The selection is a value, so a route with several parameters picks the
-    /// first shaper among them exactly as `#[routes]` folds them.
+    static GATED_ROUTE: nest_rs_core::Handler =
+        nest_rs_core::__private::declare_handler(nest_rs_core::__private::HandlerDeclaration {
+            unit: crate::unit::REQUEST,
+            host: std::any::TypeId::of::<Gated>(),
+            host_name: "Gated",
+            method: "route",
+            address: "/gated",
+            posture: nest_rs_core::Posture::Gated,
+            meta: nest_rs_core::__private::MetaLevels::default,
+        });
+
+    /// What `gate` answers on `request`, as the route's unit.
+    fn gated(
+        gate: GateFn,
+        request: crate::Request,
+    ) -> std::result::Result<(), nest_rs_core::Failure> {
+        let mut view = crate::HttpView::new(request);
+        let mut cx = nest_rs_core::__private::new_unit_context(&GATED_ROUTE, &mut view, None, None);
+        gate(&mut cx)
+    }
+
+    #[test]
+    fn the_probe_selects_a_gate_by_type_and_nothing_else() {
+        let gate = __gate_of!(Gated).expect("a type declaring a gate selects it");
+        let refused =
+            gated(gate, crate::Request::builder().finish()).expect_err("no `x-pass`, refused");
+        assert_eq!(
+            refused
+                .find::<nest_rs_guards::Denial>()
+                .map(nest_rs_guards::Denial::http_status),
+            Some(403),
+        );
+        let admitted = crate::Request::builder()
+            .header(
+                crate::HeaderName::from_static("x-pass"),
+                crate::HeaderValue::from_static(""),
+            )
+            .finish();
+        assert!(gated(gate, admitted).is_ok());
+
+        assert!(
+            __gate_of!(Shout).is_none(),
+            "a shaper declares no gate unless it says so"
+        );
+        assert!(__gate_of!(NotAShaper).is_none());
+    }
+
+    /// A type that only gates: a posture on a subject with no rows.
+    struct GatesOnly;
+
+    impl RouteResponseShaper for GatesOnly {
+        const GATE: Option<GateFn> = Gated::GATE;
+        const SHAPES: bool = false;
+
+        fn capture(_req: &Request) -> Option<Box<dyn ResponseShaping>> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_type_that_only_gates_selects_its_gate_and_arms_no_shaper() {
+        assert!(
+            __gate_of!(GatesOnly).is_some(),
+            "its gate runs with the guards"
+        );
+        assert!(
+            __shaper_of!(GatesOnly).is_none(),
+            "nothing shapes its route, so its record names no entity"
+        );
+        assert!(__shaper_of!(Gated).is_some(), "a type shapes by default");
+    }
+
     #[tokio::test]
     async fn the_first_shaping_parameter_wins() {
         let mut selected: Option<CaptureFn> = None;
-        for candidate in [shaper_of!(NotAShaper), shaper_of!(Shout)] {
+        for candidate in [__shaper_of!(NotAShaper), __shaper_of!(Shout)] {
             if selected.is_none() {
                 selected = candidate;
             }
         }
         assert!(selected.is_some());
+    }
+
+    /// What shaping adds to the future of a handler holding `N` bytes, as
+    /// `#[routes]` mounts it and as an endpoint.
+    fn added_by_shaping<const N: usize>() -> [usize; 2] {
+        let handler = size_of_val(&RouteWrapper::call(&Holding::<N>, &mut get()));
+        let ep = shaped(Holding::<N>, __shaper_of!(Shout));
+        [
+            size_of_val(&RouteWrapper::call(&ep, &mut get())) - handler,
+            size_of_val(&Endpoint::call(&ep, get())) - handler,
+        ]
+    }
+
+    #[test]
+    fn shaping_holds_the_handlers_future_once() {
+        let light = added_by_shaping::<1024>();
+        let heavy = added_by_shaping::<16384>();
+        assert_eq!(
+            light, heavy,
+            "shaping copies the handler's future: it adds {light:?} bytes to a 1 KiB one, \
+             {heavy:?} to a 16 KiB one",
+        );
     }
 }

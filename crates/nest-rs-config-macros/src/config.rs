@@ -1,134 +1,151 @@
-use nest_rs_codegen::{
-    key_as_written, reject_duplicate_argument, require_str_lit, unknown_argument, unmatched_meta,
-};
+use nest_rs_codegen::Grammar;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{ItemStruct, LitStr, Meta, Token, parse_macro_input};
+use syn::{ItemStruct, LitStr, parse_macro_input};
+
+use crate::overlay::{Fields, overlay};
 
 pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
-    let Args {
-        namespace,
-        manual_validate,
-    } = match parse_args(args.into()) {
+    let args = match parse_args(args.into()) {
         Ok(args) => args,
         Err(err) => return err.to_compile_error().into(),
     };
-
-    let item = parse_macro_input!(input as ItemStruct);
+    let mut item = parse_macro_input!(input as ItemStruct);
+    // Read before the struct is emitted: a field's `#[config(…)]` is the
+    // decorator's own, so it leaves the item it is read off.
+    let fields = match Fields::take(&mut item, args.manual_from_env) {
+        Ok(fields) => fields,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let name = &item.ident;
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
-    let namespace_lit = namespace.value();
+    let namespace_lit = args.namespace.value();
 
-    // The decorator carries `Validate` and points it back at the framework's
-    // own copy. Without the `crate = ` override the derive would emit
-    // `::validator::` against the *call site's* prelude, which is what used to
-    // force `validator = "0.20"` — and an exact version to align — into the
-    // manifest of every crate holding a `#[config]` struct.
-    //
-    // `validate = "manual"` opts out, for the config that validates across
-    // fields and writes the impl by hand: deriving on top of that is a
-    // conflicting impl, and cross-field rules are a real need, not a mistake.
-    let derive = (!manual_validate).then(|| {
+    // Without `crate = ` the derive emits `::validator::`, which the call site
+    // would have to depend on.
+    let derive = (!args.manual_validate).then(|| {
         quote! {
-            #[derive(::nest_rs_config::validator::Validate)]
-            #[validate(crate = ::nest_rs_config::validator)]
+            #[derive(::nest_rs_config::__private::validator::Validate)]
+            #[validate(crate = ::nest_rs_config::__private::validator)]
         }
     });
 
+    let from_env = (!args.manual_from_env).then(|| overlay(&item, &fields));
+
+    // A provider's injection is the whole declaration of a config: the boot
+    // queues its factory then. A generic config has no one type to file, and
+    // is queued by the module reading it.
+    let injected = item.generics.params.is_empty().then(|| {
+        quote! {
+            ::nest_rs_config::__private::inventory::submit! {
+                ::nest_rs_config::__private::InjectedFactory::new(
+                    || ::core::any::TypeId::of::<#name>(),
+                    ::nest_rs_config::__private::queue_feature::<#name>,
+                    ::nest_rs_config::__private::check_feature::<#name>,
+                )
+            }
+        }
+    });
+
+    // The literal and the declaration, not the type: a generic config files one entry.
+    let declaration = quote! {
+        ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#name))
+    };
     quote! {
         #derive
         #item
 
         impl #impl_generics ::nest_rs_config::Namespaced for #name #ty_generics #where_clause {
             const NAMESPACE: &'static str = #namespace_lit;
+            const __DECLARATION: &'static str = #declaration;
         }
+
+        ::nest_rs_config::__private::inventory::submit! {
+            ::nest_rs_config::__private::ConfigNamespace::new(#namespace_lit, #declaration)
+        }
+
+        #from_env
+
+        #injected
     }
     .into()
 }
 
-// Deliberately bespoke. `nest-rs-codegen` carried a shared "parse the sole
-// `key = \"...\"`" helper for a while and this was the one crate that evaluated
-// it: such a parser reads the value and cannot name an *unexpected* argument,
-// whereas `#[config]` rejects unknown keys by name (see the `other` arm below).
-// Nothing else ever called it, so it went; the friendlier diagnostic is worth
-// the local parser, and that is the reason rather than an oversight.
 struct Args {
     namespace: LitStr,
     manual_validate: bool,
+    manual_from_env: bool,
 }
 
-fn parse_args(args: TokenStream2) -> syn::Result<Args> {
-    // `Meta`, not `MetaNameValue`: a bare `#[config(namespace)]` is a
-    // `Meta::Path`, so parsing the narrower shape died on syn's `` expected `=` ``
-    // — the sentence `needs_a_value` exists to replace, at the decorator every
-    // configurable module in both workspaces writes.
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
+/// Every key `#[config]` takes on its struct, in the order its refusals list
+/// them.
+pub(crate) const CONFIG: Grammar =
+    Grammar::new("config", &["namespace", "validate", "from_env"]).elsewhere(a_fields_key);
 
+/// A field's key written on the struct is not misspelled: it is told whose it is.
+fn a_fields_key(key: &str) -> Option<String> {
+    crate::overlay::FIELD.keys().contains(&key).then(|| {
+        format!("#[config] `{key}` is a field's: write `#[config({key} …)]` on the field it reads")
+    })
+}
+
+/// The stem rule, worded with the rule's own examples: the namespace is read
+/// off the file's path, never chosen, so no single value is prescribed.
+const MISSING_NAMESPACE: &str = "#[config] requires `namespace`, the stem of the file's path \
+     below `src/`: the crate's subject, then each folder, joined with `__`, a plural role \
+     folder and a product's container left out — `redis/src/queue/config.rs` reads \
+     `namespace = \"redis__queue\"`, `social/src/providers/github/config.rs` \
+     `namespace = \"social__github\"`, `features/src/sign_in/config.rs` `namespace = \"sign_in\"`";
+
+fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     let mut namespace: Option<LitStr> = None;
     let mut manual_validate = false;
-    for meta in metas {
-        let Meta::NameValue(meta) = &meta else {
-            return Err(unmatched_meta("config", &meta, &["namespace", "validate"]));
-        };
-        let key = key_as_written(&meta.path);
-        match key.as_str() {
-            "namespace" => {
-                reject_duplicate_argument(namespace.is_some(), &meta.path, "config", "namespace")?;
-                namespace = Some(require_str_lit(
-                    &meta.value,
-                    "config",
-                    "namespace",
-                    "seaorm",
-                )?)
-            }
+    let mut manual_from_env = false;
+    CONFIG.parse2(args, |arg| {
+        match arg.key() {
+            "namespace" => namespace = Some(arg.str_lit("redis__queue")?),
             "validate" => {
-                reject_duplicate_argument(manual_validate, &meta.path, "config", "validate")?;
-                let lit = require_str_lit(&meta.value, "config", "validate", "manual")?;
+                let lit = arg.str_lit("manual")?;
                 if lit.value() != "manual" {
                     return Err(syn::Error::new_spanned(
-                        &meta.value,
+                        &lit,
                         "#[config] `validate` takes only `\"manual\"`, which suppresses the \
                          derive so the struct can write `impl Validate` itself",
                     ));
                 }
                 manual_validate = true;
             }
-            other => {
-                return Err(syn::Error::new_spanned(
-                    &meta.path,
-                    unknown_argument("config", other, &["namespace", "validate"]),
-                ));
+            "from_env" => {
+                let lit = arg.str_lit("manual")?;
+                if lit.value() != "manual" {
+                    return Err(syn::Error::new_spanned(
+                        &lit,
+                        "#[config] `from_env` takes only `\"manual\"`, which leaves the \
+                         struct to write `impl Config` itself, its overlay included",
+                    ));
+                }
+                manual_from_env = true;
             }
+            // The grammar hands over only its own keys.
+            _ => {}
         }
-    }
-
-    let lit = namespace.ok_or_else(|| {
-        syn::Error::new(
-            proc_macro2::Span::call_site(),
-            nest_rs_codegen::missing_argument("config", "namespace", "\"seaorm\""),
-        )
+        Ok(())
     })?;
+
+    let lit = namespace
+        .ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), MISSING_NAMESPACE))?;
     validate_namespace(&lit)?;
     Ok(Args {
         namespace: lit,
         manual_validate,
+        manual_from_env,
     })
 }
 
-/// Lowercase env-domain segment, so it reaches `<PREFIX>_<DOMAIN>__` uppercased
-/// and unambiguous.
-///
-/// **It does not round-trip, and the earlier wording said it did.** `_` is
-/// admitted, so `#[config(namespace = "social__google")]` is legal and names the
-/// same variable as `("social", "GOOGLE__CLIENT_ID")` — two key pairs, one
-/// variable, and the tree ships both spellings because `nest-rs-social` uses the
-/// separator as a nesting device. The consequence is recorded where it bites, on
-/// `nest_rs_config`'s claim registry, which keys on the resolved *name* for
-/// exactly this reason; it is restated here because this is the earliest site
-/// that can see the fact, and it said the opposite of it.
+/// Lowercase env-domain segment. It does not round-trip: `_` is admitted, so
+/// `("social__google", "CLIENT_ID")` and `("social", "GOOGLE__CLIENT_ID")` name
+/// one variable — the claim registry keys on the resolved name for that.
 fn validate_namespace(lit: &LitStr) -> syn::Result<()> {
     let value = lit.value();
     let valid = !value.is_empty()
@@ -136,14 +153,12 @@ fn validate_namespace(lit: &LitStr) -> syn::Result<()> {
         && value
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    if valid {
-        Ok(())
-    } else {
-        Err(syn::Error::new(
+    valid.ok_or_else(|| {
+        syn::Error::new(
             lit.span(),
             "#[config] `namespace` must be a lowercase env-domain segment \
              (start with a letter, then lowercase letters, digits, or underscores), \
-             e.g. \"seaorm\" or \"redis__worker\"",
-        ))
-    }
+             e.g. \"seaorm\" or \"redis__queue\"",
+        )
+    })
 }

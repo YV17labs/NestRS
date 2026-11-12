@@ -1,66 +1,104 @@
-//! Resolver-side accessor for request-scoped providers — the GraphQL mirror of
-//! [`nest_rs_http::Scoped<T>`]. A framework-level `GraphqlContextSeed`
-//! (`context.rs`) forwards the per-request `RequestScope` into the async-graphql
-//! context; [`Scoped<T>`] reads it back to resolve an
-//! `#[injectable(scope = request)]` provider (or, falling through, a singleton —
-//! prefer plain `#[inject]` for those).
+//! GraphQL's reading of [`Scoped<T>`]: a resolver's parameter resolving an
+//! `#[injectable(scope = request)]` provider from the request the operation
+//! arrived on; the boot checks its provider like an `#[inject]`ed one.
 //!
-//! ```ignore
+//! ```
+//! # use nest_rs_core::{Scoped, injectable, module};
+//! # use nest_rs_graphql::{GraphqlModule, operations, resolver};
+//! #
+//! # #[injectable(scope = request)]
+//! # #[derive(Default)]
+//! # struct PerRequestCache;
+//! #
+//! # impl PerRequestCache {
+//! #     fn value(&self) -> &'static str {
+//! #         "cached"
+//! #     }
+//! # }
+//! #
+//! # #[resolver]
+//! # struct WhoResolver;
+//! #
+//! # #[operations]
+//! # impl WhoResolver {
 //! #[query]
-//! async fn who(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
-//!     let per_req = Scoped::<PerRequestCache>::from_context(ctx)?;
-//!     Ok(per_req.value().to_string())
+//! #[public]
+//! async fn who(&self, cache: Scoped<PerRequestCache>) -> String {
+//!     cache.value().to_string()
 //! }
+//! # }
+//! #
+//! # #[module(imports = [GraphqlModule], providers = [PerRequestCache, WhoResolver])]
+//! # struct AppModule;
+//! #
+//! # #[nest_rs_core::main]
+//! # async fn main() -> nest_rs_core::anyhow::Result<()> {
+//! # let app = nest_rs_testing::TestApp::for_module::<AppModule>().await?;
+//! # let resp = app.http().post("/graphql")
+//! #     .body_json(&serde_json::json!({ "query": "{ who }" })).send().await;
+//!
+//! resp.assert_json(serde_json::json!({ "data": { "who": "cached" } })).await;
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! **Caveat.** This works inside resolver bodies, which run on the request's
-//! task. A `#[dataloader]` batch closure runs off-task (a spawned future), so a
-//! request-scoped provider is **not** reachable there — batches re-establish
-//! ambient state through their own [`crate::GraphqlBatchContext`] seam.
+//! Each operation a graphql-ws socket carries runs in a request scope of its
+//! own, never its upgrade's: a query's or a mutation's for its unit, a
+//! subscription's from its opening through every item. **Caveat.** A
+//! `#[dataloader]` batch runs off-task, shared by every field of the request,
+//! so a request-scoped provider is not reachable there; a batch reads the
+//! ambient values its request carries into it.
 
 use std::any::type_name;
-use std::ops::Deref;
-use std::sync::Arc;
 
-use async_graphql::{Context, Error};
-use nest_rs_core::RequestScope;
+use nest_rs_core::{Failure, Scoped};
 
-/// Resolves a provider of type `T` from the current operation's
-/// [`RequestScope`]. `from_context` errors if the scope is absent (the schema
-/// is not being served over the HTTP transport) or if no provider is registered
-/// for `T`.
-pub struct Scoped<T>(pub Arc<T>);
+use crate::error::{FieldFailure, Unprovided};
 
-impl<T> Scoped<T> {
-    /// Take the resolved provider handle out of the wrapper.
-    pub fn into_inner(self) -> Arc<T> {
-        self.0
-    }
+/// The `Scoped<T>` an operation takes, read in its tail once its guards
+/// passed; a miss — one run outside any request, as a schema driven bare is —
+/// answers the opaque internal error, the type filed at `error`, never
+/// answered.
+pub fn scoped_parameter<T: Send + Sync + 'static>() -> Result<Scoped<T>, FieldFailure> {
+    let provider = nest_rs_core::current_request_scope().and_then(|scope| scope.get::<T>());
+    provider.map(Scoped).ok_or_else(unprovided::<T>)
 }
 
-impl<T> Deref for Scoped<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
+/// What a field reaching a provider that is not there fails with: the opaque
+/// answer, the type on the operator's line.
+pub fn unprovided<T: 'static>() -> FieldFailure {
+    FieldFailure::unanswered(Failure::from(Unprovided {
+        provider: type_name::<T>(),
+    }))
 }
 
-impl<T: Send + Sync + 'static> Scoped<T> {
-    /// Resolve `T` from the operation's request scope, forwarded into the
-    /// async-graphql context by the framework `GraphqlContextSeed`.
-    pub fn from_context(ctx: &Context<'_>) -> async_graphql::Result<Self> {
-        let scope = ctx.data::<Arc<RequestScope>>().map_err(|_| {
-            Error::new(
-                "request scope not installed — serve the schema over the HTTP transport \
-                 (GraphqlModule) so the transport edge forwards it",
-            )
-        })?;
-        match scope.get::<T>() {
-            Some(value) => Ok(Scoped(value)),
-            None => Err(Error::new(format!(
-                "no provider registered for `{}` — add it to a module's providers",
-                type_name::<T>()
-            ))),
-        }
+#[cfg(test)]
+mod tests {
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+
+    mod red {
+        pub(super) struct Hidden;
+    }
+
+    #[test]
+    fn a_miss_answers_no_type_name_and_keeps_it_for_the_operator() {
+        let logs = LogCapture::install();
+
+        let Err(missed) = scoped_parameter::<red::Hidden>() else {
+            panic!("no request scope is installed here");
+        };
+        let answered = missed.into_answer();
+
+        assert_eq!(answered.message, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+        let said = serde_json::to_string(&answered.extensions).expect("extensions serialize");
+        assert!(!said.contains("Hidden"), "{said}");
+        logs.expect_none(crate::TARGET, "graphql operation failed");
+        let kept = crate::error::take_withheld(&answered);
+        assert!(
+            matches!(&kept, Some(nest_rs_core::__private::Withheld::Failed(said)) if said.contains("red::Hidden")),
+            "the answer keeps the type for the operator's line: {kept:?}",
+        );
     }
 }

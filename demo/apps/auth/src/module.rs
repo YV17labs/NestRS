@@ -1,28 +1,17 @@
-use nest_rs::authn::AuthnModule;
-use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::opentelemetry::OpenTelemetryModule;
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
-use nest_rs::social::SocialModule;
-use nest_rs::throttler::ThrottlerModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
+use nest_rs::social::{GithubSocialModule, GoogleSocialModule};
 
-use features::oauth::OAuthHttpModule;
+use features::sign_in::SignInHttpModule;
 
 #[module(
     imports = [
-        ConfigModule::for_root(),
-        OpenTelemetryModule,
-        SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        SeaOrmHealthModule,
-        ThrottlerModule::for_root(None),
         HealthModule,
-        HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
-        AuthnModule::for_root(None),
-        SocialModule,
-        OAuthHttpModule,
+        GithubSocialModule,
+        GoogleSocialModule,
+        SignInHttpModule,
     ],
 )]
 pub struct AuthModule;

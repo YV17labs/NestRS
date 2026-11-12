@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use nest_rs::authz::{AbilityBuilder, Action, with_ability};
-use nest_rs::seaorm::{Executor, Repo, with_executor};
-use poem::http::{StatusCode, header};
+use nest_rs::authz::{AbilityBuilder, Action};
+use nest_rs::http::{StatusCode, header};
+use nest_rs::seaorm::Repo;
 use sea_orm::{EntityTrait, IntoActiveModel, Set};
 use serde_json::json;
 use uuid::Uuid;
@@ -11,13 +11,13 @@ use crate::*;
 
 #[tokio::test]
 async fn users_are_scoped_to_their_org_and_bound_by_id() {
-    let (_db, app) = boot().await;
+    let app = boot().await;
 
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &bootstrap, "Acme").await;
     let org_b = create_org(&app, &bootstrap, "Globex").await;
-    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
-    let token_b = format!("Bearer {}", token_for(&org_b, "admin").await);
+    let token_a = sign(&app, org_a, Role::Admin);
+    let token_b = sign(&app, org_b, Role::Admin);
 
     let created = app
         .http()
@@ -26,7 +26,7 @@ async fn users_are_scoped_to_their_org_and_bound_by_id() {
         .body_json(&json!({ "name": "Ada", "email": "ada@acme.test" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let user_a = created
         .json()
         .await
@@ -100,14 +100,13 @@ mod user_row {
 
 #[tokio::test]
 async fn writes_are_scoped_to_the_callers_ability() {
-    let (db, app) = boot().await;
+    let app = boot().await;
 
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org_a = create_org(&app, &bootstrap, "Acme Writes").await;
     let org_b = create_org(&app, &bootstrap, "Globex Writes").await;
-    let token_a = format!("Bearer {}", token_for(&org_a, "admin").await);
-    let token_b = format!("Bearer {}", token_for(&org_b, "admin").await);
-    let org_b_id = Uuid::parse_str(&org_b).expect("valid org uuid");
+    let token_a = sign(&app, org_a, Role::Admin);
+    let token_b = sign(&app, org_b, Role::Admin);
 
     let created = app
         .http()
@@ -116,7 +115,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .body_json(&json!({ "name": "Ada", "email": "ada-writes@acme.test" }))
         .send()
         .await;
-    created.assert_status_is_ok();
+    created.assert_status(StatusCode::CREATED);
     let user_a = created
         .json()
         .await
@@ -129,7 +128,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
 
     let patched = app
         .http()
-        .patch(format!("/users/{user_a}"))
+        .put(format!("/users/{user_a}"))
         .header(header::AUTHORIZATION, &token_a)
         .body_json(&json!({ "name": "Ada L.", "email": "ada-writes@acme.test" }))
         .send()
@@ -141,7 +140,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
     );
 
     app.http()
-        .patch(format!("/users/{user_a}"))
+        .put(format!("/users/{user_a}"))
         .header(header::AUTHORIZATION, &token_b)
         .body_json(&json!({ "name": "Hijacked", "email": "ada-writes@acme.test" }))
         .send()
@@ -154,16 +153,15 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
-    let conn = db.connection();
+    let conn = connection(app.container());
     let blocked = Arc::new({
         let mut b = AbilityBuilder::new();
         b.can(Action::Manage, user_row::Entity)
-            .when(move |p| p.eq(user_row::Column::OrgId, org_b_id));
+            .when(move |p| p.eq(user_row::Column::OrgId, org_b));
         b.build().expect("valid test ability")
     });
-    let (update, delete) = with_executor(
-        Executor::Pool((*conn).clone()),
-        with_ability(blocked, async move {
+    let (update, delete) = app
+        .unit(blocked, move || async move {
             let model = user_row::Entity::find_by_id(user_a_id)
                 .one(&*conn)
                 .await
@@ -173,12 +171,12 @@ async fn writes_are_scoped_to_the_callers_ability() {
             active.name = Set("Hacked".to_owned());
             let update = Repo::<user_row::Entity>::update(active).await;
             let delete = Repo::<user_row::Entity>::delete(model).await;
-            (update, delete)
-        }),
-    )
-    .await;
+            Ok::<_, nest_rs::seaorm::RepoError>((update, delete))
+        })
+        .await
+        .expect("the unit runs both writes");
     assert!(
-        matches!(update, Err(sea_orm::DbErr::RecordNotUpdated)),
+        matches!(update, Err(nest_rs::seaorm::RepoError::NotFound)),
         "an out-of-scope update touches no row: {update:?}",
     );
     let delete = delete.expect("a delete query runs");
@@ -188,7 +186,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
     );
 
     let survivor = user_row::Entity::find_by_id(user_a_id)
-        .one(&*db.connection())
+        .one(&*connection(app.container()))
         .await
         .expect("re-read user A")
         .expect("user A still exists");
@@ -208,7 +206,7 @@ async fn writes_are_scoped_to_the_callers_ability() {
         .assert_status(StatusCode::NOT_FOUND);
 
     let tombstone = user_row::Entity::find_by_id(user_a_id)
-        .one(&*db.connection())
+        .one(&*connection(app.container()))
         .await
         .expect("re-read user A directly")
         .expect("soft-deleted user row remains in the database");
@@ -219,29 +217,23 @@ async fn writes_are_scoped_to_the_callers_ability() {
 }
 
 #[tokio::test]
-async fn a_plain_user_get_by_id_masks_the_email() {
-    let (_db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+async fn a_plain_user_get_by_id_withholds_the_email() {
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "Initech").await;
 
     app.http()
         .post("/users")
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", token_for(&org, "admin").await),
-        )
+        .header(header::AUTHORIZATION, sign(&app, org, Role::Admin))
         .body_json(&json!({ "name": "Bob", "email": "bob@initech.test" }))
         .send()
         .await
-        .assert_status_is_ok();
+        .assert_status(StatusCode::CREATED);
 
     let listed = app
         .http()
         .get("/users")
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", token_for(&org, "admin").await),
-        )
+        .header(header::AUTHORIZATION, sign(&app, org, Role::Admin))
         .send()
         .await;
     listed.assert_status_is_ok();
@@ -258,7 +250,7 @@ async fn a_plain_user_get_by_id_masks_the_email() {
         .string()
         .to_owned();
 
-    let user = format!("Bearer {}", token_for(&org, "user").await);
+    let user = sign(&app, org, Role::User);
     let got = app
         .http()
         .get(format!("/users/{user_id}"))
@@ -269,30 +261,28 @@ async fn a_plain_user_get_by_id_masks_the_email() {
     let json = got.json().await;
     let body = json.value().object();
     assert_eq!(body.get("name").string(), "Bob");
-    assert!(
-        body.get_opt("email").is_none(),
-        "a plain user's GET by id masks the email field",
+    assert_eq!(
+        body.get("email").deserialize::<serde_json::Value>(),
+        serde_json::Value::Null,
+        "a plain user's GET by id withholds the email field, its key written",
     );
 }
 
 #[tokio::test]
-async fn a_plain_user_listing_masks_the_email() {
-    let (_db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+async fn a_plain_user_listing_withholds_the_email() {
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "Initech").await;
 
     app.http()
         .post("/users")
-        .header(
-            header::AUTHORIZATION,
-            format!("Bearer {}", token_for(&org, "admin").await),
-        )
+        .header(header::AUTHORIZATION, sign(&app, org, Role::Admin))
         .body_json(&json!({ "name": "Bob", "email": "bob@initech.test" }))
         .send()
         .await
-        .assert_status_is_ok();
+        .assert_status(StatusCode::CREATED);
 
-    let user = format!("Bearer {}", token_for(&org, "user").await);
+    let user = sign(&app, org, Role::User);
     let listed = app
         .http()
         .get("/users")
@@ -309,18 +299,19 @@ async fn a_plain_user_listing_masks_the_email() {
         .expect("one user")
         .object();
     assert_eq!(first.get("name").string(), "Bob");
-    assert!(
-        first.get_opt("email").is_none(),
-        "a plain user's listing masks the email field",
+    assert_eq!(
+        first.get("email").deserialize::<serde_json::Value>(),
+        serde_json::Value::Null,
+        "a plain user's listing withholds the email field, its key written",
     );
 }
 
 #[tokio::test]
 async fn a_failed_mutation_persists_nothing() {
-    let (_db, app) = boot().await;
-    let bootstrap = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let bootstrap = sign(&app, ORG_ID, Role::Admin);
     let org = create_org(&app, &bootstrap, "Hooli").await;
-    let admin = format!("Bearer {}", token_for(&org, "admin").await);
+    let admin = sign(&app, org, Role::Admin);
 
     app.http()
         .post("/users")
@@ -328,7 +319,7 @@ async fn a_failed_mutation_persists_nothing() {
         .body_json(&json!({ "name": "Ada", "email": "dup@hooli.test" }))
         .send()
         .await
-        .assert_status_is_ok();
+        .assert_status(StatusCode::CREATED);
 
     app.http()
         .post("/users")
@@ -343,8 +334,8 @@ async fn a_failed_mutation_persists_nothing() {
 
 #[tokio::test]
 async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     create_org(&app, &admin, "SameName").await;
     app.http()
@@ -356,7 +347,7 @@ async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
         .assert_status(StatusCode::CONFLICT);
 
     let org = create_org(&app, &admin, "Conflict").await;
-    let token = format!("Bearer {}", token_for(&org, "admin").await);
+    let token = sign(&app, org, Role::Admin);
     let body = json!({ "name": "Dup", "email": "dup@conflict.test" });
     app.http()
         .post("/users")
@@ -364,26 +355,92 @@ async fn a_duplicate_email_create_is_a_conflict_not_a_500() {
         .body_json(&body)
         .send()
         .await
-        .assert_status_is_ok();
-    app.http()
+        .assert_status(StatusCode::CREATED);
+    let taken = app
+        .http()
         .post("/users")
+        .header(header::AUTHORIZATION, &token)
+        .body_json(&json!({ "name": "Other", "email": "dup@conflict.test" }))
+        .send()
+        .await;
+    taken.assert_status(StatusCode::CONFLICT);
+    let problem = taken
+        .json()
+        .await
+        .value()
+        .deserialize::<serde_json::Value>();
+    assert_eq!(
+        problem["errors"],
+        json!({ "email": [{ "code": "unique" }] }),
+        "the 409 names the field whose value is taken: {problem}",
+    );
+    for withheld in ["dup@conflict.test", "user_email_live", "23505"] {
+        assert!(
+            !problem.to_string().contains(withheld),
+            "{withheld} in {problem}"
+        );
+    }
+
+    let other = app
+        .http()
+        .post("/users")
+        .header(header::AUTHORIZATION, &token)
+        .body_json(&json!({ "name": "Other", "email": "other@conflict.test" }))
+        .send()
+        .await;
+    other.assert_status(StatusCode::CREATED);
+    let other_id = other
+        .json()
+        .await
+        .value()
+        .object()
+        .get("id")
+        .string()
+        .to_owned();
+    let renamed = app
+        .http()
+        .put(format!("/users/{other_id}"))
         .header(header::AUTHORIZATION, &token)
         .body_json(&body)
         .send()
+        .await;
+    renamed.assert_status(StatusCode::CONFLICT);
+    let problem = renamed
+        .json()
         .await
-        .assert_status(StatusCode::CONFLICT);
+        .value()
+        .deserialize::<serde_json::Value>();
+    assert_eq!(
+        problem["errors"],
+        json!({ "email": [{ "code": "unique" }] }),
+        "{problem}"
+    );
 }
 
 #[tokio::test]
 async fn crud_generated_update_and_delete_round_trip() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     let id = create_org(&app, &admin, "Before").await;
 
-    let patched = app
+    let partial = app
         .http()
         .patch(format!("/orgs/{id}"))
+        .header(header::AUTHORIZATION, &admin)
+        .body_json(&json!({ "name": "After" }))
+        .send()
+        .await;
+    partial.assert_status(StatusCode::METHOD_NOT_ALLOWED);
+    let allowed = partial.0.headers()[header::ALLOW]
+        .to_str()
+        .expect("ASCII")
+        .to_owned();
+    assert!(allowed.contains("PUT"), "{allowed}");
+
+    let patched = app
+        .http()
+        .put(format!("/orgs/{id}"))
         .header(header::AUTHORIZATION, &admin)
         .body_json(&json!({ "name": "After" }))
         .send()
@@ -423,22 +480,21 @@ async fn crud_generated_update_and_delete_round_trip() {
 
 #[tokio::test]
 async fn crud_cursor_pagination_walks_the_collection_in_order() {
-    let (_db, app) = boot().await;
-    let admin = format!("Bearer {}", token_for(ORG_ID, "admin").await);
+    let app = boot().await;
+    let admin = sign(&app, ORG_ID, Role::Admin);
 
     let mut created = Vec::new();
     for i in 0..5 {
-        created.push(create_org(&app, &admin, &format!("Page{i}")).await);
+        created.push(
+            create_org(&app, &admin, &format!("Page{i}"))
+                .await
+                .to_string(),
+        );
     }
 
     let mut seen: Vec<String> = Vec::new();
-    let mut after: Option<String> = None;
-    let mut first_page = true;
-    loop {
-        let path = match &after {
-            Some(cursor) => format!("/orgs?first=2&after={cursor}"),
-            None => "/orgs?first=2".to_string(),
-        };
+    let mut next = Some("/orgs?first=2".to_owned());
+    while let Some(path) = next.take() {
         let resp = app
             .http()
             .get(&path)
@@ -446,9 +502,22 @@ async fn crud_cursor_pagination_walks_the_collection_in_order() {
             .send()
             .await;
         resp.assert_status_is_ok();
-        if first_page {
-            resp.assert_header_exist("x-next-cursor");
-            first_page = false;
+        next = resp
+            .0
+            .headers()
+            .get(header::LINK)
+            .and_then(|value| value.to_str().ok())
+            .map(|link| {
+                link.strip_prefix('<')
+                    .and_then(|rest| rest.split_once(">; rel=\"next\""))
+                    .map(|(target, _)| target.to_owned())
+                    .unwrap_or_else(|| panic!("a next link: {link}"))
+            });
+        if let Some(target) = &next {
+            assert!(
+                target.starts_with("/orgs?first=2&after="),
+                "the link keeps the page size and carries the cursor: {target}",
+            );
         }
         let body = resp.json().await;
         let page: Vec<String> = body
@@ -462,14 +531,7 @@ async fn crud_cursor_pagination_walks_the_collection_in_order() {
             "the page respects first=2: got {}",
             page.len()
         );
-        if page.is_empty() {
-            break;
-        }
-        after = page.last().cloned();
         seen.extend(page);
-        if seen.len() >= created.len() {
-            break;
-        }
     }
 
     assert_eq!(seen.len(), 5, "all five orgs are paged through: {seen:?}");

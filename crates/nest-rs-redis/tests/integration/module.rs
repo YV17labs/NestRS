@@ -1,0 +1,515 @@
+//! `RedisModule::for_root` opening a named instance beside the default one, in
+//! process: two connections to two scripted servers, a named instance's budget
+//! held under each binding's net, a queue's config pinned on it, its refusals
+//! naming its own variables, its namespace refused when a linked config holds
+//! it, its variables claimed by the read that resolved them, and each binding
+//! opening the instance it runs on, under whatever pin the root names.
+
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use nest_rs_config::{Config, ConfigError, config};
+use nest_rs_core::{App, Instanced, Module, instance, module};
+use nest_rs_redis::{
+    RedisConfig, RedisConnection, RedisError, RedisModule, RedisQueueConfig, RedisQueueModule,
+    RedisScheduleModule, RedisThrottlerModule,
+};
+
+use crate::connection::DemotedRedis;
+use crate::harness::tls::trusting_the_test_authority;
+
+/// The suite's one named instance: two markers reading `cache` in one binary
+/// would be refused as twins.
+#[instance]
+pub(crate) struct Cache;
+
+/// The cache instance's server, set by each test booting a module that pins
+/// [`cache_config`] — [`TwoInstances`], `health`'s two probed instances:
+/// nextest runs each test in a process of its own.
+pub(crate) static CACHE_URL: OnceLock<String> = OnceLock::new();
+
+pub(crate) fn cache_config() -> RedisConfig {
+    RedisConfig {
+        url: CACHE_URL.get().cloned().unwrap_or_default().into(),
+        connect_timeout: Duration::from_secs(2),
+        tls: trusting_the_test_authority(),
+    }
+}
+
+/// The default instance, seeded by the test — the suite's own
+/// `<PREFIX>_REDIS__URL` would outrank a pin — beside the cache pinned here,
+/// which no variable of the suite's reaches.
+#[module(imports = [RedisModule, RedisModule::for_root((Cache, cache_config()))])]
+struct TwoInstances;
+
+/// Two instances open two connections, each to its own server: the primary
+/// behind the default one is demoted, and the cache's still takes a write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_instances_open_two_connections_each_to_its_own_server() {
+    let primary = DemotedRedis::start().await;
+    let cache = DemotedRedis::start().await;
+    CACHE_URL.set(cache.url()).expect("set once");
+    let app = App::builder()
+        .provide(primary.config())
+        .module::<TwoInstances>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("both instances boot: {refused:#}"));
+    let container = app.container();
+    let mut primary_conn = RedisConnection::clone(
+        &container
+            .get::<RedisConnection>()
+            .expect("the default instance's connection"),
+    );
+    let mut cache_conn = RedisConnection::clone(
+        &container
+            .get::<RedisConnection<Cache>>()
+            .expect("the cache's connection"),
+    );
+    assert!(
+        container.get::<Instanced<Cache, RedisConfig>>().is_some(),
+        "the cache's config is held under its instance"
+    );
+
+    primary.demote();
+    let write = || redis::cmd("SET").arg("nestrs-instance").arg("1").clone();
+    let refused = write()
+        .query_async::<()>(&mut primary_conn)
+        .await
+        .expect_err("the default instance reaches the demoted server");
+    assert_eq!(refused.code(), Some("READONLY"), "{refused}");
+    write()
+        .query_async::<()>(&mut cache_conn)
+        .await
+        .expect("the cache reaches a server of its own");
+}
+
+/// The cache's budget pinned at the rate limiter's net, on a server that
+/// answers: the boot holds the cache's budget, not the default's, under it.
+#[module(imports = [RedisThrottlerModule::<Cache>])]
+struct PatientCache;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_named_instance_s_budget_at_its_binding_s_net_is_refused_naming_its_variable() {
+    let cache = DemotedRedis::start().await;
+    let Err(refused) = App::builder()
+        .provide(Instanced::<Cache, RedisConfig>::from(RedisConfig {
+            url: cache.url().into(),
+            connect_timeout: nest_rs_throttler::HIT_TIMEOUT,
+            tls: trusting_the_test_authority(),
+        }))
+        .module::<PatientCache>()
+        .build()
+        .await
+    else {
+        panic!("a budget at the rate limiter's net must not boot");
+    };
+    let refused = refused
+        .downcast::<nest_rs_core::BudgetPastNetError>()
+        .unwrap_or_else(|other| panic!("not a budget refusal: {other:#}"));
+    assert_eq!(
+        (refused.resource, refused.port, refused.net),
+        (
+            "the Redis connection",
+            "the rate limiter",
+            nest_rs_throttler::HIT_TIMEOUT
+        )
+    );
+    assert!(
+        refused.setting.contains(&nest_rs_config::var_name(
+            "redis__cache",
+            "CONNECT_TIMEOUT_SECS"
+        )),
+        "{refused}"
+    );
+}
+
+/// The cache's budget pinned at the scheduler's net.
+#[module(imports = [RedisScheduleModule::<Cache>])]
+struct LockingCache;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_named_instance_s_budget_at_the_scheduler_s_net_is_refused_naming_its_variable() {
+    let cache = DemotedRedis::start().await;
+    let Err(refused) = App::builder()
+        .provide(Instanced::<Cache, RedisConfig>::from(RedisConfig {
+            url: cache.url().into(),
+            connect_timeout: nest_rs_schedule::LOCK_TIMEOUT,
+            tls: trusting_the_test_authority(),
+        }))
+        .module::<LockingCache>()
+        .build()
+        .await
+    else {
+        panic!("a budget at the scheduler's net must not boot");
+    };
+    let refused = refused
+        .downcast::<nest_rs_core::BudgetPastNetError>()
+        .unwrap_or_else(|other| panic!("not a budget refusal: {other:#}"));
+    assert_eq!(
+        (refused.resource, refused.port, refused.net),
+        (
+            "the Redis connection",
+            "the scheduler",
+            nest_rs_schedule::LOCK_TIMEOUT
+        )
+    );
+    assert!(
+        refused.setting.contains(&nest_rs_config::var_name(
+            "redis__cache",
+            "CONNECT_TIMEOUT_SECS"
+        )),
+        "{refused}"
+    );
+}
+
+/// The lease a queue on the cache is pinned with, unlike the default's.
+const CACHE_LEASE: Duration = Duration::from_secs(45);
+
+/// A queue on the cache, its config pinned on the binding.
+#[module(imports = [
+    RedisQueueModule::for_root((Cache, RedisQueueConfig { lease: CACHE_LEASE })),
+])]
+struct QueueOnTheCache;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queue_pinned_on_a_named_instance_holds_its_config_under_that_instance() {
+    assert_ne!(RedisQueueConfig::default().lease, CACHE_LEASE);
+    let cache = DemotedRedis::start().await;
+    let app = App::builder()
+        .provide(Instanced::<Cache, RedisConfig>::from(cache.config()))
+        .module::<QueueOnTheCache>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("the queue on the cache boots: {refused:#}"));
+    let held = app
+        .container()
+        .get::<Instanced<Cache, RedisQueueConfig>>()
+        .expect("the queue's config is held under the cache");
+    assert_eq!(held.lease, CACHE_LEASE);
+    assert!(
+        app.container().get::<RedisQueueConfig>().is_none(),
+        "the default instance has no queue"
+    );
+    assert!(
+        app.container().get::<RedisConnection<Cache>>().is_some(),
+        "the binding opens the instance it runs on"
+    );
+    assert!(
+        app.container().get::<RedisConnection>().is_none(),
+        "and no other, whose variables a deployment need not set"
+    );
+}
+
+#[module(imports = [RedisQueueModule])]
+struct QueueAlone;
+
+#[module(imports = [RedisScheduleModule])]
+struct LockAlone;
+
+#[module(imports = [RedisThrottlerModule])]
+struct StoreAlone;
+
+/// A binding beside the resource it imports.
+#[module(imports = [RedisModule, RedisQueueModule])]
+struct QueueBesideItsResource;
+
+/// Whether `M` opened the default instance over `server`.
+async fn opens_the_default_instance<M: Module>(server: &DemotedRedis) -> bool {
+    App::builder()
+        .provide(server.config())
+        .module::<M>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("{} boots: {refused:#}", std::any::type_name::<M>()))
+        .container()
+        .get::<RedisConnection>()
+        .is_some()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_binding_alone_opens_the_connection_it_runs_on() {
+    let server = DemotedRedis::start().await;
+    assert!(opens_the_default_instance::<QueueAlone>(&server).await);
+    assert!(opens_the_default_instance::<LockAlone>(&server).await);
+    assert!(opens_the_default_instance::<StoreAlone>(&server).await);
+    assert!(opens_the_default_instance::<QueueBesideItsResource>(&server).await);
+}
+
+#[module(imports = [RedisThrottlerModule::<Cache>, RedisModule::for_root((Cache, cache_config()))])]
+struct BindingThenPin;
+
+#[module(imports = [RedisModule::for_root((Cache, cache_config())), RedisThrottlerModule::<Cache>])]
+struct PinThenBinding;
+
+/// The budget `M`'s boot left the cache's connection pinned at.
+async fn cache_budget<M: Module>() -> Duration {
+    App::builder()
+        .module::<M>()
+        .build()
+        .await
+        .unwrap_or_else(|refused| panic!("{} boots: {refused:#}", std::any::type_name::<M>()))
+        .container()
+        .get::<Instanced<Cache, RedisConfig>>()
+        .expect("the cache's config")
+        .connect_timeout
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pin_at_the_root_supersedes_the_binding_s_bare_import_in_either_order() {
+    let cache = DemotedRedis::start().await;
+    CACHE_URL.set(cache.url()).expect("set once");
+    let pinned = cache_config().connect_timeout;
+    assert_ne!(RedisConfig::default().connect_timeout, pinned);
+    assert_eq!(cache_budget::<BindingThenPin>().await, pinned);
+    assert_eq!(cache_budget::<PinThenBinding>().await, pinned);
+}
+
+/// An instance reading `lock`, whose derived namespace the config below holds.
+#[instance]
+struct Lock;
+
+/// A binding's config declaring `redis__lock` — a word no reserved list can
+/// know — so the instance `Lock` would read its variables.
+#[config(namespace = "redis__lock")]
+#[derive(Clone, Default)]
+struct RedisLockConfig {
+    holders: u64,
+}
+
+#[module(imports = [RedisModule::<Lock>])]
+struct LockSharingItsNamespace;
+
+#[tokio::test]
+async fn an_instance_whose_namespace_a_linked_config_declares_is_refused() {
+    let Err(refused) = App::builder()
+        .module::<LockSharingItsNamespace>()
+        .build()
+        .await
+    else {
+        panic!("an instance sharing its namespace must not boot");
+    };
+    let Some(ConfigError::SharedInstance {
+        instance,
+        namespace,
+        claims,
+    }) = refused
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ConfigError>())
+    else {
+        panic!("not a shared-instance refusal: {refused:#}");
+    };
+    assert!(instance.ends_with("::Lock"), "{refused:#}");
+    assert_eq!(namespace, "redis__lock");
+    assert_eq!(claims.len(), 1, "{refused:#}");
+    assert!(claims[0].ends_with("::RedisLockConfig"), "{refused:#}");
+    RedisLockConfig::load().expect("the config keeps its own namespace");
+}
+
+/// The cache pinned at a port nothing listens on.
+#[module(imports = [RedisModule::for_root((Cache, RedisConfig {
+    url: "rediss://127.0.0.1:1/".into(),
+    connect_timeout: Duration::from_millis(300),
+    tls: trusting_the_test_authority(),
+}))])]
+struct UnreachableCache;
+
+#[tokio::test]
+async fn an_unreachable_named_instance_fails_the_boot_naming_its_url() {
+    let Err(refused) = App::builder().module::<UnreachableCache>().build().await else {
+        panic!("a cache nothing serves must not boot");
+    };
+    let said = format!("{refused:#}");
+    assert!(
+        refused.chain().any(|cause| matches!(
+            cause.downcast_ref::<RedisError>(),
+            Some(RedisError::Unreachable { .. })
+        )),
+        "not the connection's refusal: {said}"
+    );
+    assert!(
+        said.contains(&nest_rs_config::var_name("redis__cache", "URL"))
+            && said.contains(&nest_rs_config::var_name(
+                "redis__cache",
+                "CONNECT_TIMEOUT_SECS"
+            ))
+            && !said.contains(&nest_rs_config::var_name("redis", "URL")),
+        "{said}"
+    );
+}
+
+#[module(imports = [RedisModule, RedisModule::<Cache>])]
+struct BothFromTheEnvironment;
+
+/// The cache's variables are the cache's, though the default instance's keys
+/// are checked first — its read comes first, and its connection's refusal ends
+/// the boot before the cache is read — while a key the default instance does
+/// not read is still reported.
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
+fn the_unclaimed_report_leaves_a_named_instance_s_variables_alone() {
+    let logs = nest_rs_testing::LogCapture::install_global();
+    let nowhere = "rediss://127.0.0.1:1/";
+    let cache = |key| nest_rs_config::var_name("redis__cache", key);
+    figment::Jail::expect_with(|jail| {
+        jail.set_env(nest_rs_config::var_name("redis", "URL"), nowhere);
+        jail.set_env(
+            nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+            "1",
+        );
+        jail.set_env(cache("URL"), nowhere);
+        jail.set_env(cache("CONNECT_TIMEOUT_SECS"), "1");
+        jail.set_env(nest_rs_config::var_name("redis", "NOT_A_KEY"), "1");
+        let booted = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+            .block_on(App::builder().module::<BothFromTheEnvironment>().build());
+        assert!(booted.is_err(), "nothing serves either instance");
+        Ok(())
+    });
+
+    let reported = |variable: &str| {
+        logs.events()
+            .into_iter()
+            .filter(|event| event.target == nest_rs_config::TARGET)
+            .filter(|event| event.field("variable").as_deref() == Some(variable))
+            .collect::<Vec<_>>()
+    };
+    for claimed in [cache("URL"), cache("CONNECT_TIMEOUT_SECS")] {
+        assert!(
+            reported(&claimed).is_empty(),
+            "{claimed} is read: {:#?}",
+            reported(&claimed)
+        );
+    }
+    let unread = reported(&nest_rs_config::var_name("redis", "NOT_A_KEY"));
+    assert!(
+        unread.iter().any(|event| {
+            event.message == nest_rs_config::unclaimed::UNREAD_CONFIG_VARIABLE
+                && event.field("namespace").as_deref() == Some("redis")
+        }),
+        "the default instance's keys were checked: {:#?}",
+        logs.events()
+    );
+}
+
+#[expect(
+    dead_code,
+    reason = "the connection is declared for the container to resolve, never read"
+)]
+#[nest_rs_core::injectable]
+struct ReadsTheConnection {
+    #[inject]
+    conn: std::sync::Arc<RedisConnection>,
+}
+
+#[module(providers = [ReadsTheConnection])]
+struct NoConnectionModule;
+
+#[expect(
+    dead_code,
+    reason = "the connection is declared for the container to resolve, never read"
+)]
+#[nest_rs_core::injectable]
+struct ReadsTheCache {
+    #[inject]
+    conn: std::sync::Arc<RedisConnection<Cache>>,
+}
+
+#[module(providers = [ReadsTheCache])]
+struct NoCacheModule;
+
+/// The refusal of `M`, whose `consumer` reaches the cache's connection that no
+/// module opens: it names the connection, then the import opening it for the
+/// cache, and nothing else to do.
+async fn told_to_open_the_cache<M: Module + 'static>(consumer: &str) {
+    let Err(refused) = App::builder().module::<M>().build().await else {
+        panic!("no module opens the instance");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(
+        (missing.consumer, missing.dependency),
+        (consumer, "RedisConnection<Cache>"),
+        "{missing}"
+    );
+    let said = missing.to_string();
+    assert!(
+        said.ends_with(
+            "which no module this app imports provides. Import \
+             `nest_rs::redis::RedisModule::<Cache>`, which opens the Redis connection every \
+             binding of the `cache` instance shares."
+        ),
+        "{said}"
+    );
+}
+
+#[tokio::test]
+async fn a_provider_injecting_a_named_instance_no_module_opens_is_told_its_module() {
+    told_to_open_the_cache::<NoCacheModule>("ReadsTheCache").await;
+}
+
+#[nest_rs_http::controller(path = "/cache")]
+struct CacheController {
+    #[inject]
+    _conn: std::sync::Arc<RedisConnection<Cache>>,
+}
+
+#[nest_rs_http::routes]
+impl CacheController {
+    #[get("/")]
+    async fn read(&self) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [CacheController])]
+struct NoCacheForTheControllerModule;
+
+#[tokio::test]
+async fn an_edge_host_injecting_a_named_instance_no_module_opens_is_told_its_module() {
+    told_to_open_the_cache::<NoCacheForTheControllerModule>("CacheController").await;
+}
+
+#[nest_rs_http::controller(path = "/cache-per-request")]
+struct CachePerRequestController;
+
+#[nest_rs_http::routes]
+impl CachePerRequestController {
+    #[get("/")]
+    async fn read(&self, _conn: nest_rs_core::Scoped<RedisConnection<Cache>>) -> &'static str {
+        "ok"
+    }
+}
+
+#[module(providers = [CachePerRequestController])]
+struct NoCachePerRequestModule;
+
+#[tokio::test]
+async fn a_handler_parameter_resolving_a_named_instance_no_module_opens_is_told_its_module() {
+    told_to_open_the_cache::<NoCachePerRequestModule>("CachePerRequestController").await;
+}
+
+#[tokio::test]
+async fn a_provider_injecting_a_connection_no_module_opens_is_refused_naming_the_module() {
+    let Err(refused) = App::builder().module::<NoConnectionModule>().build().await else {
+        panic!("no module opens the connection");
+    };
+    let missing = refused
+        .downcast::<nest_rs_core::MissingDependencyError>()
+        .unwrap_or_else(|refused| panic!("not the unmet dependency: {refused:#}"));
+    assert_eq!(missing.consumer, "ReadsTheConnection");
+    let said = missing.to_string();
+    assert!(
+        said.ends_with(
+            "Import `nest_rs::redis::RedisModule`, which opens the Redis connection every \
+             binding of the default instance shares."
+        ),
+        "{said}"
+    );
+}

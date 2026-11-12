@@ -1,0 +1,8 @@
+error: #[instance] goes on a unit struct: a marker names an instance and holds nothing — the instance's values are its config's and its resource's
+ --> tests/integration/diagnostics/core/instance_on_a_struct_with_fields.rs:7:18
+  |
+7 |   pub struct Cache {
+  |  __________________^
+8 | |     pub url: String,
+9 | | }
+  | |_^

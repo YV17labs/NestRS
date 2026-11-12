@@ -1,0 +1,86 @@
+---
+title: Logging and telemetry variables
+description: "The variables no namespace holds — `RUST_LOG` and `<PREFIX>_LOG_*` for the console, the specification's `OTEL_*` for the exporter."
+sidebar:
+  order: 6.1
+---
+
+Two sets of variables sit outside every `<PREFIX>_<NAMESPACE>__*` namespace: the
+console logger's, which `nest-rs-core` reads with no module to import, and
+OpenTelemetry's, which its specification names. Both are read at the start, and
+both keep the ecosystem's names where the ecosystem owns them.
+
+## Logging — `RUST_LOG` and `<PREFIX>_LOG_*`
+
+The baseline console logger is part of `nest-rs-core` — no module to
+import, no config struct. It reads three process-level variables:
+
+| Key | Meaning |
+|---|---|
+| `RUST_LOG` | tracing filter (e.g. `info`, `debug,hyper=warn`), the ecosystem's variable, so no prefix renames it; default `info`. A library that quotes a client's payload or a secret is [clamped](/opentelemetry/logs/#the-libraries-the-framework-wires) until a directive names it |
+| `<PREFIX>_LOG_FORMAT` | `text` or `json`; defaults to `text` under a declared development or test profile, `json` otherwise — a deployment and an undeclared process alike, whatever the cargo build profile |
+| `<PREFIX>_LOG_SOURCE_LOCATION` | append the emitting `file:line` to each event — default `false` |
+
+Unset or blank keeps the default. A value that does not parse stops the
+boot, naming the variable and never its value — a mistyped
+`<PREFIX>_LOG_FORMAT=jsno` is said, never quietly replaced by the profile's
+default.
+
+`<PREFIX>_LOG`, the filter's second name before 7.0, is read by nothing: set —
+by a `.env` file or the deployment — it is said once at `warn` on
+`nest_rs::app` (`variable read by nothing since 7.0`, naming `RUST_LOG` as `read_as`),
+and the filter is `RUST_LOG`'s. A real `RUST_LOG` in the shell outranks one a
+committed `.env` writes, as every real variable outranks the files.
+
+A `text` line is coloured only on a terminal: piped or written to a file it
+carries no escape code, and `NO_COLOR` set to anything but empty turns the
+colour off on a terminal too ([no-color.org](https://no-color.org)).
+
+An app that installs its own subscriber first (e.g. through
+[OpenTelemetry](/opentelemetry/)) keeps it — the baseline logger only
+activates when none is set. The same three variables drive the console
+layer of the [OpenTelemetry](/opentelemetry/) subscriber too, so log
+config survives adopting or dropping the observability stack.
+
+## `opentelemetry` — the specification's `OTEL_*`
+
+OpenTelemetry reads the variables its
+[specification](https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/)
+names, unprefixed like `RUST_LOG`, over what `OpenTelemetryConfig` pins
+([OpenTelemetry configuration](/opentelemetry/configuration/)).
+
+| Variable | Meaning |
+|---|---|
+| `OTEL_SERVICE_NAME` | service name; default the binary's package name, or `unknown_service:<executable>` in a binary `#[nest_rs::main]` did not start. Empty reads as unset; blank fails the boot |
+| `OTEL_RESOURCE_ATTRIBUTES` | resource attributes, `key=value` comma-separated, each key and value percent-decoded (`%2C` for a comma, `%3D` for `=`): `service.version` (default the binary's package version), `deployment.environment.name`, `service.instance.id` (default a fresh UUIDv7); a member with no `=`, an empty key, an escape that does not decode or an empty or blank `service.name` fails the boot |
+| `OTEL_SDK_DISABLED` | `true`, in any case, switches every signal off whatever the endpoints and selectors say; anything else leaves the SDK on, a value neither `true` nor `false` said at `warn` |
+| `OTEL_TRACES_EXPORTER` · `OTEL_METRICS_EXPORTER` · `OTEL_LOGS_EXPORTER` | `otlp` (default) or `none`, in any case, or a comma-separated list of `otlp`: `none` switches the signal off whatever endpoint names it. Any exporter this crate does not build (`console`, `zipkin`, `prometheus`), `none` beside `otlp`, or `otlp` named with no endpoint for the signal fails the boot |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | collector base endpoint, each signal appending `/v1/traces`, `/v1/metrics`, `/v1/logs` (unset ⇒ no export): `http://` exports in plaintext, which a deployed profile says once per signal at `warn` off the loopback, `https://` over TLS alone, a loopback host dialled past any proxy the environment names; another scheme, a value that does not parse as a URL, userinfo (a credential goes in `OTEL_EXPORTER_OTLP_HEADERS`), a query on this base, or a query in an `http://` endpoint on a host other than loopback fails the boot, and so does any endpoint, a pinned one included, for a signal not switched off in a binary built without the `otlp` feature |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` · `_METRICS_ENDPOINT` · `_LOGS_ENDPOINT` | one signal's endpoint, used as given, its query kept, over the base |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` (and per signal) | `http/protobuf`, the one protocol exported; any other fails the boot |
+| `OTEL_EXPORTER_OTLP_COMPRESSION` (and per signal) | `gzip` or `none` (default), in any case; `zstd` or any other fails the boot |
+| `OTEL_EXPORTER_OTLP_HEADERS` (and per signal) | `key=value` headers every export carries, read as the SDK reads them, a signal's own set empty read as unset; a pair the SDK would drop (no `=`, an empty key or value, an invalid name), or any header beside an `http://` endpoint on a host other than loopback, fails the boot |
+| `OTEL_PROPAGATORS` | `tracecontext,baggage` (default), what the framework propagates; any other format, a list leaving one out, or `none` fails the boot |
+| `OTEL_CONFIG_FILE` | not read — the Rust SDK has no file configuration — so set, it fails the boot |
+| `OTEL_TRACES_SAMPLER` · `OTEL_TRACES_SAMPLER_ARG` | the sampler and its argument, as the SDK reads them; default parent-based, every trace. A sampler the SDK does not build (`jaeger_remote`, `xray`), a name not in lowercase, or an argument that is not a number between 0 and 1 fails the boot; an argument a sampler takes none of is ignored and said |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `cumulative` (default), `delta` or `lowmemory`, in any case; any other fails the boot |
+| `OTEL_METRIC_EXPORT_INTERVAL` | metric export period in milliseconds, from `1000` to `3600000` (default `60000`); outside, or not a whole number, fails the boot |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` (and per signal) | one export's bound in milliseconds (default `10000`), `0` no limit; not a whole number fails the boot |
+| `OTEL_METRIC_EXPORT_TIMEOUT` · `OTEL_BSP_EXPORT_TIMEOUT` · `OTEL_BLRP_EXPORT_TIMEOUT` | the metric reader's, the batch span processor's and the batch log processor's bound on one export in milliseconds (default `30000`), the earlier of it and the exporter's cutting it, `0` no limit; not a whole number, or both at `0`, fails the boot |
+| `OTEL_BSP_SCHEDULE_DELAY` · `OTEL_BSP_MAX_QUEUE_SIZE` · `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (and the `OTEL_BLRP_*` three) | the batch processors' delay in milliseconds, queue and batch sizes, read by the SDK; not a whole number, digits alone as the SDK reads it, a size of `0`, a batch above its queue, a delay under 1 ms (on which the SDK's worker polls without pause) or a queue above 1,048,576 (allocated whole when the processor starts) fails the boot |
+| `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT` · `OTEL_SPAN_EVENT_COUNT_LIMIT` · `OTEL_SPAN_LINK_COUNT_LIMIT` · `OTEL_EVENT_ATTRIBUTE_COUNT_LIMIT` · `OTEL_LINK_ATTRIBUTE_COUNT_LIMIT` | a span's attribute, event and link counts and an event's and a link's attribute counts (default `128` each), the three attribute counts falling back on `OTEL_ATTRIBUTE_COUNT_LIMIT`; not a whole number fails the boot |
+| `OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT` · `OTEL_LOGRECORD_ATTRIBUTE_*` · `OTEL_METRICS_EXEMPLAR_FILTER` · `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` · `OTEL_LOG_LEVEL` · `OTEL_BSP_MAX_CONCURRENT_EXPORTS` · `OTEL_EXPORTER_OTLP_INSECURE` (and per signal) | served by no crate this build links: set, each is said once at `warn`, unless its value names what the build does (`always_off`, `explicit_bucket_histogram`, `1`, `false`); `OTEL_LOG_LEVEL`'s subject follows `RUST_LOG`, and the `INSECURE` flags apply to gRPC alone, since over OTLP/HTTP the endpoint's scheme decides |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE` (and per signal) | path to the PEM authorities an `https://` collector's certificate must chain to, replacing the system's. Holding no certificate, or beside an `http://` endpoint, fails the boot |
+| `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` / `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | paths to the PEM client certificate chain, leaf first, and its private key, presented to a collector that requires one. Both or neither; beside an `http://` endpoint, they fail the boot |
+
+The console layer reads [`RUST_LOG` and `<PREFIX>_LOG_*`](#logging--rust_log-and-prefix_log_)
+above, over a config pinned through `init_with` too — there are no
+OTel-specific log variables.
+
+## Going further
+
+- [Logs](/opentelemetry/logs/) — what the console and the exporter write, and
+  the libraries the framework clamps.
+- [OpenTelemetry](/opentelemetry/) — the exporter these variables configure.
+- [Env-var reference](/configuration/env-reference/) — every namespaced
+  variable the framework reads.

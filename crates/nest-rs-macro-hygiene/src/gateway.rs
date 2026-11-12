@@ -1,52 +1,187 @@
-//! `#[gateway]` + `#[use_guards]` + `#[messages]` — exercises the guard-layer
-//! emission (`::nest_rs_ws::tracing`, part of the M1 regression), the message
-//! dispatch table, and the versioned mount (`::nest_rs_ws::nest_rs_http::
-//! version_path`, which a use site declaring only the umbrella must never have
-//! to name).
+//! `#[gateway]` + `#[use_guards]` + `#[messages]`: the guard-layer emission,
+//! a guard a message binds or `#[force_guards]` re-runs, the interceptors,
+//! exception filters and data pipes a gateway and its messages bind, a
+//! `Scoped<T>` and an `Ambient<T>` parameter, a message stating no posture, the
+//! message sites and the versioned mount.
 
-use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, HttpGuard, async_trait};
-use nest_rs::http::poem::Request as HttpRequest;
-use nest_rs::ws::{gateway, messages};
+use nest_rs::core::{Ambient, Layer, Scoped, UnitContext, async_trait, injectable};
+use nest_rs::guards::{Denial, Guard, GuardFor};
+use nest_rs::http::HttpView;
+use nest_rs::pipes::GlobalPipe;
+use nest_rs::ws::{WsView, gateway, messages};
 
-/// Bound on the gateway *struct*, so it runs on the upgrade — an HTTP `GET` —
-/// and the attestation it owes is [`HttpGuard`], reachable through the umbrella
-/// like every other path this crate proves.
+/// Bound on the gateway struct, so it runs on the upgrade and owes
+/// `GuardFor<HttpView>`.
 ///
-/// It overrides `check_http` rather than inheriting the default, and that is not
-/// decoration: an empty `impl Guard for X {}` beside an `impl HttpGuard` is an
-/// attestation that lies, which is exactly what the trybuild snapshots next door
-/// exist to refuse. The witness must not ship the shape it witnesses against.
+/// It overrides `check_http`: an empty `impl Guard` beside the declaration is
+/// the lying one this crate's trybuild snapshots refuse.
 #[injectable]
+#[derive(Layer)]
 pub struct HygieneWsGuard;
-
-impl Layer for HygieneWsGuard {}
 
 #[async_trait]
 impl Guard for HygieneWsGuard {
-    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for HygieneWsGuard {}
+impl GuardFor<HttpView> for HygieneWsGuard {}
 
-/// Minimal gateway consumer, guarded so the `#[use_guards]` wrap is emitted.
+/// Bound on one message, and forced on another past the app-wide pool.
+#[injectable]
+#[derive(Layer)]
+pub struct HygieneMessageGuard;
+
+#[async_trait]
+impl Guard for HygieneMessageGuard {
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<WsView> for HygieneMessageGuard {}
+
+/// A value `#[meta]` declares, read by type.
+pub struct HygieneLimit(pub u32);
+
+/// Reads a message's `data` and changes nothing: the pipe a gateway and its
+/// messages bind.
+#[injectable]
+#[derive(Layer)]
+pub struct HygieneDataPipe;
+
+impl GlobalPipe for HygieneDataPipe {}
+
+/// Built for each message, read through a `Scoped<T>` parameter.
+#[injectable(scope = request)]
+pub struct HygieneMessageSession;
+
+/// Gated, so the `#[use_guards]` wrap is emitted; its interceptor, exception
+/// filter and pipe run around, and over, each of its messages.
 #[gateway(path = "/hygiene")]
+#[meta(HygieneLimit(100))]
 #[use_guards(HygieneWsGuard)]
+#[use_interceptors(crate::pipeline::HygieneUnitAudit)]
+#[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+#[use_pipes(HygieneDataPipe)]
 pub struct HygieneGateway;
 
 #[messages]
 impl HygieneGateway {
-    /// Payload-less, reply-less handler — the smallest legal shape.
     #[subscribe_message("hygiene.ping")]
+    #[meta(HygieneLimit(10))]
     #[public]
     async fn ping(&self) {}
+
+    #[subscribe_message("hygiene.covered")]
+    async fn covered(&self) {}
+
+    #[subscribe_message("hygiene.again")]
+    #[public]
+    #[force_guards(HygieneMessageGuard)]
+    async fn again(&self) {}
+
+    #[subscribe_message("hygiene.checked")]
+    #[public]
+    #[use_guards(HygieneMessageGuard)]
+    async fn checked(&self) {}
+
+    #[subscribe_message("hygiene.layered")]
+    #[public]
+    #[use_interceptors(crate::pipeline::HygieneUnitAudit)]
+    #[use_exception_filters(crate::pipeline::HygieneUnitRefusal)]
+    #[use_pipes(HygieneDataPipe)]
+    async fn layered(&self, session: Scoped<HygieneMessageSession>, text: String) -> String {
+        let _ = session;
+        text
+    }
+
+    #[subscribe_message("hygiene.operator")]
+    #[public]
+    async fn operator(&self, operator: Ambient<crate::operator::HygieneOperator>) -> String {
+        operator.into_inner().0
+    }
+
+    #[subscribe_message("hygiene.sync")]
+    #[public]
+    fn sync(&self) -> String {
+        "sync".into()
+    }
+
+    #[subscribe_message("hygiene.steady")]
+    #[public]
+    fn steady(&self) -> Result<String, crate::never::Never> {
+        Ok("steady".into())
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[subscribe_message("hygiene.count")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn count(&self) -> Result<u64, std::fmt::Error> {
+        Ok(0)
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[subscribe_message("hygiene.public_count")]
+    #[public(nest_rs::authz::Read, crate::entity::Entity)]
+    fn public_count(&self) -> Result<u64, std::fmt::Error> {
+        Ok(0)
+    }
+
+    #[cfg(feature = "authz")]
+    #[subscribe_message("hygiene.open_export")]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_export(&self) -> Result<String, std::fmt::Error> {
+        Ok("open".into())
+    }
+
+    #[cfg(feature = "authz")]
+    #[subscribe_message("hygiene.export")]
+    #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
+    fn export(&self) -> Result<String, std::fmt::Error> {
+        Ok("queued".into())
+    }
+
+    #[cfg(feature = "seaorm")]
+    #[subscribe_message("hygiene.bare_count")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn bare_count(&self) -> u64 {
+        0
+    }
+
+    #[on_connect]
+    fn connected(&self) {}
+
+    /// A message compiled out takes its dispatch arm, chain and guard with it.
+    #[cfg(any())]
+    #[subscribe_message("hygiene.gone")]
+    #[public]
+    #[use_guards(crate::does_not_exist::Guard)]
+    async fn compiled_out(
+        &self,
+        data: crate::does_not_exist::Data,
+    ) -> crate::does_not_exist::Reply {
+        crate::does_not_exist::answer(data)
+    }
+
+    /// A duplicate event and hook under an excluding condition are not a
+    /// duplicate dispatch.
+    #[cfg(any())]
+    #[subscribe_message("hygiene.ping")]
+    #[public]
+    async fn ping_elsewhere(&self) {}
+
+    #[cfg(any())]
+    #[on_connect]
+    fn connected_elsewhere(&self) {}
 }
 
-/// The versioned mount. `version_path` lives in `nest-rs-http`, which this crate
-/// does not declare — the expansion reaches it through the umbrella, so a
-/// gateway that versions its address still costs the developer one dependency.
+/// The versioned mount reaches `nest-rs-http`'s `version_path` through the umbrella.
 #[gateway(path = "/hygiene", version = "1")]
 pub struct HygieneVersionedGateway;
 

@@ -1,52 +1,181 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md) — one binary, one module per concern.
+//! Integration tests mirroring `src/` — one binary, one module per concern.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
+mod access_log;
 mod allow;
 mod body_limit;
+mod client_ip;
 mod compression;
 mod controller;
-mod diagnostics;
+mod cors;
+mod created;
 mod edge;
 mod exclusive_paths;
-mod fail_secure;
+mod fallback;
+mod form;
 mod global_prefix;
-mod header;
+mod guard_stage;
+mod headers;
 mod input;
+mod json;
+mod multipart;
+mod opaque;
+mod paginated;
+mod path;
+mod pipe;
+mod problem;
+mod query;
+mod response;
 mod response_body;
-mod route_decorators;
+mod route_site;
+mod routes;
 mod security_headers;
+mod server;
 mod sse;
 mod tls;
 mod trace_context;
+mod transport;
+mod trusted_proxy;
 mod versioning;
+mod websocket;
 
-use nest_rs_core::{App, Module, Transport};
-use nest_rs_http::HttpTransport;
-use poem::endpoint::BoxEndpoint;
-use poem::test::TestClient;
+use nest_rs_core::{
+    __private::{HandlerDeclaration, MetaLevels, declare_handler},
+    async_trait,
+};
+use nest_rs_core::{
+    App, Handler, Layer, Module, Posture, Transport, UnitContext, injectable, module,
+};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_http::{HttpConfig, HttpTransport, HttpView, controller, routes};
+use nest_rs_testing::TestClient;
+
+/// The suite's own self-mounts.
+struct Mounts;
+
+/// A self-mount the transport gates at its edge, as a gateway's upgrade is.
+pub(crate) static GATED_MOUNT: Handler = declare_handler(HandlerDeclaration {
+    unit: nest_rs_http::unit::REQUEST,
+    host: std::any::TypeId::of::<Mounts>(),
+    host_name: "Mounts",
+    method: "",
+    address: "/",
+    posture: Posture::Gated,
+    meta: MetaLevels::default,
+});
+
+/// A self-mount no guard gates, as the OpenAPI document is.
+pub(crate) static PUBLIC_MOUNT: Handler = declare_handler(HandlerDeclaration {
+    unit: nest_rs_http::unit::REQUEST,
+    host: std::any::TypeId::of::<Mounts>(),
+    host_name: "Mounts",
+    method: "",
+    address: "/",
+    posture: Posture::Public,
+    meta: MetaLevels::default,
+});
+
+/// One handler per method decorator `#[routes]` reads.
+#[controller(path = "/methods")]
+#[derive(Default)]
+pub(crate) struct MethodsController;
+
+#[routes]
+impl MethodsController {
+    #[get("/")]
+    #[public]
+    async fn read(&self) -> String {
+        String::new()
+    }
+
+    #[post("/")]
+    #[public]
+    async fn create(&self) -> String {
+        String::new()
+    }
+
+    #[put("/")]
+    #[public]
+    async fn replace(&self) -> String {
+        String::new()
+    }
+
+    #[delete("/")]
+    #[public]
+    async fn remove(&self) -> String {
+        String::new()
+    }
+
+    #[patch("/")]
+    #[public]
+    async fn amend(&self) -> String {
+        String::new()
+    }
+
+    #[sse("/events")]
+    #[public]
+    async fn events(&self) -> nest_rs_http::SseStream {
+        nest_rs_http::SseStream::new(futures_util::stream::empty())
+    }
+}
+
+#[module(providers = [MethodsController])]
+pub(crate) struct MethodsModule;
+
+/// Refuses every request at the guard stage, before anything reads its body.
+#[injectable]
+#[derive(Default, Layer)]
+pub(crate) struct Refuse;
+
+#[async_trait]
+impl Guard for Refuse {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Err(Denial::unauthorized("no credential"))
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl GuardFor<HttpView> for Refuse {}
 
 /// Boot `M` through a real `HttpTransport` and hand back a client over the
-/// composed endpoint — the arrange every module in this suite shares, so a
-/// change to the transport's setup is one edit rather than one per file.
-///
-/// `nest-rs-testing`'s `TestApp` is the same thing one layer up; this crate is
-/// the one that cannot reach for it without a dependency cycle, so the harness
-/// lives here instead.
-pub(crate) async fn boot<M>() -> TestClient<BoxEndpoint<'static, poem::Response>>
+/// composed endpoint; `nest-rs-testing`'s `TestApp` would be a dependency cycle.
+pub(crate) async fn boot<M>() -> TestClient
 where
     M: Module + 'static,
 {
-    boot_on::<M>(HttpTransport::new()).await
+    boot_on::<M>(HttpConfig::default()).await
 }
 
-/// The same boot, on a transport the caller has already configured by hand.
-///
-/// Half this suite pins one builder call — a body cap, a compression mode, a
-/// global prefix, a `SecurityHeadersConfig` — and every one of them had copied
-/// the six lines around it, `expect` strings included. The transport is the only
-/// thing that ever differed, so it is the only thing a caller passes.
-pub(crate) async fn boot_on<M>(
-    mut transport: HttpTransport,
-) -> TestClient<BoxEndpoint<'static, poem::Response>>
+/// Bind `transport` as the kernel's boot does, and the loopback port it took.
+pub(crate) async fn listen(transport: &mut HttpTransport) -> u16 {
+    let listening = transport.listen().await.expect("the transport listens");
+    listening
+        .addresses
+        .first()
+        .expect("the transport listens on one address")
+        .port()
+}
+
+/// The transport `config` describes, before `configure`.
+pub(crate) fn built(config: &HttpConfig) -> HttpTransport {
+    HttpTransport::from_config(config).expect("the config is in range")
+}
+
+/// The same boot, on the transport `config` describes.
+pub(crate) async fn boot_on<M>(config: HttpConfig) -> TestClient
 where
     M: Module + 'static,
 {
@@ -55,13 +184,86 @@ where
         .build()
         .await
         .expect("module boots");
+    let mut transport = built(&config);
     transport
         .configure(app.container())
         .await
         .expect("transport configures against the live container");
-    TestClient::new(
+    client(
         transport
             .take_endpoint()
             .expect("configure populates the endpoint"),
     )
+}
+
+/// An endpoint answering every request with `body`.
+pub(crate) fn answering(body: &'static str) -> nest_rs_http::BoxEndpoint {
+    nest_rs_http::BoxEndpoint::new(nest_rs_http::endpoint_fn(move |_| async move {
+        Ok(nest_rs_http::Response::builder().body(body))
+    }))
+}
+
+/// The client the suite drives a composed endpoint through.
+pub(crate) type Client = TestClient;
+
+/// One route at `template` on the transport `config` describes, answered by
+/// `handler` with the request's head and body set apart, as a handler written
+/// on the vocabulary reads them.
+pub(crate) async fn vocabulary_route_on<F, Fut>(
+    config: HttpConfig,
+    method: nest_rs_http::Method,
+    template: &'static str,
+    handler: F,
+) -> Client
+where
+    F: Fn(nest_rs_http::Request, nest_rs_http::RequestBody) -> Fut + Copy + Send + Sync + 'static,
+    Fut:
+        std::future::Future<Output = nest_rs_http::Result<nest_rs_http::Response>> + Send + 'static,
+{
+    routes::table_on(config, move |routes| {
+        routes.route(
+            method.clone(),
+            template,
+            nest_rs_http::endpoint_fn(move |req: nest_rs_http::Request| {
+                let (req, body) = req.split();
+                handler(req, body)
+            }),
+        );
+    })
+    .await
+    .unwrap_or_else(|refused| panic!("the route boots: {refused}"))
+}
+
+/// [`vocabulary_route_on`] on the default transport.
+pub(crate) async fn vocabulary_route<F, Fut>(
+    method: nest_rs_http::Method,
+    template: &'static str,
+    handler: F,
+) -> Client
+where
+    F: Fn(nest_rs_http::Request, nest_rs_http::RequestBody) -> Fut + Copy + Send + Sync + 'static,
+    Fut:
+        std::future::Future<Output = nest_rs_http::Result<nest_rs_http::Response>> + Send + 'static,
+{
+    vocabulary_route_on(HttpConfig::default(), method, template, handler).await
+}
+
+/// What a client reads of an answer: its status, its `Content-Type` and its
+/// body.
+pub(crate) async fn answered(resp: nest_rs_testing::TestResponse) -> (u16, String, String) {
+    let status = resp.0.status().as_u16();
+    let content_type = resp
+        .0
+        .headers()
+        .get(nest_rs_http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    let body = resp.0.into_body().into_string().await.expect("a text body");
+    (status, content_type, body)
+}
+
+/// The kit's client over the transport's endpoint.
+pub(crate) fn client(endpoint: nest_rs_http::BoxEndpoint) -> TestClient {
+    TestClient::new(endpoint)
 }

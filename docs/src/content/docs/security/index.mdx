@@ -10,9 +10,10 @@ import { Aside, FileTree } from '@astrojs/starlight/components';
 Security in nestrs splits into two concerns wired by two composable
 layers. Authentication establishes *who* the caller is. Authorization
 declares *what* they may do, then enforces it on every read, every
-by-id write, and every response body before it leaves the process.
-Bind the two guards on the controller and the framework does the rest
-— there is no per-handler checklist.
+by-id write, and every response body a unit's posture names before it
+leaves the process. Bind the two guards on the controller, write the one
+line that says what each unit reads, and the framework does the rest: a
+unit naming nothing reads nothing a grant guards, so nothing fails open.
 
 **Here for the first auth task?**
 [Add login and protect a route](/security/add-login/) walks the whole
@@ -29,7 +30,7 @@ framework's own ability-based engine, with row-level filtering bridged into
 
 | Concern | Layer | Who answers it |
 |---------|-------|----------------|
-| Who is calling? | Authentication | A [`Strategy`](/security/authentication/) turns the request into a principal (or returns a 401 / OAuth redirect) |
+| Who is calling? | Authentication | A [`Strategy`](/security/authentication/) turns the request into a principal, or says why it could not; the guard answers the 401 |
 | What may they do? | Authorization | An [`Ability`](/security/authorization/) declares allowed actions; the framework applies it to queries, by-id loads, and response bodies |
 
 Each layer ships its own guard. Bind them in order — the authn guard
@@ -45,9 +46,9 @@ pub struct UsersController {
 }
 ```
 
-That's the whole opt-in surface for HTTP. GraphQL and WebSockets get
-matching bridges that re-establish the ambient ability at the dispatch
-point — see [Per-transport bridges](/security/authorization/per-transport-bridges/).
+That's the whole opt-in surface for HTTP. GraphQL, WebSockets and MCP run the
+same two guards at their own request, and every operation it carries reads the
+ability they attached — see [Endpoint guards](/security/authorization/endpoint-guards/).
 
 ## What you get once both are mounted
 
@@ -57,28 +58,24 @@ point — see [Per-transport bridges](/security/authorization/per-transport-brid
   [`condition_for`](/security/authorization/row-level-filtering/) into
   the SQL — a member querying `Users::find()` gets
   `WHERE org_id = $caller_org_id` appended.
-- **Every by-id write checks access.** `Bind<A, S>` calls
-  `Service::access(id)`; missing rows return `404`, denied rows return
+- **Every by-id write checks access.** `#[authorize(A, bind = S)]` calls
+  `Service::access(action, id)`; missing rows return `404`, denied rows return
   `403` — see [By-id binding](/security/authorization/by-id-binding/).
-- **Every response is masked.** The
-  [`Authorize` shaper](/security/authorization/response-masking/) runs
-  after a 2xx handler: fields the caller cannot read are stripped from
-  the body, and `retain_wire_keys` drops anything outside the wire DTO so an
-  unrestricted grant cannot leak an unexposed column.
+- **Every wire row is judged.** The exposed type a service builds from a
+  row, `User::from(&row)`,
+  [judges it for the caller](/security/authorization/response-masking/)
+  whose ability is installed there: a column their grant withholds reads
+  `null`, a row their grants refuse answers nobody, and only the columns
+  `#[expose]` lists exist on the wire, so an unrestricted grant cannot leak
+  an unexposed column. A value your body copies a column into is its own
+  visible line.
 
 The wiring sketch for an app that serves all three transports:
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        SeaOrmModule::for_root(None),
         SeaOrmDatabaseModule,
-        HttpModule::for_root(None),
-        GraphqlModule::for_root(None),
-        AuthnModule,
-        AuthzModule,
-        AuthzGraphqlModule,
-        AuthzWsModule,
         UsersHttpModule,
         UsersGraphqlModule,
         UsersWsModule,
@@ -87,8 +84,13 @@ The wiring sketch for an app that serves all three transports:
 pub struct ApiModule;
 ```
 
+Each adapter imports what its guards need — `UsersHttpModule` and
+`UsersWsModule` import `AuthzModule`, `UsersGraphqlModule` the
+`AuthzGraphqlModule` that declares `/graphql`'s guards — so the root lists the
+edges it serves, and the access graph checks each import where it is used.
+
 <Aside type="note">
-A handler opts **out** by not importing the transport's authz module —
+An adapter opts **out** by not importing its edge's authz module —
 public endpoints do exactly that and lose every layer transitively.
 Visitor-rule policy then lives in your `AbilityFactory`, not in
 `AuthnGuard`.
@@ -99,18 +101,23 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
 <FileTree>
 - security/
   - **authentication/**
-    - [index.mdx](/security/authentication/) — `Strategy`, `AuthnGuard<S>`, reading the principal back with `Ctx<P>`
-    - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, HS vs EdDSA keys, claims
+    - [index.mdx](/security/authentication/) — `Strategy`, `AuthnGuard<S>`, reading the principal back with `Ambient<P>`
+    - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, claims
+    - [jwt-configuration.mdx](/security/authentication/jwt-configuration/) — HS, EdDSA or JWK Set keys, issuer and audience
+    - [external-identity-provider.mdx](/security/authentication/external-identity-provider/) — another issuer's tokens, against its JWK Set (better-auth end to end)
     - [oauth2.mdx](/security/authentication/oauth2/) — authorization-code flow with PKCE
+    - [social-login.mdx](/security/authentication/social-login/) — the provider contract, GitHub and Google
     - [password.mdx](/security/authentication/password/) — Argon2id hashing and `burn_verify`
     - [split-deployment.mdx](/security/authentication/split-deployment/) — the split-deploy pattern
   - **authorization/**
     - [index.mdx](/security/authorization/) — `Ability`, `AuthzAbility`, where it runs
-    - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`, predicates, fields
+    - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`
+    - [predicates.mdx](/security/authorization/predicates/) — the predicate AST, relational scoping
+    - [field-grants.mdx](/security/authorization/field-grants/) — the fields a reply shows and a write may set
     - [row-level-filtering.mdx](/security/authorization/row-level-filtering/) — `condition_for`, `Repo::scoped`
-    - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `Bind<A, S>`, the `Access` outcome
-    - [response-masking.mdx](/security/authorization/response-masking/) — `Authorize`, `mask`, `WireModelDefaults`
-    - [per-transport-bridges.mdx](/security/authorization/per-transport-bridges/) — HTTP / GraphQL / WS / MCP
+    - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `#[authorize(A, bind = S)]`, the `Access` outcome
+    - [response-masking.mdx](/security/authorization/response-masking/) — the judged wire row, `#[expose(nullable)]`
+    - [endpoint-guards.mdx](/security/authorization/endpoint-guards/) — HTTP / GraphQL / WS / MCP
   - [threat-model.mdx](/security/threat-model/) — the boundary each layer enforces (read before production, not needed for your first feature)
 </FileTree>
 

@@ -1,20 +1,20 @@
 ---
 title: Compression
-description: Negotiate gzip/brotli response compression from Accept-Encoding with a single HttpConfig flag.
-tier: all-options
+description: Negotiate zstd, brotli, gzip or deflate response compression from Accept-Encoding with one HttpConfig flag.
 sidebar:
   order: 8
 ---
 
 One flag makes the transport compress responses when the client asks for
-it. `HttpConfig.compression` turns on poem's negotiation layer: each
-request's `Accept-Encoding` header picks gzip, deflate, brotli or zstd,
-and the response body is encoded before it leaves the process. Off by
-default — in most deployments a reverse proxy already does this.
+it. With `HttpConfig.compression` on, each request's `Accept-Encoding` picks
+zstd, brotli, gzip or deflate, weighed as RFC 9110 §12.5.3 reads it, and the
+response body is encoded with
+[async-compression](https://docs.rs/async-compression) before it leaves the
+process. Off by default — in
+most deployments a reverse proxy already does this.
 
-```rust title="apps/api/src/module.rs (from the demo, abridged)" {3}
+```rust title="apps/api/src/module.rs" {2}
 HttpModule::for_root(HttpConfig {
-    port: 3002,
     compression: true,
     ..Default::default()
 }),
@@ -23,10 +23,12 @@ HttpModule::for_root(HttpConfig {
 ## Wire it in
 
 Like every `HttpConfig` field, the flag is dual-path — pin it in code as
-above, or set it in the environment:
+above, or set it in the environment. The demo's api pins no `HttpConfig`: its
+flag sits in its own `.env` beside its port, and its chart sets it for a
+deployment:
 
-```bash frame="terminal"
-NESTRS_HTTP__COMPRESSION=true nestrs run dev api
+```bash title="apps/api/.env" frame="terminal"
+NESTRS_HTTP__COMPRESSION=true
 ```
 
 A client that advertises support gets an encoded body; one that does not
@@ -43,12 +45,35 @@ HTTP/1.1 200 OK
 content-type: application/json
 ```
 
+## What it negotiates
+
+- The coding weighed highest wins, `zstd` first among equals; `gzip;q=0`
+  refuses gzip, and an `identity` weighed above every coding is answered
+  unencoded. A client sending no `Accept-Encoding` gets plain bytes.
+- Every response the layer could have encoded carries
+  `Vary: Accept-Encoding`, so a shared cache keeps the encodings apart.
+- An encoded body is another representation's bytes, so a strong `ETag` the
+  handler set is sent weak (`W/"…"`, RFC 9110 §8.8.3). `If-None-Match`
+  compares weakly, so the tag still revalidates, and a `304` carries the tag
+  and the `Vary` its encoded `200` would.
+- A request body whose `Content-Encoding` names one of the four codings is
+  decoded before the route reads it, still under the transport's body cap.
+
 ## Limits
 
 - The layer sits inside CORS, so a preflight (`OPTIONS`, no body) is never
   compressed, and outside the handler, so what the handler returns is what
   gets encoded.
-- A response already carrying `Content-Encoding` is left untouched.
+- An event stream is never compressed: an encoder would hold each event back
+  until its buffer filled. Neither is a `204`, a `304`, nor a response already
+  carrying `Content-Encoding`.
+- A partial answer — a `206`, or any response carrying `Content-Range` — is
+  sent as written: its range counts bytes before any encoding (RFC 9110 §14.4),
+  so an encoded part would name offsets its body does not have.
+- A weak tag never matches `If-Match` or `If-Range`, which compare strongly
+  (RFC 9110 §13.1.1, §13.1.5): a write guarded by the tag of an encoded read
+  is refused, and a resumed download restarts whole. A client guarding a write
+  reads the tag from an unencoded answer, sent without `Accept-Encoding`.
 - Turn it off (the default) when a proxy, CDN, or load balancer in front of
   the app compresses — doing it twice only burns CPU.
 

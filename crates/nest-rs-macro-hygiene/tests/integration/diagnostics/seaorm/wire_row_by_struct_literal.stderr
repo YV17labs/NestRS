@@ -1,0 +1,7 @@
+error: cannot construct `Thing` with struct literal syntax due to private fields
+  --> tests/integration/diagnostics/seaorm/wire_row_by_struct_literal.rs:26:5
+   |
+26 |     thing::Thing {
+   |     ^^^^^^^^^^^^
+   |
+   = note: ...and other private field `__judged` that was not provided

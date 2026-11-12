@@ -1,96 +1,94 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 mod audio;
+mod audit;
 mod graphql;
 mod health;
 mod http;
+mod module;
 mod openapi;
 mod orgs;
 mod posts;
+mod schema;
 mod scopes;
 mod subscription;
 mod users;
 
 use api::ApiModule;
-use nest_rs::authn::JwtConfig;
-use nest_rs::testing::{EphemeralDatabase, TestApp};
-use poem::http::{StatusCode, header};
-use poem::test::TestResponse;
-use serde_json::json;
+use features::{Role, Subject};
+use nest_rs::http::{StatusCode, header};
+use nest_rs::testing::{TestApp, TestAppBuilder, TestResponse};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
+pub(crate) use features::testing::{
+    ORG_ID, RedisDatabase, claims, client, connection, delete_transcode,
+};
 
-pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let app = TestApp::builder()
+pub(crate) async fn boot() -> TestApp {
+    boot_with(TestApp::builder()).await
+}
+
+pub(crate) async fn boot_on(redis: RedisDatabase) -> TestApp {
+    boot_with(TestApp::builder().provide(redis.config())).await
+}
+
+async fn boot_with(builder: TestAppBuilder) -> TestApp {
+    builder
         .module::<ApiModule>()
-        .provide_arc(db.connection())
-        .provide(JwtConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
-            ..Default::default()
-        })
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
         .build()
         .await
-        .expect("ApiModule boots against the throwaway database");
-    (db, app)
+        .expect("ApiModule boots against a throwaway database")
 }
 
-pub(crate) async fn login() -> String {
-    token_for(ORG_ID, "admin").await
+pub(crate) fn sign(app: &TestApp, org_id: Uuid, role: Role) -> String {
+    app.bearer(&claims(org_id, role, client()))
 }
 
-pub(crate) async fn token_for(org_id: &str, role: &str) -> String {
-    features::testing::token_for(org_id, role, None)
-}
-
-pub(crate) async fn token_with_sub(org_id: &str, role: &str, sub: Uuid) -> String {
-    features::testing::token_for(org_id, role, Some(sub))
+pub(crate) fn sign_as(app: &TestApp, org_id: Uuid, role: Role, sub: Uuid) -> String {
+    app.bearer(&claims(org_id, role, Subject::User(sub)))
 }
 
 pub(crate) async fn create_user(app: &TestApp, bearer: &str, name: &str, email: &str) -> String {
-    let resp = app
-        .http()
-        .post("/users")
-        .header(header::AUTHORIZATION, bearer)
-        .body_json(&json!({ "name": name, "email": email }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    resp.json()
-        .await
-        .value()
-        .object()
-        .get("id")
-        .string()
-        .to_owned()
+    create(
+        app,
+        bearer,
+        "/users",
+        json!({ "name": name, "email": email }),
+    )
+    .await
 }
 
 pub(crate) async fn create_post(app: &TestApp, bearer: &str, title: &str, body: &str) -> String {
-    let resp = app
-        .http()
-        .post("/posts")
-        .header(header::AUTHORIZATION, bearer)
-        .body_json(&json!({ "title": title, "body": body }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    resp.json()
-        .await
-        .value()
-        .object()
-        .get("id")
-        .string()
-        .to_owned()
+    create(
+        app,
+        bearer,
+        "/posts",
+        json!({ "title": title, "body": body }),
+    )
+    .await
 }
 
-pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> String {
+pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> Uuid {
+    create(app, bearer, "/orgs", json!({ "name": name }))
+        .await
+        .parse()
+        .expect("an org id")
+}
+
+async fn create(app: &TestApp, bearer: &str, collection: &str, body: Value) -> String {
     let resp = app
         .http()
-        .post("/orgs")
+        .post(collection)
         .header(header::AUTHORIZATION, bearer)
-        .body_json(&json!({ "name": name }))
+        .body_json(&body)
         .send()
         .await;
     resp.assert_status(StatusCode::CREATED);
@@ -103,7 +101,7 @@ pub(crate) async fn create_org(app: &TestApp, bearer: &str, name: &str) -> Strin
         .get("id")
         .string()
         .to_owned();
-    assert_created_location(location.as_deref(), "/orgs", &id);
+    assert_created_location(location.as_deref(), collection, &id);
     id
 }
 

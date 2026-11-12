@@ -1,93 +1,67 @@
-//! The `#[processor]` decorator, re-exported by `nest-rs-queue` (the
-//! backend-agnostic abstractions crate) so the call site keeps writing
-//! `use nest_rs_queue::processor;` regardless of which backend integration
-//! (nest-rs-redis, …) is wired in.
+//! The `#[processor]` and `#[queue]` decorators, re-exported by `nest-rs-queue`
+//! and reached through the umbrella as `nest_rs::queue::{processor, queue}`.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 use proc_macro::TokenStream;
 
 mod processor;
 mod queue;
 
-/// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
-/// tagged with `#[process(queue = <Queue>, retries)]` becomes a queue consumer
-/// the `RedisWorker` spawns at boot.
+/// Submits each `#[process]` method of a provider's impl block — several, on
+/// different queues, may share one provider. A `#[meta(EXPR)]` on the impl
+/// block is declared for every `#[process]` method, one on a method for it
+/// alone, read over the block's of the same type.
 ///
-/// A single provider may carry several `#[process]` methods (different queues)
-/// sharing the same `#[inject]` dependencies — pooling related queue handlers
-/// on one service keeps shared state (clients, repositories) in one place.
+/// The `queue` is named by its `Queue` **type**, declared with
+/// [`queue`](macro@crate::queue); the macro asserts at compile time that the
+/// method's job argument is the queue's `Job`, naming both types on a mismatch.
 ///
-/// **A process method runs one job at a time.** There is no per-method
-/// concurrency knob: throughput scales by running more replicas of the worker,
-/// which is the unit the container platform already schedules. See
-/// `RedisWorker` for the guarantee and why it is the framework's job to be
-/// predictable here rather than tunable.
+/// Keys, on exactly one `#[process]` per method:
 ///
-/// The `queue` is named by its `QueueName` **type**, declared with
-/// [`queue`](macro@crate::queue) at the feature port. The macro reads
-/// `<AudioQueue as QueueName>::NAME` into the inventory entry **and** asserts,
-/// at compile time, that this method's job argument is
-/// `<AudioQueue as QueueName>::Job` — a mismatch is a build error naming both
-/// types, not a job that silently never drains. A bare string is refused with
-/// that diagnostic: naming the queue without naming its payload is the exact
-/// mistake the typed form exists to catch.
+/// - `queue = AudioQueue` — required.
+/// - `retries = 3` — how many times a failed attempt is run again before the job
+///   dead-letters; default `0`. Each retry waits first: one second after the
+///   first failure, doubling after each, at most five minutes, jittered by up to
+///   a fifth either way.
+/// - `concurrency = 4` — how many attempts of this method one worker replica
+///   runs at once; default `1`, one at a time. **Per method, per replica**:
+///   another method's jobs never wait on this one's permits.
+/// - `throttle(limit = 10, window = "1m")` — at most `limit` attempts of this
+///   method **start** per window, **across the deployment**: every replica
+///   draining the queue counts against the one limit, and a retry is an attempt
+///   like any other. Needs a backend declaring the throttle capability.
+/// - `timeout = "30m"` — how long an attempt runs before it is cut and fails
+///   retryably; default ten minutes (`nest_rs::core::JOB_TIMEOUT`), at most
+///   `"24h"`.
+/// - `transactional = false` — run on the pool rather than one transaction per
+///   attempt; required beside a `Checkpoint<_>` parameter.
 ///
-/// Per-method attributes (exactly one `#[process]` per method):
+/// The method is `async fn(&self, job: T) -> Result<(), E>` with `T: Job` and
+/// any `E` converting into `Box<dyn Error + Send + Sync>` — `anyhow::Result<()>`
+/// is the usual spelling. Beside the job it may take, once each and in any
+/// order, the two parameters the port hands one attempt, recognised by their
+/// type: a `Checkpoint<S>`, the job's progress, kept across its retries and
+/// redeliveries and cleared when it ends; and an `Attempt`, the job's id — the
+/// one its push's receipt returned — and the attempt's number, which a handler
+/// calling out keys its idempotency on. A key the app's queue backend cannot
+/// honour fails the worker's boot, naming the method.
 ///
-/// - `#[process(queue = AudioQueue)]` — minimal, defaults `retries = 0`.
-/// - `#[process(queue = AudioQueue, retries = 3)]` — retries before the job
-///   lands on the queue's failed list.
-///
-/// The method signature is `async fn(&self, job: T) -> anyhow::Result<()>`,
-/// where `T: Job`. The macro extracts the job type from the second
-/// parameter, generates a typed handler, and submits a per-method
-/// inventory entry the worker drains.
-///
-/// # Expands to
-///
-/// The impl unchanged, plus per `#[process]` method: a hidden type-erased
-/// handler `fn` (unwraps the wire envelope, deserializes the job, resolves the
-/// provider, dispatches inside the `JobContext`) and a `ProcessMethod`
-/// submitted to the link-time inventory. No `Discoverable` — the host's own
+/// The impl is re-emitted unchanged, with no `Discoverable` — the host's own
 /// `#[injectable]` owns it.
-///
-/// ```text
-/// impl AudioProcessor { /* unchanged */ }
-/// fn __nestrs_process_handler_audio_processor_transcode(payload, container) -> Pin<Box<dyn Future<…>>> { /* … */ }
-/// ::nest_rs_core::inventory::submit! {
-///     ::nest_rs_queue::ProcessMethod {
-///         name: "AudioProcessor::transcode", queue: "audio", retries: 3,
-///         provider_type_id: || TypeId::of::<AudioProcessor>(),
-///         handler: __nestrs_process_handler_audio_processor_transcode,
-///     }
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(processor::processor(args, input).into()).into()
 }
 
-/// Stamp a unit struct with a compile-time queue identity — its wire name and
-/// the `Job` payload it carries — by implementing
-/// `QueueName`. Lives beside the payload at the feature port; both the producer
-/// (`push_to::<Q>`) and the consumer (`#[process(queue = Q)]`) name the type,
-/// so a typo'd name or a mismatched payload is a compile error, not a job that
-/// silently never drains.
+/// The name follows the rule `QueueName` states, checked here at compile time.
+/// A queue per runtime key (`prefix = ..`) is refused, naming why: a backend
+/// drains every queue through a stream, a group or a subject of its own that
+/// each replica reads, so a key that varies at runtime rides in the job
+/// instead.
 ///
-/// ```ignore
-/// #[queue(name = "audio", job = TranscodeCommand)]
-/// pub struct AudioQueue;
-/// ```
-///
-/// # Expands to
-///
-/// ```ignore
-/// pub struct AudioQueue;
-/// impl ::nest_rs_queue::QueueName for AudioQueue {
-///     const NAME: &'static str = "audio";
-///     type Job = TranscodeCommand;
-/// }
-/// ```
+/// The struct is re-emitted unchanged and gains `impl Queue` and
+/// `impl Destination`.
 #[proc_macro_attribute]
 pub fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(queue::queue(args, input).into()).into()

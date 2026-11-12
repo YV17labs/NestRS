@@ -1,79 +1,130 @@
 ---
 title: HTTP configuration
-description: HttpConfig — host, port, TLS, CORS, the framework header — settable both via NESTRS_HTTP__* env vars and pinned in code.
-tier: all-options
+description: HttpConfig — host, port, TLS, the mount prefix, the framework header — each field set by `<PREFIX>_HTTP__*` or pinned in code.
 sidebar:
   order: 2
 ---
 
-Importing `HttpModule::for_root(...)` in `AppModule.imports` attaches the
-HTTP transport at boot. Pass `None` to read every option from the
-environment, or pin `HttpConfig` in code:
+`HttpModule` attaches the HTTP transport at boot. Every controller and gateway
+brings it bare, and the framework's own mounts (`GraphqlModule`, `McpModule`,
+`HealthModule`, `OpenApiModule`, …) import it — so the app imports what it serves
+and the transport attaches once. A bare import reads every option from the
+environment — what `nestrs new` scaffolds, the port in the app's own `.env`:
 
-```rust title="apps/hello/src/module.rs"
+```rust title="crates/features/src/hello/http/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule};
 
-use features::hello::HelloHttpModule;
+use super::controller::HelloController;
+use crate::hello::HelloModule;
 
 #[module(
-    imports = [
-        HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
-        HelloHttpModule,
-    ],
+    imports = [HelloModule],
+    providers = [HelloController],
 )]
-pub struct HelloModule;
+pub struct HelloHttpModule;
 ```
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```bash title="apps/hello/.env" frame="terminal"
+NESTRS_HTTP__PORT=3000
+```
+
+Or pin `HttpConfig` in code at the app's root, for what the code means
+whatever the machine — the one reason a root names the transport:
+
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
 #[module(imports = [
-    HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
+    HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
 ])]
 pub struct ApiModule;
 ```
 
+A pin takes the whole `<PREFIX>_HTTP__*` namespace off the `.env` cascade —
+every field, the ones `..Default::default()` filled included. The real
+environment still overrides any field, but a key in a `.env` file no longer
+reaches this config, and the boot names each such key at `warn`
+([the dual-path rule](/configuration/pinning/#the-dual-path-rule)). So the `.env`
+examples on this page reach an app that pins nothing — the scaffold's —
+and a pinning app reads them from the real environment alone.
+
+The app configures HTTP once. A feature crate that serves over HTTP — one
+another app may compose — gets a bare `HttpModule` from its controllers, or, in
+a module listing none, from its own `imports`: it reads the same
+`<PREFIX>_HTTP__*`, and the app still runs one server, configured by its
+`for_root`.
+
 Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
-no framework `Server` header, a `2 MiB` request-body cap, a `30`-second
-request timeout, fail-secure boot on, and the default security headers on.
+no framework `Server` header, a `2 MiB` request-body cap, a `20`-second
+request timeout, at most `10 000` open connections, a `20`-second shutdown
+window, the access log and the default security headers on.
 
 ## `HttpConfig` fields
 
 Every field of `HttpConfig` is settable both by env var and in the pinned
 struct — the same dual-path rule every config in the framework follows.
-Real env always wins over the `.env` cascade.
+Real env always wins over the `.env` cascade, and a pinned struct over every
+`.env` file.
 
 | Field | Env variable | Default | Pinned form |
 |-------|--------------|---------|-------------|
-| `host` | `NESTRS_HTTP__HOST` | `0.0.0.0` | `HttpConfig { host: "127.0.0.1".into(), ..Default::default() }` |
-| `port` | `NESTRS_HTTP__PORT` | `3000` | `HttpConfig { port: 3002, ..Default::default() }` |
-| `tls.cert` | `NESTRS_HTTP__TLS_CERT` (inline PEM) or `NESTRS_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(TlsConfig::new(cert, key)), ..Default::default() }` |
-| `tls.key`  | `NESTRS_HTTP__TLS_KEY` or `NESTRS_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
-| `cors.origins` | `NESTRS_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `CorsConfig { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
-| `cors.methods` | `NESTRS_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
-| `cors.headers` | `NESTRS_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
-| `cors.exposed_headers` | `NESTRS_HTTP__CORS_EXPOSED` | empty | `exposed_headers: vec!["X-Total-Count".into()]` |
-| `cors.credentials` | `NESTRS_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
-| `cors.max_age` | `NESTRS_HTTP__CORS_MAX_AGE` (seconds) | unset | `max_age: Some(Duration::from_secs(3600))` |
-| `server_header` | `NESTRS_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
-| `global_prefix` | `NESTRS_HTTP__GLOBAL_PREFIX` | unset ⇒ no prefix | `HttpConfig::default().with_global_prefix("/api")` |
-| `max_body_bytes` | `NESTRS_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
-| `request_timeout` | `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
-| `fail_secure_strict` | `NESTRS_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
-| `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: SecurityHeadersConfig { enabled: false, ..Default::default() }, ..Default::default() }` |
-| `compression` | `NESTRS_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
+| `host` | `<PREFIX>_HTTP__HOST` | `0.0.0.0` | `HttpConfig { host: "127.0.0.1".into(), ..Default::default() }` |
+| `port` | `<PREFIX>_HTTP__PORT` | `3000` | `HttpConfig { port: 3002, ..Default::default() }` |
+| `tls.cert` | `<PREFIX>_HTTP__TLS_CERT` (inline PEM) or `<PREFIX>_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(HttpTls::new(cert, key)), ..Default::default() }` |
+| `tls.key`  | `<PREFIX>_HTTP__TLS_KEY` or `<PREFIX>_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
+| `tls` reload interval | `<PREFIX>_HTTP__TLS_RELOAD_SECS` (`1`–`86400`, `0` ⇒ unwatched) | `60` for a pair read from files | in a test: `HttpTls::from_files(cert_path, key_path)?.with_reload(Some(Duration::from_secs(300)))`, `None` ⇒ unwatched — see [Renewal without a restart](#renewal-without-a-restart) |
+| `cors.origins` | `<PREFIX>_HTTP__CORS_ORIGINS` (comma list of `scheme://host[:port]`, or `*`; see [CORS](/http/cors/)) | unset or empty ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
+| `cors.methods` | `<PREFIX>_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
+| `cors.headers` | `<PREFIX>_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
+| `cors.exposed_headers` | `<PREFIX>_HTTP__CORS_EXPOSED_HEADERS` | empty — `Link`, `Location` and `Retry-After`, which the framework sends, are always exposed | `exposed_headers: vec!["X-Total-Count".into()]` |
+| `cors.credentials` | `<PREFIX>_HTTP__CORS_CREDENTIALS` (`true`/`false`) | `false` | `credentials: true` |
+| `cors.max_age` | `<PREFIX>_HTTP__CORS_MAX_AGE_SECS` (seconds, `1`–`86400`, `0` ⇒ none) | unset ⇒ no `Access-Control-Max-Age`, the browser's own few seconds | `max_age: Some(Duration::from_secs(3600))` |
+| `versioning` | `<PREFIX>_HTTP__VERSIONING` (`uri`, `header`, `media_type`) | `uri` | `HttpConfig { versioning: ApiVersioning::Header, ..Default::default() }` — see [Versioning](/http/versioning/) |
+| `version_header` | `<PREFIX>_HTTP__VERSION_HEADER` | `X-API-Version` | `HttpConfig { version_header: "X-Version".into(), ..Default::default() }` |
+| `default_version` | `<PREFIX>_HTTP__DEFAULT_VERSION` | unset ⇒ no default | `HttpConfig { default_version: Some("1".into()), ..Default::default() }` |
+| `server_header` | `<PREFIX>_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
+| `access_log` | `<PREFIX>_HTTP__ACCESS_LOG` (`true`/`false`) | `true` | `HttpConfig { access_log: false, ..Default::default() }` — see [Access log](/opentelemetry/operation-log/#access-log) |
+| `trusted_proxies` | `<PREFIX>_HTTP__TRUSTED_PROXIES` (comma list of addresses and CIDR ranges) | empty | `HttpConfig { trusted_proxies: vec![trusted_proxy!("10.0.0.1"), trusted_proxy!("10.0.0.0/8")], ..Default::default() }`, each literal checked as the program compiles — see [`ClientIp`](/http/client-ip/) |
+| `global_prefix` | `<PREFIX>_HTTP__GLOBAL_PREFIX` (one literal path: `{` `}` or `:` `*` `<` fail the boot) | unset ⇒ no prefix | `HttpConfig { global_prefix: Some("/api".into()), ..Default::default() }` |
+| `max_body_bytes` | `<PREFIX>_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig { max_body_bytes: 4 * 1024 * 1024, ..Default::default() }` |
+| `request_timeout` | `<PREFIX>_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `20 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
+| `max_concurrent_connections` | `<PREFIX>_HTTP__MAX_CONCURRENT_CONNECTIONS` (`1`–`1048576`) | `10 000` | `HttpConfig { max_concurrent_connections: 50_000, ..Default::default() }` |
+| `header_read_timeout` | `<PREFIX>_HTTP__HEADER_READ_TIMEOUT_SECS` (seconds, `1`–`300`) | `30 s` | `HttpConfig { header_read_timeout: Duration::from_secs(10), ..Default::default() }` |
+| `body_read_timeout` | `<PREFIX>_HTTP__BODY_READ_TIMEOUT_SECS` (seconds, `1`–`3600`) | `10 s` | `HttpConfig { body_read_timeout: Duration::from_secs(15), ..Default::default() }` |
+| `idle_timeout` | `<PREFIX>_HTTP__IDLE_TIMEOUT_SECS` (seconds, `1`–`3600`) | `75 s` | `HttpConfig { idle_timeout: Duration::from_secs(620), ..Default::default() }` |
+| `send_timeout` | `<PREFIX>_HTTP__SEND_TIMEOUT_SECS` (seconds, `1`–`3600`) | `60 s` | `HttpConfig { send_timeout: Duration::from_secs(120), ..Default::default() }` |
+| `shutdown_timeout` | `<PREFIX>_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `20 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
+| `sse_max_connection` | `<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS` (seconds, `0` ⇒ unlimited) | `4 h` | `HttpConfig { sse_max_connection: Some(Duration::from_secs(3600)), ..Default::default() }` — see [Streaming](/http/streaming/#configuration) |
+| `sse_keep_alive` | `<PREFIX>_HTTP__SSE_KEEP_ALIVE_SECS` (seconds, `1`–`3600`, `0` ⇒ none) | `15 s` | `HttpConfig { sse_keep_alive: Some(Duration::from_secs(30)), ..Default::default() }` |
+| `security_headers` | `<PREFIX>_HTTP__SECURITY_HEADERS_ENABLED` (the switch), then each field's name after `SECURITY_HEADERS_`: `_CONTENT_TYPE_OPTIONS`, `_FRAME_OPTIONS`, `_HSTS`, `_REFERRER_POLICY`, `_CROSS_ORIGIN_OPENER_POLICY`, `_CROSS_ORIGIN_RESOURCE_POLICY`, `_CROSS_ORIGIN_EMBEDDER_POLICY`, `_PERMISSIONS_POLICY`, `_CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
+| `compression` | `<PREFIX>_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
 
 See [Compression](/http/compression/) for what the flag negotiates and when to leave it off.
 
+**A long-lived connection's ceiling is set per edge.** An `#[sse]` stream, a
+[WebSocket](/websockets/) and a [GraphQL subscription](/graphql/subscriptions/)
+socket each authenticate once and keep those privileges until they end, and
+each edge runs its own loop, so each reads its own variable —
+`<PREFIX>_HTTP__SSE_MAX_CONNECTION_SECS`, `<PREFIX>_WS__MAX_CONNECTION_SECS`,
+`<PREFIX>_GRAPHQL__MAX_CONNECTION_SECS` — from one default, four hours
+(`nest_rs::http::DEFAULT_MAX_CONNECTION`). A deployment shortening how long a
+revoked credential keeps a live socket sets the three. The same holds for a
+server-sent stream's keep-alive (`SSE_KEEP_ALIVE_SECS`, here and on
+[MCP](/mcp/configuration/), `DEFAULT_SSE_KEEP_ALIVE`) and a unit's deadline
+(`REQUEST_TIMEOUT_SECS` here, a WebSocket message's and an MCP operation's on
+theirs, `DEFAULT_UNIT_TIMEOUT`).
+
 ## Serve HTTPS
 
-Setting **both** `NESTRS_HTTP__TLS_CERT[_FILE]` and `NESTRS_HTTP__TLS_KEY[_FILE]`
-makes the transport serve over [rustls](https://docs.rs/rustls) (through
-poem's listener) instead of plain HTTP. Setting only one of the pair fails
+Setting **both** `<PREFIX>_HTTP__TLS_CERT[_FILE]` and `<PREFIX>_HTTP__TLS_KEY[_FILE]`
+makes the transport serve over [rustls](https://docs.rs/rustls) instead of plain
+HTTP, offering HTTP/2 then HTTP/1.1 to each client. Setting only one of the pair fails
 the boot — a half-configured TLS is a deployment mistake, not a silent
-fall back to plaintext.
+fall back to plaintext. Setting both spellings of one half — `TLS_CERT` and
+`TLS_CERT_FILE` — in the same tier fails the boot too, naming both, since
+nothing says which was meant. Across tiers the process environment chooses,
+[as it does for every variable](/configuration/variables/#configservice-api).
 
 ```bash frame="terminal"
 # Inline (suits k8s secrets, systemd EnvironmentFile, …)
@@ -90,7 +141,7 @@ nestrs run dev api
 ### Renewal without a restart
 
 The two forms differ in one way that matters in production: **material read
-from files is watched.** Every `NESTRS_HTTP__TLS_RELOAD_SECS` seconds (60 by
+from files is watched.** Every `<PREFIX>_HTTP__TLS_RELOAD_SECS` seconds (60 by
 default, `0` to turn it off) the pair is re-read, and a renewed pair is swapped
 into the running rustls config. The listener is not rebuilt — the port stays
 bound, in-flight connections finish, and certbot's `--deploy-hook` needs no
@@ -110,72 +161,15 @@ apart** looks settled in between, and that pair is installed. Certbot and
 cert-manager both swap atomically (a new lineage directory plus a symlink, a
 remounted Secret), so this does not arise with either — but a hand-rolled hook
 that writes the two files in sequence should write them together, or set
-`NESTRS_HTTP__TLS_RELOAD_SECS` longer than the gap.
+`<PREFIX>_HTTP__TLS_RELOAD_SECS` longer than the gap.
 
-Inline PEM has no source to watch, so it is loaded once, as before.
-
-Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
-tests (production deploys carry secrets in the environment):
-
-```rust title="apps/api/src/module.rs"
-use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule, TlsConfig};
-
-let cert = std::fs::read("fullchain.pem")?;
-let key  = std::fs::read("privkey.pem")?;
-
-#[module(imports = [
-    HttpModule::for_root(HttpConfig {
-        port: 3002,
-        tls: Some(TlsConfig::new(cert, key)),
-        ..Default::default()
-    }),
-])]
-pub struct ApiModule;
-```
-
-## CORS
-
-CORS uses [poem's `Cors` middleware](https://docs.rs/poem/latest/poem/middleware/struct.Cors.html)
-under the hood. The transport installs it **outermost**, so a preflight
-(`OPTIONS`) is answered before any guard or interceptor runs.
-
-CORS activates only when `cors.origins` is non-empty — the default is no
-CORS layer. Set the origins (and any other knob you need) via either path:
-
-```bash title=".env.production" frame="terminal"
-NESTRS_HTTP__CORS_ORIGINS=https://app.example.com,https://admin.example.com
-NESTRS_HTTP__CORS_METHODS=GET,POST,PUT,DELETE
-NESTRS_HTTP__CORS_HEADERS=Content-Type,Authorization
-NESTRS_HTTP__CORS_CREDENTIALS=true
-NESTRS_HTTP__CORS_MAX_AGE=3600
-```
-
-```rust title="apps/api/src/module.rs (from the demo)"
-use std::time::Duration;
-
-use nest_rs::core::module;
-use nest_rs::http::{CorsConfig, HttpConfig, HttpModule};
-
-#[module(imports = [
-    HttpModule::for_root(HttpConfig {
-        port: 3002,
-        cors: Some(CorsConfig {
-            origins: vec!["https://app.example.com".into()],
-            methods: vec!["GET".into(), "POST".into()],
-            headers: vec!["Content-Type".into(), "Authorization".into()],
-            credentials: true,
-            max_age: Some(Duration::from_secs(3600)),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }),
-])]
-pub struct ApiModule;
-```
-
-`origins: vec!["*".into()]` is allowed for fully open APIs (the wildcard
-is passed straight through to poem).
+Inline PEM has no source to watch, so it is loaded once. In code the two forms
+are two constructors: `HttpTls::from_files(cert_path, key_path)?` reads the pair
+and watches it (`.with_reload(Some(interval))` sets the interval, `None` stops
+the watch), and
+`HttpTls::new(cert, key)` takes inline PEM bytes. Production carries its
+material in the environment, so the pinned form is a test's: a suite hands
+`HttpTls::new` the pair `nest_rs::testing::TestAuthority` issues in process.
 
 ## Mounting under a shared prefix
 
@@ -188,29 +182,39 @@ environment:
 NESTRS_HTTP__GLOBAL_PREFIX=/api
 ```
 
-or pin it in code with `with_global_prefix`:
+or pin it in code:
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
 #[module(imports = [
-    HttpModule::for_root(HttpConfig::default().with_global_prefix("/api")),
+    HttpModule::for_root(HttpConfig {
+        global_prefix: Some("/api".into()),
+        ..Default::default()
+    }),
 ])]
 pub struct ApiModule;
 ```
 
 The prefix is normalized (`"api"`, `"/api"`, `"/api/"` all yield
-`Some("/api")`; empty / `"/"` collapse to no-op), then prepended to every
-route at mount time — `#[get("/users")]` ends up at `GET /api/users`. The
-boot log and the OpenAPI document reflect the prefix.
+`Some("/api")`; empty / `"/"` collapse to no-op), then applied as the route
+table is built, to every route and every surface that mounts beside them —
+`#[get("/users")]` is registered at `GET /api/users`, `/graphql` at
+`/api/graphql`. What answers sees the path the client sent, prefix included:
+a handler's `uri()`, the template the span and the access line name
+(`/api/users/{id}`), and the boot log. The OpenAPI document keeps its `paths`
+prefix-free and states the prefix once, as its `servers` base URL. It is one literal
+path: a [route template](/http/controllers/#route-templates)'s braces, or a
+`:`, `*` or `<` the router would read as a parameter, fail the boot naming
+the variable.
 
 ## Framework `Server:` header
 
 Off by default — a production-safe choice: no fingerprint of the
 framework or its version is exposed. Flip on for local development to see
 `Server: nestrs/<crate version>` on every response (the same shape Apache
-and nginx use):
+and nginx use) — from a file when the app pins no `HttpConfig`:
 
 ```bash title=".env.development" frame="terminal"
 NESTRS_HTTP__SERVER_HEADER=true
@@ -226,129 +230,13 @@ HttpModule::for_root(HttpConfig {
 The value is sourced from the `nest-rs-http` crate's `CARGO_PKG_VERSION` at
 build time — it tracks the framework, not your app version.
 
-## Request-body size limit
-
-`RawBody` (and every extractor built on it) accepts at most
-`max_body_bytes` — `2 MiB` by default, so a runaway upload can't exhaust
-memory before a handler ever sees it. Raise or lower it globally:
-
-```bash title=".env.production" frame="terminal"
-NESTRS_HTTP__MAX_BODY_BYTES=4194304   # 4 MiB
-```
-
-A single route that needs a different cap overrides it per call with
-`RawBody::extract_with_limit`; the config value is the default for
-everything else.
-
-## Request timeout
-
-`request_timeout` bounds how long one request may run, so a slow or stuck
-request can't tie up a connection indefinitely. Default `30` seconds;
-`NESTRS_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide
-spelling every duration ceiling uses, so `0` never means "zero seconds":
-
-```bash title=".env.production" frame="terminal"
-NESTRS_HTTP__REQUEST_TIMEOUT_SECS=15
-NESTRS_HTTP__REQUEST_TIMEOUT_SECS=0    # no timeout at all
-```
-
-A handler that exceeds it is aborted and the client gets **`503 Service
-Unavailable`** with a `Retry-After` naming the budget — not `504`. RFC 9110
-§15.6.5 scopes `504 Gateway Timeout` to a server "acting as a gateway or
-proxy" whose *upstream* was slow; this transport is the origin, and the
-handler that overran is its own work. The distinction is not cosmetic: a
-client SDK or a load balancer that retries a `504` on another node is acting
-on "that node's upstream is flaky", and re-runs a handler that will overrun
-again. §15.6.4 is the origin's own sentence — explicitly temporary, and
-paired with `Retry-After`.
-
-## Default security headers
-
-On by default — a freshly-scaffolded app ships safe headers without having
-to remember them:
-
-- `X-Content-Type-Options: nosniff` — defeats MIME sniffing.
-- `X-Frame-Options: DENY` — no framing (clickjacking).
-- `Referrer-Policy: strict-origin-when-cross-origin` — a cross-origin
-  request carries the origin, never the path or the query. It matters here
-  and not only in theory: `nest-rs-social` redirects through URLs carrying
-  `state`, and the Swagger UI at `GET /api` is a real page whose outbound
-  links would otherwise name the API paths a reader was browsing.
-- `Cross-Origin-Opener-Policy: same-origin` — a document this server serves
-  keeps no `window` reference back to a cross-origin opener.
-- `Cross-Origin-Resource-Policy: same-origin` — a *no-cors* cross-origin
-  load of a response from this server is blocked. It does not touch CORS
-  requests, which is why an API can carry it; set `cross-origin` on a server
-  whose images or downloads are meant to be embedded elsewhere.
-- `Strict-Transport-Security: max-age=31536000; includeSubDomains` —
-  emitted **only when TLS is active** (HSTS over plain HTTP is
-  meaningless and a footgun on localhost).
-
-Three more are **settable and off by default**, each because a default would
-be the framework guessing about a document it does not serve:
-
-| Header | Field / env | Why it ships off |
-|---|---|---|
-| `Content-Security-Policy` | `content_security_policy` / `__CONTENT_SECURITY_POLICY` | A policy strict enough to be worth having (`default-src 'none'`) breaks the Swagger UI and every page an app serves; one loose enough to ship safely states nothing. The sources are the app's. |
-| `Cross-Origin-Embedder-Policy` | `cross_origin_embedder_policy` / `__CROSS_ORIGIN_EMBEDDER_POLICY` | `require-corp` is how a *page* opts into cross-origin isolation, and it breaks every cross-origin subresource that does not carry CORP. |
-| `Permissions-Policy` | `permissions_policy` / `__PERMISSIONS_POLICY` | It governs camera / geolocation / payment in a document; a restrictive guess silently disables a feature the app's own front end asked for. |
-
-Every value is tunable through the dual path. Disable the whole set with
-the master switch, or drop one header by setting its value to an empty
-string:
-
-```bash title=".env" frame="terminal"
-NESTRS_HTTP__SECURITY_HEADERS=false                    # all off
-NESTRS_HTTP__FRAME_OPTIONS=SAMEORIGIN                  # override one value
-NESTRS_HTTP__HSTS=                                     # empty ⇒ drop just HSTS
-NESTRS_HTTP__CONTENT_SECURITY_POLICY="default-src 'self'"
-```
-
-```rust title="apps/api/src/module.rs"
-use nest_rs::http::{HttpConfig, HttpModule, SecurityHeadersConfig};
-
-HttpModule::for_root(HttpConfig {
-    security_headers: SecurityHeadersConfig {
-        frame_options: Some("SAMEORIGIN".into()),
-        ..Default::default()
-    },
-    ..Default::default()
-});
-```
-
-## Fail-secure boot
-
-`fail_secure_strict` is `true` by default: when global guards are
-registered and an endpoint the transport can't shape (an imperative
-`mount(...)`) would bypass the guard pool, the boot **fails** naming the
-offending mount rather than silently serving it unguarded. Setting it to
-`false` downgrades that failure to a `warn` — a deliberate opt-out, not
-the default:
-
-An **imperative mount** is `HttpTransport::mount(path, |container| …)`:
-a raw poem endpoint handed to the transport, which can neither shape it
-(no `#[routes]` to run the guard pool through) nor introspect it (no
-`EdgePosture` to read). Writing an application route is not how you get
-one — `#[controller]` covers that, and a capability contributing its own
-surface (GraphQL, WebSockets, MCP, OpenAPI) self-mounts *with* a posture.
-It is the escape hatch for a hand-built endpoint, and the check exists
-because that hatch is the only hole a global guard pool cannot reach.
-The boot error names the path:
-
-```text frame="terminal"
-Error: fail-secure: imperative mount(...) endpoints bypass the global guard
-pool: /raw — route them through a #[controller], guard them explicitly, or
-opt out with HttpTransport::fail_secure_strict(false) /
-NESTRS_HTTP__FAIL_SECURE_STRICT=false
-```
-
-```bash title=".env" frame="terminal"
-NESTRS_HTTP__FAIL_SECURE_STRICT=false
-```
-
 ## Going further
 
+- [CORS and security headers](/http/cors/) — which origins a browser page may
+  call from, and the headers every response carries.
+- [Limits and deadlines](/http/limits/) — the body cap, the request budget, the
+  connection cap and deadlines, and the shutdown window.
 - [Controllers & routes](/http/controllers/) — write the handlers this
   transport serves.
-- [Configuration](/configuration/) — the framework-wide `NESTRS_<NS>__*`
+- [Configuration](/configuration/) — the framework-wide `<PREFIX>_<NS>__*`
   scheme and the `.env` cascade.

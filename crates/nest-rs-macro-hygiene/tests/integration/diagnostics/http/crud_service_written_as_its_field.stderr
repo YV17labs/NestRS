@@ -1,0 +1,5 @@
+error: #[crud] `service` names the service's type, not the field holding it — write the type of `svc`, e.g. `service = UsersService`: every generated operation reaches the service through the host's `#[inject]` field of that type
+  --> tests/integration/diagnostics/http/crud_service_written_as_its_field.rs:20:18
+   |
+20 | #[crud(service = svc, ops = [get])]
+   |                  ^^^

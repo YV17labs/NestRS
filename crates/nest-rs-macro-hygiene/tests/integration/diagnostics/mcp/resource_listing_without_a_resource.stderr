@@ -1,0 +1,5 @@
+error: a #[resources] listing lists the URIs a #[resource] reads, and this #[tools] block declares none — declare the `#[resource(template = "…")]` that reads what it lists
+  --> tests/integration/diagnostics/mcp/resource_listing_without_a_resource.rs:15:14
+   |
+15 |     async fn notes(&self) -> Result<Vec<Resource>, McpError> {
+   |              ^^^^^

@@ -9,7 +9,8 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 **multi-tenant publishing platform**: publications (orgs), authors (users),
 posts, live comments, background jobs, and an MCP assistant for drafting.
 Several binaries, one workspace, shared `crates/features/`, no chatty RPC
-between deployables.
+between deployables — [a modular monolith, deployed per workload](/why/#a-modular-monolith-deployed-per-workload),
+at full size.
 
 **Three names run through every page of these docs, and this is the whole
 map.** `hello` is the one-route binary `nestrs new` writes, `blog` is what the
@@ -25,10 +26,10 @@ snippet naming `posts` is Publish's unless the page says otherwise.
 | App | Port | Role in the story | Transports |
 |-----|------|-------------------|------------|
 | [`auth`](/security/authentication/split-deployment/) | 3001 | Authors sign in (OAuth2, JWT issuance) | HTTP |
-| [`api`](/tutorial/) | 3002 | Main API — users, orgs, audio hooks | HTTP, GraphQL, OpenAPI |
-| [`assistant`](/mcp/) | 3003 | AI tools over the audio pipeline (JWT-guarded) | MCP |
+| [`api`](/tutorial/) | 3002 | Main API — users, orgs, posts, audio hooks | HTTP, GraphQL, OpenAPI, Schedule |
+| [`assistant`](/mcp/) | 3003 | AI tools over audio, users and posts (JWT-guarded) | MCP |
 | [`live`](/websockets/) | 3004 | Live comments and notifications | WebSockets |
-| [`worker`](/queue/) | 3005 | Async jobs — newsletters, audio queue | Queue, Schedule, HTTP (health only) |
+| [`worker`](/queue/) | 3005 | Async jobs — notifications, audio queue | Queue, Schedule, HTTP (health only) |
 
 ```bash
 git clone https://github.com/YV17labs/NestRS && cd NestRS/demo
@@ -37,13 +38,20 @@ nestrs run dev auth         # issuer on :3001
 nestrs run dev api          # resource server on :3002
 nestrs run dev live         # WebSockets on :3004
 nestrs run dev assistant    # MCP on :3003
-nestrs run dev worker       # headless — needs Redis
+nestrs run dev worker       # jobs, health on :3005 — needs Redis
 ```
 
 `api` and `auth` share the same database and the `features`
 crate; the worker shares Redis with the API's queue producer. Tokens are
 self-contained JWTs — the API verifies with a public key, never calls the
 issuer over HTTP.
+
+Every app reads the workspace's `.env` files, and what is one app's alone sits
+in its own `apps/<app>/.env`: its port, the audience it requires — its own
+origin, so a token minted for one app is refused by the others. `auth`'s
+`.env.development` and `.env.test` add the signing key, the registered clients
+and the resources a sign-in may name
+([an app's own files](/configuration/env-cascade/#an-apps-own-files)).
 
 ## Deploy it
 
@@ -55,10 +63,44 @@ builds it, and the chart under
 deploys it.
 
 ```bash
+openssl genpkey -algorithm ed25519 -out signing.pem
+openssl pkey -in signing.pem -pubout -out verifying.pem
+
 helm install demo demo/charts/demo \
+  --set apps.auth.host=auth.example.com \
+  --set apps.api.host=api.example.com \
+  --set apps.assistant.host=assistant.example.com \
+  --set apps.live.host=live.example.com \
   --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
-  --set secrets.REDIS__URL="redis://redis:6379"
+  --set secrets.REDIS__URL="rediss://redis:6379" \
+  --set secrets.REDIS__TRANSCODES__URL="rediss://cache:6379" \
+  --set secrets.STORAGE__ACCESS_KEY="$STORAGE_ACCESS_KEY" \
+  --set secrets.STORAGE__SECRET_KEY="$STORAGE_SECRET_KEY" \
+  --set-file secrets.AUTHN__PRIVATE_KEY=signing.pem \
+  --set-file secrets.AUTHN__PUBLIC_KEY=verifying.pem \
+  --set-file secrets.OAUTH__SERVER__CLIENTS=clients.json
 ```
+
+The secrets are the *Required* list in [`values.yaml`](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo/values.yaml): a cluster's own services, the
+object store's credentials, the signing keypair, and `clients.json`, the array of clients
+`auth` registers, each with its `client_id`, `client_secret`, `payload`, `scopes` and
+`resources`. The chart derives the cross-app URLs from the hostnames, and each app's
+audience from its own. Leave out a secret, or the hostname of `api`, `assistant`, `auth`
+or `live`, and the install is refused, naming each setting and the apps that cannot run
+without it: an app reading one refuses its boot without it, but for the signing key,
+without which `auth` boots and its token endpoint answers `500`. An app kept off the
+Ingress pins its `AUTHN__AUDIENCE` in its own `config` instead. Social sign-in stays optional: a provider is on once
+a deployment names its `CLIENT_ID` and `CLIENT_SECRET`, and one of the two alone is
+refused like a missing secret.
+
+Each app has a Secret of its own, holding the keys of `secrets` it reads and no other:
+`auth`'s signing key and registered clients reach `auth` alone, and the migration job holds
+the database URL. What an app reads is its `reads` in `values.yaml`, read off its modules; a
+key no app reads refuses the install. A key changed rolls every app reading a Secret the
+chart writes, under one checksum of them all: a pod is read where a Secret is not, and a
+checksum of one app's Secret alone would test a guess at the secret it holds. To bring your
+own, `apps.<name>.existingSecret` hands one app a Secret of yours in place of the chart's,
+and `defaults.existingSecret` every app the same one.
 
 Every app is declared in one map, and `kind` says what it becomes in the
 cluster. Migrations are an app like the others — the same image, another binary
@@ -72,23 +114,34 @@ apps:
 ```
 
 Set the hostnames rather than the URLs. The apps address each other by URL —
-the issuer a token is signed by, the audience it is minted for, the resource
-identifier discovery serves, the MCP `Host` allowlist — and each of those is
-some app's public origin, so the chart derives them from `apps.<name>.host`.
+the issuer a token is signed by, the audience each app requires, the resource
+identifier discovery serves, the resources a sign-in may be minted a token for
+— and each of those is some app's public origin, so the chart derives them from
+`apps.<name>.host`. Each app requires its own origin as a token's audience, so
+a token minted for one is refused by the others, and the signing key reaches
+`auth` alone.
+
+Each app's pod sleeps five seconds in a `preStop` hook before its `SIGTERM`, so
+it leaves its Service while it still listens, and the 35-second grace holds that
+sleep and the framework's way down — see
+[leaving the load balancer first](/fundamentals/shutdown/#leaving-the-load-balancer-first).
 
 Scaling the queue worker is the one decision the chart does not make for you.
-The worker runs one job at a time per `#[process]` method, and Publish's
-processors are I/O — an S3 round-trip, one INSERT — so a pod draining thousands
-of jobs sits near 0% CPU and a CPU-driven autoscaler never fires. Queue depth is
-the signal that moves with the work, and [KEDA](https://keda.sh) is what reads
-it: the chart ships the triggers for both queues, disabled until you turn them
-on. The chart's
+Each `#[process]` method runs at most its declared `concurrency` per pod — one
+unless it says otherwise — and Publish's processors are I/O, an S3 round-trip or
+one INSERT, so a pod draining thousands of jobs sits near 0% CPU and a
+CPU-driven autoscaler never fires. Queue depth is the signal that moves with the
+work, and [KEDA](https://keda.sh) is what reads it: the chart ships a trigger on
+each queue's `nestrs:queue:{<queue>}:jobs` stream, disabled until you turn it on.
+The chart's
 [README](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo#scaling-the-queue-worker)
 carries the trade-offs, including why replicas stop at one rather than zero.
 
 <Aside type="caution">
-The demo's `.env` is committed on purpose and its keypair is public — anyone
-with the repository can mint tokens it accepts. Generate your own before
+The demo's keypair and its client's secret are committed on purpose, so anyone
+with the repository can mint tokens a development run accepts. Only the
+development and test profiles read them: under production, an app verifying
+tokens refuses its boot until it names its own. Generate your own before
 deploying any of this, and pass it through `secrets`.
 </Aside>
 
@@ -98,13 +151,13 @@ Three entry points — two learning paths (CLI) and one hosted reference (this r
 
 <CardGrid>
   <LinkCard title="Getting started" href="/getting-started/" description="nestrs new hello — Hello World in 30 seconds (your workspace, not this clone)." />
-  <LinkCard title="Fundamentals" href="/fundamentals/" description="blog step ① — inline handlers, then modules and providers vocabulary." />
+  <LinkCard title="Fundamentals" href="/fundamentals/" description="blog step ① — a feature adapter and a root, then modules and providers vocabulary." />
   <LinkCard title="Tutorial" href="/tutorial/" description="nestrs new blog — build posts (HTTP + DB) in your own apps/blog/." />
 </CardGrid>
 
 - **Getting started** and the **tutorial** scaffold `hello` and `blog` with the
   CLI — reproducible in any workspace, not checked into this repo.
-- **Fundamentals** walks **`blog` step ①** — inline handlers in `apps/blog/`
+- **Fundamentals** walks **`blog` step ①** — a feature adapter and the root importing it
   (vocabulary only). The tutorial builds the composed layout from page 1 onward.
 - **Reference pages** (HTTP, GraphQL, queue, MCP, …) point at the matching
   Publish app above — the complex example you clone and explore.
@@ -127,7 +180,10 @@ before inventing a second pattern.
 | `posts` | Blog articles — `api` (HTTP, org + author scoped) |
 | `users` | Authors and editors — `api` |
 | `orgs` | Publications / tenants — `api` |
-| `oauth` | OAuth2 login on `auth` |
+| `sign_in` | Password and social sign-in, token issuance — `auth` |
+| `chat` | Live comments — `live` |
+| `notifications` | Notifications — `api`, `live`, `worker` |
+| `audit` | The audit trail on writes — `api` |
 | `audio` | Media attachments + queue/schedule hooks |
 | `authn` / `authz` | JWT verification and row-level policy — `api`, not the tutorial blog |
 

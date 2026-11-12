@@ -1,0 +1,121 @@
+---
+title: Entity inputs
+description: "Create<Name> and Update<Name> — the fields a write takes and the rules it validates — and the columns the server fills: the tenant, the author, a default."
+sidebar:
+  order: 2.1
+---
+
+`#[expose]` writes the inputs a create and an update take beside the wire
+type: which fields each carries, and the rules each runs. What the caller does
+not choose, the server fills.
+
+## Write side — inputs and validation
+
+`input(create)` / `input(update)` place a field in the generated
+`Create<Name>` / `Update<Name>` structs. These entity-derived inputs are
+**bare** — no `Dto` or `Input` suffix — because one struct serves the
+service (`type Create`), the REST body, and the GraphQL input at once, so no
+single boundary suffix fits. `validate(...)` attaches a
+[`validator`](https://docs.rs/validator) rule, re-emitted verbatim onto the
+input field:
+
+```rust title="crates/features/src/posts/entity.rs"
+#[expose(input(create, update), validate(length(min = 1)))]
+pub title: String,
+
+#[expose(input(create, update), validate(email))]
+pub email: String,
+```
+
+The input structs derive `Validate`. Validation runs at whichever edge
+decodes one — a `Json<CreatePost>` body, a GraphQL `CreatePost` argument —
+so the service never sees an invalid input. The full rule set
+(`length`, `email`, `range`, `url`, custom validators, …) is the
+`validator` crate's; see its docs for the catalogue.
+
+A custom rule is a function of yours, named by `custom(function = "…")`. It
+returns `validator`'s own error, which `nest_rs::pipes::validator` re-exports at
+the release the framework derives with, so your manifest gains no line:
+
+```rust title="crates/features/src/posts/entity.rs"
+use nest_rs::pipes::validator::ValidationError;
+
+fn not_a_placeholder_title(title: &str) -> Result<(), ValidationError> {
+    if title.eq_ignore_ascii_case("todo") {
+        return Err(ValidationError::new("placeholder_title"));
+    }
+    Ok(())
+}
+```
+
+A **relation** field cannot carry `input(...)` — only scalar columns
+are writable. Set the foreign-key column (`org_id`) as the input, not
+the relation (`org`).
+
+A column the server decides is no input. The tenant and the author come from
+the caller's grants, which a create fills ([below](#the-tenant-comes-from-the-grant));
+a constant takes `default`, which every insert through `Repo` leaving the
+column unset stores:
+
+```rust title="crates/features/src/posts/entities/post.rs (from the demo, abridged)"
+#[expose(default = PostStatus::Draft)]
+pub status: PostStatus,
+```
+
+`default` belongs to a column the create input does not carry, never to the
+primary key, and never to a column `timestamps` stamps; each is a compile
+error.
+
+## The tenant comes from the grant
+
+`users` is tenant-scoped, and its controller is still one `#[crud]` line: the
+create lands in the caller's org without a handler.
+
+```rust title="crates/features/src/users/http/controller.rs (from the demo, abridged)"
+#[crud(
+    service = UsersService,
+    api(
+        get(
+            summary = "Get a user in the caller's org by id",
+            description = "A user outside the caller's org answers 403, an absent one 404."
+        ),
+        // … create(…)
+    ),
+)]
+impl UsersController {}
+```
+
+`CreateUser` carries no `org_id`. The ability's `Create` grant pins it —
+`p.eq(user::Column::OrgId, actor.org_id)` — and `Creatable::create` fills every
+column the caller's `Create` grants pin by equality that the input left unset
+(CASL's `rulesToFields`), then inserts and re-checks the fresh row against the
+same grants in SQL. A grant naming the author too pins both:
+
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
+if let Some(author) = actor.sub.user_id() {
+    ab.can(Action::Create, post::Entity)
+        .when(|p| {
+            p.all([
+                p.eq(post::Column::OrgId, actor.org_id),
+                p.eq(post::Column::AuthorId, author),
+            ])
+        })
+        .requires_scope(constants::POSTS_WRITE);
+    // …
+}
+```
+
+The fill never guesses. A column is filled only when every grant constraining
+it pins it to one value; two grants pinning it apart, or one constraining it
+with `is_in`, a comparison or `any`, leave it unset, and the re-check refuses
+the row. A value the input carries is never overwritten: the re-check judges
+it. Constants the server owns, such as a new post's status, are the entity's
+`#[expose(default = …)]` ([above](#write-side--inputs-and-validation)).
+
+## Going further
+
+- [Entities](/database/entities/) — the header and field attributes the
+  inputs are read off.
+- [CRUD](/database/crud/) — the generated create and update taking them.
+- [Field grants](/security/authorization/field-grants/#what-a-write-may-set)
+  — the columns a caller's grant lets a write set.

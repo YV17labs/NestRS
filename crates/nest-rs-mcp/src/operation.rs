@@ -1,39 +1,61 @@
-//! What one MCP operation *is*, for the layers that run around it.
-//!
-//! An HTTP handler is handed a `Request` and a mounted `RouteShaper`; a GraphQL
-//! resolver is handed a `Context` carrying the [`Container`]. An MCP operation
-//! is handed neither: rmcp builds the host once per session and dispatches each
-//! operation on its own spawned task, so a generated prelude has nothing to read
-//! the app off. This module is that seam.
-//!
-//! [`McpOperationContext`] is what a [`Guard`] then sees. It deliberately does
-//! **not** carry the operation's arguments: deciding *access* from a payload is
-//! a pipe's job (`Valid<T>` / `Piped<P, T>` run on the wire value before the
-//! body), and handing a guard the arguments invites the check to migrate into
-//! the one place the layer rules say it must not be.
+//! What one MCP operation *is*, and the sites it runs through on core's
+//! pipeline: every request's own [`REQUEST`] site, and the site `#[tools]`
+//! declares for each tool, prompt, resource and resource listing, run inside
+//! it.
 
+use std::any::TypeId;
 use std::fmt;
+use std::future::Future;
+use std::sync::Arc;
 
-use nest_rs_core::Container;
+use futures_util::future::BoxFuture;
+use nest_rs_core::__private::{
+    GlobalLayers, GuardStage, HandlerDeclaration, MetaLevels, ResolvedLayer, Site, SiteDeclaration,
+    SiteLayers, Tail, compose_chain, declare_handler, declare_site, dedup_bucket, dispatch,
+    log_effective_chain, new_unit_context, report_unresolved, resolve_scoped, settled,
+};
+use nest_rs_core::LayerSite;
+use nest_rs_core::{
+    Container, Deadline, Failure, Handler, Outcome, Posture, UnitContext, UnresolvedLayerError,
+    anyhow,
+};
+use nest_rs_guards::__private::{
+    GuardSpec, NeededPrincipal, RefusalMark, carried_stage_idle, check_guards, identifying_guard,
+    resolve_global_guards, validate_carried_unit,
+};
+use nest_rs_guards::{Denial, Guard};
+use nest_rs_http::__private::carried_request_chain;
+use rmcp::model::{
+    CallToolRequestMethod, ConstString, GetPromptRequestMethod, ListResourcesRequestMethod,
+    ReadResourceRequestMethod,
+};
 
-/// The container serving the current MCP operation, if one is installed.
-///
-/// Read off the ambient request scope rather than carried again: the HTTP
-/// transport edge builds that scope with the app container and the MCP endpoint
-/// nests under it, so a second copy would be one more thing two installs have to
-/// agree about. `None` outside an MCP dispatch, and inside one whose mount is
-/// not nested under the transport edge.
-pub fn current_container() -> Option<Container> {
+use crate::McpError;
+use crate::error::{OperationFailure, Reply, answer, opaque_answer};
+use crate::module::McpModule;
+use crate::propagate::ServedResource;
+use crate::view::McpView;
+
+/// The container serving the current MCP operation, read off the ambient request
+/// scope; `None` outside a dispatch nested under the HTTP transport edge.
+pub(crate) fn current_container() -> Option<Container> {
     crate::scope::current_scope().map(|scope| scope.root().clone())
 }
 
-/// Which router an operation belongs to — the two roles `#[tools]` serves.
+/// Which router an operation belongs to — the roles `#[tools]` serves, each
+/// named for its attribute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum McpOperationKind {
     /// A `#[tool]` method, reached by `tools/call`.
     Tool,
     /// A `#[prompt]` method, reached by `prompts/get`.
     Prompt,
+    /// A `#[resource]` method, reached by `resources/read` at a URI its
+    /// template writes.
+    Resource,
+    /// The `#[resources]` method, reached by `resources/list`.
+    Resources,
 }
 
 impl McpOperationKind {
@@ -42,6 +64,18 @@ impl McpOperationKind {
         match self {
             Self::Tool => "tool",
             Self::Prompt => "prompt",
+            Self::Resource => "resource",
+            Self::Resources => "resources",
+        }
+    }
+
+    /// The JSON-RPC method that reaches this role's router.
+    pub fn method(self) -> &'static str {
+        match self {
+            Self::Tool => CallToolRequestMethod::VALUE,
+            Self::Prompt => GetPromptRequestMethod::VALUE,
+            Self::Resource => ReadResourceRequestMethod::VALUE,
+            Self::Resources => ListResourcesRequestMethod::VALUE,
         }
     }
 }
@@ -52,67 +86,454 @@ impl fmt::Display for McpOperationKind {
     }
 }
 
-/// One MCP operation, as a [`Guard`](https://docs.rs/nest-rs-guards) sees it —
-/// the MCP analog of the `&Context` a `check_graphql` takes and the
-/// `(client, event, data)` a `check_ws_message` takes.
-///
-/// Built by the `#[tools]` expansion around each decorated operation. The caller's
-/// `Ability` is **ambient** by the time a guard runs (the endpoint's
-/// [`McpOperationGuard`](crate::McpOperationGuard) installs it in its `around`),
-/// so a capability-only guard reads it with `nest_rs_authz::current_ability`
-/// exactly as it would on any other transport.
-pub struct McpOperationContext<'a> {
-    container: &'a Container,
-    host: &'static str,
-    kind: McpOperationKind,
-    name: &'static str,
+/// What every request's own site folds of the app-wide layers: the unit
+/// stage, once around whatever the request reaches.
+const REQUEST_LAYERS: GlobalLayers = GlobalLayers {
+    unit_stage: true,
+    exception_filters: false,
+    handler_stage: false,
+};
+
+/// What a declared operation's site folds of the app-wide layers: its
+/// exception filters and handler-stage interceptors, never the unit stage the
+/// operation's own request site ran around it.
+pub const OPERATION_LAYERS: GlobalLayers = GlobalLayers {
+    unit_stage: false,
+    exception_filters: true,
+    handler_stage: true,
+};
+
+/// The declaration of every request's own site, behind the guards at the
+/// endpoint's request.
+static REQUEST_HANDLER: Handler = declare_handler(HandlerDeclaration {
+    unit: crate::unit::OPERATION,
+    host: TypeId::of::<McpModule>(),
+    host_name: "McpModule",
+    method: "",
+    address: "*",
+    posture: Posture::Gated,
+    meta: MetaLevels::default,
+});
+
+/// The site every MCP request runs as — the unit stage alone; a declared
+/// operation then reaches its own site inside it.
+pub(crate) static REQUEST: Site = declare_site(
+    &REQUEST_HANDLER,
+    SiteDeclaration {
+        layers: SiteLayers::default,
+        global: REQUEST_LAYERS,
+        guard_stage: None,
+        class_gate: None,
+    },
+);
+
+/// The guards one declared operation's site declares, as `#[tools]` collects
+/// them.
+pub struct OperationGuards {
+    /// `#[use_guards]` on the host.
+    pub host: Vec<GuardSpec>,
+    /// `#[use_guards]` beside the method, `#[force_guards]` included.
+    pub method: Vec<GuardSpec>,
+    /// `#[force_guards]`: the guards the method re-runs.
+    pub force: Vec<TypeId>,
+    /// Which router serves the operation.
+    pub kind: McpOperationKind,
+    /// The posture names no subject, so the ability is withheld from the
+    /// operation's reads.
+    pub withheld: bool,
+    /// The posture declares a class gate, which reads the ability a guard attached.
+    pub class_gated: bool,
+    /// What the operation's `Ambient<T>` parameters read, by type.
+    pub ambient: Vec<TypeId>,
 }
 
-impl<'a> McpOperationContext<'a> {
-    /// Describe the operation about to run. Macro-emitted; the arguments come
-    /// from the decorated method, so every field is `'static` but the container.
-    pub fn new(
-        container: &'a Container,
-        host: &'static str,
-        kind: McpOperationKind,
-        name: &'static str,
-    ) -> Self {
-        Self {
-            container,
-            host,
-            kind,
-            name,
+/// The guard stage of the operation `handler` declares: the app-wide pool, the
+/// host's guards and the method's, each once, each running its
+/// [`check`](Guard::check) on the operation — `None` when it runs none, needs no
+/// principal and has nothing to withhold. A `#[public]` operation reading as an
+/// `Ambient<P>` the principal a guard of its chain or its request produces
+/// refuses a caller they admitted without it.
+///
+/// The pool is part of it, as on a GraphQL root field: the endpoint's request
+/// runs `check_http`, which a guard deciding the operation alone overrides to
+/// admit the request, so leaving the pool out here would leave that guard's
+/// `check` never consulted.
+pub fn operation_guard_stage(
+    container: &Container,
+    handler: &Handler,
+    declared: OperationGuards,
+) -> anyhow::Result<Option<Arc<dyn GuardStage>>> {
+    let label = format!(
+        "{} {}::{}",
+        declared.kind,
+        handler.host_name(),
+        handler.method()
+    );
+    let host = resolve_scoped(container, &declared.host, LayerSite::Host, &label)?;
+    let method = resolve_scoped(container, &declared.method, LayerSite::Method, &label)?;
+    let chain = compose_chain::<dyn Guard>(
+        dedup_bucket(resolve_global_guards(container)),
+        host,
+        method,
+        &declared.force,
+        &label,
+    );
+    log_effective_chain(&label, "guards", &chain);
+    // No guard runs at an opened endpoint's request.
+    let opened = crate::module::posture(container) == Posture::Public;
+    let request_chain = || {
+        if opened {
+            return Ok(Vec::new());
+        }
+        carried_request_chain::<McpView>(container, &label)
+            .map_err(|unresolved| unresolved.to_string())
+    };
+    validate_carried_unit(
+        &label,
+        handler.posture(),
+        declared.class_gated,
+        opened,
+        &chain,
+        request_chain,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let public = handler.posture() == Posture::Public;
+    let needed = NeededPrincipal::carried(public, &declared.ambient, &chain, request_chain)
+        .map_err(anyhow::Error::msg)?;
+    if needed.is_none()
+        && carried_stage_idle(&chain, declared.withheld, request_chain)
+            .map_err(anyhow::Error::msg)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(OperationGuardStage {
+        guards: chain,
+        needed,
+        withheld: declared.withheld,
+    })))
+}
+
+/// One operation's guards, as the pipeline runs a site's guard stage: each
+/// one's [`check`](Guard::check) on the operation, read through [`McpView`].
+struct OperationGuardStage {
+    guards: Vec<ResolvedLayer<dyn Guard>>,
+    needed: Option<NeededPrincipal>,
+    withheld: bool,
+}
+
+impl GuardStage for OperationGuardStage {
+    fn check<'a>(&'a self, cx: &'a mut UnitContext<'_>) -> BoxFuture<'a, Result<(), Failure>> {
+        Box::pin(async move {
+            check_guards(&self.guards, self.needed.as_ref(), None, self.withheld, cx)
+                .await
+                .map_err(|refused| Failure::from(refused.into_denial(DENIED, cx)))
+        })
+    }
+
+    fn covers(&self) -> bool {
+        identifying_guard(&self.guards).is_some()
+    }
+}
+
+/// The line a guard's denial of a declared operation is filed as.
+const DENIED: &str = "guard denied the operation";
+
+/// Run one declared operation — a tool call, a prompt fetch, a resource read
+/// or listing — through the site `#[tools]` declared for it — `#[tools]`
+/// wraps every operation in this — the rest of it being
+/// `tail`: its `Scoped<T>` parameters, its pipes and the call, answering the
+/// operation's value, written inside the site.
+///
+/// It runs inside the operation's own unit, whose site ran the unit stage. A
+/// site whose chains do not compose is refused opaquely, its cause filed: no
+/// operation runs without a layer it declares.
+pub async fn run_operation<T, F, Fut>(
+    site: &'static Site,
+    view: McpView,
+    tail: F,
+) -> Result<T, McpError>
+where
+    T: Send,
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = Result<T, OperationFailure>> + Send,
+{
+    // `tail` is a closure: the operation's future is built in `dispatch`'s
+    // own frame, held once (rust-lang/rust#62958).
+    let handler = site.handler();
+    if view.kind() == Some(McpOperationKind::Resource)
+        && let Some(served) = nest_rs_core::ambient::<ServedResource>()
+    {
+        served.serves(handler.address());
+    }
+    // Composed against an empty container where no app is ambient: a site
+    // declaring nothing still runs, one declaring a layer is refused.
+    let container = current_container().unwrap_or_default();
+    let chains = match site.chains(&container) {
+        Ok(chains) => chains,
+        Err(refused) => return Err(refused_site(handler, &refused)),
+    };
+    let deadline = nest_rs_core::ambient::<Deadline>().map(|deadline| deadline.0);
+    let mut slot = None;
+    let outcome = {
+        let mut view = view;
+        let mut tail = OperationTail {
+            run: Some(tail),
+            slot: &mut slot,
+        };
+        let mut cx = new_unit_context(handler, &mut view, None, deadline);
+        dispatch(&mut cx, &chains, &mut tail).await
+    };
+    answered(handler, outcome, slot)
+}
+
+/// The view of the operation `name` of `host`, served by `kind`'s router, at
+/// the path its endpoint is mounted at when one runs it.
+pub fn operation_view(kind: McpOperationKind, name: &'static str, host: &'static str) -> McpView {
+    McpView::declared(kind, name, host).served_at(served_path())
+}
+
+/// The path the endpoint running this operation is mounted at, as its
+/// `mounted` lines name it; `None` outside one, or on a hand-built endpoint.
+pub fn served_path() -> Option<Arc<str>> {
+    nest_rs_core::ambient::<crate::propagate::ServedPath>().map(|served| Arc::clone(&served.0))
+}
+
+/// What a site whose chains did not compose answers: the opaque answer, its
+/// cause filed — the layer and the site when a declared layer did not resolve.
+fn refused_site(handler: &Handler, refused: &anyhow::Error) -> McpError {
+    match refused.downcast_ref::<UnresolvedLayerError>() {
+        Some(unresolved) => report_unresolved(unresolved),
+        None => tracing::error!(
+            target: nest_rs_core::target::LAYERS,
+            site = handler.address(),
+            error = %nest_rs_core::error_message(refused.as_ref()),
+            "an MCP operation's layers did not compose; it is refused",
+        ),
+    }
+    opaque_answer()
+}
+
+/// What the unit of the operation `handler` declares came to, as the client
+/// reads it: the value its tail wrote, or its failure answered by the edge's
+/// one rule.
+fn answered<T>(
+    handler: &Handler,
+    outcome: Outcome,
+    slot: Option<Result<T, Box<Reply>>>,
+) -> Result<T, McpError> {
+    match (outcome, slot) {
+        (Ok(_), Some(Ok(value))) => Ok(value),
+        (Ok(_), Some(Err(reply))) => Err(reply.filed()),
+        (Ok(_), None) => {
+            tracing::error!(
+                target: crate::TARGET,
+                site = handler.address(),
+                "an MCP operation settled without a value; it is refused",
+            );
+            Err(opaque_answer())
+        }
+        (Err(failure), slot) => {
+            if failure.find::<Denial>().is_some()
+                && let Some(mark) = nest_rs_core::ambient::<RefusalMark>()
+            {
+                mark.mark();
+            }
+            Err(answer(&failure, slot.and_then(Result::err)))
+        }
+    }
+}
+
+/// An operation's tail as the pipeline runs it: `run`, its value written into
+/// the operation's own slot; a failure carrying an answer only its type could
+/// say goes out answered, which the exception filters still see.
+struct OperationTail<'s, T, F> {
+    run: Option<F>,
+    slot: &'s mut Option<Result<T, Box<Reply>>>,
+}
+
+impl<T, F, Fut> Tail for OperationTail<'_, T, F>
+where
+    T: Send,
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = Result<T, OperationFailure>> + Send,
+{
+    async fn call(&mut self, _: &mut UnitContext<'_>) -> Outcome {
+        let Some(run) = self.run.take() else {
+            unreachable!("a unit runs its tail once");
+        };
+        match run().await {
+            Ok(value) => {
+                *self.slot = Some(Ok(value));
+                Ok(settled())
+            }
+            Err(OperationFailure {
+                failure,
+                reply: Some(reply),
+            }) => {
+                *self.slot = Some(Err(reply));
+                Err(failure.answered(settled()))
+            }
+            Err(OperationFailure {
+                failure,
+                reply: None,
+            }) => Err(failure),
+        }
+    }
+}
+
+/// Whether an operation's description holds no prose — `str::trim` leaves
+/// nothing of it. `const` so `#[tools]` can assert a non-literal description
+/// (`include_str!`, a constant) at build time, which `str::trim` cannot.
+pub const fn description_is_blank(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        // A `&str` is valid UTF-8, so the lead byte says how many continuation
+        // bytes follow, and each carries six bits.
+        let lead = bytes[at];
+        let (mut code, width) = match lead {
+            0x00..=0x7F => (lead as u32, 1),
+            0xC0..=0xDF => ((lead & 0x1F) as u32, 2),
+            0xE0..=0xEF => ((lead & 0x0F) as u32, 3),
+            _ => ((lead & 0x07) as u32, 4),
+        };
+        let mut next = 1;
+        while next < width {
+            code = (code << 6) | (bytes[at + next] & 0x3F) as u32;
+            next += 1;
+        }
+        match char::from_u32(code) {
+            Some(character) if character.is_whitespace() => at += width,
+            _ => return false,
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `str::trim` is the oracle.
+    #[test]
+    fn a_description_is_blank_exactly_when_trim_leaves_nothing() {
+        for character in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
+            let alone = character.to_string();
+            assert_eq!(
+                description_is_blank(&alone),
+                alone.trim().is_empty(),
+                "{:?}",
+                character,
+            );
+        }
+        for text in [
+            "",
+            " ",
+            "\t\n\r",
+            "\u{3000}\u{a0}",
+            " x ",
+            "\u{3000}é\u{3000}",
+            "😀",
+        ] {
+            assert_eq!(
+                description_is_blank(text),
+                text.trim().is_empty(),
+                "{text:?}"
+            );
         }
     }
 
-    /// The app serving this operation — what a guard resolves collaborators
-    /// from when it needs one it did not `#[inject]`.
-    pub fn container(&self) -> &Container {
-        self.container
+    #[test]
+    fn the_check_runs_in_a_constant() {
+        const {
+            assert!(description_is_blank(concat!(" ", "\u{3000}")));
+            assert!(!description_is_blank(concat!(" Counts ", "items.")));
+        }
     }
 
-    /// The `#[mcp]` host type this operation belongs to.
-    pub fn host(&self) -> &'static str {
-        self.host
+    /// With no guard at the operation or at an opened endpoint's request, nothing
+    /// can have attached what a bare `#[public]` withholds, so it keeps no stage.
+    #[test]
+    fn an_operation_with_nothing_to_withhold_pays_for_no_stage() {
+        let stage = operation_guard_stage(
+            &Container::default(),
+            &PING,
+            OperationGuards {
+                host: Vec::new(),
+                method: Vec::new(),
+                force: Vec::new(),
+                kind: McpOperationKind::Tool,
+                withheld: true,
+                class_gated: false,
+                ambient: Vec::new(),
+            },
+        )
+        .expect("no guard to resolve");
+        assert!(stage.is_none());
     }
 
-    /// Whether this is a tool call or a prompt fetch.
-    pub fn kind(&self) -> McpOperationKind {
-        self.kind
+    struct Tools;
+
+    static PING: Handler = declare_handler(HandlerDeclaration {
+        unit: crate::unit::OPERATION,
+        host: TypeId::of::<Tools>(),
+        host_name: "Tools",
+        method: "ping",
+        address: "ping",
+        posture: Posture::Public,
+        meta: MetaLevels::default,
+    });
+
+    static SITE: Site = declare_site(
+        &PING,
+        SiteDeclaration {
+            layers: SiteLayers::default,
+            global: OPERATION_LAYERS,
+            guard_stage: None,
+            class_gate: None,
+        },
+    );
+
+    /// What an operation's site adds to the future of a tail holding `N`
+    /// bytes: every stage between the wrapper and the developer's method.
+    fn added_by_the_site<const N: usize>() -> usize {
+        let holding = || async {
+            let held = [0u8; N];
+            tokio::task::yield_now().await;
+            Ok::<_, OperationFailure>(held.len())
+        };
+        let tail = size_of_val(&holding());
+        let view = operation_view(McpOperationKind::Tool, "ping", "Tools");
+        size_of_val(&run_operation(&SITE, view, holding)) - tail
     }
 
-    /// The operation's wire name — the tool or prompt the client asked for.
-    pub fn name(&self) -> &'static str {
-        self.name
+    /// A debug build reserves every copy of a future a frame holds on the
+    /// thread polling it: a site copying its tail's would multiply the stack
+    /// an operation needs by the stages it runs.
+    #[test]
+    fn an_operations_site_holds_its_tails_future_once() {
+        let light = added_by_the_site::<1024>();
+        let heavy = added_by_the_site::<16384>();
+        assert_eq!(
+            light, heavy,
+            "an operation's site copies its tail's future: it adds {light} bytes to a 1 KiB \
+             one, {heavy} to a 16 KiB one",
+        );
     }
-}
 
-impl fmt::Debug for McpOperationContext<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("McpOperationContext")
-            .field("host", &self.host)
-            .field("kind", &self.kind)
-            .field("name", &self.name)
-            .finish_non_exhaustive()
+    #[tokio::test]
+    async fn an_operation_answers_the_value_its_tail_wrote() {
+        let view = operation_view(McpOperationKind::Tool, "ping", "Tools");
+        let answered =
+            run_operation(&SITE, view, || async { Ok::<_, OperationFailure>("pong") }).await;
+        assert_eq!(answered.ok(), Some("pong"));
+    }
+
+    #[test]
+    fn an_operation_kind_names_the_method_reaching_its_router() {
+        assert_eq!(McpOperationKind::Tool.method(), "tools/call");
+        assert_eq!(McpOperationKind::Prompt.method(), "prompts/get");
+        assert_eq!(McpOperationKind::Resource.method(), "resources/read");
+        assert_eq!(McpOperationKind::Resources.method(), "resources/list");
     }
 }

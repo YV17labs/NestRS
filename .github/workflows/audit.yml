@@ -1,0 +1,49 @@
+# The framework's and the demo's Cargo trees against RustSec through
+# cargo-deny, on a pull request touching one: refused only for an advisory it
+# brings, and warned of one its base holds. No job watches a branch between
+# changes: GitHub's Dependabot alerts on the default branch's lockfiles for the
+# vulnerabilities GitHub's advisory database holds, not for the unmaintained,
+# yanked or unsound crates `deny.toml` also refuses, and `publish.yml` runs the
+# whole check before a release. Not audited: the benchmarks' trees
+# (.claude/decisions/ci-on-change.md) and the npm trees
+# (.claude/decisions/npm-lockfile-advisories.md).
+
+name: Audit
+
+on:
+  pull_request:
+    paths:
+      - '**/Cargo.lock'
+      - '**/Cargo.toml'
+      - '!bench/**'
+      - 'deny.toml'
+      - 'Justfile'
+      - '.github/workflows/audit.yml'
+
+permissions: {}
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  advisories:
+    name: advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      # The merge commit and its parents: its first is the base it was merged onto.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      # cargo-deny reads the tree through `cargo metadata`, so the pinned
+      # toolchain is all it needs: nothing is compiled.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: just@1,cargo-deny@0.20
+      - run: just audit HEAD^1

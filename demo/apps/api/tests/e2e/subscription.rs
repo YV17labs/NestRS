@@ -1,45 +1,43 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nest_rs::authn::JwtConfig;
-use nest_rs::http::HttpTransport;
-use nest_rs::http::poem::http::header;
-use nest_rs::testing::{EphemeralDatabase, TestApp};
+use nest_rs::http::header;
+use nest_rs::testing::TestApp;
+use nest_rs::testing::ws::WsApp;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 
 use api::ApiModule;
+use features::{Role, Subject};
 
-use crate::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, token_for, token_with_sub};
+use crate::{ORG_ID, claims, client};
 
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-const BIND: &str = "127.0.0.1:13372";
-
 const SUBSCRIBE: &str = "subscription { postPublished { id title orgId status } }";
 
-async fn connect(url: &str, token: &str) -> Socket {
-    for _ in 0..100 {
-        let mut request = url.into_client_request().expect("valid websocket url");
+async fn connect(app: &WsApp, authorization: Option<&str>) -> Socket {
+    let mut request = app
+        .url("/graphql")
+        .into_client_request()
+        .expect("valid websocket url");
+    if let Some(authorization) = authorization {
         request.headers_mut().insert(
             header::AUTHORIZATION,
-            format!("Bearer {token}")
-                .parse()
-                .expect("valid bearer header"),
+            authorization.parse().expect("valid bearer header"),
         );
-        request.headers_mut().insert(
-            header::SEC_WEBSOCKET_PROTOCOL,
-            "graphql-transport-ws".parse().expect("valid protocol"),
-        );
-        match tokio_tungstenite::connect_async(request).await {
-            Ok((socket, _)) => return socket,
-            Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
-        }
     }
-    panic!("could not connect to {url}");
+    request.headers_mut().insert(
+        header::SEC_WEBSOCKET_PROTOCOL,
+        "graphql-transport-ws".parse().expect("valid protocol"),
+    );
+    tokio_tungstenite::connect_async(request)
+        .await
+        .expect("the served api upgrades")
+        .0
 }
 
 async fn send(socket: &mut Socket, message: Value) {
@@ -63,8 +61,8 @@ async fn next_message(socket: &mut Socket, within: Duration) -> Option<Value> {
     }
 }
 
-async fn subscribe(url: &str, token: &str, id: &str) -> Socket {
-    let mut socket = connect(url, token).await;
+async fn subscribe(app: &WsApp, authorization: Option<&str>, id: &str) -> Socket {
+    let mut socket = connect(app, authorization).await;
     send(&mut socket, json!({ "type": "connection_init" })).await;
     let ack = next_message(&mut socket, Duration::from_secs(5))
         .await
@@ -89,20 +87,10 @@ async fn next_item(socket: &mut Socket, within: Duration) -> Option<Value> {
     None
 }
 
-async fn wait_ready() {
-    for _ in 0..200 {
-        if tokio::net::TcpStream::connect(BIND).await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("the api never bound {BIND}");
-}
-
-async fn post_json(path: &str, token: &str, body: Value) -> Value {
+async fn post_json(app: &WsApp, path: &str, authorization: &str, body: Value) -> Value {
     let response = reqwest::Client::new()
-        .post(format!("http://{BIND}{path}"))
-        .bearer_auth(token)
+        .post(format!("http://{}{path}", app.addr()))
+        .header(header::AUTHORIZATION, authorization)
         .json(&body)
         .send()
         .await
@@ -115,8 +103,8 @@ async fn post_json(path: &str, token: &str, body: Value) -> Value {
     response.json().await.expect("a JSON body")
 }
 
-async fn graphql(token: &str, query: String) -> Value {
-    let body = post_json("/graphql", token, json!({ "query": query })).await;
+async fn graphql(app: &WsApp, authorization: &str, query: String) -> Value {
+    let body = post_json(app, "/graphql", authorization, json!({ "query": query })).await;
     assert!(
         body.get("errors").is_none(),
         "the operation succeeded: {body}",
@@ -124,72 +112,78 @@ async fn graphql(token: &str, query: String) -> Value {
     body
 }
 
+fn id_of(created: Value) -> Uuid {
+    created["id"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .expect("the id of the row it created")
+}
+
+async fn serve() -> WsApp {
+    TestApp::builder()
+        .module::<ApiModule>()
+        .ephemeral_database::<migrations::Migrator>()
+        .ephemeral_signing_key()
+        .build_ws()
+        .await
+        .expect("ApiModule serves on a real port against a throwaway database")
+}
+
+#[tokio::test]
+async fn an_anonymous_subscriber_is_refused_at_subscribe() {
+    let app = serve().await;
+
+    let mut socket = subscribe(&app, None, "anonymous").await;
+
+    let refused = next_item(&mut socket, Duration::from_secs(5))
+        .await
+        .expect("the refusal is delivered");
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "UNAUTHENTICATED",
+        "{refused}",
+    );
+
+    app.close().await;
+}
+
 #[tokio::test]
 async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
-    let db = EphemeralDatabase::create::<migrations::Migrator>()
-        .await
-        .expect("create + migrate a throwaway database");
-    let served = TestApp::builder()
-        .module::<ApiModule>()
-        .provide_arc(db.connection())
-        .provide(JwtConfig {
-            public_key: Some(DEV_PUBLIC_KEY.into()),
-            audience: Some(AUDIENCE.into()),
-            ..Default::default()
-        })
-        .build_headless()
-        .await
-        .expect("ApiModule boots against the throwaway database");
-    served
-        .init()
-        .await
-        .expect("the init phases register the event listeners");
-    let transport = served
-        .spawn_transport(HttpTransport::new().bind(BIND))
-        .await
-        .expect("the api serves on a real port");
+    let app = serve().await;
+    let sign = |org_id: Uuid, sub: Subject| app.bearer(&claims(org_id, Role::Admin, sub));
 
-    wait_ready().await;
+    let bootstrap = sign(ORG_ID, client());
+    let org_a = id_of(post_json(&app, "/orgs", &bootstrap, json!({ "name": "SubAcme" })).await);
+    let org_b = id_of(post_json(&app, "/orgs", &bootstrap, json!({ "name": "SubGlobex" })).await);
 
-    let bootstrap = token_for(ORG_ID, "admin").await;
-    let org_a = post_json("/orgs", &bootstrap, json!({ "name": "SubAcme" })).await["id"]
-        .as_str()
-        .expect("an org id")
-        .to_owned();
-    let org_b = post_json("/orgs", &bootstrap, json!({ "name": "SubGlobex" })).await["id"]
-        .as_str()
-        .expect("an org id")
-        .to_owned();
+    let admin_a = sign(org_a, client());
+    let author_id = id_of(
+        post_json(
+            &app,
+            "/users",
+            &admin_a,
+            json!({ "name": "Author", "email": "author@subacme.test" }),
+        )
+        .await,
+    );
+    let author = sign(org_a, Subject::User(author_id));
+    let stranger = sign(org_b, client());
 
-    let admin_a = token_for(&org_a, "admin").await;
-    let author_id = post_json(
-        "/users",
-        &admin_a,
-        json!({ "name": "Author", "email": "author@subacme.test" }),
-    )
-    .await["id"]
-        .as_str()
-        .and_then(|id| Uuid::parse_str(id).ok())
-        .expect("a user id");
-    let author = token_with_sub(&org_a, "admin", author_id).await;
-    let stranger_token = token_for(&org_b, "admin").await;
+    let post = id_of(
+        post_json(
+            &app,
+            "/posts",
+            &author,
+            json!({ "title": "Subscribed", "body": "Big news" }),
+        )
+        .await,
+    );
 
-    let post = post_json(
-        "/posts",
-        &author,
-        json!({ "title": "Subscribed", "body": "Big news" }),
-    )
-    .await["id"]
-        .as_str()
-        .expect("a post id")
-        .to_owned();
-
-    let url = format!("ws://{BIND}/graphql");
-    let mut reader = subscribe(&url, &author, "in").await;
-    let mut stranger = subscribe(&url, &stranger_token, "out").await;
+    let mut reader = subscribe(&app, Some(&author), "in").await;
+    let mut outsider = subscribe(&app, Some(&stranger), "out").await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     graphql(
+        &app,
         &author,
         format!("mutation {{ publishPost(id: \"{post}\") {{ id status }} }}"),
     )
@@ -207,11 +201,11 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
         "{item}",
     );
 
-    let seen = next_item(&mut stranger, Duration::from_millis(700)).await;
+    let seen = next_item(&mut outsider, Duration::from_millis(700)).await;
     assert!(
         seen.is_none(),
         "a post from another org never reaches this subscriber: {seen:?}",
     );
 
-    transport.shutdown().await.expect("the transport stops");
+    app.close().await;
 }

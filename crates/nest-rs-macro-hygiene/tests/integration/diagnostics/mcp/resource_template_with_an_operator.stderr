@@ -1,0 +1,5 @@
+error: #[resource] `template` writes `{+path}`, an RFC 6570 operator, modifier or list: a resource reads each variable back off the URI it is asked for, which only a level-1 expression (`{name}`) allows — write one variable, e.g. `{id}`
+  --> tests/integration/diagnostics/mcp/resource_template_with_an_operator.rs:14:27
+   |
+14 |     #[resource(template = "file://{+path}")]
+   |                           ^^^^^^^^^^^^^^^^

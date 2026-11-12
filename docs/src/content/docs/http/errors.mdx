@@ -1,7 +1,6 @@
 ---
 title: HTTP errors
-description: Map handler errors to HTTP responses — ResponseError on a feature error enum, ProblemDetails for one-off RFC 9457 bodies.
-tier: basics
+description: Map handler errors to HTTP responses — ToProblem on a feature error enum, ProblemDetails for one-off RFC 9457 bodies.
 sidebar:
   order: 5
 ---
@@ -9,24 +8,31 @@ sidebar:
 A handler returning `Err(MyError)` should produce a typed JSON body and
 the right status — never a stack trace, never a generic `500`. The HTTP
 surface gives two paths to get there. A feature with its own error enum
-implements [poem](https://docs.rs/poem)'s `ResponseError` once, and `?`
-carries the rest. A glue route without an enum picks up `ProblemDetails`
+implements `nest_rs::core::ToProblem` once — the one mapping GraphQL,
+WebSockets and MCP answer it by too — and a route returning it answers the
+problem it says. A glue route without an enum picks up `ProblemDetails`
 — a small builder that emits an RFC 9457 `application/problem+json`
 body.
 
-For a wider tour of the three error-handling seams (typed catches,
-unconditional mapping, the `ResponseError` default), see
+For a wider tour of the error-handling seams (typed catches, unconditional
+mapping, the `ToProblem` default), see
 [Error handling](/fundamentals/exception-filters/).
 
-## Map a feature error with `ResponseError`
+## Map a feature error with `ToProblem`
 
-The pattern is `thiserror::Error` for the error type,
-[poem](https://docs.rs/poem)'s `ResponseError` for the status:
+The pattern is `thiserror::Error` for the error type, `ToProblem` for what
+the client reads of each variant: a `Problem`, its status and the `code` a
+client branches on, and when you have one, a problem type of your own:
 
 ```rust title="crates/features/src/hello/error.rs"
-use nest_rs::http::poem::http::StatusCode;
-use nest_rs::http::poem::error::ResponseError;
+use nest_rs::core::{Problem, ToProblem, code};
 use thiserror::Error;
+use nest_rs::http::Json;
+
+const NAME_RESERVED: Problem = Problem::new(409, code::CONFLICT).with_type(
+    "https://example.com/problems/name-reserved",
+    "Name reserved",
+);
 
 #[derive(Debug, Error)]
 pub enum GreetError {
@@ -36,11 +42,13 @@ pub enum GreetError {
     Reserved,
 }
 
-impl ResponseError for GreetError {
-    fn status(&self) -> StatusCode {
+impl ToProblem for GreetError {
+    fn to_problem(&self) -> Option<Problem> {
         match self {
-            GreetError::EmptyName => StatusCode::BAD_REQUEST,
-            GreetError::Reserved => StatusCode::CONFLICT,
+            GreetError::EmptyName => {
+                Some(Problem::new(400, code::INVALID_ARGUMENT).with_detail(self.to_string()))
+            }
+            GreetError::Reserved => Some(NAME_RESERVED.with_detail(self.to_string())),
         }
     }
 }
@@ -54,78 +62,70 @@ async fn shout(&self, Json(input): Json<GreetInput>) -> Result<Json<GreetReply>,
 }
 ```
 
-The `?` operator carries the error through any layer of `From`
-conversions; the outermost `ResponseError` impl decides the status and
-the body. Override `fn as_response(&self) -> Response` on the impl when
-the body needs a custom shape (e.g. an error envelope with a `code`
-field).
-
-A feature owns one error type — usually the one it already returns from
-its service. The framework's plumbing errors carry their own HTTP mapping:
-`nest_rs::seaorm::ServiceError` and the OAuth `nest_rs::oauth::server::TokenError`
-ship `ResponseError` impls, so service-layer `?` works without a
-feature-level conversion. (`nest_rs::authn::AuthError` maps itself through
-`IntoResponse` instead — see [the table below](#framework-errors-carry-their-own-mapping).)
-
-## Structured bodies with `ProblemDetails`
-
-A glue route that doesn't own a feature error enum can still emit a
-structured error body conforming to
-[RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html):
-
-```rust title="crates/features/src/posts/http/controller.rs"
-use nest_rs::http::ProblemDetails;
-use nest_rs::http::poem::Result;
-use nest_rs::http::poem::web::Json;
-
-#[get("/posts/:id")]
-async fn show(&self, Path(id): Path<Uuid>) -> Result<Json<Post>, ProblemDetails> {
-    let post = self.svc.find(id).await
-        .map_err(|e| ProblemDetails::internal().with_detail(e.to_string()))?
-        .ok_or_else(|| {
-            ProblemDetails::not_found()
-                .with_detail(format!("post {id} does not exist"))
-                .with_instance(format!("/posts/{id}"))
-        })?;
-    Ok(Json(post))
-}
-```
-
-Constructors cover the well-known statuses — `bad_request`, `unauthorized`,
-`forbidden`, `not_found`, `conflict`, `unprocessable`, `internal` — each
-preset with a stable `type` URI pointing at the matching RFC 9110
-section. Builders extend the body:
-
-| Builder | Field |
-|---------|-------|
-| `.with_detail("…")` | Free-form human-readable description |
-| `.with_instance("/posts/17")` | URI of the specific occurrence |
-| `.with_type("urn:problem:post-invalid")` | Override the type URI |
-| `.with_title("Post invalid")` | Override the title |
-| `ProblemDetails::from_error(status, title, err)` | Build from any `Display`-impl |
-
-The response carries `Content-Type: application/problem+json`
-automatically; an absent `detail` or `instance` is omitted from the body
-(per RFC 9457). Body shape, when all fields are set:
+The route reads its error by its type, as every edge does, and answers the
+problem document:
 
 ```json
 {
-  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.404",
-  "title": "Not Found",
-  "status": 404,
-  "detail": "post 9c3d… does not exist",
-  "instance": "/posts/9c3d…"
+  "type": "https://example.com/problems/name-reserved",
+  "title": "Name reserved",
+  "status": 409,
+  "detail": "name reserved",
+  "code": "CONFLICT"
 }
 ```
+
+`with_type(uri, title)` names a problem type of your own (RFC 9457 §3.1): a
+URI a client keys on and dereferences for its documentation, and its title,
+the same for every occurrence. Declared in a `const`, the URI is checked when
+it compiles. Without it the document is `about:blank`, its title the status's
+reason phrase. GraphQL answers the same problem with `extensions.type` and
+`extensions.title`, WebSockets and MCP with `data.type` and `data.title`. A
+`detail` and a field map (`with_errors`) go out on a `4xx` only; returning
+`None` answers the opaque `500`.
+
+A body that answers the edge's own error — mixing yours with `ProblemDetails`
+or a bare status — converts it with `?`: `self.svc.publish(id).await?` answers
+the problem it says, since every `ToProblem` error is a
+`nest_rs::http::ResponseError`. An answer that is no problem document at all,
+another protocol's body or an envelope of your own, implements
+`ResponseError` instead: its `status()`, and `as_response()` for the body. One
+error is mapped one way: a `ResponseError` written for a type that implements
+`ToProblem` does not compile.
+
+Either rendering keeps a `5xx`'s cause for the operator, and neither logs it
+itself. The edge files the error's whole chain once the answer is final,
+on `nest_rs::http`: at `error`, at `warn` behind a `503`, naming the route as the
+`http.request` line does, by `verb` and `path`. It goes by the
+status the client was finally sent, so an [exception
+filter](/fundamentals/exception-filters/) that answers the failure with a
+`4xx` files nothing. A `4xx` your error answers is the client's own, and
+files nothing either.
+
+A feature owns one error type — usually the one it already returns from
+its service. The framework's plumbing errors carry their own HTTP mapping:
+`nest_rs::seaorm::ServiceError` implements `ToProblem` and converts into
+`HttpError` through it, and the OAuth `nest_rs::oauth::server::TokenError` and
+`nest_rs::authn::AuthError`, which answer another protocol's body or a
+challenge, ship `ResponseError` impls, so service-layer `?` works without a
+feature-level conversion — see
+[the table below](#framework-errors-carry-their-own-mapping).
+
+## Structured bodies with `ProblemDetails`
+
+A glue route that doesn't own a feature error enum still answers an RFC 9457
+problem document: `ProblemDetails::not_found().with_detail(…)` built inline,
+`?` returning it. [Problem details](/http/problem-details/) lists its
+constructors, the `code` each status carries and its builders.
 
 ## When to pick which
 
 | Situation | Use |
 |-----------|-----|
-| The error is a variant of a feature's own enum, used by ≥ 2 routes | `ResponseError` on the enum |
+| The error is a variant of a feature's own enum, used by ≥ 2 routes | `ToProblem` on the enum |
 | A one-off route raises a problem the enum doesn't model (e.g. a glue route checking a precondition) | `ProblemDetails` inline |
 | The service returns a framework error (`ServiceError`, `TokenError`, `AuthError`, …) | Nothing — the framework's own mapping already renders it |
-| The body shape must match an external spec (CloudEvents, your own envelope) | Override `as_response` on the feature error's `ResponseError` impl |
+| The body shape must match an external spec (CloudEvents, your own envelope) | `ResponseError` on an error of its own, its `as_response` writing the body |
 
 A feature's own error type is the canonical home. `ProblemDetails` is
 the right tool for the leftovers — never the goal.
@@ -135,31 +135,56 @@ the right tool for the leftovers — never the goal.
 Everything above decides how an error is *shaped*. `Opaque` decides whether
 the client sees it at all.
 
-`ServiceError` is wire-safe by construction — its `Db` variant displays as
-`"database error"`, never the `DbErr` underneath. **A feature's own error
+`ServiceError` is wire-safe by construction — its `Internal` variant, and a `Db`
+one but for a statement Postgres cancelled at its bound (the
+[table below](#framework-errors-carry-their-own-mapping)), answer a `500` whose `code` is `INTERNAL`, with no
+`detail`, and display no cause, even wrapped in an error of yours; its log
+line says the database's failure by its SQLSTATE, never by the server's
+message, which quotes the input it refused. A failure of your own that is no
+database error keeps its cause the same way:
+`ServiceError::internal_because("could not sign the export", err)` answers
+that `500` whatever `err` holds, and the operator's line reads the detail,
+then `err`'s chain. **A feature's own error
 type has no such discipline imposed on it**, and a `Display` that wraps a
 driver error carries SQL, column names and sometimes row values into the
 response body.
 
 ```rust title="crates/features/src/reports/http/controller.rs"
 use nest_rs::http::Opaque;
+use nest_rs::http::Json;
+use nest_rs::http::Path;
+use uuid::Uuid;
 
-#[get("/reports/:id")]
+#[get("/reports/{id}")]
 #[authorize(Read, reports::Entity)]
 async fn report(&self, Path(id): Path<Uuid>) -> Result<Json<Report>> {
     Ok(Json(self.svc.render(id).await.opaque()?))
 }
 ```
 
-`.opaque()?` logs the real error at `error` on `nest_rs::http` and returns a
-`ProblemDetails` 500 carrying a constant message. The envelope is deliberate:
-a client parses the same document whether or not it was told why, so an
-opaque failure is not identifiable by its shape alone.
+`.opaque()?` answers the opaque `500` and keeps the real error for the operator:
+the edge files it at `error` on `nest_rs::http` once that answer goes out, naming
+the route, and an exception filter answering the failure with a `4xx` leaves no
+line. The `500` is the one document every server failure the framework does not
+describe is on HTTP — a `ServiceError`'s, a `#[crud]` operation's, a panic's,
+an unknown error's alike:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Internal Server Error",
+  "status": 500,
+  "code": "INTERNAL"
+}
+```
+
+A client reads the `code` and nothing else, whichever part answered, so an
+opaque failure is not identifiable by its shape.
 
 Reach for it on a failure that is none of the caller's business. A validation
 rejection or an authorization denial is the opposite case: those exist to be
 read, and travel as themselves. The same seam reads identically on
-[GraphQL](/graphql/errors/), [WebSockets](/websockets/messages/) and MCP.
+[GraphQL](/graphql/errors/), [WebSockets](/websockets/replies/) and MCP.
 
 ## Framework errors carry their own mapping
 
@@ -168,27 +193,55 @@ on a handler that calls a service without a single line of conversion code:
 
 | Error | Source | Renders as |
 |-------|--------|------------|
-| `nest_rs::seaorm::ServiceError` | Repo, CrudService, dataloader | `problem+json` — `422` validation/invalid, `409` conflict, `403` forbidden, `404` not found, `500` else (validation field errors ride as `errors`) |
-| `nest_rs::oauth::server::TokenError` | OAuth token endpoint | `ResponseError` — `application/json` per RFC 6749 §5.2 — `400` bad grant/scope, `401` `invalid_client`, `500` signing/backend |
-| `nest_rs::authn::AuthError` | Strategy authentication | `IntoResponse` — `401` challenge (`500` when the identity store is unavailable) |
+| `nest_rs::seaorm::ServiceError` | Repo, CrudService, dataloader | `ToProblem` — `problem+json` with its `code`, `400` validation, as the edge's own check answers, `422` invalid, `409` conflict (a unique violation among them), `403` forbidden, `404` not found, `503` a statement Postgres cancelled at its bound (with the bound as its `Retry-After`), `500` else (validation field errors ride as `errors`) |
+| `nest_rs::oauth::server::TokenError` | OAuth token endpoint: the handler, `ClientAuthenticationGuard`, `AccessTokenRequest` | `ResponseError` — `application/json` per RFC 6749 §5.2, never a problem document — `400` bad grant/scope, a request that does not parse (`invalid_request`, its `error_description` saying where) or a client refused without HTTP authentication, `401` `invalid_client` with a `Basic` challenge for a client refused over the `Authorization` header, `500` signing, `503` a dependency that did not answer |
+| `nest_rs::authn::AuthError` | Strategy authentication | `ResponseError` — `401` challenge (`503`, with a `Retry-After` when known, when the identity store or provider is unavailable) |
+| `nest_rs::authn::SignError` | `JwtService::sign`, `OAuthClient::authorize` | `ToProblem` saying none — the opaque `500` |
 
 Every error the HTTP transport renders — a handler's `ServiceError`, an
 inline `ProblemDetails`, a validation rejection, and even a raw router
 error (an unmounted-route `404`, a `413` over the body cap) — comes back
 as one `application/problem+json` body. The transport lifts any leftover
-plain-text error onto the RFC 9457 envelope at its edge; internal (`5xx`)
-detail is dropped so a driver or panic message never reaches the wire.
+plain-text error onto the RFC 9457 envelope at its edge, under its status's
+`code` from the table above — an unmounted route's `404` reads `NOT_FOUND`,
+as a `#[crud]` row nobody can see does; a `5xx` answers its class's document
+with no `detail`, so a driver or panic message never reaches the wire.
 
-The two `ResponseError` types convert into `poem::Error`, so `?`
-propagates them through a `poem::Result` handler. `AuthError` implements
-`IntoResponse` rather than `ResponseError`: it is returned as a handler's
-own error type (`Result<T, AuthError>`), not `?`-propagated into a
-`poem::Result`.
+An error nobody meant for the client — an `anyhow` chain a route returns
+(`anyhow::Result<T>`), one a body says `.opaque()?` of, an
+`HttpError::new(e, StatusCode::INTERNAL_SERVER_ERROR)` — is never lost on the way: it answers the
+opaque `500`, and its whole chain is filed once at `error` on
+`nest_rs::http`. So is the chain behind a framework error's `5xx`, the one
+line its failure gets: a `ServiceError`'s database error, a `SignError` or a
+`TokenError`'s signing failure, and at `warn` an `AuthError`'s or a `TokenError`'s `503`. A
+`nest_rs::core::Problem` the chain carries answers itself
+instead — its status, its `type` and `title`, its `detail` and field map on a
+`4xx`, its `code` as an extension member and its `Retry-After` — the same
+contract GraphQL, WebSockets and MCP answer it by
+(`ProblemDetails::from_problem` builds the document).
 
-There is **no `AbilityError`** — an ability denial is not an error. It is
-a guard denial, returned as an `Ok(403)` response by `AuthzGuard`, so it
-never travels the `?`/`ResponseError` path at all (see
-[Guards](/fundamentals/guards/)).
+A handler that panics answers that same opaque `500`, with nothing of the panic
+in it, and its connection serves the next request. The panic is filed once at
+`error` on `nest_rs::http` with where it happened, and the request's line says
+`outcome="panic"` (see [The operation log](/opentelemetry/operation-log/)).
+A streaming body that panics mid-flow cannot be finished, so it ends there.
+
+Each of them converts into `HttpError`, so `?` propagates it through a
+`nest_rs::http::Result` handler, and a handler may also return it as its own
+error type (`Result<T, AuthError>`).
+
+There is **no `AbilityError`** — an ability denial is not a handler's error. It
+is a `Denial`, the type a guard refuses with: the class gate that
+`#[authorize(Action, Entity)]` declares checks the ability your `AuthzGuard`
+attached and answers its `Denial` before the handler runs: `Denial::forbidden` when no
+grant covers the action, `Denial::insufficient_scope` for a token too narrow,
+`Denial::unauthorized` for an anonymous caller off a `#[public]` route. It never
+travels the `?` path at all (see
+[Guards](/fundamentals/guards/)). Its document's `code` is the one the
+denial's class carries on every edge: `UNAUTHENTICATED` for a missing or
+rejected credential, `FORBIDDEN`, `INSUFFICIENT_SCOPE` for a token too
+narrow, `RATE_LIMITED`, `UNAVAILABLE`, `INTERNAL` — so a client branches on
+one code whether the refusal reached it over HTTP, GraphQL, WebSockets or MCP.
 
 A feature only writes its own error enum for genuinely domain-specific
 wire contracts (a custom error code clients key on) or for security-opaque
@@ -198,8 +251,8 @@ framework's mapping.
 ## Going further
 
 - [Error handling](/fundamentals/exception-filters/) — the wider story:
-  `ExceptionFilter` for typed catches, `Filter` for unconditional
-  mapping, `ResponseError` as the default.
+  an exception filter for a typed catch or one envelope for every error,
+  `ToProblem` as the default.
 - [Responses](/http/responses/) — the success side, and how `#[http_code]`
   leaves a handler's `Err` status untouched.
 - [Controllers & routes](/http/controllers/) — the route table.

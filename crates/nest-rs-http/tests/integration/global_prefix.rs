@@ -1,21 +1,13 @@
-//! `HttpConfig.global_prefix` — boot the real `App`, mount two controllers,
-//! drive them through `poem::TestClient`, and pin that the prefix is applied
-//! exactly once at the root (200 on `/api/<ctrl>`, 404 without it).
-//!
-//! Also the executed witness for `caller_path`: the prefix is the one segment
-//! the router strips off `uri()` before a handler runs, so a `Location` built
-//! from anything else silently drops it.
+//! `HttpConfig.global_prefix` is applied exactly once at the root, and a
+//! `Created` answer keeps it in its `Location`.
 
 use nest_rs_config::{Config, ConfigService};
 use nest_rs_core::module;
-use nest_rs_http::{
-    HttpConfig, HttpTransport, caller_path, controller, routes, set_created_location,
-};
-use poem::http::StatusCode;
-use poem::test::TestClient;
+use nest_rs_http::StatusCode;
+use nest_rs_http::{Created, HttpConfig, controller, routes};
+use nest_rs_testing::TestClient;
 
-/// The id the create route below hands back — a fixture, not a generated value:
-/// the assertions compare the whole `Location`, so it has to be nameable.
+/// The id the create route below hands back.
 const NEW_ORG_ID: &str = "018f3f9c-0000-7000-8000-000000000001";
 
 #[controller(path = "/users")]
@@ -24,6 +16,7 @@ struct UsersController;
 #[routes]
 impl UsersController {
     #[get("/")]
+    #[public]
     async fn list_users(&self) -> &'static str {
         "users"
     }
@@ -35,34 +28,28 @@ struct OrgsController;
 #[routes]
 impl OrgsController {
     #[get("/")]
+    #[public]
     async fn list_orgs(&self) -> &'static str {
         "orgs"
     }
 
-    /// What `#[crud]`'s generated create does, by hand: the two calls its
-    /// expansion emits, on a route this crate can mount without an entity or a
-    /// service behind it.
+    /// What `#[crud]`'s generated create answers.
     #[post("/")]
-    async fn create_org(&self, req: &poem::Request) -> poem::Response {
-        let mut resp = poem::Response::builder()
-            .status(StatusCode::CREATED)
-            .finish();
-        set_created_location(&mut resp, caller_path(req), NEW_ORG_ID);
-        resp
+    #[public]
+    async fn create_org(&self) -> Created<()> {
+        Created::at(NEW_ORG_ID, ())
     }
 }
 
 #[module(providers = [UsersController, OrgsController])]
 struct TwoControllersModule;
 
-async fn boot_with_prefix(
-    prefix: Option<&str>,
-) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    let mut transport = HttpTransport::new();
-    if let Some(p) = prefix {
-        transport = transport.global_prefix(p);
-    }
-    crate::boot_on::<TwoControllersModule>(transport).await
+async fn boot_with_prefix(prefix: Option<&str>) -> TestClient {
+    crate::boot_on::<TwoControllersModule>(HttpConfig {
+        global_prefix: prefix.map(Into::into),
+        ..HttpConfig::default()
+    })
+    .await
 }
 
 #[tokio::test]
@@ -78,11 +65,8 @@ async fn global_prefix_serves_controllers_under_the_prefix() {
     orgs.assert_text("orgs").await;
 }
 
-/// The `Location` on a `201` names the collection **the caller addressed** —
-/// prefix included. Read off `uri()` it would say `/orgs/<id>`, a path that
-/// 404s on this very app; read off `original_uri()` it would say `/<id>` under
-/// the test client. Both spellings of the collection are driven, since the edge
-/// canonicalizes the trailing slash before the capture.
+/// The `Location` on a `201` names the collection the caller addressed, prefix
+/// included; the edge canonicalizes a trailing slash before the capture.
 #[tokio::test]
 async fn a_created_location_carries_the_global_prefix() {
     let client = boot_with_prefix(Some("/api")).await;
@@ -91,21 +75,22 @@ async fn a_created_location_carries_the_global_prefix() {
         let created = client.post(path).send().await;
         created.assert_status(StatusCode::CREATED);
         created.assert_header(
-            poem::http::header::LOCATION,
+            nest_rs_http::header::LOCATION,
             format!("/api/orgs/{NEW_ORG_ID}"),
         );
     }
 }
 
-/// The same route with no prefix configured — pins that the capture is the
-/// path as sent, not a prefix bolted on unconditionally.
 #[tokio::test]
 async fn a_created_location_without_a_prefix_is_the_declared_collection() {
     let client = boot_with_prefix(None).await;
 
     let created = client.post("/orgs").send().await;
     created.assert_status(StatusCode::CREATED);
-    created.assert_header(poem::http::header::LOCATION, format!("/orgs/{NEW_ORG_ID}"));
+    created.assert_header(
+        nest_rs_http::header::LOCATION,
+        format!("/orgs/{NEW_ORG_ID}"),
+    );
 }
 
 #[tokio::test]
@@ -115,17 +100,15 @@ async fn global_prefix_hides_controllers_from_their_unprefixed_paths() {
     let users = client.get("/users").send().await;
     assert_eq!(
         users.0.status(),
-        poem::http::StatusCode::NOT_FOUND,
+        nest_rs_http::StatusCode::NOT_FOUND,
         "without the prefix the controller must not be reachable",
     );
     let orgs = client.get("/orgs").send().await;
-    assert_eq!(orgs.0.status(), poem::http::StatusCode::NOT_FOUND);
+    assert_eq!(orgs.0.status(), nest_rs_http::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn global_prefix_none_serves_controllers_at_their_declared_paths() {
-    // Smoke test that `global_prefix = None` is a true no-op — the same module
-    // serves /users and /orgs without rewriting.
     let client = boot_with_prefix(None).await;
 
     let users = client.get("/users").send().await;
@@ -139,9 +122,7 @@ async fn global_prefix_none_serves_controllers_at_their_declared_paths() {
 
 #[tokio::test]
 async fn global_prefix_normalizes_input_variants() {
-    // `"api/"` ⇒ `/api`. Same served paths as the `/api` test — pins that the
-    // builder normalization (no leading slash + trailing slash) reaches the
-    // mount.
+    // `"api/"` ⇒ `/api`.
     let client = boot_with_prefix(Some("api/")).await;
 
     let users = client.get("/api/users").send().await;
@@ -153,35 +134,29 @@ async fn global_prefix_normalizes_input_variants() {
 
 #[tokio::test]
 async fn global_prefix_root_slash_is_a_noop() {
-    // `"/"` collapses to no prefix — the controllers serve at their declared
-    // paths, not under `/`.
+    // `"/"` collapses to no prefix.
     let client = boot_with_prefix(Some("/")).await;
 
     let users = client.get("/users").send().await;
     users.assert_status_is_ok();
 }
 
-/// Boot the same controller surface but resolve the prefix through
-/// `HttpConfig::from_env` — pins the dual-path rule from the env side.
-async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>>
-{
+/// Boot the same controller surface, resolving the prefix through
+/// `HttpConfig::from_env`.
+async fn boot_with_env_config() -> TestClient {
     let cfg = HttpConfig::from_env(&ConfigService::for_namespace("http"), Default::default())
         .expect("HttpConfig::from_env succeeds");
-    let mut transport = HttpTransport::new();
-    if let Some(prefix) = cfg.global_prefix {
-        transport = transport.global_prefix(prefix);
-    }
-    crate::boot_on::<TwoControllersModule>(transport).await
+    crate::boot_on::<TwoControllersModule>(cfg).await
 }
 
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn global_prefix_is_picked_up_from_nestrs_http_global_prefix_env() {
-    // The whole dual-path rule the fix is about — set the env var, let the
-    // module-side wiring read it through `HttpConfig::from_env`, observe the
-    // controllers under `/api/<x>`. Sync test on purpose: figment::Jail is
-    // sync (it scopes env to one thread) so the tokio runtime is opened
-    // *inside* the closure.
+    // Sync on purpose: figment::Jail scopes env to one thread, so the tokio
+    // runtime is opened inside the closure.
     figment::Jail::expect_with(|jail| {
         jail.set_env(nest_rs_config::var_name("http", "GLOBAL_PREFIX"), "/api");
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -195,10 +170,59 @@ fn global_prefix_is_picked_up_from_nestrs_http_global_prefix_env() {
             let unprefixed = client.get("/users").send().await;
             assert_eq!(
                 unprefixed.0.status(),
-                poem::http::StatusCode::NOT_FOUND,
+                nest_rs_http::StatusCode::NOT_FOUND,
                 "without the env-set prefix the controller must not be reachable",
             );
         });
         Ok(())
     });
+}
+
+#[tokio::test]
+async fn a_global_prefix_is_one_literal_address() {
+    let app = nest_rs_core::App::builder()
+        .module::<TwoControllersModule>()
+        .build()
+        .await
+        .expect("the module itself builds — the prefix is a transport concern");
+    let mut transport = crate::built(&HttpConfig {
+        global_prefix: Some("/tenants/{tenant}".into()),
+        ..HttpConfig::default()
+    });
+    let msg = nest_rs_core::Transport::configure(&mut transport, app.container())
+        .await
+        .expect_err("a templated prefix must fail boot")
+        .to_string();
+    assert!(
+        msg.contains("the global prefix") && msg.contains("one literal address"),
+        "names the prefix and why: {msg}",
+    );
+}
+
+/// The boot says where each route and each self-mount is served: under the
+/// prefix, the path a client calls — the unprefixed one answers `404`.
+#[tokio::test]
+async fn the_boot_lines_name_the_paths_served_under_the_prefix() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let _client = boot_with_prefix(Some("/api")).await;
+    let routes: Vec<_> = logs
+        .find(nest_rs_http::target::ROUTES, "mounted")
+        .into_iter()
+        .filter_map(|line| line.field("path"))
+        .collect();
+    assert!(routes.contains(&"/api/users".to_owned()), "{routes:?}");
+    assert!(routes.contains(&"/api/orgs".to_owned()), "{routes:?}");
+
+    let logs = nest_rs_testing::LogCapture::install();
+    crate::routes::table_under(Some("/api"), |routes| {
+        routes.route(
+            nest_rs_http::Method::GET,
+            "/probe",
+            crate::answering("probe"),
+        );
+    })
+    .await
+    .expect("the table mounts");
+    let endpoint = logs.expect_one(nest_rs_http::target::ROUTES, "mounted endpoint");
+    assert_eq!(endpoint.field("path").as_deref(), Some("/api/probe"));
 }

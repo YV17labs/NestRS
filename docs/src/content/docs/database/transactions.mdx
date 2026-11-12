@@ -1,19 +1,18 @@
 ---
 title: Transactions
-description: Mutating routes commit on 2xx/3xx, roll back otherwise — plus the retry primitive for serialization conflicts.
-tier: all-options
+description: Mutating routes commit on 2xx/3xx, roll back otherwise — plus what waits for the commit, a unique key held elsewhere, and atomic blocks.
 sidebar:
   order: 9
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-A mutating request runs inside a transaction with no boilerplate. The
-`DbContext` interceptor — auto-installed by `SeaOrmDatabaseModule` — opens it on
-the way in, hands the handler the transactional executor, and decides
-commit or rollback based on the response. The hard cases — serialization
-conflicts, deadlocks — get their own primitive, with a defined boundary
-between what the interceptor handles and what the service owns.
+A mutating request runs inside a transaction with no boilerplate. Import
+`SeaOrmDatabaseModule` and the HTTP edge opens it around every mutating
+request, hands the handler the transactional executor, and decides commit or
+rollback on the request's outcome. The hard cases — serialization conflicts,
+deadlocks — get their own primitive, with a defined boundary between what the
+edge's unit of work handles and what the service owns.
 
 The conflict classifier matches against
 [sqlx](https://github.com/launchbadge/sqlx)'s typed `DatabaseError::code()`
@@ -23,175 +22,275 @@ provides the `TransactionTrait` the programmatic boundary builds on.
 
 ## How the auto-commit works
 
-`DbContext` classifies the HTTP method and branches:
+The edge classifies the HTTP method and branches:
 
 ```text
-GET / HEAD / OPTIONS / TRACE   → Executor::Pool,  no transaction
-POST / PUT / PATCH / DELETE    → Executor::Lazy, BEGIN on the first
-                                                 data-layer touch;
-                                                 commit on 2xx/3xx,
-                                                 rollback otherwise
+GET / HEAD / OPTIONS / TRACE   → the pool, no transaction
+POST / PUT / PATCH / DELETE    → a lazy transaction, BEGIN on the first
+                                                     data-layer touch;
+                                                     commit on 2xx/3xx,
+                                                     rollback otherwise
 ```
 
-Inside the handler, `Repo::<E>::conn()` returns whichever variant the
-interceptor installed — same code, different mode. The decision matrix:
+Inside the handler, every `Repo` call runs on whichever the unit installed —
+same code, different mode. The decision matrix:
 
 | Outcome                  | Decision  |
 |--------------------------|-----------|
 | `Ok(2xx)` or `Ok(3xx)`   | commit    |
 | `Ok(4xx)` or `Ok(5xx)`   | rollback  |
-| `Err(_)` from the handler| rollback  |
+| `Err(_)` from the handler| rollback, whatever an exception filter answered |
+| Handler past the request timeout | rollback; `503` with `Retry-After` |
 | Commit error             | response becomes `500`, rollback is implicit |
+| Commit did not answer    | response becomes `500`, no `Retry-After`: its writes may have landed |
 
 A failed mutation never half-persists, even when the failure surfaces as
 a typed 4xx body from a `thiserror`-derived error. See
 [Repo and executor](/database/repo-and-executor/) for the full sequence,
 including the escape-on-spawn case.
 
-## Why retrying belongs to the service, not the interceptor
+`/graphql` and `/mcp` are the exceptions to the method rule: their requests
+carry operations that are units of their own, so the request itself runs on the
+pool — its guards read there — whatever its method, and each operation settles
+its own work.
 
-A poem `Request` is consumed by `next.run` — the body bytes are gone past
-the handler call. The interceptor cannot replay the same handler on a
-fresh transaction; the `DatabaseTransaction` handle is already aborted by
-the time a conflict surfaces. Two consequences:
+Every other edge runs the same unit of work, through the same binding, and
+commits on its own outcome — you list nothing for it:
 
-1. **The interceptor observes the conflict, it does not retry it.** The
-   failed commit has already consumed its handle, and the handler's
-   non-transactional side effects — a queued job, an emitted event, an
-   object written to storage — would replay with it.
-2. **Retrying is the service's job.** Only the service knows which
-   boundary is replayable, so the replayable closure owns that boundary
-   itself.
+| Unit | Commits when |
+|---|---|
+| GraphQL query | nothing to commit: it runs on the pool |
+| GraphQL mutation | its answer reports data; each root field kept unless it answers `null` for an error ([below](#graphql-one-unit-per-operation)) |
+| WebSocket message | the reply is not an error frame |
+| WebSocket connect or disconnect hook | the hook ran to its end |
+| MCP operation | it answered `Ok`, with no `isError: true` in the tool's result |
+| Queue attempt, scheduled tick | the method returned `Ok` (or the pool, on `transactional = false`) |
+| Lifecycle hook | the hook returned `Ok` |
 
-The framework exposes two pieces, deliberately split:
+A read is a touch: a message or a tool that only reads still opens the
+transaction on its first query, and commits it.
 
-## The observability flag
+### GraphQL: one unit per operation
 
-```bash frame="terminal"
-NESTRS_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS=true
-```
+A GraphQL response always answers `200`, so the status line cannot say what
+committed. Each operation of the document is a unit of its own instead, and a
+mutation's root fields each run in a savepoint of it, kept or rolled back on
+the answer the field gives. With `createPost` returning `Result<Option<Post>>`,
+a nullable `Post`:
 
-```rust title="apps/api/src/module.rs"
-SeaOrmModule::for_root(SeaOrmConfig {
-    observe_serialization_conflicts: true,
-    ..Default::default()
-})
-```
-
-With the flag on, the `DbContext` interceptor matches a commit-time
-conflict against the SQLSTATE markers below and logs it at `warn` with
-the conflict tag (target `nest_rs::orm`) so ops sees the failure mode
-distinctly from a generic commit error.
-
-<Aside type="note">
-**The flag observes; it never retries** — which is why it is named for what
-it does. Replaying a commit-time conflict means re-running the whole handler,
-and a handler may already have pushed a job, emitted an event, or written an
-object. None of those roll back with the transaction, so a transparent retry
-would duplicate them silently. The framework will not make that call on your
-behalf; the response fails closed with a `500` after the `warn` line, and
-retrying is the service's decision at a boundary it knows is replayable.
-</Aside>
-
-## The working retry primitive
-
-For an actually-retried operation, wrap a replayable closure in
-`retry_on_conflict` inside a service method that owns its programmatic
-transaction boundary:
-
-```rust title="crates/features/src/posts/service.rs"
-use std::sync::Arc;
-use std::time::Duration;
-use nest_rs::seaorm::retry::{
-    retry_on_conflict, DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF,
-};
-use sea_orm::{DatabaseConnection, TransactionTrait};
-
-impl PostsService {
-    pub async fn publish(&self, id: Uuid) -> Result<post::Model, ServiceError> {
-        let db = self.db.clone();
-        retry_on_conflict(DEFAULT_RETRY_ATTEMPTS, DEFAULT_INITIAL_BACKOFF, || {
-            let db = db.clone();
-            async move {
-                let txn = db.begin().await?;
-                let published = read_update_insert(&txn, id).await?;
-                txn.commit().await?;
-                Ok::<_, sea_orm::DbErr>(published)
-            }
-        })
-        .await
-        .map_err(ServiceError::from)
-    }
+```graphql
+mutation {
+  a: createPost(input: { title: "first" }) { id }   # kept
+  b: createPost(input: { title: "" }) { id }        # null: rolled back alone
+  c: createPost(input: { title: "third" }) { id }   # kept
 }
 ```
 
-`retry_on_conflict` runs the closure up to `attempts` times, sleeping
-`initial_backoff << attempt` between tries (5 ms → 10 ms → 20 ms with the
-defaults). A non-retryable error returns immediately; a retryable one is
-logged at `warn` and the closure re-runs from scratch — that's what makes
-the retry honest, the body re-opens a fresh transaction against a fresh
-snapshot.
+- **A query** runs on the pool, its own unit, opening no transaction.
+- **A mutation** is one transaction, opened on its first statement. Its root
+  fields resolve one after the other, each inside an
+  [atomic block](#atomic-blocks): a root field that answers `null` for an
+  error — its own, or a Non-Null field's below it whose `null` climbs to it —
+  rolls back its writes and drops the events it emitted, and the operation's
+  other fields commit. Its error reads as the resolver wrote it: a unique
+  violation is its `CONFLICT`, never an empty `500`.
+- **A `null` that stays below the root field leaves its work standing.** A
+  nullable field that fails under it, or a Non-Null one under a nullable
+  parent, answers `null` where it lands
+  ([where a failed field's `null` lands](/graphql/partial-results/#where-a-failed-fields-null-lands)),
+  and the root field keeps its answer: what the answer reports, the database
+  holds.
+- **An answer with no data rolls the whole operation back.** A Non-Null root
+  field — `Result<Post>`, a `Post!` — hands its `null` to `data` itself, so the
+  answer reports nothing: the root fields that answered before it roll back
+  too, and none after it runs. A mutation sent beside others whose work must
+  stand on its own returns `Result<Option<T>>`.
+- **A mutation runs each root field once.** async-graphql 7.2.1 runs a root
+  field once per selection, where the specification runs one response key
+  once, so a document naming one twice — `a: createPost(…) { id }` beside
+  `a: createPost(…) { title }`, two fragments that each select it, one
+  fragment spread twice — would write twice and answer one of the two. Its
+  copies merge into the first before validation, so the field writes once, in
+  one savepoint, and answers what each copy selects. Copies naming different
+  arguments are no one field, and are refused before any root field runs, with
+  `data: null`: side by side, as in `a: createPost(input: $p)` beside
+  `a: createPost(input: $q)`, by validation's own conflict error, which names
+  both; under different type conditions, a fragment's included, by one
+  `INVALID_ARGUMENT` error at the copy that differs
+  ([where a failed field's `null` lands](/graphql/partial-results/#where-a-failed-fields-null-lands)).
+  A copy `@skip` or `@include` leaves out runs nothing, so it repeats nothing.
+- **A field that never touches the database sends nothing**: its savepoint is
+  as lazy as the transaction around it.
+- **A batch** holding a mutation runs its operations one at a time, in
+  document order, so its units never hold several pooled connections at
+  once; a batch of queries runs them all at once.
+- **Over graphql-ws** each query and mutation is a unit of its own too, opened
+  inside the socket's; a subscription keeps the connection's pool.
+- **When an operation's commit cannot be honoured** — it failed, or did not
+  answer within its net — the operation answers `data: null` and one opaque
+  `INTERNAL` error: a response never reports a write that did not land.
+- **Under a request timeout**, a request holding a mutation takes the deadline
+  over: an operation still running there is cut inside its unit, rolled back
+  and answered `UNAVAILABLE` in band, while one already committing is waited
+  for. A request of queries alone is cut as any request is, `503`.
 
-The defaults are conservative on purpose:
+### A deadline cuts the body, never the commit
 
-| Constant                  | Value                  |
-|---------------------------|------------------------|
-| `DEFAULT_RETRY_ATTEMPTS`  | 3                      |
-| `DEFAULT_INITIAL_BACKOFF` | 5 ms                   |
-| `MAX_RETRY_ATTEMPTS`      | 32 (hard ceiling)      |
-| Per-sleep cap             | 30 s                   |
+Every unit with a deadline — a request's timeout, a WebSocket message's, an
+MCP operation's, a job's or a tick's `timeout` — cuts its **body** there and
+nothing else. A body cut at its deadline is rolled back and answered as a
+timeout: `503` with `Retry-After`, an `UNAVAILABLE` frame or error with
+`reason: "timeout"`, a retryable `JobTimedOut`. Its rollback may still wait on
+a statement Postgres holds behind a lock; the edge answers at the deadline all
+the same, and the driver ends the rollback on a task of its own.
 
-The hard ceiling and per-sleep cap exist because `1u32 << attempt`
-overflows at `attempt >= 32` (UB in debug, wraps to `0` in release —
-which would hot-spin). Pass `usize::MAX` and the function still terminates
-in bounded time.
+A body that answered in time is never turned into a timeout by its commit: the
+`COMMIT` runs to its answer on the driver's task, which a client gone, an
+operation stopped or a closing window does not cut, and which the driver drains
+before the pool closes at shutdown. SeaORM waits for that answer at most the
+statement budget plus a second (`<PREFIX>_SEAORM__STATEMENT_TIMEOUT_SECS`, `15`
+by default); a commit that does not answer by then **may have landed**, so the
+unit fails *in doubt* — never retried, a request answered `500` without
+`Retry-After`, a job dead-lettered, a tick reported `retryable=false`:
+
+```text frame="terminal"
+ERROR nest_rs::orm: the unit's commit did not answer within its net; its writes may have landed transport="queue" outcome="in_doubt" net_ms=16000 trace_id=… span_id=…
+```
+
+## What waits for the commit
+
+An [event](/events/) emitted inside the transaction is dispatched **after**
+the commit, and dropped when the transaction rolls back or fails to commit, or
+the request fails — an event announces a fact, and a write that did not land is
+not one. The same holds at every boundary that settles a transaction: a
+WebSocket message, an MCP operation, a queue attempt, a scheduled tick, a
+lifecycle hook. The listeners run outside the transaction they waited for,
+each a unit of work of
+its own — a transaction committed on the `Result` it answers and bounded by
+its own `timeout` — with the caller's scope, ability and every value the
+emitter carries; the response leaves once they have — or at the unit's
+deadline, whichever comes first, and with the commit's answer when that comes
+only past the deadline.
+Past the deadline a listener runs on, the unit answers the outcome it
+committed, and a slow listener never turns a committed write into a timeout
+(a `debug` line on `nest_rs::orm`: `after-commit work outlived the unit's
+deadline`).
+
+A job you push waits too: with the `queue` feature, the push is written into
+the transaction as an outbox record and filed once it commits — see [A push
+inside a transaction](/queue/outbox/).
+
+A WebSocket broadcast and a storage write do **not** wait, and cannot: each
+answers its caller — a send failure, an object key — and that answer only
+exists once the socket or the store has been asked. Inside a transaction they
+happen where they are written; when the work must follow the commit, emit an
+event and do it in its listener.
+
+An [atomic block](#atomic-blocks) holds what is emitted inside it: when it
+keeps its writes, the events join the request's and wait for the request's
+commit; when it rolls back, they are dropped with its writes.
+
+The primitive underneath is `nest_rs::database::after_commit`, which the bus
+calls; a [database driver](/database/writing-a-driver/) implements it for its
+own transactions.
+
+## A unique key someone else may hold
+
+A statement that fails inside a transaction aborts the whole transaction, and
+the commonest failure a service expects is a unique key a concurrent request
+has just taken. An insert that should land, or meet the row already holding
+its key, says so instead of failing: `Repo::insert_unscoped_or_existing` sends
+`INSERT … ON CONFLICT (key) DO NOTHING RETURNING`, then reads the live row
+holding the key, so nothing fails and the transaction carries on.
+
+```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
+let linked = Repo::<UserIdentities>::insert_unscoped_or_existing(
+    new_identity_active(user_id, identity),
+    [
+        user_identity::Column::Provider,
+        user_identity::Column::Subject,
+    ],
+)
+.await?;
+if let Insertion::New(_) = linked {
+    // …
+}
+```
+
+`Insertion::New` holds the row inserted, `Insertion::Existing` the one that
+held the key. The key needs a unique index over exactly its columns; on an
+entity declared `soft_delete`, one over its live rows alone is inferred too,
+and a tombstone is never returned. It is `insert_unscoped`'s escape, under the
+same bar — provisioning before a principal exists, work no principal does.
+
+## Atomic blocks
+
+A statement that may fail any other way runs in `nest_rs::database::atomic`.
+The block is a savepoint inside the request's transaction: an error rolls back
+the block alone, and the request carries on and commits. Several statements
+that land together or not at all — a user and the identity it signs in
+with — run in one block too, which on a safe route is a transaction of its
+own.
+
+```rust title="crates/features/src/users/service.rs (from the demo, abridged)"
+let provisioned: Result<entity::Model, ServiceError> = atomic(async {
+    let user = match Repo::<Users>::insert_unscoped_or_existing(
+        active,
+        [entity::Column::Email],
+    )
+    .await?
+    {
+        Insertion::New(user) => {
+            // …
+            user
+        }
+        Insertion::Existing(user) => user,
+    };
+    self.link_identity(user.id, identity).await?;
+    Ok(user)
+})
+.await;
+```
+
+- **`Ok` keeps the block's writes** in the request's transaction, which still
+  commits or rolls back as a whole.
+- **`Err`, a panic, or a failure the block swallowed** rolls the block back
+  and nothing else. A block that returns `Ok` over a failed statement answers
+  `AtomicError::Poisoned`, since nothing it wrote stands.
+- **On a safe route**, where the request runs on the pool, the block is a
+  transaction of its own, committed when it returns `Ok`. A block in a block
+  is a savepoint of its own and rolls back alone. Its `COMMIT` runs on the
+  driver's task too: a deadline that cuts the body while it commits leaves
+  it to finish, and the unit fails *in doubt*, its writes possibly landed.
+- **Nothing is sent until the block's first statement**: a block that never
+  queries costs no round trip.
+
+The block's error type takes an `AtomicError` — `ServiceError` does, by the
+class of the database's refusal — so `?` works inside it. A `Repo` call inside
+the block runs on the block's savepoint: the request waits while a block is
+open, since a statement of its own would land inside the savepoint, and a
+statement issued from inside the block on the unit's own transaction is
+refused, whether or not the block has opened yet, rather than left to wait for
+the block that holds it.
 
 <Aside type="caution">
-**This is a service primitive.** It lives in `nest_rs::seaorm::retry` and
-takes an `Arc<DatabaseConnection>` because the closure re-opens the
-transaction from scratch. A handler can't use it against the ambient
-transaction — that handle is already aborted past the first attempt's
-failure.
+A block dropped before it settles — cancelled by a timeout or a `select!` —
+leaves its savepoint open, so the request can no longer commit: it answers
+`500`. Keep a deadline outside the block, around the work that may cancel it.
 </Aside>
 
-## What `is_retryable_conflict` catches
+## Serialization conflicts
 
-| SQLSTATE | Backend(s)             | What it means                  |
-|----------|------------------------|--------------------------------|
-| `40001`  | Postgres, MySQL        | Serialization failure          |
-| `40P01`  | Postgres               | Deadlock detected              |
-| `1213`   | MySQL                  | Deadlock found                 |
-| `1205`   | SQL Server             | Transaction was deadlock victim |
-
-Anything else — `23505` (unique violation), `RecordNotFound`, a generic
-`Internal` error whose message *contains* "40001" — returns immediately.
-A unique-violation retry would loop forever; a substring match on the
-message would falsely retry a connection log mentioning port `40001`. The
-classifier reads the typed code only, never the display string.
-
-## When retries don't help
-
-The failure modes a retry cannot fix:
-
-- **A unique constraint violation.** Retrying inserts the same row again,
-  same failure. The classifier rejects these.
-- **A row that doesn't exist.** `RecordNotFound` is terminal — no amount
-  of retries materialize the row.
-- **Application-side validation.** `ServiceError::Validation` is not a
-  conflict; the closure re-runs from scratch but the input is the same.
-- **A handler-time conflict on the auto-commit transaction.** The
-  interceptor cannot retry the body; the conflict surfaces as a
-  `DbErr` from the service, which gets mapped to the appropriate HTTP
-  status. Use `retry_on_conflict` at the service level instead.
-
-The split is deliberate. The interceptor handles the common case
-transparently (open / commit / rollback); the service handles the hard case
-explicitly (replay the work against a fresh snapshot). One way to do each.
+A conflict the database reports is observed by the request's unit and retried
+by the service that owns a replayable boundary:
+[Serialization conflicts](/database/conflicts/).
 
 ## Going further
 
 - [Database](/database/) — the slice that imports `SeaOrmDatabaseModule`.
-- [Repo and executor](/database/repo-and-executor/) — what the interceptor
-  installs, the escape-on-spawn fail-closed.
-- [Pagination](/database/pagination/) — the other knob the entity carries.
-- [Configuration](/configuration/) — the full `NESTRS_SEAORM__*` scheme.
+- [Repo and executor](/database/repo-and-executor/) — what the request's
+  unit installs, the escape-on-spawn fail-closed, the savepoint a block runs on.
+- [Job transactions](/database/job-transactions/) — one transaction per
+  queue attempt or tick.
+- [Environment variables](/configuration/env-reference/#seaorm--prefix_seaorm__)
+  — every `<PREFIX>_SEAORM__*`.

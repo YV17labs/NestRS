@@ -1,7 +1,6 @@
 ---
 title: Pagination
 description: Keyset pages over the primary key — one cursor story, REST and GraphQL, on by default.
-tier: basics
 sidebar:
   order: 8
 ---
@@ -18,13 +17,7 @@ keyset-paginated unless you opt out.
 A `#[crud]` list — REST or GraphQL — is keyset-paginated out of the box:
 
 ```rust title="crates/features/src/posts/http/controller.rs"
-#[crud(
-    service = svc,
-    entity = PostEntity,
-    output = Post,
-    create = CreatePost,
-    update = UpdatePost,
-)]
+#[crud(service = PostsService)]
 impl PostsController {}
 ```
 
@@ -37,27 +30,47 @@ collections.
 
 ## Keyset, the REST shape
 
-The generated `GET /posts` returns a plain `Vec<Post>` body plus an
-`x-next-cursor` response header when more rows remain. The body stays a
-flat array so response masking works unchanged.
+The generated `GET /posts` returns a plain `Vec<Post>` body and, when more rows
+remain, the next page as an RFC 8288 `Link`. The body stays a flat array of
+wire rows, each judged for the caller. The link is in the
+[OpenAPI document](/openapi/) and, under CORS, exposed to a browser on another
+origin without being listed.
 
-```bash
-curl -s '/posts?first=20'
-# [ { "id": "...", "title": "..." }, ... ]
-# x-next-cursor: 0193f1b2-...
+```bash frame="terminal"
+$ curl -si '/posts?first=20'
+HTTP/1.1 200 OK
+link: </posts?first=20&after=0193f1b2-...>; rel="next"
 
-curl -s '/posts?first=20&after=0193f1b2-...'
-# next page
+[ { "id": "...", "title": "..." }, ... ]
+
+$ curl -si '/posts?first=20&after=0193f1b2-...'
 ```
 
+Following the link is the whole protocol: it keeps the page size, carries the
+cursor, and is built on the path the caller addressed, global prefix and
+version included. The last page has no `Link`.
+
 The query carries `first` (page size, defaulting to 20, clamped to
-`1..=100`) and `after` (the cursor returned by the previous response). An
-unparseable cursor pages from the start — never an error.
+`1..=100`) and `after` (the cursor the previous page's link carries, passed
+back as given; absent or empty for the first page). A cursor no page issued
+is a `400`, never the first page — a sync loop following `next` never
+restarts the collection silently:
+
+```bash frame="terminal"
+$ curl -si '/posts?first=20&after=0193f1b2'
+HTTP/1.1 400 Bad Request
+content-type: application/problem+json
+
+{"type":"about:blank","title":"Bad Request","status":400,"detail":"query parameter `after`: not a cursor this endpoint issued","code":"INVALID_ARGUMENT"}
+```
+
+The refusal names the parameter as a value its type refused is named, never
+the value it was sent.
 
 ## Keyset, the GraphQL shape
 
 The generated list query takes the same two cursor arguments and returns a
-plain list — the body stays maskable, exactly like REST:
+plain list of judged wire rows, exactly like REST:
 
 ```graphql title="the query a client sends"
 query {
@@ -69,18 +82,22 @@ query {
 # next page: posts(first: 20, after: "<last id of the previous page>")
 ```
 
-UUID-v7 keys are time-ordered, so the cursor is just the previous
-page's last `id` — no opaque cursor type. An empty page means you reached
-the end.
+UUID-v7 keys are time-ordered, so the cursor is the previous page's last
+`id`, as its text — no opaque encoding. An `after` that is not one is a
+field error naming the argument as GraphQL names one its type refused —
+`Invalid value for argument "after", not a cursor this endpoint issued` —
+never the first page; its `extensions.code` is `INVALID_ARGUMENT`, as for a
+malformed `id`. An empty page means you reached the end.
 
 ## What `Page<M>` carries
 
 The keyset shape, before serialization:
 
 ```rust title="nest_rs::seaorm::Page"
+#[non_exhaustive]
 pub struct Page<M> {
     pub items: Vec<M>,
-    pub next_cursor: Option<Uuid>,
+    pub next_cursor: Option<PageCursor>,
     pub has_more: bool,
 }
 ```
@@ -88,16 +105,27 @@ pub struct Page<M> {
 The implementation fetches `limit + 1` rows, truncates the probe row from
 `items`, and uses its presence to set `has_more` and `next_cursor`. The
 cursor is the last visible row's primary key — present only when there is
-more to fetch.
+more to fetch. A later 7.x may add a field, so a page is read field by field
+and built through `Page::new(items, next_cursor, has_more)`, as a service
+does when it hands on a page whose rows it mapped.
+
+`PageCursor` is that key as a type. It writes the key's own text
+(`Display`), reads any spelling of a UUID back (`FromStr`), and refuses
+anything else with a `PipeError` saying it is `not a cursor this endpoint
+issued` — the refusal every edge answers as its native client error, after
+where it read the cursor. `PageParams::cursor()` reads the query's `after`
+that way, an empty one as the first page, and names the query parameter.
 
 `CrudService::page(first, after)` returns a `Page<E::Model>` directly;
-callers paginating a custom query reach for `Repo::<E>::page(first,
-after)`.
+callers paginating a query of their own reach for `Repo::<E>::page(first,
+after, extra)`.
 
 ## A custom paginated query
 
-When the auto-emitted `page` does not match — say you want only one
-author's posts — call `Repo::scoped` and the same cursor helpers:
+When the auto-emitted list does not match — say you want only one author's
+posts — pass the filter to `Repo::page` as its `extra` condition. It is
+ANDed onto the ability scope, so the keyset, the clamp and the over-fetch
+stay the framework's:
 
 ```rust title="crates/features/src/posts/service.rs"
 impl PostsService {
@@ -105,33 +133,35 @@ impl PostsService {
         &self,
         author_id: Uuid,
         first: u64,
-        after: Option<Uuid>,
-    ) -> Result<Page<Post>, ServiceError> {
-        let conn = Repo::<Posts>::conn()?;
-        let limit = nest_rs::seaorm::page::clamp_page_size(first);
-
-        let mut cursor = Repo::<Posts>::scoped(Action::Read)
-            .filter(entity::Column::AuthorId.eq(author_id))
-            .cursor_by(entity::Column::Id);
-        if let Some(after) = after {
-            cursor.after(after);
-        }
-        cursor.first(limit + 1);
-
-        let rows = cursor.all(&conn).await?;
-        let (rows, has_more) = nest_rs::seaorm::page::split_overfetched(rows, limit);
-        let next_cursor = has_more.then(|| rows.last()?.id);
-
-        Ok(Page {
-            items: rows.iter().map(Post::from).collect(),
-            next_cursor,
-            has_more,
-        })
+        after: Option<PageCursor>,
+    ) -> Result<Page<entity::Model>, ServiceError> {
+        let by_author = Condition::all().add(entity::Column::AuthorId.eq(author_id));
+        Ok(Repo::<Posts>::page(first, after, by_author).await?)
     }
 }
 ```
 
-`Repo::scoped(Action::Read)` is the entry point — the ability filter
+The route reads the query as `PageParams`, answers a cursor no page issued
+with the `400` every list answers, through `pipe_error`, and returns a
+`Paginated` answer, which writes the `Link` on the path the caller addressed
+and documents it, as the generated list does:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[get("/by-author/{author_id}")]
+#[authorize(Read, PostEntity)]
+async fn by_author(
+    &self,
+    author_id: Path<Uuid>,
+    params: Query<PageParams>,
+) -> Result<Paginated<Json<Vec<Post>>>> {
+    let after = params.cursor().map_err(|refused| pipe_error(&refused))?;
+    let page = self.svc.page_by_author(author_id.0, params.limit(), after).await?;
+    let posts: Vec<Post> = page.items.iter().map(Post::from).collect();
+    Ok(Paginated::new(Json(posts), params.limit(), page.next_cursor))
+}
+```
+
+`Repo::page` runs under `scoped(Action::Read)` — the ability filter
 applies, and a request without one denies every row (fail-closed).
 
 ## Limits
@@ -151,5 +181,5 @@ rows, so past a few thousand it is a scan.
 - [Database](/database/) — the entity behind the generated list.
 - [CRUD](/database/crud/) — the `paginate` knob on `#[crud(...)]`.
 - [Repo and executor](/database/repo-and-executor/) — `Repo::scoped` and
-  `Repo::conn` behind the cursor query.
+  the ambient executor behind the cursor query.
 - [GraphQL](/graphql/) — the list query on a resolver.

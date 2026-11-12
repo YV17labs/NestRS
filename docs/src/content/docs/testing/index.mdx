@@ -6,12 +6,12 @@ sidebar:
   order: 1
 ---
 
-`nest-rs-testing` boots the **real** `AppBuilder` (the four-phase collect →
-factories → register → access-graph check) in-process, configures an
-`HttpTransport` without a socket, and exposes a typed client over
-[`poem::test::TestClient`](https://docs.rs/poem/latest/poem/test/struct.TestClient.html).
-GraphQL, OpenAPI, and MCP ride the same client because they self-mount as
-HTTP endpoints.
+`nest-rs-testing` boots the **real** `AppBuilder` (its four phases, seeds → collect →
+factories → register, then the access-graph check) in-process, configures an
+`HttpTransport` without a socket, and hands you `TestClient`, its own
+in-process client over the stack the server runs — the edge, the router, the
+guards and your handlers. GraphQL, OpenAPI, and MCP ride the same client
+because they self-mount as HTTP endpoints.
 
 The principle: **a test is the truth of what production does.** No mocked
 DI graph, no separate test wiring.
@@ -23,11 +23,12 @@ Three categories, Rust's standard model plus the app e2e:
   access and no DI boot.
 - **[Integration tests](/testing/integration/)** — `tests/integration/main.rs`,
   a directory and never a flat `tests/<x>.rs`. The crate's public API,
-  exercised as an external consumer would. Shared fixtures go in
-  `tests/integration/common/mod.rs`.
+  exercised as an external consumer would. Shared fixtures sit in the suite's
+  `main.rs`, beside its `mod` list.
 - **[End-to-end tests](/testing/e2e/)** — `TestApp` boots the real
-  `AppModule` against an `EphemeralDatabase`. The route table, the DI
-  graph, the access-graph check, authn/authz, and the data path all run.
+  `ApiModule` on a throwaway database and a signing key of the test's own.
+  The route table, the DI graph, the access-graph check, authn/authz, and the
+  data path all run.
 
 | Where | What it tests | Boots? |
 |---|---|---|
@@ -43,7 +44,14 @@ cargo add --dev nest-rs --features testing
 ```
 
 A dev-dependency — the harness only compiles under `cargo test`, never into
-your release binary.
+your release binary. `TestApp`, the HTTP half, rides the `http` feature your
+app already enables. A crate built without `http` — a worker, a queue driver —
+keeps its suite headless too: it boots through `HeadlessApp::builder()`, and
+its dev-dependency leaves the default features off:
+
+```bash frame="terminal"
+cargo add --dev nest-rs --no-default-features --features queue,testing
+```
 
 ## Picking the right tool
 
@@ -54,7 +62,7 @@ what doesn't:
 | Risk you carry | Technique it earns |
 |---|---|
 | Wiring (DI graph, routes mounted, guards bound) | E2E — `TestApp` boots the real module tree |
-| Security policy regressions (`Ability::mask`, `condition_for`, `WireModelDefaults`) | [Policy tests](/testing/policy/) — pure unit tests on the policy types |
+| Security policy regressions (`condition_for`, `permitted_fields`, `can`) | [Policy tests](/testing/policy/) — pure unit tests on the policy types |
 | Failure modes (401 / 403 / 400 / rollback) | [Negative-path tests](/testing/negative-path/) in the app's e2e |
 | Pure logic — calculations, conversions, validators | [Unit tests](/testing/unit/) next to the code |
 | Edge cases in parsers and validators | Property-based testing with [`proptest`](https://crates.io/crates/proptest) |
@@ -69,7 +77,7 @@ what it doesn't.
 ## Run it
 
 ```bash frame="terminal"
-$ nestrs run test unit                   # unit + integration, no DB
+$ nestrs run test integration            # in process, no database
    Compiling api v0.1.0
     Finished `test` profile in 12.4s
 test result: ok. 142 passed in 0.21s
@@ -83,21 +91,20 @@ test result: ok. 14 passed in 4.31s
 
 ```bash frame="terminal"
 $ nestrs run test cov               # full suite with coverage (llvm-cov)
-error: failed to find llvm-tools-preview, please install llvm-tools-preview,
-       or set LLVM_COV and LLVM_PROFDATA environment variables
 ```
 
-`cov` is the one recipe with a prerequisite the CLI does not bootstrap: it
-shells out to the LLVM tools, installed with
-`rustup component add llvm-tools-preview`. A toolchain without rustup
-(Homebrew, a distro package) points `LLVM_COV` / `LLVM_PROFDATA` at its own
-copies instead. `unit`, `e2e` and `doc` need nothing beyond the bootstrap.
+`cov` shells out to the LLVM tools. The CLI's first-run bootstrap installs
+`cargo-llvm-cov`, and rustup installs the `llvm-cov` / `llvm-profdata` it drives
+on the first run, from the `llvm-tools-preview` component the scaffold's
+`rust-toolchain.toml` pins. A toolchain without rustup (Homebrew, a distro
+package) ignores that file: point `LLVM_COV` / `LLVM_PROFDATA` at its own copies
+instead.
 
-The split is by **what each command needs to run**, not by Rust test
-category. `nestrs run test unit` covers everything that runs without Postgres —
-unit tests *and* integration tests of crates that don't own
-persistence. `nestrs run test e2e` covers the rest. The full suite is
-`nestrs run test unit && nestrs run test e2e`.
+One recipe per kind, named for the suite it runs: `unit` the `#[cfg(test)]`
+modules, `integration` the `tests/integration` suites — in process, no
+database — `e2e` the `tests/e2e` suites against Postgres and Redis, and `doc`
+the examples in doc comments. Bare `nestrs run test` runs every kind, and
+`nestrs run ci` runs the lint before it.
 
 ## What "done" requires
 
@@ -109,9 +116,9 @@ persistence. `nestrs run test e2e` covers the rest. The full suite is
 - **HTTP/GraphQL changes** are confirmed against a running binary:
   `nestrs run dev <app>` plus a `curl` on the affected endpoint. The e2e suite
   proves the wiring; the curl proves the wire shape.
-- **No DB mocking in e2e tests** — a real database per run via
-  `EphemeralDatabase`, created on the server `NESTRS_SEAORM__URL` points at
-  and dropped when the guard drops. Unit tests of *pure* logic need no DB.
+- **No DB mocking in e2e tests** — a real database per test via
+  `ephemeral_database`, created on the server `<PREFIX>_SEAORM__URL` points at
+  and dropped after the app. Unit tests of *pure* logic need no DB.
 
 ## Reference
 
@@ -130,14 +137,20 @@ persistence. `nestrs run test e2e` covers the rest. The full suite is
 - [Unit tests](/testing/unit/) — pure logic next to the code, no DI boot.
 - [Integration tests](/testing/integration/) — a crate's public API in
   process, no database and no network.
-- [End-to-end tests](/testing/e2e/) — the real `AppModule` against live
+- [End-to-end tests](/testing/e2e/) — the real `ApiModule` against live
   Postgres, Redis and S3.
 
 ### All options
 
+- [Driving the app](/testing/driving/) — a bearer the app verifies, the HTTP
+  client, a GraphQL subscription with no socket.
+- [Provider overrides](/testing/overrides/) — a double in place of a provider,
+  before anything is built from it.
+- [Headless apps](/testing/headless/) — a worker on a Redis database of its
+  own, the outbox relay, the way down.
 - [Negative-path tests](/testing/negative-path/) — auth refused,
   cross-tenant denied, validation failed, rollback verified.
-- [Policy tests](/testing/policy/) — asserting on `Ability::mask` and
+- [Policy tests](/testing/policy/) — asserting on `Ability::permitted_fields` and
   `condition_for` directly, because a regression there is a leak.
 
 ## Going further

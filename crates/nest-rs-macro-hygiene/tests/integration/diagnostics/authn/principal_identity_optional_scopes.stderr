@@ -1,0 +1,14 @@
+error[E0277]: `std::option::Option<Vec<std::string::String>>` is no scope list: `#[principal(scopes)]` reads its field as the scopes the credential grants
+  --> tests/integration/diagnostics/authn/principal_identity_optional_scopes.rs:13:16
+   |
+13 |     pub scope: Option<Vec<String>>,
+   |                ^^^^^^ not a list of scopes
+   |
+   = help: the trait `AsRef<[std::string::String]>` is not implemented for `std::option::Option<Vec<std::string::String>>`
+   = note: a scopes field holds a `Vec<String>`, empty when the credential grants none — never an `Option`, which would make a credential sent without its `scope` claim one no scoped rule applies to
+   = note: required for `std::option::Option<Vec<std::string::String>>` to implement `nest_rs::authn::__private::ScopeList`
+note: required by a bound in `nest_rs::authn::__private::scope_list`
+  --> $WORKSPACE/crates/nest-rs-authn/src/principal.rs
+   |
+   | pub fn scope_list<L: ScopeList + ?Sized>(field: &L) -> &[String] {
+   |                      ^^^^^^^^^ required by this bound in `scope_list`

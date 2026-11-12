@@ -1,0 +1,5 @@
+error: `FreshToken` is listed by both `#[use_guards]` and `#[force_guards]` — `#[force_guards]` alone binds it here and re-runs it; drop it from `#[use_guards]`
+  --> tests/integration/diagnostics/http/guard_both_bound_and_forced.rs:17:20
+   |
+17 |     #[force_guards(FreshToken)]
+   |                    ^^^^^^^^^^

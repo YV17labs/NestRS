@@ -6,34 +6,35 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "WebSocket gateways for NestRS: the #[gateway]/#[subscribe_message] decorators self-mount on the HTTP transport, built on poem's WebSocket upgrade."
-keywords = ["framework", "nestrs", "websocket", "web", "poem"]
+description = "WebSocket gateways for NestRS: a #[gateway] struct and its #[messages] impl self-mount on the HTTP transport's upgrade."
+keywords = ["framework", "nestrs", "websocket", "web", "gateway"]
 categories = ["web-programming::websocket", "asynchronous"]
 
 
 [dependencies]
 nest-rs-core.workspace = true
-# `WsConfig` follows the framework dual-path config rule (`NESTRS_WS__*` env +
+# `WsConfig` follows the framework dual-path config rule (`<PREFIX>_WS__*` env +
 # pinned struct via `WsModule::for_root`) — the socket-lifetime ceiling lives here.
 nest-rs-config.workspace = true
 # The gateway self-mounts as an HttpEndpointMeta (the upgrade is an HTTP GET),
 # so it rides the existing HTTP transport — reusing its guards, CORS, port and
-# TLS — rather than opening a second server.
-nest-rs-http.workspace = true
+# TLS — rather than opening a second server. `websocket` is the handshake and
+# the socket above it.
+nest-rs-http = { workspace = true, features = ["websocket"] }
 nest-rs-ws-macros.workspace = true
-# `websocket` is a non-default poem feature; enabling it here turns it on for the
-# whole build (Cargo features are additive).
-poem = { workspace = true, features = ["websocket"] }
+# Each message and each connection hook is a unit of work the gateway runs
+# through the bound `dyn UnitOfWork`, resolved once at mount.
+nest-rs-database.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
-# Global pipes over a message's `data` (`transform_ws_data`), bridged from
-# `use_pipes_global` via the `WsDataPipe` seeded fn pointer.
+# Global pipes over a message's `data` (`ArgumentKind::Data`): the gateway
+# resolves the app's `GlobalPipes` pool once, at mount.
 nest-rs-pipes.workspace = true
+# The edge runs its guards itself: the upgrade's, each message's chain; it
+# renders a denial as its error frame.
+nest-rs-guards.workspace = true
 async-trait.workspace = true
-# Typed error for the per-message `Scoped<T>` bridge (`WsScopeError`) — the
-# house pattern: thiserror in libs.
-thiserror.workspace = true
-# `StreamExt`/`SinkExt` to split and drive poem's `WebSocketStream`: the connection
+# `StreamExt`/`SinkExt` to split and drive the upgraded socket: the connection
 # loop reads while a spawned writer task drains the per-connection outbox.
 futures-util.workspace = true
 # `tokio::spawn` for the writer task and `mpsc` for the per-connection outbox the
@@ -45,23 +46,22 @@ parking_lot.workspace = true
 # `#[derive(Validate)]` on `WsConfig` — the `Config` trait bounds it (empty
 # validation today, but the field maps are the framework's config contract).
 validator.workspace = true
+# `GatewayPostureError`, what the boot says of a gateway's posture.
+thiserror.workspace = true
 
 [dev-dependencies]
-# The `#[messages]` macro emits `::nest_rs_guards::*` for the Layer-System
-# chain (global + per-message guard dedup). nest-rs-guards depends on
-# nest-rs-ws at the lib level, so this stays a dev-only edge. The `ws` feature
-# is needed for `GuardAsWsMessageCheck` in `tests/ws.rs` — without it, building
-# this crate in isolation (`cargo test -p nest-rs-ws`) fails to compile that
-# test (it only worked under workspace feature-unification before).
-nest-rs-guards = { path = "../nest-rs-guards", features = ["ws"] }
-# Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
-trybuild.workspace = true
 # A denial that fails closed but logs nothing passes every reply assertion —
 # `LogCapture` covers the other half of the dispatch contract. `ws` adds the
 # socket driver: everything above `Gateway::dispatch` — the upgrade, the
 # resolved `WsConfig`, the lifetime ceiling, the writer task, the registry
 # entry's cleanup, the close frames — exists only inside a real connection.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["ws"] }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "ws"] }
+# `test-util` (not part of tokio's `full`) pauses time while nothing reads a
+# socket, so a lifetime ceiling or a shutdown window costs the suite nothing.
+tokio = { workspace = true, features = ["test-util"] }
+# Both ends of a socket over an in-memory pipe, so a unit test drives the
+# connection loop past what a real peer can provoke (a writer that panics).
+tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true

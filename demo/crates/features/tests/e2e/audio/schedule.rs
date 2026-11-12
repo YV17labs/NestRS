@@ -3,14 +3,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use features::audio::{AudioQueue, AudioScheduleModule, TranscodeCommand};
+use features::audio::{
+    AudioConfig, AudioQueue, AudioScheduleModule, SEED_OPEN, TARGET, TranscodeCommand,
+};
+use features::testing::{RedisDatabase, assert_passes_under_profile, delete_transcode};
+use nest_rs::config::{Environment, Surface};
 use nest_rs::core::{injectable, module};
-use nest_rs::queue::processor;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule};
-use nest_rs::schedule::{ScheduleModule, Scheduler};
-use nest_rs::testing::TestApp;
+use nest_rs::queue::{QueueWorker, processor};
+use nest_rs::redis::{RedisQueueModule, RedisScheduleModule};
+use nest_rs::schedule::Scheduler;
+use nest_rs::testing::{HeadlessApp, LogCapture, load_project_env};
+use parking_lot::Mutex;
+use uuid::Uuid;
+
+const DEPLOYED_TICK: &str =
+    "audio::schedule::a_deployed_tick_seeds_through_what_says_the_seed_is_open";
 
 static SCHEDULED_FIRES: AtomicUsize = AtomicUsize::new(0);
+
+static SEEDED: Mutex<Vec<Uuid>> = Mutex::new(Vec::new());
 
 fn started_ms() -> u128 {
     static STARTED: OnceLock<u128> = OnceLock::new();
@@ -30,12 +41,9 @@ pub struct CountingProcessor;
 impl CountingProcessor {
     #[process(queue = AudioQueue)]
     async fn count(&self, job: TranscodeCommand) -> Result<()> {
-        if let Some(ms) = job
-            .file
-            .strip_prefix("track-")
-            .and_then(|rest| rest.strip_suffix(".mp3"))
-            .and_then(|stem| stem.parse::<u128>().ok())
-            && ms >= started_ms()
+        SEEDED.lock().push(job.file);
+        if let Some((secs, nanos)) = job.file.get_timestamp().map(|minted| minted.to_unix())
+            && Duration::new(secs, nanos).as_millis() >= started_ms()
         {
             SCHEDULED_FIRES.fetch_add(1, Ordering::SeqCst);
         }
@@ -44,32 +52,52 @@ impl CountingProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, ScheduleModule, AudioScheduleModule],
+    imports = [
+        RedisQueueModule,
+        RedisScheduleModule,
+        AudioScheduleModule,
+    ],
 )]
 struct ScheduleHarness;
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    imports = [RedisQueueModule],
     providers = [CountingProcessor],
 )]
 struct CountingWorkerHarness;
 
+#[test]
+fn the_every_5s_audio_task_fires_and_lands_on_the_queue_where_a_deployment_opened_it() {
+    load_project_env();
+    assert_passes_under_profile(DEPLOYED_TICK, Some("production"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
+async fn a_deployed_tick_seeds_through_what_says_the_seed_is_open() {
+    load_project_env();
+    if !Environment::from_env().is_deployed() {
+        return;
+    }
+    let logs = LogCapture::install_global();
     let _ = started_ms();
 
-    let worker = TestApp::builder()
+    let worker = HeadlessApp::builder()
         .module::<CountingWorkerHarness>()
+        .provide(RedisDatabase::AudioSchedule.config())
         .build_headless()
         .await
         .expect("the counting worker boots against Redis");
     let worker_handle = worker
-        .spawn_transport(RedisWorker::new())
+        .spawn_transport(QueueWorker::new())
         .await
-        .expect("the RedisWorker drains the audio queue");
+        .expect("the QueueWorker drains the audio queue");
 
-    let schedule = TestApp::builder()
+    let schedule = HeadlessApp::builder()
         .module::<ScheduleHarness>()
+        .provide(RedisDatabase::AudioSchedule.config())
+        .provide(AudioConfig {
+            synthetic_seed: Surface::Open,
+        })
         .build_headless()
         .await
         .expect("the schedule harness boots against Redis + storage");
@@ -88,10 +116,17 @@ async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
 
     let _ = schedule_handle.shutdown().await;
     let _ = worker_handle.shutdown().await;
+    let seeded = std::mem::take(&mut *SEEDED.lock());
+    for file in seeded {
+        delete_transcode(schedule.container(), file).await;
+    }
 
     assert!(
         SCHEDULED_FIRES.load(Ordering::SeqCst) >= 1,
         "the #[every(\"5s\")] task must fire and its command must be consumed \
          from the queue within {deadline:?}",
     );
+    let said = logs.expect_one(TARGET, SEED_OPEN);
+    assert_eq!(said.level, "warn");
+    assert_eq!(said.field("environment").as_deref(), Some("production"));
 }

@@ -1,0 +1,5 @@
+error: #[config] reads the field `queue__url` under its name, and a key holds no `__`, the namespace's separator — rename the field
+ --> tests/integration/diagnostics/config/config_field_name_holds_a_separator.rs:9:5
+  |
+9 |     queue__url: String,
+  |     ^^^^^^^^^^

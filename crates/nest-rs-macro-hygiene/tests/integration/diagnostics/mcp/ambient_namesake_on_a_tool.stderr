@@ -1,0 +1,19 @@
+error[E0308]: `?` operator has incompatible types
+  --> tests/integration/diagnostics/mcp/ambient_namesake_on_a_tool.rs:14:1
+   |
+14 | #[tools]
+   | ^^^^^^^^ expected `Ambient`, found `Ambient<_>`
+   |
+   = note: `?` operator cannot convert from `nest_rs::core::Ambient<_>` to `Ambient`
+   = note: `nest_rs::core::Ambient<_>` and `Ambient` have similar names, but are actually distinct types
+note: `nest_rs::core::Ambient<_>` is defined in crate `nest_rs_core`
+  --> $WORKSPACE/crates/nest-rs-core/src/ambient.rs
+   |
+   | pub struct Ambient<T>(pub T);
+   | ^^^^^^^^^^^^^^^^^^^^^
+note: `Ambient` is defined in the current crate
+  --> tests/integration/diagnostics/mcp/ambient_namesake_on_a_tool.rs:8:1
+   |
+ 8 | struct Ambient;
+   | ^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `tools` (in Nightly builds, run with -Z macro-backtrace for more info)

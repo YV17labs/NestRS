@@ -1,24 +1,15 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use syn::Item;
 
 use super::Finding;
-use crate::naming::{reserved_category, to_kebab};
+use crate::naming::{Names, reserved_category, to_kebab};
 
 /// Stems that are not vocabulary, so are not this rule's business.
-///
-/// The role words (`module`, `service`, `guard`, …) and the pluralized role
-/// folders (`entities/`, `dtos/`, …) are **not** listed here: they are derived
-/// from the *Reserved vocabulary* block of `architecture.md` through
-/// [`reserved_category`] — the same derivation `nestrs new` refuses a feature
-/// name with — so a row added to that table reaches this rule and that refusal
-/// at once, and neither can drift from the file both are written in.
-///
-/// What is left is what the block does not carry: Rust's own file names, and
-/// the recognised custom-provider words, which *architecture.md* names in the
-/// prose of its custom-provider paragraph rather than in the table. Those take
-/// that paragraph's own pairing (`<Subject>Registry`), so they are not this
-/// rule's business either.
+/// The role words and pluralized role folders are not listed: they are derived
+/// from `architecture.md`'s *Reserved vocabulary* through [`reserved_category`].
+/// What is left is Rust's own file names and the recognised custom-provider
+/// words, which take their own pairing (`<Subject>Registry`).
 const NOT_VOCABULARY: &[&str] = &[
     "lib",
     "main",
@@ -33,23 +24,26 @@ const NOT_VOCABULARY: &[&str] = &[
     "inventory",
 ];
 
-/// Directories a scan never descends into. `migrations` is not an exemption
-/// won on merit: sea-orm fixes those filenames to `m<date>_<name>`, so the stem
-/// is a timestamp and no pairing was ever available to check.
+/// Directories a scan never descends into: sea-orm fixes migration filenames to
+/// `m<date>_<name>`.
 const SKIPPED: &[&str] = &["target", ".git", "node_modules", "migrations"];
 
 /// What one scan found, and how much it looked at.
 ///
-/// `checked` is reported rather than inferred so a caller can tell an empty
-/// finding list apart from a walk that read nothing — a scan pointed at the
-/// wrong directory is silently clean, and silence is the one result a
-/// conformance suite must never accept.
+/// `checked` tells an empty finding list apart from a walk that read nothing.
 #[derive(Debug, Default)]
 pub struct Scan {
     /// Files that carried a declared type and were subject to the pairing.
     pub checked: usize,
     /// Every file whose stem reached nothing it declares.
     pub findings: Vec<Finding>,
+    /// Every file or directory the walk could not read, with the system's
+    /// answer: a file left unread is a file left unjudged.
+    pub unreadable: Vec<(PathBuf, std::io::Error)>,
+    /// Every file the rule would judge that Rust's parser refuses, relative to
+    /// the root the scan was given, with where it stopped: a file left unparsed
+    /// is a file left unjudged.
+    pub unparsable: Vec<(PathBuf, syn::Error)>,
 }
 
 /// Walk every `src/` file under `root` and pair each stem against what its file
@@ -58,26 +52,34 @@ pub fn scan(root: &Path) -> Scan {
     let mut out = Scan::default();
     walk(root, root, false, &mut out);
     out.findings.sort_by(|a, b| a.path.cmp(&b.path));
+    out.unparsable.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
 
-/// `in_src` is carried down rather than re-derived per file: only source is
-/// judged, and a `tests/` tree names its files for the `src/` concern they
-/// cover, which is a different rule with a different table. Reading it off the
-/// path instead would also answer *yes* for every tree the caller happens to
-/// reach through a directory of their own called `src`.
+/// `in_src` is carried down: only source is judged, and a `tests/` tree names
+/// its files for the `src/` concern they cover.
 fn walk(dir: &Path, root: &Path, in_src: bool, out: &mut Scan) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            out.unreadable.push((dir.to_path_buf(), e));
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                out.unreadable.push((dir.to_path_buf(), e));
+                continue;
+            }
+        };
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        // `file_type` reads what the directory listing already carried, where
-        // `is_dir` would pay a `stat` per entry. It does not follow symlinks —
-        // deliberate: a symlinked tree is judged where it really lives, once.
+        // `file_type` does not follow symlinks: a symlinked tree is judged where it
+        // really lives, once.
         if entry.file_type().is_ok_and(|t| t.is_dir()) {
             if !SKIPPED.contains(&name) && !name.starts_with('.') {
                 walk(&path, root, in_src || name == "src", out);
@@ -104,14 +106,22 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
         return;
     }
 
-    let Ok(source) = std::fs::read_to_string(path) else {
-        return;
+    let source = match std::fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(e) => {
+            out.unreadable.push((path.to_path_buf(), e));
+            return;
+        }
     };
-    // Rust's own parser, not a scan: a `pub struct` inside a template string is
-    // the exact thing a regex counts and a parser does not, and this crate
-    // ships such a string.
-    let Ok(file) = syn::parse_file(&source) else {
-        return;
+    // Rust's own parser, not a scan: this crate ships a `pub struct` inside a
+    // template string.
+    let file = match syn::parse_file(&source) {
+        Ok(file) => file,
+        Err(refused) => {
+            let relative = path.trim_prefix(root).to_path_buf();
+            out.unparsable.push((relative, refused));
+            return;
+        }
     };
 
     let declared: Vec<String> = file
@@ -129,9 +139,13 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
     }
     out.checked += 1;
 
+    // A folder also reaches its singular, read by the singularizer a generator
+    // names a port's types with: `cities/subject.rs` holds `City`.
+    let singular = Names::parse(folder).table();
     let mut subject: Vec<&str> = stem.split('_').collect();
     if folder != "src" {
         subject.extend(folder.split('_'));
+        subject.extend(singular.split('_'));
     }
     let paired = declared.iter().any(|ty| {
         words_of(ty)
@@ -153,14 +167,13 @@ fn inspect(path: &Path, root: &Path, out: &mut Scan) {
     }
 
     out.findings.push(Finding {
-        path: path.strip_prefix(root).unwrap_or(path).to_path_buf(),
+        path: path.trim_prefix(root).to_path_buf(),
         declared,
     });
 }
 
 /// `RedisQueueProducer` → `["redis", "queue", "producer"]`, through the same
-/// case splitter `nestrs new` derives a crate name with. Two PascalCase
-/// splitters in one crate is how the two come to disagree about an acronym.
+/// case splitter `nestrs new` derives a crate name with.
 fn words_of(ty: &str) -> Vec<String> {
     to_kebab(ty).split('-').map(str::to_owned).collect()
 }
@@ -171,9 +184,6 @@ fn words_of(ty: &str) -> Vec<String> {
 /// - a compound contains the other word (`part` in `multipart`);
 /// - an inflection shares a root (`scope` / `scoped`, `log` / `logging`);
 /// - an abbreviation is a subsequence from the same letter (`ctx` / `context`).
-///
-/// A tighter test — the stem as the type's first or last word — reads well and
-/// is false on a third of the framework, which is why it is not this one.
 fn reach(a: &str, b: &str) -> bool {
     a == b
         || (a.len() >= 2 && b.contains(a))
@@ -263,6 +273,56 @@ mod tests {
         let scan = scan_one(dir.path(), "registry.rs", "pub struct GuardSpec;");
         assert_eq!(scan.checked, 0);
         assert!(scan.findings.is_empty());
+    }
+
+    fn scan_at(dir: &Path, folder: &str, name: &str, body: &str) -> Scan {
+        let at = dir.join("src").join(folder);
+        std::fs::create_dir_all(&at).unwrap();
+        std::fs::write(at.join(name), body).unwrap();
+        scan(dir)
+    }
+
+    #[test]
+    fn a_plural_folder_reaches_the_singular_a_generator_names_its_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan = scan_at(
+            dir.path(),
+            "cities",
+            "subject.rs",
+            "#[subject]\npub struct City;",
+        );
+        assert_eq!(scan.checked, 1);
+        assert!(scan.findings.is_empty(), "{:?}", scan.findings);
+    }
+
+    #[test]
+    fn a_capability_named_for_what_it_grants_is_not_its_ports_subject() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan = scan_at(
+            dir.path(),
+            "audio",
+            "subject.rs",
+            "#[subject]\npub struct Transcoding;",
+        );
+        assert_eq!(scan.findings.len(), 1);
+        assert_eq!(scan.findings[0].path, Path::new("src/audio/subject.rs"));
+    }
+
+    #[test]
+    fn a_file_the_parser_refuses_is_kept_with_where_it_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let scan = scan_one(
+            dir.path(),
+            "connection.rs",
+            "pub struct RedisConnection;\nfn half(\n",
+        );
+        assert_eq!(scan.checked, 0);
+        assert!(scan.findings.is_empty());
+        let [(path, refused)] = scan.unparsable.as_slice() else {
+            panic!("one file refused: {:?}", scan.unparsable);
+        };
+        assert_eq!(path, Path::new("src/connection.rs"));
+        assert_eq!(refused.span().start().line, 2, "the delimiter left open");
     }
 
     #[test]

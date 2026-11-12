@@ -1,0 +1,1071 @@
+//! Covers `src/jwks.rs` — an issuer's JWK Set, served over TLS by an in-process
+//! double whose certificate a `TestAuthority` issued, verified through
+//! `JwtService`, through a booted guard and under a resource binding.
+//!
+//! The clock moves past the refresh floor only between fetches (`elapse`): a
+//! fetch is real I/O, and a paused clock would jump its deadline.
+
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use jsonwebtoken::jwk::{
+    AlgorithmParameters, CommonParameters, EllipticCurve, Jwk, OctetKeyPairParameters,
+    OctetKeyPairType, PublicKeyUse,
+};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, get_current_timestamp};
+use nest_rs_authn::{
+    AuthError, AuthnConfig, AuthnGuard, AuthnModule, JWKS_CONNECT_TIMEOUT, JWKS_FETCH_TIMEOUT,
+    JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR, JWKS_STALE_CEILING, JwtService, JwtStrategy,
+    PrincipalIdentity,
+};
+use nest_rs_core::{App, module};
+use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
+use nest_rs_http::{StatusCode, header};
+use nest_rs_testing::{LogCapture, TestApp, TestAuthority, TestCertificate, wait_until};
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio::task::JoinSet;
+
+/// The authority the double's certificate chains to, and the client trusts.
+static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
+
+static CERTIFICATE: LazyLock<TestCertificate> = LazyLock::new(|| AUTHORITY.server(&["127.0.0.1"]));
+
+/// A key the issuer signs with, and the public JWK it publishes for it.
+struct Signing {
+    key: EncodingKey,
+    public: Jwk,
+}
+
+/// The issuer's signing keys, one per key type, generated once per process.
+static RSA: LazyLock<Signing> = LazyLock::new(|| {
+    let pair = rcgen::KeyPair::generate_rsa_for(&rcgen::PKCS_RSA_SHA256, rcgen::RsaKeySize::_2048)
+        .expect("an RSA key generates");
+    let key = EncodingKey::from_rsa_pem(pair.serialize_pem().as_bytes()).expect("a PKCS#8 key");
+    let public = Jwk::from_encoding_key(&key, Algorithm::RS256).expect("its public JWK");
+    Signing { key, public }
+});
+
+static P256: LazyLock<Signing> = LazyLock::new(|| {
+    let pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
+        .expect("a P-256 key generates");
+    let key = EncodingKey::from_ec_pem(pair.serialize_pem().as_bytes()).expect("a PKCS#8 key");
+    let public = Jwk::from_encoding_key(&key, Algorithm::ES256).expect("its public JWK");
+    Signing { key, public }
+});
+
+/// Built by hand: `Jwk::from_encoding_key` reads only a PKCS#8 v1 Ed25519 key,
+/// and aws-lc writes v2.
+static ED25519: LazyLock<Signing> = LazyLock::new(|| {
+    let pair =
+        rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).expect("an Ed25519 key generates");
+    let key = EncodingKey::from_ed_pem(pair.serialize_pem().as_bytes()).expect("a PKCS#8 key");
+    let public = Jwk {
+        common: CommonParameters::default(),
+        algorithm: AlgorithmParameters::OctetKeyPair(OctetKeyPairParameters {
+            key_type: OctetKeyPairType::OctetKeyPair,
+            curve: EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(pair.public_key_raw()),
+        }),
+    };
+    Signing { key, public }
+});
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    iss: String,
+    aud: String,
+    exp: u64,
+}
+
+impl nest_rs_core::AmbientValue for Claims {}
+
+impl PrincipalIdentity for Claims {
+    fn actor_id(&self) -> Option<String> {
+        Some(self.sub.clone())
+    }
+}
+
+/// The public JWK of `key`, published under `kid` for `algorithm`.
+fn jwk(key: &Signing, algorithm: Algorithm, kid: &str) -> Jwk {
+    let mut jwk = key.public.clone();
+    jwk.common.key_algorithm = Some(algorithm.into());
+    jwk.common.key_id = Some(kid.to_owned());
+    jwk
+}
+
+/// `jwk` without the `alg` member, as an issuer that leaves it out publishes it.
+fn unbound(mut jwk: Jwk) -> Jwk {
+    jwk.common.key_algorithm = None;
+    jwk
+}
+
+/// An access token `key` signed with `algorithm`, naming `kid`.
+fn token(key: &EncodingKey, algorithm: Algorithm, kid: Option<&str>) -> String {
+    signed(
+        key,
+        algorithm,
+        kid,
+        &Claims {
+            sub: "ada".into(),
+            iss: crate::ISSUER.into(),
+            aud: crate::AUDIENCE.into(),
+            exp: get_current_timestamp() + 3600,
+        },
+    )
+}
+
+/// `claims` as an access token `key` signed with `algorithm`, naming `kid`.
+fn signed(
+    key: &EncodingKey,
+    algorithm: Algorithm,
+    kid: Option<&str>,
+    claims: &impl Serialize,
+) -> String {
+    let mut header = Header::new(algorithm);
+    header.kid = kid.map(str::to_owned);
+    header.typ = Some("at+jwt".into());
+    jsonwebtoken::encode(&header, claims, key).expect("the token signs")
+}
+
+/// What the double answers every fetch with.
+#[derive(Clone)]
+struct Answer {
+    status: u16,
+    headers: Vec<(&'static str, String)>,
+    body: Vec<u8>,
+    /// Whether the answer states its length, or ends when the connection does.
+    length: bool,
+}
+
+impl Answer {
+    fn keys(keys: &[Jwk]) -> Self {
+        Self::body(serde_json::to_vec(&serde_json::json!({ "keys": keys })).expect("JSON"))
+    }
+
+    fn body(body: impl Into<Vec<u8>>) -> Self {
+        Self {
+            status: 200,
+            headers: vec![("content-type", "application/jwk-set+json".to_owned())],
+            body: body.into(),
+            length: true,
+        }
+    }
+
+    fn status(status: u16) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body: Vec::new(),
+            length: true,
+        }
+    }
+
+    fn with(mut self, name: &'static str, value: &str) -> Self {
+        self.headers.push((name, value.to_owned()));
+        self
+    }
+
+    fn until_closed(mut self) -> Self {
+        self.length = false;
+        self
+    }
+}
+
+/// An issuer's JWK Set endpoint: HTTPS on loopback, one answer per
+/// connection, every fetch counted.
+struct Issuer {
+    addr: SocketAddr,
+    answer: Arc<Mutex<Answer>>,
+    fetches: Arc<AtomicUsize>,
+}
+
+impl Issuer {
+    async fn serving(answer: Answer) -> Self {
+        Self::serving_to(answer, None).await
+    }
+
+    /// An issuer asking every client for a certificate `clients` issued, when
+    /// it names one.
+    async fn serving_to(answer: Answer, clients: Option<&TestAuthority>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let addr = listener.local_addr().expect("its address");
+        let answer = Arc::new(Mutex::new(answer));
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let acceptor = CERTIFICATE.acceptor(clients);
+        let (served, counted) = (Arc::clone(&answer), Arc::clone(&fetches));
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (acceptor, answer, fetches) =
+                    (acceptor.clone(), Arc::clone(&served), Arc::clone(&counted));
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let mut head = Vec::new();
+                    let mut buf = [0_u8; 1024];
+                    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match tls.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => head.extend_from_slice(&buf[..read]),
+                        }
+                    }
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                    let answer = answer.lock().expect("the answer").clone();
+                    let mut response =
+                        format!("HTTP/1.1 {} Answer\r\nconnection: close\r\n", answer.status);
+                    if answer.length {
+                        response.push_str(&format!("content-length: {}\r\n", answer.body.len()));
+                    }
+                    for (name, value) in &answer.headers {
+                        response.push_str(&format!("{name}: {value}\r\n"));
+                    }
+                    response.push_str("\r\n");
+                    let _ = tls.write_all(response.as_bytes()).await;
+                    let _ = tls.write_all(&answer.body).await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        Self {
+            addr,
+            answer,
+            fetches,
+        }
+    }
+
+    fn uri(&self) -> String {
+        format!("https://127.0.0.1:{}/api/auth/jwks", self.addr.port())
+    }
+
+    fn answer(&self, answer: Answer) {
+        *self.answer.lock().expect("the answer") = answer;
+    }
+
+    fn fetches(&self) -> usize {
+        self.fetches.load(Ordering::SeqCst)
+    }
+}
+
+/// What a deployment verifying `jwks_uri`'s set sets, trusting the test
+/// authority.
+fn config(jwks_uri: String) -> AuthnConfig {
+    AuthnConfig {
+        jwks_uri: Some(jwks_uri),
+        tls: AUTHORITY.client_tls(),
+        issuer: Some(crate::ISSUER.into()),
+        audience: Some(crate::AUDIENCE.into()),
+        ..AuthnConfig::default()
+    }
+}
+
+/// The service `config` builds, as `AuthnModule` builds it.
+fn verifier_with(config: AuthnConfig) -> JwtService {
+    JwtService::new(config.into_options().expect("options")).expect("a JWK Set verifier")
+}
+
+fn verifier(issuer: &Issuer) -> JwtService {
+    verifier_with(config(issuer.uri()))
+}
+
+/// A URI on loopback nothing listens on.
+fn unreachable() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let port = listener.local_addr().expect("its address").port();
+    format!("https://127.0.0.1:{port}/jwks")
+}
+
+/// Let `by` pass on tokio's clock, with no fetch in flight, so no I/O deadline
+/// moves with it.
+async fn elapse(by: Duration) {
+    tokio::time::pause();
+    tokio::time::advance(by).await;
+    tokio::time::resume();
+}
+
+/// An issuer requiring a client certificate is handed the one the deployment
+/// sets under `<PREFIX>_AUTHN__TLS_CERT` and `TLS_KEY`; without one, its set
+/// cannot be had.
+#[tokio::test]
+async fn an_issuer_requiring_a_client_certificate_is_handed_the_configured_one() {
+    use nest_rs_config::{Config, ConfigService, Namespaced};
+
+    let clients = TestAuthority::new();
+    let issued = clients.client("nestrs-test-client");
+    let issuer = Issuer::serving_to(
+        Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")]),
+        Some(&clients),
+    )
+    .await;
+    let signed = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
+    let presenting = AuthnConfig::from_env(
+        &ConfigService::with_vars(
+            AuthnConfig::NAMESPACE,
+            [
+                ("TLS_CERT", issued.cert.as_str()),
+                ("TLS_KEY", issued.key.as_str()),
+            ],
+        ),
+        config(issuer.uri()),
+    )
+    .expect("the deployment's certificate over the trusted authority");
+    verifier_with(presenting)
+        .verify::<Claims>(&signed)
+        .await
+        .expect("the set fetched presenting the certificate verifies the token");
+
+    let refused = verifier(&issuer).verify::<Claims>(&signed).await;
+    assert!(
+        matches!(refused, Err(AuthError::Unavailable { .. })),
+        "{refused:?}"
+    );
+}
+
+/// A certificate the client does not accept is an outage said with the
+/// setting that fixes it, as every TLS client of the framework says it.
+#[tokio::test]
+async fn an_issuer_certificate_the_client_does_not_accept_names_the_setting_that_fixes_it() {
+    use nest_rs_config::{Namespaced, var_name};
+
+    let issuer = Issuer::serving(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")])).await;
+    let trusting_the_system = verifier_with(AuthnConfig {
+        tls: nest_rs_config::ClientTls::default(),
+        ..config(issuer.uri())
+    });
+    let Err(detail @ AuthError::Unavailable { .. }) = trusting_the_system
+        .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+        .await
+    else {
+        panic!("a certificate no trusted authority signed must not be fetched from");
+    };
+    let detail = nest_rs_core::error_message(&detail);
+    assert!(
+        detail.contains("does not chain to an authority")
+            && detail.contains(&var_name(AuthnConfig::NAMESPACE, "TLS_CA_CERT")),
+        "{detail}"
+    );
+}
+
+#[tokio::test]
+async fn rsa_ec_and_ed25519_tokens_verify_against_the_set() {
+    let issuer = Issuer::serving(Answer::keys(&[
+        unbound(jwk(&RSA, Algorithm::RS256, "rsa")),
+        jwk(&P256, Algorithm::ES256, "p256"),
+        jwk(&ED25519, Algorithm::EdDSA, "ed"),
+    ]))
+    .await;
+    let jwt = verifier(&issuer);
+
+    for (key, algorithm, kid) in [
+        (&RSA.key, Algorithm::RS256, "rsa"),
+        (&RSA.key, Algorithm::PS256, "rsa"),
+        (&P256.key, Algorithm::ES256, "p256"),
+        (&ED25519.key, Algorithm::EdDSA, "ed"),
+    ] {
+        let claims = jwt
+            .verify::<Claims>(&token(key, algorithm, Some(kid)))
+            .await
+            .unwrap_or_else(|refused| panic!("{algorithm:?} must verify: {refused:?}"));
+        assert_eq!(claims.sub, "ada");
+    }
+    assert_eq!(issuer.fetches(), 1, "a fresh set serves every token");
+}
+
+/// RFC 8725 §3.1: the token's header picks among what the verifier binds each
+/// key to, and nothing else.
+#[tokio::test]
+async fn a_key_checks_no_algorithm_but_its_own() {
+    let issuer = Issuer::serving(Answer::keys(&[
+        jwk(&RSA, Algorithm::RS256, "rsa"),
+        jwk(&ED25519, Algorithm::EdDSA, "ed"),
+    ]))
+    .await;
+    let jwt = verifier(&issuer);
+
+    for (forged, why) in [
+        (
+            token(&RSA.key, Algorithm::PS256, Some("rsa")),
+            "the key's own alg is RS256",
+        ),
+        (
+            token(&RSA.key, Algorithm::RS256, Some("ed")),
+            "an Ed25519 key checks no RSA signature",
+        ),
+    ] {
+        assert!(
+            matches!(
+                jwt.verify::<Claims>(&forged).await,
+                Err(AuthError::InvalidAlgorithm)
+            ),
+            "{why}"
+        );
+    }
+
+    let narrowed = verifier_with(AuthnConfig {
+        algorithms: Some(vec![nest_rs_authn::Algorithm::EdDSA]),
+        ..config(issuer.uri())
+    });
+    assert!(matches!(
+        narrowed
+            .verify::<Claims>(&token(&RSA.key, Algorithm::RS256, Some("rsa")))
+            .await,
+        Err(AuthError::InvalidAlgorithm)
+    ));
+    narrowed
+        .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+        .await
+        .expect("the one accepted algorithm verifies");
+}
+
+/// The algorithms a verifier runs are nestrs's own: narrowing them in code
+/// to RS256 verifies an RS256 token against the set, and refuses another.
+#[tokio::test]
+async fn options_narrowed_in_code_to_rs256_verify_an_rs256_token() {
+    let issuer = Issuer::serving(Answer::keys(&[
+        jwk(&RSA, Algorithm::RS256, "rsa"),
+        jwk(&ED25519, Algorithm::EdDSA, "ed"),
+    ]))
+    .await;
+    let mut options = config(issuer.uri()).into_options().expect("options");
+    options.algorithms = vec![nest_rs_authn::Algorithm::RS256];
+    let jwt = JwtService::new(options).expect("RS256 fits a JWK Set");
+
+    let claims = jwt
+        .verify::<Claims>(&token(&RSA.key, Algorithm::RS256, Some("rsa")))
+        .await
+        .expect("an RS256 token verifies");
+    assert_eq!(claims.sub, "ada");
+    assert!(matches!(
+        jwt.verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+            .await,
+        Err(AuthError::InvalidAlgorithm)
+    ));
+}
+
+/// The classic confusion — the issuer's public key, read off its own set, as an
+/// HMAC secret — and an unsigned token, both refused before the set is asked
+/// for.
+#[tokio::test]
+async fn an_hmac_or_unsigned_token_is_refused_without_asking_the_issuer() {
+    let published = jwk(&RSA, Algorithm::RS256, "rsa");
+    let issuer = Issuer::serving(Answer::keys(std::slice::from_ref(&published))).await;
+    let jwt = verifier(&issuer);
+
+    let as_secret = serde_json::to_vec(&published).expect("JSON");
+    let confused = token(
+        &EncodingKey::from_secret(&as_secret),
+        Algorithm::HS256,
+        Some("rsa"),
+    );
+    assert!(matches!(
+        jwt.verify::<Claims>(&confused).await,
+        Err(AuthError::InvalidAlgorithm)
+    ));
+
+    let payload = confused.split('.').nth(1).expect("a payload");
+    let unsigned = format!(
+        "{}.{payload}.",
+        URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"at+jwt","kid":"rsa"}"#),
+    );
+    assert!(jwt.verify::<Claims>(&unsigned).await.is_err());
+    assert_eq!(
+        issuer.fetches(),
+        0,
+        "a token no accepted algorithm signs costs the issuer nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_key_published_for_encryption_checks_no_token() {
+    let mut encryption = unbound(jwk(&RSA, Algorithm::RS256, "enc"));
+    encryption.common.public_key_use = Some(PublicKeyUse::Encryption);
+    let issuer = Issuer::serving(Answer::keys(&[
+        encryption,
+        jwk(&ED25519, Algorithm::EdDSA, "ed"),
+    ]))
+    .await;
+    let jwt = verifier(&issuer);
+
+    assert!(matches!(
+        jwt.verify::<Claims>(&token(&RSA.key, Algorithm::RS256, Some("enc")))
+            .await,
+        Err(AuthError::UnknownKey)
+    ));
+    assert_eq!(
+        issuer.fetches(),
+        1,
+        "the set just fetched is not fetched again"
+    );
+}
+
+/// A token naming no `kid` is checked by the one key that fits, and refused
+/// where several do rather than tried against each.
+#[tokio::test]
+async fn a_token_without_a_kid_needs_exactly_one_fitting_key() {
+    let issuer = Issuer::serving(Answer::keys(&[
+        jwk(&ED25519, Algorithm::EdDSA, "ed"),
+        jwk(&P256, Algorithm::ES256, "p256"),
+    ]))
+    .await;
+    let jwt = verifier(&issuer);
+    jwt.verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, None))
+        .await
+        .expect("one Ed25519 key in the set");
+
+    issuer.answer(Answer::keys(&[
+        jwk(&ED25519, Algorithm::EdDSA, "ed-1"),
+        jwk(&ED25519, Algorithm::EdDSA, "ed-2"),
+    ]));
+    let other = verifier(&issuer);
+    assert!(matches!(
+        other
+            .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, None))
+            .await,
+        Err(AuthError::UnknownKey)
+    ));
+}
+
+/// A rotation reaches the verifier through the one fetch a new `kid` earns,
+/// once the floor since the last fetch has passed.
+#[tokio::test]
+async fn a_kid_the_set_lacks_is_found_after_one_refetch() {
+    let issuer = Issuer::serving(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "old")])).await;
+    let jwt = verifier(&issuer);
+    jwt.verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("old")))
+        .await
+        .expect("the published key");
+
+    issuer.answer(Answer::keys(&[
+        jwk(&ED25519, Algorithm::EdDSA, "old"),
+        jwk(&P256, Algorithm::ES256, "new"),
+    ]));
+    let rotated = token(&P256.key, Algorithm::ES256, Some("new"));
+    assert!(
+        matches!(
+            jwt.verify::<Claims>(&rotated).await,
+            Err(AuthError::UnknownKey)
+        ),
+        "within the floor the set is not asked again"
+    );
+    assert_eq!(issuer.fetches(), 1);
+
+    elapse(JWKS_REFRESH_FLOOR).await;
+    jwt.verify::<Claims>(&rotated)
+        .await
+        .expect("the key the issuer rotated in");
+    assert_eq!(issuer.fetches(), 2);
+}
+
+/// Tokens naming kids nobody published cost the issuer one fetch per floor,
+/// however many arrive at once.
+#[tokio::test]
+async fn a_burst_of_unknown_kids_costs_one_fetch_per_floor() {
+    let issuer = Issuer::serving(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")])).await;
+    let jwt = Arc::new(verifier(&issuer));
+    jwt.verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+        .await
+        .expect("the published key");
+
+    burst(&jwt, "within").await;
+    assert_eq!(issuer.fetches(), 1, "no fetch within the floor");
+    elapse(JWKS_REFRESH_FLOOR).await;
+    burst(&jwt, "past").await;
+    assert_eq!(
+        issuer.fetches(),
+        2,
+        "past it, one fetch for the whole burst"
+    );
+}
+
+/// Fifty tokens at once, each naming a `kid` nobody published.
+async fn burst(jwt: &Arc<JwtService>, label: &str) {
+    let mut burst = JoinSet::new();
+    for forged in 0..50 {
+        let jwt = Arc::clone(jwt);
+        let token = token(
+            &ED25519.key,
+            Algorithm::EdDSA,
+            Some(&format!("forged-{label}-{forged}")),
+        );
+        burst.spawn(async move { jwt.verify::<Claims>(&token).await });
+    }
+    for outcome in burst.join_all().await {
+        assert!(matches!(outcome, Err(AuthError::UnknownKey)), "{outcome:?}");
+    }
+}
+
+/// The answer's `max-age` is when the set is asked for again; a stale set
+/// keeps serving while it is.
+#[tokio::test]
+async fn a_set_is_fetched_again_once_its_max_age_runs_out() {
+    let issuer = Issuer::serving(
+        Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")]).with("cache-control", "max-age=120"),
+    )
+    .await;
+    let jwt = verifier(&issuer);
+    let token = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
+    jwt.verify::<Claims>(&token).await.expect("fetched");
+
+    elapse(Duration::from_secs(119)).await;
+    jwt.verify::<Claims>(&token).await.expect("still fresh");
+    assert_eq!(issuer.fetches(), 1);
+
+    elapse(Duration::from_secs(2)).await;
+    jwt.verify::<Claims>(&token)
+        .await
+        .expect("served stale while it refreshes");
+    wait_until(Duration::from_secs(5), || issuer.fetches() == 2).await;
+}
+
+#[tokio::test]
+async fn a_failed_refresh_keeps_the_last_good_set_until_its_stale_ceiling() {
+    let logs = LogCapture::install();
+    let issuer = Issuer::serving(
+        Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")]).with("cache-control", "max-age=60"),
+    )
+    .await;
+    let jwt = verifier(&issuer);
+    let valid = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
+    jwt.verify::<Claims>(&valid).await.expect("fetched");
+    let fetched = logs.expect_one(nest_rs_authn::TARGET, "the issuer's key set was fetched");
+    assert_eq!(fetched.field("fresh_ms").as_deref(), Some("60000"));
+
+    issuer.answer(Answer::status(500));
+    elapse(Duration::from_secs(61)).await;
+    jwt.verify::<Claims>(&valid)
+        .await
+        .expect("the last good set still verifies");
+    let kept = "the issuer's key set could not be refreshed; the last good one is kept";
+    wait_until(Duration::from_secs(5), || {
+        !logs.find(nest_rs_authn::TARGET, kept).is_empty()
+    })
+    .await;
+    let event = logs.expect_one(nest_rs_authn::TARGET, kept);
+    assert_eq!(event.level, "warn");
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|error| error.contains("answered 500")),
+        "{:?}",
+        event.fields
+    );
+    assert!(
+        matches!(
+            jwt.verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("other")))
+                .await,
+            Err(AuthError::Unavailable { .. })
+        ),
+        "a kid looked for while the issuer fails was never checked"
+    );
+
+    elapse(JWKS_STALE_CEILING).await;
+    let Err(detail @ AuthError::Unavailable { .. }) = jwt.verify::<Claims>(&valid).await else {
+        panic!("past its stale ceiling the set verifies nothing");
+    };
+    let detail = nest_rs_core::error_message(&detail);
+    assert!(detail.contains("answered 500"), "{detail}");
+}
+
+/// An issuer that answers anything but a JWK Set is an outage, never a bad
+/// token — and what it answered is never quoted.
+#[tokio::test]
+async fn an_answer_that_is_not_a_usable_set_is_unavailable_and_never_quoted() {
+    const SENTINEL: &str = "never-quoted-7f3a";
+    let oversized = vec![b' '; JWKS_MAX_BYTES + 1];
+    for (answer, reason, retry_after) in [
+        (
+            Answer::body(format!(r#"{{"keys":"{SENTINEL}"}}"#)),
+            "is not a JWK Set",
+            None,
+        ),
+        (
+            Answer::body(format!("<html>{SENTINEL}</html>")),
+            "is not a JWK Set",
+            None,
+        ),
+        (Answer::body(oversized.clone()), "more than", None),
+        (Answer::body(oversized).until_closed(), "more than", None),
+        (
+            Answer::keys(&[]),
+            "holds no key this verifier can use",
+            None,
+        ),
+        (
+            Answer::status(302).with("location", "https://elsewhere.example/jwks"),
+            "a redirect is not followed",
+            None,
+        ),
+        (
+            Answer::status(503).with("retry-after", "120"),
+            "answered 503",
+            Some(Duration::from_secs(120)),
+        ),
+    ] {
+        let issuer = Issuer::serving(answer).await;
+        let jwt = verifier(&issuer);
+        let Err(
+            refused @ AuthError::Unavailable {
+                retry_after: waited,
+                ..
+            },
+        ) = jwt
+            .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+            .await
+        else {
+            panic!("{reason}: must be unavailable");
+        };
+        let detail = nest_rs_core::error_message(&refused);
+        assert!(detail.contains(reason), "{detail}");
+        assert!(!detail.contains(SENTINEL), "{detail}");
+        assert!(!detail.contains("elsewhere"), "{detail}");
+        if let Some(asked) = retry_after {
+            let waited = waited.expect("the wait until the next fetch may start");
+            assert!(
+                waited > asked - Duration::from_secs(1) && waited <= asked.mul_f64(1.2),
+                "the issuer's own wait, stretched by a fifth at most: {waited:?}"
+            );
+        } else {
+            assert!(waited.is_some(), "the wait until the next fetch may start");
+        }
+        assert_eq!(issuer.fetches(), 1);
+    }
+}
+
+/// An issuer asking for a wait is not asked again before it, however many
+/// tokens need its set, and is asked again once it passed; the callers told to
+/// wait are told the time left until then.
+#[tokio::test]
+async fn an_issuer_asking_a_wait_is_not_asked_again_before_it() {
+    let asked = Duration::from_secs(120);
+    let issuer = Issuer::serving(Answer::status(503).with("retry-after", "120")).await;
+    let jwt = verifier(&issuer);
+    let signed = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
+    assert!(matches!(
+        jwt.verify::<Claims>(&signed).await,
+        Err(AuthError::Unavailable { .. })
+    ));
+    assert_eq!(issuer.fetches(), 1);
+
+    elapse(JWKS_REFRESH_FLOOR).await;
+    let Err(AuthError::Unavailable {
+        retry_after: Some(told),
+        ..
+    }) = jwt.verify::<Claims>(&signed).await
+    else {
+        panic!("within the asked wait the set cannot be had");
+    };
+    assert_eq!(issuer.fetches(), 1, "past the floor, within what it asked");
+    // The real time since the settle comes off `told`; a fetcher ignoring the
+    // ask would tell none.
+    assert!(
+        told <= asked.mul_f64(1.2) - JWKS_REFRESH_FLOOR
+            && told > asked - JWKS_REFRESH_FLOOR - Duration::from_secs(1),
+        "the time left until the next fetch: {told:?}"
+    );
+
+    issuer.answer(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")]));
+    elapse(asked.mul_f64(1.2)).await;
+    jwt.verify::<Claims>(&signed)
+        .await
+        .expect("asked again once its wait passed");
+    assert_eq!(issuer.fetches(), 2);
+}
+
+/// What the operator's line says below `refused`'s constant.
+fn beneath(refused: &AuthError) -> String {
+    std::error::Error::source(refused)
+        .map(nest_rs_core::error_message)
+        .expect("the detail beneath the constant")
+}
+
+/// An issuer whose listener never takes the connection fails the fetch at
+/// `JWKS_CONNECT_TIMEOUT`, said by that bound alone: reqwest's own "timed
+/// out" beneath it would say it twice.
+#[tokio::test(start_paused = true)]
+async fn an_issuer_that_never_takes_the_connection_is_said_by_the_connect_bound_alone() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let uri = format!(
+        "https://127.0.0.1:{}/jwks",
+        listener.local_addr().expect("its address").port()
+    );
+    let jwt = verifier_with(config(uri.clone()));
+
+    let sent = tokio::time::Instant::now();
+    let Err(refused @ AuthError::Unavailable { .. }) = jwt
+        .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+        .await
+    else {
+        panic!("a set that cannot be reached verifies nothing");
+    };
+
+    assert_eq!(sent.elapsed(), JWKS_CONNECT_TIMEOUT);
+    assert_eq!(
+        beneath(&refused),
+        format!("the JWK Set at {uri} could not be connected to within {JWKS_CONNECT_TIMEOUT:?}"),
+    );
+}
+
+/// An issuer that takes the request and never answers fails the fetch at
+/// `JWKS_FETCH_TIMEOUT`, said by that bound alone. The double stops the
+/// clock once it has read the request, so the bound is waited out for free.
+#[tokio::test]
+async fn an_issuer_that_never_answers_is_said_by_the_fetch_bound_alone() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+    let uri = format!(
+        "https://127.0.0.1:{}/jwks",
+        listener.local_addr().expect("its address").port()
+    );
+    let acceptor = CERTIFICATE.acceptor(None);
+    tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let Ok(mut tls) = acceptor.accept(stream).await else {
+            return;
+        };
+        let mut head = Vec::new();
+        let mut buf = [0_u8; 1024];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+            match tls.read(&mut buf).await {
+                Ok(0) | Err(_) => return,
+                Ok(read) => head.extend_from_slice(&buf[..read]),
+            }
+        }
+        tokio::time::pause();
+        std::future::pending::<()>().await;
+    });
+    let jwt = verifier_with(config(uri.clone()));
+
+    let sent = tokio::time::Instant::now();
+    let Err(refused @ AuthError::Unavailable { .. }) = jwt
+        .verify::<Claims>(&token(&ED25519.key, Algorithm::EdDSA, Some("ed")))
+        .await
+    else {
+        panic!("a set that never comes verifies nothing");
+    };
+
+    assert!(sent.elapsed() >= JWKS_FETCH_TIMEOUT, "{:?}", sent.elapsed());
+    assert_eq!(
+        beneath(&refused),
+        format!("the JWK Set at {uri} did not answer within {JWKS_FETCH_TIMEOUT:?}"),
+    );
+}
+
+// The set through the module's seam, behind a booted guard.
+
+type JwksStrategy = JwtStrategy<Claims>;
+type JwksGuard = AuthnGuard<JwksStrategy>;
+
+const REACHED: &str = "reached";
+
+#[controller(path = "/posts")]
+#[use_guards(JwksGuard)]
+struct PostsController;
+
+#[routes]
+impl PostsController {
+    #[get("/mine")]
+    async fn mine(&self) -> &'static str {
+        REACHED
+    }
+
+    #[get("/latest")]
+    #[public]
+    async fn latest(&self) -> &'static str {
+        REACHED
+    }
+}
+
+#[module(
+    imports = [
+        HttpModule::for_root(HttpConfig { port: 0, ..Default::default() }),
+        AuthnModule,
+    ],
+    providers = [JwksStrategy, JwksGuard, PostsController],
+)]
+struct JwksHttpModule;
+
+/// The module boots on the config a deployment gives it — seeded here, as a
+/// hermetic test seeds one.
+async fn app(jwks_uri: String) -> TestApp {
+    TestApp::builder()
+        .module::<JwksHttpModule>()
+        .provide(config(jwks_uri))
+        .build()
+        .await
+        .expect("the app boots without fetching the set")
+}
+
+#[tokio::test]
+async fn a_guarded_route_admits_a_token_the_issuers_set_verifies() {
+    let issuer = Issuer::serving(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")])).await;
+    let app = app(issuer.uri()).await;
+    assert_eq!(issuer.fetches(), 0, "nothing is fetched at boot");
+
+    let admitted = app
+        .http()
+        .get("/posts/mine")
+        .header(
+            header::AUTHORIZATION,
+            format!(
+                "Bearer {}",
+                token(&ED25519.key, Algorithm::EdDSA, Some("ed"))
+            ),
+        )
+        .send()
+        .await;
+    admitted.assert_status_is_ok();
+    admitted.assert_text(REACHED).await;
+
+    let foreign = app
+        .http()
+        .get("/posts/mine")
+        .header(
+            header::AUTHORIZATION,
+            format!(
+                "Bearer {}",
+                token(&P256.key, Algorithm::ES256, Some("p256"))
+            ),
+        )
+        .send()
+        .await;
+    foreign.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+/// A set that cannot be had is the `503` an unreachable store is, on a
+/// `#[public]` route as on a guarded one: the token was never checked.
+#[tokio::test]
+async fn an_unreachable_set_answers_503_on_a_guarded_and_a_public_route() {
+    let logs = LogCapture::install();
+    let app = app(unreachable()).await;
+    let bearer = format!(
+        "Bearer {}",
+        token(&ED25519.key, Algorithm::EdDSA, Some("ed"))
+    );
+
+    for path in ["/posts/mine", "/posts/latest"] {
+        let refused = app
+            .http()
+            .get(path)
+            .header(header::AUTHORIZATION, bearer.as_str())
+            .send()
+            .await;
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            refused.0.headers().get(header::RETRY_AFTER).is_some(),
+            "{path}: when the next fetch may start"
+        );
+        assert!(
+            refused.0.headers().get(header::WWW_AUTHENTICATE).is_none(),
+            "{path}: no challenge blames the token"
+        );
+    }
+    let outages = logs.find(nest_rs_authn::TARGET, "guard denied the request");
+    assert_eq!(outages.len(), 2);
+    assert_eq!(outages[0].field("reason").as_deref(), Some("unavailable"));
+    assert!(
+        outages[0]
+            .field("error")
+            .is_some_and(|error| error.contains("could not be fetched")),
+        "{:?}",
+        outages[0].fields
+    );
+
+    app.http()
+        .get("/posts/latest")
+        .send()
+        .await
+        .assert_status_is_ok();
+}
+
+// The set behind the resource an app serves, as `OAuthResourceModule` binds it.
+
+/// What the resource binding names: the resource, and the authorization
+/// servers it advertises.
+const RESOURCE: &str = "https://api.example";
+const ADVERTISED: [&str; 2] = ["https://as-1.example", "https://as-2.example"];
+
+#[module(imports = [AuthnModule])]
+struct BoundJwksHost;
+
+/// A token from `iss`, when it names one, for `aud`, signed by the key the set
+/// publishes for `algorithm` under `kid`.
+fn minted(
+    (key, algorithm, kid): (&Signing, Algorithm, &str),
+    iss: Option<&str>,
+    aud: &str,
+) -> String {
+    let mut claims = serde_json::json!({
+        "sub": "ada",
+        "exp": get_current_timestamp() + 3600,
+        "aud": aud,
+    });
+    if let Some(iss) = iss {
+        claims["iss"] = iss.into();
+    }
+    signed(&key.key, algorithm, Some(kid), &claims)
+}
+
+/// RFC 9068 §4 over a JWK Set, the external issuer's case: bound to a
+/// resource, the verifier requires that resource as `aud` and an advertised
+/// authorization server as `iss`, for every algorithm the set serves.
+#[tokio::test]
+async fn a_bound_jwk_set_verifier_requires_the_resource_and_an_advertised_issuer() {
+    let issuer = Issuer::serving(Answer::keys(&[
+        jwk(&ED25519, Algorithm::EdDSA, "ed"),
+        jwk(&P256, Algorithm::ES256, "p256"),
+    ]))
+    .await;
+    let app = App::builder()
+        .provide(config(issuer.uri()))
+        .provide(nest_rs_authn::__private::ResourceBinding {
+            audience: RESOURCE.into(),
+            issuers: ADVERTISED.iter().map(|&issuer| issuer.to_owned()).collect(),
+        })
+        .module::<BoundJwksHost>()
+        .build()
+        .await
+        .expect("the bound module boots without fetching the set");
+    let jwt: Arc<JwtService> = app.container().get().expect("a JwtService");
+
+    for key in [
+        (&*ED25519, Algorithm::EdDSA, "ed"),
+        (&*P256, Algorithm::ES256, "p256"),
+    ] {
+        for advertised in ADVERTISED {
+            let claims = jwt
+                .verify::<Claims>(&minted(key, Some(advertised), RESOURCE))
+                .await
+                .unwrap_or_else(|refused| {
+                    panic!("{:?} from {advertised} must verify: {refused:?}", key.1)
+                });
+            assert_eq!(claims.sub, "ada");
+        }
+    }
+    let ed = (&*ED25519, Algorithm::EdDSA, "ed");
+    for (label, token) in [
+        (
+            "another resource",
+            minted(ed, Some(ADVERTISED[0]), "https://billing.example"),
+        ),
+        (
+            "an issuer the resource does not advertise",
+            minted(ed, Some("https://as-3.example"), RESOURCE),
+        ),
+        ("no issuer", minted(ed, None, RESOURCE)),
+    ] {
+        assert!(
+            matches!(
+                jwt.verify::<Claims>(&token).await,
+                Err(AuthError::InvalidToken)
+            ),
+            "a token from {label} must not verify"
+        );
+    }
+}

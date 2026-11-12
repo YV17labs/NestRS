@@ -1,298 +1,500 @@
 //! Request-scoped DataLoaders, discovered at link time.
 //!
 //! `#[dataloader]` generates one batching loader per method and submits a
-//! [`GraphqlLoaderRegistration`]. The loader is rebuilt per request and seeded into
-//! the GraphQL context by [`LoaderExtension`], where a `#[field_resolver]` reads it as
-//! `&DataLoader<…>`. Per-request build makes module import order irrelevant:
-//! the container is fully assembled when the request arrives.
+//! [`GraphqlLoaderRegistration`]; [`LoaderSeeds`] rebuilds it per request and
+//! seeds it into the GraphQL context for a field to read. A field whose
+//! resolver reads one — an exposed relation, a `#[field_resolver]`'s
+//! `&DataLoader<L>` parameter — submits a [`GraphqlRelationRegistration`], a
+//! root field's parameter a [`GraphqlRootLoaderRegistration`], so a served field
+//! whose loader's owner the app does not reach refuses the boot rather than
+//! every query selecting it.
+//!
+//! async-graphql runs every batch on a task of its own, so batches run in the
+//! `/graphql` mount's [`DetachedWork`], which the transport stops at the close
+//! of its shutdown window.
 
 use std::any::TypeId;
+use std::cell::RefCell;
+use std::mem::DropGuard;
 use std::sync::Arc;
 
-use async_graphql::async_trait::async_trait;
-use async_graphql::extensions::{
-    Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest,
+use async_graphql::dataloader::DataLoader;
+use async_graphql::{Context, ContextBase, Data, Request};
+use futures_util::future::Either;
+use nest_rs_core::__private::AnswerContext;
+use nest_rs_core::{
+    Container, Continuation, Failure, ReachableProviders, RequestContinuation,
+    UngatedDiscoveryError, anyhow,
 };
-use async_graphql::{Request, ServerResult};
-use nest_rs_core::{Container, ReachableProviders, TaskContext};
+use nest_rs_http::DetachedWork;
+use tracing::Instrument;
 
-/// One DataLoader registration. `owner_type_id` is the `TypeId` of the
-/// `#[dataloader]` impl's `Self`; when the owner is not in
-/// [`ReachableProviders`], `container.get::<Self>()` would panic at request
-/// time, so the seed is module-gated by the owner's reachability.
-#[doc(hidden)]
+use crate::context::held_by;
+use crate::error::{FieldFailure, UnseededLoader};
+use crate::operation::field_name;
+use crate::resolver::{ServedObjects, import_remedy};
+
+/// One DataLoader registration, module-gated by its owner's reachability:
+/// `container.get::<Owner>()` would panic at request time otherwise.
 pub struct GraphqlLoaderRegistration {
+    /// The `#[dataloader]` owner's type, read against the reachable providers.
     pub owner_type_id: fn() -> TypeId,
-    pub seed: fn(&Container, Request) -> Request,
+    /// Attach the owner's loaders to the request's data.
+    pub seed: fn(&Container, &DetachedWork, Request) -> Request,
 }
 
 inventory::collect!(GraphqlLoaderRegistration);
 
-/// A DataLoader batch's work, boxed for spawning on its own task.
-pub type GraphqlBatchFuture =
-    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
-
-/// Spawns a batch future, having re-established the request's ambient state
-/// around it (see [`GraphqlBatchContext`]).
-pub type GraphqlBatchSpawner = Box<dyn Fn(GraphqlBatchFuture) + Send + Sync>;
-
-/// Re-establishes per-request ambient state inside a DataLoader batch.
-/// async-graphql runs every batch on a spawned task, which starts with empty
-/// task-local storage — so the ambient executor + ability a request installs
-/// are gone by the time a batch loads, and a loader's `Repo` reads would run
-/// unscoped. `spawner` is called per request inside the operation's ambient
-/// scope so the implementor can snapshot that state into the returned
-/// spawner.
-///
-/// Bind with `providers = [MyBridge as dyn GraphqlBatchContext]`. With none
-/// registered, batches spawn bare on `tokio::spawn` — correct only for a
-/// loader that reaches no request-scoped state. A loader going through `Repo`
-/// (which every auto-emitted relation loader does) finds no ambient executor on
-/// that bare task and fails the whole relation before a single statement
-/// reaches the database, so the schema build warns when loaders exist and no
-/// context is bound.
-pub trait GraphqlBatchContext: Send + Sync + 'static {
-    /// Build a spawner that carries the current request's ambient executor +
-    /// ability into each batch it runs.
-    fn spawner(&self) -> GraphqlBatchSpawner;
+/// The provider a `#[dataloader]` loader batches through, which a field
+/// reading the loader needs the app to reach — said by a function, since the
+/// provider may be private where its loader is not.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is no loader `#[dataloader]` generated, so the boot cannot check that the app reaches what it batches through",
+    note = "write the batch as a method of a `#[dataloader]` impl block, and name the loader it generates, `{{Owner}}{{PascalMethod}}`"
+)]
+pub trait LoaderOwner {
+    /// The `#[dataloader]` impl block's own type, and its name as
+    /// `std::any::type_name` spells it.
+    fn owner() -> (TypeId, &'static str);
 }
 
-#[doc(hidden)]
-pub fn batch_spawner(container: &Container) -> GraphqlBatchSpawner {
-    let inner = match container.get_dyn::<dyn GraphqlBatchContext>() {
-        Some(ctx) => ctx.spawner(),
-        None => Box::new(|fut| {
-            tokio::spawn(fut);
-        }),
-    };
-    instrumented(inner)
+/// One field whose resolver reads a loader — an exposed relation, a
+/// `#[field_resolver]`'s `&DataLoader<L>` parameter — with the object it is
+/// served on: the schema build refuses it when that object is served and the
+/// loader's owner is not reached.
+pub struct GraphqlRelationRegistration {
+    /// The object the field is served on, as `std::any::type_name` spells it.
+    pub parent: fn() -> &'static str,
+    /// The field's GraphQL name.
+    pub field: &'static str,
+    /// What declares the field — the relation's entity, the field resolver's
+    /// parent — as `std::any::type_name` spells it.
+    pub entity: fn() -> &'static str,
+    /// The loader's owner type, read against the reachable providers, and its
+    /// name ([`LoaderOwner::owner`]).
+    pub owner: fn() -> (TypeId, &'static str),
+    /// Where the field is declared (`module_path!()`), which tells the app's
+    /// own declaration from a dependency's.
+    pub origin: &'static str,
 }
 
-/// Carry the request across the batch's task boundary, whatever the registered
-/// context does with the future otherwise.
-///
-/// A batch runs the loader's SQL, so its statements, its `Repo` denials and its
-/// errors are events of the request that asked for the field. Spawned bare they
-/// were rooted at nothing — the same defect MCP had across rmcp's spawn, at a
-/// site nobody looks at because the relation still resolves.
-///
-/// Both halves cross, and neither substitutes for the other — the reasoning is
-/// [`TaskContext`]'s, which is where it is written and which this calls.
-///
-/// Wrapping *here*, rather than asking every `GraphqlBatchContext` implementor
-/// to remember it, is the point: this is the one seam every batch goes through,
-/// bound or unbound.
-fn instrumented(inner: GraphqlBatchSpawner) -> GraphqlBatchSpawner {
-    Box::new(move |fut| {
-        inner(Box::pin(TaskContext::current().carry(fut)));
+inventory::collect!(GraphqlRelationRegistration);
+
+/// One root field whose method reads a loader — a `#[query]`, `#[mutation]`,
+/// `#[subscription]` or `#[entity]`'s `&DataLoader<L>` parameter. The schema
+/// serves it whenever the app reaches its resolver, and an `#[entity]` is no
+/// field of any object, so it is read against the resolver, never the objects.
+pub struct GraphqlRootLoaderRegistration {
+    /// The resolver declaring the field, read against the reachable providers,
+    /// and its name.
+    pub resolver: fn() -> (TypeId, &'static str),
+    /// The field as a chain's log line and a refusal name it (`query label`).
+    pub field: &'static str,
+    /// The loader's owner type, read against the reachable providers, and its
+    /// name ([`LoaderOwner::owner`]).
+    pub owner: fn() -> (TypeId, &'static str),
+    /// Where the field is declared (`module_path!()`), which tells the app's
+    /// own declaration from a dependency's.
+    pub origin: &'static str,
+}
+
+inventory::collect!(GraphqlRootLoaderRegistration);
+
+/// The request's `L` loader for the field `ctx` resolves. Its absence fails the
+/// field, never panics: the schema build refuses a field whose loader's owner
+/// the app does not reach, so only a schema no `GraphqlModule` built gets here,
+/// and the type goes on the operator's line, never to the client.
+pub fn seeded_loader<'c, L>(ctx: &Context<'c>) -> Result<&'c DataLoader<L>, FieldFailure>
+where
+    L: Send + Sync + 'static,
+{
+    ctx.data_opt::<DataLoader<L>>().ok_or_else(|| {
+        FieldFailure::unanswered(Failure::from(UnseededLoader {
+            field: field_name(ctx).to_owned(),
+            loader: std::any::type_name::<L>(),
+        }))
     })
 }
 
-/// Seeds every discovered DataLoader into each GraphQL request.
-/// The per-request seeding step of one reachable dataloader.
-type LoaderSeed = fn(&Container, Request) -> Request;
+/// The loaders a query's or a mutation's own `&DataLoader<L>` parameters read:
+/// the request's, or, where the field's unit holds what its request does not —
+/// an ability its own guards attached — loaders of the field's own, whose
+/// batches judge under it ([`batch_spawner`]).
+pub struct UnitLoaders(Option<Data>);
 
-pub(crate) struct LoaderExtensionFactory {
-    container: Container,
-    /// The reachable loaders, resolved **once** at schema build. Reachability
-    /// is decided by the access graph and frozen from then on, so re-walking
-    /// link-time inventory and re-testing the gate per request was pure
-    /// repetition of a boot-time answer.
-    seeds: Arc<[LoaderSeed]>,
-}
+impl UnitLoaders {
+    /// The loaders of the root field `ctx` resolves, read inside its unit.
+    pub fn of(ctx: &Context<'_>) -> Self {
+        if AnswerContext::capture().is_empty() {
+            return Self(None);
+        }
+        Self(LoaderSeeds::seed_own(ctx))
+    }
 
-impl LoaderExtensionFactory {
-    pub(crate) fn new(container: Container) -> Self {
-        warn_unreachable_loaders(&container);
-        let seeds = reachable_seeds(&container);
-        warn_missing_batch_context(&container, seeds.len());
-        Self { container, seeds }
+    /// The `L` loader the field reads, failing as [`seeded_loader`] does.
+    pub fn get<'a, L>(&'a self, ctx: &Context<'a>) -> Result<&'a DataLoader<L>, FieldFailure>
+    where
+        L: Send + Sync + 'static,
+    {
+        match self.0.as_ref().and_then(held_by::<DataLoader<L>>) {
+            Some(own) => Ok(own),
+            None => seeded_loader(ctx),
+        }
     }
 }
 
-/// Freeze the reachable loader seeds. A missing `ReachableProviders` (only a
-/// hand-rolled container can produce one) seeds nothing: a loader whose owner
-/// module is absent would panic on `container.get::<Owner>()`, so skipping is
-/// the fail-closed answer — and it is reported here, once, rather than on
-/// every request.
-fn reachable_seeds(container: &Container) -> Arc<[LoaderSeed]> {
-    let Some(reachable) = container.get::<ReachableProviders>() else {
-        tracing::warn!(
-            target: crate::TARGET,
-            hint = "build the schema via App::builder/App::new or seed ReachableProviders",
-            "loaders skipped: no ReachableProviders seeded"
-        );
-        return Arc::from(Vec::new());
-    };
-    inventory::iter::<GraphqlLoaderRegistration>()
-        .filter(|reg| reachable.0.contains(&(reg.owner_type_id)()))
-        .map(|reg| reg.seed)
-        .collect()
+/// The spawner a request's DataLoader batches run through, filed under
+/// `batches`.
+///
+/// async-graphql calls it on the resolver's task, inside `load_many`, so the
+/// capture taken there sees the request: the batch runs under what the request
+/// carries into a [`Batch`](Continuation::Batch) — its trace, the caller's
+/// ability, the pool rather than its transaction — whichever field triggered
+/// it. Built where the request seeds its loaders, before any field runs, it
+/// holds the span of the unit whose identity the batch carries — the request's,
+/// outside the operation's own — so the export files a batch where its lines
+/// do. A field whose unit holds what its request does not — an ability a root
+/// field's own guards attached — carries that too, merged over the request's
+/// ([`AnswerContext`]): a query's or a mutation's root field reads through
+/// loaders of its own there ([`UnitLoaders`], `LoaderSeeds::seed_own`), so no
+/// other root field's keys join its batches, and a subscription's operation
+/// holds one root field, another refused before it opens (`operation_units`).
+pub fn batch_spawner(
+    batches: &DetachedWork,
+) -> impl Fn(crate::BoxFuture<'static, ()>) + Send + Sync + 'static {
+    let batches = batches.clone();
+    let span = SEEDING
+        .with_borrow(Option::clone)
+        .unwrap_or_else(tracing::Span::current);
+    move |batch| {
+        let batch = AnswerContext::capture().scope(batch);
+        let batch = match RequestContinuation::capture(Continuation::Batch) {
+            Some(carried) => Either::Left(carried.scope(batch)),
+            None => Either::Right(batch),
+        };
+        let batch = nest_rs_core::panic::contain(batch.instrument(span.clone()));
+        let batches = batches.clone();
+        tokio::spawn(async move {
+            if let Some(Err(unwound)) = batches.run(batch).await {
+                nest_rs_core::contained_panic!(
+                    target: crate::TARGET,
+                    unwound.as_ref(),
+                    "a DataLoader batch panicked; the loads it served answer no value",
+                );
+            }
+        });
+    }
 }
 
-/// Boot-time visibility for the "linked but unreachable" case: a
-/// `#[dataloader]` links into the binary but its owner service's module is not
-/// imported by (or reachable from) this app's root. Such a loader is skipped
-/// per request in `LoaderExtension::prepare_request` — seeding it would panic
-/// on `container.get::<Owner>()` — so the skip must not be silent, per the
-/// "linked but unreachable ⇒ boot `tracing::warn`" norm. Emitted once, at
-/// schema build (`LoaderExtensionFactory::new`), not per request.
-///
-/// [`GraphqlLoaderRegistration`] carries only the owner's `TypeId`, not a name,
-/// so this reports the count; the per-relation name lands in the query-time
-/// resolver error (`nest-rs-resource-macros` emits `data_opt` + a named error,
-/// not the panicking `data_unchecked`).
-fn warn_unreachable_loaders(container: &Container) {
-    // No gate seeded (a hand-rolled container in a test): `reachable_seeds`
-    // warns once and seeds nothing — nothing to add here.
-    let Some(reachable) = container.get::<ReachableProviders>() else {
-        return;
-    };
+/// The per-request seeding step of one reachable dataloader.
+type LoaderSeed = fn(&Container, &DetachedWork, Request) -> Request;
+
+/// The span a request's batches run in, put in its data by the operation's
+/// unit before it opens its own: a batch carries its outermost unit's
+/// identity, so it runs in that unit's span, never the operation's.
+pub(crate) struct BatchSpan(pub(crate) tracing::Span);
+
+thread_local! {
+    /// The [`BatchSpan`] of the request whose loaders are being seeded, for the
+    /// spawners built there; set around the seeding alone, which is synchronous.
+    static SEEDING: RefCell<Option<tracing::Span>> = const { RefCell::new(None) };
+}
+
+/// What seeds every discovered DataLoader into each GraphQL request.
+pub(crate) struct LoaderSeeds {
+    container: Container,
+    /// The reachable loaders, resolved **once** at schema build.
+    seeds: Box<[LoaderSeed]>,
+    /// What the batches are carried by — the `/graphql` mount's.
+    batches: DetachedWork,
+}
+
+/// What the loader registry holds, as a refusal to read it ungated names it.
+const LOADERS: &str = "#[dataloader] method";
+
+impl LoaderSeeds {
+    /// The loaders the app reaches, or a refusal of a container no app sealed.
+    pub(crate) fn new(
+        container: Container,
+        batches: DetachedWork,
+    ) -> Result<Self, UngatedDiscoveryError> {
+        let seeds = reachable_seeds(&container)?;
+        Ok(Self {
+            container,
+            seeds,
+            batches,
+        })
+    }
+
+    /// A loader of each owner the app reaches, of the root field `ctx` resolves
+    /// alone, its batches in the span its request's run in: a request's loaders
+    /// are shared by every field reading through them, so a batch of theirs would
+    /// join the keys of root fields whose units hold different abilities. `None`
+    /// in a schema no `GraphqlModule` built, which seeds none.
+    pub(crate) fn seed_own<T>(ctx: &ContextBase<'_, T>) -> Option<Data> {
+        let seeds = ctx.data_opt::<Arc<Self>>()?;
+        let mut request = Request::new("");
+        if let Some(span) = ctx.data_opt::<BatchSpan>() {
+            request = request.data(BatchSpan(span.0.clone()));
+        }
+        Some(seeds.seed(request).data)
+    }
+
+    /// `request`, holding a loader of each owner the app reaches.
+    pub(crate) fn seed(&self, mut request: Request) -> Request {
+        let held = held_by::<BatchSpan>(&request.data).map(|held| held.0.clone());
+        // An ancestor of the current span cannot be entered again, so the
+        // spawners read it off the seeding instead.
+        let _seeding = DropGuard::new(SEEDING.replace(held), |outer| SEEDING.set(outer));
+        for seed in self.seeds.iter() {
+            request = seed(&self.container, &self.batches, request);
+        }
+        request
+    }
+}
+
+/// Freeze the seeds of the loaders the app reaches.
+fn reachable_seeds(container: &Container) -> Result<Box<[LoaderSeed]>, UngatedDiscoveryError> {
+    let reachable = ReachableProviders::of(container, LOADERS)?;
+    Ok(inventory::iter::<GraphqlLoaderRegistration>()
+        .filter(|reg| reachable.reaches((reg.owner_type_id)()))
+        .map(|reg| reg.seed)
+        .collect())
+}
+
+/// Refuse every field the schema serves reading a loader whose owner the app
+/// does not reach — each query selecting one would fail — naming the field,
+/// what declares it and the module to import; then count at `warn` the
+/// unreached loaders no served field reads.
+pub(crate) fn check_served_relations(
+    container: &Container,
+    served: &ServedObjects,
+) -> anyhow::Result<()> {
+    let reachable = ReachableProviders::of(container, LOADERS)?;
+    let mut unreached: Vec<String> = inventory::iter::<GraphqlRelationRegistration>()
+        .filter(|relation| !reachable.reaches((relation.owner)().0))
+        .filter_map(|relation| {
+            let parent = served.serving((relation.parent)(), relation.field)?;
+            Some(unreached_relation(container, relation, parent))
+        })
+        .collect();
+    unreached.extend(
+        inventory::iter::<GraphqlRootLoaderRegistration>()
+            .filter(|read| {
+                reachable.reaches((read.resolver)().0) && !reachable.reaches((read.owner)().0)
+            })
+            .map(|read| unreached_root_read(container, read)),
+    );
+    if !unreached.is_empty() {
+        unreached.sort_unstable();
+        anyhow::bail!(
+            "a served field reads a loader this app does not reach, so every query \
+             selecting it would fail: {}",
+            unreached.join("; ")
+        );
+    }
+    warn_unreachable_loaders(&reachable);
+    Ok(())
+}
+
+/// What a refusal says of one field of the object `parent`: its name, what
+/// declares it, the loader's owner and the import its cause prescribes.
+fn unreached_relation(
+    container: &Container,
+    relation: &GraphqlRelationRegistration,
+    parent: &str,
+) -> String {
+    let (owner_type, owner) = (relation.owner)();
+    let remedy = import_remedy(container, relation.origin, owner_type, parent);
+    format!(
+        "`{parent}.{}` (declared on `{}`) reads a loader of `{owner}`: {remedy}",
+        relation.field,
+        (relation.entity)(),
+    )
+}
+
+/// What a refusal says of one root field: its name, the resolver declaring it,
+/// the loader's owner and the import its cause prescribes.
+fn unreached_root_read(container: &Container, read: &GraphqlRootLoaderRegistration) -> String {
+    let (owner_type, owner) = (read.owner)();
+    let (_, resolver) = (read.resolver)();
+    let remedy = import_remedy(container, read.origin, owner_type, resolver);
+    format!(
+        "`{}` (declared on `{resolver}`) reads a loader of `{owner}`: {remedy}",
+        read.field,
+    )
+}
+
+/// Warn once at schema build about `#[dataloader]`s linked into the binary
+/// whose owner's module is unreachable, which no served field reads. Only a
+/// count: a registration carries the owner's `TypeId`, not a name.
+fn warn_unreachable_loaders(reachable: &ReachableProviders) {
     let skipped = inventory::iter::<GraphqlLoaderRegistration>()
-        .filter(|reg| !reachable.0.contains(&(reg.owner_type_id)()))
+        .filter(|reg| !reachable.reaches((reg.owner_type_id)()))
         .count();
     if skipped > 0 {
         tracing::warn!(
             target: crate::TARGET,
             count = skipped,
-            hint = "import the modules that provide these loaders; relation fields backed by them error at query time",
+            hint = "no field this schema serves reads them; import the modules that provide them if one should",
             "dataloaders linked but unreachable",
         );
     }
 }
 
-/// Warn once at schema build when loaders are seeded but nothing re-installs
-/// the request's ambient state around their batches.
-///
-/// This is the boot signal a whole class of failure had none of. Every
-/// auto-emitted relation loader reads through `Repo`, and `Repo` runs against
-/// the *ambient* executor — which a bare `tokio::spawn` batch does not have.
-/// The result was a relation that returned `database error` with no `DbErr`
-/// behind it and, tellingly, **no SQL reaching the database at all**: the query
-/// failed before execution, on a wiring gap nothing announced. The flagship
-/// "relations resolve themselves" feature looked broken with nothing to grep.
-fn warn_missing_batch_context(container: &Container, seeded: usize) {
-    const HINT: &str = "list `LoaderScope as dyn GraphqlBatchContext` in a reachable module \
-         (`nestrs g graphql` writes it into authz/graphql/) — without it every batch runs on a \
-         task with no ambient executor, and each relation field answers with an error before \
-         any SQL is issued";
-    if seeded == 0 || container.get_dyn::<dyn GraphqlBatchContext>().is_some() {
-        return;
-    }
-    tracing::warn!(
-        target: crate::TARGET,
-        loaders = seeded,
-        hint = HINT,
-        "dataloaders seeded with no batch context",
-    );
-}
-
-impl ExtensionFactory for LoaderExtensionFactory {
-    fn create(&self) -> Arc<dyn Extension> {
-        Arc::new(LoaderExtension {
-            container: self.container.clone(),
-            seeds: Arc::clone(&self.seeds),
-        })
-    }
-}
-
-struct LoaderExtension {
-    container: Container,
-    seeds: Arc<[LoaderSeed]>,
-}
-
-#[async_trait]
-impl Extension for LoaderExtension {
-    async fn prepare_request(
-        &self,
-        ctx: &ExtensionContext<'_>,
-        mut request: Request,
-        next: NextPrepareRequest<'_>,
-    ) -> ServerResult<Request> {
-        for seed in self.seeds.iter() {
-            request = seed(&self.container, request);
-        }
-        next.run(ctx, request).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use async_graphql::registry::Registry;
 
     use super::*;
 
-    // Falling back to bare `tokio::spawn` is the documented "no row-level
-    // security" path. Pin that the spawner actually runs the future end-to-end
-    // when no `GraphqlBatchContext` provider is registered.
-    /// A container with no `ReachableProviders` seeds **no** loaders — the
-    /// fail-closed answer, since resolving a loader whose owner module is
-    /// absent would panic on `container.get::<Owner>()`.
-    ///
-    /// What makes the event load-bearing is that nothing else changes: the
-    /// schema builds, every query works, and only a relation field backed by a
-    /// loader errors — at query time, in production, to a client. This line is
-    /// emitted once at build and carries the two ways to fix it.
     #[test]
-    fn a_container_with_no_reachability_says_it_seeded_no_loaders() {
-        let logs = nest_rs_testing::LogCapture::install();
-        // Hand-rolled: `App::builder`/`App::new` always seed `ReachableProviders`,
-        // so this is the one shape that reaches the branch.
-        let seeds = reachable_seeds(&Container::builder().build());
-        assert!(seeds.is_empty(), "nothing is seeded without reachability");
+    fn loaders_seeded_over_a_container_no_app_sealed_are_refused_naming_their_reader() {
+        let by_hand = Container::builder().build().expect("the container builds");
 
-        let event = logs.expect_one(
-            "nest_rs::graphql",
-            "loaders skipped: no ReachableProviders seeded",
-        );
-        assert_eq!(event.level, "warn");
-        assert!(
-            event
-                .field("hint")
-                .is_some_and(|h| h.contains("App::builder")),
-            "the remedy is the point of the line, got {:?}",
-            event.fields,
-        );
+        let Err(ungated) = reachable_seeds(&by_hand) else {
+            panic!("an ungated discovery is refused, never served empty");
+        };
+
+        assert_eq!(ungated.reader, "#[dataloader] method");
     }
 
-    /// The owner of a loader no module in the app provides. `inventory` is
-    /// link-time, so this registration is in the test binary whether a given
-    /// test wants it or not — which *is* the situation the event reports, and
-    /// it is inert: `reachable_seeds` filters it out of every seed list.
+    /// The owner of a loader no module provides. Link-time, so it is in every
+    /// test of this binary, inert: `reachable_seeds` filters it out.
     struct AbsentOwner;
 
     inventory::submit! {
         GraphqlLoaderRegistration {
             owner_type_id: || TypeId::of::<AbsentOwner>(),
-            seed: |_, request| request,
+            seed: |_, _, request| request,
         }
     }
 
-    /// `ReachableProviders` seeded with exactly `types` — the shape a real boot
-    /// leaves behind, as opposed to the no-gate shape above.
+    #[derive(async_graphql::SimpleObject)]
+    struct Shelf {
+        owner: i32,
+    }
+
+    inventory::submit! {
+        GraphqlRelationRegistration {
+            parent: std::any::type_name::<Shelf>,
+            field: "owner",
+            entity: || "shelves::Entity",
+            owner: || (TypeId::of::<AbsentOwner>(), "AbsentOwner"),
+            origin: module_path!(),
+        }
+    }
+
+    /// An unrelated object spelling the relation's object's GraphQL name, as a
+    /// binary links objects its schema does not all serve.
+    #[derive(async_graphql::SimpleObject)]
+    #[graphql(name = "Shelf")]
+    struct NamesakeShelf {
+        owner: i32,
+    }
+
+    /// What a schema serving only `T` serves.
+    fn serving<T: async_graphql::OutputType>() -> ServedObjects {
+        let mut registry = Registry::default();
+        T::create_type_info(&mut registry);
+        ServedObjects(registry)
+    }
+
+    #[tokio::test]
+    async fn a_field_reading_a_loader_its_request_holds_no_seed_of_fails_and_tells_the_operator() {
+        use crate::root_fields::RootFields;
+
+        struct Unseeded;
+
+        impl async_graphql::dataloader::Loader<i32> for Unseeded {
+            type Value = i32;
+            type Error = std::convert::Infallible;
+
+            async fn load(
+                &self,
+                _: &[i32],
+            ) -> Result<std::collections::HashMap<i32, i32>, Self::Error> {
+                Ok(std::collections::HashMap::new())
+            }
+        }
+
+        struct Query;
+
+        #[async_graphql::Object]
+        impl Query {
+            async fn shelf(&self, ctx: &Context<'_>) -> async_graphql::Result<i32> {
+                seeded_loader::<Unseeded>(ctx).map_err(FieldFailure::into_answer)?;
+                Ok(1)
+            }
+        }
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let schema = async_graphql::Schema::new(
+            Query,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        );
+
+        let answer = schema.execute("{ shelf }").await;
+
+        assert_eq!(
+            answer.errors[0].message,
+            nest_rs_core::OPAQUE_CLIENT_MESSAGE
+        );
+        // What the operation's unit does with its answer, which a bare schema has none of.
+        crate::error::file_kept(&answer.errors, Some("query"), &RootFields::default());
+        let filed = logs.expect_one(crate::TARGET, "graphql operation failed");
+        assert_eq!(filed.level, "error");
+        let said = filed.field("error").unwrap_or_default();
+        assert!(
+            said.contains("`shelf`") && said.contains("Unseeded"),
+            "the operator reads the field and the loader: {said}",
+        );
+    }
+
+    #[test]
+    fn a_served_relation_whose_loader_owner_is_unreached_is_refused_naming_the_field() {
+        let served = serving::<Shelf>();
+
+        let refused = check_served_relations(&reached(&[]), &served)
+            .expect_err("every query selecting `owner` would fail")
+            .to_string();
+
+        assert!(
+            refused.contains(
+                "`Shelf.owner` (declared on `shelves::Entity`) reads a loader of `AbsentOwner`"
+            ),
+            "{refused}"
+        );
+        check_served_relations(&reached(&[TypeId::of::<AbsentOwner>()]), &served)
+            .expect("its owner reached, the relation is served");
+    }
+
+    #[test]
+    fn an_object_of_the_same_graphql_name_serves_no_relation_of_another() {
+        check_served_relations(&reached(&[]), &serving::<NamesakeShelf>())
+            .expect("the schema serves its namesake, whose `owner` reads no loader");
+    }
+
+    /// `ReachableProviders` seeded with exactly `types`.
     fn reached(types: &[TypeId]) -> Container {
         Container::builder()
-            .provide(ReachableProviders(types.iter().copied().collect()))
+            .provide(nest_rs_core::__private::reachable_providers(
+                types.iter().copied(),
+            ))
             .build()
+            .expect("the container builds")
     }
 
     #[test]
     fn a_loader_whose_owner_module_is_not_imported_is_counted_at_boot() {
-        // The failure this exists for is silent by construction: the schema
-        // builds, every query answers, and only a relation field backed by the
-        // skipped loader errors — at query time, to a client, in an app whose
-        // boot said nothing. `#[dataloader]` on a service in a feature crate
-        // that this binary links but does not import is all it takes.
         let logs = nest_rs_testing::LogCapture::install();
-        warn_unreachable_loaders(&reached(&[]));
+        check_served_relations(&reached(&[]), &ServedObjects(Registry::default()))
+            .expect("no served field reads it");
 
         let event = logs.expect_one("nest_rs::graphql", "dataloaders linked but unreachable");
         assert_eq!(event.level, "warn");
-        // At least one, not exactly one: `inventory` is link-time, so the count
-        // is a property of the whole test binary. Pinning it to `1` would break
-        // the day this crate gains a second `#[cfg(test)]` registration or its
-        // first unit test of a real `#[dataloader]` — silently, on a number
-        // that was never this test's subject.
+        // At least one: the link-time count is a property of the whole test binary.
         let counted: usize = event
             .field("count")
             .and_then(|c| c.parse().ok())
@@ -311,132 +513,46 @@ mod tests {
 
     #[test]
     fn a_loader_whose_owner_is_reachable_is_not_reported() {
-        // The other direction, and the one that keeps the count honest: every
-        // app that works links loaders, so a check reading the registry alone
-        // would warn on all of them.
         let logs = nest_rs_testing::LogCapture::install();
         let container = reached(&[TypeId::of::<AbsentOwner>()]);
-        warn_unreachable_loaders(&container);
+        check_served_relations(&container, &ServedObjects(Registry::default()))
+            .expect("no served relation is unreached");
         logs.expect_none("nest_rs::graphql", "dataloaders linked but unreachable");
-        assert!(
-            !reachable_seeds(&container).is_empty(),
-            "and it is seeded rather than skipped",
-        );
+        let seeds = reachable_seeds(&container).expect("the set is seeded");
+        assert!(!seeds.is_empty(), "and it is seeded rather than skipped");
     }
+
+    /// A value the triggering unit carries, read back by the batch.
+    #[derive(Debug, PartialEq)]
+    struct Caller(&'static str);
+
+    impl nest_rs_core::AmbientValue for Caller {}
 
     #[tokio::test]
-    async fn batch_spawner_without_a_context_runs_the_future_on_tokio_spawn() {
-        let container = Container::builder().build();
-        let spawner = batch_spawner(&container);
-        let ran = Arc::new(AtomicUsize::new(0));
-        let r = ran.clone();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test's receiver may already be gone"
+    )]
+    async fn a_batch_runs_under_what_its_unit_carried_when_it_was_spawned() {
+        let spawner = batch_spawner(&DetachedWork::new());
+        let correlation = nest_rs_core::Correlation::minted(None);
+        let trace = correlation.trace_id();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        spawner(Box::pin(async move {
-            r.fetch_add(1, Ordering::SeqCst);
-            let _ = tx.send(());
-        }));
-        rx.await.expect("spawned future resolves");
-        assert_eq!(ran.load(Ordering::SeqCst), 1);
-    }
-
-    // A registered `GraphqlBatchContext` provider must take over from the default
-    // spawner. The trait is intentionally minimal so a bridge can install
-    // ambient state around the future; verifying the dispatch (not just the
-    // shape) is the regression check that matters.
-    struct CountingContext {
-        count: Arc<AtomicUsize>,
-    }
-
-    impl GraphqlBatchContext for CountingContext {
-        fn spawner(&self) -> GraphqlBatchSpawner {
-            let count = self.count.clone();
-            Box::new(move |fut| {
-                count.fetch_add(1, Ordering::SeqCst);
-                tokio::spawn(fut);
+        nest_rs_core::with_request_scope(None, correlation, async {
+            nest_rs_core::with_ambient(Arc::new(Caller("alice")), async {
+                spawner(Box::pin(async move {
+                    let _ = tx.send((
+                        nest_rs_core::current_trace_id(),
+                        nest_rs_core::ambient::<Caller>(),
+                    ));
+                }));
             })
-        }
-    }
+            .await;
+        })
+        .await;
 
-    #[tokio::test]
-    async fn batch_spawner_routes_through_a_registered_batch_context() {
-        let count = Arc::new(AtomicUsize::new(0));
-        let ctx: Arc<dyn GraphqlBatchContext> = Arc::new(CountingContext {
-            count: count.clone(),
-        });
-        let container = Container::builder().provide_dyn(ctx).build();
-
-        let spawner = batch_spawner(&container);
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        spawner(Box::pin(async move {
-            let _ = tx.send(());
-        }));
-        rx.await.expect("spawned future resolves");
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            1,
-            "the bridge's spawner must wrap the future, not be bypassed",
-        );
-    }
-}
-
-#[cfg(test)]
-mod batch_context_warning {
-    use nest_rs_testing::LogCapture;
-
-    use super::*;
-
-    struct Bridge;
-
-    impl GraphqlBatchContext for Bridge {
-        fn spawner(&self) -> GraphqlBatchSpawner {
-            Box::new(|fut| {
-                tokio::spawn(fut);
-            })
-        }
-    }
-
-    const EVENT: &str = "dataloaders seeded with no batch context";
-
-    /// The wiring gap behind "relations resolve themselves, except they return
-    /// `database error`". Every auto-emitted relation loader reads through
-    /// `Repo`, `Repo` runs against the *ambient* executor, and a batch spawned
-    /// bare has none — so the relation failed before a single statement reached
-    /// the database, with nothing at `RUST_LOG=trace` to point at the cause.
-    /// Schema build now names it, and names the binding that fixes it.
-    #[test]
-    fn seeded_loaders_without_a_batch_context_warn_at_schema_build() {
-        let logs = LogCapture::install();
-        warn_missing_batch_context(&Container::builder().build(), 3);
-
-        let event = logs.expect_one("nest_rs::graphql", EVENT);
-        assert_eq!(event.level, "warn");
-        assert_eq!(event.field("loaders").as_deref(), Some("3"));
-        assert!(
-            event
-                .field("hint")
-                .is_some_and(|h| h.contains("LoaderScope as dyn GraphqlBatchContext")),
-            "the hint names the binding: {event:#?}",
-        );
-    }
-
-    /// Bound, and the warning goes away — otherwise it would be noise every
-    /// correctly-wired app has to learn to ignore.
-    #[test]
-    fn a_bound_batch_context_is_silent() {
-        let container = Container::builder()
-            .provide_dyn::<dyn GraphqlBatchContext>(Arc::new(Bridge))
-            .build();
-        let logs = LogCapture::install();
-        warn_missing_batch_context(&container, 3);
-        logs.expect_none("nest_rs::graphql", EVENT);
-    }
-
-    /// An app with no loaders at all needs no context — a schema of plain
-    /// resolvers must boot silent.
-    #[test]
-    fn no_loaders_means_no_warning() {
-        let logs = LogCapture::install();
-        warn_missing_batch_context(&Container::builder().build(), 0);
-        logs.expect_none("nest_rs::graphql", EVENT);
+        let (seen_trace, seen_caller) = rx.await.expect("the batch runs");
+        assert_eq!(seen_trace, Some(trace), "the batch keeps its unit's trace");
+        assert_eq!(seen_caller.as_deref(), Some(&Caller("alice")));
     }
 }

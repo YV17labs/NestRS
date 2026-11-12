@@ -1,0 +1,204 @@
+---
+title: What's new in 7.0
+description: "What NestRS 7.0 brings, part by part, and why every 7.x release builds on it without breaking what you wrote."
+---
+
+NestRS 7.0 is the foundation the next versions build on. Each concern a backend
+repeats has one way to be declared, one contract on every edge, and a boot that
+refuses it when it is wired wrong. What you write stays business logic, and no
+7.x release breaks it.
+
+```rust title="crates/features/src/posts/http/controller.rs (from the demo, abridged)"
+#[post("/{id}/publish")]
+#[authorize(Update, bind = PostsService)]
+#[use_guards(PostAuthorGuard)]
+// …
+async fn publish(&self, post: Authorized<Update, PostEntity>) -> Result<Json<Post>, PostError> {
+    Ok(Json(self.svc.publish(post.into_inner()).await?))
+}
+```
+
+```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo)"
+#[mutation]
+#[authorize(Update, bind = PostsService)]
+#[use_guards(PostAuthorGuard)]
+async fn publish_post(&self, post: Authorized<Update, PostEntity>) -> Result<Post, PostError> {
+    self.svc.publish(post.into_inner()).await
+}
+```
+
+One operation, two edges, the same posture and guard. Each loads the post under
+the caller's `Update` grant, runs the same guard, and commits or rolls back on
+its own answer. A WebSocket message and an MCP tool take `#[authorize]` and
+`#[use_guards]` too; taking one payload rather than an id, they name the
+subject without `bind` and load the row through the service's `access`.
+
+## Secure by default, row by row
+
+Security is what you do not write. Once the [security modules](/security/) are
+imported, every `Repo` read is filtered in SQL by the caller's ability, and
+every by-id write checks access first. An HTTP route or a WebSocket message no
+guard covers refuses the boot unless it says `#[public]`, and a GraphQL
+operation declaring no posture does not compile.
+
+Each row a reply carries is judged where `#[expose]`'s conversion builds it:
+a column the caller's grant withholds reads `null`, a row their grants refuse
+answers no one, and only the columns `#[expose]` lists exist on the wire. A
+handler answering a raw `Model` does not compile, and a value your body copies
+out of a column is its own visible line. [Response
+masking](/security/authorization/response-masking/) shows the judged row on
+every edge.
+
+What fails stays quiet about what it saw. A value held as `Secret` prints and
+serializes `<redacted>`, an error nobody meant for the client is answered
+opaquely while its whole chain is logged, and no refusal quotes what the client
+sent. A process that declares no environment runs as production.
+
+## A boot that refuses what would fail later
+
+A wiring mistake fails the start, never the first request. A provider
+injecting what its module cannot reach stops the boot, and so does a listed
+provider that cannot be built. So does a queue with no backend, or a GraphQL
+field whose resolver or loader the app does not reach. A `#[crud]` host, and a
+route, field or MCP resource loading a bound subject, stop the boot too when
+nothing binds the unit of work their `Repo` calls need. Each refusal names
+what is missing and the line that fixes it. The
+[access graph](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot)
+is that check.
+
+Configuration is read the same way. A duration outside its range fails the
+boot, whether the environment or your code set it, and a variable nothing reads
+is named at boot, beside the nearest name the binary does read. Every resource
+the framework opens — the pool, each Valkey, the store — is proved before
+anything serves, and the app turns ready only once every transport listens.
+
+## One way to declare each thing
+
+Each concern has one spelling, so a reader knows where to look and a reviewer
+has one thing to check. A module is imported bare to read its environment, and
+`for_root` only pins a value; a config's keys are its fields, and every
+variable can also be read from a file, the `_FILE` spelling secrets use.
+[Pinning a config](/configuration/pinning/#one-seam-per-module) holds that seam.
+
+Layers bind with the same attributes on every decorator pair —
+`#[use_guards]`, `#[use_pipes]`, `#[use_interceptors]`,
+`#[use_exception_filters]` — and one a site would never run is a compile error
+saying why. `#[authorize]` is one class gate on every edge, and a
+domain error maps to the wire once, through `ToProblem`. A second Valkey is a
+type of its own, `RedisConnection<Cache>`, never a string key. The
+[architecture page](/architecture/) gives every module, file and type its one
+name.
+
+## Every edge and every backend, whole
+
+One pipeline dispatches every unit: an HTTP request, a GraphQL field, a
+WebSocket message, an MCP tool call, a job's attempt, a scheduled tick and an
+event listener call. Each runs the same stages — the guards where a caller
+exists, then pipes, interceptors and exception filters, each layer once —
+inside a unit of work that commits on its own outcome. [The request
+lifecycle](/fundamentals/request-lifecycle/) is that contract, stage by stage.
+
+A backend NestRS supports, it supports in every shape its latest version runs
+in production. Valkey runs standalone, under Sentinel or as a Cluster, and the
+queue, the rate limiter and the schedule lock each run on all three, each on
+TLS — [Valkey topologies](/queue/topologies/). Postgres is reached through
+SeaORM, and object storage through one URL whose scheme picks the store.
+
+## TLS on every connection
+
+A connection the framework opens is TLS it verifies, or plaintext you wrote on
+purpose — never encrypted without checking. Postgres connects `verify-full`
+unless its URL says `sslmode=disable`, a `rediss://` URL checks the server's
+certificate for its host, and a setting that would encrypt without verifying —
+`sslmode=require`, `#insecure` — fails the boot. A deployed profile says each
+plaintext opening at `warn`.
+
+Each client trusts the system's authorities, or a private one you name in its
+own setting: `TLS_CA_CERT` for Valkey, storage, the JWK Set and the OAuth
+client, the URL's `sslrootcert` for Postgres, which keeps the public
+authorities sqlx compiles in beside either. Valkey, the JWK Set client and the
+OAuth client present a certificate of their own from `TLS_CERT` and
+`TLS_KEY`, and Postgres from the URL's `sslcert` and `sslkey`. The HTTP server
+serves TLS itself and picks up a renewed certificate file without a restart.
+The
+[threat model](/security/threat-model/#every-client-the-framework-opens-verifies-tls)
+lists every client and what it trusts; each has a test that dials a server it
+must not trust and sees it refused.
+
+## Guards and the authorization model
+
+Posture is a visible line. `#[use_guards]` names what runs, and
+`#[authorize(Action, Subject)]` or `#[public]` says what a unit opens — never a
+parameter type, a service method or a helper. A guard is written once and bound
+wherever a caller reaches a unit; it declares the units it checks, and binding
+it on a site whose units it does not declare does not compile — [Guards beyond
+HTTP](/fundamentals/guards-beyond-http/).
+
+Authorization is one policy. You write one `AbilityFactory`, and the framework
+reads the ability it builds per request in three places: the query filter, the
+by-id binding, and each row a reply carries. One predicate serves all three, so
+the SQL and the in-memory check never disagree. A scope is declared once, as a
+`Scope`; a capability no table holds is a `#[subject]`; and a refusal reads the
+same on every edge, in RFC 6750's words when a token lacks a scope.
+[Authorization](/security/authorization/) starts there.
+
+## Generators that wire what they write
+
+`nestrs new` scaffolds a workspace — your domain in a shared `features` crate,
+thin apps under `apps/`. `nestrs g` adds to it: a resource from its columns,
+an entity, a migration, the auth adapter, or one more edge on a port you
+already have.
+
+```bash
+nestrs g resource posts title:string body:text published_at:datetime:nullable
+```
+
+Each generator wires what it wrote into the app that serves it, and every
+route, operation and socket it writes is guarded: `#[public]` is a line you
+add. The CLI's own suite replays the tutorial's commands as the pages print
+them, so what the docs tell you to type runs. [Generators](/cli/generators/)
+lists each one.
+
+## Performance, measured
+
+HTTP runs on nestrs's own accept loop over hyper, with a cap on connections and
+on HTTP/2 streams. Decorators expand at compile time into plain Rust, and a
+capability you leave off is code you never compile: a headless worker links no
+HTTP stack.
+
+Against NestJS 12.4 on `node:http`, its fastest adapter, the same service on
+NestRS answers twice the requests on a guarded route, one core each. Its p99 is
+nearly three times lower, it idles in 6 MB where Node takes about 100, and it
+answers its first request about 10 ms after it starts. The
+[benchmarks](/benchmarks/) hold every tier, the protocol, and the one command
+that replays it on your hardware.
+
+## What 7.x keeps
+
+The foundation comes with a promise: no 7.x release breaks what you build on.
+Your code compiles, your configuration boots, and your log filters and alerts
+keep matching. The libraries you write in your own code — `sea-orm`,
+`async-graphql`, `rmcp`, `validator` — keep their majors for the whole line.
+A minor adds, a patch fixes, and a break waits for 8.0. The one exception is a
+security fix refusing an insecure configuration, which the upgrading guide
+names with the secure one to write.
+
+What comes next builds on the same seams. A driver for another backend, a
+transport or a package of your own plugs in where the framework's own modules
+do — [Extending NestRS](/extending/) is that contract, and the [semver
+policy](/semver/) says exactly what 7.x covers.
+
+## Limits
+
+7.0 supports the most-used backends whole, not every backend: Postgres for the
+database, Valkey for queues, shared rate limits and schedule locks, and S3 or a
+server speaking its API for files. CI proves Linux on x86_64; macOS runs as a
+development host, and no job builds or runs Windows.
+
+## Going further
+
+- [Upgrading from 6.x](/upgrading/) — the order that moves a 6.1 project to
+  7.0.
+- [Getting started](/getting-started/) — install the CLI and run your first
+  app.
+- [Why NestRS](/why/) — the thesis this foundation serves.

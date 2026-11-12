@@ -1,0 +1,8 @@
+error: #[output] takes a struct or an enum, and this is a union: it derives `Serialize` and `JsonSchema`, which describe a value an edge sends
+  --> tests/integration/diagnostics/core/output_on_a_union.rs:7:1
+   |
+ 7 | / pub union Reading {
+ 8 | |     raw: u32,
+ 9 | |     scaled: f32,
+10 | | }
+   | |_^

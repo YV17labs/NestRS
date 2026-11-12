@@ -1,99 +1,673 @@
-//! Covers `src/container.rs` — the registrations the container accepts while
-//! saying it did something surprising.
-//!
-//! Two shapes, and the difference is deliberate. A duplicate *unkeyed* provider
-//! is a boot error: nothing can distinguish the two, so one of them was going to
-//! be silently unreachable. A duplicate *keyed* one, and a scope that changes
-//! under a type, are legal — an app may genuinely want to replace a keyed
-//! binding — so they warn and continue.
-//!
-//! Which makes the event the whole safety net: after it, resolution answers
-//! normally and the losing registration is simply gone. Nothing read these, so
-//! a module quietly shadowing another module's provider was invisible.
+//! Covers `src/container.rs` — one type has one provider whatever its scope, so
+//! a second registration fails the boot naming both; `Foo as dyn Trait` holds
+//! one `Foo` under its own type and each trait; a container built by hand
+//! refuses at `build` what the seal reads off its modules.
 
-use nest_rs_core::target;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::Container;
-use nest_rs_testing::LogCapture;
+use nest_rs_core::{
+    App, Collecting, Container, ContainerBuilder, ContainerError, DuplicateProviderError, Module,
+    ProviderScope, Registering, UnbuiltCause, UnbuiltProviderError, injectable, module,
+};
 
-#[derive(Debug, PartialEq)]
-struct Pool(&'static str);
+fn duplicate(boot: anyhow::Result<App>) -> DuplicateProviderError {
+    let Err(refused) = boot else {
+        panic!("one registration would be dropped for the other");
+    };
+    refused
+        .downcast::<DuplicateProviderError>()
+        .unwrap_or_else(|refused| panic!("not the duplicate: {refused:#}"))
+}
+
+/// The duplicate `boot` refused, checked to name `type_name` and both sites, in
+/// its fields and in its sentence.
+fn names_both(
+    boot: anyhow::Result<App>,
+    type_name: &str,
+    first: &str,
+    second: &str,
+) -> DuplicateProviderError {
+    let duplicate = duplicate(boot);
+    let sentence = duplicate.to_string();
+    assert!(duplicate.type_name.contains(type_name), "{sentence}");
+    assert_eq!(duplicate.first, first, "{sentence}");
+    assert_eq!(duplicate.second, second, "{sentence}");
+    assert!(
+        sentence.contains(&format!("registered by {first} and again by {second}")),
+        "{sentence}"
+    );
+    duplicate
+}
+
+#[injectable(scope = request)]
+#[derive(Default)]
+struct PerRequest;
+
+#[module(providers = [PerRequest])]
+struct FirstRequestModule;
+
+#[module(providers = [PerRequest])]
+struct SecondRequestModule;
+
+#[module(imports = [FirstRequestModule, SecondRequestModule])]
+struct TwoRequestScopedRoot;
+
+#[tokio::test]
+async fn a_request_scoped_provider_registered_twice_fails_the_boot_naming_both() {
+    let duplicate = names_both(
+        App::builder()
+            .module::<TwoRequestScopedRoot>()
+            .build()
+            .await,
+        "PerRequest",
+        "`FirstRequestModule` at `imports[0]` of `TwoRequestScopedRoot`",
+        "`SecondRequestModule` at `imports[1]` of `TwoRequestScopedRoot`",
+    );
+    assert_eq!(
+        duplicate.scopes, None,
+        "one scope says no scopes: {duplicate}"
+    );
+}
+
+#[injectable(scope = transient)]
+#[derive(Default)]
+struct Rebuilt;
+
+#[module(providers = [Rebuilt])]
+struct FirstTransientModule;
+
+#[module(providers = [Rebuilt])]
+struct SecondTransientModule;
+
+#[module(imports = [FirstTransientModule, SecondTransientModule])]
+struct TwoTransientRoot;
+
+#[tokio::test]
+async fn a_transient_provider_registered_twice_fails_the_boot_naming_both() {
+    let duplicate = names_both(
+        App::builder().module::<TwoTransientRoot>().build().await,
+        "Rebuilt",
+        "`FirstTransientModule` at `imports[0]` of `TwoTransientRoot`",
+        "`SecondTransientModule` at `imports[1]` of `TwoTransientRoot`",
+    );
+    assert_eq!(duplicate.scopes, None, "{duplicate}");
+}
+
+#[injectable]
+#[derive(Default)]
+struct Shelf;
+
+#[module(providers = [Shelf])]
+struct SingletonShelfModule;
+
+/// Registers `Shelf` by hand under another scope than `#[injectable]` gave it.
+struct TransientShelfModule;
+
+impl Module for TransientShelfModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_transient(|_| Shelf)
+    }
+}
+
+struct RequestShelfModule;
+
+impl Module for RequestShelfModule {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide_scoped(|_| Shelf)
+    }
+}
+
+#[module(imports = [SingletonShelfModule, TransientShelfModule])]
+struct SingletonThenTransientRoot;
+
+#[module(imports = [TransientShelfModule, SingletonShelfModule])]
+struct TransientThenSingletonRoot;
+
+#[module(imports = [SingletonShelfModule, RequestShelfModule])]
+struct SingletonThenRequestRoot;
+
+#[tokio::test]
+async fn a_singleton_then_a_transient_of_one_type_fail_the_boot_naming_both_scopes() {
+    let duplicate = names_both(
+        App::builder()
+            .module::<SingletonThenTransientRoot>()
+            .build()
+            .await,
+        "Shelf",
+        "`SingletonShelfModule` at `imports[0]` of `SingletonThenTransientRoot`",
+        "`TransientShelfModule` at `imports[1]` of `SingletonThenTransientRoot`",
+    );
+    assert_eq!(
+        duplicate.scopes,
+        Some((ProviderScope::Singleton, ProviderScope::Transient))
+    );
+    assert!(
+        duplicate
+            .to_string()
+            .contains("(first as a singleton, then transient)"),
+        "{duplicate}"
+    );
+}
+
+#[tokio::test]
+async fn a_transient_then_a_singleton_of_one_type_fail_the_boot_naming_both_scopes() {
+    let duplicate = names_both(
+        App::builder()
+            .module::<TransientThenSingletonRoot>()
+            .build()
+            .await,
+        "Shelf",
+        "`TransientShelfModule` at `imports[0]` of `TransientThenSingletonRoot`",
+        "`SingletonShelfModule` at `imports[1]` of `TransientThenSingletonRoot`",
+    );
+    assert_eq!(
+        duplicate.scopes,
+        Some((ProviderScope::Transient, ProviderScope::Singleton))
+    );
+    assert!(
+        duplicate
+            .to_string()
+            .contains("(first transient, then as a singleton)"),
+        "{duplicate}"
+    );
+}
+
+#[tokio::test]
+async fn a_singleton_then_a_request_scoped_provider_of_one_type_fail_the_boot_naming_both_scopes() {
+    let duplicate = names_both(
+        App::builder()
+            .module::<SingletonThenRequestRoot>()
+            .build()
+            .await,
+        "Shelf",
+        "`SingletonShelfModule` at `imports[0]` of `SingletonThenRequestRoot`",
+        "`RequestShelfModule` at `imports[1]` of `SingletonThenRequestRoot`",
+    );
+    assert_eq!(
+        duplicate.scopes,
+        Some((ProviderScope::Singleton, ProviderScope::Request))
+    );
+    assert!(
+        duplicate
+            .to_string()
+            .contains("(first as a singleton, then request-scoped)"),
+        "{duplicate}"
+    );
+}
+
+/// Queues a factory of `Shelf`, which `SingletonShelfModule` also lists.
+struct QueuesShelfModule;
+
+impl Module for QueuesShelfModule {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        builder.provide_factory(|_| async { Ok(Shelf) })
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder
+    }
+}
+
+#[module(imports = [QueuesShelfModule, SingletonShelfModule])]
+struct FactoryThenModuleRoot;
+
+#[tokio::test]
+async fn a_factory_output_a_module_also_lists_names_the_import_that_queued_the_factory() {
+    names_both(
+        App::builder()
+            .module::<FactoryThenModuleRoot>()
+            .build()
+            .await,
+        "Shelf",
+        "a factory queued by `QueuesShelfModule` at `imports[0]` of `FactoryThenModuleRoot`",
+        "`SingletonShelfModule` at `imports[1]` of `FactoryThenModuleRoot`",
+    );
+}
+
+trait Greeting: Send + Sync {
+    fn word(&self) -> &'static str;
+}
+
+#[injectable]
+struct Hello;
+
+impl Greeting for Hello {
+    fn word(&self) -> &'static str {
+        "hello"
+    }
+}
+
+#[injectable]
+struct Bonjour;
+
+impl Greeting for Bonjour {
+    fn word(&self) -> &'static str {
+        "bonjour"
+    }
+}
+
+#[module(providers = [Hello as dyn Greeting])]
+struct HelloModule;
+
+#[module(providers = [Bonjour as dyn Greeting])]
+struct BonjourModule;
+
+#[module(imports = [HelloModule, BonjourModule])]
+struct BothGreetingsModule;
+
+#[tokio::test]
+async fn two_modules_binding_one_trait_object_fail_the_boot_naming_it() {
+    names_both(
+        App::builder().module::<BothGreetingsModule>().build().await,
+        std::any::type_name::<Arc<dyn Greeting>>(),
+        "`HelloModule` at `imports[0]` of `BothGreetingsModule`",
+        "`BonjourModule` at `imports[1]` of `BothGreetingsModule`",
+    );
+}
+
+/// A root written by hand, importing both bindings itself.
+struct BothGreetingsByHand;
+
+impl Module for BothGreetingsByHand {
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.import::<HelloModule>().import::<BonjourModule>()
+    }
+}
+
+/// Each import a hand-written root makes is named as it writes it, and the root
+/// by its type's name.
+#[tokio::test]
+async fn two_bindings_a_hand_written_root_imports_name_each_import() {
+    names_both(
+        App::builder().module::<BothGreetingsByHand>().build().await,
+        std::any::type_name::<Arc<dyn Greeting>>(),
+        "`HelloModule`, which the root `BothGreetingsByHand` imports",
+        "`BonjourModule`, which the root `BothGreetingsByHand` imports",
+    );
+}
+
+#[tokio::test]
+async fn a_seeded_trait_object_a_module_also_binds_fails_the_boot_naming_the_seed() {
+    let duplicate = duplicate(
+        App::builder()
+            .provide_dyn::<dyn Greeting>(Arc::new(Bonjour))
+            .module::<HelloModule>()
+            .build()
+            .await,
+    );
+    assert_eq!(
+        duplicate.type_name,
+        std::any::type_name::<Arc<dyn Greeting>>()
+    );
+    assert_eq!(duplicate.first, "a seed (`App::builder().provide…`)");
+    assert_eq!(
+        duplicate.second,
+        "`HelloModule`, a root the app is built from",
+    );
+}
+
+#[tokio::test]
+async fn an_override_replaces_the_trait_object_a_module_binds() {
+    let app = App::builder()
+        .module::<HelloModule>()
+        .override_dyn::<dyn Greeting>(Arc::new(Bonjour))
+        .build()
+        .await
+        .expect("an override is the one replacement a binding takes");
+    assert_eq!(
+        app.container().get_dyn::<dyn Greeting>().map(|g| g.word()),
+        Some("bonjour")
+    );
+}
+
+trait Left: Send + Sync {
+    fn serial(&self) -> usize;
+}
+
+trait Right: Send + Sync {
+    fn serial(&self) -> usize;
+}
+
+static BOUND_BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+struct Bound {
+    serial: usize,
+}
+
+impl Default for Bound {
+    fn default() -> Self {
+        Self {
+            serial: BOUND_BUILDS.fetch_add(1, Ordering::SeqCst),
+        }
+    }
+}
+
+impl Left for Bound {
+    fn serial(&self) -> usize {
+        self.serial
+    }
+}
+
+impl Right for Bound {
+    fn serial(&self) -> usize {
+        self.serial
+    }
+}
+
+#[module(providers = [Bound as dyn Left, Bound as dyn Right])]
+struct BoundModule;
+
+/// The address an `Arc` points at, whatever its pointee's metadata.
+fn address<T: ?Sized>(arc: &Arc<T>) -> *const () {
+    Arc::as_ptr(arc).cast::<()>()
+}
+
+#[tokio::test]
+async fn a_provider_bound_as_two_traits_is_one_instance_under_its_own_type_and_each_trait() {
+    let app = App::builder()
+        .module::<BoundModule>()
+        .build()
+        .await
+        .expect("the module boots");
+    let container = app.container();
+    let own = container.get::<Bound>().expect("held under its own type");
+    let left = container.get_dyn::<dyn Left>().expect("held as `dyn Left`");
+    let right = container
+        .get_dyn::<dyn Right>()
+        .expect("held as `dyn Right`");
+
+    assert_eq!(
+        address(&own),
+        address(&left),
+        "one allocation under both keys"
+    );
+    assert_eq!(
+        address(&own),
+        address(&right),
+        "one allocation under every key"
+    );
+    assert_eq!(left.serial(), right.serial());
+    assert_eq!(
+        BOUND_BUILDS.load(Ordering::SeqCst),
+        1,
+        "the constructor runs once for every key the provider is listed with"
+    );
+}
+
+#[module(providers = [Hello])]
+struct ConcreteHelloModule;
+
+#[module(imports = [ConcreteHelloModule, HelloModule])]
+struct HelloBothWaysRoot;
+
+#[tokio::test]
+async fn a_provider_in_one_module_and_bound_as_dyn_in_another_is_a_duplicate_of_its_type() {
+    let duplicate = names_both(
+        App::builder().module::<HelloBothWaysRoot>().build().await,
+        std::any::type_name::<Hello>(),
+        "`ConcreteHelloModule` at `imports[0]` of `HelloBothWaysRoot`",
+        "`HelloModule` at `imports[1]` of `HelloBothWaysRoot`",
+    );
+    assert_eq!(duplicate.scopes, None, "{duplicate}");
+}
+
+#[module(providers = [Hello, crate::container::Hello as dyn Greeting])]
+struct TwoSpellingsModule;
+
+#[tokio::test]
+async fn two_spellings_of_one_provider_in_one_list_are_a_duplicate_of_its_type() {
+    let duplicate = duplicate(App::builder().module::<TwoSpellingsModule>().build().await);
+    assert_eq!(duplicate.type_name, std::any::type_name::<Hello>());
+}
+
+/// A type a test provides on a container built by hand, or does not.
+struct HandLedger;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandBookkeeper {
+    #[inject]
+    ledger: Arc<HandLedger>,
+}
+
+#[module(providers = [HandBookkeeper])]
+struct HandBookkeepingModule;
+
+/// The provider-never-built refusal `build` answered, checked to name what
+/// the bookkeeper needed and the builder's call order.
+fn unbuilt_bookkeeper(built: Result<Container, ContainerError>) -> UnbuiltProviderError {
+    let Err(ContainerError::UnbuiltProvider(unbuilt)) = built else {
+        panic!("the bookkeeper would be absent, and nothing would say why");
+    };
+    assert_eq!(unbuilt.module, "HandBookkeepingModule");
+    assert_eq!(unbuilt.provider, "HandBookkeeper");
+    assert_eq!(unbuilt.missing, ["HandLedger"]);
+    assert_eq!(unbuilt.cause, UnbuiltCause::ImportedFirst, "{unbuilt}");
+    assert!(
+        unbuilt.to_string().contains(
+            "`HandBookkeepingModule` was imported on a container built by hand while nothing \
+             there provided it: provide it, or import what provides it, before \
+             `HandBookkeepingModule`"
+        ),
+        "{unbuilt}"
+    );
+    unbuilt
+}
 
 #[test]
-fn a_second_registration_under_one_key_names_the_provider_and_the_key() {
-    let logs = LogCapture::install();
+fn a_container_built_by_hand_refuses_a_provider_whose_dependency_nothing_provides() {
+    unbuilt_bookkeeper(
+        Container::builder()
+            .import::<HandBookkeepingModule>()
+            .build(),
+    );
+}
+
+#[test]
+fn a_container_built_by_hand_refuses_a_provider_whose_dependency_it_provides_after_the_module() {
+    unbuilt_bookkeeper(
+        Container::builder()
+            .import::<HandBookkeepingModule>()
+            .provide(HandLedger)
+            .build(),
+    );
     let container = Container::builder()
-        .provide_keyed("primary", Pool("first"))
-        .provide_keyed("primary", Pool("second"))
-        .build();
+        .provide(HandLedger)
+        .import::<HandBookkeepingModule>()
+        .build()
+        .expect("the ledger is provided before the module");
+    assert!(container.get::<HandBookkeeper>().is_some());
+}
 
-    // The last registration wins, silently as far as any caller can tell.
-    let pool: Arc<Pool> = container
-        .get_keyed("primary")
-        .expect("the keyed provider resolves");
-    assert_eq!(pool.0, "second");
+/// A type a provider reads when present.
+struct HandClock;
 
-    let event = logs.expect_one(target::CONTAINER, "keyed provider override");
-    assert_eq!(event.level, "warn");
-    assert_eq!(event.field("key").as_deref(), Some("primary"));
-    assert!(
-        event.field("provider").is_some_and(|p| p.contains("Pool")),
-        "the event names the provider whose binding was replaced, got {:?}",
-        event.fields,
-    );
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandScheduler {
+    #[inject]
+    clock: Option<Arc<HandClock>>,
+}
+
+#[module(providers = [HandScheduler])]
+struct HandSchedulerModule;
+
+#[test]
+fn a_container_built_by_hand_refuses_a_provider_built_before_its_optional_dependency() {
+    let Err(ContainerError::LateOptionalDependency(late)) = Container::builder()
+        .import::<HandSchedulerModule>()
+        .provide(HandClock)
+        .build()
+    else {
+        panic!("the scheduler would run as if the clock were absent");
+    };
+    assert_eq!(late.provider, "HandScheduler");
+    assert_eq!(late.dependency, "HandClock");
+    assert_eq!(late.cause, UnbuiltCause::ImportedFirst, "{late}");
+    let container = Container::builder()
+        .import::<HandSchedulerModule>()
+        .build()
+        .expect("an optional dependency nothing provides is absent");
+    assert!(container.get::<HandScheduler>().is_some());
+}
+
+#[injectable]
+#[derive(Default)]
+struct HandAtlas;
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandCartographer {
+    #[inject]
+    atlas: Arc<HandAtlas>,
+}
+
+#[module(imports = [HandSurveyModule], providers = [HandAtlas])]
+struct HandAtlasModule;
+
+#[module(imports = [HandAtlasModule], providers = [HandCartographer])]
+struct HandSurveyModule;
+
+#[test]
+fn a_container_built_by_hand_names_the_import_cycle_a_provider_never_built_crosses() {
+    let Err(ContainerError::UnbuiltProvider(unbuilt)) =
+        Container::builder().import::<HandAtlasModule>().build()
+    else {
+        panic!("the cartographer would be absent, and nothing would say why");
+    };
+    assert_eq!(unbuilt.provider, "HandCartographer");
+    let UnbuiltCause::ImportCycle(modules) = &unbuilt.cause else {
+        panic!("not an import cycle: {unbuilt}");
+    };
+    for module in ["HandAtlasModule", "HandSurveyModule"] {
+        assert!(modules.contains(&module), "{unbuilt}");
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandAuthors {
+    #[inject]
+    books: Arc<HandBooks>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable]
+struct HandBooks {
+    #[inject]
+    authors: Arc<HandAuthors>,
+}
+
+#[module(imports = [HandBooksModule], providers = [HandAuthors])]
+struct HandAuthorsModule;
+
+#[module(imports = [HandAuthorsModule], providers = [HandBooks])]
+struct HandBooksModule;
+
+#[test]
+fn a_container_built_by_hand_refuses_singletons_waiting_on_each_other_across_its_modules() {
+    let Err(ContainerError::ProviderCycle(cycle)) =
+        Container::builder().import::<HandAuthorsModule>().build()
+    else {
+        panic!("neither provider could be built, and nothing would say why");
+    };
+    assert_eq!(cycle.scope, ProviderScope::Singleton);
+    assert_eq!(cycle.chain, ["HandBooks", "HandAuthors", "HandBooks"]);
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct HandDraft {
+    #[inject]
+    review: Arc<HandReview>,
+}
+
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
+#[injectable(scope = request)]
+struct HandReview {
+    #[inject]
+    draft: Arc<HandDraft>,
+}
+
+#[module(providers = [HandDraft, HandReview])]
+struct HandRequestCycleModule;
+
+#[tokio::test]
+async fn a_container_built_by_hand_refuses_request_scoped_providers_waiting_on_each_other() {
+    let Err(ContainerError::ProviderCycle(cycle)) = Container::builder()
+        .import::<HandRequestCycleModule>()
+        .build()
+    else {
+        panic!("the first request resolving either provider would panic");
+    };
+    assert_eq!(cycle.scope, ProviderScope::Request);
+    assert_eq!(cycle.chain, ["HandDraft", "HandReview", "HandDraft"]);
+    let Err(booted) = App::builder()
+        .module::<HandRequestCycleModule>()
+        .build()
+        .await
+    else {
+        panic!("the boot refuses the cycle");
+    };
+    assert_eq!(cycle.to_string(), booted.to_string(), "the boot's refusal");
+}
+
+/// A limit a factory resolves, whose read refuses `0`.
+struct SeedLimit(u32);
+
+/// The check a seed of [`SeedLimit`] passes, as a read one would.
+fn limit_is_positive(container: &Container) -> anyhow::Result<()> {
+    match container.get::<SeedLimit>() {
+        Some(limit) if limit.0 == 0 => anyhow::bail!("a limit of 0 admits nothing"),
+        _ => Ok(()),
+    }
+}
+
+/// `limit` seeded by hand over the factory a module would queue for it, with
+/// the check that factory's seeds pass.
+fn seeded_limit(limit: u32) -> ContainerBuilder {
+    nest_rs_core::__private::check_seed(
+        Container::builder()
+            .provide(SeedLimit(limit))
+            .provide_factory::<SeedLimit, _, _>(|_| async { Ok(SeedLimit(1)) }),
+        std::any::TypeId::of::<SeedLimit>(),
+        limit_is_positive,
+    )
 }
 
 #[test]
-fn a_singleton_shadowed_by_a_transient_of_the_same_type_is_reported() {
-    let logs = LogCapture::install();
-    // Registering both is what makes the singleton unreachable: resolution
-    // answers with a fresh transient build every time, so whatever state the
-    // singleton held is never read again.
-    let _container = Container::builder()
-        .provide(Pool("singleton"))
-        .provide_transient(|_| Pool("transient"))
-        .build();
-
-    let event = logs.expect_one(target::CONTAINER, "provider scope conflict");
-    assert_eq!(event.level, "warn");
-    assert_eq!(event.field("existing_kind").as_deref(), Some("singleton"));
-    assert_eq!(event.field("new_kind").as_deref(), Some("transient"));
+fn a_container_built_by_hand_refuses_a_seed_its_check_refuses() {
+    let Err(ContainerError::SeedRefused(refused)) = seeded_limit(0).build() else {
+        panic!("the seed passes no check a read one would");
+    };
+    assert_eq!(refused.to_string(), "a limit of 0 admits nothing");
 }
 
 #[test]
-fn the_conflict_is_reported_from_either_direction() {
-    let logs = LogCapture::install();
-    // The mirror registration order: the warning has to fire whichever module
-    // happened to be imported first, or the diagnostic depends on `imports`
-    // ordering — which is the class of bug it exists to surface.
-    let _container = Container::builder()
-        .provide_transient(|_| Pool("transient"))
-        .provide(Pool("singleton"))
-        .build();
-
-    let event = logs.expect_one(target::CONTAINER, "provider scope conflict");
-    assert_eq!(event.field("existing_kind").as_deref(), Some("transient"));
-    assert_eq!(event.field("new_kind").as_deref(), Some("singleton"));
-}
-
-#[test]
-fn a_request_scoped_factory_replaced_by_another_says_which_kind_it_was() {
-    let logs = LogCapture::install();
-    // The third survivable conflict, and the one whose kind field matters: a
-    // request-scoped binding replaced by another is legal, so the only way to
-    // notice that two modules both claim the type is this line.
-    let _container = Container::builder()
-        .provide_scoped(|_| Pool("first"))
-        .provide_scoped(|_| Pool("second"))
-        .build();
-
-    let event = logs.expect_one(target::CONTAINER, "provider override");
-    assert_eq!(event.level, "warn");
-    assert_eq!(event.field("kind").as_deref(), Some("request_scoped"));
-    assert!(
-        event.field("provider").is_some_and(|p| p.contains("Pool")),
-        "{:?}",
-        event.fields,
-    );
+fn a_container_built_by_hand_keeps_a_seed_its_check_passes() {
+    let built = seeded_limit(2).build().expect("the seed passes its check");
+    assert_eq!(built.get::<SeedLimit>().map(|limit| limit.0), Some(2));
 }

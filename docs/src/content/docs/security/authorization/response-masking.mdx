@@ -1,275 +1,194 @@
 ---
 title: Response masking
-description: Declare Authorize<A, S> on the handler and every successful response is masked automatically — fail-closed, with an unexposed column unable to leak.
-tier: basics
+description: "Each wire row is judged whole where #[expose]'s conversion builds it: a column the caller's grant withholds holds no value, on every edge and in every shape."
 sidebar:
   order: 5
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-The third layer of authorization runs after the handler returns — and the
-80% of this page is one sentence: **declare `Authorize<A, S>` as a handler
-parameter and masking runs automatically after every successful
-response**. Fields the caller cannot read are stripped, rows they cannot
-see are dropped, and a body that cannot be verified fails **closed** (500)
-rather than shipping unmasked. The route never calls `mask` itself.
+The third layer of authorization happens where you build the answer, not after
+it: **`User::from(&row)` judges the row for the caller whose ability is
+installed there**. A column their grant withholds is not in the wire row at all —
+it reads `null` — a row their grants refuse answers nobody, and the row
+remembers who judged it, so it answers that caller and no one else. Nothing reads
+your reply back, and nothing in your handler calls a mask.
 
-## Declare it — `Authorize<A, S>`
+## Declare it — `#[authorize]`, then build the rows
 
-`Authorize<A, S>` is the handler-level extractor that arms the shaper.
-Declare it as a parameter; the `#[routes]` orchestrator detects it and
-installs the shaper:
+`#[authorize(Read, user::Entity)]` declares the route's posture: the class gate
+runs with the route's guards, and the handler reads under the caller's ability.
+Build the exposed type from the rows the service read, as you always have:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::authz::{Read, http::Authorize};
-use sea_orm::EntityTrait;
+use nest_rs::authz::Read;
+use nest_rs::http::Json;
 
 #[get("/")]
-async fn list(
-    &self,
-    _authz: Authorize<Read, user::Entity>,
-) -> Result<Json<Vec<User>>> {
+#[authorize(Read, user::Entity)]
+async fn list(&self) -> Result<Json<Vec<User>>> {
     Ok(Json(self.svc.directory().await?))
 }
 ```
 
 `directory` is a service method returning `Result<Vec<User>, ServiceError>` —
-the `Model` → `User` conversion lives there, so the handler declares a posture
-and delegates.
-
-`Authorize<Read, user::Entity>` does two things:
-
-1. **Class-level gate.** On extraction, refuses with 403 unless the
-   ability's `can_class(Read, TypeId::of::<user::Entity>())` is
-   true.
-2. **Shaper trigger.** The `RouteResponseShaper` impl wraps the
-   handler in `with_ability(ability, inner)` (so `Repo::scoped`
-   reads the right ability) and runs `mask_response::<user::Entity>`
-   on the way out.
+the `Model` → `User` conversion lives there, and that conversion is where each
+row is judged. The same declaration and the same conversion serve GraphQL
+(`#[query]`, `#[mutation]`, `#[subscription]`), WebSocket messages and MCP tools
+and resources.
 
 <Aside type="caution">
-The parameter is load-bearing even bound as `_authz` — deleting the
-"unused" parameter disarms masking for that route.
+`#[public(Action, Entity)]` opens the same read for a caller with no credential
+([Public reads](/security/authorization/public-reads/)), and a unit naming no
+entity in its posture reads nothing a grant guards: what its guards attached is
+withheld from its reads. `Authorize<A, S>` is what the two declare, never a
+handler parameter: one written by hand does not compile, whatever its import
+calls it.
+</Aside>
 
-How you *spell* it does not matter. `#[routes]` hands each parameter type to
-the compiler and asks whether it is a `RouteResponseShaper`, so an alias
-(`use ... as Foo`), a re-export or any module qualification arms the route
-exactly like the canonical name.
+## What a grant may withhold — `#[expose(nullable)]`
 
-One shape stays invisible to that question: an extractor reached **indirectly**
-— nested inside another extractor, or run by a hand-rolled `FromRequest`. Such
-a route arms nothing, and rather than ship an unmasked body it **fails closed**
-— a `500` for every caller — with an `error` on `nest_rs::http` naming the
-route and the fix:
+A grant's `.fields` on `Read` names the columns a caller may read. Every other
+column reads `null` in their rows, so the column has to be one the wire can
+answer `null` for: an `Option` column, or one you declare with
+`#[expose(nullable)]`.
+
+```rust title="crates/features/src/users/entities/user.rs"
+#[expose]
+pub id: Uuid,
+#[expose(nullable)]
+pub org_id: Uuid,
+#[expose(input(create, update), validate(length(min = 1)))]
+pub name: String,
+#[expose(input(create, update), validate(email), nullable)]
+pub email: String,
+```
+
+```rust title="crates/features/src/authz/ability.rs"
+ab.can(Action::Read, user::Entity)
+    .when(|p| p.eq(user::Column::OrgId, actor.org_id))
+    .fields([user::Column::Id, user::Column::Name]);
+```
+
+A member then reads `{"id": "…", "org_id": null, "name": "Ada", "email": null, …}`
+on HTTP and WebSocket, `email: null` on GraphQL and in MCP's structured content.
+The schema says so on every edge: the field is nullable, its description says the
+caller's ability may withhold it, and its key is still required, since a reply always
+writes it — OpenAPI's and MCP's `required` and GraphQL's `!` stay true. A
+`belongs_to` field says the same on GraphQL, where it reads `null` for a key or a row
+the caller may not read. A column you do not declare is never withheld: a grant on `Read` or
+`Manage` leaving one out fails when the ability builds, naming the column and the
+key:
 
 ```text
-ERROR nest_rs::http: a masking extractor ran but no response shaper armed on
-  this route — declare it as a handler parameter (a nested or hand-rolled
-  extractor is invisible to the type-directed arm); failing closed
-  route="get /aliased"
+malformed authorization rule: the grant for `Read` on `users::Entity` withholds `email` in `.fields`, which a reply cannot answer null — declare the column `#[expose(nullable)]` on `email`, or name it in `.fields`
 ```
 
-Nothing ships unmasked, so this is a wiring error to fix, not an exposure to
-audit. Declare the extractor as its own parameter.
-</Aside>
+The primary key names its row and takes no `nullable`: every reply's grant reads
+it. A reply reads `Read`'s grants whatever its posture's action — `.fields` on
+`Update` or `Create` names what a write may set, never what a reply shows.
 
-The GraphQL analog is `#[authorize(Action, Entity)]` on a
-`#[query]`/`#[mutation]` — same declaration, same automatic mask, with
-one difference the schema forces: the masked value has to come back as
-the operation's own type. A stripped column masks to `null` where the
-field is nullable; where it is `String!` — what `#[expose]` emits for a
-non-nullable column — it cannot, so an operation that **selects** such a
-field is refused and one that does not select it is served. Row dropping
-applies either way.
+## Each row is judged on its whole row
 
-The refusal carries `extensions.code = "FORBIDDEN"` and `extensions.fields` —
-a **list** of the column names it refused:
+The judgement runs on the `Model` the service read, every column of it, so a
+condition on any column is decided in memory: with a grant of every column on the
+caller's own row and of `id` and `name` on the others, the caller's own email ships
+and the others' read `null`. A rule the row cannot decide — a relation, two value
+types only the database compares — counts as the `Repo` read that admitted the row
+counted it: a row out of `Repo::scoped(Read)` passed `(OR grants) AND NOT (OR
+denials)`, so when no decided grant matches, an undecided one did, and the row
+keeps the columns every such grant permits.
 
-```json
-{"data":null,"errors":[{"message":"forbidden","path":["users"],
-  "extensions":{"code":"FORBIDDEN","fields":["email","name"]}}]}
-```
+A row the caller's grants refuse never ships as an empty object: in a GraphQL
+mutation's reply it answers its key alone, which names the row the write wrote, and
+refuses every other column `FORBIDDEN`; on any other operation it refuses every
+column, its key included; and elsewhere the reply is refused `403` — a write-only
+caller's write answers its key on GraphQL and nothing on HTTP. A list a body built
+by hand holding such a row fails the whole reply closed; a `Repo` read never hands
+it one.
 
-MCP takes the same declaration beside a `#[tool]` / `#[prompt]`, and pushes the
-schema constraint one step further: an operation returns one fixed Rust type to
-a model, with no selection set to excuse a stripped **required** field, so such
-a mask fails the operation closed. Leave a maskable column `Option` on the
-entity, or — when the tool deliberately answers with a projection narrower than
-every grant — declare `#[authorize(Action, Entity, unmasked)]` and let the
-projection be the field restriction. The gate and the row filter stay either
-way.
+## A row answers the caller who judged it
 
-## What you get
+A wire row carries the id of the ability that judged it, and a private proof no
+struct literal can supply — `Thing { … }` outside the decorator does not compile —
+and it has no `Deserialize`. Its `Serialize` and each of its GraphQL columns check
+that the ability installed where it answers is that one, so:
 
-- **Field masking.** Restricted keys are stripped from the object (their
-  key is removed, not set to `null`) per the ability's `.fields([...])` grants.
-- **Row dropping.** In collection responses, rows the caller cannot read
-  drop out entirely.
-- **Two-layer defense.** The wire DTO decides what may *ever* ship
-  (column-level allowlist — no `#[expose]`, no wire); the `Ability`
-  decides what may ship *to this caller*. A column on neither list never
-  leaves — even an unrestricted grant cannot leak an unexposed column
-  like `password_hash`.
-- **Fail-closed.** A successful body that cannot be reconciled with the
-  entity's `Model` yields 500 rather than shipping unmasked. A
-  misconfigured route surfaces as a 500 in prod; the alternative —
-  shipping unmasked data — is worse.
+- a row kept in a cache, or carried into another request, answers no one: the
+  reply fails with `500` and one `error` line, `a wire row answered a caller it was
+  not judged for`, naming the unit as its `mounted` line does;
+- a `#[field_resolver]` whose parent is such a row, or one the caller may not read,
+  refuses before it runs, as the parent's own columns refuse, so nothing it derives
+  from the parent ships;
+- a GraphQL root field's answer resolves under the ability its own unit judged its
+  rows by — the one its request carried, or the one the field's own guards attached
+  where the request carried none — and so do the field resolvers below it, the
+  batches its relations read and a subscription's items: `AbilityGuard` bound on the
+  field answers as it does bound at `/graphql`'s request;
+- a push to other connections (`WsServer`'s `broadcast`, `emit_to`, `emit`)
+  refuses a row judged for the caller pushing it — no recipient's ability judged
+  it — and takes a row a job built, which holds every exposed column for no caller
+  and answers nowhere else outside a job: kept in a cache and answered by a route,
+  it fails as another caller's;
+- a subscription builds its rows where the socket polls its stream, so each is
+  judged for its subscriber: carry the `Model` on your event and build the wire row
+  in the stream.
 
-Non-2xx, non-JSON, and scalar responses pass through untouched.
-
-Pair every masked route with a
-[negative-path test](/testing/negative-path/) that pins the masked body
-shape — a regression surfaces immediately, not after an audit.
-
-## How it works (internals)
-
-<Aside type="note">
-Everything below is the mechanism, not the surface — first-time builders
-can stop here and come back when they hit a hand-written
-`WireModelDefaults` or want to audit the fail-closed path.
-</Aside>
-
-### The pipeline after a 2xx
-
-```text
-Handler returns Json<UserWire>
-       │
-       ▼
-  body in bytes
-       │
-parse JSON → Value
-       │
-wire_to_model::<S>     ← fill unexposed columns via WireModelDefaults
-       │
-ability.mask::<S>      ← typed: filters by row, masks by field
-       │
-retain_wire_keys       ← drop anything not on the wire DTO
-       │
-serialize → response body
-```
-
-Each step has a defined failure mode:
-
-- **Parse fails** (the body was not JSON) → original bytes ship.
-- **`wire_to_model` fails** (object shape does not match `Model`) →
-  500. Fail closed — and the same for a failure on any array element,
-  or a re-serialize failure.
-- **`Ability::mask` runs** — any row the caller cannot read drops
-  out (collection responses) and every restricted key is stripped from
-  the object (`map.retain` keeps only the permitted keys).
-- **`retain_wire_keys`** — strips back any field the wire DTO never
-  carried.
-
-### `Ability::mask` — what it strips
-
-```rust title="nest_rs::authz::Ability::mask"
-pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
-```
-
-Serializes the model, then keeps only the fields permitted by the
-matching grants. The rule shape (`.fields([cols])`) decides; the
-union across matching grants wins.
-
-```rust title="nest_rs::authz::Ability::mask_many"
-pub fn mask_many<'m, E>(
-    &self,
-    action: Action,
-    models: impl IntoIterator<Item = &'m E::Model>,
-) -> Vec<serde_json::Value>
-```
-
-For a collection: drops the models the caller cannot see
-(`Ability::can` returns false), masks the rest. The
-`retain_wire_keys` step runs per item afterwards.
-
-A grant with no `.fields` returns `FieldSet::All` — every column is
-permitted. A grant with `.fields([Id, Name])` returns
-`FieldSet::Only({"id", "name"})`. The masker unions:
-`FieldSet::Only(union_of_grants)` unless any matching grant is
-`FieldSet::All`, which clears the restriction.
-
-### `retain_wire_keys` — the defense in depth
-
-After `Ability::mask` produces a `serde_json::Value`, the shaper
-drops keys absent from the original wire body:
-
-```rust title="inside the framework — you don't write this"
-fn retain_wire_keys(masked: &mut Value, wire: &Value) {
-    let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
-        return;
-    };
-    masked_obj.retain(|key, _| wire_obj.contains_key(key));
+```rust title="crates/features/src/posts/graphql/resolver.rs"
+#[subscription]
+#[authorize(Read, PostEntity)]
+async fn post_published(&self) -> impl Stream<Item = Post> {
+    self.bus
+        .stream::<PostPublishedEvent>()
+        .map(|event| Post::from(&event.post))
 }
 ```
 
-Why this step exists: an `Ability` grant with no `.fields` permits
-every column on the `Model`. If the `Model` carries a
-`password_hash` field (server-only, never carries `#[expose]` so it is
-absent from the wire DTO), an unrestricted grant would have it pass `Ability::mask`
-untouched. `retain_wire_keys` then drops it because it was never on
-the wire DTO to begin with.
+A subscription's item is a push no read filtered, so a rule only a read could
+decide grants nothing there, and an item a refusal makes leaves the stream — a row,
+a list's rows, a row inside an `Option` or a `Result` — so a subscriber learns
+nothing of a push they may not read. An object of your own holding the row arrives,
+its row answering no column, the key included: stream the row itself where a
+subscriber must not learn a push happened.
 
-### `WireModelDefaults` — filling the gaps
+## Every shape holds only what the row holds
 
-To run `Ability::mask` the shaper needs a typed `S::Model`. The wire
-body, by design, omits every unexposed column. `WireModelDefaults`
-fills them with placeholder values so deserialization succeeds:
+Since a withheld column is no value in the row, there is nothing for any shape to
+leak: a scalar a body builds (`Json<Vec<User>>` in GraphQL), an object holding a
+row or copying its columns (`#[graphql(flatten)]`), a map column, a column renamed
+onto a field resolver's name — each holds the row as it was judged. A row a
+scalar holds that refuses its caller — one judged for another, kept in a `Json` —
+fails its root field with the refusal's code rather than the `null` async-graphql
+writes for a value it cannot serialize, its line naming that field. A generated
+loader answers wire rows too, judged for the caller whose request runs the batch,
+so a body reading `writers.load_one(id).await?.and_then(|row| row.email)` reads
+`None` where the grant withholds the email.
 
-```rust title="nest_rs::resource::WireModelDefaults"
-pub trait WireModelDefaults: EntityTrait {
-    fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
-}
-```
+A `belongs_to` relation reads its link off the judged row, so a key the grant
+withholds is no link to follow and the relation reads `null`. A `has_many` groups
+its children by their key inside the batch, each child judged on its own; the
+relation's `#[expose]` is its visible opening.
 
-The `#[expose]` macro emits an impl per entity that fills every
-unexposed scalar column with a JSON default (`""`, `0`, `null`). The
-defaults are discarded again by `retain_wire_keys` before the body
-ships — they never reach the wire.
+## What stays the body's own line
 
-A few column types the macro cannot default automatically:
+No type tells a column a body copies into a value of its own from a column it
+derives: `initials(row.name)` and `row.email` in a DTO read alike. A body reading a
+column off a whole `Model` and answering it as its own value is that body's
+visible line, read in review — as is a body serializing a row by hand. A method
+answering a `Model` itself, whatever wraps it and whatever it derives, does not
+compile: return the exposed type, built from the row, and the judgement is the
+framework's.
 
-- A non-`Option` `Uuid` (e.g. an unexposed `org_id` foreign key) — no
-  wire default, so the round-trip cannot reconstruct the model and the
-  response fails closed.
-- Non-`Option` timestamps (`DateTimeWithTimeZone`).
-- `Decimal` (no canonical zero in JSON).
-- Custom Rust enums with no `Default` impl.
-- Columns whose `Default` is meaningful business state.
+## What it costs
 
-Hand-write a `WireModelDefaults` impl for those entities:
+Measured in release on a 100-row list of a user-shaped entity (6 exposed columns,
+3 hidden), `Vec<Model>` to bytes under an ability eight ambient values deep:
 
-```rust title="crates/features/src/invoices/entity.rs"
-impl WireModelDefaults for invoice::Entity {
-    fn fill_wire_defaults(map: &mut Map<String, Value>) {
-        map.entry("amount").or_insert(serde_json::json!("0"));
-        map.entry("currency").or_insert(serde_json::json!("USD"));
-    }
-}
-```
+| | no column narrowed | one `.fields` grant | conditional on the row |
+|---|---|---|---|
+| the judged row: build and serialize | 31.4 µs | 23.7 µs | 31.7 µs |
+| no authorization at all | 24.6 µs | 24.7 µs | 24.6 µs |
 
-<Aside type="caution">
-**A column an ability rule predicates on must carry its real value during
-masking — expose it, do not default it.** The mask rebuilds the model and
-re-runs the grant's `Predicate` (`org_id == actor.org_id`) to decide which
-fields to keep. A `WireModelDefaults` placeholder (`Uuid::nil()`) would make
-that predicate compare against the wrong value and mask the row's fields *out*,
-while the SQL pre-filter went on using the real column — which is what keeps
-the mistake invisible. So a tenant key like `org_id` is best `#[expose]`d
-read-only (output, never an input), exactly because it is the column the policy
-depends on. **Nothing checks this for you**; it is a review question.
-</Aside>
-
-A handler returning a body that does not deserialize even with
-defaults yields 500 with `"response masking failed: body did not
-match the authorized subject type"`. The test bench is the right
-home for noticing this — a unit test that runs the shaper against
-the handler's `Json<T>` shape pins it.
-
-## Going further
-
-- [Policies](/security/authorization/policies/) — `.fields([...])`,
-  which feeds `Ability::mask`.
-- [Row-level filtering](/security/authorization/row-level-filtering/)
-  — the layer that filters rows, complementing the field mask.
-- [Authorization](/security/authorization/) — engine overview.
+On GraphQL each resolved column checks who judged its row: 600 checks cost about
+4.3 µs. An app with no field grant pays the judgement of an unconditional grant and
+nothing else.

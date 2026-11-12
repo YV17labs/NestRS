@@ -1,43 +1,29 @@
-use nest_rs_core::{container::ContainerBuilder, module::Module};
+use std::any::TypeId;
 
-#[cfg(feature = "otlp")]
-use crate::meter::OpenTelemetryMeter;
+use nest_rs_core::{ContainerBuilder, Module, Registering};
 
-/// Registers the global OTel [`OpenTelemetryMeter`] as a provider, under the
-/// `otlp` feature.
+use crate::Metrics;
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::DependencyRemedy::new(
+        TypeId::of::<Metrics>,
+        "Import `nest_rs::opentelemetry::OpenTelemetryModule` in the module whose provider \
+         injects `Metrics`; it provides them over the meter `OpenTelemetry::init()` installs \
+         in `main`.",
+    )
+}
+
+/// Provides [`Metrics`] over the global meter, for the module whose provider
+/// injects them; it mounts nothing, and an app recording no metric of its own
+/// imports it nowhere.
 ///
-/// **It mounts no per-request layer, and that is the design.** Everything this
-/// crate adds to a span is seeded onto the framework's span constructor at
-/// `init` (see `linker`), so it reaches every edge — a queue job in a headless
-/// worker as much as an HTTP request — instead of the one transport an
-/// interceptor could have been attached to.
-///
-/// **Ordering:** [`crate::OpenTelemetry::init`] must run before this module is
-/// registered, or the global tracer/meter are no-ops and signals are silently
-/// dropped — boot panics with a clear message.
+/// Telemetry itself is `let _otel = OpenTelemetry::init()?;` in `main`, which
+/// installs the meter this module hands out. A suite boots without it, and its
+/// `Metrics` record nothing.
 pub struct OpenTelemetryModule;
 
 impl Module for OpenTelemetryModule {
-    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
-        if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
-            return builder;
-        }
-        // Module::register has no Result to thread back, so a panic is the
-        // only way to surface the ordering contract before signals are lost.
-        if !crate::init::initialized() {
-            panic!(
-                "OpenTelemetryModule was imported without calling `OpenTelemetry::init` first — \
-                 the global tracer and meter are no-ops, so traces and metrics would be \
-                 silently dropped. Add `let _otel = \
-                 nest_rs::opentelemetry::OpenTelemetry::init(\"<service>\")?;` at the top of `main`, \
-                 before building the app."
-            );
-        }
-        #[cfg(feature = "otlp")]
-        let builder = {
-            let meter = opentelemetry::global::meter("nestrs");
-            builder.provide_arc(std::sync::Arc::new(OpenTelemetryMeter(meter)))
-        };
-        builder
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        builder.provide(Metrics::new(opentelemetry::global::meter("nestrs")))
     }
 }

@@ -1,0 +1,5 @@
+error: `bind = Service` is not available on MCP — a listing loads no one row to bind
+  --> tests/integration/diagnostics/mcp/authorize_bind_on_a_listing.rs:24:23
+   |
+24 |     #[authorize(Read, bind = DemoService)]
+   |                       ^^^^^^^^^^^^^^^^^^

@@ -1,51 +1,86 @@
-//! [`RedisModule`] — the substrate seam. `RedisModule::for_root(None)` opens
-//! the one [`RedisConnection`] this crate's bindings share; each binding
-//! (`RedisQueueModule`, `RedisWorkerModule`, `RedisThrottlerModule`) is then a
-//! bare import beside it, or its own `for_root` when it owns a config of its
-//! own, and reads the connection from the container.
-//!
-//! This is the crate-root `module.rs` a driver is allowed exactly once: a
-//! module *of Redis* — the crate's own subject — and not one binding wearing the
-//! crate's name. Every binding folder reaches it, which is the level a shared
-//! thing belongs at.
+//! [`RedisModule`] — the substrate seam. `RedisModule` opens the
+//! [`RedisConnection`] this crate's bindings share, and under the `health`
+//! feature attaches its indicator; each binding (`RedisQueueModule`,
+//! `RedisThrottlerModule`, `RedisScheduleModule`) imports it, by the instance it
+//! runs on. An app opening a second Redis names it with an instance marker, as a
+//! typed import, `RedisModule::<Cache>`, and a binding over a named instance
+//! the same way, `RedisScheduleModule::<Locks>`.
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
+use std::borrow::Borrow;
+use std::marker::PhantomData;
+
+use nest_rs_config::{ConfigModule, ConfigSetup, ForInstance};
+use nest_rs_core::{Collecting, ContainerBuilder, Instance, Module, Registering, Unnamed};
 
 use crate::{RedisConfig, RedisConnection};
 
-/// The Redis substrate. Import [`RedisModule::for_root`] once, then the
-/// bindings your app needs beside it — they share the connection it opens.
-pub struct RedisModule;
+/// The Redis substrate for the instance `I`: the connection, its budget and,
+/// under the `health` feature, its indicator. Every binding imports its
+/// instance's, so an app names it only to pin it, through
+/// [`RedisModule::for_root`], or for a connection reached by injection alone,
+/// bare, which reads its variables. It is imported by type, so two imports of
+/// one instance open and report one connection.
+///
+/// The default instance reads `<PREFIX>_REDIS__*`; a `#[instance] struct
+/// Cache` reads `<PREFIX>_REDIS__CACHE__*` and is injected as
+/// `Arc<RedisConnection<Cache>>`.
+///
+/// ```no_run
+/// use std::time::Duration;
+///
+/// use nest_rs_core::{instance, module};
+/// use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueModule, RedisThrottlerModule};
+///
+/// #[instance]
+/// pub struct Cache;
+///
+/// #[instance]
+/// pub struct Limits;
+///
+/// #[module(imports = [
+///     RedisQueueModule,
+///     RedisModule::<Cache>,
+///     RedisModule::for_root((Limits, RedisConfig {
+///         connect_timeout: Duration::from_secs(2),
+///         ..RedisConfig::default()
+///     })),
+///     RedisThrottlerModule::<Limits>,
+/// ])]
+/// pub struct AppModule;
+/// ```
+pub struct RedisModule<I = Unnamed>(PhantomData<fn() -> I>);
 
 impl RedisModule {
-    /// `None` ⇒ load from `NESTRS_REDIS__*`; `Some(cfg)` pins the base those
-    /// variables overlay, per field.
-    pub fn for_root(config: impl Into<Option<RedisConfig>>) -> RedisSetup {
-        RedisSetup {
-            pinned: config.into(),
-        }
+    /// Pin the config of one instance, the base its variables overlay, per
+    /// field: the default instance takes a [`RedisConfig`], a named one
+    /// `(Marker, config)`. The bare import, `RedisModule` or
+    /// `RedisModule::<Marker>`, reads those variables over the defaults.
+    pub fn for_root<I: Instance>(config: impl Into<ForInstance<I, RedisConfig>>) -> RedisSetup<I> {
+        ConfigModule::setup(config)
     }
 }
 
-/// The configured import produced by [`RedisModule::for_root`]. Resolves
-/// [`RedisConfig`] and opens the [`RedisConnection`] in the collect phase, so
-/// every binding's factory — wherever it falls in `imports = [..]` — finds the
-/// connection already built.
-pub struct RedisSetup {
-    pinned: Option<RedisConfig>,
-}
+/// The configured import [`RedisModule::for_root`] returns for the instance
+/// `I`: its connection opens in the factory phase, before every binding's
+/// factory, wherever the bindings fall in `imports = [..]`.
+pub type RedisSetup<I = Unnamed> = ConfigSetup<RedisModule<I>, RedisConfig, I>;
 
-impl DynamicModule for RedisSetup {
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        builder.provide_factory::<RedisConnection, _, _>(|container| async move {
-            let config = container
-                .get::<RedisConfig>()
-                .expect("RedisConfig is resolved by ConfigModule::provide_feature");
-            // `?` lifts the typed `RedisError` into the factory's `anyhow`
-            // boundary (the composition-root error channel).
-            Ok(RedisConnection::connect_within(&config.url, config.connect_timeout).await?)
-        })
+impl<I: Instance> Module for RedisModule<I> {
+    fn collect(builder: ContainerBuilder, _: Collecting<Self>) -> ContainerBuilder {
+        ConfigModule::provide_feature::<I, RedisConfig>(builder)
+            .provide_meta(RedisConnection::<I>::declared_budget())
+            .provide_factory_after::<RedisConnection<I>, (I::Of<RedisConfig>,), _, _>(
+                |container| async move {
+                    let held = ConfigModule::resolved_for::<I, RedisConfig>(&container)?;
+                    let config: &RedisConfig = (*held).borrow();
+                    Ok(RedisConnection::<I>::open(config).await?)
+                },
+            )
+    }
+
+    fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
+        #[cfg(feature = "health")]
+        let builder = crate::health::register::<I, Self>(builder);
+        builder
     }
 }

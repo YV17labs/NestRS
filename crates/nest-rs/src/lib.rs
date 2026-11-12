@@ -1,126 +1,315 @@
-//! `nestrs` — umbrella crate that re-exports the framework's surface so an
+//! `nest-rs` — the umbrella that re-exports the framework's surface so an
 //! application can write a single `use nest_rs::prelude::*;` instead of a
-//! handful of per-crate imports.
-//!
-//! The per-crate split (`nest-rs-core`, `nest-rs-http`, …) stays the public,
-//! versioned source of truth. This crate adds no API of its own — it only
-//! collects what already exists behind Cargo features, with one feature per
-//! surface so an app pays only for what it uses.
+//! handful of per-crate imports. Each surface sits behind its own Cargo
+//! feature, so an app pays only for what it uses.
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-pub use nest_rs_core as core;
+// A module over a glob, never `pub use nest_rs_core as core`: rustc names a crate
+// re-exported under another name by its own, `nest_rs::nest_rs_core::…`, in every
+// diagnostic, a path no app can write. Each is written out: a module a
+// `macro_rules!` expands loses to `prelude` in the path rustc prints
+// (`nest_rs::prelude::Json`).
 
+/// The DI container, modules, the lifecycle and the unit pipeline every edge runs through.
+pub mod core {
+    #[doc(no_inline)]
+    pub use nest_rs_core::*;
+}
+
+/// The binary's entry point: `#[nest_rs::main] async fn main()`. It builds the
+/// runtime, runs the app on it, and ends the process within the shutdown
+/// budget. Its `SIGINT` / `SIGTERM` handlers are installed before `main` runs,
+/// so the first signal stops the boot or drains the app, and one received
+/// before any app exists exits at once with 130 / 143 — see [`core::main`].
+pub use nest_rs_core::main;
+
+/// The HTTP edge: controllers, routes, the request vocabulary and the server.
 #[cfg(feature = "http")]
-pub use nest_rs_http as http;
+pub mod http {
+    #[doc(no_inline)]
+    pub use nest_rs_http::*;
+}
 
+/// Typed configuration, read from the environment under each config's namespace.
 #[cfg(feature = "config")]
-pub use nest_rs_config as config;
+pub mod config {
+    #[doc(no_inline)]
+    pub use nest_rs_config::*;
+}
 
+/// The data-layer port: the unit of work every edge runs through.
 #[cfg(feature = "database")]
-pub use nest_rs_database as database;
+pub mod database {
+    #[doc(no_inline)]
+    pub use nest_rs_database::*;
+}
 
+/// SeaORM: the pool, the database binding, `Repo`, `#[expose]` and `#[crud]`'s services.
 #[cfg(feature = "seaorm")]
-pub use nest_rs_seaorm as seaorm;
+pub mod seaorm {
+    #[doc(no_inline)]
+    pub use nest_rs_seaorm::*;
+}
 
+/// The GraphQL edge: resolvers, operations and the schema, on async-graphql.
 #[cfg(feature = "graphql")]
-pub use nest_rs_graphql as graphql;
+pub mod graphql {
+    #[doc(no_inline)]
+    pub use nest_rs_graphql::*;
+}
 
+/// The WebSocket edge: gateways and their messages.
 #[cfg(feature = "ws")]
-pub use nest_rs_ws as ws;
+pub mod ws {
+    #[doc(no_inline)]
+    pub use nest_rs_ws::*;
+}
 
+/// The Model Context Protocol edge: hosts, tools, prompts and resources, on rmcp.
 #[cfg(feature = "mcp")]
-pub use nest_rs_mcp as mcp;
+pub mod mcp {
+    #[doc(no_inline)]
+    pub use nest_rs_mcp::*;
+}
 
+/// The queue port: queues, jobs and the `#[processor]` that drains them.
 #[cfg(feature = "queue")]
-pub use nest_rs_queue as queue;
+pub mod queue {
+    #[doc(no_inline)]
+    pub use nest_rs_queue::*;
+}
 
+/// Redis: the connection, and the queue, throttler and schedule bindings over it.
 #[cfg(feature = "redis")]
-pub use nest_rs_redis as redis;
+pub mod redis {
+    #[doc(no_inline)]
+    pub use nest_rs_redis::*;
+}
 
+/// Scheduled jobs: `#[scheduled]` with `#[every]`, `#[cron]` and `#[after]`.
 #[cfg(feature = "schedule")]
-pub use nest_rs_schedule as schedule;
+pub mod schedule {
+    #[doc(no_inline)]
+    pub use nest_rs_schedule::*;
+}
 
+/// The in-process event bus and its `#[listeners]`.
 #[cfg(feature = "events")]
-pub use nest_rs_events as events;
+pub mod events {
+    #[doc(no_inline)]
+    pub use nest_rs_events::*;
+}
 
+/// Authentication: `JwtService`, the `Strategy` port and `AuthnGuard`.
 #[cfg(feature = "authn")]
-pub use nest_rs_authn as authn;
+pub mod authn {
+    #[doc(no_inline)]
+    pub use nest_rs_authn::*;
+}
 
+/// Authorization: abilities, `#[authorize]`, the query filter and the judged wire
+/// row.
 #[cfg(feature = "authz")]
-pub use nest_rs_authz as authz;
+pub mod authz {
+    #[doc(no_inline)]
+    pub use nest_rs_authz::*;
+}
 
 /// RFC 6749 §1.1's roles, one module per role, spelled in the RFC's own words.
-///
-/// The level exists because a family whose members are named by one standard is
-/// read as one thing; the word below it is looked up in §1.1 rather than chosen,
-/// so a role added later has exactly one place to land. See *Families* in
-/// `.claude/rules/architecture.md`.
 #[cfg(any(
     feature = "oauth-client",
     feature = "oauth-server",
     feature = "oauth-resource"
 ))]
 pub mod oauth {
+    /// RFC 6749 §1.1's client: the Authorization Code flow with PKCE.
     #[cfg(feature = "oauth-client")]
-    pub use nest_rs_oauth_client as client;
+    pub mod client {
+        #[doc(no_inline)]
+        pub use nest_rs_oauth_client::*;
+    }
+    /// RFC 6749 §1.1's resource server: RFC 9728's Protected Resource Metadata.
     #[cfg(feature = "oauth-resource")]
-    pub use nest_rs_oauth_resource as resource;
+    pub mod resource {
+        #[doc(no_inline)]
+        pub use nest_rs_oauth_resource::*;
+    }
+    /// RFC 6749 §1.1's authorization server: client authentication and the token response.
     #[cfg(feature = "oauth-server")]
-    pub use nest_rs_oauth_server as server;
+    pub mod server {
+        #[doc(no_inline)]
+        pub use nest_rs_oauth_server::*;
+    }
 }
+/// Social login: the `SocialProvider` contract and its registry.
 #[cfg(feature = "social")]
-pub use nest_rs_social as social;
+pub mod social {
+    #[doc(no_inline)]
+    pub use nest_rs_social::*;
+}
 
+/// OpenTelemetry: traces, metrics, logs and the OTLP export.
 #[cfg(feature = "opentelemetry")]
-pub use nest_rs_opentelemetry as opentelemetry;
+pub mod opentelemetry {
+    #[doc(no_inline)]
+    pub use nest_rs_opentelemetry::*;
+}
 
+/// The OpenAPI 3.1 document and its Swagger UI.
 #[cfg(feature = "openapi")]
-pub use nest_rs_openapi as openapi;
+pub mod openapi {
+    #[doc(no_inline)]
+    pub use nest_rs_openapi::*;
+}
 
+/// Liveness, readiness and startup probes, and their indicators.
 #[cfg(feature = "health")]
-pub use nest_rs_health as health;
+pub mod health {
+    #[doc(no_inline)]
+    pub use nest_rs_health::*;
+}
 
+/// Rate limiting: `ThrottlerGuard` and the `ThrottlerStore` port.
 #[cfg(feature = "throttler")]
-pub use nest_rs_throttler as throttler;
+pub mod throttler {
+    #[doc(no_inline)]
+    pub use nest_rs_throttler::*;
+}
 
+/// The W3C Server-Timing response header.
 #[cfg(feature = "server-timing")]
-pub use nest_rs_server_timing as server_timing;
+pub mod server_timing {
+    #[doc(no_inline)]
+    pub use nest_rs_server_timing::*;
+}
 
+/// Static files and single-page apps, served beside the API.
+#[cfg(feature = "static-files")]
+pub mod static_files {
+    #[doc(no_inline)]
+    pub use nest_rs_static_files::*;
+}
+
+/// The in-process test harness: `TestApp`, its client and provider overrides.
 #[cfg(feature = "testing")]
-pub use nest_rs_testing as testing;
+pub mod testing {
+    #[doc(no_inline)]
+    pub use nest_rs_testing::*;
+}
 
-// Layer-System extension-point crates — re-exported so writing a custom
-// `Guard`/`Pipe`/`Interceptor`/`Filter`/`ExceptionFilter` (or a `#[resource]`/
-// worker provider) needs no direct per-crate dep (FACADE-I11).
+// The layer contracts an edge's decorators name, so a custom `Guard` or `Pipe`
+// needs no per-crate dependency; `Interceptor` and `ExceptionFilter` are core's.
+/// The guard contract every edge checks, and the app-wide `GlobalGuards`.
 #[cfg(feature = "guards")]
-pub use nest_rs_guards as guards;
+pub mod guards {
+    #[doc(no_inline)]
+    pub use nest_rs_guards::*;
+}
 
+/// Validation and transformation pipes.
 #[cfg(feature = "pipes")]
-pub use nest_rs_pipes as pipes;
+pub mod pipes {
+    #[doc(no_inline)]
+    pub use nest_rs_pipes::*;
+}
 
-#[cfg(feature = "interceptors")]
-pub use nest_rs_interceptors as interceptors;
+/// Object storage over `object_store`, its backend picked by the URL's scheme.
+#[cfg(feature = "storage")]
+pub mod storage {
+    #[doc(no_inline)]
+    pub use nest_rs_storage::*;
+}
 
-#[cfg(feature = "filters")]
-pub use nest_rs_filters as filters;
+// What codegen appends after an expansion reaching a feature an attribute
+// pulls in (`#[authorize]`, `#[crud]`): one chain per expansion, each link
+// adding its feature when this build lacks it, the last saying one sentence
+// for them all. Written out pair by pair: a `#[macro_export]` a macro produces
+// is unreachable by an absolute path inside its own crate, and a `#[cfg]` a
+// `macro_rules!` emits is read in the caller's crate.
 
-#[cfg(feature = "exception-filters")]
-pub use nest_rs_exception_filters as exception_filters;
+#[cfg(feature = "authz")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_authz {
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)*] $($rest)* }
+    };
+}
+
+#[cfg(not(feature = "authz"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_authz {
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)* "authz"] $($rest)* }
+    };
+}
 
 #[cfg(feature = "seaorm")]
-pub use nest_rs_resource as resource;
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_seaorm {
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)*] $($rest)* }
+    };
+}
 
-#[cfg(feature = "storage")]
-pub use nest_rs_storage as storage;
+#[cfg(not(feature = "seaorm"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_seaorm {
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)* "seaorm"] $($rest)* }
+    };
+}
 
-#[cfg(feature = "worker")]
-pub use nest_rs_worker as worker;
+#[cfg(feature = "graphql")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_graphql {
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)*] $($rest)* }
+    };
+}
+
+#[cfg(not(feature = "graphql"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_graphql {
+    ($what:literal $req:literal [$($missing:literal)*] $next:ident $($rest:ident)*) => {
+        $crate::$next! { $what $req [$($missing)* "graphql"] $($rest)* }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __requires_end {
+    ($what:literal $req:literal []) => {};
+    ($what:literal $req:literal [$only:literal]) => {
+        ::core::compile_error!(::core::concat!(
+            $what, " expands into `nest_rs::", $only,
+            "`, which this build does not enable. Add the feature to Cargo.toml:\n\n    \
+             nest-rs = { version = \"", $req, "\", features = [\"", $only, "\"] }"
+        ));
+    };
+    ($what:literal $req:literal [$first:literal $($more:literal)+]) => {
+        ::core::compile_error!(::core::concat!(
+            $what, " expands into `nest_rs::", $first, "`", $(" and `nest_rs::", $more, "`",)+
+            ", which this build does not enable. Add the features to Cargo.toml:\n\n    \
+             nest-rs = { version = \"", $req, "\", features = [\"", $first, "\""
+            $(, ", \"", $more, "\"")+, "] }"
+        ));
+    };
+}
 
 /// The everyday import — covers the decorators and types an app reaches for
 /// on every controller, service, and module.
 ///
-/// ```ignore
+/// ```
 /// use nest_rs::prelude::*;
+/// # fn everyday(_: App, _: AppBuilder, _: Container, _: ContainerBuilder) {}
+/// # fn root<M: Module>() {}
 /// ```
 ///
 /// Items behind Cargo features are pulled in only when the matching feature
@@ -128,28 +317,18 @@ pub use nest_rs_worker as worker;
 /// HTTP-API case.
 pub mod prelude {
     pub use nest_rs_core::{
-        App, AppBuilder, Container, ContainerBuilder, Module, hooks, injectable, module,
+        Ambient, App, AppBuilder, Container, ContainerBuilder, Module, Reflector, Scoped,
+        async_trait, hooks, injectable, interceptor, module,
     };
 
-    // `#[input]` is `nest-rs-core`'s and every edge re-exports it, which is the
-    // statement that it belongs to none of them. It sat inside the `http` block
-    // for a while, so `--no-default-features --features queue` left a job
-    // payload with no `#[input]` and the remedy a developer reaches for pulls
-    // the whole HTTP stack into a headless worker.
-    pub use nest_rs_core::input;
+    // Outside every edge's feature: a headless worker needs `#[input]` too.
+    pub use nest_rs_core::{input, output, wire_enum};
 
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
-        ClientIp, Ctx, HttpConfig, HttpModule, RawBody, Reflector, Scoped, Valid, controller,
-        http_code, interceptor, redirect, response_header, routes,
+        ClientIp, HttpConfig, HttpModule, Json, Path, Query, RawBody, controller, http_code,
+        redirect, response_header, routes,
     };
-
-    // `Json`/`Path`/`Query` are `poem` extractors re-exported through
-    // `nest_rs_http::poem`. This is a deliberate part of the declared
-    // poem-coupling contract (see the root `Cargo.toml` pinned-major policy:
-    // poem's major version is tied to the nestrs major), not an accidental leak.
-    #[cfg(feature = "http")]
-    pub use nest_rs_http::poem::web::{Json, Path, Query};
 
     #[cfg(feature = "config")]
     pub use nest_rs_config::{Config, Namespaced, config};
@@ -170,7 +349,7 @@ pub mod prelude {
     pub use nest_rs_queue::{processor, queue};
 
     #[cfg(feature = "seaorm")]
-    pub use nest_rs_resource::{expose, wire_enum};
+    pub use nest_rs_seaorm::expose;
 
     #[cfg(feature = "schedule")]
     pub use nest_rs_schedule::scheduled;
@@ -178,10 +357,6 @@ pub mod prelude {
     #[cfg(feature = "ws")]
     pub use nest_rs_ws::{gateway, messages};
 
-    // `#[crud]` is deliberately **not** re-exported here: `nest_rs_http::crud`
-    // and `nest_rs_graphql::crud` are different decorators sharing a name, so a
-    // glob prelude carrying both would collide the moment an app enables
-    // `http` + `graphql`. Name the transport at the use site —
-    // `use nest_rs::graphql::crud;` — which is also what the file it decorates
-    // is about.
+    // No `#[crud]`: the HTTP and GraphQL decorators share the name, so a glob
+    // would collide; import it from its edge (`nest_rs::graphql::crud`).
 }

@@ -1,15 +1,10 @@
 use std::sync::Arc;
 
-use nest_rs::authz::{Create, Read};
-use nest_rs::http::{Ctx, Valid, controller, crud};
-use nest_rs::seaorm::Bind;
-use poem::Result;
-use poem::web::Json;
+use nest_rs::http::{controller, crud};
 
-use crate::Claims;
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
-use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
+use crate::users::UsersService;
 
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
@@ -19,37 +14,17 @@ pub struct UsersController {
 }
 
 #[crud(
-    service = svc,
-    entity = UserEntity,
-    output = User,
-    create = CreateUser,
-    update = UpdateUser,
+    service = UsersService,
+    api(
+        get(
+            summary = "Get a user in the caller's org by id",
+            description = "A user outside the caller's org answers 403, an absent one 404."
+        ),
+        create(
+            summary = "Create a user in the caller's org",
+            description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). \
+                           The user's org is taken from the caller's token, never the body."
+        ),
+    ),
 )]
-impl UsersController {
-    #[post("/")]
-    #[authorize(Create, UserEntity)]
-    #[api(
-        summary = "Create a user in the caller's org",
-        description = "Requires a bearer JWT (obtain one from `POST /login` on the auth app). The \
-                       user's org is taken from the caller's token, never the body.",
-        tags("User")
-    )]
-    async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>) -> Result<Json<User>> {
-        let user = self
-            .svc
-            .create_in_org(body.into_inner(), auth.org_id)
-            .await?;
-        Ok(Json(User::from(&user)))
-    }
-
-    #[get("/:id")]
-    #[api(
-        summary = "Get a user in the caller's org by id",
-        description = "The id is bound to the loaded, authorized user through the \
-                       service — a row outside the caller's scope is 403, absent 404.",
-        tags("User")
-    )]
-    async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
-        Json(User::from(&*user))
-    }
-}
+impl UsersController {}

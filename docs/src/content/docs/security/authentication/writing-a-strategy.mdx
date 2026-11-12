@@ -1,0 +1,149 @@
+---
+title: Writing a strategy
+description: A Strategy of your own for a credential the framework does not read — an API key, a session cookie — and the contract every strategy keeps.
+sidebar:
+  order: 8
+---
+
+When the credential is not a JWT — an API key, a session cookie,
+something app-specific — a strategy implements one async method. It
+returns the principal on success (`Ok`), or an `AuthError` describing
+why it could not (`Err`). A strategy never issues a transport response
+itself — a redirect-style flow (OAuth `/authorize`) is a plain handler,
+so authentication stays a pure request → principal mapping.
+
+```rust title="crates/features/src/authn/strategies/api_key.rs"
+use std::sync::Arc;
+
+use nest_rs::authn::{AuthError, PrincipalIdentity, Strategy};
+use nest_rs::core::{async_trait, injectable};
+use nest_rs::http::Request;
+use uuid::Uuid;
+
+#[derive(Clone, PrincipalIdentity)]
+pub struct ApiKey {
+    #[principal(actor)]
+    pub owner_id: Uuid,
+}
+
+#[injectable]
+pub struct ApiKeyStrategy {
+    #[inject]
+    svc: Arc<KeysService>,
+}
+
+#[async_trait]
+impl Strategy for ApiKeyStrategy {
+    type Principal = ApiKey;
+
+    async fn authenticate(&self, req: &mut Request) -> Result<ApiKey, AuthError> {
+        match req.header("x-api-key").and_then(|k| self.svc.lookup(k)) {
+            Some(api_key) => Ok(api_key),
+            None => Err(AuthError::MissingCredentials),
+        }
+    }
+}
+```
+
+`#[derive(PrincipalIdentity)]` makes `ApiKey` a principal: the guard attaches
+it for the rest of the request, and records the field marked
+`#[principal(actor)]` as `actor_id` on the request span, so every denial is
+attributable. A custom strategy binds exactly like the shipped one:
+`AuthnGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
+bound with `#[use_guards(...)]`.
+
+## How long the guard waits
+
+The guard waits for `authenticate` for at most
+`nest_rs::authn::AUTHENTICATE_TIMEOUT` — 18 seconds — and then denies the
+request. That is a net, not a budget: a strategy that calls a backend bounds
+each call itself, the way the [OAuth2 client](/security/authentication/oauth2/)
+does, so an outage reaches the caller as your strategy's own failure, with its
+cause, long before the net. The net sits above every login the framework ships
+(a social login spends at most 15 s on its provider) and below the HTTP edge's
+20-second request timeout, so a strategy that hangs is refused by the guard, on
+every edge — a route, the GraphQL POST, the MCP POST, the WebSocket upgrade —
+with the 503 an unreachable identity store gets, `#[public]` routes included.
+The edge files the refusal once on `nest_rs::authn` — `guard denied the
+request`, at `warn`, `reason = "strategy_timeout"` — its `error` chain naming
+your strategy's type and how long it was waited on. A strategy that panics
+decided nothing either, and is denied the same way, `reason =
+"strategy_panicked"`, with the panic's own line at `error`, `strategy
+panicked; denying (fail-closed)`, carrying the `panic` — so answer your
+store's failure as `AuthError::Unavailable` rather than an `unwrap`.
+
+The call is dropped where it stands when the net fires, so keep no state in a
+strategy that a half-finished call would have had to undo.
+
+## The actor and the tenant
+
+You declare `actor_id` once, here. Reading it back is
+`nest_rs::core::current_actor_id()`, anywhere the framework carries work — a
+service, the data layer, a queue job in another process — and it answers `None`
+for an anonymous caller. It is an **audit** identity and never an authorization
+input: what a caller may *do* is the ambient `Ability`, decided in a guard. See
+[Correlation](/fundamentals/correlation/).
+
+Mark the credential's subject as the actor. RFC 9068 §2.2 requires `sub` in a
+JWT access token — the client's own id when it acts on its own behalf — so a
+conformant credential always names one. A principal whose `actor_id` is `None`
+can still be authorized, but nothing can be bound to it alone: an
+[MCP session](/mcp/configuration/#a-session-belongs-to-the-principal-that-opened-it)
+never opens for one.
+
+A principal bound to a tenant marks it beside, `#[principal(tenant)]` on the
+field read off the verified credential — a claim its issuer signed,
+never a header the caller sends beside it. The tenant is the opposite of the
+actor: an **authorization** input. The guard makes it ambient for the request
+and seals it into every job the request pushes, and
+`nest_rs::core::current_tenant_id()` reads it back in a service or a
+processor. See [Multi-tenant SaaS](/security/multi-tenant-saas/).
+
+## One return type — principal or error
+
+```rust title="nest_rs::authn::Strategy"
+async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError>;
+```
+
+A strategy maps a request to a principal and nothing else — it never
+issues a transport response. The request is the one the edge holds, body
+included, so a strategy verifying a signed webhook reads the body and sets
+it back (`req.take_body()`, then `req.set_body(bytes)`) for the handler to
+read. The two protocol styles both fit:
+
+- **Bearer protocols** return `Ok(principal)` on a valid token,
+  `Err(AuthError)` on a missing or invalid one — the guard turns the
+  error into a 401 with `WWW-Authenticate: Bearer`.
+- **Redirect protocols** (OAuth) keep the redirect *out* of the
+  strategy: the `/authorize` endpoint is a plain handler that returns a
+  302, the browser bounces to the provider and comes back to the
+  callback, and only then does a strategy verify the resulting token.
+
+The same trait serves both shapes because authentication is always a
+pure request → principal mapping; the guard just runs `authenticate`
+and reacts to the `Result`.
+
+## Credential extractors
+
+`nest-rs-authn` exposes two header extractors so a `Strategy` does not
+re-parse them:
+
+- `bearer_token(req.headers()) -> Option<&str>` — pulls the token out of
+  `Authorization: Bearer <token>` after trimming.
+- `basic_credentials(req.headers()) -> Option<(String, String)>` — decodes
+  `Authorization: Basic <base64>` and returns `(client_id,
+  client_secret)`, splitting on the first colon (RFC 7617).
+
+Both return `None` rather than erroring on missing/malformed headers
+— the strategy decides whether a missing credential is an `AuthError`
+or an anonymous request the guard lets through on a `#[public]`
+route.
+
+## Going further
+
+- [Authentication](/security/authentication/) — the guard that runs a
+  strategy, and the errors it answers.
+- [OAuth2 client configuration](/security/authentication/oauth2-configuration/#every-provider-call-has-a-bound)
+  — a strategy calling a backend, each call bounded.
+- [Multi-tenant SaaS](/security/multi-tenant-saas/) — the tenant a principal
+  marks, end to end.

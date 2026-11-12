@@ -1,0 +1,13 @@
+error[E0277]: an `#[on_event]` method returns `()` or `Result<(), E>`, and `std::option::Option<()>` is neither
+  --> tests/integration/diagnostics/events/on_event_returns_an_option.rs:18:46
+   |
+18 |     async fn on_ping(&self, _event: Ping) -> Option<()> {
+   |                                              ^^^^^^ not `()`, nor a `Result<(), E>` whose `E` converts into `Box<dyn Error + Send + Sync>`
+   |
+   = help: the trait `nest_rs::events::__private::ListenerAnswer` is not implemented for `std::option::Option<()>`
+   = note: an `Err` rolls the listener's unit of work back and is reported at `error` on `nest_rs::events`; the next listener runs either way
+note: required by a bound in `nest_rs::events::__private::answered`
+  --> $WORKSPACE/crates/nest-rs-events/src/answer.rs
+   |
+   | pub fn answered<A: ListenerAnswer>(answer: A) -> Result<(), Box<dyn Error + Send + Sync>> {
+   |                    ^^^^^^^^^^^^^^ required by this bound in `answered`

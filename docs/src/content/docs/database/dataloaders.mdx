@@ -1,7 +1,6 @@
 ---
 title: Dataloaders
 description: "Batch field fetches without N+1 — auto-emitted PK and FK loaders from #[expose], plus #[dataloader] for custom keys."
-tier: all-options
 sidebar:
   order: 7
 ---
@@ -20,7 +19,7 @@ A naïve resolver loop runs one query per parent; a dataloader collapses the `N`
 to `1`:
 
 ```text
-GET /graphql { orgs { name users { name } } }
+POST /graphql { orgs { name users { name } } }
   └─ select * from org                                       # 1
   └─ select * from "user" where org_id = ?   (per org)       # N   ← naïve
   └─ select * from "user" where org_id in ($1, … $n)         # 1   ← dataloader
@@ -32,7 +31,7 @@ A `belongs_to` or `has_many` whose relation field carries `#[expose]` becomes a
 GraphQL field auto-resolved through a dataloader. The macro emits:
 
 - a **PK loader** on the owner's service (`<Service>ById`) for every entity
-  with `#[expose(name = ..., service = ...)]` — used by every inverse side
+  with `#[expose(name = ..., service = ..., graphql)]` — used by every inverse side
   to reach the parent;
 - an **FK loader** (`<Service>By<FkCol>`) per `belongs_to` on the
   FK-owning side, keyed on the parent id **and the page window**, so it
@@ -44,7 +43,12 @@ GraphQL field auto-resolved through a dataloader. The macro emits:
   matching loader and returns the related object.
 
 ```rust title="crates/features/src/posts/entities/post.rs (from the demo, abridged)"
-#[expose(name = "Post", service = super::super::service::PostsService, graphql)]
+#[expose(
+    name = "Post",
+    service = super::super::service::PostsService,
+    graphql,
+    // …
+)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
 #[sea_orm(table_name = "post")]
@@ -54,11 +58,14 @@ pub struct Model {
     pub id: Uuid,
     #[expose]
     pub org_id: Uuid,
+    // …
     #[expose(input(create, update), validate(length(min = 1)))]
     pub title: String,
+    // …
     #[sea_orm(belongs_to, from = "org_id", to = "id")]
     #[expose]
     pub org: HasOne<crate::orgs::Entity>,
+    // …
 }
 ```
 
@@ -106,7 +113,7 @@ impl PostsService {
         }
         let rows = Repo::<Posts>::scoped(Action::Read)
             .filter(entity::Column::Title.is_in(names.iter().cloned()))
-            .all(&Repo::<Posts>::conn()?)
+            .all()
             .await?;
         Ok(group_by_name(names, rows))
     }
@@ -116,8 +123,7 @@ impl PostsService {
 Three properties make this loader correct:
 
 - **Empty-keys short-circuit.** A frame with no keys returns the empty
-  map without touching the executor — `Repo::conn()` would otherwise
-  error outside scope.
+  map without touching the database — no query, no connection drawn.
 - **Result, not silent empty.** A DB error returns `Err(_)`. **Never**
   map a DB error to an empty `HashMap` — that turns a failure into a
   silent miss, the worst kind.
@@ -125,20 +131,73 @@ Three properties make this loader correct:
   applies, so a batch on behalf of one caller never returns another
   tenant's rows.
 
-A resolver injects the loader and calls `.load_one(key)` per parent — the
-runtime batches every call into a single query:
+## Reading a loader
 
-```rust title="crates/features/src/posts/graphql/resolver.rs"
+A `#[field_resolver]` takes the loader as a parameter and calls `.load_one(key)`
+per parent — the runtime batches every call into a single query:
+
+```rust title="crates/features/src/authors/graphql/resolver.rs"
 #[field_resolver]
-async fn by_name(
+async fn namesakes(
     &self,
-    ctx: &Context<'_>,
-    name: String,
-) -> Result<Vec<Post>> {
-    let loader = ctx.data_unchecked::<DataLoader<PostsServiceByName>>();
-    Ok(loader.load_one(name).await?.unwrap_or_default())
+    author: &Author,
+    posts: &DataLoader<PostsServiceByName>,
+) -> Result<Vec<Post>, ServiceError> {
+    Ok(posts.load_one(author.name.clone()).await?.unwrap_or_default())
 }
 ```
+
+A root field — `#[query]`, `#[mutation]`, `#[subscription]`, `#[entity]` — takes it the
+same way, and the parameter is no argument of the schema, nor part of an entity's key:
+
+```rust title="crates/features/src/posts/graphql/resolver.rs"
+#[query]
+#[authorize(Read, posts::Entity)]
+async fn posts_named(
+    &self,
+    name: String,
+    posts: &DataLoader<PostsServiceByName>,
+) -> Result<Vec<Post>, ServiceError> {
+    Ok(posts.load_one(name).await?.unwrap_or_default())
+}
+```
+
+A batch [carries the request's values, never one field's](#batches-carry-the-request-with-them),
+so a field naming a [visitor's read](/security/authorization/public-reads/) reads nothing
+through a loader: under `#[public(Read, posts::Entity)]` a visitor's batch runs with no
+ability, and `Repo` denies every row, with the `warn` on `nest_rs::orm`. Read those rows in
+the field's own body. A caller a token backs reads through the loader by `define`, on either
+line.
+
+A loader's rows are wire rows, judged where the batch builds them for the caller whose
+request runs it: the batch decides the rows, and [the caller's grants their
+columns](/security/authorization/response-masking/#every-shape-holds-only-what-the-row-holds),
+a withheld one reading `None`, as a root field's rows do. A scalar a body derives from a
+`Model` it read whole is [its own line](/security/authorization/response-masking/#what-stays-the-bodys-own-line).
+
+The parameter is the whole wiring, and it declares the need. A loader is seeded
+only for an owner the app reaches, so the schema build reads the parameter and
+refuses a served field whose loader's owner the app does not import, as it does
+for an [exposed relation](/graphql/relations/), naming the line to add:
+
+```text frame="terminal"
+a served field reads a loader this app does not reach, so every query selecting it would fail: `Author.namesakes` (declared on `features::authors::Author`) reads a loader of `features::posts::PostsService`: import `PostsModule` into the module serving `Author`
+```
+
+A root field is named by its role, `query posts_named` (declared on its resolver).
+
+The loader's name comes from `#[dataloader]`, so the parameter takes only one
+`#[dataloader]` generated: the macro's own association is what the boot reads,
+and a hand-written `Loader` here is a compile error saying so.
+
+<Aside type="caution">
+Keep each loader as the framework builds it, caching no record. Never build
+async-graphql's `dataloader::LruCache`, which `nest_rs::graphql::async_graphql`
+reaches: it stores into `lru` 0.16, whose `LruCache::pop` frees a node it still
+links when a key's `Drop` panics
+([RUSTSEC-2026-0253](https://rustsec.org/advisories/RUSTSEC-2026-0253.html)).
+The fix ships in async-graphql 8, a NestRS major away.
+</Aside>
 
 ## The cross-entity rule
 
@@ -152,25 +211,39 @@ A resolver returning `Post` from a notification field uses the auto-emitted
 `PostsServiceById`; the loader is the property of `PostsService` and any
 new feature reaches it through the existing one.
 
-## Batches run on a snapshot of the request context
+## Batches carry the request with them
 
-async-graphql runs each batch on a spawned task — fresh task-local
-storage. Without intervention, the ambient executor and ability would be
-gone and the loader would read on the pool, unscoped.
+async-graphql runs each batch on a task of its own, which starts with
+nothing ambient. The spawner captures what the request carries the moment a
+field asks the loader — its trace, the caller's ability, every value it
+carries — and runs the batch under it. You bind nothing for this: a batch
+reads through `Repo` filtered by the caller's ability, and every line it
+logs carries the request's `trace_id`.
 
-The framework installs a `LoaderScope` (bound to `dyn GraphqlBatchContext`)
-that runs while the per-request loader is built, snapshots the executor and
-ability, and re-installs them around each batch future. You don't write
-this; importing `AuthzGraphqlModule` on the resolver activates it. The
-captured executor is the **pool**, never the request transaction — a batch
-runs off the request task, and a write inside a loader would race the
-auto-commit's `Arc::try_unwrap`. Loaders are reads.
+A batch is shared by every field of the request that loads through the
+loader, so it belongs to the **request**: it carries the request's values,
+never one field's, and its lines and spans sit in the request's span, not
+under the field that asked first. One exception keeps a root field's rows its
+own: where a query's or a mutation's own guards attached the ability its
+request did not carry, its answer and its loader parameters read through
+loaders of the field's own, whose batches judge their rows under that ability —
+no other root field's keys join them. A subscription's opening reads the
+request's, since its operation holds no other root field: a second is refused
+before either opens ([Subscriptions](/graphql/subscriptions/#limits)). Its executor is the **pool**, never the
+request transaction — a batch runs beside the request, and a write inside a
+loader would race the commit. So a relation resolved in a mutation's own
+response reads the rows as they stood before the mutation's transaction: a
+row the mutation wrote is not there yet. Loaders are reads.
+
+A batch that panics is contained on its task and said once, at `error` on
+`nest_rs::graphql`, with the panic's message; the fields waiting on it fail
+with it, as a field that panics itself does.
 
 ## Going further
 
 - [Database](/database/) — the slice the loader hangs off.
-- [Repo and executor](/database/repo-and-executor/) — what `Repo::conn`
-  reads, what `Repo::scoped` filters.
+- [Repo and executor](/database/repo-and-executor/) — the executor a
+  `Repo` query runs on, what `Repo::scoped` filters.
 - [GraphQL](/graphql/) — `#[resolver]`, `#[field_resolver]`, the
   schema-discovery seam.
 - [Security](/security/) — the ability that drives `Repo::scoped`'s

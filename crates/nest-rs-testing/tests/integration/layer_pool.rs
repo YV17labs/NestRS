@@ -1,32 +1,22 @@
-//! Layer-pool invariant: a layer declared at any combination of scopes
-//! (global / controller / method) executes **exactly once** per request. This
-//! is the contract the unified layer pool guarantees — scope is a *declaration*
-//! concern, deduplicated by `TypeId` via `compose_chain`, run once.
-//!
-//! The first half pins the invariant for **guards** across all seven scope
-//! combinations (interceptor / filter / pipe / exception-filter cross-scope
-//! dedup is exercised in `interceptors.rs`, `versioning_filters.rs`,
-//! `pipes.rs` and `exception_filters.rs`). A counting guard increments a
-//! process-global counter and then lets the request through, so the response
-//! is always `200` and the counter is the assertion surface.
-//!
-//! The second half pins the **execution site** contract for the global
-//! interceptor / filter scope: they run at the transport edge, so they
-//! observe what the per-route site cannot — 404s and guard denials — and an
-//! error a route-site filter maps carries the `MappedError` marker the data
-//! layer reads to refuse the commit.
+//! Layer-pool invariant: a guard declared at any combination of scopes
+//! executes **exactly once** per request; a global interceptor runs after the
+//! guards, so a denial never reaches it; a unit an exception filter answered
+//! stays failed, so its data rolls back; and each family's pool runs a layer it
+//! alone lists.
 
+use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, injectable, module};
-use nest_rs_filters::{Filter, RequestSnapshot, filter};
-use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::MappedError;
-use nest_rs_http::{async_trait, controller, routes};
-use nest_rs_interceptors::{Interceptor, Next, interceptor};
+use nest_rs_core::{
+    Caught, ExceptionFilter, GlobalExceptionFilters, GlobalInterceptors, Interceptor, Layer, Next,
+    Outcome, UnitContext, async_trait, injectable, module,
+};
+use nest_rs_guards::{Denial, GlobalGuards, Guard, GuardFor};
+use nest_rs_http::{
+    HeaderName, HeaderValue, HttpView, Json, Response, StatusCode, controller, routes,
+};
+use nest_rs_pipes::{ArgumentKind, GlobalPipe, GlobalPipes, PipeError};
 use nest_rs_testing::TestApp;
-use poem::http::StatusCode;
-use poem::{Request, Response};
 use tokio::sync::Mutex;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -40,26 +30,34 @@ fn counter() -> usize {
     COUNTER.load(Ordering::SeqCst)
 }
 
-/// Counts every execution, then admits the request (so the count, not the
-/// status, is what each test asserts).
+/// Counts every execution, then admits the request.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct CountingGuard;
-
-impl Layer for CountingGuard {}
 
 #[async_trait]
 impl Guard for CountingGuard {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         COUNTER.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Ok(())
     }
 }
 
-impl HttpGuard for CountingGuard {}
-
-// One controller carries every scope combination on its own route, so a single
-// module covers all cases. `g` = guarded at the named scope(s).
+impl GuardFor<nest_rs_http::HttpView> for CountingGuard {}
 
 #[controller(path = "/pool")]
 #[use_guards(CountingGuard)]
@@ -67,13 +65,11 @@ struct ControllerGuarded;
 
 #[routes]
 impl ControllerGuarded {
-    // controller-only
     #[get("/c")]
     async fn c(&self) -> &'static str {
         "ok"
     }
 
-    // controller + method
     #[get("/cm")]
     #[use_guards(CountingGuard)]
     async fn cm(&self) -> &'static str {
@@ -86,15 +82,15 @@ struct MethodGuarded;
 
 #[routes]
 impl MethodGuarded {
-    // method-only
     #[get("/m")]
     #[use_guards(CountingGuard)]
     async fn m(&self) -> &'static str {
         "ok"
     }
 
-    // unguarded locally — used only under a global guard
+    // Used only under a global guard.
     #[get("/none")]
+    #[public]
     async fn none(&self) -> &'static str {
         "ok"
     }
@@ -116,13 +112,15 @@ async fn guard_runs_once_per_request_at_each_local_scope() {
     }
 }
 
+#[module(imports = [PoolModule], providers = [GlobalGuards<(CountingGuard,)>])]
+struct GuardRunsOncePerRequestWithGlobalSeedingApp;
+
 /// global alone, global+controller, global+method, global+controller+method.
 #[tokio::test]
 async fn guard_runs_once_per_request_with_global_seeding() {
     let _gate = GATE.lock().await;
     let app = TestApp::builder()
-        .module::<PoolModule>()
-        .use_guards_global([guard::<CountingGuard>()])
+        .module::<GuardRunsOncePerRequestWithGlobalSeedingApp>()
         .build()
         .await
         .expect("boots with a global guard");
@@ -140,14 +138,6 @@ async fn guard_runs_once_per_request_with_global_seeding() {
     }
 }
 
-// --- transport-edge coverage of the global interceptor / filter scope --------
-//
-// Global interceptors / filters execute at the transport edge (outside
-// routing and the guard pool), so they cover what a per-route site cannot:
-// unmatched paths and guard denials. Per-route interceptors stay inside the
-// guard chain (a denial short-circuits before them) — that case is pinned in
-// `interceptors.rs::guard_short_circuits_before_the_interceptor`.
-
 static EDGE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn reset_edge_counter() {
@@ -158,66 +148,82 @@ fn edge_counter() -> usize {
     EDGE_COUNTER.load(Ordering::SeqCst)
 }
 
-/// Counts every request it observes, then forwards.
+/// Counts every unit it runs around, then forwards.
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct EdgeObserver;
-
-impl Layer for EdgeObserver {}
 
 #[async_trait]
 impl Interceptor for EdgeObserver {
-    async fn intercept(&self, req: Request, next: Next<'_>) -> poem::Result<Response> {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
         EDGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-        next.run(req).await
+        next.run(cx).await
     }
 }
 
-/// Maps any error escaping routing to `418` with a fixed body.
+/// Answers a handler's error with a *success*.
 #[injectable]
-#[derive(Default)]
-struct EdgeTeapot;
-
-impl Layer for EdgeTeapot {}
-
-#[async_trait]
-impl Filter for EdgeTeapot {
-    async fn filter(&self, _req: &RequestSnapshot, _error: poem::Error) -> Response {
-        Response::builder()
-            .status(StatusCode::IM_A_TEAPOT)
-            .body("edge-mapped")
-    }
-}
-
-/// Maps a handler error to a *success* — exists to prove the response still
-/// carries the `MappedError` marker the data layer reads to refuse a commit.
-#[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct MapToOk;
 
-impl Layer for MapToOk {}
+#[async_trait]
+impl ExceptionFilter for MapToOk {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, cx: &mut UnitContext<'_>) -> Caught {
+        match HttpView::of(cx) {
+            Ok(view) => Caught::Answered(view.respond(Response::builder().body("recovered"))),
+            Err(_) => Caught::Declined,
+        }
+    }
+}
+
+/// Says, at the unit stage, whether the unit failed, whatever it answered.
+#[nest_rs_core::interceptor(stage = unit)]
+#[derive(Default, Layer)]
+struct UnitOutcome;
 
 #[async_trait]
-impl Filter for MapToOk {
-    async fn filter(&self, _req: &RequestSnapshot, _error: poem::Error) -> Response {
-        Response::builder().status(StatusCode::OK).body("recovered")
+impl Interceptor for UnitOutcome {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        let outcome = next.run(cx).await;
+        let said = if outcome.is_ok() { "ok" } else { "failed" };
+        if let Some(response) = HttpView::of(cx)?.response_mut() {
+            response.headers_mut().insert(
+                HeaderName::from_static("x-unit"),
+                HeaderValue::from_static(said),
+            );
+        }
+        outcome
     }
 }
 
 #[injectable]
-#[derive(Default)]
+#[derive(Default, Layer)]
 struct DenyAll;
-
-impl Layer for DenyAll {}
 
 #[async_trait]
 impl Guard for DenyAll {
-    async fn check_http(&self, _req: &mut Request) -> std::result::Result<(), Denial> {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
         Err(Denial::forbidden("denied"))
+    }
+
+    async fn check(
+        &self,
+        _cx: &mut nest_rs_core::UnitContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Ok(())
     }
 }
 
-impl HttpGuard for DenyAll {}
+impl GuardFor<nest_rs_http::HttpView> for DenyAll {}
 
 #[controller(path = "/edge")]
 struct EdgeController;
@@ -231,44 +237,28 @@ impl EdgeController {
     }
 
     #[get("/boom")]
-    #[use_filters(MapToOk)]
-    async fn boom(&self) -> poem::Result<&'static str> {
-        Err(poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+    #[public]
+    #[use_exception_filters(MapToOk)]
+    async fn boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
 }
 
-#[module(providers = [EdgeObserver, EdgeTeapot, MapToOk, DenyAll, EdgeController])]
+#[module(providers = [EdgeObserver, MapToOk, UnitOutcome, DenyAll, EdgeController])]
 struct EdgeModule;
 
+#[module(imports = [EdgeModule], providers = [GlobalInterceptors<(EdgeObserver,)>])]
+struct AGlobalInterceptorNeverSeesAGuardDenialApp;
+
 #[tokio::test]
-async fn global_interceptor_observes_an_unmatched_path() {
+async fn a_global_interceptor_never_sees_a_guard_denial() {
     let _gate = GATE.lock().await;
     reset_edge_counter();
 
     let app = TestApp::builder()
-        .module::<EdgeModule>()
-        .use_interceptors_global([interceptor::<EdgeObserver>()])
-        .build()
-        .await
-        .expect("boots");
-
-    let resp = app.http().get("/no-such-route").send().await;
-    resp.assert_status(StatusCode::NOT_FOUND);
-    assert_eq!(
-        edge_counter(),
-        1,
-        "a global interceptor wraps routing itself, so a 404 is still observed",
-    );
-}
-
-#[tokio::test]
-async fn global_interceptor_observes_a_guard_denial() {
-    let _gate = GATE.lock().await;
-    reset_edge_counter();
-
-    let app = TestApp::builder()
-        .module::<EdgeModule>()
-        .use_interceptors_global([interceptor::<EdgeObserver>()])
+        .module::<AGlobalInterceptorNeverSeesAGuardDenialApp>()
         .build()
         .await
         .expect("boots");
@@ -277,40 +267,141 @@ async fn global_interceptor_observes_a_guard_denial() {
     resp.assert_status(StatusCode::FORBIDDEN);
     assert_eq!(
         edge_counter(),
-        1,
-        "a global interceptor runs outside the guard pool and observes the denial response",
+        0,
+        "the guards answer before the handler stage, which a global interceptor runs at",
     );
 }
 
 #[tokio::test]
-async fn global_filter_maps_an_unmatched_path() {
-    let _gate = GATE.lock().await;
-
-    let app = TestApp::builder()
-        .module::<EdgeModule>()
-        .use_filters_global([filter::<EdgeTeapot>()])
-        .build()
-        .await
-        .expect("boots");
-
-    let resp = app.http().get("/no-such-route").send().await;
-    resp.assert_status(StatusCode::IM_A_TEAPOT);
-    resp.assert_text("edge-mapped").await;
-}
-
-#[tokio::test]
-async fn a_mapped_error_response_carries_the_rollback_marker() {
+async fn a_unit_a_filter_answered_with_a_success_stays_failed() {
     let _gate = GATE.lock().await;
 
     let app = TestApp::for_module::<EdgeModule>().await.expect("boots");
 
-    // The route-site filter maps the handler's 500 into a 200 — but the
-    // response must carry `MappedError`, which the data layer reads to roll
-    // the ambient transaction back (a mapped error never commits).
     let resp = app.http().get("/edge/boom").send().await;
     resp.assert_status_is_ok();
-    assert!(
-        resp.0.extensions().get::<MappedError>().is_some(),
-        "a response produced by mapping a handler error must be tagged MappedError",
+    resp.assert_header("x-unit", "failed");
+    resp.assert_text("recovered").await;
+}
+
+static ONCE_GUARD: AtomicUsize = AtomicUsize::new(0);
+static ONCE_INTERCEPTOR: AtomicUsize = AtomicUsize::new(0);
+static ONCE_FILTER: AtomicUsize = AtomicUsize::new(0);
+static ONCE_PIPE: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Layer)]
+struct OnceGuard;
+
+#[async_trait]
+impl Guard for OnceGuard {
+    fn phase(&self) -> nest_rs_guards::GuardPhase {
+        nest_rs_guards::GuardPhase::Authorization
+    }
+
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+        ONCE_GUARD.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> std::result::Result<(), Denial> {
+        Ok(())
+    }
+}
+
+#[injectable]
+#[derive(Layer)]
+struct OnceInterceptor;
+
+#[async_trait]
+impl Interceptor for OnceInterceptor {
+    async fn intercept(&self, cx: &mut UnitContext<'_>, next: Next<'_>) -> Outcome {
+        ONCE_INTERCEPTOR.fetch_add(1, Ordering::SeqCst);
+        next.run(cx).await
+    }
+}
+
+#[injectable]
+#[derive(Layer)]
+struct OnceFilter;
+
+#[async_trait]
+impl ExceptionFilter for OnceFilter {
+    type Exception = dyn Error + Send + Sync;
+
+    async fn catch(&self, _: &Self::Exception, _: &mut UnitContext<'_>) -> Caught {
+        ONCE_FILTER.fetch_add(1, Ordering::SeqCst);
+        Caught::Declined
+    }
+}
+
+#[injectable]
+#[derive(Layer)]
+struct OncePipe;
+
+impl GlobalPipe for OncePipe {
+    fn transform(
+        &self,
+        _cx: &UnitContext<'_>,
+        _argument: ArgumentKind,
+        _input: &mut serde_json::Value,
+    ) -> std::result::Result<(), PipeError> {
+        ONCE_PIPE.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[controller(path = "/once")]
+struct OnceController;
+
+#[routes]
+impl OnceController {
+    #[post("/echo")]
+    async fn echo(&self, body: Json<serde_json::Value>) -> Json<serde_json::Value> {
+        body
+    }
+
+    #[get("/boom")]
+    async fn boom(&self) -> nest_rs_http::Result<&'static str> {
+        Err(nest_rs_http::HttpError::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
+    }
+}
+
+#[module(providers = [
+    OnceController,
+    GlobalGuards<(OnceGuard,)>,
+    GlobalInterceptors<(OnceInterceptor,)>,
+    GlobalExceptionFilters<(OnceFilter,)>,
+    GlobalPipes<(OncePipe,)>,
+])]
+struct EveryPoolListsItsLayerOnceApp;
+
+#[tokio::test]
+async fn every_familys_pool_runs_a_layer_it_alone_lists() {
+    let app = TestApp::for_module::<EveryPoolListsItsLayerOnceApp>()
+        .await
+        .expect("a pool registers what it lists");
+
+    app.http()
+        .post("/once/echo")
+        .body_json(&serde_json::json!({ "a": 1 }))
+        .send()
+        .await
+        .assert_status_is_ok();
+    assert_eq!(ONCE_GUARD.load(Ordering::SeqCst), 1, "the guard's pool");
+    assert_eq!(
+        ONCE_INTERCEPTOR.load(Ordering::SeqCst),
+        1,
+        "the interceptor's"
     );
+    assert_eq!(ONCE_PIPE.load(Ordering::SeqCst), 1, "the pipe's");
+
+    app.http()
+        .get("/once/boom")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(ONCE_FILTER.load(Ordering::SeqCst), 1, "the filter's");
 }

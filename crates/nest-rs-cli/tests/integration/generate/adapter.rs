@@ -2,7 +2,10 @@
 //! obligations are per transport: the right template, the crates its expansion
 //! names, and the wiring into feature and app.
 
-use crate::harness::{run_ok, write_fake_app, write_fake_workspace};
+use crate::harness::{
+    assigned, files_under, move_service_into_a_folder, run_err, run_ok, scaffolded_var,
+    write_fake_app, write_fake_migrations_crate, write_fake_workspace,
+};
 use std::fs;
 use std::process::Command;
 
@@ -22,37 +25,41 @@ fn generate_http_adapter_wires_feature_mod() {
     let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
     assert!(mod_rs.contains("pub mod http;"));
     assert!(mod_rs.contains("PostsHttpModule"));
-    // The index exports the module and never the handler: `mod.rs` is the
-    // export contract, and a controller reachable as `features::posts::*` is
-    // a decision the generator would be making for every project at once.
+    // The index exports the module and never the handler.
     assert!(!mod_rs.contains("PostsController"), "{mod_rs}");
 }
 
-/// Every route declares a posture — the `hello` starter and the GraphQL adapter
-/// both write `#[public]`, and the HTTP adapter used to write neither, so any
-/// app that took a `g http` booted with `unguarded routes detected` on a route
-/// nobody had decided about.
+/// A generated route is guarded: no posture of its own, the two guards on its
+/// controller, and the auth adapter they come from bootstrapped when the
+/// workspace has none.
 #[test]
-fn generate_http_adapter_declares_a_route_posture() {
+fn generate_http_adapter_binds_the_guards_and_bootstraps_their_auth() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
 
     run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
-    run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
+    let printed = run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
 
-    let controller = fs::read_to_string(
-        dir.path()
-            .join("crates/features/src/posts/http/controller.rs"),
-    )
-    .unwrap();
+    let src = dir.path().join("crates/features/src");
+    let controller = fs::read_to_string(src.join("posts/http/controller.rs")).unwrap();
     assert!(
-        controller.contains("#[public]"),
-        "the scaffolded route must declare its posture: {controller}"
+        controller.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        "the scaffolded route is guarded: {controller}"
     );
     assert!(
-        controller.contains("SECURITY:"),
-        "and say why it is open, the way the graphql adapter does: {controller}"
+        !controller.lines().any(|line| line.trim() == "#[public]"),
+        "an opening is the developer's line, never the generator's: {controller}"
+    );
+    let module = fs::read_to_string(src.join("posts/http/module.rs")).unwrap();
+    assert!(module.contains("AuthzModule"), "{module}");
+    assert!(
+        src.join("authz/ability.rs").is_file(),
+        "the guards' adapter lands"
+    );
+    assert!(
+        printed.contains("Also created the auth adapter"),
+        "{printed}"
     );
 }
 
@@ -75,9 +82,7 @@ fn generate_ws_adapter_ensures_dep_and_wires() {
 }
 
 /// A self-mount path is its exclusive namespace, so two gateways cannot share
-/// one. The template hard-coded `/ws`, which meant a second `g ws` produced an
-/// app that failed boot on `duplicate self-mounted endpoint path "/ws"` — and
-/// the generator's own next-step line told you to wire it in.
+/// one.
 #[test]
 fn generate_ws_adapter_gives_each_gateway_a_distinct_path() {
     let dir = tempfile::tempdir().unwrap();
@@ -107,9 +112,7 @@ fn generate_ws_adapter_gives_each_gateway_a_distinct_path() {
         "so a second adapter does not collide: {notify}"
     );
 
-    // The HTTP adapter claims `/<feature>`; the gateway must not land there
-    // either — a controller prefix and a self-mount on one path is the same
-    // exclusivity failure across families.
+    // A controller prefix and a self-mount on one path collide too.
     run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
     let controller = fs::read_to_string(
         dir.path()
@@ -122,32 +125,9 @@ fn generate_ws_adapter_gives_each_gateway_a_distinct_path() {
     );
 }
 
-/// `WsModule` provides the connection registry every default-namespace gateway
-/// reads. Left out, the app compiles, mounts the gateway, and *then* dies — so
-/// the generator writes the import rather than leaving it to the boot.
-#[test]
-fn generate_ws_adapter_imports_the_connection_registry() {
-    let dir = tempfile::tempdir().unwrap();
-    write_fake_workspace(dir.path());
-    let path = dir.path().to_str().unwrap();
-
-    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
-    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
-
-    let module_rs =
-        fs::read_to_string(dir.path().join("crates/features/src/posts/ws/module.rs")).unwrap();
-    assert!(
-        module_rs.contains("use nest_rs::ws::WsModule;")
-            && module_rs.contains("imports = [PostsModule, WsModule]"),
-        "the generated ws module must import WsModule: {module_rs}"
-    );
-}
-
-/// `#[messages]` expands to `nest_rs_guards::GuardAsWsMessageCheck`, gated
-/// behind that crate's `ws` feature — and the gateway body logs. Without both,
-/// `cargo check -p features` fails while `cargo check --workspace` passes
-/// (feature unification through a dev-dependency), which is the worst possible
-/// place for the failure to surface.
+/// `#[messages]` expands to names behind `nest_rs_guards`' `ws` feature, and the
+/// gateway body logs. Feature unification would hide a miss from
+/// `cargo check --workspace`.
 #[test]
 fn generate_ws_adapter_enables_the_guards_ws_feature_and_tracing() {
     let dir = tempfile::tempdir().unwrap();
@@ -174,9 +154,9 @@ fn generate_ws_adapter_enables_the_guards_ws_feature_and_tracing() {
     assert!(features_cargo.contains("tracing"), "{features_cargo}");
 }
 
-/// A typed WS payload reaches its derives through `#[input]`, so the generated
-/// manifest gains a feature and not a `serde` entry — the scaffold must not
-/// re-introduce a line the decorator exists to absorb.
+/// A typed WS payload reaches its derives through `#[input]`, so the adapter
+/// adds a feature and not a `serde` entry; the auth adapter, written first,
+/// brings its own.
 #[test]
 fn generate_ws_adapter_leaves_serde_to_the_decorator() {
     let dir = tempfile::tempdir().unwrap();
@@ -195,16 +175,17 @@ nest-rs.workspace = true
     .unwrap();
 
     run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "auth", "-p", path]);
+    let serde_lines = |manifest: &str| manifest.lines().filter(|l| l.contains("serde")).count();
+    let before = serde_lines(&fs::read_to_string(&features_cargo_path).unwrap());
     run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
 
     let features_cargo = fs::read_to_string(&features_cargo_path).unwrap();
-    assert!(!features_cargo.contains("serde"), "{features_cargo}");
+    assert_eq!(serde_lines(&features_cargo), before, "{features_cargo}");
     assert!(features_cargo.contains("\"ws\""), "{features_cargo}");
 }
 
-/// A2: the `ws` skeleton hardcoded `self.svc.count()`, which a `g resource`
-/// port's `CrudService` does not have — so the CLI page's "any adapter compiles
-/// immediately" guarantee broke, with rustc blaming `Iterator::count`.
+/// A `g resource` port's `CrudService` has no `count()`.
 #[test]
 fn generate_ws_over_a_resource_port_does_not_call_count() {
     let dir = tempfile::tempdir().unwrap();
@@ -223,9 +204,7 @@ fn generate_ws_over_a_resource_port_does_not_call_count() {
 }
 
 /// The schedule skeleton files no line of its own: `nest-rs-schedule` already
-/// emits one `info` per tick — "the only place a tick says it ran at all" — so
-/// a second one is the same unit of work said twice, on a target
-/// `nest_rs::operation=off` does not silence.
+/// emits one `info` per tick.
 #[test]
 fn generate_schedule_adapter_does_not_restate_the_tick_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -244,15 +223,51 @@ fn generate_schedule_adapter_does_not_restate_the_tick_line() {
         !tasks_rs.contains("tracing::"),
         "the tick's own line is the scheduler's to file: {tasks_rs}",
     );
-    // …and the dependency goes with the line: a `tracing` entry written into a
-    // hand-assembled workspace for a skeleton that names it nowhere is a
-    // manifest line the generator cannot account for.
+    // …and brings no `tracing` dependency.
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(
         !features_cargo.contains("tracing"),
         "the schedule skeleton writes no `tracing::` call, so it brings no \
          `tracing` dependency: {features_cargo}"
     );
+}
+
+/// `events/` is the edge folder, so the fact the listener receives sits at the
+/// port as `event.rs` — never in a plural `events/` beside the edge.
+#[test]
+fn generate_events_adapter_puts_the_event_at_the_port() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "events", "posts", "-p", path]);
+
+    let feature = dir.path().join("crates/features/src/posts");
+    let event_rs = fs::read_to_string(feature.join("event.rs")).unwrap();
+    assert!(
+        event_rs.contains("pub struct PostChangedEvent"),
+        "{event_rs}"
+    );
+
+    let listener_rs = fs::read_to_string(feature.join("events/listener.rs")).unwrap();
+    assert!(listener_rs.contains("#[listeners]"), "{listener_rs}");
+    assert!(
+        listener_rs.contains("event: PostChangedEvent) -> Result<()>"),
+        "a listener answers a Result its unit settles on: {listener_rs}"
+    );
+    assert!(!listener_rs.contains("pub struct PostChangedEvent"));
+
+    let module_rs = fs::read_to_string(feature.join("events/module.rs")).unwrap();
+    assert!(
+        module_rs.contains("pub struct PostsEventsModule"),
+        "{module_rs}"
+    );
+
+    let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
+    assert!(mod_rs.contains("mod event;"));
+    assert!(mod_rs.contains("pub use event::PostChangedEvent;"));
+    assert!(mod_rs.contains("pub mod events;"));
 }
 
 #[test]
@@ -266,8 +281,6 @@ fn generate_queue_adapter_puts_command_at_the_port() {
 
     let feature = dir.path().join("crates/features/src/posts");
 
-    // The imperative queue payload is a `Command` at the port, not inside the
-    // `queue/` adapter — a producer↔worker contract the processor imports.
     let command_rs = fs::read_to_string(feature.join("command.rs")).unwrap();
     assert!(command_rs.contains("pub struct ProcessPostCommand"));
 
@@ -282,10 +295,8 @@ fn generate_queue_adapter_puts_command_at_the_port() {
         "{port_import}"
     );
     assert!(processor_rs.contains("job: ProcessPostCommand"));
-    // The payload is imported, never redefined in the adapter.
     assert!(!processor_rs.contains("pub struct ProcessPostCommand"));
 
-    // The port `mod.rs` exposes both the command and the adapter module.
     let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
     assert!(mod_rs.contains("mod command;"));
     let command_export = mod_rs
@@ -300,11 +311,8 @@ fn generate_queue_adapter_puts_command_at_the_port() {
     assert!(mod_rs.contains("PostsQueueModule"));
 }
 
-/// The `#[queue]` marker is the artifact `push_to::<Q>` is generic over, so it
-/// has to be *reachable*. Declared in the adapter's private `processor` module
-/// it was invisible to the feature's own service one directory up, leaving the
-/// untyped `push(name, job)` escape hatch as the only way to enqueue — the exact
-/// check `QueueName` exists to provide, lost.
+/// The `#[queue]` marker is the destination a typed `push` takes, so it is
+/// reachable from the feature's own service.
 #[test]
 fn generate_queue_adapter_declares_the_queue_marker_at_the_port() {
     let dir = tempfile::tempdir().unwrap();
@@ -329,15 +337,12 @@ fn generate_queue_adapter_declares_the_queue_marker_at_the_port() {
     );
     assert!(processor_rs.contains("#[process(queue = PostsQueue"));
 
-    // Reachable from the port, which is what a producer imports.
     let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
     assert!(mod_rs.contains("PostsQueue"), "{mod_rs}");
 }
 
-/// The generated processor module imports the port like every sibling adapter
-/// does. It reads as redundant only while the stub stays inert: give it the
-/// documented shape — a thin processor delegating to the port service — and
-/// without the import the worker dies at boot with an access violation.
+/// The generated processor module imports the port like every sibling adapter;
+/// a processor delegating to the port service needs it at boot.
 #[test]
 fn generate_queue_adapter_module_imports_the_port() {
     let dir = tempfile::tempdir().unwrap();
@@ -354,17 +359,14 @@ fn generate_queue_adapter_module_imports_the_port() {
         "the queue adapter module must import its port: {module_rs}"
     );
 
-    // The processor's own line is the queue's to file, so the skeleton writes no
-    // `tracing::` call — and therefore brings no `tracing` dependency either.
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(!features_cargo.contains("tracing"), "{features_cargo}");
 }
 
-/// C1: `/queue/producing-jobs/` wires `RedisModule` + `RedisQueueModule` from `nest_rs::redis`
-/// and the install stanza names the crate — the generator wrote four of the
-/// five lines, so the first documented step after it did not compile.
+/// The generator wires `RedisQueueModule` and the feature that compiles it,
+/// `redis-queue` — `redis` alone is the connection, as `/queue/` documents.
 #[test]
-fn generate_queue_adapter_brings_the_connection_crate() {
+fn generate_queue_adapter_brings_the_queue_binding_feature() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let root = dir.path().to_str().unwrap();
@@ -373,21 +375,54 @@ fn generate_queue_adapter_brings_the_connection_crate() {
     run_ok(dir.path(), &["g", "queue", "audio", "-p", root]);
 
     let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
-    assert!(root_cargo.contains("\"redis\""), "{root_cargo}");
+    assert!(root_cargo.contains("\"redis-queue\""), "{root_cargo}");
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    assert!(features_cargo.contains("\"redis\""), "{features_cargo}");
+    assert!(
+        features_cargo.contains("\"redis-queue\""),
+        "{features_cargo}"
+    );
 }
 
-/// E6: the `mcp` feature is what seeds the fallback operation guard, without
-/// which a registered global pool cannot gate `/mcp`.
-///
-/// (E1 — rmcp's `#[tool]` emitting bare `schemars::` paths, which used to force
-/// a second manifest line on any tool taking input — is closed as of rmcp 3.x:
-/// the input schema is built through `rmcp::handler::server::common`, so the
-/// `use nest_rs::mcp::rmcp;` the template already writes covers it.
-/// `nest-rs-macro-hygiene` compiles that exact shape with one dependency.)
+/// A queue beside the workspace's database arms the outbox, whose table the
+/// framework's migration creates: `g queue` registers it in the migrator the
+/// workspace keeps, and leaves a workspace without one alone.
 #[test]
-fn generate_mcp_adapter_brings_the_guard_fallback() {
+fn generate_queue_adapter_registers_the_outbox_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    write_fake_migrations_crate(dir.path());
+    let root = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "audio", "-p", root]);
+    let printed = run_ok(dir.path(), &["g", "queue", "audio", "-p", root]);
+
+    let migrator =
+        fs::read_to_string(dir.path().join("crates/migrations/src/migrator.rs")).unwrap();
+    assert_eq!(
+        migrator
+            .matches("Box::new(nest_rs::seaorm::queue::OutboxMigration)")
+            .count(),
+        1,
+        "{migrator}"
+    );
+    assert!(
+        migrator.contains("Box::new(m20260101_000000_init::Migration)"),
+        "{migrator}"
+    );
+    assert!(printed.contains("nestrs run db up"), "{printed}");
+
+    let bare = tempfile::tempdir().unwrap();
+    write_fake_workspace(bare.path());
+    let root = bare.path().to_str().unwrap();
+    run_ok(bare.path(), &["g", "feature", "audio", "-p", root]);
+    run_ok(bare.path(), &["g", "queue", "audio", "-p", root]);
+    assert!(!bare.path().join("crates/migrations").exists());
+}
+
+/// `#[mcp]` expands to names behind the `mcp` feature, so the generator turns
+/// the feature on.
+#[test]
+fn generate_mcp_adapter_enables_the_mcp_feature() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let root = dir.path().to_str().unwrap();
@@ -398,21 +433,48 @@ fn generate_mcp_adapter_brings_the_guard_fallback() {
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(
         features_cargo.contains("nest-rs") && features_cargo.contains("\"mcp\""),
-        "the mcp guard fallback rides the `mcp` feature: {features_cargo}",
+        "`#[mcp]` needs the `mcp` feature: {features_cargo}",
+    );
+    assert!(
+        !features_cargo.contains("seaorm"),
+        "a tool over a port with no entity turns on no ORM: {features_cargo}",
+    );
+    let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(!root_cargo.contains("seaorm"), "{root_cargo}");
+}
+
+/// A headless workspace (`default-features = false`) has no `http` until an
+/// HTTP adapter asks for it; the entity before it turns on `seaorm` alone.
+#[test]
+fn generate_http_adapter_enables_the_http_feature_on_a_headless_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let root_manifest = dir.path().join("Cargo.toml");
+    let headless = fs::read_to_string(&root_manifest).unwrap()
+        + "\n[workspace.dependencies]\n\
+           nest-rs = { version = \"7.0\", default-features = false, features = [\"config\"] }\n";
+    fs::write(&root_manifest, headless).unwrap();
+    let root = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", root]);
+    run_ok(dir.path(), &["g", "entity", "posts", "-p", root]);
+    run_ok(dir.path(), &["g", "http", "posts", "-p", root]);
+
+    let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
+    assert!(
+        features_cargo.contains("\"http\""),
+        "the controller imports `nest_rs::http`, which the umbrella gates on `http`: \
+         {features_cargo}",
     );
 }
 
-/// `#[resolver]` expands to names behind `nest-rs-guards`' `graphql` feature,
-/// and that crate is already a dependency of every scaffolded workspace — so
-/// the generator has to turn the *feature* on, not add the entry. Without it
-/// the very first `cargo check` after `g graphql` is a wall of
-/// `cannot find … in nest_rs_guards`.
+/// `#[resolver]` expands to names behind the `graphql` feature, so the generator
+/// turns the *feature* on rather than adding the entry.
 #[test]
 fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
-    // The starter shape: the crate is declared, with default features.
     let features_cargo_path = dir.path().join("crates/features/Cargo.toml");
     fs::write(
         &features_cargo_path,
@@ -428,27 +490,203 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
         features_cargo.contains("nest-rs") && features_cargo.contains("graphql"),
         "the guards crate has to gain the graphql feature: {features_cargo}"
     );
-
-    // A port with no entity stays the `#[public]` stand-in — nothing to guard.
-    let resolver = fs::read_to_string(
-        dir.path()
-            .join("crates/features/src/posts/graphql/resolver.rs"),
-    )
-    .unwrap();
-    assert!(resolver.contains("#[public]"), "{resolver}");
     assert!(
-        !dir.path().join("crates/features/src/authz").exists(),
-        "a workspace with no policy does not get one from a public count query",
+        !features_cargo.contains("seaorm"),
+        "an operation over a port with no entity turns on no ORM: {features_cargo}",
+    );
+    let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(!root_cargo.contains("seaorm"), "{root_cargo}");
+
+    // A port with no entity gates its operation on the `#[subject]` written
+    // beside its service, behind the guards its auth adapter brings.
+    let src = dir.path().join("crates/features/src");
+    let resolver = fs::read_to_string(src.join("posts/graphql/resolver.rs")).unwrap();
+    assert!(
+        resolver.contains("#[authorize(Read, Post)]")
+            && resolver.contains("#[use_guards(AuthzGuard)]"),
+        "{resolver}"
+    );
+    assert!(
+        !resolver.lines().any(|line| line.trim() == "#[public]"),
+        "an opening is the developer's line, never the generator's: {resolver}"
+    );
+    let subject = fs::read_to_string(src.join("posts/subject.rs")).unwrap();
+    assert!(
+        subject.contains("#[subject]") && subject.contains("pub struct Post;"),
+        "{subject}"
+    );
+    let mod_rs = fs::read_to_string(src.join("posts/mod.rs")).unwrap();
+    assert!(
+        mod_rs.contains("mod subject;") && mod_rs.contains("pub use subject::Post;"),
+        "{mod_rs}"
+    );
+    let module = fs::read_to_string(src.join("posts/graphql/module.rs")).unwrap();
+    assert!(module.contains("AuthzGraphqlModule"), "{module}");
+    assert!(
+        src.join("authz/ability.rs").is_file(),
+        "the guards' adapter lands"
+    );
+    assert_fits_the_margin(&resolver);
+}
+
+/// A generated line, comments included, keeps within rustfmt's margin.
+fn assert_fits_the_margin(source: &str) {
+    for line in source.lines() {
+        assert!(line.chars().count() <= 100, "{line}\n{source}");
+    }
+}
+
+/// An MCP tool over a port with no entity is gated on the port's `#[subject]`,
+/// written once whichever adapter comes first, and `/mcp` gets the guards that
+/// attach the ability its gate reads.
+#[test]
+fn generate_mcp_over_a_feature_port_gates_the_tool_on_the_ports_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+    let printed = run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+
+    let src = dir.path().join("crates/features/src");
+    let tool = fs::read_to_string(src.join("posts/mcp/tool.rs")).unwrap();
+    assert!(tool.contains("#[authorize(Read, Post)]"), "{tool}");
+    assert!(
+        !tool.lines().any(|line| line.trim() == "#[public]"),
+        "an opening is the developer's line, never the generator's: {tool}"
+    );
+    let module = fs::read_to_string(src.join("posts/mcp/module.rs")).unwrap();
+    assert!(module.contains("AuthzMcpModule"), "{module}");
+    let mod_rs = fs::read_to_string(src.join("posts/mod.rs")).unwrap();
+    assert_eq!(
+        mod_rs.matches("pub use subject::Post;").count(),
+        1,
+        "the second adapter reuses the subject: {mod_rs}"
+    );
+    assert!(
+        printed.contains("ab.can(nest_rs::authz::Action::Read, crate::posts::Post)"),
+        "the next step names the grant as `authz/ability.rs` resolves it: {printed}"
+    );
+    // A tool gated on a `#[subject]` answers no row, so it says it is re-gated on
+    // the entity before it answers with rows, never how its rows answer.
+    assert!(
+        !tool.contains("each row judged for the caller")
+            && tool.contains("re-gated on that entity")
+            && tool.contains("#[authorize(Read, PostEntity)]")
+            && tool.contains("refused rather than handed an empty answer"),
+        "{tool}"
+    );
+    assert_fits_the_margin(&tool);
+}
+
+/// A generated tool's header teaches what the word means on every edge: an
+/// operation the endpoint's guards cover needs no posture, and `#[public]` admits
+/// a caller with no credential, so behind those guards it refuses the boot.
+#[test]
+fn generate_mcp_says_public_admits_a_caller_with_no_credential() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+
+    let tool =
+        fs::read_to_string(dir.path().join("crates/features/src/posts/mcp/tool.rs")).unwrap();
+    assert!(
+        tool.contains("needs no posture") && tool.contains("admits a caller with no credential"),
+        "{tool}",
+    );
+    assert!(
+        !tool.contains("declares its own posture") && !tool.contains("the endpoint admitted"),
+        "that is the meaning the word no longer has: {tool}",
+    );
+    assert_fits_the_margin(&tool);
+}
+
+/// Over a port that has an entity but no `CrudService`, the operation gates on
+/// the entity, and no `#[subject]` is written beside it.
+#[test]
+fn generate_mcp_over_a_port_with_an_entity_gates_the_tool_on_the_entity() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "entity", "posts", "-p", path]);
+    let printed = run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+
+    let src = dir.path().join("crates/features/src");
+    let tool = fs::read_to_string(src.join("posts/mcp/tool.rs")).unwrap();
+    assert!(
+        tool.contains("#[authorize(Read, PostEntity)]")
+            && tool.contains("use crate::posts::{Entity as PostEntity, PostsService};"),
+        "{tool}"
+    );
+    assert!(tool.contains("each row judged for the caller"), "{tool}");
+    assert_fits_the_margin(&tool);
+    assert!(!src.join("posts/subject.rs").exists());
+    assert!(
+        printed.contains("ab.can(nest_rs::authz::Action::Read, crate::posts::Entity)"),
+        "the resolver's alias resolves nowhere in `authz/ability.rs`: {printed}"
     );
 }
 
-/// The GraphQL twin of `generate_resource_emits_the_guarded_form_…`: over a
-/// `g resource` port the resolver is the `#[crud]` form behind the app's
-/// guards, and the per-operation bridge it is enforced through
-/// (`authz/graphql/`) is scaffolded with it. The old scaffold called
-/// `svc.count()` — a method a `CrudService` does not have.
+/// A port named by its own singular (`blog`) holds its subject in `subject.rs`
+/// too: a file named for the subject would be `blog/blog.rs`, a module inside
+/// one of the same name, which the scaffold's `clippy -D warnings` refuses.
 #[test]
-fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
+fn the_subject_of_a_port_named_by_its_own_singular_never_repeats_its_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "blog", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "blog", "-p", path]);
+
+    let src = dir.path().join("crates/features/src");
+    let subject = fs::read_to_string(src.join("blog/subject.rs")).unwrap();
+    assert!(subject.contains("pub struct Blog;"), "{subject}");
+    assert!(!src.join("blog/blog.rs").exists());
+    let mod_rs = fs::read_to_string(src.join("blog/mod.rs")).unwrap();
+    assert!(
+        mod_rs.contains("pub use subject::Blog;") && !mod_rs.contains("mod blog;"),
+        "{mod_rs}"
+    );
+}
+
+/// Every file an adapter generator writes at a port passes the `nestrs lint`
+/// the scaffold's `lint` and `ci` recipes run, whatever the port's plural:
+/// `cities` names its types `City`, which only the singular of its folder
+/// reaches.
+#[test]
+fn every_adapter_over_a_port_whose_plural_hides_its_singular_passes_the_lint() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "cities", "-p", path]);
+    for transport in [
+        "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
+    ] {
+        run_ok(dir.path(), &["g", transport, "cities", "-p", path]);
+    }
+
+    assert!(
+        dir.path()
+            .join("crates/features/src/cities/subject.rs")
+            .is_file()
+    );
+    let linted = run_ok(dir.path(), &["lint", "-p", path]);
+    assert!(linted.contains("named for what it declares"), "{linted}");
+}
+
+/// The GraphQL twin of `generate_resource_emits_the_guarded_form_…`: over a
+/// `g resource` port the resolver is the `#[crud]` form, with the
+/// `authz/graphql/` adapter it is enforced through.
+#[test]
+fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_endpoint_guards() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
@@ -463,32 +701,45 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
         "a CrudService has no `count()`: {resolver}"
     );
     assert!(
-        resolver.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        resolver.contains("#[use_guards(AuthzGuard)]"),
         "DB-backed rows are only reachable behind the ability guard: {resolver}"
     );
+    // `AuthnGuard` has no `check_graphql`, so `#[resolver]` would refuse it.
     assert!(
-        resolver.contains("#[crud(") && resolver.contains("entity = PostEntity"),
-        "the resource resolver uses the #[crud] form: {resolver}"
+        !resolver
+            .lines()
+            .any(|line| line.contains("use_guards(") && line.contains("AuthnGuard"))
+            && !resolver.contains("use crate::authn::AuthnGuard"),
+        "a resolver binds no guard without a GraphQL check: {resolver}"
+    );
+    assert!(
+        resolver.contains("#[crud(service = PostsService)]"),
+        "the resource resolver uses the #[crud] form, typed off its service: {resolver}"
     );
 
     // The entity has to *be* a GraphQL object for the resolver to return it.
     let entity = fs::read_to_string(src.join("posts/entity.rs")).unwrap();
-    assert!(entity.contains("#[expose(graphql"), "{entity}");
+    assert!(entity.contains("#[expose(\n    graphql,\n"), "{entity}");
+    assert!(
+        entity.lines().all(|line| line == line.trim_end()),
+        "no trailing space for `cargo fmt --check` to refuse: {entity}"
+    );
 
-    // The bridge `/graphql` gates through, and the module that serves it.
+    // The guards `/graphql`'s request runs, and the module that serves it.
     let module = fs::read_to_string(src.join("posts/graphql/module.rs")).unwrap();
     assert!(module.contains("AuthzGraphqlModule"), "{module}");
-    let bridge = fs::read_to_string(src.join("authz/graphql/bridge.rs")).unwrap();
-    assert!(
-        bridge.contains("GraphqlAbilityBridge<AuthnGuard, AuthzGuard>"),
-        "{bridge}"
-    );
     let authz_graphql = fs::read_to_string(src.join("authz/graphql/module.rs")).unwrap();
     assert!(
-        authz_graphql.contains("dyn GraphqlOperationGuard")
-            && authz_graphql.contains("dyn GraphqlBatchContext")
-            && authz_graphql.contains("forward_principal!(Claims)"),
-        "the two providers the bridge needs, and the principal forward: {authz_graphql}"
+        authz_graphql.contains("EndpointGuards<GraphqlView, (AuthnGuard, AuthzGuard)>"),
+        "the endpoint's guards: {authz_graphql}"
+    );
+    assert!(
+        !authz_graphql.contains("forward_principal"),
+        "a resolver reads the claims as an `Ambient<Claims>` parameter, with no forwarder: {authz_graphql}"
+    );
+    assert!(
+        !authz_graphql.contains("LoaderScope"),
+        "a DataLoader batch carries what its request carries, with no binding: {authz_graphql}"
     );
     let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
     assert!(
@@ -507,10 +758,31 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
     assert!(features_cargo.contains("authz"), "{features_cargo}");
 }
 
-/// A second GraphQL adapter reuses the bridge the first one created rather
+/// Over a `#[crud]` port the resolver holds an operation per action, so the next
+/// step grants them all, on the entity's path as `authz/ability.rs` names it.
+#[test]
+fn generate_graphql_over_a_resource_prints_the_grant_its_crud_operations_wait_for() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "resource", "articles", "-p", path]);
+    let printed = run_ok(dir.path(), &["g", "graphql", "articles", "-p", path]);
+
+    assert!(
+        printed.contains("ab.can(nest_rs::authz::Action::Manage, crate::articles::Entity)"),
+        "{printed}"
+    );
+    assert!(
+        !printed.contains("ArticleEntity") && !printed.contains("Action::Read"),
+        "a single read grant leaves the writes FORBIDDEN: {printed}"
+    );
+}
+
+/// A second GraphQL adapter reuses the authz adapter the first one created rather
 /// than failing on a file that already exists.
 #[test]
-fn generate_graphql_reuses_an_existing_authz_bridge() {
+fn generate_graphql_reuses_an_existing_authz_adapter() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
@@ -529,24 +801,192 @@ fn generate_graphql_reuses_an_existing_authz_bridge() {
     );
 }
 
-/// D1: `g graphql` edited the app's `module.rs` and left its `Cargo.toml`
-/// alone, so the generator's own printed next step (`use
-/// nest_rs_graphql::GraphqlModule;`) failed with `E0433`.
+/// An adapter names its port, and the decorator on its handler brings what
+/// serves its edge, so the app importing the adapter serves it and is told
+/// nothing more to import; an event's bus is imported by the port that emits it.
 #[test]
-fn generate_graphql_gives_the_app_crate_the_dependency_its_next_step_needs() {
+fn an_adapter_names_no_module_its_edge_runs_on() {
+    const RUNTIME: [&str; 6] = [
+        "HttpModule",
+        "GraphqlModule",
+        "WsModule",
+        "QueueModule",
+        "ScheduleModule",
+        "McpModule",
+    ];
+
+    for (transport, file) in [
+        ("http", "http/module.rs"),
+        ("graphql", "graphql/module.rs"),
+        ("ws", "ws/module.rs"),
+        ("queue", "queue/module.rs"),
+        ("schedule", "schedule/module.rs"),
+        ("mcp", "mcp/module.rs"),
+        ("events", "events/module.rs"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let app = write_fake_app(dir.path(), "api");
+        let root = dir.path().to_str().unwrap();
+
+        run_ok(dir.path(), &["g", "feature", "posts", "-p", root]);
+        let printed = run_ok(&app, &["g", transport, "posts"]);
+
+        let module_rs =
+            fs::read_to_string(dir.path().join("crates/features/src/posts").join(file)).unwrap();
+        let imports = module_rs
+            .split("imports = [")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .unwrap_or_default();
+        assert!(
+            imports
+                .split([',', ' ', '\n'])
+                .any(|token| token == "PostsModule"),
+            "`g {transport}` imports its port in posts/{file}: {module_rs}",
+        );
+        let written: Vec<&str> = module_rs
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .collect();
+        for ident in RUNTIME {
+            assert!(
+                !written.contains(&ident),
+                "`g {transport}` names {ident}, which its handler brings, in posts/{file}: \
+                 {module_rs}",
+            );
+        }
+        assert!(
+            !printed.contains("Make sure the app imports"),
+            "`g {transport}` wired what serves its edge itself: {printed}",
+        );
+    }
+}
+
+#[test]
+fn generate_events_imports_the_bus_into_the_port_that_emits() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
-    let app = write_fake_app(dir.path(), "hello");
+    let app = write_fake_app(dir.path(), "api");
     let root = dir.path().to_str().unwrap();
 
-    run_ok(dir.path(), &["g", "feature", "notes", "-p", root]);
-    run_ok(&app, &["g", "graphql", "notes"]);
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", root]);
+    run_ok(&app, &["g", "events", "posts"]);
 
-    let app_cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
+    let port = fs::read_to_string(dir.path().join("crates/features/src/posts/module.rs")).unwrap();
     assert!(
-        app_cargo.contains("graphql"),
-        "the app that has to import GraphqlModule needs the crate: {app_cargo}",
+        port.contains("use nest_rs::events::EventsModule;")
+            && port.contains("imports = [EventsModule"),
+        "{port}"
     );
+}
+
+/// The queue backend is chosen at the app's root, so `g queue` writes its
+/// binding there when the app binds none, and leaves a root that binds one as
+/// it is.
+#[test]
+fn generate_queue_writes_the_backend_binding_only_when_the_app_binds_none() {
+    for bound in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let app = write_fake_app(dir.path(), "worker");
+        let module_rs = app.join("src/module.rs");
+        if bound {
+            let source = fs::read_to_string(&module_rs).unwrap().replace(
+                "        HttpModule,",
+                "        HttpModule,\n        RedisModule::for_root(redis()),\n        RedisQueueModule,",
+            );
+            fs::write(&module_rs, source).unwrap();
+        }
+        let root = dir.path().to_str().unwrap();
+
+        run_ok(dir.path(), &["g", "feature", "audio", "-p", root]);
+        let printed = run_ok(&app, &["g", "queue", "audio"]);
+
+        let module = fs::read_to_string(&module_rs).unwrap();
+        assert!(module.contains("        AudioQueueModule,"), "{module}");
+        assert_eq!(
+            module
+                .matches("use nest_rs::redis::RedisQueueModule;")
+                .count(),
+            usize::from(!bound),
+            "the binding is written only where the app has none: {module}",
+        );
+        assert_eq!(
+            module.matches("        RedisQueueModule,").count(),
+            1,
+            "listed once: {module}",
+        );
+        assert_eq!(
+            module.contains("RedisModule"),
+            bound,
+            "the binding imports the connection, so only a root's pin names it: {module}",
+        );
+        assert_eq!(
+            printed.contains("beside RedisQueueModule."),
+            !bound,
+            "the run says what it wrote beside the adapter: {printed}",
+        );
+        let app_cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
+        assert!(
+            app_cargo.contains("redis-queue"),
+            "the app that binds the backend needs the binding's feature: {app_cargo}",
+        );
+    }
+}
+
+/// The binding `g queue` writes imports the connection it runs on, so a root
+/// opening any instance of Redis gains the binding alone, and a root binding
+/// the queue in any form gains nothing.
+#[test]
+fn generate_queue_never_writes_the_connection_its_binding_imports() {
+    for (root_lines, writes_the_binding) in [
+        ("RedisModule::<Cache>,", true),
+        ("RedisModule::for_root((Cache, cache())),", true),
+        ("RedisModule::for_root(redis()),", true),
+        ("RedisQueueModule::<Jobs>,", false),
+        (
+            "RedisModule::<Jobs>,\n        RedisQueueModule::<Jobs>,",
+            false,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let app = write_fake_app(dir.path(), "worker");
+        let module_rs = app.join("src/module.rs");
+        let source = fs::read_to_string(&module_rs).unwrap().replace(
+            "        HttpModule,",
+            &format!("        HttpModule,\n        {root_lines}"),
+        );
+        fs::write(&module_rs, source).unwrap();
+        let root = dir.path().to_str().unwrap();
+
+        run_ok(dir.path(), &["g", "feature", "audio", "-p", root]);
+        let printed = run_ok(dir.path(), &["g", "queue", "audio", "-p", root]);
+
+        let module = fs::read_to_string(&module_rs).unwrap();
+        assert!(
+            module.contains(&format!("        {root_lines}")),
+            "the root's own lines stay: {module}"
+        );
+        assert!(
+            !module.contains("        RedisModule,"),
+            "`{root_lines}`: the connection is the binding's to import: {module}",
+        );
+        assert_eq!(
+            module.contains("        RedisQueueModule,"),
+            writes_the_binding,
+            "`{root_lines}`: {module}",
+        );
+        let beside = if writes_the_binding {
+            ", beside RedisQueueModule"
+        } else {
+            ""
+        };
+        assert!(
+            printed.contains(&format!("AudioQueueModule is wired into `worker`{beside}.")),
+            "`{root_lines}`: the run says what it wrote: {printed}",
+        );
+    }
 }
 
 #[test]
@@ -579,63 +1019,54 @@ fn generate_adapter_requires_existing_feature() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("not found"));
 }
 
-/// F4: `g ws` and `g mcp` used to *name* an authz module in their output and in
-/// the code they generated — `AuthzWsModule` in the gateway's SECURITY comment,
-/// `features::authz::mcp` in the MCP next step and the tool's own doc — while no
-/// generator wrote either. A reader following the docs end to end got a boot
-/// `warn` on an unguarded self-mount edge, a `/mcp` answering 401 to everything,
-/// and the repo's demo as the only source for the two modules.
-///
-/// One case per transport, in one test: the obligation is identical, and it is
-/// the *set* of transports that carries it which regressed.
+/// `g mcp` writes the authz adapter its output and code name, which the
+/// generated adapter imports and the app does not.
 #[test]
-fn generate_ws_and_mcp_write_the_authz_bridges_their_own_output_names() {
-    // (transport, bridge dir, module, a provider only that bridge registers)
-    const CASES: [(&str, &str, &str, &str); 2] = [
-        ("ws", "ws", "AuthzWsModule", "dyn SocketContext"),
-        ("mcp", "mcp", "AuthzMcpModule", "dyn McpOperationGuard"),
-    ];
+fn generate_mcp_writes_the_authz_adapter_its_own_output_names() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let app = write_fake_app(dir.path(), "api");
+    let path = dir.path().to_str().unwrap();
 
-    for (transport, bridge_dir, module, provider) in CASES {
-        let dir = tempfile::tempdir().unwrap();
-        write_fake_workspace(dir.path());
-        let app = write_fake_app(dir.path(), "api");
-        let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    run_ok(&app, &["g", "mcp", "posts"]);
 
-        run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
-        // Run from inside the app, so the composition site is wired too.
-        run_ok(&app, &["g", transport, "posts"]);
+    let src = dir.path().join("crates/features/src");
+    let authz_module = fs::read_to_string(src.join("authz/mcp/module.rs"))
+        .expect("`g mcp` writes authz/mcp/module.rs");
+    assert!(
+        authz_module.contains("EndpointGuards<McpView, (AuthnGuard, AuthzGuard)>"),
+        "the MCP authz adapter declares the endpoint's guards: {authz_module}"
+    );
+    assert!(
+        !authz_module.contains("DataContext"),
+        "the edge opens its own units of work; no data context is listed: {authz_module}"
+    );
 
-        let src = dir.path().join("crates/features/src");
-        let bridge_module = fs::read_to_string(src.join(format!("authz/{bridge_dir}/module.rs")))
-            .unwrap_or_else(|_| panic!("`g {transport}` writes authz/{bridge_dir}/module.rs"));
-        assert!(
-            bridge_module.contains(provider),
-            "the {transport} bridge registers {provider}: {bridge_module}"
-        );
-
-        // Reachable from the feature crate's root, and from the app that serves
-        // the adapter — an unimported AuthzMcpModule leaves /mcp deny-all.
-        let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
-        assert!(
-            authz_mod.contains(&format!("pub use {bridge_dir}::{module};")),
-            "{authz_mod}"
-        );
-        let app_module = fs::read_to_string(app.join("src/module.rs")).unwrap();
-        assert!(
-            app_module.contains(module),
-            "the app composes {module}: {app_module}"
-        );
-    }
+    // An unimported `AuthzMcpModule` leaves `/mcp` deny-all.
+    let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
+    assert!(
+        authz_mod.contains("pub use mcp::AuthzMcpModule;"),
+        "{authz_mod}"
+    );
+    let adapter = fs::read_to_string(src.join("posts/mcp/module.rs")).unwrap();
+    assert!(
+        adapter.contains("AuthzMcpModule"),
+        "the adapter imports AuthzMcpModule: {adapter}"
+    );
+    let app_module = fs::read_to_string(app.join("src/module.rs")).unwrap();
+    assert!(
+        !app_module.contains("AuthzMcpModule"),
+        "the app lists the adapter, not what it brings: {app_module}"
+    );
 }
 
-/// The bridge is scaffolded only where there is a policy to enforce. A `g
-/// feature` port in a workspace with no auth adapter has none, so `g ws` writes
-/// the adapter and stops — scaffolding a whole authn/authz slice off the back of
-/// a WebSocket stub would be the generator deciding something the developer has
-/// not.
+/// A generated gateway is guarded at its upgrade: over a `g feature` port with
+/// no auth adapter, `g ws` bootstraps it, and the gateway's adapter imports
+/// `AuthzModule`, as an HTTP adapter does — no WebSocket authz adapter of its
+/// own.
 #[test]
-fn generate_ws_without_an_auth_adapter_writes_no_bridge() {
+fn generate_ws_over_a_feature_port_guards_the_upgrade_and_bootstraps_its_auth() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
@@ -644,12 +1075,439 @@ fn generate_ws_without_an_auth_adapter_writes_no_bridge() {
     run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
 
     let src = dir.path().join("crates/features/src");
+    let gateway = fs::read_to_string(src.join("posts/ws/gateway.rs")).unwrap();
     assert!(
-        src.join("posts/ws/gateway.rs").is_file(),
-        "the adapter lands"
+        gateway.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        "{gateway}"
     );
+    assert!(
+        !gateway.lines().any(|line| line.trim() == "#[public]"),
+        "an opening is the developer's line, and the upgrade's guards cover the message: {gateway}",
+    );
+    let module = fs::read_to_string(src.join("posts/ws/module.rs")).unwrap();
+    assert!(module.contains("AuthzModule"), "{module}");
     assert!(
         !src.join("authz/ws").exists(),
-        "no policy to bridge, so no bridge",
+        "a gateway reuses the HTTP pair, through AuthzModule"
     );
+}
+
+/// A `#[crud]` controller or resolver runs each call in the unit of work
+/// `SeaOrmDatabaseModule` binds, and an app without it is refused at boot: over
+/// a CRUD port, `g http` and `g graphql` write the binding beside the adapter
+/// into an app that has none, as `g resource` does, and leave one that has it
+/// as it is.
+#[test]
+fn a_crud_adapter_brings_the_data_layer_into_an_app_without_one() {
+    for (transport, module) in [
+        ("http", "PostsHttpModule"),
+        ("graphql", "PostsGraphqlModule"),
+    ] {
+        for bound in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            write_fake_workspace(dir.path());
+            let app = write_fake_app(dir.path(), "api");
+            let path = dir.path().to_str().unwrap();
+            run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+            let service = dir.path().join("crates/features/src/posts/service.rs");
+            let crud = format!(
+                "{}\nimpl CrudService for PostsService {{}}\n",
+                fs::read_to_string(&service).unwrap()
+            );
+            fs::write(&service, crud).unwrap();
+            let module_rs = app.join("src/module.rs");
+            if bound {
+                let with_db = fs::read_to_string(&module_rs)
+                    .unwrap()
+                    .replace("    ],", "        SeaOrmDatabaseModule,\n    ],");
+                fs::write(&module_rs, with_db).unwrap();
+            }
+
+            let printed = run_ok(&app, &["g", transport, "posts"]);
+
+            let composed = fs::read_to_string(&module_rs).unwrap();
+            assert!(
+                composed.contains(&format!("        {module},")),
+                "`g {transport}` wires {module}: {composed}"
+            );
+            assert_eq!(
+                composed.matches("        SeaOrmDatabaseModule,").count(),
+                1,
+                "the binding is listed once: {composed}"
+            );
+            assert!(
+                !composed.contains("SeaOrmModule"),
+                "the binding imports the pool it runs on: {composed}"
+            );
+            assert_eq!(
+                printed.contains("beside SeaOrmDatabaseModule"),
+                !bound,
+                "the run says what it wrote beside the adapter: {printed}"
+            );
+        }
+    }
+}
+
+/// Over a CRUD port with no auth adapter, `g graphql` bootstraps one as
+/// `g resource` does, and announces it the same way: secrets included.
+#[test]
+fn generate_graphql_over_a_crud_port_announces_the_auth_adapter_it_bootstraps() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    let service = dir.path().join("crates/features/src/posts/service.rs");
+    let crud = format!(
+        "{}\nimpl CrudService for PostsService {{}}\n",
+        fs::read_to_string(&service).unwrap()
+    );
+    fs::write(&service, crud).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    assert!(
+        dir.path()
+            .join("crates/features/src/authz/ability.rs")
+            .is_file()
+    );
+    assert!(
+        printed.contains("Also created the auth adapter"),
+        "{printed}"
+    );
+    let var = scaffolded_var("AUTHN", "SECRET");
+    for file in [".env.local", ".env.test"] {
+        let secret = assigned(&dir.path().join(file), &var).expect("a secret of its own");
+        assert!(!printed.contains(&secret), "{printed}");
+        assert!(
+            printed.contains(&format!("`{file}` holds")),
+            "the run says where the secret is:\n{printed}",
+        );
+    }
+}
+
+/// A feature that emits nothing declares no log target (the features rule):
+/// neither `g feature`'s port nor `g resource`'s declares one, and `g ws`,
+/// whose gateway logs, adds it once, at the top of the port's `mod.rs`.
+#[test]
+fn only_a_feature_that_logs_declares_its_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    let src = dir.path().join("crates/features/src");
+    let declares = |feature: &str| {
+        fs::read_to_string(src.join(feature).join("mod.rs"))
+            .unwrap()
+            .matches("pub const TARGET: &str")
+            .count()
+    };
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "resource", "orders", "-p", path]);
+    assert_eq!(declares("posts"), 0, "a port emits nothing");
+    assert_eq!(declares("orders"), 0, "a resource emits nothing");
+
+    run_ok(dir.path(), &["g", "http", "posts", "-p", path]);
+    assert_eq!(declares("posts"), 0, "a controller emits nothing");
+    run_ok(dir.path(), &["g", "ws", "posts", "-p", path]);
+    let index = fs::read_to_string(src.join("posts/mod.rs")).unwrap();
+    assert!(
+        index.starts_with("pub const TARGET: &str = \"features::posts\";\n"),
+        "the gateway logs, so its port declares the target first: {index}"
+    );
+    assert!(index.contains("pub use ws::PostsWsModule;"), "{index}");
+    assert_eq!(declares("posts"), 1);
+
+    run_ok(dir.path(), &["g", "ws", "orders", "-p", path]);
+    assert_eq!(declares("orders"), 1, "declared once, by the gateway's run");
+}
+
+/// A port keeping its entities in `entities/` has an entity, and `crate::blog::Entity`
+/// still names the first: the operation gates on it, and no `#[subject]` lands
+/// beside it, on either edge a posture gates.
+#[test]
+fn an_adapter_over_a_port_keeping_its_entities_in_a_folder_writes_no_subject() {
+    for edge in ["mcp", "graphql"] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let path = dir.path().to_str().unwrap();
+
+        run_ok(dir.path(), &["g", "feature", "blog", "-p", path]);
+        run_ok(dir.path(), &["g", "entity", "blog/article", "-p", path]);
+        run_ok(dir.path(), &["g", "entity", "blog/comment", "-p", path]);
+        let printed = run_ok(dir.path(), &["g", edge, "blog", "-p", path]);
+
+        let port = dir.path().join("crates/features/src/blog");
+        assert!(
+            !port.join("subject.rs").exists(),
+            "`g {edge}` wrote a subject beside `entities/`"
+        );
+        assert!(
+            printed.contains("crate::blog::Entity"),
+            "`g {edge}` prints the grant the entity takes: {printed}"
+        );
+    }
+}
+
+/// A folder re-exporting no entity flat leaves `crate::blog::Entity` unresolved, so
+/// the operation stays on the subject the generator writes: it compiles, and it
+/// is gated all the same.
+#[test]
+fn an_adapter_over_a_folder_re_exporting_no_entity_flat_keeps_the_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "blog", "-p", path]);
+    let port = dir.path().join("crates/features/src/blog");
+    fs::create_dir_all(port.join("entities")).unwrap();
+    fs::write(port.join("entities/mod.rs"), "pub mod article;\n").unwrap();
+    fs::write(port.join("entities/article.rs"), "\n").unwrap();
+    let index = fs::read_to_string(port.join("mod.rs")).unwrap();
+    fs::write(
+        port.join("mod.rs"),
+        format!("mod entities;\npub use entities::article;\n{index}"),
+    )
+    .unwrap();
+
+    run_ok(dir.path(), &["g", "mcp", "blog", "-p", path]);
+
+    assert!(port.join("subject.rs").is_file());
+}
+
+/// `g entity` moves a resource's `entity.rs` to `entities/`, and `g graphql` still
+/// flags the entity the port's `CrudService` names, and no other.
+#[test]
+fn generate_graphql_flags_the_entity_its_crud_service_names_inside_a_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "entity", "posts/comments", "-p", path]);
+
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let port = dir.path().join("crates/features/src/posts");
+    let post = fs::read_to_string(port.join("entities/post.rs")).unwrap();
+    assert!(post.contains("graphql,"), "{post}");
+    let comment = fs::read_to_string(port.join("entities/comment.rs")).unwrap();
+    assert!(!comment.contains("graphql"), "{comment}");
+    assert!(!port.join("subject.rs").exists());
+}
+
+/// The line of a run's next steps naming the `graphql` flag: under `Next steps:`,
+/// above what the authz adapter's rationale says.
+fn the_flag_s_next_step(printed: &str) -> &str {
+    let step = printed
+        .lines()
+        .find(|line| line.contains("#[expose(graphql)]"))
+        .unwrap_or_else(|| panic!("the run names the flag: {printed}"));
+    let at = printed.find(step).unwrap();
+    let steps = printed.find("Next steps:").unwrap();
+    assert!(steps < at, "under `Next steps:`: {printed}");
+    if let Some(rationale) = printed.find("Also created") {
+        assert!(at < rationale, "above the rationale: {printed}");
+    }
+    step
+}
+
+/// A `CrudService` whose entity the generator cannot follow to a file is not
+/// skipped in silence: the run says what the developer writes.
+#[test]
+fn generate_graphql_names_the_flag_it_could_not_write() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let port = dir.path().join("crates/features/src/posts");
+    let service = fs::read_to_string(port.join("service.rs")).unwrap();
+    fs::write(
+        port.join("service.rs"),
+        service.replace("use super::entity::{", "use other::place::{"),
+    )
+    .unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let step = the_flag_s_next_step(&printed);
+    assert!(step.contains("posts/service.rs"), "{step}");
+}
+
+/// An adapter flags inside its own port: a `CrudService` over another port's entity
+/// lands on no file of either, and the run says what the developer writes.
+#[test]
+fn generate_graphql_over_another_port_s_entity_flags_neither_port() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "resource", "comments", "-p", path]);
+    let features = dir.path().join("crates/features/src");
+    let service = features.join("comments/service.rs");
+    let source = fs::read_to_string(&service).unwrap();
+    let renamed = source.replace(
+        "type Entity = Comments;",
+        "type Entity = crate::posts::entity::Entity;",
+    );
+    assert_ne!(renamed, source);
+    fs::write(&service, renamed).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "comments", "-p", path]);
+
+    for port in ["comments", "posts"] {
+        let entity = fs::read_to_string(features.join(port).join("entity.rs")).unwrap();
+        assert!(!entity.contains("graphql"), "{port}: {entity}");
+    }
+    let step = the_flag_s_next_step(&printed);
+    assert!(step.contains("comments/service.rs"), "{step}");
+}
+
+/// An entity file holding no `#[expose(` has nothing to flag, which is not its being
+/// flagged already: the first takes the next step, naming the file, and the second
+/// takes none.
+#[test]
+fn generate_graphql_tells_an_entity_with_no_expose_from_one_already_flagged() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let entity = dir.path().join("crates/features/src/posts/entity.rs");
+    let generated = fs::read_to_string(&entity).unwrap();
+    let flagged = generated.replacen("#[expose(\n", "#[expose(\n    graphql,\n", 1);
+    assert_ne!(flagged, generated);
+    fs::write(&entity, flagged).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    assert!(!printed.contains("#[expose(graphql)]"), "{printed}");
+
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let entity = dir.path().join("crates/features/src/posts/entity.rs");
+    let bare = "pub struct Model;\n";
+    fs::write(&entity, bare).unwrap();
+
+    let printed = run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    assert_eq!(fs::read_to_string(&entity).unwrap(), bare);
+    let step = the_flag_s_next_step(&printed);
+    assert!(step.contains("posts/entity.rs"), "{step}");
+}
+
+/// A port file that does not parse says nothing of what the port holds, so no
+/// adapter is written over a guess: the run names the file and its line, and leaves
+/// the tree as it found it — at any depth the port's module tree declares it.
+#[test]
+fn an_adapter_refuses_a_port_file_that_does_not_parse() {
+    for broken in [
+        "service.rs",
+        "mod.rs",
+        "services/articles.rs",
+        "services/mod.rs",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        write_fake_workspace(dir.path());
+        let path = dir.path().to_str().unwrap();
+        run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+        let port = dir.path().join("crates/features/src/posts");
+        if broken.starts_with("services/") {
+            move_service_into_a_folder(&port);
+        }
+        let file = port.join(broken);
+        let source = fs::read_to_string(&file).unwrap();
+        let line = source.lines().count() + 1;
+        fs::write(&file, format!("{source}fn half(\n")).unwrap();
+        let before = files_under(dir.path());
+
+        let refused = run_err(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+        assert!(
+            refused.contains(broken) && refused.contains(&format!("line {line}")),
+            "`{broken}`, line {line}: {refused}"
+        );
+        assert_eq!(files_under(dir.path()), before, "a refusal writes nothing");
+    }
+}
+
+/// `architecture.md` allows `services/`: a `CrudService` there reads as one, so
+/// the port takes the `#[crud]` template under the service's own name, and no
+/// `#[subject]`.
+#[test]
+fn an_adapter_reads_a_crud_service_in_the_services_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let port = dir.path().join("crates/features/src/posts");
+    move_service_into_a_folder(&port);
+
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "mcp", "posts", "-p", path]);
+
+    let resolver = fs::read_to_string(port.join("graphql/resolver.rs")).unwrap();
+    assert!(
+        resolver.contains("#[crud(service = ArticlesService)]"),
+        "{resolver}"
+    );
+    assert!(!port.join("subject.rs").exists());
+    let entity = fs::read_to_string(port.join("entity.rs")).unwrap();
+    assert!(entity.contains("graphql,"), "{entity}");
+    let tool = fs::read_to_string(port.join("mcp/tool.rs")).unwrap();
+    assert!(tool.contains("ArticlesService"), "{tool}");
+}
+
+/// A `CrudService` is read wherever the port's module tree declares it: in a
+/// custom provider's file beside the port's own, as the demo's posts hold one,
+/// the port takes the `#[crud]` template under the service's name.
+#[test]
+fn an_adapter_reads_a_crud_service_wherever_the_port_declares_it() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "resource", "posts", "-p", path]);
+    let port = dir.path().join("crates/features/src/posts");
+    fs::rename(port.join("service.rs"), port.join("store.rs")).unwrap();
+    for file in ["mod.rs", "entity.rs"] {
+        let moved = fs::read_to_string(port.join(file))
+            .unwrap()
+            .replace("mod service;", "mod store;")
+            .replace("service::PostsService", "store::PostsService");
+        fs::write(port.join(file), moved).unwrap();
+    }
+
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let resolver = fs::read_to_string(port.join("graphql/resolver.rs")).unwrap();
+    assert!(
+        resolver.contains("#[crud(service = PostsService)]"),
+        "{resolver}"
+    );
+    assert!(!port.join("subject.rs").exists());
+    let entity = fs::read_to_string(port.join("entity.rs")).unwrap();
+    assert!(entity.contains("graphql,"), "{entity}");
+}
+
+/// A file no `mod` declares is no part of the crate, as the compiler reads it:
+/// its `CrudService` is not the port's, and its parse is not the run's.
+#[test]
+fn an_adapter_reads_no_file_the_port_does_not_declare() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    let port = dir.path().join("crates/features/src/posts");
+    fs::create_dir_all(port.join("services")).unwrap();
+    fs::write(
+        port.join("services/stale.rs"),
+        "impl CrudService for StaleService { type Entity = super::super::entity::Entity; }
+fn half(
+",
+    )
+    .unwrap();
+
+    run_ok(dir.path(), &["g", "graphql", "posts", "-p", path]);
+
+    let resolver = fs::read_to_string(port.join("graphql/resolver.rs")).unwrap();
+    assert!(!resolver.contains("StaleService"), "{resolver}");
+    assert!(!resolver.contains("#[crud("), "{resolver}");
 }

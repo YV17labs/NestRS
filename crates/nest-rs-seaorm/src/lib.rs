@@ -1,52 +1,86 @@
-//! SeaORM for nestrs — the adapter that wraps `sea_orm`, whose URL scheme picks
-//! the engine (postgres, mysql, sqlite). One substrate and its bindings:
+//! SeaORM for nestrs — the adapter that wraps `sea_orm` over PostgreSQL, the
+//! one engine it supports, as CI runs it. One substrate and its bindings:
 //!
-//! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`NESTRS_SEAORM__*`)
-//!   and opens the one `sea_orm::DatabaseConnection` every binding shares.
-//! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port: the
-//!   `DbContext` request interceptor, which binds each request to an ambient
-//!   [`Executor`] — the pool for a safe method, a transaction for a mutating
-//!   one — and the `WorkerDbContext` bridge for jobs.
-//! - [`SeaOrmHealthModule`] (bare, feature `health`) binds a health indicator.
+//! - [`SeaOrmModule`] resolves [`SeaOrmConfig`] (`<PREFIX>_SEAORM__*`)
+//!   and opens the one `sea_orm::DatabaseConnection` every binding shares,
+//!   closing it when the app ends, after every shutdown hook, without waiting
+//!   past the settle for a connection no unit holds. Under the `health`
+//!   feature it attaches the pool's indicator, `seaorm`, which an app
+//!   importing `HealthModule` runs on the readiness and startup probes.
+//! - [`SeaOrmDatabaseModule`] (bare), which imports the pool it runs on, binds
+//!   the `nest-rs-database` port: [`SeaOrmUnitOfWork`], which every edge — an
+//!   HTTP request, a WS message, an MCP operation, a queue attempt, a scheduled
+//!   tick — and every lifecycle hook runs its unit of work through, on an ambient
+//!   executor: the pool, or a transaction opened on the unit's first data-layer
+//!   touch.
+//! - Under the `queue` feature, [`SeaOrmDatabaseModule`] also keeps the queue
+//!   port's outbox, `queue::SeaOrmOutbox`: a job pushed inside a unit's
+//!   transaction is written there and filed after its commit;
+//!   `queue::OutboxMigration` creates its table.
 //!
-//! Services then query through [`Repo`] instead of holding a connection: every
-//! call runs on the ambient executor (transactions need no hand-threading) and
-//! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability)
-//! (row-level security cannot be forgotten).
+//! Services query through [`Repo`]: every call runs on the ambient executor,
+//! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability),
+//! and an entity declared `#[expose(..., soft_delete)]` keeps its deleted rows
+//! out of every read but [`Repo::with_tombstones`].
+//! [`nest_rs_database::atomic`] runs a block inside a savepoint of that
+//! executor's transaction, or a transaction of its own on the pool.
+//! An entity crosses the wire through [`macro@expose`], and a column's enum
+//! through `nest_rs_core`'s `#[wire_enum]`.
 //!
-//! ```ignore
-//! #[module(imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule, UsersModule])]
+//! ```
+//! # use nest_rs_core::module;
+//! # use nest_rs_seaorm::sea_orm::{ConnectOptions, Database};
+//! # use nest_rs_seaorm::SeaOrmDatabaseModule;
+//! # use nest_rs_testing::TestApp;
+//! # use nest_rs_database::UnitOfWork;
+//! # #[module(providers = [])]
+//! # pub struct UsersModule;
+//! #[module(imports = [SeaOrmDatabaseModule, UsersModule])]
 //! pub struct AppModule;
+//! # #[nest_rs_core::main]
+//! # async fn main() -> anyhow::Result<()> {
+//! # let mut options = ConnectOptions::new("postgres://app@localhost/app");
+//! # options.connect_lazy(true);
+//! # let db = Database::connect(options).await?;
+//! # let app = TestApp::builder().provide(db).module::<AppModule>().build().await?;
+//!
+//! assert!(app.container().get_dyn::<dyn UnitOfWork>().is_some());
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! Pin explicit values with [`SeaOrmModule::for_root`]`(SeaOrmConfig { .. })`.
+//! Pin a base those variables overlay with
+//! [`SeaOrmModule::for_root`]`(SeaOrmConfig { .. })`, the one reason an app
+//! running on the binding names the pool.
 
 #![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-/// This crate's span target — Repository access — every query, and every row-level filter applied.
-///
-/// Declared by the crate that **owns** the concern, which is not always the only
-/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
-/// rather than spelling a second one, because a target's one job is to say
-/// **where** an event came from. A central table in the kernel would have meant
-/// `nest-rs-core` holding a name for a concern it does not know exists.
-pub const TARGET: &str = "nest_rs::orm";
-
+mod atomic;
+mod bind;
+mod column_default;
 mod config;
+mod contained;
 mod database;
-#[cfg(any(feature = "ws", feature = "mcp"))]
-mod dispatch;
 mod error;
 mod executor;
+mod exposed;
+mod hidden_columns;
+mod insertion;
 mod module;
 mod page;
 mod repo;
 pub mod retry;
+mod savepoint;
+mod select;
 mod service;
 mod slug;
 mod soft_delete;
+pub mod target;
 mod time;
-mod worker;
+mod turn;
+mod unique_key;
+mod unit;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;
@@ -54,50 +88,238 @@ pub mod graphql;
 mod health;
 #[cfg(feature = "http")]
 mod http;
-#[cfg(feature = "mcp")]
-pub mod mcp;
-#[cfg(feature = "ws")]
-pub mod ws;
+#[cfg(feature = "queue")]
+pub mod queue;
 
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
-pub use error::ServiceError;
-#[cfg(feature = "http")]
-pub use error::crud_error;
-pub use executor::{
-    CommitError, Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
-    current_executor_scope, with_executor, with_job_executor, with_request_executor,
-};
+pub use error::{Diagnostics, RepoError, ServiceError};
+pub use exposed::Exposed;
+pub use insertion::Insertion;
 pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};
-pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageParams, clamp_page_size};
+pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageCursor, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
+pub use select::RepoSelect;
 pub use service::{
     Access, Authorized, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel,
     model_uuid,
 };
 pub use slug::resolve_unique_slug;
-pub use soft_delete::{
-    SoftDeletable, SoftDeleteRegistration, audit_soft_delete_bindings, live_condition,
-};
+pub use soft_delete::{SoftDeletable, live_condition};
 pub use time::now;
-pub use worker::WorkerDbContext;
+pub use unit::SeaOrmUnitOfWork;
 
-#[cfg(feature = "health")]
-pub use health::{SeaOrmHealthIndicator, SeaOrmHealthModule};
-#[cfg(feature = "http")]
-pub use http::{Bind, DbContext};
+#[doc(hidden)]
+pub mod __private {
+    //! Called by this framework's macro expansions and sibling crates. Not API:
+    //! may change in any release.
 
-/// Re-exported so a consumer names one `sea_orm` — the framework's — instead of
-/// carrying its own dependency and hand-mirroring the exact pin. SeaORM types
-/// saturate the ORM public surface (`Repo` bounds, `Executor`, `DbErr`, the
-/// entity / `ActiveModel` derives), so its version is part of this crate's API
-/// contract: the workspace exact-pins it (`=2.0`) and apps should resolve it
-/// through this re-export to stay in lockstep (the same rationale
-/// `nest-rs-http` re-exports `poem` and `nest-rs-graphql` re-exports
-/// `async_graphql`).
+    pub use crate::bind::resource_bind;
+    pub use crate::config::DEFAULT_STATEMENT_TIMEOUT;
+    #[cfg(feature = "graphql")]
+    pub use crate::error::{graphql_crud_error, graphql_crud_write_error};
+    #[cfg(feature = "http")]
+    pub use crate::error::{http_crud_error, http_crud_write_error};
+    pub use crate::executor::{FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor};
+    #[cfg(feature = "graphql")]
+    pub use crate::graphql::bind::graphql_bind;
+    #[cfg(feature = "graphql")]
+    pub use crate::graphql::relations::__private::{relation_key, relation_page};
+    #[cfg(feature = "http")]
+    pub use crate::http::http_bind;
+    #[cfg(feature = "graphql")]
+    pub use crate::page::graphql_page_cursor;
+    pub use crate::repo::unit_of_work_required;
+    pub use crate::savepoint::Savepoint;
+    pub use crate::service::{SameEntity, bound_entity, created_key};
+
+    pub use crate::column_default::ColumnDefaultRegistration;
+    pub use crate::exposed::{ExposeDeclared, nullable_schema};
+    pub use crate::hidden_columns::{AModelCrossesNoWire, HiddenColumns};
+    pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
+    pub use crate::unique_key::UniqueKeyRegistration;
+    pub use inventory;
+
+    // What `#[expose]` emits, so an entity crate declares none of these; each
+    // derive carries a `crate = ` override pointing here.
+    pub use async_trait::async_trait;
+    pub use chrono;
+    #[cfg(feature = "graphql")]
+    pub use nest_rs_graphql::__private::{
+        FieldFailure, GraphqlRelationRegistration, LoaderOwner, seeded_loader,
+    };
+    #[cfg(feature = "graphql")]
+    pub use nest_rs_graphql::{async_graphql, dataloader};
+    pub use schemars;
+    pub use serde;
+    pub use serde_json;
+    pub use tracing;
+    pub use uuid;
+    pub use validator;
+}
+
+/// Expose a SeaORM entity to REST/OpenAPI (and optionally GraphQL) from one
+/// declaration: its wire DTO (`Serialize` + `JsonSchema`), built from a row and
+/// judged there for the caller the running unit answers, and its `Create`/`Update`
+/// inputs. A `Model` crosses no wire but as that type: a
+/// wire derive written on it is refused, and one above the decorator or an impl
+/// written by hand does not compile beside what the decorator emits on it, so it
+/// serializes nowhere and, with the `graphql` feature, answers no GraphQL field.
+///
+/// **Exposure is opt-in:** a column reaches the wire only when its field
+/// carries `#[expose]` (or `#[expose(input(...))]`, which implies read). A field
+/// with no `#[expose]` stays hidden on every transport, so a column added by a
+/// later migration never leaks by omission.
+///
+/// ```
+/// # use nest_rs_seaorm::expose;
+/// # mod service {
+/// #     pub struct UsersService;
+/// # }
+/// # mod user {
+/// #     use super::*;
+/// #     use nest_rs_core::Secret;
+/// #     use sea_orm::entity::prelude::*;
+/// #[expose(name = "User", service = super::service::UsersService)]
+/// #[sea_orm::model]
+/// # #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+/// # #[sea_orm(table_name = "users")]
+/// pub struct Model {
+///     #[sea_orm(primary_key, auto_increment = false)]
+///     #[expose]                                                  // read-only
+///     pub id: Uuid,
+///     #[expose]                                                  // read-only
+///     pub org_id: Uuid,
+///     #[expose(input(create, update), validate(length(min = 1)))] // read + write
+///     pub name: String,
+///     #[expose(input(create), validate(email), nullable)]        // read + create-only,
+///     pub email: String,                                         //   a grant may withhold it
+///     pub password_hash: Option<Secret<String>>,                 // no #[expose] ⇒ hidden
+/// }
+/// # impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # #[nest_rs_core::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # use nest_rs_authz::{AbilityBuilder, Action};
+/// # use sea_orm::prelude::Uuid;
+/// # use user::{CreateUser, Model, UpdateUser, User};
+/// # let id = Uuid::nil();
+/// let mut ab = AbilityBuilder::new();
+/// ab.can(Action::Read, user::Entity)
+///     .fields([user::Column::Id, user::Column::OrgId, user::Column::Name]);
+/// # let ability = std::sync::Arc::new(ab.build()?);
+/// # nest_rs_authz::__private::install_ability(ability, async {
+///
+/// let model = Model {
+///     id,
+///     org_id: id,
+///     name: "Ada".into(),
+///     email: "ada@example.com".into(),
+///     password_hash: Some("$argon2id$…".into()),
+/// };
+/// assert_eq!(
+///     serde_json::to_value(User::from(&model))?,
+///     serde_json::json!({ "id": id, "org_id": id, "name": "Ada", "email": null }),
+/// );
+/// let _ = CreateUser { name: "Ada".into(), email: "ada@example.com".into() };
+/// let _ = UpdateUser { name: "Ada L.".into() };
+/// # Ok::<_, serde_json::Error>(())
+/// # }).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// The `Model` is no wire type: a handler answers its exposed type, so a
+/// hidden column never crosses a wire.
+///
+/// ```compile_fail,E0277
+/// # use nest_rs_seaorm::expose;
+/// # mod post {
+/// #     use super::*;
+/// #     use sea_orm::entity::prelude::*;
+/// #[expose(name = "Post")]
+/// # #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+/// # #[sea_orm(table_name = "posts")]
+/// pub struct Model {
+///     #[sea_orm(primary_key)]
+///     #[expose]
+///     pub id: i32,
+///     pub deleted_at: Option<DateTimeWithTimeZone>,
+/// }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # let row = post::Model { id: 1, deleted_at: None };
+/// serde_json::to_value(&row)?;
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+///
+/// A grant on `Read` may withhold only a column the wire type answers `null`:
+/// an `Option` column, or one `#[expose(nullable)]` declares, whose field is an
+/// `Option` and whose schema is nullable on every edge, its description saying a
+/// grant may withhold it. The primary key names its row and takes no `nullable`.
+///
+/// Add the `graphql` flag, with this crate's `graphql` feature, and the DTO is
+/// also a GraphQL object, its `#[expose]`d relations resolved through
+/// dataloaders (`graphql::RelatedTo`); without the flag the entity crate
+/// compiles no GraphQL at all:
+///
+/// ```
+/// # use nest_rs_seaorm::expose;
+/// # mod service {
+/// #     pub struct ItemsService;
+/// # }
+/// # mod rest {
+/// #     use super::*;
+/// #     use sea_orm::entity::prelude::*;
+/// #[expose(name = "Item", service = super::service::ItemsService)]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+/// #     #[sea_orm(table_name = "items")]
+/// #     pub struct Model {
+/// #         #[sea_orm(primary_key)]
+/// #         #[expose]
+/// #         pub id: i32,
+/// #     }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # mod graph {
+/// #     use super::*;
+/// #     use sea_orm::entity::prelude::*;
+/// #[expose(name = "Item", service = super::service::ItemsService, graphql)]
+/// #     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+/// #     #[sea_orm(table_name = "items")]
+/// #     pub struct Model {
+/// #         #[sea_orm(primary_key)]
+/// #         #[expose]
+/// #         pub id: i32,
+/// #     }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # fn main() {
+/// # use async_graphql::OutputType;
+///
+/// fn wire_only<T: serde::Serialize + schemars::JsonSchema>() {}
+/// fn with_graphql<T: serde::Serialize + schemars::JsonSchema + OutputType>() {}
+/// wire_only::<rest::Item>();
+/// with_graphql::<graph::Item>();
+/// # }
+/// ```
+///
+/// **An insert through [`Repo`] fills the entity's column defaults** the row
+/// left unset, [`Repo::insert_unscoped`] and [`Creatable::create`] alike: a
+/// `Uuid` key with a v7 UUID, and a column's `#[expose(default = expr)]` — a
+/// server-side constant on a column the create input does not carry. What the
+/// caller's grants pin (the tenant, the author) [`Creatable::create`] fills
+/// first, so a pin wins over a default. The entity's `ActiveModelBehavior` is
+/// its own, but under `timestamps`, which writes it to stamp `created_at` on
+/// insert and `updated_at`, when the entity has one, on every save.
+pub use nest_rs_seaorm_macros::expose;
+
+/// Re-exported so an app resolves the framework's exact `sea_orm` pin, part of
+/// this crate's API.
 pub use sea_orm;
-
-/// Re-exported so the `inventory::submit!` `#[expose(..., soft_delete)]` emits
-/// resolves through this crate — the entity crate declares neither `inventory`
-/// nor its version.
-pub use inventory;

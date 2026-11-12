@@ -1,7 +1,6 @@
 ---
 title: Rooms
 description: The WsClient handle — join, leave, broadcast, scoped emit_to — and the room semantics behind them.
-tier: basics
 sidebar:
   order: 4
 ---
@@ -29,7 +28,7 @@ current connection's handle:
 use nest_rs::ws::{gateway, messages, WsClient};
 
 #[gateway(path = "/ws")]
-#[derive(Default)]
+#[use_guards(AuthnGuard)]
 pub struct ChatGateway;
 
 #[messages]
@@ -40,13 +39,11 @@ impl ChatGateway {
     }
 
     #[subscribe_message("join")]
-    #[public]
     async fn join_room(&self, room: String, client: &WsClient) {
         client.join(&room);
     }
 
     #[subscribe_message("leave")]
-    #[public]
     async fn leave_room(&self, room: String, client: &WsClient) {
         client.leave(&room);
     }
@@ -68,22 +65,22 @@ membership atomically — no stale rows, no cleanup hook to write.
 | `client.broadcast(event, &data)` | Every live connection, including this one. |
 | `client.registry()` | The underlying [`WsServer`](/websockets/server-push/) — for advanced cases. |
 
-Every method serializes `data` with `serde` and returns either a
-boolean (one connection) or a count of outboxes that accepted the
-frame. A closed outbox returns `false` / `0` silently — the writer
-task drops the channel on disconnect, so the dispatch loop never blocks
-on a slow client.
+Every method but `registry` serializes `data` with `serde` and returns a `Result`: a
+boolean (one connection) or a count of outboxes that accepted the frame, `Err` when
+`data` does not serialize. A frame an outbox refuses is shed rather than awaited, with
+one `warn` on `nest_rs::ws`, so the dispatch loop never blocks on a slow client.
 
 ```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("say")]
-#[public]
-async fn say(&self, msg: SendMessage, client: &WsClient) {
-    let _ = client.broadcast("said", &msg);
-    let _ = client.to("lobby", "said", &msg);
+async fn say(&self, msg: SendMessageDto, client: &WsClient) -> Result<(), WsError> {
+    client.broadcast("said", &msg).opaque()?;
+    client.to("lobby", "said", &msg).opaque()?;
+    Ok(())
 }
 ```
 
-`broadcast` reaches the whole gateway; `to` scopes by room.
+`broadcast` reaches every connection on the gateway's registry, any other gateway
+sharing it included; `to` scopes by room.
 `client.to(room, ...)` does **not** require the sender to be in
 `room` — a user can post into any room they know the name of, which is
 why authorization belongs in a [guard](/websockets/guards/) and not in
@@ -93,18 +90,17 @@ the membership table.
 A reply from a handler return value is independent of these calls.
 Returning `T` sends one frame on the request's event to the sender.
 Calling `client.broadcast(...)` sends frames on a different event to
-the room. A handler often does both in one call.
+every connection on the registry. A handler often does both in one call.
 </Aside>
 
 ## A worked example
 
-The `chat` gateway uses all four scopes — joining at connect,
-moving rooms by event, broadcasting peer-visible events, replying with
-a payload:
+The `chat` gateway joins a room at connect, broadcasts peer-visible events and
+replies with a payload:
 
-```rust title="crates/features/src/chat/ws/gateway.rs (from the demo)"
+```rust title="crates/features/src/chat/ws/gateway.rs (from the demo, abridged)"
 #[gateway(path = "/ws")]
-#[use_guards(AuthnGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct ChatGateway {
     #[inject]
     svc: Arc<ChatService>,
@@ -124,45 +120,63 @@ impl ChatGateway {
     }
 
     #[subscribe_message("message")]
-    #[public]
-    #[use_guards(ModerationGuard)]
-    async fn on_message(&self, message: SendMessageDto) -> Result<(), serde_json::Error> {
-        self.svc.record(message)?;
+    #[authorize(Create, Posting)]
+    async fn on_message(
+        &self,
+        caller: Ambient<Claims>,
+        message: SendMessageDto,
+    ) -> Result<(), WsError> {
+        self.svc.record(caller.into_inner().sub, message).opaque()?;
         Ok(())
     }
 
     #[subscribe_message("history")]
-    #[public]
     async fn history(&self) -> Vec<ChatMessageDto> {
         self.svc.history()
     }
 
+    // …
+
     #[subscribe_message("typing")]
-    #[public]
-    async fn typing(&self, message: SendMessageDto, client: &WsClient) {
-        if let Err(e) = client.broadcast("typing", &message) {
-            tracing::warn!(target: "features::chat", error = %e, "broadcast failed");
+    #[authorize(Create, Posting)]
+    async fn typing(
+        &self,
+        caller: Ambient<Claims>,
+        message: SendMessageDto,
+        client: &WsClient,
+    ) -> Result<(), WsError> {
+        let typing = ChatMessageDto {
+            author: caller.into_inner().sub,
+            text: message.text,
+        };
+        if let Err(e) = client.broadcast("typing", &typing) {
+            tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
         }
+        Ok(())
     }
 }
 ```
 
-Drive it from two terminals at once and the picture comes through:
+Each client sends its text alone, `{"text":"hi"}`. Drive it from two
+terminals at once, each holding a user's token, and the picture comes
+through:
 
 ```text frame="terminal"
-$ websocat ws://localhost:3000/ws       # tab A
-{"event":"message","data":{"author":"ada","text":"hi"}}
-{"event":"typing","data":{"author":"bob","text":"..."}}
+$ websocat ws://localhost:3004/ws       # tab A, Ada
+{"event":"message","data":{"author":"0192b6f0-7c1e-7a40-9d3e-5f1c2a8b4d61","text":"hi"}}
+{"event":"typing","data":{"author":"0192b6f1-02aa-7f13-8c55-1d9e7b3c0a42","text":"..."}}
 
-$ websocat ws://localhost:3000/ws       # tab B
-{"event":"typing","data":{"author":"bob","text":"..."}}
-{"event":"message","data":{"author":"ada","text":"hi"}}
+$ websocat ws://localhost:3004/ws       # tab B, Bob
+{"event":"typing","data":{"author":"0192b6f1-02aa-7f13-8c55-1d9e7b3c0a42","text":"..."}}
+{"event":"message","data":{"author":"0192b6f0-7c1e-7a40-9d3e-5f1c2a8b4d61","text":"hi"}}
 ```
 
-`message` is recorded by the service, which calls
-`WsServer::broadcast("message", ...)` from outside the handler — see
-[Server-side push](/websockets/server-push/). `typing` broadcasts
-through the client handle directly because there is no state to
+The author is the subject of the token the upgrade verified, read from the
+principal every message on the connection carries — never a name the payload
+states, so no client speaks as another. `message` is recorded by the
+service, which calls `WsServer::broadcast("message", ...)` from outside the
+handler — see [Server-side push](/websockets/server-push/). `typing`
+broadcasts through the client handle directly because there is no state to
 record.
 
 ## When `&WsClient` is not enough

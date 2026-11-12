@@ -1,29 +1,25 @@
+#[cfg(feature = "otlp")]
+use tracing_subscriber::Layer as _;
+use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer, Registry};
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use nest_rs_core::__private::{ConsoleLayer, install_global_subscriber, log_filter};
 
-use nest_rs_core::logging::{JsonFormat, TextFormat};
-
-use crate::config::{LogFormat, OpenTelemetryConfig};
+use crate::config::{OpenTelemetryConfig, say_retired_variables};
 use crate::error::OpenTelemetryError;
 
-/// `OpenTelemetryModule` reads this to fail fast rather than register no-op providers
-/// when `OpenTelemetry::init` was forgotten.
-static INITIALIZED: AtomicBool = AtomicBool::new(false);
+const ALREADY_INSTALLED: &str = "a global subscriber is already installed, and is kept";
 
-pub(crate) fn initialized() -> bool {
-    INITIALIZED.load(Ordering::Relaxed)
-}
-
-fn mark_initialized() {
-    INITIALIZED.store(true, Ordering::Relaxed);
-}
+/// What the boot says when a deployment exports a signal over plain HTTP off
+/// this machine: honoured, since its `http://` endpoint wrote it.
+#[cfg(feature = "otlp")]
+const PLAINTEXT_EXPORT: &str = "a signal is exported over plain HTTP outside a dev profile: its \
+     telemetry travels unencrypted";
 
 /// Drop synchronously flushes pending traces/metrics/logs. Keep the binding
-/// alive for the whole program: `let _otel = OpenTelemetry::init("api")?;`.
+/// alive for the whole program: `let _otel = OpenTelemetry::init()?;`.
+#[must_use = "dropping the guard shuts the exporters down at once: bind it, \
+              `let _otel = OpenTelemetry::init()?;`, for the whole of `main`"]
 pub struct OpenTelemetry {
     #[cfg(feature = "otlp")]
     tracer_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
@@ -34,51 +30,56 @@ pub struct OpenTelemetry {
 }
 
 impl OpenTelemetry {
-    /// Reads `NESTRS_OPENTELEMETRY__*`. Batch exporters are added only when an OTLP
-    /// endpoint is set, but the tracer is always installed so `trace_id` and
-    /// `traceparent` propagation work out of the box.
-    pub fn init(service_name: impl Into<String>) -> Result<Self, OpenTelemetryError> {
-        Self::init_with(OpenTelemetryConfig::from_env(service_name))
+    /// Install the subscriber from the environment
+    /// ([`OpenTelemetryConfig::from_env`]), the service named after the binary
+    /// `#[nest_rs::main]` started. A signal's batch exporter is added only when
+    /// an OTLP endpoint is set for it (`OTEL_EXPORTER_OTLP_ENDPOINT`) and
+    /// neither its selector (`OTEL_TRACES_EXPORTER`, `_METRICS_`, `_LOGS_`) nor
+    /// `OTEL_SDK_DISABLED` turns it off, but the tracer is always installed so
+    /// `trace_id` and `traceparent` propagation work out of the box.
+    pub fn init() -> Result<Self, OpenTelemetryError> {
+        Self::init_with(OpenTelemetryConfig::from_env()?)
     }
 
-    /// Console-only init for tests. Idempotent; first call wins. No flush
-    /// guard. Log level honours `NESTRS_LOG` then `RUST_LOG`, default `warn`
-    /// (noise control) — an invalid directive falls through rather than
-    /// failing a test run over log config.
-    #[doc(hidden)]
-    pub fn init_for_tests() {
-        if initialized() {
-            return;
-        }
-        let filter = std::env::var(nest_rs_core::EnvPrefix::var(
-            nest_rs_core::logging::var::FILTER,
-        ))
-        .ok()
-        .and_then(|spec| EnvFilter::try_new(&spec).ok())
-        .or_else(|| EnvFilter::try_from_default_env().ok())
-        .unwrap_or_else(|| EnvFilter::new("warn"));
-        let _ = Registry::default()
-            .with(filter)
-            .with(console_layer(LogFormat::Text, false))
-            .try_init();
-        mark_initialized();
-    }
-
-    /// Install the subscriber from an explicit [`OpenTelemetryConfig`] (the
-    /// programmatic path; [`init`](Self::init) is the env-driven wrapper).
-    /// Returns the flush guard that must outlive `main`, or an error that
-    /// aborts boot on an unparseable filter or a failed exporter build.
+    /// Install the subscriber from `config`, under the variables that override
+    /// it field by field: the OpenTelemetry specification's (`OTEL_*`) and the
+    /// console's (`RUST_LOG`, `<PREFIX>_LOG_FORMAT`,
+    /// `<PREFIX>_LOG_SOURCE_LOCATION`), as [`OpenTelemetryConfig::from_env`]
+    /// reads them. Returns the flush guard that must outlive `main`, or an
+    /// error that aborts boot on a filter, a setting, a number the SDK reads
+    /// or a header that does not parse, a batch processor's queue or batch
+    /// size it cannot run with, an export no timeout bounds, a service name
+    /// naming nothing, a request this binary cannot serve —
+    /// an exporter, a compression or a propagator it does not build,
+    /// `OTEL_CONFIG_FILE`, userinfo in an endpoint, a query on a base
+    /// endpoint, a header beside a plaintext endpoint on another host or a
+    /// query in one, an endpoint in a binary built without the `otlp`
+    /// feature — a metric interval or sample ratio outside its range, or a
+    /// failed exporter build. A specification variable this build serves
+    /// nowhere is said once at `warn`, unless its value names what it does, and
+    /// so, in a deployed profile, is each signal exporting over `http://` off
+    /// this machine.
+    ///
+    /// The framework propagates W3C Trace Context at every edge and carries a
+    /// queue job's W3C Baggage onto the pushes it makes, whatever this crate
+    /// installs, so `OTEL_PROPAGATORS` may only name those two.
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
-        let filter = parse_log_filter(&config.log_filter)?;
-        let fmt_layer = console_layer(config.log_format, config.log_source_location);
+        let console = config.console()?;
+        let filter = log_filter(&console.filter);
+        let console_layer = ConsoleLayer::new(console.format, console.source_location);
+        // The boot line says what the console writes: `format` may hold `ByProfile`.
+        let log_format = if console.format.writes_json() {
+            "json"
+        } else {
+            "text"
+        };
 
         #[cfg(feature = "otlp")]
         {
             let exporters = crate::otlp::build(&config)?;
             let otel_layer = tracing_opentelemetry::layer().with_tracer(exporters.tracer);
-            // Every span the framework opens, at every edge — see `linker`. It
-            // is seeded here rather than mounted as a module because a queue
-            // worker imports no transport and would otherwise get nothing.
+            // Seeded here rather than mounted by a module: a queue worker imports no
+            // transport.
             crate::linker::install();
 
             // Bridge only when an exporter is present; otherwise it pays the
@@ -86,28 +87,56 @@ impl OpenTelemetry {
             let appender_layer = match exporters.logger_provider.as_ref() {
                 Some(lp) => Some(
                     opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(lp)
-                        .with_filter(parse_log_filter(&config.log_filter)?),
+                        .with_filter(log_filter(&console.filter)),
                 ),
                 None => None,
             };
 
-            Registry::default()
-                .with(filter)
-                .with(fmt_layer)
-                .with(otel_layer)
-                .with(appender_layer)
-                .try_init()
-                .map_err(|e| OpenTelemetryError::Init(e.to_string()))?;
-            mark_initialized();
+            if !install_global_subscriber(
+                Registry::default()
+                    .with(filter)
+                    .with(console_layer)
+                    .with(otel_layer)
+                    .with(appender_layer),
+            ) {
+                return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
+            }
 
+            say_retired_variables();
+            let summary = exporters.summary;
+            for over in summary.passed_over {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    variable = over.variable,
+                    reason = over.reason,
+                    "an OpenTelemetry variable is passed over",
+                );
+            }
+            if let Some(environment) = nest_rs_config::Surface::Open.opened_in_deployment() {
+                for (signal, endpoint) in summary.in_plaintext {
+                    tracing::warn!(
+                        target: crate::TARGET,
+                        environment = environment.as_str(),
+                        signal = signal.name(),
+                        endpoint = endpoint.as_str(),
+                        "{PLAINTEXT_EXPORT}",
+                    );
+                }
+            }
+            // Strings, which the console quotes, so a logfmt reader takes
+            // `off (no endpoint)` whole.
+            let [traces, metrics, logs] = summary.destinations.map(|to| to.to_string());
             tracing::info!(
                 target: crate::TARGET,
-                service = %config.service_name,
+                service = summary.service.as_str(),
                 mode = "otlp",
-                endpoint = config.otlp_endpoint.as_deref().unwrap_or("<none>"),
-                sample_ratio = config.trace_sample_ratio,
-                log_format = ?config.log_format,
-                otlp_export = exporters.meter_provider.is_some(),
+                traces = traces.as_str(),
+                metrics = metrics.as_str(),
+                logs = logs.as_str(),
+                sampler = summary.sampler.name,
+                sampler_source = summary.sampler.source,
+                sample_ratio = summary.sampler.ratio,
+                log_format,
                 "OpenTelemetry initialised"
             );
 
@@ -120,17 +149,21 @@ impl OpenTelemetry {
 
         #[cfg(not(feature = "otlp"))]
         {
-            Registry::default()
-                .with(filter)
-                .with(fmt_layer)
-                .try_init()
-                .map_err(|e| OpenTelemetryError::Init(e.to_string()))?;
-            mark_initialized();
+            refuse_what_no_exporter_serves(&config, &nest_rs_config::env_var)?;
+            let service = console_service(
+                &config,
+                nest_rs_core::AppIdentity::current(),
+                &nest_rs_config::env_var,
+            )?;
+            if !install_global_subscriber(Registry::default().with(filter).with(console_layer)) {
+                return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
+            }
+            say_retired_variables();
             tracing::info!(
                 target: crate::TARGET,
-                service = %config.service_name,
+                service = service.as_str(),
                 mode = "console",
-                log_format = ?config.log_format,
+                log_format,
                 "OpenTelemetry initialised"
             );
             Ok(OpenTelemetry {})
@@ -138,151 +171,472 @@ impl OpenTelemetry {
     }
 }
 
-/// Parse an `EnvFilter` directive string, mapping a rejection to a named,
-/// boot-aborting error instead of silently falling back to `info`. A
-/// set-but-unparseable filter is a config error, never a degraded default —
-/// same posture as every other `NESTRS_*` var (set-but-invalid ⇒ `Err`).
-fn parse_log_filter(spec: &str) -> Result<EnvFilter, OpenTelemetryError> {
-    EnvFilter::try_new(spec).map_err(|source| OpenTelemetryError::InvalidLogFilter {
-        value: spec.to_owned(),
-        source,
-    })
+/// The service a binary built without the `otlp` feature names on its boot
+/// line, as the exporters' resource would name it: `OTEL_SERVICE_NAME`, then
+/// `service.name` in `OTEL_RESOURCE_ATTRIBUTES`, then the pin, then the binary,
+/// then [`unknown_service`]. What names none is refused as it is there. `read`
+/// is the environment as written: a blank `OTEL_SERVICE_NAME` is refused, never
+/// read as unset.
+#[cfg(not(feature = "otlp"))]
+fn console_service(
+    config: &OpenTelemetryConfig,
+    binary: Option<&nest_rs_core::AppIdentity>,
+    read: &impl Fn(&str) -> Option<String>,
+) -> Result<String, nest_rs_config::ConfigError> {
+    use crate::config::{SERVICE_NAME, resource_attributes, service_name};
+
+    let pinned = config.pinned_service_name()?;
+    let attributes = resource_attributes(read)?;
+    Ok(service_name(read)?
+        .or_else(|| {
+            attributes
+                .into_iter()
+                .rev()
+                .find_map(|(key, value)| (key == SERVICE_NAME).then_some(value))
+        })
+        .or_else(|| pinned.map(str::to_owned))
+        .or_else(|| binary.map(|binary| binary.name.clone()))
+        .unwrap_or_else(unknown_service))
 }
 
-/// Boxed because `text` and `json` layers have distinct concrete types.
-/// `FmtSpan::NONE` by default — a span's lifecycle is not an event, so what
-/// reaches the console is the operation line each edge files once per unit of
-/// work on `nest_rs::operation`. (Through 5.1 that was HTTP's access log alone,
-/// on `nest_rs::access`; the concept generalised to every edge and the target
-/// went with it.)
-fn console_layer<S>(
-    format: LogFormat,
-    source_location: bool,
-) -> Box<dyn Layer<S> + Send + Sync + 'static>
-where
-    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
-{
-    match format {
-        // The kernel's formatters, not tracing-subscriber's, and the same ones
-        // the fallback subscriber installs: an app's log lines cannot change
-        // shape because it adopted an exporter, and the ids on a line owe nothing
-        // to one. See `nest_rs_core::logging::TextFormat` for the rule and for
-        // why `with_file` / `with_line_number` are absent here.
-        LogFormat::Text => tracing_subscriber::fmt::layer()
-            .event_format(TextFormat::new(source_location))
-            .boxed(),
-        LogFormat::Json => tracing_subscriber::fmt::layer()
-            .json()
-            .event_format(JsonFormat::new(source_location))
-            .boxed(),
-    }
+/// The resource specification's name for a service nothing names, as the SDK's
+/// detector writes it where this build does not link one: `unknown_service:` and
+/// the executable's name, or `unknown_service` where that does not read.
+#[cfg(not(feature = "otlp"))]
+fn unknown_service() -> String {
+    use crate::config::UNKNOWN_SERVICE;
+
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| Some(format!("{UNKNOWN_SERVICE}:{}", path.file_name()?.to_str()?)))
+        .unwrap_or_else(|| UNKNOWN_SERVICE.to_owned())
 }
+
+/// What a binary built without the `otlp` feature cannot honour, refused
+/// naming the variable or the field, never the value: the specification's
+/// file configuration, a propagator the framework does not speak, a selector
+/// naming an exporter, and an endpoint set for a signal its selector and
+/// `OTEL_SDK_DISABLED` leave on — a signal's own variable, then
+/// `OTEL_EXPORTER_OTLP_ENDPOINT`, then the pinned one — since the binary
+/// builds no exporter and the deployment would believe it ships.
+#[cfg(not(feature = "otlp"))]
+fn refuse_what_no_exporter_serves(
+    config: &OpenTelemetryConfig,
+    read: &impl Fn(&str) -> Option<String>,
+) -> Result<(), nest_rs_config::ConfigError> {
+    use crate::signal::{OTEL_EXPORTER_OTLP_ENDPOINT, SdkSwitch, Selection, Signal};
+
+    let read = crate::config::blank_as_unset(read);
+    crate::config::refuse_config_file(&read)?;
+    crate::propagators::read_propagators(&read)?;
+    let disabled = SdkSwitch::read(&read) == SdkSwitch::Off;
+    for signal in Signal::ALL {
+        if signal.selection(&read)? == Selection::None || disabled {
+            continue;
+        }
+        let set_by = [signal.endpoint_var(), OTEL_EXPORTER_OTLP_ENDPOINT]
+            .into_iter()
+            .find(|variable| read(variable).is_some())
+            .or_else(|| {
+                config
+                    .otlp_endpoint
+                    .is_some()
+                    .then_some(crate::config::PINNED_ENDPOINT)
+            });
+        if let Some(set_by) = set_by {
+            return Err(nest_rs_config::ConfigError::parse(
+                set_by,
+                format!(
+                    "sets an endpoint for {}, but this binary was built without the otlp feature \
+                     and exports nothing — build it with the feature (the umbrella's \
+                     opentelemetry turns it on), or turn the signal off with {}=none",
+                    signal.name(),
+                    signal.exporter_var(),
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// How long the final telemetry flush may hold the exit, every provider at once.
+///
+/// A bounded step of the way down, after the transports' windows and the
+/// shutdown hooks' budget and before the console's last lines
+/// (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT` tabulates the sum, under the 30 s a
+/// Kubernetes pod is given before `SIGKILL`).
+///
+/// **The providers flush concurrently, each on a thread of its own**: the SDK's
+/// `shutdown` blocks up to five seconds per provider. What is still exporting at
+/// the bound is abandoned and said on stderr, naming the provider.
+pub const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Drop for OpenTelemetry {
     fn drop(&mut self) {
         #[cfg(feature = "otlp")]
-        {
-            // A failed final flush loses telemetry. `Drop` can't return, and
-            // tracing may itself be mid-teardown, so report to stderr directly.
-            if let Some(p) = self.tracer_provider.take()
-                && let Err(e) = p.shutdown()
-            {
-                eprintln!("{}: tracer provider shutdown failed: {e}", crate::TARGET);
-            }
-            if let Some(p) = self.meter_provider.take()
-                && let Err(e) = p.shutdown()
-            {
-                eprintln!("{}: meter provider shutdown failed: {e}", crate::TARGET);
-            }
-            if let Some(p) = self.logger_provider.take()
-                && let Err(e) = p.shutdown()
-            {
-                eprintln!("{}: logger provider shutdown failed: {e}", crate::TARGET);
+        self.flush_within(FLUSH_TIMEOUT);
+    }
+}
+
+#[cfg(feature = "otlp")]
+impl OpenTelemetry {
+    /// Shut every provider down at once, waiting `bound` for all three
+    /// together — [`FLUSH_TIMEOUT`] from `Drop`; the providers still exporting
+    /// at the bound, which it abandoned.
+    #[expect(
+        clippy::print_stderr,
+        reason = "the final flush runs after the subscriber it would log through is gone"
+    )]
+    fn flush_within(&mut self, bound: std::time::Duration) -> Vec<&'static str> {
+        type Shutdown = Box<dyn FnOnce() -> opentelemetry_sdk::error::OTelSdkResult + Send>;
+
+        // `Drop` can't return, and tracing may itself be mid-teardown, so
+        // every failure here goes to stderr directly. A failed or abandoned
+        // final flush loses telemetry, and says so.
+        let deadline = std::time::Instant::now() + bound;
+        let mut flushes: Vec<(&'static str, Shutdown)> = Vec::new();
+        if let Some(p) = self.tracer_provider.take() {
+            flushes.push(("tracer", Box::new(move || p.shutdown_with_timeout(bound))));
+        }
+        // The metrics provider ignores the timeout it is handed and waits
+        // its reader's fixed five seconds (opentelemetry_sdk 0.33), which is
+        // why the bound is enforced here rather than trusted to the SDK.
+        if let Some(p) = self.meter_provider.take() {
+            flushes.push(("meter", Box::new(move || p.shutdown_with_timeout(bound))));
+        }
+        if let Some(p) = self.logger_provider.take() {
+            flushes.push(("logger", Box::new(move || p.shutdown_with_timeout(bound))));
+        }
+
+        let (done, settled) = std::sync::mpsc::channel();
+        let mut pending: Vec<&'static str> = Vec::new();
+        for (provider, shutdown) in flushes {
+            let done = done.clone();
+            let spawned = std::thread::Builder::new()
+                    .name(format!("otel-flush-{provider}"))
+                    .spawn(move || {
+                        #[expect(clippy::let_underscore_must_use, reason = "the receiver stops listening at the deadline, which it reports itself")]
+                        let _ = done.send((provider, shutdown()));
+                    });
+            match spawned {
+                Ok(_) => pending.push(provider),
+                Err(e) => eprintln!(
+                    "{}: {provider} provider not flushed: no thread to flush it on: {e}",
+                    crate::TARGET,
+                ),
             }
         }
+        drop(done);
+
+        while !pending.is_empty() {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match settled.recv_timeout(left) {
+                Ok((provider, outcome)) => {
+                    pending.retain(|p| *p != provider);
+                    if let Err(e) = outcome {
+                        eprintln!(
+                            "{}: {provider} provider shutdown failed: {e}",
+                            crate::TARGET
+                        );
+                    }
+                }
+                Err(_) => {
+                    eprintln!(
+                        "{}: final flush abandoned after {} ms, still exporting: {}",
+                        crate::TARGET,
+                        bound.as_millis(),
+                        pending.join(", "),
+                    );
+                    break;
+                }
+            }
+        }
+        pending
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "otlp"))]
+    use crate::testing::reading;
 
-    /// `INITIALIZED` is a process-wide `AtomicBool`; tests that mutate it must
-    /// serialize so an interleaved check does not see another test's write.
-    static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+    /// A filter pinned in code is checked by the kernel's parser, which names
+    /// the field and never quotes the directive.
     #[test]
-    fn initialized_reflects_the_mark() {
-        let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Snapshot, mutate, restore — leaving the flag set would poison every
-        // other init test in the file (and `init_for_tests` depends on it
-        // returning the prior state).
-        let prior = INITIALIZED.swap(false, Ordering::Relaxed);
-        assert!(!initialized());
-        mark_initialized();
-        assert!(initialized());
-        INITIALIZED.store(prior, Ordering::Relaxed);
+    fn init_with_refuses_a_pinned_filter_that_does_not_parse_naming_the_field() {
+        let config = OpenTelemetryConfig {
+            log_filter: "billing=notalevel".into(),
+            ..OpenTelemetryConfig::default()
+        };
+        // `OpenTelemetry` has no `Debug`, so no `expect_err`.
+        let Err(refused) = OpenTelemetry::init_with(config) else {
+            panic!("a filter that does not parse aborts init, never degrades to `info`");
+        };
+        assert!(
+            matches!(refused, OpenTelemetryError::LogSettings(_)),
+            "{refused:?}"
+        );
+        let said = refused.to_string();
+        assert!(said.contains("OpenTelemetryConfig::log_filter"), "{said}");
+        assert!(!said.contains("notalevel"), "{said}");
+        assert!(!said.contains("billing"), "{said}");
     }
 
+    /// A collector that never answers holds the exit for one bound, the meter's
+    /// provider included, which ignores the one it is handed.
+    #[cfg(feature = "otlp")]
     #[test]
-    fn console_layer_produces_a_text_layer_for_text_format() {
-        // The returned layer is type-erased (`Box<dyn Layer<_>>`); compose it
-        // against a registry to confirm the branch builds a working layer.
-        let layer = console_layer::<Registry>(LogFormat::Text, false);
-        let _subscriber = Registry::default().with(layer);
+    fn a_collector_that_never_answers_holds_the_final_flush_to_the_bound_for_all_three_providers() {
+        use opentelemetry::logs::{LogRecord as _, Logger as _, LoggerProvider as _};
+        use opentelemetry::metrics::MeterProvider as _;
+        use opentelemetry::trace::{Tracer as _, TracerProvider as _};
+        use opentelemetry_otlp::{
+            LogExporter, MetricExporter, Protocol, SpanExporter, WithExportConfig,
+        };
+
+        // Bound and never accepted: the kernel completes the handshake, so each
+        // export's request goes out and its answer never comes.
+        let collector = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+        let base = format!("http://{}", collector.local_addr().expect("its address"));
+
+        let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(
+                SpanExporter::builder()
+                    .with_http()
+                    .with_endpoint(format!("{base}/v1/traces"))
+                    .with_protocol(Protocol::HttpBinary)
+                    .build()
+                    .expect("the span exporter builds"),
+            )
+            .build();
+        tracer_provider.tracer("pin").in_span("queued", |_| {});
+
+        let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+            .with_reader(
+                opentelemetry_sdk::metrics::PeriodicReader::builder(
+                    MetricExporter::builder()
+                        .with_http()
+                        .with_endpoint(format!("{base}/v1/metrics"))
+                        .with_protocol(Protocol::HttpBinary)
+                        .build()
+                        .expect("the metric exporter builds"),
+                )
+                .build(),
+            )
+            .build();
+        meter_provider
+            .meter("pin")
+            .u64_counter("queued")
+            .build()
+            .add(1, &[]);
+
+        let logger_provider = opentelemetry_sdk::logs::SdkLoggerProvider::builder()
+            .with_batch_exporter(
+                LogExporter::builder()
+                    .with_http()
+                    .with_endpoint(format!("{base}/v1/logs"))
+                    .with_protocol(Protocol::HttpBinary)
+                    .build()
+                    .expect("the log exporter builds"),
+            )
+            .build();
+        let logger = logger_provider.logger("pin");
+        let mut record = logger.create_log_record();
+        record.set_body("queued".into());
+        logger.emit(record);
+
+        let mut guard = OpenTelemetry {
+            tracer_provider: Some(tracer_provider),
+            meter_provider: Some(meter_provider),
+            logger_provider: Some(logger_provider),
+        };
+        let bound = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let abandoned = guard.flush_within(bound);
+        let took = started.elapsed();
+
+        assert!(
+            took >= bound,
+            "the providers were given the bound: took {took:?}"
+        );
+        // The meter's reader holds its shutdown five seconds whatever it is
+        // handed: abandoned, it was not waited out.
+        assert!(
+            abandoned.contains(&"meter"),
+            "the bound is held here, not trusted to the SDK: abandoned {abandoned:?}",
+        );
     }
 
-    #[test]
-    fn console_layer_produces_a_json_layer_for_json_format() {
-        let layer = console_layer::<Registry>(LogFormat::Json, false);
-        let _subscriber = Registry::default().with(layer);
+    /// The refusal of an endpoint `set` names, in a binary built without the
+    /// `otlp` feature, as said.
+    #[cfg(not(feature = "otlp"))]
+    fn refused(config: &OpenTelemetryConfig, set: &[(&str, &str)]) -> String {
+        refuse_what_no_exporter_serves(config, &reading(set))
+            .expect_err("an endpoint nothing exports to")
+            .to_string()
     }
 
+    /// The binary's name stands where nothing else names the service, and the
+    /// last of two `service.name`s wins, as the resource holds them.
+    #[cfg(not(feature = "otlp"))]
     #[test]
-    fn console_layer_builds_with_source_location_enabled() {
-        // The `with_file`/`with_line_number` branch composes against a registry.
-        let layer = console_layer::<Registry>(LogFormat::Text, true);
-        let _subscriber = Registry::default().with(layer);
-    }
-
-    #[test]
-    fn init_for_tests_is_idempotent() {
-        let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // First call may or may not be the first across the whole test
-        // binary — either way `initialized()` must be true afterwards, and a
-        // second call must not panic.
-        OpenTelemetry::init_for_tests();
-        assert!(initialized(), "init_for_tests must flip the global flag");
-        // Second call hits the short-circuit branch.
-        OpenTelemetry::init_for_tests();
-        assert!(initialized());
-    }
-
-    #[test]
-    fn init_with_rejects_a_set_but_unparseable_log_filter() {
-        // `foo=notalevel` names a target with an invalid level — `EnvFilter`
-        // rejects it. The parse happens before any global-subscriber install,
-        // so this asserts the error without touching the `INITIALIZED` flag.
-        let config = OpenTelemetryConfig::new("svc").with_log_filter("foo=notalevel");
-        // `OpenTelemetry` has no `Debug` (its otlp providers don't), so match
-        // rather than `expect_err`. The `Ok` arm can't fire — the filter is
-        // definitively invalid, so no global subscriber is ever installed.
-        match OpenTelemetry::init_with(config) {
-            Err(OpenTelemetryError::InvalidLogFilter { value, .. }) => {
-                assert_eq!(
-                    value, "foo=notalevel",
-                    "the error must name the bad directive"
-                );
-            }
-            Err(other) => panic!("expected InvalidLogFilter, got {other:?}"),
-            Ok(_) => panic!("a set-but-unparseable filter must abort init, not degrade to `info`"),
+    fn without_the_otlp_feature_the_service_is_named_as_the_resource_would_name_it() {
+        let binary = nest_rs_core::__private::package_identity("auth", "7.0.0", "");
+        let pinned = OpenTelemetryConfig {
+            service_name: Some("pinned".into()),
+            ..OpenTelemetryConfig::default()
+        };
+        let default = OpenTelemetryConfig::default();
+        for (config, set, named) in [
+            (&default, vec![], "auth"),
+            (&pinned, vec![], "pinned"),
+            (
+                &pinned,
+                vec![(
+                    "OTEL_RESOURCE_ATTRIBUTES",
+                    "service.name=one,service.name=two",
+                )],
+                "two",
+            ),
+            (
+                &pinned,
+                vec![
+                    ("OTEL_SERVICE_NAME", "named"),
+                    ("OTEL_RESOURCE_ATTRIBUTES", "service.name=one"),
+                ],
+                "named",
+            ),
+        ] {
+            assert_eq!(
+                console_service(config, Some(&binary), &reading(&set)).expect("a name"),
+                named,
+                "{set:?}"
+            );
         }
     }
 
+    #[cfg(not(feature = "otlp"))]
     #[test]
-    fn parse_log_filter_accepts_a_valid_directive() {
-        // The unset/default path still works — a valid filter parses cleanly.
-        assert!(parse_log_filter("debug,hyper=warn").is_ok());
+    fn without_the_otlp_feature_otel_exporter_otlp_endpoint_is_refused_naming_it() {
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_ENDPOINT")
+                && said.contains("for traces")
+                && said.contains("without the otlp feature"),
+            "{said}"
+        );
+        assert!(!said.contains("collector"), "{said}");
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_the_traces_endpoint_is_refused_naming_it() {
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[(
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                "http://collector:4318/v1/traces",
+            )],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") && said.contains("for traces"),
+            "{said}"
+        );
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_the_metrics_endpoint_is_refused_naming_it() {
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[(
+                "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+                "http://collector:4318/v1/metrics",
+            )],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") && said.contains("for metrics"),
+            "{said}"
+        );
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_the_logs_endpoint_is_refused_naming_it() {
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[(
+                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+                "http://collector:4318/v1/logs",
+            )],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") && said.contains("for logs"),
+            "{said}"
+        );
+    }
+
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_a_pinned_endpoint_is_refused_naming_the_field() {
+        let said = refused(
+            &OpenTelemetryConfig {
+                otlp_endpoint: Some("http://collector:4318".into()),
+                ..OpenTelemetryConfig::default()
+            },
+            &[],
+        );
+        assert!(
+            said.contains("OpenTelemetryConfig::otlp_endpoint") && said.contains("for traces"),
+            "{said}"
+        );
+        assert!(!said.contains("collector"), "{said}");
+    }
+
+    /// A signal its selector or `OTEL_SDK_DISABLED` switches off exports nothing,
+    /// as the binary does: its endpoint is no refusal, while another signal's
+    /// still is.
+    #[cfg(not(feature = "otlp"))]
+    #[test]
+    fn without_the_otlp_feature_an_endpoint_switched_off_boots() {
+        let pinned = OpenTelemetryConfig {
+            otlp_endpoint: Some("http://collector:4318".into()),
+            ..OpenTelemetryConfig::default()
+        };
+        assert!(
+            refuse_what_no_exporter_serves(
+                &pinned,
+                &reading(&[
+                    ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+                    ("OTEL_TRACES_EXPORTER", "none"),
+                    ("OTEL_METRICS_EXPORTER", "none"),
+                    ("OTEL_LOGS_EXPORTER", "NONE"),
+                ])
+            )
+            .is_ok()
+        );
+        assert!(
+            refuse_what_no_exporter_serves(&pinned, &reading(&[("OTEL_SDK_DISABLED", "true")]))
+                .is_ok()
+        );
+        let said = refused(
+            &OpenTelemetryConfig::default(),
+            &[
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+                ("OTEL_TRACES_EXPORTER", "none"),
+            ],
+        );
+        assert!(
+            said.contains("OTEL_EXPORTER_OTLP_ENDPOINT") && said.contains("for metrics"),
+            "{said}"
+        );
+        assert!(
+            refuse_what_no_exporter_serves(&OpenTelemetryConfig::default(), &reading(&[])).is_ok()
+        );
     }
 
     #[test]

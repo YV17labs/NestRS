@@ -1,0 +1,28 @@
+error[E0080]: evaluation panicked: a range's floor is at most its ceiling, or no value is inside it
+ --> tests/integration/diagnostics/config/duration_bounds_floor_above_its_ceiling.rs:6:32
+  |
+6 |   const WINDOW: DurationBounds = DurationBounds::secs(
+  |  ________________________________^
+7 | |     Floor::Units(Bound::new(60, "a shorter window counts nothing")),
+8 | |     Bound::new(30, "past half a minute it is a unit slip"),
+9 | | );
+  | |_^ evaluation of `WINDOW` failed inside this call
+  |
+note: inside `DurationBounds::secs`
+ --> $WORKSPACE/crates/nest-rs-config/src/bounds.rs
+  |
+  |         Self::new(DurationUnit::Seconds, least, most)
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: inside `DurationBounds::new`
+ --> $RUST/core/src/panic.rs
+  |
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: $WORKSPACE/crates/nest-rs-config/src/bounds.rs
+  |
+  | /         assert!(
+  | |             least.count() <= most.count,
+  | |             "a range's floor is at most its ceiling, or no value is inside it",
+  | |         );
+  | |_________- in this macro invocation

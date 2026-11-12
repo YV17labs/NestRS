@@ -8,34 +8,33 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item};
 
-use crate::error::{CliError, CliResult};
+use crate::error::{CliError, CliResult, FileAction};
 
 const NESTRS_WORKSPACE_MARKERS: &[&str] = &["crates/*", "apps/*"];
 
 /// Default HTTP port handed to the first app in a fresh workspace.
-pub const DEFAULT_PORT_BASE: u16 = 3000;
+pub(super) const DEFAULT_PORT_BASE: u16 = 3000;
 
 /// The framework's own env-var prefix, and what a project gets unless the
-/// environment names another. Kept as a literal rather than borrowed from
-/// `nest-rs-core`: the CLI depends on no framework crate, so that
-/// `cargo install nest-rs-cli` stays independent of the version a project pins.
-pub const DEFAULT_ENV_PREFIX: &str = "NESTRS";
+/// environment names another — a literal, since the CLI links no framework crate.
+pub(crate) const DEFAULT_ENV_PREFIX: &str = "NESTRS";
 
-/// The variable the prefix is read from — the one name no prefix can rename,
-/// which is why it is spelled here (`nest_rs_core::EnvPrefix::VAR` is the same
-/// literal, for the same reason).
-pub const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
+/// The variable the prefix is read from — the one name no prefix can rename.
+pub(crate) const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
 
 #[derive(Debug, Clone)]
-pub struct NestrsWorkspace {
+pub(crate) struct NestrsWorkspace {
     pub root: PathBuf,
     pub metadata: Metadata,
+    /// Whether the root declares `[workspace.lints]`, which a member the CLI
+    /// adds then inherits.
+    pub lints: bool,
 }
 
 /// Opt-in `[workspace.metadata.nestrs]` overrides. Every field has a default,
 /// so the table is never required.
 #[derive(Debug, Clone)]
-pub struct Metadata {
+pub(crate) struct Metadata {
     /// Base port for app port allocation.
     pub port_base: u16,
 }
@@ -49,8 +48,10 @@ impl Default for Metadata {
 }
 
 impl NestrsWorkspace {
-    pub fn discover(start: &Path) -> CliResult<Option<Self>> {
-        let mut dir = start.canonicalize().map_err(CliError::Io)?;
+    pub(crate) fn discover(start: &Path) -> CliResult<Option<Self>> {
+        let mut dir = start
+            .canonicalize()
+            .map_err(CliError::file(FileAction::Resolve, start))?;
         loop {
             if let Some(ws) = read_workspace(&dir)? {
                 return Ok(Some(ws));
@@ -61,47 +62,71 @@ impl NestrsWorkspace {
         }
     }
 
-    pub fn require(start: &Path) -> CliResult<Self> {
+    pub(crate) fn require(start: &Path) -> CliResult<Self> {
         Self::discover(start)?.ok_or(CliError::NotNestrsWorkspace)
     }
 
-    pub fn features_root(&self) -> PathBuf {
+    pub(crate) fn features_root(&self) -> PathBuf {
         self.root.join("crates/features/src")
     }
 
-    pub fn features_lib(&self) -> PathBuf {
+    pub(crate) fn features_lib(&self) -> PathBuf {
         self.root.join("crates/features/src/lib.rs")
     }
 
-    pub fn features_cargo(&self) -> PathBuf {
+    pub(crate) fn features_cargo(&self) -> PathBuf {
         self.root.join("crates/features/Cargo.toml")
     }
 
-    pub fn apps_root(&self) -> PathBuf {
+    pub(crate) fn apps_root(&self) -> PathBuf {
         self.root.join("apps")
     }
 
+    /// Every app's name — a directory under `apps/` holding a `Cargo.toml` —
+    /// sorted; none when there is no `apps/`.
+    pub(crate) fn app_names(&self) -> CliResult<Vec<String>> {
+        let apps = self.apps_root();
+        let entries = match std::fs::read_dir(&apps) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(CliError::file(FileAction::List, &apps)(e)),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let path = entry
+                .map_err(CliError::file(FileAction::List, &apps))?
+                .path();
+            if path.join("Cargo.toml").is_file()
+                && let Some(name) = path.file_name().and_then(|name| name.to_str())
+            {
+                names.push(name.to_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
     /// `crates/migrations/src` — the SeaORM migration crate's source dir.
-    pub fn migrations_root(&self) -> PathBuf {
+    pub(crate) fn migrations_root(&self) -> PathBuf {
         self.root.join("crates/migrations/src")
     }
 
     /// The migration crate's `lib.rs` (the `mod m…;` registry).
-    pub fn migrations_lib(&self) -> PathBuf {
+    pub(crate) fn migrations_lib(&self) -> PathBuf {
         self.migrations_root().join("lib.rs")
     }
 
-    /// The migration crate's `migrator.rs` (the `MigratorTrait` vec — regenerated
-    /// from the `lib.rs` module list so both registrations always agree).
-    pub fn migrations_migrator(&self) -> PathBuf {
+    /// The migration crate's `migrator.rs` (the `MigratorTrait` vec, regenerated
+    /// from the `lib.rs` module list).
+    pub(crate) fn migrations_migrator(&self) -> PathBuf {
         self.migrations_root().join("migrator.rs")
     }
 
-    pub fn feature_root(&self, snake: &str) -> PathBuf {
+    pub(crate) fn feature_root(&self, snake: &str) -> PathBuf {
         self.features_root().join(snake)
     }
 
-    pub fn feature_exists(&self, snake: &str) -> bool {
+    pub(crate) fn feature_exists(&self, snake: &str) -> bool {
         self.feature_root(snake).is_dir()
     }
 }
@@ -111,9 +136,8 @@ impl NestrsWorkspace {
 /// scaffold ([`crate::version::framework_req`]).
 ///
 /// `None` covers both "no `nest-rs` entry" and an entry carrying no version (a
-/// `path` dependency in a contributor's tree): neither is a requirement to
-/// report, and inventing one would be worse than saying nothing.
-pub fn framework_pin(manifest_dir: &Path) -> CliResult<Option<String>> {
+/// `path` dependency).
+pub(crate) fn framework_pin(manifest_dir: &Path) -> CliResult<Option<String>> {
     let Some(doc) = read_manifest(manifest_dir)? else {
         return Ok(None);
     };
@@ -143,11 +167,13 @@ fn read_manifest(dir: &Path) -> CliResult<Option<DocumentMut>> {
     if !manifest.is_file() {
         return Ok(None);
     }
-    let source = std::fs::read_to_string(&manifest).map_err(CliError::Io)?;
-    source
-        .parse::<DocumentMut>()
-        .map(Some)
-        .map_err(|e| CliError::Anyhow(e.into()))
+    let source =
+        std::fs::read_to_string(&manifest).map_err(CliError::file(FileAction::Read, &manifest))?;
+    source.parse::<DocumentMut>().map(Some).map_err(|e| {
+        CliError::Anyhow(
+            anyhow::Error::new(e).context(format!("cannot parse `{}`", manifest.display())),
+        )
+    })
 }
 
 fn read_workspace(dir: &Path) -> CliResult<Option<NestrsWorkspace>> {
@@ -179,6 +205,7 @@ fn read_workspace(dir: &Path) -> CliResult<Option<NestrsWorkspace>> {
     Ok(Some(NestrsWorkspace {
         root: dir.to_path_buf(),
         metadata: read_metadata(workspace),
+        lints: workspace.contains_key("lints"),
     }))
 }
 
@@ -203,32 +230,29 @@ fn read_metadata(workspace: &toml_edit::Table) -> Metadata {
 }
 
 /// Where the CLI's idea of the prefix comes from — the same environment the app
-/// will read, so the two cannot disagree about a project they both see.
-///
-/// There is deliberately no project file to fall back on: a second source is
-/// how a rename half-lands, and `doctor` reporting `ACME` from a manifest while
-/// the deployed process resolves `NESTRS` is precisely the failure the single
-/// variable exists to remove.
+/// will read; there is no project file to fall back on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum EnvPrefixSource {
+pub(crate) enum EnvPrefixSource {
     /// Nothing names one; every variable is built from `NESTRS`.
     #[default]
     Unset,
     /// The environment names it, and it is usable.
     Environment(String),
-    /// The environment names something the *app* would abort on, so the CLI
-    /// must not quietly build names from the default and look correct. Carries
-    /// the validator's sentence, which already quotes the offending value.
+    /// The environment names something the *app* would abort on. Carries the
+    /// validator's sentence.
     Invalid(String),
 }
 
 impl EnvPrefixSource {
     /// Read the environment this process was given.
-    pub fn detect() -> Self {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the prefix is the bootstrap's own variable, read before any config"
+    )]
+    pub(crate) fn detect() -> Self {
         let Ok(value) = std::env::var(ENV_PREFIX_VAR) else {
             return Self::Unset;
         };
-        // Empty is unset, the way an empty variable is everywhere else.
         if value.is_empty() {
             return Self::Unset;
         }
@@ -240,7 +264,7 @@ impl EnvPrefixSource {
 
     /// The prefix to build names from — the default whenever there is no usable
     /// one, which is also what the app resolves in that case.
-    pub fn prefix(&self) -> &str {
+    pub(crate) fn prefix(&self) -> &str {
         match self {
             Self::Environment(prefix) => prefix,
             Self::Unset | Self::Invalid(_) => DEFAULT_ENV_PREFIX,
@@ -249,36 +273,31 @@ impl EnvPrefixSource {
 }
 
 /// The prefix every name this CLI writes or checks must carry.
-pub fn env_prefix() -> String {
+pub(crate) fn env_prefix() -> String {
     EnvPrefixSource::detect().prefix().to_owned()
 }
 
 /// A framework variable's full name, `<PREFIX>_<NAMESPACE>__<KEY>` — the CLI's
 /// mirror of `nest_rs_config::var_name`, since it links no framework crate.
-///
-/// One function so the name a command *checks* and the name it *prints* cannot
-/// be two independent `format!`s that drift.
-pub fn var_name(env_prefix: &str, namespace: &str, key: &str) -> String {
+pub(crate) fn var_name(env_prefix: &str, namespace: &str, key: &str) -> String {
     format!("{env_prefix}_{namespace}__{key}")
 }
 
 /// The shape the runtime accepts, restated for the CLI (which links no
 /// framework crate). Uppercase ASCII, digits and underscores, starting with a
 /// letter and not ending in `_` — the framework supplies the separator.
-pub fn validate_env_prefix(prefix: &str) -> Result<(), String> {
+pub(crate) fn validate_env_prefix(prefix: &str) -> Result<(), String> {
     let valid = !prefix.is_empty()
         && prefix.starts_with(|c: char| c.is_ascii_uppercase())
         && !prefix.ends_with('_')
         && prefix
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-    if valid {
-        Ok(())
-    } else {
-        Err(format!(
+    valid.ok_or_else(|| {
+        format!(
             "`{prefix}` is not a usable env prefix: use uppercase ASCII letters, digits and \
              underscores, starting with a letter and not ending in `_` (e.g. `ACME`, which \
              yields ACME_ENV and ACME_SEAORM__URL)"
-        ))
-    }
+        )
+    })
 }

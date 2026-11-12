@@ -1,7 +1,6 @@
 ---
 title: Pipes
 description: Stateless transforms at the request boundary — parse, normalize, validate before the handler runs.
-tier: basics
 sidebar:
   order: 7
 ---
@@ -14,18 +13,19 @@ GraphQL argument, a WS payload, an MCP tool's arguments, a queued job — and
 hands it to the pipe. The pipe either returns the transformed value, or
 rejects with a `PipeError` the transport renders as its native error.
 
-The trait lives in `nest-rs-pipes`, transport-agnostic, and binds **per
-argument on every transport**. Two forms, one surface:
+Validation needs no pipe at all: every edge holds each argument it decoded to
+the rules its type declares, before any pipe runs, with nothing to wrap.
 
-- **HTTP** wraps an *extractor*: `nest_rs::http::Piped<P, E>` /
-  `Valid<E>` run the pipe over what `E` extracts.
-- **GraphQL, WebSockets, MCP, and queues** deserialize a single typed
-  value, so there is no extractor to wrap: `nest_rs::pipes::Piped<P, T>` /
-  `Valid<T>` expose the wire type `T` and hand the handler the
-  transformed value. The transport macro (`#[operations]`, `#[messages]`,
-  `#[tools]`, `#[processor]`) does the stripping and the call. On MCP the
-  carrier goes **inside** `Parameters<…>`, since that is what the protocol
-  deserializes an operation's arguments into.
+The trait lives in `nest-rs-pipes`, transport-agnostic, and binds **per
+argument on every transport** through one carrier, `nest_rs::pipes::Piped`:
+
+- **HTTP** names the *extractor* the pipe reads: `Piped<P, Path<String>>`
+  runs `P` over what `Path` extracted.
+- **GraphQL, WebSockets, MCP and queues** decode the argument themselves,
+  so the carrier is `Piped<P>` and the wire value is the pipe's `In` — see
+  [Pipes beyond HTTP](/fundamentals/pipes-beyond-http/).
+
+On every edge `Piped(value)` binds the pipe's output.
 
 ```rust title="nest_rs::pipes::Pipe"
 pub trait Pipe {
@@ -65,8 +65,8 @@ impl Pipe for Trim {
 }
 ```
 
-If you need DI-injected logic at the request boundary, that's a service
-or an interceptor — not a pipe.
+If you need DI-injected logic at the request boundary, that's a service,
+an interceptor, or a [global pipe](/fundamentals/global-pipes/) — not a per-argument pipe.
 
 ## The built-in set
 
@@ -78,177 +78,139 @@ your own:
 | `Parse<T>` | `String → T` (any `FromStr`) | Generic conversion: `ParseInt`, `ParseFloat`, `ParseBool` |
 | `ParseUuid` | `String → Uuid` | Any-version UUID |
 | `ParseUuidV4` / `ParseUuidV7` / … | `String → Uuid` | Version-pinned UUID |
-| `ParseArray<P>` | `String → Vec<P::Out>` | Comma-separated list, each item piped through `P` |
+| `ParseArray<T>` | `String → Vec<T>` (any `FromStr`) | Comma-separated list; a refused item is named by its position (`item 2 must be a valid u64`), never quoted |
 | `Trim`, `Lowercase`, `Uppercase` | `String → String` | Edge normalization |
-| `ValidationPipe<T>` | `T → T` (where `T: Validate`) | Run [validator](https://docs.rs/validator) attribute rules |
 
-A `PipeError` rejection surfaces as the transport's native error —
-the handler body never runs:
+A `PipeError` rejection surfaces as the edge's native error — on HTTP an
+RFC 9457 `problem+json` `400` — and the handler body never runs; each edge's
+form is on [Pipes beyond HTTP](/fundamentals/pipes-beyond-http/#what-a-rejection-becomes).
 
-| Transport | A rejection becomes |
-|-----------|--------------------|
-| HTTP | RFC 9457 `problem+json` `400` (`{ "type": …, "title": "Bad Request", "status": 400, "detail": "must be a UUID v7" }`) |
-| GraphQL | An error in the response's `errors` array |
-| WebSockets | An error frame on the socket (`{ event, data: { error, errors } }`) |
-| MCP | `invalid_params` (`-32602`), the field errors in the error's `data` |
-| Queue | A job error — the queue's retry/failure policy applies |
+## Validation at the edge
 
-`ValidationPipe<T>` attaches the structured field-level errors to the
-rejection, and **every** transport carries them through under the name
-`errors`: an RFC 9457 extension member on HTTP, `extensions.errors` on
-GraphQL, `data.errors` on a WebSocket frame, the error `data` on MCP, an
-`errors` field on the queue's `job dead-lettered` event. A client (or an operator reading a dead-letter log)
-can always tell which field was wrong, not merely that something was.
-
-## Validation at the HTTP edge
-
-`Valid<E>` is the ergonomic form of `Piped<ValidationPipe<T>, E>`: extract
-`E`, then validate.
+A type that declares [validator](https://docs.rs/validator) rules is checked
+wherever it is decoded. `#[input]` carries the `Validate` derive, so the rules
+on the DTO are the whole declaration:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::{Valid, input};
+use nest_rs::http::{Created, Json, Result};
+use nest_rs::core::{Secret, input};
 
 #[input]
 pub struct CreateUser {
     #[validate(email)]
     email: String,
     #[validate(length(min = 8))]
-    password: String,
+    #[schemars(with = "String")]
+    password: Secret<String>,
 }
 
 #[post("/")]
-async fn create(&self, Valid(input): Valid<Json<CreateUser>>)
-    -> Result<Json<User>>
-{
-    Ok(Json(self.svc.create(input).await?))
+async fn create(&self, Json(input): Json<CreateUser>) -> Result<Created<Json<User>>> {
+    let user = self.svc.create(input).await?;
+    Ok(Created::at(user.id, Json(User::from(&user))))
 }
 ```
 
-A malformed JSON body is `400` before the pipe runs. A well-formed body
-that fails validation is an RFC 9457 `problem+json` `400` with:
+A password is a `Secret` from the moment it is decoded: its rules judge the
+value, and whatever serializes the DTO writes `<redacted>`. A `Secret` has no
+schema of its own, so `#[schemars(with = "String")]` names what the wire carries.
+
+A rule of your own is a function `custom(function = "…")` names, returning
+`nest_rs::pipes::validator::ValidationError`, the error of the release the
+framework derives with.
+
+The handler sees a validated `CreateUser`, and answers `201` with the new
+user's `Location`, as [responses](/http/responses/) teaches. `Json`, `Query`,
+`Form`, `Path` and `Header` answer for the value they carry, a list for each
+item and an `Option` for the value it holds. A malformed JSON body is `400`
+before the rules run. A well-formed body that breaks them is an RFC 9457
+`problem+json` `400` with:
 
 ```json
 {
-  "type": "https://www.rfc-editor.org/rfc/rfc9110#status.400",
+  "type": "about:blank",
   "title": "Bad Request",
   "status": 400,
   "detail": "validation failed",
+  "code": "INVALID_ARGUMENT",
   "errors": {
-    "email": [{ "code": "email", "message": null, "params": { /* ... */ } }],
-    "password": [{ "code": "length", "params": { "min": 8 } }]
+    "email": [{ "code": "email" }],
+    "password": [{ "code": "length" }]
   }
 }
 ```
 
-No manual checks in the handler.
+A failure names its field and its rule, never the rule's parameters: they hold
+what was sent (`value`, and `must_match`'s other field), and a bound such as
+`max = self.limit` can read another field. A rule that should tell the client
+its bound says so in its `message`. No manual checks in the handler.
+
+The check runs after the guards and the class gate, so a caller they refuse
+pays for no validation and never learns what a valid input looks like. A
+service that builds an input itself — from a provider's profile, from a seed
+— calls `validate()` on it, and converts the failure with `PipeError::from`
+when it answers through an edge's `pipe_error`.
 
 ## Custom transforms with `Piped<P, E>`
 
-When the input needs a transform other than `Validate`, name the pipe at
-the call site:
+When the input needs a transform, name the pipe at the call site:
 
 ```rust title="crates/features/src/users/http/controller.rs"
-use nest_rs::http::Piped;
-use nest_rs::pipes::ParseUuidV7;
-use nest_rs::http::poem::web::Path;
+use nest_rs::http::Path;
+use nest_rs::pipes::{ParseUuidV7, Piped};
+use nest_rs::http::Json;
 
-#[get("/:id")]
-async fn get(&self, id: Piped<ParseUuidV7, Path<String>>) -> Json<User> {
-    Json(self.svc.find(*id).await?)
+#[get("/{id}")]
+async fn get(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> Result<Json<User>> {
+    Ok(Json(self.svc.find(id).await?))
 }
 ```
-
-`Valid<E>` destructures in the parameter list (`Valid(input)`) and binds the
-extractor's **inner** value — `Valid<Json<CreateUser>>` carries the
-`CreateUser`, never the `Json`. `Piped<P, E>` names its pipe with a phantom
-marker, so it is not a tuple struct: bind it and reach the value through
-`Deref`/`into_inner()`, as above.
 
 `Path<String>` extracts the raw segment; `ParseUuidV7::transform` validates
-it as a v7 UUID. A non-UUID string is `400` with `"must be a UUID v7"` —
-not a stringly-typed handler doing its own `parse::<Uuid>()`.
+it as a v7 UUID. A non-UUID string is `400` with `"must be a valid UUID"`, a UUID
+of another version `400` with `"must be a UUID v7"` — not a stringly-typed handler doing its own `parse::<Uuid>()`. `Piped(id)`
+binds the pipe's output, a `Uuid`; the carrier also derefs to it.
 
-## The same pipe beyond HTTP
+The carrier is read where it is written: `#[routes]` takes `Piped<P, E>`
+spelled out in the handler's signature, holds what `E` extracted to its rules,
+then runs the pipe. `Piped` is no extractor, so the same carrier behind a type
+alias does not compile rather than skip those rules.
 
-On GraphQL, WebSockets, MCP and queues the argument *is* the wire value, so
-the binding is `nest_rs::pipes::Piped<P, T>` / `Valid<T>`. `T` is what
-appears on the wire — the SDL argument type, the WS payload, the job payload
-— and the handler body sees `P::Out` through `into_inner()` / `Deref`,
-exactly as on HTTP.
+## Global pipes
 
-```rust title="crates/features/src/users/graphql/resolver.rs"
-// GraphQL — the SDL argument is `String`; the body sees it trimmed.
-#[query]
-#[public]
-async fn trimmed(&self, raw: Piped<Trim, String>) -> async_graphql::Result<String> {
-    Ok(raw.into_inner())
-}
+A pipe bound per argument runs where its argument is decoded. One that shapes
+every input of the app at once — a body, a GraphQL operation's variables, a
+WebSocket message's `data` — is a [global pipe](/fundamentals/global-pipes/),
+registered in `main`.
 
-// GraphQL — validates the input object; the SDL argument is `NameInput`.
-#[query]
-#[public]
-async fn named(&self, input: Valid<NameInput>) -> async_graphql::Result<String> {
-    Ok(input.into_inner().name)
-}
-```
+## Pipes vs a bound subject
 
-```rust title="crates/features/src/users/ws/gateway.rs"
-// WebSockets — the message payload is a `String`, piped before the handler.
-#[subscribe_message("trim")]
-#[public]
-async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
-    name.into_inner()
-}
-```
-
-```rust title="crates/features/src/weather/mcp/tool.rs"
-// MCP — the tool's schema is `Coords`; the body sees it validated.
-#[tool]
-#[public]
-async fn current_weather(
-    &self,
-    Parameters(coords): Parameters<Valid<Coords>>,
-) -> Result<String, McpError> {
-    let coords = coords.into_inner();
-    /* ... */
-}
-```
-
-```rust title="crates/features/src/users/queue/processor.rs"
-// Queue — the job payload is a `String`, piped after deserialization.
-#[process(queue = SignupsQueue, retries = 0)]
-async fn handle(&self, name: Piped<Trim, String>) -> anyhow::Result<()> {
-    /* ... */
-}
-```
-
-## Pipes vs `Bind`
-
-A pipe converts a *primitive* input — an ID string into a `Uuid`, a JSON
-blob into a validated DTO. A [`Bind<A, S>`](/database/) extractor goes
+A pipe converts a *primitive* input — an ID string into a `Uuid`, a list
+into its items. A route declaring
+[`#[authorize(A, bind = S)]`](/security/authorization/by-id-binding/) goes
 further: it parses the id, **loads the row through a service**, and
 **authorizes** it — returning `404` if the row doesn't exist within the
 caller's scope, `403` if denied.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 // Pipe — pure conversion, no DB
-#[get("/_validate/:id")]
-async fn validate(&self, id: Piped<ParseUuidV7, Path<String>>) -> String {
-    format!("{} is valid", *id)
+#[get("/_validate/{id}")]
+async fn validate(&self, Piped(id): Piped<ParseUuidV7, Path<String>>) -> String {
+    format!("{id} is valid")
 }
 
-// Bind — convert + load + authorize
-#[get("/:id")]
-async fn get(&self, user: Bind<Read, UsersService>) -> Json<User> {
+// Bound — convert + load + authorize
+#[get("/{id}")]
+#[authorize(Read, bind = UsersService)]
+async fn get(&self, user: Authorized<Read, UserEntity>) -> Json<User> {
     Json(User::from(&*user))
 }
 ```
 
-`Bind` depends on the data layer (its GraphQL analog is `bind` — see
-[By-id binding](/security/authorization/by-id-binding/)). `Pipe` is
-transport-agnostic — the same `ParseUuidV7` binds identically on HTTP,
-GraphQL, WebSockets, and queues.
+A bound subject depends on the data layer, and GraphQL takes the same
+attribute (see [By-id binding](/security/authorization/by-id-binding/)). A
+pipe is transport-agnostic — the same `ParseUuidV7` binds identically on
+HTTP, GraphQL, WebSockets, and queues.
 
 ## Writing a pipe
 
@@ -285,7 +247,7 @@ Then bind it at the call site:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[post("/")]
-async fn create(&self, name: Piped<NonEmpty, Json<String>>) -> &'static str {
+async fn create(&self, Piped(name): Piped<NonEmpty, Json<String>>) -> &'static str {
     "ok"
 }
 ```
@@ -300,9 +262,13 @@ apps belongs in `crates/nest-rs-pipes/`.
 
 - [HTTP / controllers](/http/controllers/) — every extractor that
   composes with a pipe.
+- [Pipes beyond HTTP](/fundamentals/pipes-beyond-http/) — the same pipes on
+  GraphQL, WebSockets, MCP and queues.
+- [Global pipes](/fundamentals/global-pipes/) — one pipe over every body,
+  set of variables and message.
 - [Guards](/fundamentals/guards/) — gate access; pipes don't.
-- [Database / `Bind`](/database/) — pipes are for primitives, `Bind`
-  loads and authorizes a row.
-- [`oauth/http/controller.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/oauth/http/controller.rs)
+- [By-id binding](/security/authorization/by-id-binding/) — pipes are for
+  primitives, `bind = Service` loads and authorizes a row.
+- [`sign_in/http/controller.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/sign_in/http/controller.rs)
   in the demo — binds `Piped<Lowercase, Path<String>>` so the OAuth provider
   segment is case-insensitive.

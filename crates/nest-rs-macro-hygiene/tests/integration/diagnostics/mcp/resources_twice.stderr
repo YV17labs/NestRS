@@ -1,0 +1,5 @@
+error: `#[tools]` declares `#[resources]` on `notes` and again on `drafts`: `resources/list` is answered by one method per host — list every resource there
+  --> tests/integration/diagnostics/mcp/resources_twice.rs:19:5
+   |
+19 |     #[resources]
+   |     ^^^^^^^^^^^^

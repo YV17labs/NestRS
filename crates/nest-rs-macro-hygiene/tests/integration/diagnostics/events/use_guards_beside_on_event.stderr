@@ -1,0 +1,5 @@
+error: `#[use_guards]` is not taken on a `#[listeners]` method: a job, a tick and an event have no caller to gate — guard where the work is produced
+  --> tests/integration/diagnostics/events/use_guards_beside_on_event.rs:19:5
+   |
+19 |     #[use_guards(AllowAll)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^

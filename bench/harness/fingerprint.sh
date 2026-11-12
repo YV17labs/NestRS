@@ -28,8 +28,7 @@ jq -n \
   --arg node "$(node --version 2>/dev/null || echo absent)" \
   --arg oha "$(oha --version 2>/dev/null || echo absent)" \
   --arg nestrs "$nestrs_version" \
-  --arg nestjs_express "$(nest_version nestjs-express)" \
-  --arg nestjs_fastify "$(nest_version nestjs-fastify)" \
+  --arg nestjs "$(nest_version nestjs-node)" \
   '{date: $date, host: $host, cpu: $cpu, cores: $cores, kernel: $kernel,
     toolchain: {rustc: $rustc, node: $node, oha: $oha},
-    versions: {nestrs: $nestrs, "nestjs-express": $nestjs_express, "nestjs-fastify": $nestjs_fastify}}'
+    versions: {nestrs: $nestrs, nestjs: $nestjs}}'

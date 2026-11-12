@@ -1,0 +1,226 @@
+---
+title: Coming from NestJS
+description: Map your NestJS reflexes onto NestRS decorators, and see what runs differently underneath.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+If NestJS shaped how you think about backends, most of NestRS will read like
+home. You still write a module, a service, a thin controller, and let
+decorators carry the wiring. This page maps the vocabulary you already know
+onto its NestRS equivalent; [what runs
+differently](/coming-from-nestjs/what-runs-differently/) is where the machine
+underneath diverges.
+
+```rust title="crates/features/src/users/http/controller.rs"
+#[controller(path = "/users")]
+#[use_guards(AuthnGuard, AuthzGuard)]
+pub struct UsersController {
+    #[inject]
+    svc: Arc<UsersService>,
+}
+
+#[routes]
+impl UsersController {
+    #[get("/{id}")]
+    #[authorize(Read, bind = UsersService)]
+    async fn get(&self, user: Authorized<Read, UserEntity>) -> Json<User> {
+        Json(User::from(&*user))
+    }
+}
+```
+
+A `@Controller('users')` with an injected service and a `@Get(':id')` — the
+shape survives the port to Rust. The decorators changed spelling, not meaning.
+
+## The equivalence table
+
+Each row is a reflex you already have on the left and its NestRS spelling on
+the right. The layer vocabulary — module, provider, controller, guard,
+resolver — carries across intact.
+
+| NestJS | NestRS |
+|---|---|
+| `@Module({ imports, providers })` | `#[module(imports = [...], providers = [...])]` |
+| `@Module({ controllers: [...] })` | the same `providers` list — there is no `controllers` key |
+| `@Injectable()` | `#[injectable]` |
+| `@Controller('users')` | `#[controller(path = "/users")]` |
+| `@Get()` / `@Post()` methods | `#[get("/")]` / `#[post("/")]` in a `#[routes] impl` |
+| `@Get(':id')`, `@Get('files/*path')` | `#[get("/{id}")]`, `#[get("/files/{*path}")]` — OpenAPI's [path templating](/http/controllers/#route-templates), the spelling the document prints |
+| `CanActivate` guard | `Guard` trait (`check`, and `check_http` where the request differs) + `#[use_guards(...)]`; `ExecutionContext` is the `UnitContext` both entries take |
+| DTO + `class-validator` | entity `#[expose]` + `validate(...)` (the `validator` crate) |
+| `@Param('id')` / `@Query()` / `@Body()` | the parameter type: `Path<Uuid>`, `Query<F>`, `Json<T>` |
+| `@ApiProperty()` / `@Field()` per property | one `#[expose]` on the column, schemas derived |
+| `@Inject('TOKEN')` provider token | inject `Arc<dyn Trait>`, provider listed `as dyn Trait` |
+| `@UseGuards(...)` | `#[use_guards(...)]` |
+| `@UseInterceptors(...)` | `#[use_interceptors(...)]` |
+| `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]`; `@Catch(T)` is `type Exception = T`, and `@Catch()` with no argument is `type Exception = dyn Error + Send + Sync` |
+| `APP_GUARD` | `GlobalGuards<(RequireApiKey,)>` in the providers of the module the app boots |
+| `APP_INTERCEPTOR` | `GlobalInterceptors<(…)>` in the module the app boots; around the guards, `#[interceptor(stage = unit)]`, which its module's import brings |
+| `APP_FILTER`, `APP_PIPE` | `GlobalExceptionFilters<(…)>`, `GlobalPipes<(…)>` in the module the app boots |
+| an `HttpException` whose body carries an error code | a `nest_rs::core::Problem` and its `Code`, which every edge renders in its own form |
+| `AsyncLocalStorage`, `nestjs-cls` | the [ambient context](/fundamentals/execution-context/#what-a-unit-carries): `cx.attach(value)` in a layer, `ambient::<T>()` anywhere the unit reaches |
+| `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
+| `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
+| Hooks run by DI level, each level at once (`Promise.all`) | dependencies first, one hook at a time, and shutdown in exact reverse ([order](/fundamentals/lifecycle/#ordering-and-failure)) |
+| `onModuleDestroy()` / `beforeApplicationShutdown(signal)`, run before the server closes | `#[on_module_destroy]` / `#[before_application_shutdown]`, run once every transport has drained; work due at the signal waits on `stopping()` on an injected `Arc<AppLifecycle>` ([why](/fundamentals/lifecycle/#the-five-phases)) |
+| `onApplicationShutdown(signal)` | `#[on_application_shutdown]`; the signal is `cause()` on an injected `Arc<AppLifecycle>` (`StopCause::Terminate`, `Interrupt`, …) |
+| `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
+| `XModule.forRootAsync({ useFactory })` | none, by design: a config comes from `for_root`, the environment or a `_FILE`; a resource computed from another provider is a factory [reading `ConfigModule::resolved`](/extending/package/#a-resource-it-opens) |
+| `ServeStaticModule.forRoot({ rootPath })` | `StaticFilesModule::for_root(StaticFilesConfig { root, .. })` — or `for_root(Embedded::of::<WebAssets>())` for a folder embedded in the binary |
+| `Test.createTestingModule(...)` | `TestApp` booting the real `ApiModule` |
+| `NestFactory.createApplicationContext(...)`, then `app.close()` | `App::builder()…build()`, `init()`, then `close()` ([running without serving](/fundamentals/app-state/#running-without-serving)) |
+| `nest g resource users` | `nestrs g resource users` |
+| Runtime DI resolution | access graph checked at boot, with a named error |
+
+The rows are close, but four of them carry a design change worth reading in
+full: what a module lists, provider visibility, when wiring is verified, and
+where configuration comes from.
+
+## A controller is a provider
+
+`@Module({ controllers: [...], providers: [...] })` keeps two lists because a
+NestJS controller is a different kind of citizen — not injectable, never
+exported. NestRS keeps one. `#[module]` accepts exactly two keys, `imports` and
+`providers`, and an unknown key is a compile error naming the two.
+
+```rust title="crates/features/src/users/http/module.rs (from the demo)"
+use nest_rs::core::module;
+
+use super::controller::UsersController;
+use crate::authz::AuthzModule;
+use crate::users::UsersModule;
+
+#[module(
+    imports = [UsersModule, AuthzModule],
+    providers = [UsersController],
+)]
+pub struct UsersHttpModule;
+```
+
+A controller, a resolver, a gateway, a queue processor and an MCP tool are all
+providers: built by the same container, holding the same `#[inject]` fields,
+resolved by the same access-graph check. What makes one an HTTP route table is
+`#[controller]` + `#[routes]` — the decorator carries the transport, so the
+module list has nothing left to say about it.
+
+The payoff is per-binary composition. A transport mounts only when its module is
+reachable from the running app's root — a listed host brings it, as
+`UsersController` brings `HttpModule` — so one feature crate serves an API that
+imports `UsersHttpModule` and `UsersGraphqlModule` and a worker that imports
+neither. Dropping the import unmounts the routes, and there is no second list to
+keep in sync with the first.
+
+## No exports array
+
+In NestJS a provider is private to its module until you add it to `exports`,
+and a consumer imports the whole module to reach it. NestRS has no per-module
+export list. A provider becomes shareable by exposing a `pub trait` and binding
+it in the module's `providers` as `SomeProvider as dyn Trait`; a consumer then
+injects `Arc<dyn Trait>`.
+
+Visibility is Rust's job. The container is flat, and the orphan and coherence
+rules already decide what a crate can name. Adding an `exports` list on top of
+that would be a second, redundant gate, so there is not one.
+
+## Wiring is checked at boot, not on the first request
+
+NestJS resolves the dependency graph as the app instantiates, and a bad wire
+often surfaces as a `Cannot resolve dependency` the first time a route runs.
+NestRS records every module's imports and every provider's dependencies at
+compile time. At startup, `App::builder().build()` walks that graph.
+
+A provider that injects something its module cannot reach fails startup with an
+error naming the missing dependency and the fix — never a runtime resolution
+error minutes after deploy. The reflex to test-request an endpoint just to
+confirm it wired up does not carry over; if it **boots**, it's wired — and it
+boots in milliseconds, so you find out immediately.
+
+<Aside type="note">
+  This is [property 5 in *Why NestRS*](/why/#5-wiring-verified-at-boot). The
+  access graph and the exact boot error live on
+  [Providers](/fundamentals/providers/).
+</Aside>
+
+## Every config field has an environment variable
+
+In NestJS the two configuration paths rarely line up: some knobs live in a
+`forRoot` literal in code, others behind an untyped
+`configService.get('SOME_KEY')`, and which is which is a per-module habit.
+NestRS makes it a framework rule instead. Every field of every `nest-rs-*`
+module config is reachable both ways:
+
+1. **Pinned in code** — `Module::for_root(MyConfig { .. })`, type-checked by
+   the compiler.
+2. **`<PREFIX>_<NAMESPACE>__<FIELD>`** — each field read under its own name,
+   the overlay `#[config]` writes from the struct, so the struct lists exactly
+   which variables exist.
+
+The two compose **per field, not per struct**: the pinned struct is the *base*
+the environment overlays. Pinning `compression` in `HttpConfig` leaves
+`<PREFIX>_HTTP__PORT` free to move, and neither path erases the other.
+
+"The environment" here is the **real process environment only**. A `for_root`
+pin outranks every `.env` file committed beside the code — for its whole
+namespace, and the boot names each key it shadows; it does not outrank a
+variable actually present in the environment at startup — the full chain is on
+[Pinning a config](/configuration/pinning/#the-dual-path-rule).
+
+That is what pays off in a container. The image ships one binary with sane pins. The deployment then moves any
+knob through the `env` block of a Compose file or a Kubernetes Deployment,
+or through a Secret: no rebuild, no config file baked into a layer, no
+override mounted at a path the process has to go find. A
+malformed value is boot-fatal and names the variable, so a bad ConfigMap fails
+the readiness probe instead of surfacing as a mystery three requests later.
+
+<Aside type="note">
+  The rule lives on [Pinning a config](/configuration/pinning/#the-dual-path-rule)
+  and the struct-as-contract on
+  [Configuration](/configuration/#why-the-struct-is-the-contract); every variable
+  the framework reads is in the [env reference](/configuration/env-reference/).
+</Aside>
+
+## What runs differently
+
+Beyond the vocabulary, the machine underneath diverges: security holds by
+composition, a forgotten guard refuses the boot, there is no `forwardRef` and no
+runtime reflection, and the parameter's type is the decorator.
+[What runs differently](/coming-from-nestjs/what-runs-differently/) takes each,
+and what you will reach for and not find.
+
+## What the port changes
+
+The same slice — a users controller with an injected service and one guarded
+route. The NestJS sketch:
+
+```ts title="users.controller.ts"
+@Controller('users')
+@UseGuards(AuthnGuard, AuthzGuard)
+export class UsersController {
+  constructor(private readonly svc: UsersService) {}
+
+  @Get(':id')
+  async get(@Param('id') id: string): Promise<User> {
+    return this.svc.findInOrg(id);
+  }
+}
+```
+
+The NestRS equivalent is the snippet that opened this page. The guard binding,
+the injected service and the route decorator each have a direct counterpart —
+the lines with no counterpart are the posture and the parameter.
+`@Param('id') id: string` hands you a string to look up;
+`#[authorize(Read, bind = UsersService)]` hands you the row, as an
+`Authorized<Read, UserEntity>`.
+
+The org scoping is not an argument you thread through by hand. The guard
+established the principal, and the bound load resolves the id to a row the
+caller is authorized to read — outside the caller's org is a 403, absent is a
+404.
+
+## Going further
+
+- [Why NestRS](/why/) — the thesis and the six structural properties behind it.
+- [Fundamentals](/fundamentals/) — modules, providers, guards, pipes, filters.
+- [Providers](/fundamentals/providers/) — the access graph, checked at boot.
+- [Getting started](/getting-started/) — scaffold and run your first app.

@@ -12,7 +12,7 @@ type Mutation {
 	createUser(input: CreateUser!): User!
 	deleteOrg(id: String!): Boolean!
 	deleteUser(id: String!): Boolean!
-	publishPost(id: String!): Post
+	publishPost(id: String!): Post!
 	updateOrg(id: String!, input: UpdateOrg!): Org
 	updateUser(id: String!, input: UpdateUser!): User
 }
@@ -49,11 +49,17 @@ type PageInfo {
 }
 
 type Post {
+	"""
+	Field-level authorization applies: reads `null` where the caller's ability withholds it.
+	"""
 	author: User
 	authorId: String!
 	body: String!
 	createdAt: String!
 	id: String!
+	"""
+	Field-level authorization applies: reads `null` where the caller's ability withholds it.
+	"""
 	org: Org
 	orgId: String!
 	status: PostStatus!
@@ -118,14 +124,29 @@ input UpdateUser {
 }
 
 type User {
-	createdAt: String!
-	email: String!
+	"""
+	Field-level authorization applies: reads `null` where the caller's ability withholds it.
+	"""
+	createdAt: String
+	"""
+	Field-level authorization applies: reads `null` where the caller's ability withholds it.
+	"""
+	email: String
 	id: String!
 	name: String!
+	"""
+	Field-level authorization applies: reads `null` where the caller's ability withholds it.
+	"""
 	org: Org
-	orgId: String!
+	"""
+	Field-level authorization applies: reads `null` where the caller's ability withholds it.
+	"""
+	orgId: String
 	posts(after: String, first: Int): PostConnection!
-	updatedAt: String!
+	"""
+	Field-level authorization applies: reads `null` where the caller's ability withholds it.
+	"""
+	updatedAt: String
 }
 
 type UserConnection {

@@ -3,9 +3,8 @@ use std::path::PathBuf;
 
 /// One file whose stem and whose declared types do not reach each other.
 ///
-/// Carries the halves rather than a rendered sentence: the command prints it,
-/// the conformance suite asserts on it, and a caller that only wants the paths
-/// should not have to parse English to get them.
+/// Carries the halves rather than a rendered sentence, so a caller never
+/// parses English.
 #[derive(Debug)]
 pub struct Finding {
     /// The offending file, relative to the root the scan was given.

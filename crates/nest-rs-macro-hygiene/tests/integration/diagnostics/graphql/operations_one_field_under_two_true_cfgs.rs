@@ -1,0 +1,28 @@
+//! Two fields of one root under `#[cfg]`s that both hold are two resolvers for
+//! one name — refused in the decorator's sentence by a `const` compiled under
+//! both conditions, since rustc is what evaluates them.
+
+use nest_rs::graphql::{operations, resolver};
+
+#[resolver]
+struct DemoResolver;
+
+#[operations]
+impl DemoResolver {
+    #[cfg(all())]
+    #[query]
+    #[public]
+    async fn widget(&self) -> i32 {
+        1
+    }
+
+    #[cfg(all())]
+    #[query]
+    #[public]
+    #[graphql(name = "widget")]
+    async fn other_widget(&self, id: i32) -> i32 {
+        id
+    }
+}
+
+fn main() {}

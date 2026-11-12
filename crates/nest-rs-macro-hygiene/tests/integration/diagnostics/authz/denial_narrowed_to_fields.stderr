@@ -1,0 +1,8 @@
+error[E0599]: no method named `fields` found for struct `RuleSpec<'_, users::Entity, Cannot>` in the current scope
+  --> tests/integration/diagnostics/authz/denial_narrowed_to_fields.rs:26:10
+   |
+25 |     ab.cannot(Action::Read, users::Entity)
+26 |         .fields([users::Column::Email]);
+   |          ^^^^^^ method not found in `RuleSpec<'_, users::Entity, Cannot>`
+   |
+   = note: the method was found for `RuleSpec<'_, S>`

@@ -1,7 +1,6 @@
 ---
 title: OAuth scopes
-description: Gate a rule on the scope a token carries with .requires_scope(...) — the refusal is an RFC 6750 insufficient_scope challenge naming what to request.
-tier: all-options
+description: Declare your scopes once, gate a rule on one with .requires_scope(...) — the refusal is an RFC 6750 insufficient_scope challenge naming what to request.
 sidebar:
   order: 8
 ---
@@ -22,27 +21,43 @@ Roles and scopes answer different questions, and both have to hold:
 
 ## Declare the scope on the rule it conditions
 
-```rust title="crates/features/src/authz/ability.rs (from the demo)" {5,9}
+A scope is a `nest_rs::guards::Scope`, declared once as a constant — the
+token RFC 6749 §3.3 defines, checked against its grammar when it compiles:
+
+```rust title="crates/features/src/authz/constants.rs (from the demo)"
+use nest_rs::guards::Scope;
+
+pub const POSTS_READ: Scope = Scope::new("posts:read");
+pub const POSTS_WRITE: Scope = Scope::new("posts:write");
+pub const AUDIO_TRANSCODE: Scope = Scope::new("audio:transcode");
+
+pub const ALL: [Scope; 3] = [POSTS_READ, POSTS_WRITE, AUDIO_TRANSCODE];
+```
+
+A rule requires one by name, so a scope no declaration holds does not
+compile — `requires_scope` takes a `Scope`, never a string:
+
+```rust title="crates/features/src/authz/ability.rs" {5,9}
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
     fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
         ab.can(Action::Read, post::Entity)
             .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-            .requires_scope("posts:read");
+            .requires_scope(POSTS_READ);
 
         ab.can(Action::Manage, post::Entity)
             .when(|p| p.eq(post::Column::OrgId, actor.org_id))
-            .requires_scope("posts:write");
+            .requires_scope(POSTS_WRITE);
     }
 }
 ```
 
-That is the whole declaration. When the caller's token does not carry the scope, the rule is **withheld** —
+That is the whole declaration. When the caller's token does not carry the scope, the grant is **withheld** —
 not added at all. Every layer then refuses together, exactly as it would for
-a rule you never wrote: the class gate says no, the [query
+a grant you never wrote: the class gate says no, the [query
 pre-filter](/security/authorization/row-level-filtering/) matches nothing,
-and the [response mask](/security/authorization/response-masking/) has
+and the [wire row](/security/authorization/response-masking/) holds
 nothing to expose.
 
 Call it more than once to require **all** the named scopes. Scopes are
@@ -51,23 +66,29 @@ you may mint, never a pattern the framework expands.
 
 <Aside type="caution" title="It narrows, it never widens">
 A scope cannot grant what the role denies. `requires_scope` adds a
-condition to an existing rule; it never creates one. If a member may not
-manage users, no scope makes them able to.
+condition to an existing grant; it never creates one. If a member may not
+manage users, no scope makes them able to. A denial takes no scope at
+all — `cannot(..).requires_scope(..)` does not compile — so a token
+asking for fewer scopes never escapes one.
 </Aside>
 
 ## Tell the framework what the token carries
 
-Scopes reach the ability layer from the principal. Implement
-`PrincipalIdentity::scopes` on your claims type, and read the standard
-space-delimited `scope` claim with the `serde` helper the framework
-ships:
+Scopes reach the ability layer from the principal. Mark the field that
+holds them `#[principal(scopes)]` on your claims type, and read the
+standard space-delimited `scope` claim with the `serde` helper the
+framework ships:
 
-```rust title="crates/features/src/authn/claims.rs (from the demo)" {6-11,19-21}
-#[derive(Debug, Clone, Serialize, Deserialize)]
+```rust title="crates/features/src/authn/claims.rs (from the demo)" {9-16}
+#[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
 pub struct Claims {
-    pub sub: Option<Uuid>,
+    #[principal(actor)]
+    pub sub: Subject,
+    pub client_id: String,
+    #[principal(tenant)]
     pub org_id: Uuid,
     pub roles: Vec<Role>,
+    #[principal(scopes)]
     #[serde(
         default,
         rename = "scope",
@@ -75,19 +96,12 @@ pub struct Claims {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub scopes: Vec<String>,
-    pub exp: u64,
-}
-
-impl PrincipalIdentity for Claims {
-    fn actor_id(&self) -> Option<String> {
-        self.sub.map(|sub| sub.to_string())
-    }
-
-    fn scopes(&self) -> Option<&[String]> {
-        Some(&self.scopes)
-    }
 }
 ```
+
+The field is a list, never an `Option`: a token sent without its `scope`
+claim reads as one granted nothing, and the derive refuses an optional
+list at compile time.
 
 The authentication guard publishes the result and the ability guard
 reads it. You write nothing else.
@@ -105,15 +119,53 @@ the fail-closed choice: a token arriving with no `scope` claim was
 granted no scopes, not exempted from them.
 </Aside>
 
+## Grant no more than was registered
+
+Scopes only narrow if the issuer never hands out more than a client may
+hold. `nest_rs::oauth::server` holds that rule for every token endpoint built
+on it: the client `ClientAuthenticationGuard` attached reads its grant with
+`AuthenticatedClient::scope_for`, which follows RFC 6749 §3.3 strictly — a
+request naming scopes gets exactly those when every one is registered for the
+client, a request naming one that is not gets `invalid_scope` whole, never a
+quietly narrowed token, a scope named twice is granted once, and a request
+naming none gets the client's whole registration. The demo's token endpoint
+(`apps/auth`, the `client_credentials` grant) is all it takes:
+
+```rust title="crates/features/src/sign_in/service.rs (from the demo, abridged)"
+pub(crate) fn grant_client_credentials_with_jwt(
+    jwt_svc: &JwtService,
+    scope: &[String],
+    resource: &[String],
+    client: &AuthenticatedClient,
+) -> Result<AccessTokenResponse, TokenError> {
+    let scopes = client.scope_for(scope)?;
+    let audience = client.audience_for(resource)?;
+    // …
+}
+```
+
+The token's `scope` claim is the granted set, and the response states it
+with `AccessTokenResponse::with_scope`, which RFC 6749 §5.1 requires
+whenever the grant differs from the request. The client's roles come from
+its registration's `payload`, never from the scopes it asks for — the two
+answer different questions on the issuer's side too. The demo's
+`demo-service` client is an admin of its org: asking for `posts:read`
+alone, it reads posts, and an edit or a delete answers the challenge
+below. Creating a post answers a plain `403` instead, whatever the scope:
+a post's author is a user, and no scope makes a client one, so a challenge
+naming `posts:write` would send it after a token refused all the same.
+
 ## What the refused caller receives
 
 A client that cannot tell "you may never do this" from "come back with a
 wider token" either gives up too early or retries the same token
 forever. So the two refusals are distinct on every transport.
 
-On HTTP, WS and MCP, a scope refusal is a `403` carrying the RFC 6750
-§3.1 challenge — provided the app is a
-[protected resource server](/security/authentication/split-deployment/):
+On HTTP, a scope refusal is a `403` whose RFC 6750 §3.1 challenge names
+the scopes the request needs. A
+[protected resource server](/security/authentication/split-deployment/)
+adds the document to request them from, and carries the same challenge on
+WS and MCP:
 
 ```http
 HTTP/1.1 403 Forbidden
@@ -124,8 +176,14 @@ WWW-Authenticate: Bearer error="insufficient_scope",
 
 The client now knows the exact scope to request and the document to
 request it from. An **ordinary** `403` — the caller may not do this at
-all — deliberately carries no challenge: advertising a recovery that
-cannot succeed is worse than a plain refusal.
+all, no grant or a `cannot` with no `when` — deliberately carries no
+challenge, even beside a grant the token's scopes withhold: advertising
+a recovery that cannot succeed is worse than a plain refusal.
+
+A rule cannot name a scope outside RFC 6749 §3.3's grammar. A guard's own
+`Denial::insufficient_scope` can — a space, a quote — and that cannot ride the quoted
+attribute: the challenge goes out without `scope`, and a `warn` names the scopes, `a required scope is not a
+scope-token; the challenge is sent without its scope attribute`.
 
 On GraphQL there is no `403` to enrich, so the same facts ride the error
 frame the transport already speaks:
@@ -133,39 +191,101 @@ frame the transport already speaks:
 ```json
 {
   "errors": [{
-    "message": "insufficient_scope",
+    "message": "the request requires higher privileges than provided by the access token",
     "extensions": { "code": "INSUFFICIENT_SCOPE", "requiredScopes": ["posts:write"] }
   }]
 }
 ```
 
+The list is what one grant lacks, every scope of it needed. When several
+grants would have allowed the operation, it is the one asking for fewest — the
+action's own before `Action::Manage`'s, then the first declared, among those asking
+as many — never their union, which would send the client asking for more than it
+needs.
+
+A site gated on `Manage` needs [every action](/security/authorization/policies/#actions),
+so its list is the smallest that lifts all of them: one grant of each refused action,
+each scope once — `posts:write` alone where it opens `Update` and is one of the two
+grants opening `Read` — or a grant of the wildcard, which opens the four at once,
+when it asks for fewer. A site no scope could lift, a denial barring one action or
+an action no grant opens, names none and answers a plain `403`.
+
+The sentence is RFC 6750 §3.1's own description of `insufficient_scope`, and
+it is the same on every transport: one class gate,
+[`class_gate`](/security/authorization/#one-class-gate-on-every-edge), decides
+an `#[authorize]` on HTTP, GraphQL, WebSocket and MCP alike.
+
 ## Advertise every scope you gate on
 
 The scopes your rules require and the scopes your resource server
-advertises must be the same set:
+advertises must be the same set, so the set you declared is what it
+advertises — the metadata document's `scopes_supported` and the
+challenge's — handed to the module once:
 
-```bash title=".env"
-NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
+```rust title="apps/assistant/src/module.rs (from the demo, abridged)"
+#[module(
+    imports = [
+        // …
+        OAuthResourceModule::for_root(constants::ALL),
+        // …
+    ],
+)]
+pub struct AssistantModule;
 ```
 
-A scope a rule requires but the metadata document omits is a dead end —
-the client is told to request something discovery never names. The
-framework reports it at `warn` (`reason="scope_not_advertised"`) the
-first time such a refusal is emitted; keeping the names in one
-`constants.rs` and reading them from both sides is what stops it
+A deployment that sets `<PREFIX>_OAUTH__RESOURCE__SCOPES_SUPPORTED`
+advertises that list instead, and an app declaring two sets fails the boot
+naming both imports. A scope a rule requires but the metadata document
+omits is a dead end — the client is told to request something discovery
+never names. The framework reports it at `warn`
+(`reason="scope_not_advertised"`) on each such refusal;
+declaring the set once and handing it to both sides is what stops it
 happening.
 
-## Raising a scope refusal from your own guard
+## A scope on a capability no table holds
 
-A [non-CRUD route](/security/authorization/policies/) gated by a
-capability-only guard raises the same denial directly:
+Not every scope names rows. The demo advertises `audio:transcode`, and
+transcoding is a capability: there is no table to filter and no row to
+judge. Declare it as a [subject no table
+holds](/security/authorization/policies/#subjects-no-table-holds) and gate
+it like any other rule — the scope goes on the rule, never in a guard:
 
-```rust title="crates/features/src/audio/guard.rs"
-Err(Denial::insufficient_scope(["audio:transcode"], "forbidden"))
+```rust title="crates/features/src/audio/transcoding.rs"
+use nest_rs::authz::subject;
+
+#[subject]
+pub struct Transcoding;
 ```
 
-Every transport renders it the same way — the challenge is written once,
-at the transport edge, so a guard never formats a header itself.
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
+if actor.is_admin() {
+    ab.can(Action::Manage, Transcoding)
+        .requires_scope(constants::AUDIO_TRANSCODE);
+}
+```
+
+```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
+#[post("/transcode")]
+#[authorize(Manage, Transcoding)]
+#[http_code(202)]
+async fn transcode(&self, Json(body): Json<TranscodeDto>) -> Result<()> {
+    self.svc.enqueue_transcode(body.file).await.opaque()?;
+    Ok(())
+}
+```
+
+The class gate answers exactly as above: a member, whom no rule grants,
+gets `403 FORBIDDEN` with no challenge, since no wider token would change
+it; an admin whose token was not delegated `audio:transcode` gets the
+`insufficient_scope` challenge naming it; a credential that is not
+scope-aware — a session, an mTLS identity — is gated on the role alone.
+The same `#[authorize(Manage, Transcoding)]` sits on the MCP tool and on
+the progress stream, so `audio:transcode` gates every edge it is
+advertised for.
+
+Every transport renders the denial the same way — the challenge is written
+once, at the transport edge, so neither a rule nor a guard formats a header
+itself.
 
 ## Going further
 

@@ -169,6 +169,55 @@ pub struct GenTarget {
     pub dry_run: bool,
 }
 
+/// What a generator wiring its output into an app takes: [`GenTarget`]'s,
+/// plus the app.
+#[derive(Args, Debug)]
+pub struct WiredTarget {
+    /// Name (e.g. `posts`).
+    pub name: String,
+
+    /// Workspace root or working directory (default: auto-discover from cwd).
+    #[arg(long, short = 'p')]
+    pub path: Option<PathBuf>,
+
+    /// App to wire it into (default: the app the working directory is in, else
+    /// the workspace's only app).
+    #[arg(long, value_name = "APP")]
+    pub app: Option<String>,
+
+    /// Print what would be written without touching the filesystem.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+/// What `g resource` takes: [`WiredTarget`]'s, plus the columns its table
+/// holds.
+#[derive(Args, Debug)]
+pub struct ResourceTarget {
+    /// Name (e.g. `posts`).
+    pub name: String,
+
+    /// The table's columns beside its key and timestamps, each
+    /// `<name>:<type>`, or `<name>:<type>:nullable` for one a row may leave
+    /// empty; the type one of string, text, integer, bigint, float, boolean,
+    /// uuid, date, datetime (default: `name:string`).
+    #[arg(value_name = "COLUMN")]
+    pub columns: Vec<String>,
+
+    /// Workspace root or working directory (default: auto-discover from cwd).
+    #[arg(long, short = 'p')]
+    pub path: Option<PathBuf>,
+
+    /// App to wire it into (default: the app the working directory is in, else
+    /// the workspace's only app).
+    #[arg(long, value_name = "APP")]
+    pub app: Option<String>,
+
+    /// Print what would be written without touching the filesystem.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 /// `g entity` takes a two-part target: the feature it joins, and — when the
 /// feature's own singular is not the entity's name — the entity itself. A
 /// struct of its own rather than [`GenTarget`] so `--help` spells that grammar
@@ -195,6 +244,11 @@ pub struct AuthTarget {
     #[arg(long, short = 'p')]
     pub path: Option<PathBuf>,
 
+    /// App to serve its token route (default: the app the working directory is
+    /// in, else the workspace's only app).
+    #[arg(long, value_name = "APP")]
+    pub app: Option<String>,
+
     /// Print what would be written without touching the filesystem.
     #[arg(long)]
     pub dry_run: bool,
@@ -204,8 +258,9 @@ pub struct AuthTarget {
 pub enum GenerateCommand {
     /// A transport-agnostic port (mod + module + service).
     Feature(GenTarget),
-    /// A DB-backed CRUD slice (entity + CrudService + guarded HTTP adapter).
-    Resource(GenTarget),
+    /// A DB-backed CRUD slice (entity + CrudService + guarded HTTP adapter), its
+    /// table's migration and its round trip.
+    Resource(ResourceTarget),
     /// One `#[expose]` entity in an existing feature, without the CRUD slice.
     ///
     /// Placement follows the feature: its first entity is the lone `entity.rs`,
@@ -215,20 +270,23 @@ pub enum GenerateCommand {
     Entity(EntityTarget),
     /// The app's authn/authz adapter (Claims, AuthnGuard, AuthzAbility, AuthzGuard).
     Auth(AuthTarget),
-    /// A SeaORM migration, registered in both lib.rs and migrator.rs.
+    /// A SeaORM migration, registered in both lib.rs and migrator.rs (`nestrs_outbox`: the
+    /// framework's own, in migrator.rs alone).
     Migration(GenTarget),
     /// Add an HTTP controller adapter to an existing feature.
-    Http(GenTarget),
+    Http(WiredTarget),
     /// Add a GraphQL resolver adapter to an existing feature.
-    Graphql(GenTarget),
+    Graphql(WiredTarget),
     /// Add a WebSocket gateway adapter to an existing feature.
-    Ws(GenTarget),
+    Ws(WiredTarget),
     /// Add a queue processor adapter to an existing feature.
-    Queue(GenTarget),
+    Queue(WiredTarget),
     /// Add a scheduled-tasks adapter to an existing feature.
-    Schedule(GenTarget),
+    Schedule(WiredTarget),
     /// Add an MCP tool adapter to an existing feature.
-    Mcp(GenTarget),
+    Mcp(WiredTarget),
+    /// Add an event listener adapter to an existing feature.
+    Events(WiredTarget),
 }
 
 pub fn run(cli: Cli) -> CliResult<()> {
@@ -296,7 +354,9 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
         }),
         Resource(t) => commands::run_resource(commands::ResourceOptions {
             name: t.name,
+            columns: t.columns,
             path: t.path,
+            app: t.app,
             dry_run: t.dry_run,
         }),
         Entity(t) => commands::run_entity(commands::EntityOptions {
@@ -306,6 +366,7 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
         }),
         Auth(t) => commands::run_auth(commands::AuthOptions {
             path: t.path,
+            app: t.app,
             dry_run: t.dry_run,
         }),
         Migration(t) => commands::run_migration(commands::MigrationOptions {
@@ -319,15 +380,17 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
         Queue(t) => adapter(Transport::Queue, t),
         Schedule(t) => adapter(Transport::Schedule, t),
         Mcp(t) => adapter(Transport::Mcp, t),
+        Events(t) => adapter(Transport::Events, t),
     }
 }
 
-fn adapter(transport: Transport, t: GenTarget) -> CliResult<()> {
+fn adapter(transport: Transport, t: WiredTarget) -> CliResult<()> {
     commands::run_adapter(
         transport,
         commands::AdapterOptions {
             name: t.name,
             path: t.path,
+            app: t.app,
             dry_run: t.dry_run,
         },
     )
@@ -339,7 +402,7 @@ fn run_check(names: &Names, output: &std::path::Path) -> CliResult<()> {
             .args(["check", "-p", &names.kebab])
             .current_dir(&ws.root)
             .status()
-            .map_err(crate::error::CliError::Io)?;
+            .map_err(crate::error::CliError::spawn("cargo"))?;
         if !status.success() {
             return Err(crate::error::CliError::Anyhow(anyhow::anyhow!(
                 "cargo check -p {} failed",
@@ -356,6 +419,25 @@ fn run_check(names: &Names, output: &std::path::Path) -> CliResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--help` is where a reader finds the column grammar: it names every
+    /// type word the parser reads.
+    #[test]
+    fn the_resource_help_names_every_column_type() {
+        use clap::CommandFactory;
+
+        let mut cli = Cli::command();
+        let help = cli
+            .find_subcommand_mut("generate")
+            .and_then(|generate| generate.find_subcommand_mut("resource"))
+            .expect("g resource")
+            .render_long_help()
+            .to_string();
+        for word in crate::column::type_words() {
+            assert!(help.contains(word), "{word}: {help}");
+        }
+        assert!(help.contains(":nullable"), "{help}");
+    }
 
     #[test]
     fn after_help_includes_docs_and_repo() {

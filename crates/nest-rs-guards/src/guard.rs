@@ -1,31 +1,21 @@
-//! The unified [`Guard`] trait — extends [`Layer`] so guards plug into the
-//! Layer System (dedup-by-`TypeId`, declaration-order chain).
+//! The [`Guard`] trait — one contract every edge checks a unit through — and
+//! [`GuardFor`], the declaration a decorator binds a guard on.
 
 use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use nest_rs_core::Layer;
-use nest_rs_http::poem::Request as HttpRequest;
-#[cfg(feature = "mcp")]
-use nest_rs_mcp::McpOperationContext;
-#[cfg(feature = "ws")]
-use nest_rs_ws::{WsClient, WsMessageCheck};
-#[cfg(feature = "ws")]
-use serde_json::Value;
+use nest_rs_core::{DenialDocument, Layer, Posture, UnitContext, UnitView};
 
 use crate::denial::Denial;
-
-#[cfg(feature = "graphql")]
-use nest_rs_graphql::GraphqlOperationContext;
 
 /// Where in a guard chain this guard belongs — **declared**, never inferred
 /// from type names. Boot-time chain validation reads it to refuse a chain
 /// whose authorization guard is listed before the authentication guard it
 /// depends on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GuardPhase {
     /// Establishes *who* the caller is (attaches a principal).
     Authentication,
@@ -35,14 +25,19 @@ pub enum GuardPhase {
     Other,
 }
 
-/// A principal type a guard produces onto — or expects from — the request,
-/// described by `TypeId` plus a human-readable name for boot errors.
+/// A principal type a guard attaches to a unit — or expects an earlier guard to
+/// have attached — described by `TypeId` plus a human-readable name for boot
+/// errors.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct PrincipalClaim {
-    /// The principal's `TypeId` (the request-extension key).
+    /// The principal's `TypeId`, the key it is attached under.
     pub type_id: TypeId,
     /// The principal's type name, for boot diagnostics.
     pub type_name: &'static str,
+    /// An expected principal whose absence the guard decides itself
+    /// ([`or_visitor`](Self::or_visitor)).
+    pub or_visitor: bool,
 }
 
 impl PrincipalClaim {
@@ -51,251 +46,241 @@ impl PrincipalClaim {
         Self {
             type_id: TypeId::of::<T>(),
             type_name: std::any::type_name::<T>(),
+            or_visitor: false,
+        }
+    }
+
+    /// An expected principal the guard does without: it reads it where it is,
+    /// and decides a caller with none itself, as an authorization guard builds a
+    /// visitor's ability. Nothing attaching it is no wiring defect, and is said
+    /// at `warn` rather than refusing the boot.
+    #[must_use]
+    pub fn or_visitor(self) -> Self {
+        Self {
+            or_visitor: true,
+            ..self
         }
     }
 }
 
-/// A transport-spanning guard.
+/// The future a guard's check returns, as `#[async_trait]` writes an override.
+type Check<'fut> = Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>;
+
+/// A guard: decides whether a unit of work may run, before anything an app or
+/// a package adds around it.
 ///
-/// One impl, four transports. Override only the `check_*` method(s) where
-/// this guard has work to do; the rest inherit `Ok(())` defaults — a
-/// no-op means "doesn't apply to this transport," not "skip security."
+/// One decision, written once: [`check`](Self::check) runs on every unit the
+/// guard is bound at — a GraphQL field, a WebSocket message, an MCP operation,
+/// a later edge's unit — and on an HTTP request too, since
+/// [`check_http`](Self::check_http) runs it unless the guard overrides it. A
+/// guard overrides `check_http` only where the request differs from the unit:
+/// it reads the request itself, answers in its protocol's own words, or what is
+/// missing at the request means something else than at the unit. `check` has
+/// no default, so no guard admits a unit it never decided: one whose decision
+/// is the request's alone, made in `check_http`, admits the units that request
+/// carries in one visible `Ok(())`. Then declare each edge it checks with
+/// [`GuardFor`]: a decorator binds a guard only on the edges it declares.
 ///
-/// `Guard` extends [`Layer`] (priority + name + dedup-by-TypeId). The
-/// `#[public]` marker is NOT a framework skip: it attaches the
-/// [`Public`](nest_rs_http::Public) data to the request and each guard
-/// decides whether to honor it. An `AbilityGuard` may want to apply
-/// visitor rules on public routes; an `AuthnGuard` may want to skip
-/// rejection when no token is present. Both are policy decisions the
-/// guard owns, not the framework.
+/// A refusal is a [`Denial`], filed by the edge that ran the guard — one line,
+/// on the guard's [`target`](Self::target), carrying the denial's
+/// [`reason`](Denial::reason) — so a guard writes no log line of its own for
+/// it.
 ///
-/// See the crate-level docs for copy-paste templates.
-#[async_trait]
+/// The posture a site declares — `#[public]`, `#[authorize]`, an in-band
+/// endpoint — is read through [`UnitContext::reflector`], and what a guard
+/// makes known for the rest of the unit is attached with
+/// [`UnitContext::attach`]: ambient once the whole stage passed, never on a
+/// refused unit. What an earlier guard must have attached is read with
+/// [`UnitContext::require`], and a principal declared through
+/// [`expected_principal`](Self::expected_principal) answers by cause: the boot
+/// refuses a chain nothing in which attaches it, so its absence at a unit is a
+/// caller the guard attaching it admitted without one, the caller's `401`. Any
+/// other value's absence is a `500`.
+///
+/// The entries are written out as `#[async_trait]` writes an override, so an
+/// implementation is an ordinary `async fn` under `#[async_trait]` — one
+/// closing every unit while the deployment is in maintenance:
+///
+/// ```
+/// use nest_rs_core::{Layer, UnitContext, async_trait};
+/// use nest_rs_guards::{Denial, Guard};
+///
+/// #[derive(Layer)]
+/// struct Maintenance {
+///     closed: bool,
+/// }
+///
+/// #[async_trait]
+/// impl Guard for Maintenance {
+///     async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+///         if self.closed {
+///             return Err(Denial::forbidden("closed for maintenance"));
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
 pub trait Guard: Layer {
-    /// HTTP request entry. Default = no-op (this guard doesn't apply to HTTP).
-    ///
-    /// A guard bound on a `#[controller]` / `#[routes]` must attest it with
-    /// [`HttpGuard`], the same way the three edges below are attested — the
-    /// default is what makes an unattested binding pass every request in
-    /// silence.
-    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
-        Ok(())
+    /// An HTTP request — a route, a WebSocket upgrade, the request of an
+    /// in-band endpoint (`/graphql`, `/mcp`). Read it — head and body — through
+    /// the HTTP edge's view of `cx` (`HttpView::of(cx)`); a guard that reads the
+    /// body sets it back. The default runs [`check`](Self::check), the guard's
+    /// one decision.
+    fn check_http<'s, 'c, 'u, 'fut>(&'s self, cx: &'c mut UnitContext<'u>) -> Check<'fut>
+    where
+        's: 'fut,
+        'c: 'fut,
+        'u: 'fut,
+        Self: 'fut,
+    {
+        self.check(cx)
     }
 
-    /// GraphQL operation entry. Default = no-op. Available with the `graphql`
-    /// feature on this crate.
-    ///
-    /// Takes a [`GraphqlOperationContext`] rather than async-graphql's `Context`
-    /// because the operation has **two** sites: a resolver field, and the
-    /// `_service` / `_entities` root fields async-graphql resolves above the
-    /// merged root, where a schema extension is the only seam and no `Context`
-    /// exists. One declaration, both sites; `operation.context()` is how a guard
-    /// that genuinely needs the selection set asks for it.
-    #[cfg(feature = "graphql")]
-    async fn check_graphql(&self, _operation: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
-        Ok(())
-    }
-
-    /// WebSocket per-message entry. Default = no-op. Available with the `ws`
-    /// feature on this crate.
-    #[cfg(feature = "ws")]
-    async fn check_ws_message(
-        &self,
-        _client: &WsClient,
-        _event: &str,
-        _data: &Value,
-    ) -> Result<(), Denial> {
-        Ok(())
-    }
-
-    /// MCP per-operation entry. Default = no-op. Available with the `mcp`
-    /// feature on this crate.
-    ///
-    /// Runs inside rmcp's spawned dispatch, *after* the endpoint's
-    /// [`McpOperationGuard`](nest_rs_mcp::McpOperationGuard) has authenticated
-    /// the request and installed the caller's `Ability` — so a capability-only
-    /// guard reads the ability with `nest_rs_authz::current_ability` here, the
-    /// same way `check_http` reads it off the request.
-    ///
-    /// The context deliberately carries no arguments: rejecting a *payload* is
-    /// a pipe's job (`Valid<T>` / `Piped<P, T>` run on the wire value before the
-    /// body), and a guard that reads arguments is one step from deciding access
-    /// from them.
-    #[cfg(feature = "mcp")]
-    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
-        Ok(())
-    }
+    /// The guard's decision on a unit; [`UnitContext::edge`] and
+    /// [`UnitContext::switch_to`] say which. It has no default: a guard
+    /// admitting a unit says so.
+    fn check<'s, 'c, 'u, 'fut>(&'s self, cx: &'c mut UnitContext<'u>) -> Check<'fut>
+    where
+        's: 'fut,
+        'c: 'fut,
+        'u: 'fut,
+        Self: 'fut;
 
     /// The chain phase this guard declares. Boot-time validation refuses a
     /// chain listing an [`Authentication`](GuardPhase::Authentication) guard
-    /// after an [`Authorization`](GuardPhase::Authorization) one.
+    /// after an [`Authorization`](GuardPhase::Authorization) one, and only those
+    /// two cover a unit: under [`Other`](GuardPhase::Other) guards alone, the
+    /// default, a unit says `#[public]` or refuses the boot.
     fn phase(&self) -> GuardPhase {
         GuardPhase::Other
     }
 
-    /// The principal type this guard attaches to the request on success
-    /// (an authn guard's claims), if any. Read by boot-time chain validation.
+    /// The principal type this guard attaches on success (an authentication
+    /// guard's claims), if any. Read by boot-time chain validation.
     fn produced_principal(&self) -> Option<PrincipalClaim> {
         None
     }
 
     /// The principal type this guard expects an earlier guard to have
-    /// attached (an authz guard's actor), if any. Boot-time chain validation
-    /// fails boot when an earlier guard produces a *different* principal type
-    /// — the mismatch that would otherwise 500 on every request.
+    /// attached (an authorization guard's actor), if any. Boot-time chain
+    /// validation fails the boot when an earlier guard attaches a **different**
+    /// type, or when nothing in the chain attaches it, unless the claim says the
+    /// guard does without it ([`PrincipalClaim::or_visitor`]) — what would
+    /// otherwise answer `500` on every request.
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         None
     }
+
+    /// Whether this guard attaches the caller's ability, which a class gate
+    /// reads: the boot refuses a gate no guard answering `true` reaches, in its
+    /// chain or at its request. `nest_rs::authz::AbilityGuard` does, and nothing
+    /// else builds that ability, so an app lists that guard and answers nothing here.
+    #[doc(hidden)]
+    fn __attaches_ability(&self) -> bool {
+        false
+    }
+
+    /// Whether this guard's `check` attaches the caller's ability on a unit an in-band
+    /// edge carries, declaring `posture`: by default what it answers for the request.
+    /// `nest_rs::authz::AbilityGuard` builds one on a `#[public]` unit alone, a gated
+    /// unit reading the one its request attached.
+    #[doc(hidden)]
+    fn __attaches_ability_to(&self, _posture: Posture) -> bool {
+        self.__attaches_ability()
+    }
+
+    /// The statuses [`check_http`](Self::check_http) can refuse a request
+    /// with on a route that is `#[public]` (`public`) or not, each one a
+    /// [`Denial::http_status`] or the status of the error a refusing guard
+    /// answers in its protocol's own words, which the HTTP edge serves in place
+    /// of the denial's rendering: what a route's document lists for this guard.
+    /// A `500` is not declared — [`Denial::internal`] is a wiring defect, and
+    /// every route documents it. A status outside `400` to `599` fails the boot
+    /// of a route this guard runs on: a refusal answers an error.
+    ///
+    /// The default is `401` and `403` on a route that is not `#[public]`, and
+    /// nothing on one that is. A guard refusing with anything else says so,
+    /// read off its `Err` paths — one answering `403` to a caller outside the
+    /// office network, on every route:
+    ///
+    /// ```
+    /// # use nest_rs_core::{Layer, UnitContext, async_trait};
+    /// # use nest_rs_guards::{Denial, Guard};
+    /// #[derive(Layer)]
+    /// struct OfficeOnly;
+    ///
+    /// #[async_trait]
+    /// impl Guard for OfficeOnly {
+    ///     # async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+    ///     #     Err(Denial::forbidden("outside the office network"))
+    ///     # }
+    ///     fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+    ///         &[403]
+    ///     }
+    /// }
+    /// ```
+    fn denial_statuses(&self, public: bool) -> &'static [u16] {
+        if public { &[] } else { &[401, 403] }
+    }
+
+    /// How a route's document states this guard's
+    /// [`denial_statuses`](Self::denial_statuses). The default,
+    /// [`DenialDocument::PROBLEM`], is what a [`Denial`] renders: a problem
+    /// document, and a `Bearer` challenge on a `401`. A guard answering in its
+    /// protocol's own words says so, as a client refused at a token endpoint is
+    /// answered RFC 6749 §5.2's body and a `Basic` challenge.
+    fn denial_document(&self) -> DenialDocument {
+        DenialDocument::PROBLEM
+    }
+
+    /// The target the edge files this guard's denials on: the target constant
+    /// of the crate owning the concern the guard decides. The default is
+    /// `nest_rs::layers`.
+    fn target(&self) -> &'static str {
+        nest_rs_core::target::LAYERS
+    }
 }
 
-/// A guard that checks HTTP requests — declared by overriding
-/// [`Guard::check_http`] and then writing `impl HttpGuard for X {}`.
+/// Declares that a guard checks the units whose view is `V` — the bound every
+/// decorator emits for the guards bound at its site.
 ///
-/// Required by `#[controller]` / `#[routes]` / `#[crud]` of every guard in a
-/// `#[use_guards]`, and by `#[gateway]` of every guard on the gateway struct:
-/// those run on the WS upgrade, which is an HTTP `GET`.
-///
-/// **The one marker with no feature behind it.** Its three siblings gate a
-/// `check_*` that only exists when its edge is compiled in; HTTP is the
-/// substrate the other three mount on — `/graphql`, `/mcp` and a WS upgrade are
-/// all HTTP requests — so there is no build of this crate in which `check_http`
-/// is absent, and nothing to gate. The *attestation* is what makes the four
-/// edges symmetric, not the `cfg`.
+/// `V` is an edge's view: the HTTP edge's for a `#[controller]`, a `#[routes]`
+/// verb and a `#[gateway]` (whose guards run on the upgrade, an HTTP `GET`),
+/// GraphQL's for a `#[resolver]`, WebSocket's for a `#[subscribe_message]`,
+/// MCP's for an `#[mcp]` host or a `#[tool]`. A crate whose guard serves
+/// several edges declares each one behind that edge's feature, one line each.
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not check HTTP requests",
-    label = "this guard has no `check_http`",
-    note = "a guard bound on a `#[controller]` / `#[routes]`, or on a `#[gateway]` struct \
-            (whose guards run on the upgrade, an HTTP `GET`), runs `Guard::check_http` — whose \
-            default is `Ok(())`, so binding one that does not override it passes every request \
-            silently",
-    note = "override `check_http`, then declare `impl HttpGuard for {Self} {{}}`; or bind this \
-            guard at the edge it does check — a `#[resolver]` (`GraphqlGuard`), beside a \
-            `#[subscribe_message]` (`WsGuard`, per message rather than at the upgrade), or an \
-            `#[mcp]` host (`McpGuard`)"
+    message = "`{Self}` does not declare that it checks `{V}` units",
+    label = "bound at a site whose units are `{V}`",
+    note = "a guard's `check` decides the units it declares; bound where its units are another \
+            edge's, it would run a decision written for a view they do not have",
+    note = "write the guard's decision for `{V}` units in `Guard::check` (overriding \
+            `Guard::check_http` only where the HTTP request differs from the unit), then declare \
+            `impl GuardFor<{V}> for {Self} {{}}`"
 )]
-pub trait HttpGuard: Guard {}
+pub trait GuardFor<V: UnitView>: Guard {}
 
-/// A guard that checks GraphQL operations — declared by overriding
-/// [`Guard::check_graphql`] and then writing `impl GraphqlGuard for X {}`.
-///
-/// Every `check_*` defaults to `Ok(())`, which is right ("does not apply to this
-/// transport") and was also the answer to a question nobody asked:
-/// `#[use_guards(ThrottlerGuard)]` beside a `#[query]` compiled, read as a
-/// protection, and throttled nothing — that guard implements only `check_http`, so
-/// the per-operation chain called the default and passed. `#[resolver]` and
-/// `#[operations]` now emit a bound against this marker for every guard declared
-/// at their site, so the mistake is a compile error at the `#[use_guards]` line.
-///
-/// Declaring the marker without overriding the method is the one mistake left. It
-/// is a deliberate line, written next to the method it should have been.
-#[cfg(feature = "graphql")]
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` does not check GraphQL operations",
-    label = "this guard has no `check_graphql`",
-    note = "a guard bound on a resolver runs `Guard::check_graphql`, whose default is \
-            `Ok(())` — binding one that does not override it passes every operation silently",
-    note = "override `check_graphql`, then declare `impl GraphqlGuard for {Self} {{}}`; or bind \
-            this guard on an HTTP `#[controller]` / `#[routes]` instead"
-)]
-pub trait GraphqlGuard: Guard {}
-
-/// A guard that checks WebSocket messages — declared by overriding
-/// [`Guard::check_ws_message`] and then writing `impl WsGuard for X {}`.
-///
-/// Required by `#[messages]` of every guard in a `#[use_guards]` beside a
-/// `#[subscribe_message]`. **Not** of a `#[gateway]`-struct guard: those run on the
-/// upgrade, which is an HTTP `GET`, so they are HTTP guards — and that distinction
-/// is exactly what this bound makes visible instead of leaving to a reader.
-#[cfg(feature = "ws")]
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` does not check WebSocket messages",
-    label = "this guard has no `check_ws_message`",
-    note = "a guard bound beside a `#[subscribe_message]` runs `Guard::check_ws_message`, \
-            whose default is `Ok(())` — binding one that does not override it passes every \
-            message silently",
-    note = "override `check_ws_message`, then declare `impl WsGuard for {Self} {{}}`; or move it \
-            to the `#[gateway]` struct, where guards run on the HTTP upgrade instead"
-)]
-pub trait WsGuard: Guard {}
-
-/// A guard that checks MCP operations — declared by overriding [`Guard::check_mcp`]
-/// and then writing `impl McpGuard for X {}`.
-///
-/// Required by `#[mcp]` of every host-scope guard and by `#[tools]` of every
-/// operation-scope one: both fold into the same per-operation chain, so both run
-/// `check_mcp`.
-#[cfg(feature = "mcp")]
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` does not check MCP operations",
-    label = "this guard has no `check_mcp`",
-    note = "a guard bound on an MCP host or operation runs `Guard::check_mcp`, whose default \
-            is `Ok(())` — binding one that does not override it passes every tool call \
-            silently",
-    note = "override `check_mcp`, then declare `impl McpGuard for {Self} {{}}`; or bind this \
-            guard on an HTTP `#[controller]` / `#[routes]` instead"
-)]
-pub trait McpGuard: Guard {}
-
-// Manual forwards, not `#[async_trait]`: the macro would wrap each inner
-// (already boxed) future in a second box, taxing every check made through an
-// `Arc<dyn Guard>` without `.as_ref()` — the double-box the dispatch sites
-// individually dodge today.
+// Written out, not `#[async_trait]`: the macro would box each already-boxed
+// inner future a second time.
 impl<T: Guard + ?Sized> Guard for Arc<T> {
-    fn check_http<'s, 'r, 'fut>(
-        &'s self,
-        req: &'r mut HttpRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
-    where
-        's: 'fut,
-        'r: 'fut,
-        Self: 'fut,
-    {
-        (**self).check_http(req)
-    }
-
-    #[cfg(feature = "graphql")]
-    fn check_graphql<'s, 'c, 'g, 'fut>(
-        &'s self,
-        operation: &'c GraphqlOperationContext<'g>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
+    fn check_http<'s, 'c, 'u, 'fut>(&'s self, cx: &'c mut UnitContext<'u>) -> Check<'fut>
     where
         's: 'fut,
         'c: 'fut,
-        'g: 'fut,
+        'u: 'fut,
         Self: 'fut,
     {
-        (**self).check_graphql(operation)
+        (**self).check_http(cx)
     }
 
-    #[cfg(feature = "ws")]
-    fn check_ws_message<'s, 'c, 'e, 'd, 'fut>(
-        &'s self,
-        client: &'c WsClient,
-        event: &'e str,
-        data: &'d Value,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
+    fn check<'s, 'c, 'u, 'fut>(&'s self, cx: &'c mut UnitContext<'u>) -> Check<'fut>
     where
         's: 'fut,
         'c: 'fut,
-        'e: 'fut,
-        'd: 'fut,
+        'u: 'fut,
         Self: 'fut,
     {
-        (**self).check_ws_message(client, event, data)
-    }
-
-    #[cfg(feature = "mcp")]
-    fn check_mcp<'s, 'c, 'o, 'fut>(
-        &'s self,
-        ctx: &'c McpOperationContext<'o>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
-    where
-        's: 'fut,
-        'c: 'fut,
-        'o: 'fut,
-        Self: 'fut,
-    {
-        (**self).check_mcp(ctx)
+        (**self).check(cx)
     }
 
     fn phase(&self) -> GuardPhase {
@@ -309,52 +294,175 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
     fn expected_principal(&self) -> Option<PrincipalClaim> {
         (**self).expected_principal()
     }
+
+    fn __attaches_ability(&self) -> bool {
+        (**self).__attaches_ability()
+    }
+
+    fn __attaches_ability_to(&self, posture: Posture) -> bool {
+        (**self).__attaches_ability_to(posture)
+    }
+
+    fn denial_statuses(&self, public: bool) -> &'static [u16] {
+        (**self).denial_statuses(public)
+    }
+
+    fn denial_document(&self) -> DenialDocument {
+        (**self).denial_document()
+    }
+
+    fn target(&self) -> &'static str {
+        (**self).target()
+    }
 }
 
-/// Newtype adapter that lets any [`Guard`] satisfy the
-/// [`WsMessageCheck`](nest_rs_ws::WsMessageCheck) interface — the bridge the
-/// `#[messages]` macro uses to put guards in the per-event chain table
-/// without nest-rs-ws depending on nest-rs-guards.
-#[cfg(feature = "ws")]
-pub struct GuardAsWsMessageCheck {
-    inner: Arc<dyn Guard>,
-    type_id: TypeId,
-    name: &'static str,
-}
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
 
-#[cfg(feature = "ws")]
-impl GuardAsWsMessageCheck {
-    /// Adapt an HTTP [`Guard`] into a per-WS-message check, preserving its
-    /// `type_id`/`name` so dedup and logging match the HTTP path.
-    pub fn new(inner: Arc<dyn Guard>, type_id: TypeId, name: &'static str) -> Self {
-        Self {
-            inner,
-            type_id,
-            name,
+    use async_trait::async_trait;
+    use nest_rs_core::__private::{HandlerDeclaration, MetaLevels, declare_handler, declare_unit};
+    use nest_rs_core::operation_log::Kind;
+    use nest_rs_core::{Handler, Posture};
+
+    use super::*;
+
+    struct Socket;
+
+    impl UnitView for Socket {}
+
+    struct Host;
+
+    static MESSAGE: Handler = declare_handler(HandlerDeclaration {
+        unit: declare_unit("nest-rs-ws", "nest_rs::ws", Kind::Server, "ws.message"),
+        host: TypeId::of::<Host>(),
+        host_name: "Host",
+        method: "send",
+        address: "send",
+        posture: Posture::Gated,
+        meta: MetaLevels::default,
+    });
+
+    /// Overrides both, as an app writes them.
+    #[derive(Layer)]
+    struct Both;
+
+    #[async_trait]
+    impl Guard for Both {
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            let _ = cx.reflector().posture();
+            Err(Denial::unauthorized("refused at the request"))
+        }
+
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            match cx.switch_to::<Socket>() {
+                Some(_) => Err(Denial::forbidden("refused on the socket")),
+                None => Ok(()),
+            }
         }
     }
-}
 
-#[cfg(feature = "ws")]
-#[async_trait]
-impl WsMessageCheck for GuardAsWsMessageCheck {
-    async fn check(
-        &self,
-        client: &WsClient,
-        event: &str,
-        data: &Value,
-    ) -> std::result::Result<(), String> {
-        match self.inner.check_ws_message(client, event, data).await {
-            Ok(()) => Ok(()),
-            Err(denial) => Err(denial.message().to_owned()),
+    /// Refuses a caller outside the office network, wherever it is bound.
+    #[derive(Layer)]
+    struct OfficeOnly;
+
+    #[async_trait]
+    impl Guard for OfficeOnly {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Err(Denial::forbidden("outside the office network"))
+        }
+
+        fn denial_statuses(&self, _public: bool) -> &'static [u16] {
+            &[403]
         }
     }
 
-    fn type_key(&self) -> TypeId {
-        self.type_id
+    #[test]
+    fn a_guard_declaring_no_statuses_answers_an_authentication_guard_s_off_a_public_route() {
+        let guard: Arc<dyn Guard> = Arc::new(OneDecision);
+        assert_eq!(guard.denial_statuses(false), [401, 403]);
+        assert!(
+            guard.denial_statuses(true).is_empty(),
+            "a guard that says nothing claims no refusal on a `#[public]` route",
+        );
     }
 
-    fn layer_name(&self) -> &'static str {
-        self.name
+    #[test]
+    fn an_arc_answers_the_statuses_its_guard_declares() {
+        let guard = Arc::new(OfficeOnly);
+        assert_eq!(Guard::denial_statuses(&guard, false), [403]);
+        assert_eq!(Guard::denial_statuses(&guard, true), [403]);
+    }
+
+    /// Writes its decision once, in the unit entry.
+    #[derive(Layer)]
+    struct OneDecision;
+
+    #[async_trait]
+    impl Guard for OneDecision {
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Err(Denial::forbidden("refused wherever it is bound"))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_guard_writing_one_decision_refuses_an_http_request_with_it() {
+        let mut view = Socket;
+        let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
+        let guard: Arc<dyn Guard> = Arc::new(OneDecision);
+
+        let http = guard.as_ref().check_http(&mut cx).await;
+        assert_eq!(
+            http.map_err(|denial| denial.http_status()),
+            Err(403),
+            "an HTTP request runs the one decision a guard writes, never an admit-all default",
+        );
+    }
+
+    /// What an earlier guard attaches.
+    struct Author;
+
+    impl nest_rs_core::AmbientValue for Author {}
+
+    /// Requires what no guard before it attached.
+    #[derive(Layer)]
+    struct RequiresAuthor;
+
+    #[async_trait]
+    impl Guard for RequiresAuthor {
+        async fn check(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            cx.require::<Author>()?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_precondition_refuses_with_a_500_naming_the_value() {
+        let mut view = Socket;
+        let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
+        let guard: Arc<dyn Guard> = Arc::new(RequiresAuthor);
+
+        let unit = guard.as_ref().check(&mut cx).await;
+        let denial = unit.expect_err("an unwired guard fails closed");
+        assert_eq!(denial.http_status(), 500);
+        assert_eq!(denial.reason(), Some(crate::denial::MISSING_AMBIENT));
+        let chain = crate::denial::failure_chain(&denial).unwrap_or_default();
+        assert!(chain.contains("no `Author` is ambient"), "{chain}");
+
+        cx.attach(Author);
+        let unit = guard.as_ref().check(&mut cx).await;
+        assert!(unit.is_ok(), "attached earlier in the stage, it is there");
+    }
+
+    #[tokio::test]
+    async fn an_async_trait_override_of_each_entry_is_the_one_that_runs() {
+        let mut view = Socket;
+        let mut cx = nest_rs_core::__private::new_unit_context(&MESSAGE, &mut view, None, None);
+        let guard: Arc<dyn Guard> = Arc::new(Both);
+
+        let http = guard.check_http(&mut cx).await;
+        assert_eq!(http.map_err(|d| d.http_status()), Err(401));
+        let unit = guard.check(&mut cx).await;
+        assert_eq!(unit.map_err(|d| d.http_status()), Err(403));
     }
 }

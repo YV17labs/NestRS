@@ -1,0 +1,104 @@
+//! [`GraphqlView`], the GraphQL edge's view of the field it dispatches.
+
+use std::sync::Arc;
+
+use async_graphql::parser::types::OperationType;
+use nest_rs_core::{ServedAddress, UnitView};
+use nest_rs_http::CarriedView;
+
+use crate::filed_facts::FiledFacts;
+
+/// The GraphQL edge's view of one field a guard checks: which field, under
+/// which kind of operation, in which role.
+///
+/// A guard reaches it through `UnitContext::switch_to` in
+/// `Guard::check`. The field's arguments are not on it: refusing a payload is
+/// a pipe's job.
+///
+/// It is read in place, never copied: it stays where a layer's answer can be
+/// written, as every edge's view is, and what it says outlives the unit by
+/// value (`field`, `operation`, `role`).
+///
+/// ```compile_fail,E0308
+/// use nest_rs_graphql::GraphqlView;
+///
+/// fn kept(view: &GraphqlView) -> GraphqlView {
+///     view.clone()
+/// }
+/// ```
+#[derive(Debug)]
+pub struct GraphqlView {
+    field: &'static str,
+    operation: OperationType,
+    role: FieldRole,
+    /// What the operation already filed, for a unit run once per parent.
+    filed: Option<Arc<FiledFacts>>,
+}
+
+impl UnitView for GraphqlView {
+    fn served_address(&self) -> Option<ServedAddress<'_>> {
+        Some(ServedAddress::field(
+            crate::operation::operation_label(self.operation),
+            self.field,
+        ))
+    }
+}
+
+/// `/graphql`'s request carries its operations.
+impl CarriedView for GraphqlView {}
+
+impl GraphqlView {
+    /// The view of `field`, declared at its site, run under `operation`.
+    pub(crate) fn new(field: &'static str, operation: OperationType, role: FieldRole) -> Self {
+        Self {
+            field,
+            operation,
+            role,
+            filed: None,
+        }
+    }
+
+    /// The same view, filing what its operation already filed once.
+    pub(crate) fn filing_into(mut self, filed: Option<Arc<FiledFacts>>) -> Self {
+        self.filed = filed;
+        self
+    }
+
+    /// Whether the operation has yet to file `fact`; a view no operation record
+    /// reaches files each.
+    pub(crate) fn first_filed(&self, fact: String) -> bool {
+        self.filed.as_ref().is_none_or(|filed| filed.first(fact))
+    }
+
+    /// The field, as its site declares it (`listUsers`).
+    pub fn field(&self) -> &'static str {
+        self.field
+    }
+
+    /// The kind of operation the field runs under.
+    pub fn operation(&self) -> OperationType {
+        self.operation
+    }
+
+    /// The role the field plays in its operation.
+    pub fn role(&self) -> FieldRole {
+        self.role
+    }
+}
+
+/// The role a field plays in the operation that resolves it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FieldRole {
+    /// A `#[query]`, `#[mutation]` or `#[subscription]`: a field of the root
+    /// type the operation selects.
+    RootField,
+    /// An `#[entity]`, resolved from a reference a federation router sent.
+    Entity,
+    /// A federation root field, `_service` or `_entities`, which no resolver
+    /// declares.
+    Federation,
+    /// A `#[field_resolver]`, resolved under a root field's result once per
+    /// parent: a field of a unit, never a unit of its own.
+    Nested,
+}

@@ -1,0 +1,5 @@
+error: `#[tools]` declares `#[resource(template = "note://{id}")]` on `note` and again on `again`: a host reads the URIs one template writes through one method, so one of the two would never run — give one a distinct `template`
+  --> tests/integration/diagnostics/mcp/resource_template_twice.rs:20:5
+   |
+20 |     #[resource(template = "note://{id}")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

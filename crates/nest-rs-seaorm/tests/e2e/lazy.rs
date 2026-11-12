@@ -1,40 +1,21 @@
-//! The lazy request executor: `BEGIN` is deferred to the first data-layer
-//! touch, so a guard-denied mutating request opens **zero** transactions,
-//! while a handler that writes still commits through the lazily opened one.
+//! The lazy executor: `BEGIN` waits for the first data-layer touch, and what
+//! the boundary reports when a statement or the session failed under it. The
+//! HTTP edge's request running through it is `unit`'s.
 
 use std::sync::Arc;
 
-use nest_rs_interceptors::InterceptorExt;
-use nest_rs_seaorm::{
-    DbContext, Executor, LazyTransaction, SeaOrmConfig, current_executor, with_request_executor,
+use nest_rs_database::__private::with_request_executor;
+use nest_rs_seaorm::__private::{
+    FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor,
 };
-use poem::endpoint::make;
-use poem::http::{Method, StatusCode};
-use poem::{Endpoint, IntoResponse, Request, Response, Result};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-fn mutating_request() -> Request {
-    Request::builder()
-        .method(Method::POST)
-        .uri("/".parse().unwrap())
-        .finish()
-}
-
-fn status_of(result: Result<Response>) -> StatusCode {
-    match result {
-        Ok(resp) => resp.status(),
-        Err(err) => err.into_response().status(),
-    }
-}
-
-// The counting seam itself: no data-layer touch ⇒ the cell stays empty ⇒ no
-// `BEGIN` was ever issued against Postgres.
 #[tokio::test]
 async fn no_data_layer_touch_opens_no_transaction() {
     let conn = crate::harness::connect_arc().await;
     let lazy = Arc::new(LazyTransaction::new((*conn).clone(), "test"));
 
-    with_request_executor(Executor::Lazy(lazy.clone()), async {
+    with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), async {
         // Simulates a guard denial: the request scope exists, nothing queries.
     })
     .await;
@@ -50,7 +31,7 @@ async fn first_query_opens_the_transaction_once() {
     let conn = crate::harness::connect_arc().await;
     let lazy = Arc::new(LazyTransaction::new((*conn).clone(), "test"));
 
-    with_request_executor(Executor::Lazy(lazy.clone()), async {
+    with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), async {
         let executor = current_executor().expect("ambient executor installed");
         executor
             .execute_unprepared("SELECT 1")
@@ -74,110 +55,36 @@ async fn first_query_opens_the_transaction_once() {
         .expect("rollback the probe transaction");
 }
 
-// End-to-end through `DbContext`: a denied mutating request (403 before any
-// query) flows through unchanged — the finalizer finds no transaction to
-// commit or roll back.
-#[tokio::test]
-async fn a_denied_mutating_request_passes_through_with_no_transaction() {
-    let ctx = DbContext::new(
-        crate::harness::connect_arc().await,
-        Arc::new(SeaOrmConfig::default()),
-    );
-
-    let endpoint = make(|_req: Request| async { StatusCode::FORBIDDEN.into_response() });
-
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-    assert_eq!(status, StatusCode::FORBIDDEN);
-}
-
-// End-to-end through `DbContext`: a handler that writes commits through the
-// lazily opened transaction — visible from the pool afterwards.
-#[tokio::test]
-async fn a_writing_handler_commits_through_the_lazy_transaction() {
-    let conn = crate::harness::connect_arc().await;
-    conn.execute_unprepared("DROP TABLE IF EXISTS lazy_commit_probe")
-        .await
-        .expect("drop any leftover probe table");
-    conn.execute_unprepared("CREATE TABLE lazy_commit_probe (id INT PRIMARY KEY)")
-        .await
-        .expect("create the probe table");
-
-    let ctx = DbContext::new(conn.clone(), Arc::new(SeaOrmConfig::default()));
-    let endpoint = make(|_req: Request| async {
-        let executor = current_executor().expect("ambient executor installed");
-        executor
-            .execute_unprepared("INSERT INTO lazy_commit_probe (id) VALUES (1)")
-            .await
-            .expect("the insert opens and rides the lazy transaction");
-        StatusCode::CREATED.into_response()
-    });
-
-    let status = status_of(endpoint.interceptor(ctx).call(mutating_request()).await);
-    assert_eq!(status, StatusCode::CREATED);
-
-    let count: i32 = conn
-        .query_one_raw(Statement::from_string(
-            DatabaseBackend::Postgres,
-            "SELECT COUNT(*)::int AS n FROM lazy_commit_probe",
-        ))
-        .await
-        .expect("count on the pool")
-        .expect("count returns a row")
-        .try_get("", "n")
-        .expect("read the count");
-    assert_eq!(count, 1, "the lazily opened transaction must commit");
-
-    conn.execute_unprepared("DROP TABLE IF EXISTS lazy_commit_probe")
-        .await
-        .expect("clean up the probe table");
-}
-
-// ---------------------------------------------------------------------------
-// What a **connection** fault costs an attempt. Both cases below are ones the
-// framework knows wrote nothing — no `COMMIT` was ever issued — so both are
-// retryable, and both were classified `deterministic` and dead-lettered before
-// `is_transient_failure` existed. The in-doubt commit at the end is the
-// deliberate exception, and it is what keeps the classification honest.
-
 /// The pool never hands out a connection, so `BEGIN` cannot even be issued.
-/// Nothing reached the database; an outage is exactly what a retry budget is
-/// for.
 #[tokio::test]
 async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
     let logs = nest_rs_testing::LogCapture::install();
     let pool = crate::harness::starved_pool().await;
 
-    // Hold the only connection for the duration of the attempt.
     let hog = sea_orm::TransactionTrait::begin(&pool)
         .await
         .expect("hold the only connection");
 
     let lazy = Arc::new(LazyTransaction::new(pool.clone(), "test"));
-    let reported_success = with_request_executor(Executor::Lazy(lazy.clone()), async {
-        let executor = current_executor().expect("ambient executor installed");
-        // The shape `Poisoned` exists for: the job swallows the `DbErr` and
-        // reports success.
-        let _ = executor.execute_unprepared("SELECT 1").await;
-        true
-    })
-    .await;
+    let reported_success =
+        with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), async {
+            let executor = current_executor().expect("ambient executor installed");
+            // Swallowed, and success reported: the shape `Poisoned` exists for.
+            let _ = executor.execute_unprepared("SELECT 1").await;
+            true
+        })
+        .await;
 
     match lazy.finalize(reported_success).await {
-        nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable } => assert!(
+        FinalizeOutcome::Poisoned { retryable } => assert!(
             retryable,
             "a pool acquire timeout wrote nothing, so the attempt is worth repeating",
         ),
         other => panic!("expected a poisoned boundary, got {other:?}"),
     }
 
-    // Its own message, distinct from the transaction-was-opened twin: nothing
-    // was opened here, so `NoTransaction` would have been the honest-looking
-    // answer and the wrong one — it says "nothing to settle" about work that
-    // was meant to land and did not. An operator reading this line learns the
-    // request never reached the database at all, which is a different incident
-    // from one whose statements ran and were thrown away.
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "a statement failed before this boundary could open its transaction, but the \
          boundary reported success; nothing it meant to write was written",
     );
@@ -199,8 +106,6 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
     hog.rollback().await.expect("release the held connection");
 }
 
-/// The table the terminated attempt writes to, so "nothing landed" is a row
-/// count rather than an assumption.
 const TERMINATED_PROBE_TABLE: &str = "lazy_terminated_probe";
 
 /// The server closes the session mid-attempt (`57P01`). Postgres rolls the
@@ -217,23 +122,24 @@ async fn a_backend_terminated_mid_attempt_is_retryable() {
     .await;
 
     let lazy = Arc::new(LazyTransaction::new(pool.clone(), "test"));
-    let reported_success = with_request_executor(Executor::Lazy(lazy.clone()), async {
-        let executor = current_executor().expect("ambient executor installed");
-        executor
-            .execute_unprepared(&format!(
-                "INSERT INTO {TERMINATED_PROBE_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING"
-            ))
-            .await
-            .expect("the first statement opens the transaction and writes");
-        let pid = crate::harness::backend_pid(&executor).await;
-        crate::harness::terminate_backend(&killer, pid).await;
-        let _ = executor.execute_unprepared("SELECT 1").await;
-        true
-    })
-    .await;
+    let reported_success =
+        with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), async {
+            let executor = current_executor().expect("ambient executor installed");
+            executor
+                .execute_unprepared(&format!(
+                    "INSERT INTO {TERMINATED_PROBE_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING"
+                ))
+                .await
+                .expect("the first statement opens the transaction and writes");
+            let pid = crate::harness::backend_pid(&executor).await;
+            crate::harness::terminate_backend(&killer, pid).await;
+            let _ = executor.execute_unprepared("SELECT 1").await;
+            true
+        })
+        .await;
 
     match lazy.finalize(reported_success).await {
-        nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable } => assert!(
+        FinalizeOutcome::Poisoned { retryable } => assert!(
             retryable,
             "a connection the server closed rolled the attempt back, so a replay \
              cannot write twice",
@@ -241,9 +147,6 @@ async fn a_backend_terminated_mid_attempt_is_retryable() {
         other => panic!("expected a poisoned boundary, got {other:?}"),
     }
 
-    // The claim the classification rests on, asserted rather than assumed: the
-    // attempt's write is not durable. `retryable: true` is only safe because of
-    // this row count.
     let surviving = pool
         .query_one_raw(Statement::from_string(
             DatabaseBackend::Postgres,
@@ -261,14 +164,8 @@ async fn a_backend_terminated_mid_attempt_is_retryable() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// An **abandoned** boundary: the future holding the executor is dropped before
-// anything settles it. That is the framework's own shutdown path — a queue
-// worker's `shutdown_timeout` elapsing makes apalis drop the job future where
-// it stands — and if that is mid-statement, the transaction stays open until
-// the abandoned statement drains server-side. Nothing can cancel it from here,
-// so what the framework owes is the event.
-
+// A worker's drain window drops the attempt mid-statement: the transaction stays
+// open until the statement drains server-side, and nothing here can cancel it.
 #[tokio::test]
 async fn a_boundary_abandoned_mid_statement_says_so() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -276,17 +173,19 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
     let conn = crate::harness::connect().await;
     let lazy = Arc::new(LazyTransaction::new(conn.clone(), "worker"));
     {
-        let attempt = nest_rs_seaorm::with_job_executor(Executor::Lazy(Arc::clone(&lazy)), async {
-            let executor = current_executor().expect("ambient executor installed");
-            executor
-                .execute_unprepared("SELECT 1")
-                .await
-                .expect("the first statement opens the transaction");
-            // In flight when the attempt is dropped, which is the case that
-            // costs something: the rollback cannot go out until it drains.
-            let _ = executor.execute_unprepared("SELECT pg_sleep(1)").await;
-            true
-        });
+        let attempt = nest_rs_database::__private::with_job_executor(
+            SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
+            async {
+                let executor = current_executor().expect("ambient executor installed");
+                executor
+                    .execute_unprepared("SELECT 1")
+                    .await
+                    .expect("the first statement opens the transaction");
+                // In flight when dropped: the rollback cannot go out until it drains.
+                let _ = executor.execute_unprepared("SELECT pg_sleep(1)").await;
+                true
+            },
+        );
         // What a shutdown timeout does: drop the job future where it stands.
         let elapsed = tokio::time::timeout(std::time::Duration::from_millis(200), attempt).await;
         assert!(elapsed.is_err(), "the attempt is abandoned, not finished");
@@ -295,7 +194,7 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
     drop(lazy);
 
     let event = logs.expect_one(
-        nest_rs_seaorm::TARGET,
+        nest_rs_seaorm::target::ORM,
         "transaction abandoned without settling; its locks are held until the abandoned \
          statement drains",
     );
@@ -311,19 +210,15 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
     );
 }
 
-/// The deliberate exception, and the one that keeps the widened classification
-/// honest: the connection is lost with the transaction **clean**, so nothing
-/// poisoned it and `finalize` reaches the `COMMIT` — which then fails without
-/// saying whether it landed. That one is **not** replayed. Widening
-/// `CommitError::is_retryable_conflict` to match `is_transient_failure` would
-/// turn "may have written once" into "wrote twice"; this is what would catch it.
+/// A connection lost with the transaction clean fails the `COMMIT` without
+/// saying whether it landed, so it is never replayed.
 #[tokio::test]
 async fn a_commit_whose_outcome_is_unknown_stays_deterministic() {
     let pool = crate::harness::connect().await;
     let killer = crate::harness::connect().await;
 
     let lazy = Arc::new(LazyTransaction::new(pool.clone(), "test"));
-    let pid = with_request_executor(Executor::Lazy(Arc::clone(&lazy)), async {
+    let pid = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         let executor = current_executor().expect("ambient executor installed");
         executor
             .execute_unprepared("SELECT 1")
@@ -333,13 +228,12 @@ async fn a_commit_whose_outcome_is_unknown_stays_deterministic() {
     })
     .await;
 
-    // Killed *after* the last statement returned, so no statement failed and the
-    // boundary is clean: the failure lands on the `COMMIT` itself.
+    // Killed after the last statement, so the failure lands on the `COMMIT`.
     crate::harness::terminate_backend(&killer, pid).await;
 
     match lazy.finalize(true).await {
-        nest_rs_seaorm::FinalizeOutcome::CommitFailed(err) => assert!(
-            !err.is_retryable_conflict(),
+        FinalizeOutcome::CommitFailed(err) => assert!(
+            !nest_rs_seaorm::retry::is_retryable_conflict(&err),
             "a commit that may have landed is never replayed, whatever the \
              statement-level classification says about the same error: {err}",
         ),

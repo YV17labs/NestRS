@@ -1,39 +1,54 @@
 //! [`RedisThrottler`] — a cross-process rate-limit store backing the
-//! `nest-rs-throttler` [`ThrottlerGuard`], enabled by the `throttler` feature.
+//! `nest-rs-throttler` [`ThrottlerGuard`](nest_rs_throttler::ThrottlerGuard), enabled by the `throttler` feature.
 //!
 //! Same fixed-window semantics as the in-process
 //! [`InMemoryThrottler`](nest_rs_throttler::InMemoryThrottler), but the counter
-//! lives in Redis, so N replicas of an app share **one** budget per client
-//! instead of N× the limit. The window is advanced by a single atomic Lua
-//! script (`INCR` + set-expiry-if-unset + `PTTL`) — one round-trip, no
-//! check-then-act race between replicas.
+//! lives in Redis, so N replicas of an app share **one** budget per client,
+//! advanced by one atomic Lua script.
 //!
-//! **Fail-closed.** [`ThrottlerStore::hit`] is async, so the Redis round-trip
-//! is awaited directly on the guard's request task — no worker thread is
-//! blocked per rate-limit check. When Redis is unreachable the store **denies**
-//! (mirrors the in-memory saturation choice): a rate limiter that fails open
-//! under a backend outage is an auth bypass, so the outage is logged at `warn`
-//! and the request is refused.
+//! **Fail-closed, by the port.** When Redis cannot count a hit the store
+//! answers its error and says nothing; the guard denies for the window and
+//! says it once at `warn`, naming this store: a rate limiter that fails open
+//! under an outage is an auth bypass.
 
 use std::time::Duration;
 
-use async_trait::async_trait;
-use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
-use redis::Script;
-
 use crate::RedisConnection;
+use crate::script::RedisScript;
+use async_trait::async_trait;
+use nest_rs_core::{Instance, Unnamed};
+use nest_rs_throttler::{Decision, Throttle, ThrottlerStore, ThrottlerStoreError};
+
+/// Every key this binding writes: `nestrs:throttler:buckets:<subject>`, one per
+/// throttled subject, counting its current window. The concern is the tail of
+/// [`nest_rs_throttler::TARGET`], never `redis`.
+pub(crate) const BUCKETS: &str = "nestrs:throttler:buckets";
+
+/// The key `subject`'s window is counted in. The subject is the port's: this
+/// store keeps its counters outside the process, so it is handed the subject's
+/// pseudonym — hex digits, never the client's address or identity — and a `:`
+/// never reaches it.
+fn bucket(subject: &str) -> String {
+    format!("{BUCKETS}:{subject}")
+}
 
 /// Atomic fixed-window step. Returns `{count, ttl_ms}` in one round-trip:
 ///
+/// - `PTTL` is the remaining window in ms, so the guard's `Retry-After` is the
+///   true time to reset, not a fixed guess; `INCR` keeps it.
+/// - a window in its last millisecond (`PTTL` `0`) has ended, as the
+///   in-memory store's does at `start + window`, so `PEXPIRE … 0` deletes it
+///   and this hit opens the next one.
 /// - `INCR` opens or advances the window counter.
-/// - the window's expiry is (re)armed only when the key has none
-///   (`PTTL < 0` — a just-created key, or one that somehow lost its TTL), which
-///   is the `EXPIRE NX` semantics without a version dependency.
-/// - `PTTL` returns the remaining window in ms, so the guard's `Retry-After` is
-///   the true time to reset, not a fixed guess.
-const WINDOW_SCRIPT: &str = r"
+/// - the window's expiry is armed only when the key has none (`PTTL < 0` — a
+///   key this hit created, or one that somehow lost its TTL), which is the
+///   `EXPIRE NX` semantics without a version dependency.
+const WINDOW_SCRIPT: &str = "local ttl = redis.call('PTTL', KEYS[1])
+if ttl == 0 then
+  redis.call('PEXPIRE', KEYS[1], 0)
+  ttl = -2
+end
 local count = redis.call('INCR', KEYS[1])
-local ttl = redis.call('PTTL', KEYS[1])
 if ttl < 0 then
   redis.call('PEXPIRE', KEYS[1], ARGV[1])
   ttl = tonumber(ARGV[1])
@@ -44,75 +59,105 @@ return {count, ttl}
 /// Redis-backed [`ThrottlerStore`]. Construct via [`RedisThrottler::new`] or let
 /// [`RedisThrottlerModule`](crate::RedisThrottlerModule) wire it over the shared
 /// [`RedisConnection`]. It counts and nothing else — which limit applies is the
-/// port's policy, carried by the guard.
-pub struct RedisThrottler {
-    conn: RedisConnection,
-    script: Script,
+/// port's policy, carried by the guard. `I` is the instance it counts on.
+pub struct RedisThrottler<I = Unnamed> {
+    conn: RedisConnection<I>,
+    script: RedisScript,
 }
 
-impl RedisThrottler {
+impl<I: Instance> RedisThrottler<I> {
     /// `conn` is the app's shared Redis connection (reused, not reopened —
-    /// [`RedisConnection::manager`] hands out the multiplexed handle).
-    pub fn new(conn: RedisConnection) -> Self {
+    /// every hit goes over its multiplexed socket, bounded by its budget).
+    pub fn new(conn: RedisConnection<I>) -> Self {
         Self {
             conn,
-            script: Script::new(WINDOW_SCRIPT),
+            script: RedisScript::new(WINDOW_SCRIPT),
         }
     }
 
     /// Run the window script for `key` over the shared connection. `window_ms`
-    /// is the current limit's window. Awaited on the guard's own request task —
-    /// the [`ThrottlerStore`] seam is async, so no runtime worker is blocked
-    /// and a current-thread runtime works too.
+    /// is the current limit's window.
     async fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), redis::RedisError> {
-        // A namespace prefix keeps throttle counters from colliding with queue
-        // keys on a shared Redis, and makes them greppable in `redis-cli`.
-        let namespaced = format!("nestrs:throttle:{key}");
-        let mut conn = self.conn.manager();
-        self.script
-            .key(namespaced)
-            .arg(window_ms)
-            .invoke_async::<(i64, i64)>(&mut conn)
+        self.conn
+            .invoke(self.script.keys(&[&bucket(key)]).arg(window_ms))
             .await
     }
 }
 
 #[async_trait]
-impl ThrottlerStore for RedisThrottler {
-    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
-        // `as u64` is saturating-safe here: a `Duration` window never exceeds
-        // `u64::MAX` ms in any real config, and Redis PEXPIRE takes an i64 ms.
-        let window_ms = limit.window.as_millis().min(u64::MAX as u128) as u64;
-        match self.run(key, window_ms).await {
-            Ok((count, ttl_ms)) => {
-                // Denied when the count has passed the limit — identical rule to
-                // the in-memory store (`count > limit.limit`).
-                let allowed = count <= i64::from(limit.limit);
-                if allowed {
-                    Decision::allowed()
-                } else {
-                    // Prefer the real remaining TTL; fall back to the full
-                    // window if Redis reported no expiry (defensive).
-                    let retry_after = if ttl_ms > 0 {
-                        Duration::from_millis(ttl_ms as u64)
-                    } else {
-                        limit.window
-                    };
-                    Decision::denied(retry_after)
-                }
-            }
-            // Fail-closed: a Redis outage must not open the rate limit. Deny and
-            // surface the error at `warn` (a security event on the throttler
-            // target), asking the client to retry after the window.
-            Err(error) => {
-                tracing::warn!(
-                    target: nest_rs_throttler::TARGET,
-                    key = %key,
-                    error = %error,
-                    "redis throttler unavailable; denying (fail-closed)",
-                );
-                Decision::denied(limit.window)
-            }
+impl<I: Instance> ThrottlerStore for RedisThrottler<I> {
+    async fn hit(&self, key: &str, limit: Throttle) -> Result<Decision, ThrottlerStoreError> {
+        // Redis refuses an expiry whose instant overflows its `i64` milliseconds,
+        // which `Throttle::new` lets a window reach.
+        let window_ms = crate::millis::millis(limit.window());
+        let (count, ttl_ms) = self
+            .run(key, window_ms)
+            .await
+            .map_err(ThrottlerStoreError::new)?;
+        // Denied when the count has passed the limit — identical rule to the
+        // in-memory store (`count > limit.limit()`).
+        if count <= i64::from(limit.limit()) {
+            return Ok(Decision::allowed());
         }
+        // Prefer the real remaining TTL; fall back to the full window if Redis
+        // reported no expiry (defensive).
+        let retry_after = if ttl_ms > 0 {
+            Duration::from_millis(ttl_ms as u64)
+        } else {
+            limit.window()
+        };
+        Ok(Decision::denied(retry_after))
+    }
+
+    fn name(&self) -> &'static str {
+        store_name::<I>()
+    }
+}
+
+/// The store's type path, its instance argument added for a named one only, so
+/// an app with one Redis reads the spelling it always has.
+fn store_name<I: Instance>() -> &'static str {
+    let named = std::any::type_name::<RedisThrottler<I>>();
+    if I::NAME.is_empty() {
+        named.split_once('<').map_or(named, |(bare, _)| bare)
+    } else {
+        named
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_key_is_a_level_of_the_throttler() {
+        crate::testing::assert_keys_of(nest_rs_throttler::TARGET, &[BUCKETS]);
+    }
+
+    /// The port's subject — a pseudonym — follows the structure verbatim.
+    #[test]
+    fn a_bucket_carries_the_subject_verbatim() {
+        let subject = "3f9c0e7a51d24b8896c1f0aa7d42e913";
+        assert_eq!(bucket(subject), format!("{BUCKETS}:{subject}"));
+    }
+
+    #[nest_rs_core::instance]
+    struct Cache;
+
+    #[test]
+    fn the_default_instance_s_store_is_named_by_its_bare_path_and_a_named_one_s_by_its_instance() {
+        assert_eq!(
+            store_name::<Unnamed>(),
+            "nest_rs_redis::throttler::store::RedisThrottler"
+        );
+        assert_eq!(
+            store_name::<Cache>(),
+            std::any::type_name::<RedisThrottler<Cache>>()
+        );
+        assert!(
+            store_name::<Cache>().ends_with("::Cache>"),
+            "{}",
+            store_name::<Cache>()
+        );
     }
 }

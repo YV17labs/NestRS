@@ -1,6 +1,8 @@
-use nest_rs::http::poem::http::StatusCode;
+use nest_rs::http::StatusCode;
+use nest_rs::testing::LogCapture;
 use nest_rs::ws::CloseCode;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use super::harness::*;
 
@@ -8,7 +10,7 @@ const QUIET: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[tokio::test]
 async fn gateway_endpoint_is_mounted() {
-    let app = boot_builder().build().await.expect("LiveModule boots");
+    let app = boot().await;
 
     let resp = app.http().get("/ws").send().await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
@@ -17,14 +19,13 @@ async fn gateway_endpoint_is_mounted() {
 #[tokio::test]
 async fn gateway_echoes_messages_over_a_real_socket() {
     let app = serve().await;
-    let mut socket = open(&app, "/ws").await;
+    let ada = Uuid::now_v7();
+    let mut socket = open_as(&app, "/ws", &user_bearer(&app, ada)).await;
 
-    socket
-        .send("message", json!({ "author": "ada", "text": "hello" }))
-        .await;
+    socket.send("message", json!({ "text": "hello" })).await;
     let echoed = socket.next_envelope().await;
     assert_eq!(echoed["event"], "message");
-    assert_eq!(echoed["data"]["author"], "ada");
+    assert_eq!(echoed["data"]["author"], ada.to_string());
     assert_eq!(echoed["data"]["text"], "hello");
 
     socket.send("history", Value::Null).await;
@@ -72,18 +73,17 @@ async fn a_request_scoped_provider_is_reachable_per_message_over_ws() {
 #[tokio::test]
 async fn a_message_is_broadcast_to_every_connected_client() {
     let app = serve().await;
-    let mut alice = open(&app, "/ws").await;
+    let alice_id = Uuid::now_v7();
+    let mut alice = open_as(&app, "/ws", &user_bearer(&app, alice_id)).await;
     let mut bob = open(&app, "/ws").await;
 
-    alice
-        .send("message", json!({ "author": "alice", "text": "hi all" }))
-        .await;
+    alice.send("message", json!({ "text": "hi all" })).await;
 
     let to_alice = alice.next_envelope().await;
     let to_bob = bob.next_envelope().await;
     for frame in [&to_alice, &to_bob] {
         assert_eq!(frame["event"], "message");
-        assert_eq!(frame["data"]["author"], "alice");
+        assert_eq!(frame["data"]["author"], alice_id.to_string());
         assert_eq!(frame["data"]["text"], "hi all");
     }
 
@@ -93,25 +93,84 @@ async fn a_message_is_broadcast_to_every_connected_client() {
 }
 
 #[tokio::test]
-async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned_author() {
+async fn a_message_naming_an_author_is_refused_and_reaches_no_one() {
+    let app = serve().await;
+    let alice_id = Uuid::now_v7();
+    let mut alice = open_as(&app, "/ws", &user_bearer(&app, alice_id)).await;
+    wait_for_presence(&mut alice, 1).await;
+    let mut mallory = open(&app, "/ws").await;
+    wait_for_presence(&mut alice, 2).await;
+
+    for event in ["message", "typing"] {
+        mallory
+            .send(
+                event,
+                json!({ "author": alice_id.to_string(), "text": "hi" }),
+            )
+            .await;
+        let refused = mallory.next_envelope().await;
+        assert_eq!(refused["event"], event);
+        assert!(refused["data"]["error"].is_string(), "{refused}");
+        assert!(
+            !refused.to_string().contains(&alice_id.to_string()),
+            "the refusal never quotes the name it was sent: {refused}",
+        );
+    }
+    alice.expect_silence(QUIET).await;
+
+    mallory.send("history", Value::Null).await;
+    let history = mallory.next_envelope().await;
+    assert_eq!(history["event"], "history");
+    assert_eq!(history["data"], json!([]));
+
+    mallory.close(CloseCode::Normal, "done").await;
+    alice.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
+}
+
+#[tokio::test]
+async fn typing_is_broadcast_under_the_callers_name() {
+    let app = serve().await;
+    let alice_id = Uuid::now_v7();
+    let mut alice = open_as(&app, "/ws", &user_bearer(&app, alice_id)).await;
+    let mut bob = open(&app, "/ws").await;
+
+    alice.send("typing", json!({ "text": "..." })).await;
+
+    for frame in [alice.next_envelope().await, bob.next_envelope().await] {
+        assert_eq!(frame["event"], "typing");
+        assert_eq!(frame["data"]["author"], alice_id.to_string());
+        assert_eq!(frame["data"]["text"], "...");
+    }
+
+    alice.close(CloseCode::Normal, "done").await;
+    bob.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
+}
+
+#[tokio::test]
+async fn lifecycle_hooks_track_presence_and_the_posting_gate_refuses_a_token_naming_no_user() {
     let app = serve().await;
     let mut alice = open(&app, "/ws").await;
     wait_for_presence(&mut alice, 1).await;
-    let mut bob = open(&app, "/ws").await;
+    let mut bot = open_as(&app, "/ws", &machine_bearer(&app)).await;
     wait_for_presence(&mut alice, 2).await;
 
-    bob.send("message", json!({ "author": "banned", "text": "hi" }))
-        .await;
-    let denied = bob.next_envelope().await;
-    assert_eq!(denied["event"], "message");
-    assert!(
-        denied["data"]["error"]
-            .as_str()
-            .expect("error string")
-            .contains("not allowed")
-    );
+    let logs = LogCapture::install();
+    for event in ["message", "typing"] {
+        bot.send(event, json!({ "text": "hi" })).await;
+        let denied = bot.next_envelope().await;
+        assert_eq!(denied["event"], event);
+        assert_eq!(denied["data"]["code"], "FORBIDDEN", "{denied}");
+    }
+    alice.expect_silence(QUIET).await;
+    let refused = logs.find("nest_rs::authz", "authorization denied");
+    assert_eq!(refused.len(), 2, "one line per denial: {refused:#?}");
+    for line in &refused {
+        assert_eq!(line.field("reason").as_deref(), Some("no_class_grant"));
+    }
 
-    bob.close(CloseCode::Normal, "done").await;
+    bot.close(CloseCode::Normal, "done").await;
     wait_for_presence(&mut alice, 1).await;
 
     alice.close(CloseCode::Normal, "done").await;
@@ -124,8 +183,7 @@ async fn namespaced_gateways_isolate_their_broadcasts() {
     let mut chat = open(&app, "/ws").await;
     let mut notify = open(&app, "/notify").await;
 
-    chat.send("message", json!({ "author": "ada", "text": "hi" }))
-        .await;
+    chat.send("message", json!({ "text": "hi" })).await;
     assert_eq!(chat.next_envelope().await["event"], "message");
     notify.expect_silence(QUIET).await;
 
@@ -144,15 +202,13 @@ async fn an_oversized_message_is_rejected_and_closes_the_socket() {
     let mut socket = open(&app, "/ws").await;
 
     let oversized = "x".repeat(128 * 1024);
-    socket
-        .send("message", json!({ "author": "ada", "text": oversized }))
-        .await;
+    socket.send("message", json!({ "text": oversized })).await;
 
     let (code, _) = socket.expect_close().await;
     assert_eq!(
         code,
-        CloseCode::Error,
-        "an over-cap message ends the socket with a status, never a bare drop",
+        CloseCode::Size,
+        "an over-cap message ends the socket with 1009 Message Too Big, never a bare drop",
     );
 
     app.shutdown().await.expect("transport shuts down");
@@ -160,10 +216,11 @@ async fn an_oversized_message_is_rejected_and_closes_the_socket() {
 
 #[tokio::test]
 async fn the_socket_lifetime_ceiling_closes_the_socket() {
-    let app = boot_builder()
-        .provide(
-            nest_rs::ws::WsConfig::default().with_max_connection(std::time::Duration::from_secs(1)),
-        )
+    let app = builder()
+        .provide(nest_rs::ws::WsConfig {
+            max_connection: Some(std::time::Duration::from_secs(1)),
+            ..Default::default()
+        })
         .build_ws()
         .await
         .expect("LiveModule serves on a real port");

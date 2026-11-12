@@ -1,4 +1,7 @@
-use nest_rs::resource::wire_enum;
+use std::fmt;
+
+use nest_rs::authn::PrincipalIdentity;
+use nest_rs::core::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -9,12 +12,62 @@ pub enum Role {
     User,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum Subject {
+    User(Uuid),
+    Client(String),
+}
+
+impl Subject {
+    pub fn user_id(&self) -> Option<Uuid> {
+        match self {
+            Self::User(id) => Some(*id),
+            Self::Client(_) => None,
+        }
+    }
+
+    pub fn client_id(&self) -> Option<&str> {
+        match self {
+            Self::User(_) => None,
+            Self::Client(id) => Some(id),
+        }
+    }
+}
+
+impl From<String> for Subject {
+    fn from(sub: String) -> Self {
+        match Uuid::try_parse(&sub) {
+            Ok(id) => Self::User(id),
+            Err(_) => Self::Client(sub),
+        }
+    }
+}
+
+impl From<Subject> for String {
+    fn from(sub: Subject) -> Self {
+        sub.to_string()
+    }
+}
+
+impl fmt::Display for Subject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::User(id) => id.fmt(f),
+            Self::Client(id) => f.write_str(id),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PrincipalIdentity)]
 pub struct Claims {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sub: Option<Uuid>,
+    #[principal(actor)]
+    pub sub: Subject,
+    pub client_id: String,
+    #[principal(tenant)]
     pub org_id: Uuid,
     pub roles: Vec<Role>,
+    #[principal(scopes)]
     #[serde(
         default,
         rename = "scope",
@@ -22,22 +75,11 @@ pub struct Claims {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub scopes: Vec<String>,
-    pub exp: u64,
 }
 
 impl Claims {
     pub fn is_admin(&self) -> bool {
         self.roles.contains(&Role::Admin)
-    }
-}
-
-impl nest_rs::authn::PrincipalIdentity for Claims {
-    fn actor_id(&self) -> Option<String> {
-        self.sub.map(|sub| sub.to_string())
-    }
-
-    fn scopes(&self) -> Option<&[String]> {
-        Some(&self.scopes)
     }
 }
 
@@ -47,22 +89,41 @@ mod tests {
 
     fn claims(roles: Vec<Role>) -> Claims {
         Claims {
-            sub: Some(Uuid::nil()),
+            sub: Subject::User(Uuid::nil()),
+            client_id: "publish-web".into(),
             org_id: Uuid::nil(),
             roles,
             scopes: Vec::new(),
-            exp: 0,
+        }
+    }
+
+    fn machine(client_id: &str) -> Claims {
+        Claims {
+            sub: Subject::Client(client_id.to_owned()),
+            client_id: client_id.to_owned(),
+            ..claims(vec![Role::User])
         }
     }
 
     #[test]
-    fn actor_id_is_the_sub_claim() {
-        use nest_rs::authn::PrincipalIdentity;
-        let with_sub = claims(vec![]);
-        assert_eq!(with_sub.actor_id(), Some(Uuid::nil().to_string()));
-        let mut subjectless = claims(vec![]);
-        subjectless.sub = None;
-        assert_eq!(subjectless.actor_id(), None);
+    fn actor_id_is_the_subject_of_either_kind() {
+        assert_eq!(claims(vec![]).actor_id(), Some(Uuid::nil().to_string()));
+        assert_eq!(machine("ci").actor_id().as_deref(), Some("ci"));
+    }
+
+    #[test]
+    fn tenant_id_is_the_org_id_claim() {
+        let org_id = Uuid::now_v7();
+        let member = Claims {
+            org_id,
+            ..claims(vec![Role::User])
+        };
+        assert_eq!(member.tenant_id(), Some(org_id.to_string()));
+        let machine = Claims {
+            org_id,
+            ..machine("ci")
+        };
+        assert_eq!(machine.tenant_id(), Some(org_id.to_string()));
     }
 
     #[test]
@@ -86,17 +147,14 @@ mod tests {
     }
 
     #[test]
-    fn machine_grant_omits_sub_from_the_wire() {
-        let machine = Claims {
-            sub: None,
-            org_id: Uuid::nil(),
-            roles: vec![Role::User],
-            scopes: Vec::new(),
-            exp: 42,
-        };
-        let json = serde_json::to_value(&machine).expect("serialize");
-        let obj = json.as_object().expect("object");
-        assert!(!obj.contains_key("sub"), "machine grants omit sub: {obj:?}");
+    fn a_machine_grant_names_its_client_as_sub_and_client_id() {
+        let json = serde_json::to_value(machine("ci")).expect("serialize");
+        assert_eq!(json["sub"], "ci");
+        assert_eq!(json["client_id"], "ci");
+
+        let back: Claims = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(back.sub, Subject::Client("ci".into()));
+        assert_eq!(back.sub.user_id(), None);
     }
 
     #[test]
@@ -104,26 +162,45 @@ mod tests {
         use crate::authz::constants::POSTS_READ;
         let sub = Uuid::now_v7();
         let user = Claims {
-            sub: Some(sub),
+            sub: Subject::User(sub),
+            client_id: "publish-web".into(),
             org_id: Uuid::now_v7(),
             roles: vec![Role::User],
             scopes: vec![POSTS_READ.into()],
-            exp: 100,
         };
         let json = serde_json::to_value(&user).expect("serialize");
+        assert_eq!(json["sub"], sub.to_string());
+        assert_eq!(json["client_id"], "publish-web");
         assert_eq!(
-            json["scope"], POSTS_READ,
+            json["scope"],
+            POSTS_READ.as_str(),
             "the claim goes out in the space-delimited form RFC 6749 §3.3 defines",
         );
         let back: Claims = serde_json::from_value(json).expect("deserialize");
-        assert_eq!(back.sub, Some(sub));
-        assert_eq!(back.exp, 100);
+        assert_eq!(back.sub.user_id(), Some(sub));
         assert_eq!(back.scopes, [POSTS_READ]);
     }
 
     #[test]
+    fn a_subject_a_uuid_parses_is_a_user() {
+        let id = Uuid::now_v7();
+        assert_eq!(Subject::from(id.to_string()), Subject::User(id));
+        assert_eq!(Subject::from(id.simple().to_string()), Subject::User(id));
+        assert_eq!(
+            Subject::from("demo-service".to_owned()),
+            Subject::Client("demo-service".into())
+        );
+    }
+
+    #[test]
+    fn a_token_naming_no_subject_is_refused_by_the_claims() {
+        let mut json = serde_json::to_value(claims(vec![Role::Admin])).expect("serialize");
+        json.as_object_mut().expect("an object").remove("sub");
+        assert!(serde_json::from_value::<Claims>(json).is_err());
+    }
+
+    #[test]
     fn a_token_with_no_scope_claim_is_delegated_nothing() {
-        use nest_rs::authn::PrincipalIdentity;
         let bare = claims(vec![Role::Admin]);
         assert_eq!(
             bare.scopes(),

@@ -1,0 +1,5 @@
+error: `#[meta(...)]` for the whole host belongs on the struct beside `#[controller]`, not on this `#[routes]` block; a value for one operation goes on its method
+  --> tests/integration/diagnostics/http/meta_on_a_routes_block.rs:12:1
+   |
+12 | #[meta(Limit(10))]
+   | ^^^^^^^^^^^^^^^^^^

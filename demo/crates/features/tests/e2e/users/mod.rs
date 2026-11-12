@@ -1,1 +1,2 @@
+mod graphql;
 mod service;

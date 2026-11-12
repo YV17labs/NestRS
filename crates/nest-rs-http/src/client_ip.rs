@@ -1,86 +1,53 @@
 //! Who the request came from — [`ClientOrigin`], the one resolution every
 //! consumer shares, and [`ClientIp`], the extractor over it.
 //!
-//! # Why a trusted-proxy list is not optional
-//!
-//! `Forwarded`, `X-Forwarded-For` and `X-Real-IP` are client-authored strings.
-//! Honoring them unconditionally lets any caller claim any address; ignoring
-//! them entirely means an app behind a load balancer only ever sees the
-//! balancer. Neither is usable, so the resolution is gated on the **direct
-//! peer**:
+//! The forwarding headers are client-authored, so they are read only when the
+//! direct peer is in `<PREFIX>_HTTP__TRUSTED_PROXIES` (empty by default), an
+//! address or a CIDR range ([`TrustedProxy`]):
 //!
 //! 1. no peer address at all (unix socket, or a proxy that hides it) ⇒
 //!    [`ClientOrigin::Unknown`];
-//! 2. the peer is not in `NESTRS_HTTP__TRUSTED_PROXIES` ⇒ that peer *is* the
-//!    client ([`ClientOrigin::Peer`]) and the headers are ignored;
-//! 3. the peer is a trusted proxy ⇒ the forwarding headers are read, and the
-//!    client is the **rightmost** hop that is not itself a trusted proxy
-//!    ([`ClientOrigin::Forwarded`]).
+//! 2. an untrusted peer *is* the client ([`ClientOrigin::Peer`]), headers ignored;
+//! 3. a trusted peer ⇒ `Forwarded` (RFC 7239), `X-Forwarded-For`, then
+//!    `X-Real-IP` are read, and the client is the **rightmost** hop that is not
+//!    itself a trusted proxy ([`ClientOrigin::Forwarded`]): a proxy appends, a
+//!    caller can only prepend, on one field line or over several.
 //!
-//! # Three headers, one rule, the standard first
+//! A header is read whole or not at all, and the headers agree or none is
+//! believed: one the parser cannot read, a client position holding a node the
+//! proxy withheld (`unknown`, an obfuscated `_id`), or two headers naming
+//! different clients name no client whatever the others say, and the trusted
+//! proxy stands ([`ClientOrigin::TrustedProxy`]). `X-Real-IP`, one hop in no
+//! order, answers alone only where neither chain names a client: behind a proxy
+//! writing one header and passing the others through, the one a caller wrote
+//! would otherwise choose.
 //!
-//! [RFC 7239](https://www.rfc-editor.org/rfc/rfc7239) §4 standardised this
-//! exchange as `Forwarded: for=192.0.2.60;proto=http;by=203.0.113.43`, and it is
-//! what a conformant proxy emits — nginx's `$proxy_add_forwarded`, HAProxy's
-//! `option forwardfor` successor, and every intermediary that follows the RFC
-//! rather than the convention it replaced. Reading only the de-facto pair meant
-//! that behind such a proxy **every caller resolved to the balancer**: one
-//! rate-limit bucket for the entire internet, the balancer's address on every
-//! access line and span, and — because the peer is still trusted —
-//! `traceparent` continued for a client the transport could not identify.
+//! An IPv4-mapped address, what a dual-stack listener reports an IPv4 peer as,
+//! is the IPv4 address it carries, in the peer, in a hop and in the answer.
 //!
-//! So all three are read, in the order of their authority: `Forwarded`, then
-//! `X-Forwarded-For`, then `X-Real-IP`. The trust gate above is the same for
-//! all three; a header is evidence only once the peer that sent it is
-//! infrastructure.
-//!
-//! **Rightmost, never leftmost.** A proxy *appends* the address it received the
-//! request from to the right of the chain — RFC 7239 §4 says so for its own
-//! header too — so the genuine client is the last hop infrastructure wrote. A
-//! caller can only *prepend*, and a prepended entry
-//! lands to the left of the genuine one — which is why it can neither mint a
-//! fresh identity nor impersonate a victim's (B-HTTP-1). Keying on the leftmost
-//! hop is the spoofable rule.
-//!
-//! With no trusted proxy configured — the default — step 2 always wins and the
-//! headers are never read. That is the safe default, not a limitation: an app
-//! that is genuinely behind a balancer names it, and only then does the
-//! framework believe what the balancer says.
-//!
-//! # Two consumers, one answer
-//!
-//! [`ClientIp`] (observational: logging, geolocation hints, sampling keys) and
-//! the throttler's rate-limit bucket must not disagree about who the caller is
-//! — a request rate-limited as one address and logged as another is
-//! unauditable. Both go through [`ClientOrigin::of`], so the deployment
-//! declares its proxies once, in `HttpConfig`.
-//!
-//! Treat the result as observational, never as an authentication or
-//! authorization input: the peer is trustworthy, the hop behind it is only as
-//! trustworthy as the proxy that wrote it.
+//! [`ClientIp`] and the throttler's bucket both resolve through
+//! [`ClientOrigin::of`]. Treat the result as observational, never as an authn
+//! or authz input; the address is personal data, so no line or span carries it.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::borrow::Cow;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use http::header::AsHeaderName;
+use http::{HeaderMap, header};
 use nest_rs_core::current_request_scope;
-use poem::http::header;
-use poem::{FromRequest, Request, RequestBody, Result};
 
 use crate::HttpConfig;
+use crate::trusted_proxy::{TrustedProxy, lists};
 
-/// The de-facto forwarding headers, spelled once. Neither is in the `http`
-/// crate's constant table, because neither is a standard — which is the whole
-/// reason RFC 7239 exists and why `header::FORWARDED` is read in preference to
-/// both.
+/// The de-facto forwarding headers, which the `http` crate does not name.
 const X_FORWARDED_FOR: &str = "x-forwarded-for";
 const X_REAL_IP: &str = "x-real-ip";
 
-/// Who a request is attributed to, and on what evidence. The variants are what
-/// let each consumer react differently to the same resolution: the throttler
-/// warns on [`Unknown`](Self::Unknown) and
-/// [`TrustedProxy`](Self::TrustedProxy) (both collapse every caller into one
-/// bucket), while [`ClientIp`] only needs the address and whether a header
-/// supplied it.
+/// Who a request is attributed to, and on what evidence.
+/// [`Unknown`](Self::Unknown) and [`TrustedProxy`](Self::TrustedProxy) collapse
+/// every caller into one throttler bucket.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum ClientOrigin {
     /// The direct transport peer, which is not a configured trusted proxy.
     /// Forwarding headers were present or not — either way they were ignored.
@@ -88,167 +55,255 @@ pub enum ClientOrigin {
     /// A hop read from `Forwarded` / `X-Forwarded-For` / `X-Real-IP`, admitted
     /// because the direct peer is a configured trusted proxy.
     Forwarded(IpAddr),
-    /// The peer is a trusted proxy but forwarded no usable client address.
-    /// Every caller behind it is indistinguishable.
+    /// The peer is a trusted proxy but forwarded no usable client address: none,
+    /// one it withheld, two headers naming different ones, or a header the
+    /// parser cannot read whole. Every caller behind it is indistinguishable.
     TrustedProxy(IpAddr),
     /// No peer address at all — a unix socket, or a proxy that hides it.
     Unknown,
 }
 
 impl ClientOrigin {
-    /// Resolve from a live request, reading the trusted-proxy list off the
-    /// [`HttpConfig`] the app booted with.
-    ///
-    /// The list is a **boot-time constant**, so it is read from the container
-    /// rather than pushed through per-request state: an extension insert costs
-    /// one box each and the first one allocates the whole per-request anymap,
-    /// which is the trade
-    /// [`RequestScope`](nest_rs_core::RequestScope)'s own doc rejects. Off the
-    /// request task (a hand-built `Request` in a unit test) nothing is trusted,
-    /// which is the same answer an unconfigured deployment gives.
-    pub fn of(req: &Request) -> Self {
-        let scope = current_request_scope();
-        let config = scope.as_ref().and_then(|s| s.root().get::<HttpConfig>());
-        Self::of_with(
-            req,
-            config.as_deref().map_or(&[][..], |c| &c.trusted_proxies),
-        )
+    /// The address the request is attributed to — the peer, a forwarded hop,
+    /// or the trusted proxy that forwarded none — or `None` when there is no
+    /// peer address at all.
+    pub const fn ip(self) -> Option<IpAddr> {
+        match self {
+            Self::Peer(ip) | Self::Forwarded(ip) | Self::TrustedProxy(ip) => Some(ip),
+            Self::Unknown => None,
+        }
     }
 
-    /// [`of`](Self::of) against an explicit list — what the transport edge
-    /// needs, because it runs *before* the request scope that `of` reads the
-    /// list off exists.
+    /// The resolution the transport made of a live request, against the
+    /// trusted-proxy list of the [`HttpConfig`] the app booted with.
     ///
-    /// Both entry points funnel here so the forwarding header names and the
-    /// argument order are written once: a resolution spelled twice is two
-    /// answers to "who called" the day one of them learns about `Forwarded:`.
-    pub(crate) fn of_with(req: &Request, trusted_proxies: &[IpAddr]) -> Self {
-        // With nothing declared trusted — the default deployment — no
-        // forwarding header can be believed, so none is looked up. `resolve`
-        // reaches the same answer from the peer alone; skipping the reads only
-        // spares it three header probes and three UTF-8 validations per
-        // request, and leaves the decision itself in one place.
-        fn believed(req: &Request, trusted: bool, name: impl header::AsHeaderName) -> Option<&str> {
-            trusted
-                .then(|| req.headers().get(name)?.to_str().ok())
-                .flatten()
+    /// Off the transport (a hand-built `Request`) it resolves again, against the
+    /// config of the request's app; off the request task nothing is trusted.
+    pub fn of(req: &crate::Request) -> Self {
+        if let Some(origin) = req.extensions().get::<Self>() {
+            return *origin;
         }
-        let trusted = !trusted_proxies.is_empty();
-        Self::resolve(
-            believed(req, trusted, header::FORWARDED),
-            believed(req, trusted, X_FORWARDED_FOR),
-            believed(req, trusted, X_REAL_IP),
-            req.remote_addr().as_socket_addr().map(SocketAddr::ip),
+        let config = configured();
+        Self::filed(Self::of_with(req, trusted_proxies(config.as_deref())))
+    }
+
+    /// [`of`](Self::of) against an explicit list, for the transport edge, which
+    /// runs before the request scope `of` reads exists, and before the request's
+    /// trace context: what it refused to believe is the edge's to file inside it.
+    pub(crate) fn of_with(
+        req: &crate::Request,
+        trusted_proxies: &[TrustedProxy],
+    ) -> (Self, Option<Refusal>) {
+        Self::of_head(
+            req.headers(),
+            req.peer_addr().map(|peer| peer.ip()),
             trusted_proxies,
         )
     }
 
+    /// The resolution over a request's head and its peer.
+    fn of_head(
+        headers: &HeaderMap,
+        peer: Option<IpAddr>,
+        trusted_proxies: &[TrustedProxy],
+    ) -> (Self, Option<Refusal>) {
+        // A peer off the list could have forged them all, so none is read.
+        if !peer.is_some_and(|peer| lists(trusted_proxies, peer)) {
+            return Self::weigh(None, None, None, peer, trusted_proxies);
+        }
+        Self::weigh(
+            field_list(headers, header::FORWARDED).as_deref(),
+            field_list(headers, X_FORWARDED_FOR).as_deref(),
+            // One hop, no list: the line a proxy adds is the last.
+            headers
+                .get_all(X_REAL_IP)
+                .iter()
+                .next_back()
+                .map(|line| String::from_utf8_lossy(line.as_bytes()))
+                .as_deref(),
+            peer,
+            trusted_proxies,
+        )
+    }
+
+    /// The client's address, when the evidence names one: the direct peer, or
+    /// the hop a trusted proxy forwarded — never the proxy's own.
+    pub(crate) fn client(self) -> Option<IpAddr> {
+        match self {
+            Self::Peer(ip) | Self::Forwarded(ip) => Some(ip),
+            Self::TrustedProxy(_) | Self::Unknown => None,
+        }
+    }
+
     /// Whether the direct peer is declared infrastructure — the one fact that
-    /// decides whether *any* header this caller sent may be believed.
-    ///
-    /// Read by the correlation id's gate on `X-Request-Id`, so the deployment
-    /// cannot end up believing a header for the client's address while
-    /// disbelieving it for the id, or the reverse. `Peer` is a peer that is not
-    /// a trusted proxy; `Unknown` is no peer at all.
+    /// decides whether *any* header this caller sent may be believed, the
+    /// `X-Request-Id` gate included.
     pub(crate) fn peer_is_trusted(self) -> bool {
         matches!(self, Self::Forwarded(_) | Self::TrustedProxy(_))
     }
 
-    /// The resolution itself, over plain values — the whole security argument
-    /// of this module lives here, and so do its tests.
-    ///
-    /// `forwarded` is the RFC 7239 field value, `forwarded_for` and `real_ip`
-    /// the de-facto pair. Each chain is reduced in one forward pass, so nothing
-    /// here allocates on a request behind a proxy.
+    /// The resolution itself, over plain values. `forwarded` is the RFC 7239
+    /// field value, `forwarded_for` and `real_ip` the de-facto pair; a list sent
+    /// over several field lines is passed as one, in order (RFC 9110 §5.3).
     pub fn resolve(
         forwarded: Option<&str>,
         forwarded_for: Option<&str>,
         real_ip: Option<&str>,
         peer: Option<IpAddr>,
-        trusted_proxies: &[IpAddr],
+        trusted_proxies: &[TrustedProxy],
     ) -> Self {
-        let Some(peer) = peer else {
-            return Self::Unknown;
-        };
-        // Anyone but a trusted proxy could have forged the headers, so the peer
-        // is the client and nothing else is read.
-        if !trusted_proxies.contains(&peer) {
-            return Self::Peer(peer);
-        }
-
-        let standard = Chain::of(
-            forwarded.into_iter().flat_map(forwarded_hops),
+        Self::filed(Self::weigh(
+            forwarded,
+            forwarded_for,
+            real_ip,
+            peer,
             trusted_proxies,
-        );
-        let de_facto = Chain::of(
+        ))
+    }
+
+    /// The origin a resolution answered, what it refused to believe filed where
+    /// it was read.
+    fn filed((origin, refusal): (Self, Option<Refusal>)) -> Self {
+        if let Some(refusal) = refusal {
+            refusal.file();
+        }
+        origin
+    }
+
+    /// [`resolve`](Self::resolve), and what it refused to believe, unfiled.
+    fn weigh(
+        forwarded: Option<&str>,
+        forwarded_for: Option<&str>,
+        real_ip: Option<&str>,
+        peer: Option<IpAddr>,
+        trusted_proxies: &[TrustedProxy],
+    ) -> (Self, Option<Refusal>) {
+        let Some(peer) = peer.map(|peer| peer.to_canonical()) else {
+            return (Self::Unknown, None);
+        };
+        // Anyone but a trusted proxy could have forged the headers.
+        if !lists(trusted_proxies, peer) {
+            return (Self::Peer(peer), None);
+        }
+        // A header read two ways names no client, and decides for every
+        // header: ignored alone, it would leave the answer to one a caller wrote.
+        let refused = |reason| (Self::TrustedProxy(peer), Some(Refusal { peer, reason }));
+
+        let Ok(standard) = Chain::of(
+            ForwardedPairs::new(forwarded.unwrap_or_default()).filter_map(|pair| match pair {
+                Ok((name, value)) => name.eq_ignore_ascii_case("for").then(|| Hop::parse(value)),
+                Err(unreadable) => Some(Err(unreadable)),
+            }),
+            trusted_proxies,
+        ) else {
+            return refused(Reason::Unreadable("forwarded"));
+        };
+        let Ok(de_facto) = Chain::of(
             forwarded_for
                 .unwrap_or_default()
                 .split(',')
-                .filter_map(parse_forwarded_entry),
+                .map(str::trim)
+                .filter(|element| !element.is_empty())
+                .map(Hop::parse),
             trusted_proxies,
-        );
-        // The hop infrastructure appended most recently that is not itself
-        // ours. **When both headers answer and disagree, neither is believed** —
-        // and that is the half a "prefer RFC 7239" rule gets wrong.
-        //
-        // RFC 7239 §8.1: the header is trustworthy only insofar as the trusted
-        // intermediary is the one that wrote it. A real deployment emits *one*
-        // of the two, so both answering is already anomalous: the common way to
-        // reach it is a proxy that appends `X-Forwarded-For` and passes unknown
-        // client headers straight through (nginx's default), where a caller
-        // sending `Forwarded: for=198.51.100.9` would outrank the genuine hop
-        // the proxy itself appended. The trusted-proxy gate cannot catch that —
-        // it decides whether to read the headers at all, not which of two a
-        // trusted peer authored.
-        //
-        // So a disagreement degrades to `TrustedProxy`: the caller is behind
-        // our infrastructure and is not identifiable, which is what a rate-limit
-        // bucket, an access line and a `traceparent` decision all need to be
-        // told rather than guessed at. Reported, because a deployment emitting
-        // both is a misconfiguration whichever header is the honest one.
-        match (standard.client, de_facto.client) {
-            (Some(standard_client), Some(de_facto_client))
-                if standard_client != de_facto_client =>
-            {
-                tracing::warn!(
-                    target: crate::target::HTTP,
-                    forwarded = %standard_client,
-                    x_forwarded_for = %de_facto_client,
-                    peer = %peer,
-                    "forwarding headers disagree about the client — neither is believed",
-                );
-                return Self::TrustedProxy(peer);
-            }
-            (Some(client), _) | (None, Some(client)) => return Self::Forwarded(client),
-            (None, None) => {}
-        }
-        // nginx's single-hop form. Read after the chains because it carries no
-        // ordering of its own, and skipped when it names a proxy we already
-        // know is infrastructure.
-        if let Some(ip) = real_ip
-            .and_then(parse_forwarded_entry)
-            .filter(|ip| !trusted_proxies.contains(ip))
+        ) else {
+            return refused(Reason::Unreadable(X_FORWARDED_FOR));
+        };
+        // nginx's single-hop form: one hop in no order, read whole like the
+        // chains. A hop of ours names no client.
+        let single = match real_ip
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(Hop::parse)
         {
-            return Self::Forwarded(ip);
+            Some(Err(Unreadable)) => return refused(Reason::Unreadable(X_REAL_IP)),
+            Some(Ok(Hop::Address(ip))) if lists(trusted_proxies, ip) => None,
+            Some(Ok(hop)) => Some(hop),
+            None => None,
+        };
+        let mut client = None;
+        let mut withheld = false;
+        for hop in [standard.client, de_facto.client, single]
+            .into_iter()
+            .flatten()
+        {
+            match hop {
+                // Headers naming different clients are all refused (RFC 7239
+                // §8.1): behind a proxy writing one and passing the others
+                // through (nginx appending `X-Forwarded-For` beside a caller's
+                // `Forwarded`, or writing `X-Real-IP` beside a caller's
+                // `X-Forwarded-For`), the one a caller wrote would decide.
+                Hop::Address(ip) if client.is_some_and(|named| named != ip) => {
+                    return refused(Reason::Disagreement);
+                }
+                Hop::Address(ip) => client = Some(ip),
+                Hop::Withheld => withheld = true,
+            }
+        }
+        // The hop facing the client withheld it: what sits left of it, or in
+        // another header, is the caller's own to write.
+        if withheld {
+            return (Self::TrustedProxy(peer), None);
+        }
+        if let Some(client) = client {
+            return (Self::Forwarded(client), None);
         }
         // Degenerate: every recorded hop is itself a trusted proxy. The
         // outermost recorded address is still more specific than the peer.
-        if let Some(outermost) = standard.outermost.or(de_facto.outermost) {
-            return Self::Forwarded(outermost);
+        match standard.outermost.or(de_facto.outermost) {
+            Some(outermost) => (Self::Forwarded(outermost), None),
+            None => (Self::TrustedProxy(peer), None),
         }
-        Self::TrustedProxy(peer)
+    }
+}
+
+/// What a resolution refused to believe from a trusted proxy, filed once,
+/// inside the request it was refused for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    peer: IpAddr,
+    reason: Reason,
+}
+
+/// Why no client was believed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reason {
+    /// The header the parser could not read whole.
+    Unreadable(&'static str),
+    /// Two headers naming different clients.
+    Disagreement,
+}
+
+impl Refusal {
+    /// The `warn` an operator reads: the proxy is named, never what it relayed,
+    /// which may be a caller's own and is personal data.
+    pub(crate) fn file(&self) {
+        match self.reason {
+            Reason::Unreadable(header) => tracing::warn!(
+                target: crate::target::HTTP,
+                peer = %self.peer,
+                header,
+                "forwarding header unreadable — no client is believed",
+            ),
+            Reason::Disagreement => tracing::warn!(
+                target: crate::target::HTTP,
+                peer = %self.peer,
+                "forwarding headers disagree about the client — neither is believed",
+            ),
+        }
     }
 }
 
 /// Best-effort client IP for the current request. Always present — see
 /// [`ClientOrigin`] for the resolution and the security caveat.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub struct ClientIp {
     /// The resolved address. `0.0.0.0` only when the request has no peer
     /// address at all.
     pub ip: IpAddr,
-    /// `true` when a trusted proxy's `X-Forwarded-For` / `X-Real-IP` supplied
-    /// the address, `false` when it is the direct peer (or the default).
+    /// `true` when a trusted proxy's forwarding header supplied the address,
+    /// `false` when it is the direct peer (or the default).
     pub forwarded: bool,
 }
 
@@ -278,167 +333,250 @@ impl From<ClientOrigin> for ClientIp {
     }
 }
 
+/// Every field line of the list `name`, in order, as one field value (RFC 9110
+/// §5.3): a proxy may add its own line after the caller's, so the first alone
+/// is the caller's to choose. Bytes no text holds are replaced line by line,
+/// and a hop holding them is no node, so the list is unreadable.
+fn field_list(headers: &HeaderMap, name: impl AsHeaderName) -> Option<Cow<'_, str>> {
+    let mut lines = headers
+        .get_all(name)
+        .into_iter()
+        .map(|line| String::from_utf8_lossy(line.as_bytes()));
+    let mut list = lines.next()?;
+    for line in lines {
+        let list = list.to_mut();
+        list.push_str(", ");
+        list.push_str(&line);
+    }
+    Some(list)
+}
+
+/// A forwarding header the parser cannot read whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Unreadable;
+
+/// One hop of a forwarding chain: the address a proxy recorded, or a node it
+/// withheld (RFC 7239 §6.2 `unknown`, §6.3 an obfuscated identifier).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hop {
+    Address(IpAddr),
+    Withheld,
+}
+
+impl Hop {
+    /// One RFC 7239 `node` (§6), or one de-facto list element: an address bare,
+    /// with a port, or bracketed (`[ip]`, `[ip]:port`, the form nginx and
+    /// HAProxy emit for IPv6), `unknown`, or an obfuscated `_id`, each in
+    /// canonical form. Anything else is no node, so its list is no chain: a hop
+    /// a caller could not have the parser skip is never a rate-limit key either.
+    fn parse(node: &str) -> Result<Self, Unreadable> {
+        if let Ok(ip) = node.parse::<IpAddr>() {
+            return Ok(Self::Address(ip.to_canonical()));
+        }
+        if let Some(bracketed) = node.strip_prefix('[') {
+            let (inside, after) = bracketed.split_once(']').ok_or(Unreadable)?;
+            let ip = inside.parse::<Ipv6Addr>().ok().ok_or(Unreadable)?;
+            if !(after.is_empty() || after.strip_prefix(':').is_some_and(is_port)) {
+                return Err(Unreadable);
+            }
+            return Ok(Self::Address(IpAddr::V6(ip).to_canonical()));
+        }
+        let name = match node.rsplit_once(':') {
+            Some((name, port)) if is_port(port) => name,
+            Some(_) => return Err(Unreadable),
+            None => node,
+        };
+        if name.eq_ignore_ascii_case("unknown") || is_obfuscated(name) {
+            return Ok(Self::Withheld);
+        }
+        name.parse::<Ipv4Addr>()
+            .ok()
+            .map(|ip| Self::Address(IpAddr::V4(ip)))
+            .ok_or(Unreadable)
+    }
+}
+
+/// RFC 7239 §6's `node-port`: a port number, or an obfuscated one.
+fn is_port(port: &str) -> bool {
+    // `u16`'s parser takes a leading `+`, which no port writes.
+    is_obfuscated(port) || (port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok())
+}
+
+/// RFC 7239 §6.3's `obfnode` and `obfport`: `_` and one or more letters, digits,
+/// `.`, `_` or `-`.
+fn is_obfuscated(text: &str) -> bool {
+    text.strip_prefix('_').is_some_and(|rest| {
+        !rest.is_empty()
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    })
+}
+
 /// What one forwarding chain says: the rightmost hop that is not ours (the
 /// client), and the outermost recorded hop (the degenerate answer, kept for
-/// when every hop is infrastructure).
-///
-/// Both fall out of a single forward pass, which is why nothing here has to
-/// collect the chain to walk it backwards.
+/// when every hop is infrastructure), both from a single forward pass that
+/// reads the whole chain.
 #[derive(Debug, Default, Clone, Copy)]
 struct Chain {
-    client: Option<IpAddr>,
+    client: Option<Hop>,
     outermost: Option<IpAddr>,
 }
 
 impl Chain {
-    fn of(hops: impl Iterator<Item = IpAddr>, trusted_proxies: &[IpAddr]) -> Self {
+    fn of(
+        hops: impl Iterator<Item = Result<Hop, Unreadable>>,
+        trusted_proxies: &[TrustedProxy],
+    ) -> Result<Self, Unreadable> {
         let mut chain = Self::default();
         for hop in hops {
-            chain.outermost.get_or_insert(hop);
-            if !trusted_proxies.contains(&hop) {
-                chain.client = Some(hop);
+            let hop = hop?;
+            if let Hop::Address(ip) = hop {
+                chain.outermost.get_or_insert(ip);
+                if lists(trusted_proxies, ip) {
+                    continue;
+                }
             }
+            chain.client = Some(hop);
         }
-        chain
+        Ok(chain)
     }
 }
 
-/// The `for=` nodes of an RFC 7239 `Forwarded` field value, left to right.
-///
-/// Element boundaries do not have to be reconstructed to read them: an element
-/// carries at most one `for`, and the pairs of a header arrive in the same
-/// left-to-right order as the elements that hold them — so walking the pairs
-/// walks the chain.
-fn forwarded_hops(raw: &str) -> impl Iterator<Item = IpAddr> + '_ {
-    ForwardedPairs { rest: raw }
-        .filter(|(name, _)| name.eq_ignore_ascii_case("for"))
-        .filter_map(|(_, value)| parse_forwarded_node(value))
+/// The first `name=` parameter of an RFC 7239 `Forwarded` field value, unquoted:
+/// the one the hop facing the client wrote, read up to the first byte the
+/// grammar refuses.
+pub(crate) fn forwarded_param<'a>(raw: &'a str, name: &str) -> Option<&'a str> {
+    ForwardedPairs::new(raw)
+        .map_while(Result::ok)
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value)
 }
 
-/// One `token "=" ( token / quoted-string )` pair of a `Forwarded` value, with
-/// the value's surrounding quotes removed (RFC 7239 §4).
+/// The `token "=" ( token / quoted-string )` pairs of a `Forwarded` value, in
+/// order, a value's surrounding quotes removed and a quoted-pair left escaped
+/// (RFC 7239 §4), then [`Unreadable`] once at the first byte the grammar refuses.
 ///
-/// The separators are `,` (between elements) and `;` (between pairs), and both
-/// are legal *inside* a quoted string — `for="[2001:db8::1]:4711"` is the shape
-/// every IPv6 hop takes — so the scan tracks quoting rather than splitting on
-/// the characters. A quoted-pair (`\"`) is left escaped, and cannot matter: the
-/// `node` production is IPv4 / bracketed IPv6 / `unknown` / an obfuscated
-/// identifier, none of which admits a backslash, so such a value fails to parse
-/// either way.
+/// What it refuses is what reads two ways: a quote that no quote closes, one
+/// inside a value, a closing quote followed by anything but a separator, a pair
+/// with no `=` or no name, an empty value. A proxy appending a quoted value to a
+/// caller's line that left a quote open would otherwise close the caller's
+/// quote, and the caller's hop would read as the rightmost. Whitespace around a
+/// separator and a value outside `tchar` (an unquoted `[::1]:80` a hand-written
+/// proxy rule emits) read one way, and pass.
 struct ForwardedPairs<'a> {
-    rest: &'a str,
+    rest: Option<&'a str>,
+}
+
+impl<'a> ForwardedPairs<'a> {
+    fn new(raw: &'a str) -> Self {
+        Self { rest: Some(raw) }
+    }
+
+    /// The pair `text` starts with and what follows it, from its separator on.
+    fn pair(text: &'a str) -> Result<((&'a str, &'a str), &'a str), Unreadable> {
+        let equals = text.find(['=', ',', ';', '"']).ok_or(Unreadable)?;
+        let name = text[..equals].trim_end_matches(OWS);
+        if text.as_bytes()[equals] != b'=' || name.is_empty() || name.contains(OWS) {
+            return Err(Unreadable);
+        }
+        let value = text[equals + 1..].trim_start_matches(OWS);
+        if let Some(quoted) = value.strip_prefix('"') {
+            let close = closing_quote(quoted).ok_or(Unreadable)?;
+            let rest = quoted[close + 1..].trim_start_matches(OWS);
+            if !(rest.is_empty() || rest.starts_with([',', ';'])) {
+                return Err(Unreadable);
+            }
+            return Ok(((name, &quoted[..close]), rest));
+        }
+        let end = value.find([',', ';']).unwrap_or(value.len());
+        let token = value[..end].trim_end_matches(OWS);
+        if token.is_empty() || token.contains('"') {
+            return Err(Unreadable);
+        }
+        Ok(((name, token), &value[end..]))
+    }
 }
 
 impl<'a> Iterator for ForwardedPairs<'a> {
-    type Item = (&'a str, &'a str);
+    type Item = Result<(&'a str, &'a str), Unreadable>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.rest.is_empty() {
-                return None;
-            }
-            let mut in_quotes = false;
-            let mut escaped = false;
-            let mut end = self.rest.len();
-            for (index, ch) in self.rest.char_indices() {
-                if escaped {
-                    escaped = false;
-                    continue;
-                }
-                match ch {
-                    '\\' if in_quotes => escaped = true,
-                    '"' => in_quotes = !in_quotes,
-                    ',' | ';' if !in_quotes => {
-                        end = index;
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            let (pair, rest) = self.rest.split_at(end);
-            // Past the separator, or the empty tail when this was the last pair.
-            self.rest = rest.get(1..).unwrap_or_default();
-            // An empty element (`for=a,,for=b`) is legal and carries nothing.
-            if let Some((name, value)) = pair.split_once('=') {
-                return Some((name.trim(), unquote(value.trim())));
-            }
+        // An empty element (`for=a,,for=b`) or pair (`a=b;;c=d`) is legal and
+        // carries nothing.
+        let text = self.rest?.trim_start_matches([' ', '\t', ',', ';']);
+        if text.is_empty() {
+            self.rest = None;
+            return None;
+        }
+        let read = Self::pair(text);
+        // Past a refusal nothing is read.
+        self.rest = read.as_ref().ok().map(|&(_, rest)| rest);
+        Some(read.map(|(pair, _)| pair))
+    }
+}
+
+/// Optional whitespace (RFC 9110 §5.6.3).
+const OWS: [char; 2] = [' ', '\t'];
+
+/// Where the `quoted-string` whose opening quote precedes `quoted` closes: its
+/// first quote no backslash escapes.
+fn closing_quote(quoted: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (index, byte) in quoted.bytes().enumerate() {
+        match byte {
+            _ if escaped => escaped = false,
+            b'\\' => escaped = true,
+            b'"' => return Some(index),
+            _ => {}
         }
     }
+    None
 }
 
-/// Strip the quotes of a `quoted-string`, leaving a `token` alone.
-fn unquote(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|inner| inner.strip_suffix('"'))
-        .unwrap_or(value)
-}
-
-/// One RFC 7239 `node` identifier as an address, or `None` when it names no
-/// address.
-///
-/// Two node forms are deliberately *not* addresses and are skipped exactly like
-/// an unparseable hop: `unknown` (§6.2 — the intermediary states that it has
-/// one and will not say which) and an obfuscated identifier (§6.3, `_hidden`,
-/// which is opaque by construction). Reading either as a client would key a
-/// rate-limit bucket on a string a proxy chose to withhold.
-fn parse_forwarded_node(node: &str) -> Option<IpAddr> {
-    let node = node.trim();
-    if node.eq_ignore_ascii_case("unknown") || node.starts_with('_') {
-        return None;
-    }
-    parse_forwarded_entry(node)
-}
-
-/// Parse one forwarded entry — strip whitespace, accept a bare IP, `IP:port`,
-/// or a bracketed IPv6 (`[ip]` or `[ip]:port` per RFC 7239 — nginx and HAProxy
-/// emit the bracketed form). An unparseable entry yields `None` and is skipped
-/// rather than accepted as a key, so a caller cannot inject an arbitrary string
-/// into a rate-limit bucket name or a log field.
-fn parse_forwarded_entry(raw: &str) -> Option<IpAddr> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Ok(ip) = trimmed.parse::<IpAddr>() {
-        return Some(ip);
-    }
-    if let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
-        && let Ok(ip) = inner.parse::<IpAddr>()
-    {
-        return Some(ip);
-    }
-    trimmed.parse::<SocketAddr>().ok().map(|sa| sa.ip())
-}
-
-impl<'a> FromRequest<'a> for ClientIp {
-    async fn from_request(req: &'a Request, _body: &mut RequestBody) -> Result<Self> {
+impl<'a> crate::FromRequest<'a> for ClientIp {
+    async fn from_request(
+        req: &'a crate::Request,
+        _body: &mut crate::RequestBody,
+    ) -> crate::Result<Self> {
         Ok(ClientOrigin::of(req).into())
     }
 }
 
+/// The configuration of the app the running request belongs to; none off the
+/// request task.
+fn configured() -> Option<std::sync::Arc<HttpConfig>> {
+    current_request_scope().and_then(|scope| scope.root().get::<HttpConfig>())
+}
+
+/// The proxies `config` trusts; none without one.
+pub(crate) fn trusted_proxies(config: Option<&HttpConfig>) -> &[TrustedProxy] {
+    config.map_or(&[][..], |config| &config.trusted_proxies)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use super::*;
+    use crate::Request;
 
     fn ip(s: &str) -> IpAddr {
         s.parse().expect("test literal is an IP")
     }
 
-    fn resolve(xff: Option<&str>, peer: Option<IpAddr>, trusted: &[IpAddr]) -> ClientOrigin {
-        ClientOrigin::resolve(None, xff, None, peer, trusted)
+    fn listed(addresses: &[IpAddr]) -> Vec<TrustedProxy> {
+        addresses.iter().copied().map(TrustedProxy::from).collect()
     }
 
-    /// A caller behind a proxy that appends `X-Forwarded-For` and passes
-    /// unknown headers through can send a `Forwarded` of its own. Preferring
-    /// RFC 7239 unconditionally let that spoof outrank the hop the proxy itself
-    /// wrote — so a disagreement is refused rather than resolved, and it is the
-    /// **rate-limit bucket, the access line and the `traceparent` decision**
-    /// that would otherwise have taken the caller's word.
+    fn resolve(xff: Option<&str>, peer: Option<IpAddr>, trusted: &[IpAddr]) -> ClientOrigin {
+        ClientOrigin::resolve(None, xff, None, peer, &listed(trusted))
+    }
+
     #[test]
     fn two_forwarding_headers_that_disagree_are_both_refused() {
         let proxy: IpAddr = "10.0.0.1".parse().unwrap();
-        let trusted = [proxy];
+        let trusted = listed(&[proxy]);
 
         let logs = nest_rs_testing::LogCapture::install();
         let spoofed = ClientOrigin::resolve(
@@ -453,22 +591,21 @@ mod tests {
             ClientOrigin::TrustedProxy(proxy),
             "a disagreement names no client, so neither header decides",
         );
-        // A deployment emitting both is a misconfiguration whichever header is
-        // the honest one, so it is reported rather than silently degraded.
-        let reported = logs.expect_one(
-            crate::target::HTTP,
-            "forwarding headers disagree about the client — neither is believed",
-        );
+        let reported = logs.expect_one(crate::target::HTTP, DISAGREEMENT);
         assert_eq!(reported.level, "warn");
-        assert_eq!(reported.field("forwarded").as_deref(), Some("198.51.100.9"));
-        assert_eq!(
-            reported.field("x_forwarded_for").as_deref(),
-            Some("203.0.113.7"),
-        );
+        assert_eq!(reported.field("peer").as_deref(), Some("10.0.0.1"));
+        for claimed in ["198.51.100.9", "203.0.113.7"] {
+            assert!(
+                reported
+                    .fields
+                    .values()
+                    .all(|value| !value.contains(claimed)),
+                "{:?}",
+                reported.fields
+            );
+        }
         drop(logs);
 
-        // Agreement is not a disagreement: one deployment, two spellings of the
-        // same hop, still resolves.
         let agreeing = ClientOrigin::resolve(
             Some("for=203.0.113.7"),
             Some("203.0.113.7"),
@@ -481,7 +618,6 @@ mod tests {
             ClientOrigin::Forwarded("203.0.113.7".parse().unwrap())
         );
 
-        // And each header alone is unaffected.
         for (fwd, xff) in [(Some("for=203.0.113.7"), None), (None, Some("203.0.113.7"))] {
             assert_eq!(
                 ClientOrigin::resolve(fwd, xff, None, Some(proxy), &trusted),
@@ -490,16 +626,13 @@ mod tests {
         }
     }
 
-    /// The RFC 7239 half, with neither de-facto header in play.
     fn resolve_forwarded(
         forwarded: &str,
         peer: Option<IpAddr>,
         trusted: &[IpAddr],
     ) -> ClientOrigin {
-        ClientOrigin::resolve(Some(forwarded), None, None, peer, trusted)
+        ClientOrigin::resolve(Some(forwarded), None, None, peer, &listed(trusted))
     }
-
-    // ── The peer gate ───────────────────────────────────────────────────────
 
     #[test]
     fn no_peer_address_is_unknown() {
@@ -509,17 +642,24 @@ mod tests {
         );
     }
 
-    // The default deployment: nothing is trusted, so a header a caller set is
-    // never read. This is the regression that mattered — the extractor used to
-    // return the peer with `forwarded = false` for a *different* reason (a
-    // `return` above the header branches), which read as correct behaviour
-    // while making the trusted-proxy case unreachable too.
+    #[test]
+    fn every_origin_but_an_unknown_one_is_attributed_to_its_address() {
+        let addr = ip("203.0.113.50");
+        for origin in [
+            ClientOrigin::Peer(addr),
+            ClientOrigin::Forwarded(addr),
+            ClientOrigin::TrustedProxy(addr),
+        ] {
+            assert_eq!(origin.ip(), Some(addr), "{origin:?}");
+        }
+        assert_eq!(ClientOrigin::Unknown.ip(), None);
+    }
+
     #[test]
     fn an_untrusted_peer_ignores_forwarding_headers() {
         let origin = resolve(Some("203.0.113.50"), Some(ip("192.0.2.10")), &[]);
         assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
 
-        // Even a well-formed multi-hop chain from an untrusted peer.
         let origin = resolve(
             Some("203.0.113.50, 10.0.0.99"),
             Some(ip("192.0.2.10")),
@@ -528,23 +668,14 @@ mod tests {
         assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
     }
 
-    // ── Behind a trusted proxy ──────────────────────────────────────────────
-
-    // B-HTTP-1: the real client is the hop the proxy APPENDED (the rightmost
-    // non-trusted), not the leftmost — the leftmost is the client-authored,
-    // spoofable value.
     #[test]
     fn a_trusted_proxy_yields_the_rightmost_untrusted_hop() {
         let proxy = ip("10.0.0.1");
-        // The proxy received the request from 192.0.2.1 and appended it; the
-        // leftmost "203.0.113.50" is a header the client set.
+        // The leftmost hop is the one the client set.
         let origin = resolve(Some("203.0.113.50, 192.0.2.1"), Some(proxy), &[proxy]);
         assert_eq!(origin, ClientOrigin::Forwarded(ip("192.0.2.1")));
     }
 
-    // B-HTTP-1 (the core exploit): an attacker prepends a random or victim IP.
-    // The genuine hop sits to its right and is the one selected, so the
-    // prepended value can neither mint a fresh identity nor claim a victim's.
     #[test]
     fn a_prepended_spoofed_hop_cannot_change_the_answer() {
         let proxy = ip("10.0.0.1");
@@ -565,30 +696,20 @@ mod tests {
         );
     }
 
-    // A two-layer chain (LB → nginx → app): both infra hops are trusted, so the
-    // client is the rightmost hop that is not one of them.
     #[test]
     fn a_two_layer_proxy_chain_selects_the_real_client() {
         let nginx = ip("10.0.0.1");
         let lb = ip("10.0.0.2");
-        // client(203.0.113.50) → lb appended it → nginx appended lb.
+        // client → lb appended it → nginx appended lb.
         let origin = resolve(Some("203.0.113.50, 10.0.0.2"), Some(nginx), &[nginx, lb]);
         assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
 
-        // And a spoofed hop prepended inside that chain is still skipped.
         let origin = resolve(
             Some("9.9.9.9, 203.0.113.50, 10.0.0.2"),
             Some(nginx),
             &[nginx, lb],
         );
         assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
-    }
-
-    #[test]
-    fn an_unparseable_hop_is_skipped_never_used_as_a_key() {
-        let proxy = ip("10.0.0.1");
-        let origin = resolve(Some("not-an-ip, 192.0.2.1"), Some(proxy), &[proxy]);
-        assert_eq!(origin, ClientOrigin::Forwarded(ip("192.0.2.1")));
     }
 
     #[test]
@@ -608,7 +729,6 @@ mod tests {
                 "hop {raw:?}",
             );
         }
-        // Malformed shapes yield no hop at all.
         for raw in ["[malformed::]", "not-an-ip"] {
             assert_eq!(
                 resolve(Some(raw), Some(proxy), &[proxy]),
@@ -621,21 +741,28 @@ mod tests {
     #[test]
     fn x_real_ip_answers_when_the_chain_does_not() {
         let proxy = ip("10.0.0.1");
-        let origin =
-            ClientOrigin::resolve(None, None, Some("198.51.100.20"), Some(proxy), &[proxy]);
-        assert_eq!(origin, ClientOrigin::Forwarded(ip("198.51.100.20")));
-
-        // The chain outranks it when it carries a usable hop.
         let origin = ClientOrigin::resolve(
             None,
-            Some("203.0.113.50"),
+            None,
             Some("198.51.100.20"),
             Some(proxy),
-            &[proxy],
+            &listed(&[proxy]),
         );
-        assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("198.51.100.20")));
 
-        // And an untrusted peer's X-Real-IP is ignored like everything else.
+        let origin = ClientOrigin::resolve(
+            None,
+            Some("10.0.0.1"),
+            Some("198.51.100.20"),
+            Some(proxy),
+            &listed(&[proxy]),
+        );
+        assert_eq!(
+            origin,
+            ClientOrigin::Forwarded(ip("198.51.100.20")),
+            "a chain of the proxies' own names no client",
+        );
+
         let origin = ClientOrigin::resolve(
             None,
             None,
@@ -646,8 +773,6 @@ mod tests {
         assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
     }
 
-    // Degenerate: every recorded hop is itself a trusted proxy — the outermost
-    // recorded address is still more specific than the peer.
     #[test]
     fn an_all_trusted_chain_falls_back_to_the_outermost_hop() {
         let (a, b, c) = (ip("10.0.0.1"), ip("10.0.0.2"), ip("10.0.0.3"));
@@ -667,10 +792,6 @@ mod tests {
         }
     }
 
-    // ── RFC 7239 `Forwarded` ────────────────────────────────────────────────
-
-    // The RFC's own examples, §4 and §7.1. Each is a shape a conformant proxy
-    // emits, and every one of them used to resolve to the balancer.
     #[test]
     fn the_rfc_7239_examples_resolve_to_their_for_node() {
         let proxy = ip("10.0.0.1");
@@ -689,46 +810,68 @@ mod tests {
             ),
             // §4, two elements — the rightmost is the hop appended last.
             ("for=192.0.2.43, for=198.51.100.17", Some("198.51.100.17")),
-            // §7.1, the parameter name is case-insensitive and the node may be
-            // quoted with a port.
+            // §7.1.
             ("FOR=\"192.0.2.43:47011\"", Some("192.0.2.43")),
         ];
+        let logs = nest_rs_testing::LogCapture::install();
         for (header, expected) in cases {
             let origin = resolve_forwarded(header, Some(proxy), &[proxy]);
             let expected = match expected {
                 Some(addr) => ClientOrigin::Forwarded(ip(addr)),
-                // Nothing an address can be read from ⇒ the same answer an
-                // empty chain gives, never a bucket keyed on the raw string.
                 None => ClientOrigin::TrustedProxy(proxy),
             };
             assert_eq!(origin, expected, "Forwarded: {header}");
         }
+        assert!(
+            logs.events_at(tracing::Level::WARN).is_empty(),
+            "a value the RFC writes is read whole"
+        );
     }
 
-    // §6.2 / §6.3: both are *valid* node identifiers that name no address, so
-    // they are skipped rather than accepted — a rate-limit bucket keyed on
-    // `unknown` is one bucket for every caller a proxy chose not to name.
+    /// A proxy rule written by hand may leave a node unquoted, outside `tchar`:
+    /// it reads one way, so it is read.
     #[test]
-    fn unknown_and_obfuscated_nodes_are_skipped_like_an_unparseable_hop() {
+    fn an_unquoted_node_a_hand_written_rule_emits_is_read() {
         let proxy = ip("10.0.0.1");
-        assert_eq!(
-            resolve_forwarded("for=unknown", Some(proxy), &[proxy]),
-            ClientOrigin::TrustedProxy(proxy),
-        );
-        assert_eq!(
-            resolve_forwarded("for=_hidden", Some(proxy), &[proxy]),
-            ClientOrigin::TrustedProxy(proxy),
-        );
-        // And a real hop beside one still answers.
-        assert_eq!(
-            resolve_forwarded("for=203.0.113.50, for=unknown", Some(proxy), &[proxy]),
-            ClientOrigin::Forwarded(ip("203.0.113.50")),
-        );
+        for (header, client) in [
+            ("for=2001:db8::1", "2001:db8::1"),
+            ("for=[2001:db8::1]:8080", "2001:db8::1"),
+            ("for=192.0.2.43:47011; proto=https", "192.0.2.43"),
+            ("for = 192.0.2.43 , for=203.0.113.50", "203.0.113.50"),
+        ] {
+            assert_eq!(
+                resolve_forwarded(header, Some(proxy), &[proxy]),
+                ClientOrigin::Forwarded(ip(client)),
+                "Forwarded: {header}",
+            );
+        }
     }
 
-    // The security rule is the header's, not the parser's: the rightmost hop
-    // wins here exactly as it does on `X-Forwarded-For`, so a prepended element
-    // is as inert on the standard header as on the de-facto one.
+    /// `unknown` and an obfuscated identifier name no address, so they key no
+    /// bucket; left of the client, a node the caller wrote decides nothing.
+    #[test]
+    fn unknown_and_obfuscated_nodes_name_no_client() {
+        let proxy = ip("10.0.0.1");
+        for (forwarded, client) in [
+            ("for=unknown", None),
+            ("for=_hidden", None),
+            ("for=\"unknown:4711\"", None),
+            ("for=unknown, for=203.0.113.50", Some("203.0.113.50")),
+            (
+                "for=_hidden, for=\"203.0.113.50:_port\"",
+                Some("203.0.113.50"),
+            ),
+        ] {
+            assert_eq!(
+                resolve_forwarded(forwarded, Some(proxy), &[proxy]),
+                client.map_or(ClientOrigin::TrustedProxy(proxy), |client| {
+                    ClientOrigin::Forwarded(ip(client))
+                }),
+                "{forwarded}",
+            );
+        }
+    }
+
     #[test]
     fn a_prepended_forwarded_element_cannot_change_the_answer() {
         let proxy = ip("10.0.0.1");
@@ -744,8 +887,6 @@ mod tests {
         assert_eq!(origin, ClientOrigin::Peer(ip("192.0.2.10")));
     }
 
-    // A two-layer chain, and the all-trusted degenerate case — the same two
-    // rules the de-facto chain follows, on the standard header.
     #[test]
     fn a_forwarded_chain_follows_the_same_trust_rules_as_the_de_facto_one() {
         let (nginx, lb) = (ip("10.0.0.1"), ip("10.0.0.2"));
@@ -764,13 +905,6 @@ mod tests {
         );
     }
 
-    // **Neither header outranks the other where they disagree**, and the earlier
-    // reading — "the one with a grammar wins" — is the spoof this refuses: a
-    // proxy that appends `X-Forwarded-For` and passes unknown client headers
-    // through (nginx's default) lets a caller send a `Forwarded` of its own,
-    // which would then beat the hop the proxy actually wrote. RFC 7239 §8.1
-    // makes the header trustworthy only insofar as the trusted intermediary
-    // authored it, and nothing here can tell which of two it authored.
     #[test]
     fn the_standard_header_does_not_outrank_the_de_facto_one() {
         let proxy = ip("10.0.0.1");
@@ -779,29 +913,15 @@ mod tests {
             Some("198.51.100.7"),
             Some("198.51.100.8"),
             Some(proxy),
-            &[proxy],
+            &listed(&[proxy]),
         );
         assert_eq!(
             origin,
             ClientOrigin::TrustedProxy(proxy),
             "a disagreement names no client rather than picking a header",
         );
-
-        // And it falls through when the standard header names no address, so a
-        // proxy emitting `for=unknown` beside a usable chain is still readable.
-        let origin = ClientOrigin::resolve(
-            Some("for=unknown"),
-            Some("198.51.100.7"),
-            None,
-            Some(proxy),
-            &[proxy],
-        );
-        assert_eq!(origin, ClientOrigin::Forwarded(ip("198.51.100.7")));
     }
 
-    // A quoted value may carry the separators, which is why the scan is
-    // quote-aware rather than a `split`. Getting this wrong reads
-    // `for="[2001:db8::1]:4711"` as two pairs and resolves neither.
     #[test]
     fn a_quoted_value_carrying_a_separator_is_one_pair() {
         let proxy = ip("10.0.0.1");
@@ -812,6 +932,21 @@ mod tests {
                 &[proxy],
             ),
             ClientOrigin::Forwarded(ip("2001:db8::1")),
+        );
+    }
+
+    /// A quoted-pair closes nothing: a value a proxy quoted holds what follows
+    /// it, a forged `for` included.
+    #[test]
+    fn an_escaped_quote_closes_no_value() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            resolve_forwarded(
+                "for=203.0.113.7;host=\"\\\",for=198.51.100.98,\"",
+                Some(proxy),
+                &[proxy],
+            ),
+            ClientOrigin::Forwarded(ip("203.0.113.7")),
         );
     }
 
@@ -834,47 +969,445 @@ mod tests {
         }
     }
 
-    // ── The extractor over the resolution ───────────────────────────────────
-
-    /// A request carrying a real transport peer — what a built `Request` lacks,
-    /// and what every branch past `Unknown` needs. `poem`'s builder cannot set
-    /// one, so the parts are assembled directly.
-    fn req_from(peer: &str, headers: &[(&str, &str)]) -> Request {
-        use poem::Addr;
-        use poem::web::{LocalAddr, RemoteAddr};
-
-        let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
-        let (mut parts, _) = poem::http::Request::new(()).into_parts();
-        for (name, value) in headers {
-            parts.headers.insert(
-                poem::http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
-                poem::http::HeaderValue::from_str(value).expect("header value"),
+    /// What a listed peer's head resolves to, its field lines in the order sent.
+    fn from_the_proxy(lines: &[(&str, &[u8])]) -> ClientOrigin {
+        let proxy = ip("10.0.0.1");
+        let mut headers = HeaderMap::new();
+        for (name, value) in lines {
+            headers.append(
+                http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                http::HeaderValue::from_bytes(value).expect("header value"),
             );
         }
-        Request::from_parts(
-            (
-                parts,
-                LocalAddr::default(),
-                RemoteAddr(Addr::socket(socket)),
-                poem::http::uri::Scheme::HTTP,
-            )
-                .into(),
-            poem::Body::empty(),
-        )
+        ClientOrigin::filed(ClientOrigin::of_head(
+            &headers,
+            Some(proxy),
+            &listed(&[proxy]),
+        ))
     }
 
-    /// Extract under an ambient request scope over a container holding `config`
-    /// — the shape the transport edge installs, and the only place the
-    /// trusted-proxy list comes from.
+    /// A proxy may add its own line after the caller's (RFC 7239 §4), and the
+    /// lines of one name are one list (RFC 9110 §5.3): the rightmost hop is the
+    /// proxy's on either spelling, so the caller's first line decides nothing.
+    #[test]
+    fn a_chain_over_several_field_lines_is_one_list() {
+        for name in ["x-forwarded-for", "forwarded"] {
+            let hop = |address: &str| {
+                if name == "forwarded" {
+                    format!("for={address}").into_bytes()
+                } else {
+                    address.as_bytes().to_vec()
+                }
+            };
+            let (forged, client, inner) =
+                (hop("198.51.100.99"), hop("203.0.113.7"), hop("10.0.0.1"));
+            assert_eq!(
+                from_the_proxy(&[(name, &forged), (name, &client)]),
+                ClientOrigin::Forwarded(ip("203.0.113.7")),
+                "{name}: the proxy's line follows the caller's",
+            );
+            assert_eq!(
+                from_the_proxy(&[(name, &forged), (name, &client), (name, &inner)]),
+                ClientOrigin::Forwarded(ip("203.0.113.7")),
+                "{name}: an inner proxy's line follows that",
+            );
+        }
+    }
+
+    /// A proxy on one line, the shape nearly every request has, costs no copy.
+    #[test]
+    fn a_list_on_one_field_line_is_read_in_place() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            X_FORWARDED_FOR,
+            http::HeaderValue::from_static("203.0.113.7"),
+        );
+        assert!(matches!(
+            field_list(&headers, X_FORWARDED_FOR),
+            Some(Cow::Borrowed("203.0.113.7")),
+        ));
+        assert_eq!(field_list(&headers, header::FORWARDED), None);
+    }
+
+    /// Bytes no text holds, on a caller's own line or beside a hop, are no node:
+    /// the list they sit in names no client.
+    #[test]
+    fn a_line_or_a_hop_no_text_holds_names_no_client() {
+        for (name, forged, own, same_line) in [
+            (
+                "x-forwarded-for",
+                &b"\xFF"[..],
+                &b"203.0.113.7"[..],
+                &b"\xFF, 203.0.113.7"[..],
+            ),
+            (
+                "forwarded",
+                &b"for=\xFF"[..],
+                &b"for=203.0.113.7"[..],
+                &b"for=\xFF, for=203.0.113.7"[..],
+            ),
+        ] {
+            for lines in [&[(name, forged), (name, own)][..], &[(name, same_line)]] {
+                refused_whole(lines, name);
+            }
+        }
+    }
+
+    /// A quote no quote closes reads two ways once a proxy writes after it, on a
+    /// line of its own or appended to the caller's, quoted or not: no chain.
+    #[test]
+    fn a_caller_s_unclosed_quote_leaves_no_chain() {
+        for own in [&b"for=203.0.113.7"[..], &b"for=\"203.0.113.7:4711\""[..]] {
+            refused_whole(
+                &[("forwarded", b"for=198.51.100.99;x=\""), ("forwarded", own)],
+                "forwarded",
+            );
+        }
+        for raw in [
+            "for=198.51.100.99;x=\", for=203.0.113.7",
+            "for=198.51.100.99;x=\"a\\\", for=203.0.113.7",
+            "for=198.51.100.99;x=\", for=\"203.0.113.7:4711\"",
+            "for=198.51.100.99;x=\", for=203.0.113.7;host=\"a,for=198.51.100.98\"",
+        ] {
+            refused_whole(&[("forwarded", raw.as_bytes())], "forwarded");
+        }
+    }
+
+    /// `X-Real-IP` names one hop, and a proxy adding its line adds it last.
+    #[test]
+    fn a_real_ip_over_several_field_lines_is_its_last() {
+        assert_eq!(
+            from_the_proxy(&[
+                ("x-real-ip", b"198.51.100.99"),
+                ("x-real-ip", b"203.0.113.7"),
+            ]),
+            ClientOrigin::Forwarded(ip("203.0.113.7")),
+        );
+    }
+
+    /// The same two lines from a peer off the list are the caller's to write.
+    #[test]
+    fn an_untrusted_peer_ignores_every_field_line() {
+        let req = req_from(
+            "203.0.113.200",
+            &[
+                ("x-forwarded-for", "198.51.100.99"),
+                ("x-forwarded-for", "203.0.113.7"),
+            ],
+        );
+        assert_eq!(
+            ClientOrigin::of_with(&req, &listed(&[ip("10.0.0.1")])).0,
+            ClientOrigin::Peer(ip("203.0.113.200")),
+        );
+    }
+
+    /// An ingress whose pods move holds no address list: its range names every
+    /// pod, the peer and each hop of the chain alike.
+    #[test]
+    fn a_peer_inside_a_listed_range_is_trusted() {
+        let trusted = trusting(&["10.0.0.0/8", "fd00::/8"]).trusted_proxies;
+        let of = |xff, peer: &str| {
+            ClientOrigin::resolve(None, Some(xff), None, Some(ip(peer)), &trusted)
+        };
+        let client = ClientOrigin::Forwarded(ip("203.0.113.50"));
+        assert_eq!(of("203.0.113.50", "10.42.7.9"), client);
+        assert_eq!(of("203.0.113.50", "::ffff:10.42.7.9"), client);
+        assert_eq!(of("203.0.113.50", "fd12::9"), client);
+        assert_eq!(of("203.0.113.50, 10.42.0.1", "10.42.7.9"), client);
+        assert_eq!(of("203.0.113.50, fd12::1", "10.42.7.9"), client);
+        assert_eq!(
+            of("203.0.113.50", "11.0.0.1"),
+            ClientOrigin::Peer(ip("11.0.0.1")),
+            "a peer past the range forges nothing",
+        );
+    }
+
+    /// A dual-stack listener reports an IPv4 proxy as `::ffff:a.b.c.d`: it is
+    /// the proxy its IPv4 entry names, or every caller reads as the proxy.
+    #[test]
+    fn a_mapped_peer_matches_its_ipv4_entry() {
+        let origin = resolve(
+            Some("203.0.113.50"),
+            Some(ip("::ffff:10.0.0.1")),
+            &[ip("10.0.0.1")],
+        );
+        assert_eq!(origin, ClientOrigin::Forwarded(ip("203.0.113.50")));
+    }
+
+    /// Off any proxy a client is its IPv4 address, in the spelling a caller
+    /// compares and a bucket keys on, never the mapped one only the socket uses.
+    #[test]
+    fn a_mapped_peer_is_attributed_to_its_ipv4_address() {
+        assert_eq!(
+            resolve(None, Some(ip("::ffff:203.0.113.50")), &[]),
+            ClientOrigin::Peer(ip("203.0.113.50")),
+        );
+    }
+
+    #[test]
+    fn a_mapped_proxy_forwarding_nothing_is_reported_as_its_ipv4_address() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            resolve(None, Some(ip("::ffff:10.0.0.1")), &[proxy]),
+            ClientOrigin::TrustedProxy(proxy),
+        );
+    }
+
+    /// A proxy records the peer it read, so a chain may hold the mapped form:
+    /// it names the same proxy, and the same client.
+    #[test]
+    fn a_mapped_hop_is_the_ipv4_address_it_carries() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            resolve(
+                Some("203.0.113.50, ::ffff:10.0.0.2"),
+                Some(proxy),
+                &[proxy, ip("10.0.0.2")]
+            ),
+            ClientOrigin::Forwarded(ip("203.0.113.50")),
+            "a proxy's own hop in the chain",
+        );
+        assert_eq!(
+            resolve(Some("::ffff:203.0.113.50"), Some(proxy), &[proxy]),
+            ClientOrigin::Forwarded(ip("203.0.113.50")),
+            "the client's hop",
+        );
+    }
+
+    #[test]
+    fn a_real_ip_naming_a_mapped_proxy_names_no_client() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            ClientOrigin::resolve(
+                None,
+                None,
+                Some("::ffff:10.0.0.1"),
+                Some(proxy),
+                &listed(&[proxy]),
+            ),
+            ClientOrigin::TrustedProxy(proxy),
+        );
+    }
+
+    /// Two proxies spelling one client two ways do not disagree about it.
+    #[test]
+    fn two_chains_naming_one_client_in_two_spellings_agree() {
+        let proxy = ip("10.0.0.1");
+        assert_eq!(
+            ClientOrigin::resolve(
+                Some("for=\"[::ffff:203.0.113.50]\""),
+                Some("203.0.113.50"),
+                None,
+                Some(proxy),
+                &listed(&[proxy]),
+            ),
+            ClientOrigin::Forwarded(ip("203.0.113.50")),
+        );
+    }
+
+    const UNREADABLE: &str = "forwarding header unreadable — no client is believed";
+    const DISAGREEMENT: &str = "forwarding headers disagree about the client — neither is believed";
+
+    /// A listed peer's head that names no client, the peer standing, and the one
+    /// `warn` it filed naming `header`, which quotes none of the head's hops.
+    #[track_caller]
+    fn refused_whole(lines: &[(&str, &[u8])], header: &str) {
+        let logs = nest_rs_testing::LogCapture::install();
+        assert_eq!(
+            from_the_proxy(lines),
+            ClientOrigin::TrustedProxy(ip("10.0.0.1")),
+            "{lines:?}",
+        );
+        let filed = logs.expect_one(crate::target::HTTP, UNREADABLE);
+        assert_eq!(filed.level, "warn");
+        assert_eq!(filed.field("header").as_deref(), Some(header), "{lines:?}");
+        assert_eq!(filed.field("peer").as_deref(), Some("10.0.0.1"));
+        for hop in ["198.51.100.99", "203.0.113.7", "garbage"] {
+            assert!(!logs.quotes(hop), "{:?}", filed.fields);
+        }
+    }
+
+    /// A proxy appending to the caller's own line a quoted value that starts with
+    /// a separator closes the caller's quote there: the bytes read two ways, so
+    /// the chain is no chain and the caller's hop is not the client.
+    #[test]
+    fn a_quote_a_proxy_appended_to_the_caller_s_line_chooses_no_client() {
+        let line = b"for=198.51.100.99;x=\", for=203.0.113.7;host=\",a\"";
+        refused_whole(&[("forwarded", line)], "forwarded");
+    }
+
+    /// Every way a `Forwarded` value fails its grammar reads the same: no chain.
+    #[test]
+    fn a_forwarded_value_its_grammar_refuses_is_no_chain() {
+        for line in [
+            &b"for=198.51.100.99;x=\""[..],
+            b"for=\"203.0.113.7\"x",
+            b"for=203.0.113.7\"",
+            b"for=198.51.100.99, for",
+            b"=203.0.113.7",
+            b"for=",
+            b"for=garbage",
+            b"for=\"[203.0.113.7]\"",
+            b"for=\xFF",
+            b"for=203.0.113.7 198.51.100.99",
+        ] {
+            refused_whole(&[("forwarded", line)], "forwarded");
+        }
+    }
+
+    /// A de-facto list is read whole too: an element that is no node leaves the
+    /// hop beside it standing for nobody.
+    #[test]
+    fn an_x_forwarded_for_element_that_is_no_node_is_no_chain() {
+        for line in [
+            &b"198.51.100.99, garbage"[..],
+            b"garbage, 203.0.113.7",
+            b"\xFF, 203.0.113.7",
+            b"203.0.113.7:99999",
+            b"[malformed::]",
+        ] {
+            refused_whole(&[("x-forwarded-for", line)], "x-forwarded-for");
+        }
+    }
+
+    #[test]
+    fn a_real_ip_that_is_no_node_is_no_hop() {
+        for line in [&b"garbage"[..], b"203.0.113.7, 198.51.100.99", b"\xFF"] {
+            refused_whole(&[("x-real-ip", line)], "x-real-ip");
+        }
+    }
+
+    /// A chain nobody can read decides for every header: ignored alone, it would
+    /// hand the answer to the one the caller wrote, behind a proxy appending to
+    /// `Forwarded` and passing `X-Forwarded-For` through.
+    #[test]
+    fn an_unreadable_chain_hands_the_answer_to_no_other_header() {
+        refused_whole(
+            &[
+                ("forwarded", b"x=\", for=203.0.113.7;host=\",a\""),
+                ("x-forwarded-for", b"198.51.100.99"),
+                ("x-real-ip", b"198.51.100.99"),
+            ],
+            "forwarded",
+        );
+        refused_whole(
+            &[
+                ("x-forwarded-for", b"203.0.113.7, garbage"),
+                ("x-real-ip", b"198.51.100.99"),
+            ],
+            "x-forwarded-for",
+        );
+    }
+
+    /// The hop facing the client withheld it (RFC 7239 §6.2, §6.3): the hop to
+    /// its left is the caller's own, so no client is named, on either chain.
+    #[test]
+    fn a_client_the_proxy_withheld_hands_the_answer_to_no_hop_left_of_it() {
+        let proxy = ip("10.0.0.1");
+        for (forwarded, forwarded_for) in [
+            (Some("for=198.51.100.99, for=unknown"), None),
+            (Some("for=198.51.100.99, for=_hidden"), None),
+            (Some("for=198.51.100.99, for=\"_hidden:_port\""), None),
+            (None, Some("198.51.100.99, unknown")),
+            (Some("for=unknown"), Some("198.51.100.99")),
+            (Some("for=198.51.100.99"), Some("unknown")),
+        ] {
+            let logs = nest_rs_testing::LogCapture::install();
+            assert_eq!(
+                ClientOrigin::resolve(
+                    forwarded,
+                    forwarded_for,
+                    Some("198.51.100.99"),
+                    Some(proxy),
+                    &listed(&[proxy])
+                ),
+                ClientOrigin::TrustedProxy(proxy),
+                "{forwarded:?} {forwarded_for:?}",
+            );
+            assert!(
+                logs.events_at(tracing::Level::WARN).is_empty(),
+                "a node RFC 7239 names is no fault"
+            );
+        }
+    }
+
+    /// `X-Real-IP` beside a chain naming the client is read whole and must name
+    /// that client too: behind a proxy that writes `X-Real-IP` and passes the
+    /// caller's chain through, the chain is the caller's, so another client there
+    /// is a disagreement, refused as two chains are. A hop of the proxies' own
+    /// names no client, and changes nothing.
+    #[test]
+    fn a_real_ip_beside_a_chain_names_its_client_or_none_is_believed() {
+        let proxy = ip("10.0.0.1");
+        let client = ClientOrigin::Forwarded(ip("203.0.113.7"));
+        let refused = ClientOrigin::TrustedProxy(proxy);
+        for (forwarded, forwarded_for) in
+            [(Some("for=203.0.113.7"), None), (None, Some("203.0.113.7"))]
+        {
+            for (real_ip, answer, filed) in [
+                ("203.0.113.7", client, None),
+                ("::ffff:203.0.113.7", client, None),
+                ("10.0.0.1", client, None),
+                ("unknown", refused, None),
+                ("198.51.100.99", refused, Some(DISAGREEMENT)),
+                ("garbage", refused, Some(UNREADABLE)),
+                ("\u{FFFD}", refused, Some(UNREADABLE)),
+            ] {
+                let case = format!("{forwarded:?} {forwarded_for:?} {real_ip:?}");
+                let logs = nest_rs_testing::LogCapture::install();
+                assert_eq!(
+                    ClientOrigin::resolve(
+                        forwarded,
+                        forwarded_for,
+                        Some(real_ip),
+                        Some(proxy),
+                        &listed(&[proxy]),
+                    ),
+                    answer,
+                    "{case}",
+                );
+                let Some(message) = filed else {
+                    let warned = logs.events_at(tracing::Level::WARN);
+                    assert!(warned.is_empty(), "{case}: {warned:?}");
+                    continue;
+                };
+                let line = logs.expect_one(crate::target::HTTP, message);
+                assert_eq!(line.field("peer").as_deref(), Some("10.0.0.1"), "{case}");
+                if message == UNREADABLE {
+                    assert_eq!(line.field("header").as_deref(), Some(X_REAL_IP), "{case}");
+                }
+                for hop in ["198.51.100.99", "203.0.113.7", "garbage"] {
+                    assert!(!logs.quotes(hop), "{case}: {:?}", line.fields);
+                }
+            }
+        }
+    }
+
+    /// A request carrying a real transport peer.
+    fn req_from(peer: &str, headers: &[(&str, &str)]) -> Request {
+        let socket: SocketAddr = format!("{peer}:54321").parse().expect("test literal");
+        let mut builder = Request::builder().peer_addr(socket);
+        for (name, value) in headers {
+            builder = builder.header(
+                http::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                http::HeaderValue::from_str(value).expect("header value"),
+            );
+        }
+        builder.finish()
+    }
+
+    /// Extract under an ambient request scope over a container holding `config`.
     async fn extract_under(config: Option<HttpConfig>, req: Request) -> ClientIp {
         let mut builder = nest_rs_core::Container::builder();
         if let Some(config) = config {
             builder = builder.provide(config);
         }
-        let scope = std::sync::Arc::new(nest_rs_core::RequestScope::new(builder.build()));
+        let scope = std::sync::Arc::new(nest_rs_core::RequestScope::new(
+            builder.build().expect("the container builds"),
+        ));
         nest_rs_core::with_request_scope(
             Some(scope),
-            nest_rs_core::Correlation::mint(),
+            nest_rs_core::Correlation::minted(None),
             extract(req),
         )
         .await
@@ -882,14 +1415,14 @@ mod tests {
 
     fn trusting(proxies: &[&str]) -> HttpConfig {
         HttpConfig {
-            trusted_proxies: proxies.iter().map(|p| ip(p)).collect(),
+            trusted_proxies: proxies
+                .iter()
+                .map(|p| p.parse().expect("an entry"))
+                .collect(),
             ..HttpConfig::default()
         }
     }
 
-    // The wiring, end to end: a peer, a forwarding header, and an `HttpConfig`
-    // naming that peer. Every unit above tests the rule; this tests that the
-    // extractor actually reaches it.
     #[tokio::test]
     async fn the_extractor_reads_the_trusted_proxies_off_the_booted_config() {
         let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
@@ -898,9 +1431,6 @@ mod tests {
         assert!(extracted.forwarded);
     }
 
-    // The wiring for the standard header: `of_with` has to *look it up*. Every
-    // unit above proves the rule and none of them would notice a transport that
-    // never reads `Forwarded` — which is the state this replaces.
     #[tokio::test]
     async fn the_extractor_reads_the_rfc_7239_header() {
         let req = req_from(
@@ -912,10 +1442,6 @@ mod tests {
         assert!(extracted.forwarded);
     }
 
-    // The default deployment — `trusted_proxies` empty, so the same request
-    // resolves to the peer. This is the regression: the extractor used to
-    // answer the peer here *and* in the case above, because the header branches
-    // were unreachable on TCP.
     #[tokio::test]
     async fn an_empty_trusted_proxy_list_resolves_the_same_request_to_the_peer() {
         let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
@@ -924,8 +1450,6 @@ mod tests {
         assert!(!extracted.forwarded);
     }
 
-    // No config in reach at all (a hand-built request off the transport task):
-    // the same answer an unconfigured deployment gives, never a panic.
     #[tokio::test]
     async fn no_reachable_config_trusts_nothing() {
         let req = req_from("10.0.0.1", &[("x-forwarded-for", "203.0.113.50")]);
@@ -936,25 +1460,29 @@ mod tests {
 
     async fn extract(req: Request) -> ClientIp {
         let (req, mut body) = req.split();
-        ClientIp::from_request(&req, &mut body)
+        <ClientIp as crate::FromRequest>::from_request(&req, &mut body)
             .await
             .expect("the extractor is infallible")
     }
 
     #[tokio::test]
     async fn a_request_with_no_peer_and_no_trusted_proxy_extracts_the_default() {
-        // A built `Request` has no peer socket — the `Unknown` branch.
+        // A built `Request` has no peer socket.
         let ip = extract(Request::builder().finish()).await;
         assert_eq!(ip, ClientIp::unknown());
     }
 
-    // The end-to-end shape of the bug: headers present, no trusted proxy
-    // declared, so the extractor reports the peer and says so.
     #[tokio::test]
     async fn headers_alone_never_set_forwarded() {
         let req = Request::builder()
-            .header("x-forwarded-for", "9.9.9.9")
-            .header("x-real-ip", "9.9.9.9")
+            .header(
+                http::HeaderName::from_static("x-forwarded-for"),
+                http::HeaderValue::from_static("9.9.9.9"),
+            )
+            .header(
+                http::HeaderName::from_static("x-real-ip"),
+                http::HeaderValue::from_static("9.9.9.9"),
+            )
             .finish();
         let extracted = extract(req).await;
         assert_eq!(extracted, ClientIp::unknown());

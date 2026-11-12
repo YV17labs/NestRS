@@ -1,0 +1,5 @@
+error: every `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]` declares its access posture: `#[authorize(Action, Subject)]` (class-level gate, and the reads it opens — e.g. `#[authorize(Read, users::Entity)]`) for a caller a principal backs, `#[public(Action, Subject)]` for the same on what any caller may read, or a bare `#[public]` (a caller with no credential is admitted, and the operation reads nothing a grant guards — `#[use_guards]` guards still run)
+  --> tests/integration/diagnostics/graphql/subscription_without_posture.rs:17:14
+   |
+17 |     async fn ticks(&self) -> impl Stream<Item = i32> {
+   |              ^^^^^

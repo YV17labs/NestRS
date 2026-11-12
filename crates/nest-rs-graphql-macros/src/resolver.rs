@@ -1,89 +1,91 @@
 //! `#[resolver]`: construction on the struct. `#[operations]`: the
 //! orchestration of the `#[query]` / `#[mutation]` / `#[subscription]` /
 //! `#[field_resolver]` methods on its impl block.
-//!
-//! Two decorators rather than one accepting two item shapes, because an
-//! attribute macro is a single path in the macro namespace: the shape is
-//! discriminated *after* `syn::parse`, so a shared name gives one rustdoc page
-//! for two argument grammars and annotates every expansion error with the same
-//! attribute whichever half emitted it. See the *one decorator, one item shape*
-//! rule in `CLAUDE.md`.
 
+use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
-use syn::punctuated::Punctuated;
+use quote::{format_ident, quote, quote_spanned};
+use syn::ext::IdentExt;
+use syn::spanned::Spanned as _;
 use syn::{
-    Attribute, FnArg, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path, Signature, Token, Type,
-    parse_quote,
+    Attribute, FnArg, GenericArgument, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path,
+    PathArguments, Signature, Token, Type, TypeImplTrait, TypeParamBound, parse_quote,
 };
 
-use nest_rs_codegen::{
-    DecoratorPair, Edge, InjectableBody, PipeWrapper, build_injectable_body, force_guard_typeids,
-    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
-    impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
-    injected_names_with_layers, layer_deps, normalize_forwarded_args, pipe_wrapper,
-    reject_http_only_layers, scoped_specs, take_flag_attr, take_path_list,
-};
-
-/// The GraphQL edge's pair, read by `#[resolver]`, `#[operations]` and `#[crud]`.
-pub(crate) const GRAPHQL_PAIR: DecoratorPair = DecoratorPair {
-    host: "#[resolver]",
-    subject: "resolver struct",
-    operations: "#[operations]",
-    collects: "#[query] / #[mutation] / #[subscription] / #[entity] / #[field_resolver]",
+use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
+use nest_rs_codegen::__private::{
+    AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
+    HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, SiteGuards, SiteItems,
+    SitePosture, TailParam, VersionedEdge, ambient_type_ids, answer_span, authorized_entity,
+    await_if_async, build_injectable_body, camel_case, cfg_attrs, concrete_signature,
+    delegated_attrs, exception_filter_specs, force_guard_typeids, forwarded_arg_idents,
+    forwarded_idents, from_container_method, guard_capability_bounds, handler_const, host_meta_fn,
+    host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    injected_names_with_layers, injected_optional_fns, injected_remedies_fn, injects_impls,
+    interceptor_specs, key_as_written, layer_deps, mixed_site_ident, no_row_answered,
+    no_tail_decoded, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
+    reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_items, site_ref,
+    spelled, tail_param, take_posture, takes_value, type_label, unit_of_work_required,
+    unknown_argument, validate_argument, withheld,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
-    // `version = "…"` before the blanket refusal below: the developer arriving
-    // from `#[controller(version = "1")]` asked a real question, and "takes no
-    // arguments" answers a different one. Only the host half carries this — the
-    // sentence names `#[resolver]`, which is where a version would be declared
-    // if the schema had one. The wording is `nest-rs-codegen`'s, so GraphQL's
-    // answer lives where every edge's does.
-    if let Err(err) = Edge::Graphql.reject_version(&args) {
+    // Before the blanket refusal, so `version = "…"` gets its own sentence.
+    if let Err(err) = VersionedEdge::Graphql.reject_version(&args) {
         return err.to_compile_error().into();
     }
     if let Err(err) = reject_resolver_args(&args) {
         return err.to_compile_error().into();
     }
 
-    // Naming the sibling is the whole point of the split: the shape a developer
-    // reached for exists, it is just spelled with the other decorator. Both
-    // halves read `GRAPHQL_PAIR`, so the two sentences cannot drift.
-    match GRAPHQL_PAIR.parse_host(input.into()) {
+    match pair::GRAPHQL.parse_host(input.into()) {
         Ok(item) => resolver_struct(item),
         Err(err) => err.to_compile_error().into(),
     }
 }
 
 pub(crate) fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
-    // The shared sentence, from the same pair the wrong-shape error reads: the
-    // operation set it names is `GRAPHQL_PAIR.collects`, so adding a role — this
-    // is how `#[entity]` arrived — cannot leave one of the two listing the old
-    // set.
-    if let Err(err) = GRAPHQL_PAIR.reject_args(
-        &TokenStream2::from(args),
-        "a resolver's construction and provider-scope layers are declared by",
-    ) {
-        return err.to_compile_error().into();
-    }
-
-    match GRAPHQL_PAIR.parse_operations(input.into()) {
+    // Refused through the kept item: dropping the `impl` buries the real error
+    // under `no method found` at every caller.
+    let written = TokenStream2::from(input.clone());
+    let expansion: TokenStream = match pair::GRAPHQL
+        .reject_args(
+            &TokenStream2::from(args),
+            "a resolver's construction and provider-scope layers are declared by",
+        )
+        .and_then(|()| pair::GRAPHQL.parse_operations(input.into()))
+    {
         Ok(item) => resolver_impl(item),
         Err(err) => err.to_compile_error().into(),
-    }
+    };
+    pair::GRAPHQL
+        .keep_item_on_refusal(written, expansion.into(), &OPERATIONS_HELPERS, |item| {
+            let self_ty = &item.self_ty;
+            quote! {
+                impl ::nest_rs_core::Discoverable for #self_ty {
+                    fn register(
+                        builder: ::nest_rs_core::ContainerBuilder,
+                    ) -> ::nest_rs_core::ContainerBuilder {
+                        builder
+                    }
+                }
+            }
+        })
+        .into()
 }
 
-/// The **host** half takes no arguments either, which no other edge's does:
-/// `#[controller]` and `#[gateway]` declare a path, `#[mcp]` an endpoint. A
-/// resolver has no address to declare — one schema, one introspection — so the
-/// sentence points at the operations instead of at a sibling argument.
-///
-/// One site, so it stays here rather than on `DecoratorPair`; it reads the
-/// pair's own `collects` all the same, so it and the impl half's refusal cannot
-/// come to name different operation sets.
+/// What `#[operations]` consumes off a method beside the layers and the posture.
+const OPERATIONS_HELPERS: [&str; 6] = [
+    "query",
+    "mutation",
+    "subscription",
+    "entity",
+    "field_resolver",
+    "graphql",
+];
+
 fn reject_resolver_args(args: &TokenStream2) -> syn::Result<()> {
     if args.is_empty() {
         return Ok(());
@@ -92,33 +94,41 @@ fn reject_resolver_args(args: &TokenStream2) -> syn::Result<()> {
         args,
         format!(
             "{} takes no arguments; tag methods with {} under {}",
-            GRAPHQL_PAIR.host, GRAPHQL_PAIR.collects, GRAPHQL_PAIR.operations
+            pair::GRAPHQL.host(),
+            pair::GRAPHQL.collects(),
+            pair::GRAPHQL.operations()
         ),
     ))
 }
 
 /// `#[resolver]` on the struct: construction + provider-scope layer
-/// declarations (parallel to `#[controller]` on the struct, `#[gateway]` on
-/// the struct). The impl-form macro reads the layer specs back at runtime
-/// via the inherent `__nestrs_resolver_*_specs()` helpers emitted here.
+/// declarations, read back by `#[operations]` through `__nestrs_resolver_*_specs()`.
 fn resolver_struct(mut item: ItemStruct) -> TokenStream {
-    if let Err(err) = reject_http_only_layers(&item.attrs, "GraphQL", "resolver") {
-        return err.to_compile_error().into();
-    }
-    // Resolver-scope (provider) guard declarations — same shape and same
-    // mental model as `#[controller] struct` + `#[gateway] struct`. Stored
-    // here so the impl-form macro can fold them into the per-operation
-    // chain at runtime through `__nestrs_resolver_guard_specs()`.
-    let guards = match take_use_guards(&mut item.attrs) {
-        Ok(paths) => paths,
+    let Layers {
+        guards,
+        interceptors,
+        exception_filters,
+        meta,
+        ..
+    } = match take_layers(&pair::GRAPHQL, LayerScope::Host, &mut item.attrs) {
+        Ok(layers) => layers,
         Err(err) => return err.to_compile_error().into(),
     };
+    let host_meta = host_meta_fn(&meta);
 
+    // Read before the body strips `#[inject]`: `#[crud]` reaches its service
+    // through the field of its type.
+    let injected_fields = match injects_impls(&item, "resolver") {
+        Ok(impls) => impls,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let InjectableBody {
         ctor,
         dep_keys,
         dep_names,
-        ..
+        opt_keys,
+        opt_names,
+        remedies,
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
         Err(err) => return err.to_compile_error().into(),
@@ -128,30 +138,25 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     let name_str = name.to_string();
     let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
     let from_container = from_container_method(&ctor);
-    // The struct's `#[inject]` keys + any resolver-scope guards, exposed
-    // for the impl-block macro to fold into `Discoverable::injected`
-    // together with method guards and `#[field_resolver]` `&Service`
-    // deps. Same struct/impl split as `#[controller]`/`#[routes]`.
-    // Keys plus index-aligned labels from one walk, so a resolver-scope guard no
-    // module provides is named in the boot error rather than reported as
-    // `<unnamed dependency>`.
-    let layers = layer_deps(guards.iter());
+    // Keys and index-aligned labels from one walk, so a missing layer is named at boot.
+    let layers = layer_deps(guards.iter().chain(&interceptors).chain(&exception_filters));
     let injected_keys = injected_keys_with_layers(&dep_keys, &layers);
     let injected_names = injected_names_with_layers(&dep_names, &layers);
+    let injected_optional = injected_optional_fns(&opt_keys, &opt_names);
+    let injected_remedies = injected_remedies_fn(&remedies);
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
-    // Resolver-scope guards fold into the same per-operation chain, so they owe
-    // the same capability.
-    let capability_bounds =
-        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::GraphqlGuard));
+    let interceptor_specs = interceptor_specs(&interceptors);
+    let exception_filter_specs = exception_filter_specs(&exception_filters);
+    let capability_bounds = guard_capability_bounds(
+        guards.iter(),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_graphql::GraphqlView>),
+    );
 
-    // Resolver-membership marker so the boot can require this resolver be
-    // listed in a reachable module's `providers` (its schema presence is
-    // unconditional via the registry). A generic resolver has no single
-    // `TypeId` so it can't be a `providers` entry.
+    // A generic resolver has no single `TypeId`, so it cannot be a `providers` entry.
     let descriptor = if item.generics.params.is_empty() {
         quote! {
-            ::nest_rs_graphql::inventory::submit! {
-                ::nest_rs_graphql::ResolverDescriptor {
+            ::nest_rs_graphql::__private::inventory::submit! {
+                ::nest_rs_graphql::__private::ResolverDescriptor {
                     resolver: || ::core::any::TypeId::of::<#name>(),
                     name: #name_str,
                 }
@@ -161,7 +166,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         quote!()
     };
 
-    let residency = GRAPHQL_PAIR.host_residency(&name, &item.generics);
+    let residency = pair::GRAPHQL.host_residency(&name, &item.generics);
 
     quote! {
         #item
@@ -170,8 +175,12 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 
         #residency
 
+        #injected_fields
+
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container
+
+            #host_meta
 
             #[doc(hidden)]
             pub fn __nestrs_injected() -> ::std::vec::Vec<::core::any::TypeId> {
@@ -183,14 +192,29 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
                 #injected_names
             }
 
-            /// Resolver-scope `#[use_guards(...)]`, exposed for the
-            /// impl-form macro to fold into each operation's per-chain
-            /// `run_layered_graphql_chain` call. Empty when none declared.
+            #injected_optional
+
+            #injected_remedies
+
             #[doc(hidden)]
             pub fn __nestrs_resolver_guard_specs()
-                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+                -> ::std::vec::Vec<::nest_rs_guards::__private::GuardSpec>
             {
                 #guard_specs
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_resolver_interceptor_specs()
+                -> ::std::vec::Vec<::nest_rs_core::__private::InterceptorSpec>
+            {
+                #interceptor_specs
+            }
+
+            #[doc(hidden)]
+            pub fn __nestrs_resolver_exception_filter_specs()
+                -> ::std::vec::Vec<::nest_rs_core::__private::ExceptionFilterSpec>
+            {
+                #exception_filter_specs
             }
         }
 
@@ -199,147 +223,139 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     .into()
 }
 
-/// Extract and remove a `#[use_guards(...)]` attribute, returning its paths.
-/// The attribute is consumed so it never reaches the compiler as an unknown
-/// attribute. At most one per item.
-fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    take_path_list(attrs, "use_guards")
-}
-
-/// `#[force_guards(...)]` — the Layer-System opt-in that lets a per-method
-/// guard re-run even when the same `TypeId` is already in the global chain.
-/// Same shape as `#[use_guards]`.
-fn take_force_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    take_path_list(attrs, "force_guards")
-}
-
-/// `#[authorize(Action, Entity)]` parsed off a `#[query]`/`#[mutation]`
-/// method: the operation's declared access posture. The macro emits the
-/// class-level gate (`authorize::<Action, Entity>`) before the call and the
-/// automatic response mask (`masked_value_for`) after it — the GraphQL analog
-/// of the HTTP `Authorize<A, E>` extractor. `unmasked` keeps the gate but
-/// leaves response masking to the method body (custom shapes the value-level
-/// round-trip cannot see through, e.g. a cursor connection).
+/// `#[authorize(Action, Subject)]` or `#[public(Action, Subject)]` parsed off an
+/// operation: what its declared access posture gates on.
 struct AuthorizeSpec {
     action: Path,
-    /// The entity the gate + mask act on. Explicit (`#[authorize(Action,
-    /// Entity)]`) or, when `bind = Service` is set, **derived** from
-    /// `<Service as CrudService>::Entity` so it is never retyped —
-    /// `#[authorize(Update, bind = ArtworksService)]`.
+    /// `None` when derived from `<Service as CrudService>::Entity` under `bind`.
     entity: Option<Path>,
-    unmasked: bool,
-    /// `bind = Service`: the macro turns a by-id GraphQL argument into the
-    /// loaded, authorized subject and hands it to the operation's
-    /// `Authorized<Action, E>` parameter — the GraphQL analog of the HTTP
-    /// `Bind<A, S>` extractor. The action in the proof is the one named here, so
-    /// the receiving method demands a proof for *exactly* that action. `None` ⇒
-    /// the operation binds its subject itself (or has none).
+    /// `bind = Service`: a by-id argument loaded into the `Authorized<Action, E>` parameter.
     bind: Option<Path>,
-    /// The wire name of the synthesized id argument when `bind` is set, as a
-    /// snake_case ident (async-graphql camelCases it). `None` defaults to `id`;
-    /// `id_arg = file_id` yields `fileId` to preserve an existing SDL argument.
+    /// The synthesized id argument's snake_case name (async-graphql camelCases
+    /// it); `None` is `id`.
     id_arg: Option<Ident>,
 }
 
-/// One token in `#[authorize(...)]`: a positional `Path` (action, entity, or
-/// the `unmasked` flag) or a `name = value` option (`bind = Service`,
-/// `id_arg = ident`).
+/// One token in a posture's arguments; a keyed one keeps its key, where a repeat is spanned.
 enum AuthorizeArg {
     Positional(Path),
-    Bind(Path),
-    IdArg(Ident),
+    Bind(Ident, Path),
+    IdArg(Ident, Ident),
 }
 
-impl syn::parse::Parse for AuthorizeArg {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        if input.peek(Ident) && input.peek2(Token![=]) {
-            let name: Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
-            if name == "bind" {
-                Ok(AuthorizeArg::Bind(input.parse()?))
-            } else if name == "id_arg" {
-                Ok(AuthorizeArg::IdArg(input.parse()?))
-            } else {
-                let spelled = name.to_string();
-                Err(syn::Error::new_spanned(
-                    name,
-                    nest_rs_codegen::unknown_argument("authorize", &spelled, &["bind", "id_arg"]),
+/// The keys an operation's posture takes beside its action and subject.
+const POSTURE_KEYS: &[&str] = &["bind", "id_arg"];
+
+/// One token of `#[word(...)]`.
+fn posture_arg(input: syn::parse::ParseStream, word: &'static str) -> syn::Result<AuthorizeArg> {
+    if input.peek(Ident) && input.peek2(Token![=]) {
+        let name: Ident = input.parse()?;
+        input.parse::<Token![=]>()?;
+        if name == "bind" {
+            input
+                .parse()
+                .map(|p| AuthorizeArg::Bind(name, p))
+                .map_err(refused(word, "bind", BIND_TAKES))
+        } else if name == "id_arg" {
+            input
+                .parse()
+                .map(|i| AuthorizeArg::IdArg(name, i))
+                .map_err(refused(
+                    word,
+                    "id_arg",
+                    "the id argument's name as a snake_case identifier, e.g. `id_arg = file_id`",
                 ))
-            }
         } else {
-            Ok(AuthorizeArg::Positional(input.parse()?))
+            let spelled = name.to_string();
+            Err(syn::Error::new_spanned(
+                name,
+                unknown_argument(word, &spelled, POSTURE_KEYS),
+            ))
         }
+    } else {
+        input
+            .parse()
+            .map(AuthorizeArg::Positional)
+            .map_err(|stopped| syn::Error::new(stopped.span(), posture_shape(word)))
     }
 }
 
-/// Extract and remove a `#[authorize(...)]` attribute. At most one per method.
-fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
-    let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
-        return Ok(None);
-    };
-    let attr = attrs.remove(pos);
-    if attrs.iter().any(|a| a.path().is_ident("authorize")) {
-        return Err(syn::Error::new_spanned(
-            &attr,
-            nest_rs_codegen::at_most_one_authorize("operation"),
-        ));
+fn refused(
+    word: &'static str,
+    key: &'static str,
+    takes: &'static str,
+) -> impl Fn(syn::Error) -> syn::Error {
+    move |stopped| syn::Error::new(stopped.span(), takes_value(word, Some(key), takes))
+}
+
+/// The posture's shape refusal, in the words of the attribute `word` names.
+fn posture_shape(word: &str) -> String {
+    format!(
+        "expected `#[{word}(Action, Subject)]` — e.g. `#[{word}(Read, users::Entity)]`. \
+         `bind = Service` (optionally `id_arg = ident`) binds the subject from an id argument, \
+         and lets the entity be omitted (derived from `Service::Entity`): \
+         `#[{word}(Update, bind = ArtworksService)]`"
+    )
+}
+
+/// What an operation with no posture at all is told.
+const POSTURE_REQUIRED: &str = "every `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]` \
+     declares its access posture: `#[authorize(Action, Subject)]` (class-level gate, and the \
+     reads it opens — e.g. `#[authorize(Read, users::Entity)]`) for a caller a principal backs, \
+     `#[public(Action, Subject)]` for the same on what any caller may read, or a bare `#[public]` \
+     (a caller with no credential is admitted, and the operation reads nothing a grant guards — \
+     `#[use_guards]` guards still run)";
+
+/// Read `#[word(Action, Subject)]` or `#[word(Action, bind = Service)]`.
+fn gate_of(attr: &Attribute, word: &'static str) -> syn::Result<AuthorizeSpec> {
+    let shape_err = || syn::Error::new_spanned(attr, posture_shape(word));
+    if !matches!(attr.meta, syn::Meta::List(_)) {
+        return Err(shape_err());
     }
-    let args: Vec<AuthorizeArg> = attr
-        .parse_args_with(Punctuated::<AuthorizeArg, Token![,]>::parse_terminated)?
-        .into_iter()
-        .collect();
-    let shape_err = || {
-        syn::Error::new_spanned(
-            &attr,
-            "expected `#[authorize(Action, Entity)]` — e.g. `#[authorize(Read, users::Entity)]`; \
-             append `unmasked` to keep the class gate but mask the response yourself. \
-             `bind = Service` (optionally `id_arg = ident`) binds the subject from an id \
-             argument, and lets the entity be omitted (derived from `Service::Entity`): \
-             `#[authorize(Update, bind = ArtworksService)]`",
-        )
-    };
+    let args: Vec<AuthorizeArg> = attr.parse_args_with(|input: syn::parse::ParseStream| {
+        let mut args = Vec::new();
+        while !input.is_empty() {
+            args.push(posture_arg(input, word)?);
+            if !input.is_empty() {
+                input
+                    .parse::<Token![,]>()
+                    .map_err(|stopped| syn::Error::new(stopped.span(), posture_shape(word)))?;
+            }
+        }
+        Ok(args)
+    })?;
     let mut positional: Vec<Path> = Vec::new();
     let mut bind: Option<Path> = None;
     let mut id_arg: Option<Ident> = None;
+    // A repeated key is refused, never last-write-wins: `bind` picks the loading service.
+    let mut keys: Vec<Ident> = Vec::new();
     for arg in args {
         match arg {
             AuthorizeArg::Positional(p) => positional.push(p),
-            // Refused rather than last-write-wins: `bind` decides **which
-            // service loads the authorized subject**, so dropping one of two by
-            // source order is the posture silently deciding itself.
-            AuthorizeArg::Bind(p) => {
-                nest_rs_codegen::reject_duplicate_argument(
-                    bind.is_some(),
-                    &p,
-                    "authorize",
-                    "bind",
-                )?;
+            AuthorizeArg::Bind(key, p) => {
+                keys.push(key);
                 bind = Some(p);
             }
-            AuthorizeArg::IdArg(i) => {
-                nest_rs_codegen::reject_duplicate_argument(
-                    id_arg.is_some(),
-                    &i,
-                    "authorize",
-                    "id_arg",
-                )?;
+            AuthorizeArg::IdArg(key, i) => {
+                keys.push(key);
                 id_arg = Some(i);
             }
         }
     }
+    nest_rs_codegen::Grammar::new(word, POSTURE_KEYS).take_all(&keys)?;
     if id_arg.is_some() && bind.is_none() {
         return Err(syn::Error::new_spanned(
-            &attr,
+            attr,
             "`id_arg` only applies with `bind = Service`",
         ));
     }
-    let unmasked = positional.iter().any(|p| p.is_ident("unmasked"));
-    let mut subject: Vec<Path> = positional
-        .into_iter()
-        .filter(|p| !p.is_ident("unmasked"))
-        .collect();
-    // `Action, Entity` always; `Action` alone is allowed only with `bind`,
-    // where the entity is derived from `Service::Entity` (never retyped).
+    if let Some(unmasked) = positional.iter().find(|p| p.is_ident("unmasked")) {
+        return Err(syn::Error::new_spanned(
+            unmasked,
+            nest_rs_codegen::__private::unmasked_refused(),
+        ));
+    }
+    let mut subject = positional;
     let (action, entity) = match (subject.len(), bind.is_some()) {
         (2, _) => {
             let entity = subject.remove(1);
@@ -348,39 +364,33 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
         (1, true) => (subject.remove(0), None),
         _ => return Err(shape_err()),
     };
-    Ok(Some(AuthorizeSpec {
+    Ok(AuthorizeSpec {
         action,
         entity,
-        unmasked,
         bind,
         id_arg,
-    }))
-}
-
-/// The ident of a `#[query]`/`#[mutation]` parameter typed `Authorized<A, E>`
-/// (the subject `bind = Service` resolves). Matched on the last path segment so
-/// both `Authorized<A, E>` and a fully-qualified form are recognised.
-fn authorized_param_ident(sig: &Signature) -> Option<Ident> {
-    sig.inputs.iter().find_map(|arg| {
-        let FnArg::Typed(pt) = arg else { return None };
-        let Type::Path(tp) = &*pt.ty else { return None };
-        if tp.path.segments.last()?.ident != "Authorized" {
-            return None;
-        }
-        match &*pt.pat {
-            syn::Pat::Ident(pi) => Some(pi.ident.clone()),
-            _ => None,
-        }
     })
 }
 
+/// The parameter typed `Authorized<A, E>`, matched on the last path segment.
+fn authorized_param(sig: &Signature) -> Option<&FnArg> {
+    sig.inputs.iter().find(|arg| spelled(arg, "Authorized"))
+}
+
+/// The ident of the parameter typed `Authorized<A, E>`, matched on the last path segment.
+fn authorized_param_ident(sig: &Signature) -> Option<Ident> {
+    let FnArg::Typed(pt) = authorized_param(sig)? else {
+        return None;
+    };
+    match &*pt.pat {
+        syn::Pat::Ident(pi) => Some(pi.ident.clone()),
+        _ => None,
+    }
+}
+
 /// Grouping key for a `#[field_resolver]`'s parent type — its **last path
-/// segment**. Two spellings of one type (`User` and `crate::wire::User`) share
-/// a last segment, so their field resolvers merge into a single
-/// `#[ComplexObject]` block instead of splitting into two impls that then
-/// collide as an opaque `E0119` duplicate-impl error. Mirrors the last-segment
-/// matching in [`authorized_param_ident`]. A non-path type (rare for a wire
-/// parent) falls back to its full token string.
+/// segment**, so `User` and `crate::wire::User` share one `#[ComplexObject]`
+/// rather than colliding as `E0119`.
 fn field_parent_key(ty: &Type) -> String {
     match ty {
         Type::Path(tp) => tp
@@ -393,22 +403,16 @@ fn field_parent_key(ty: &Type) -> String {
     }
 }
 
-/// A `#[query]`/`#[mutation]` parameter typed `Piped<P, T>` or `Valid<T>` — a
-/// per-argument pipe. The wrapper exposes the wire value type `T` in the
-/// parameter's place, runs the pipe (`P::transform` / validation), and hands the
-/// operation the `Piped`/`Valid` carrier — the GraphQL analog of the HTTP
-/// `Piped<P, E>` / `Valid<E>` extractors. A pipe transforms input only; it never
-/// decides authz (that stays the `#[authorize]` gate's job).
+/// An operation parameter typed `Piped<P>`: the wrapper exposes the pipe's
+/// input in its place and hands the operation the carrier.
 struct PipedArg {
     ident: Ident,
-    /// The pipe `P` in `Piped<P, T>`; `None` for `Valid<T>` (validation).
-    pipe: Option<Path>,
-    /// The wire value type `T` the operation exposes and the pipe consumes.
+    /// The carrier as the method spells it.
+    carrier: Type,
+    /// What the wire carries: the pipe's `In`.
     value_ty: Type,
 }
 
-/// Every `Piped<P, T>` / `Valid<T>` parameter of an operation, matched on the
-/// last path segment so a fully-qualified form is recognised too.
 fn piped_args(sig: &Signature) -> Vec<PipedArg> {
     sig.inputs
         .iter()
@@ -417,79 +421,106 @@ fn piped_args(sig: &Signature) -> Vec<PipedArg> {
             let syn::Pat::Ident(pi) = &*pt.pat else {
                 return None;
             };
-            let (pipe, value_ty) = match pipe_wrapper(&pt.ty)? {
-                PipeWrapper::Piped { pipe, value } => (Some(pipe), value),
-                PipeWrapper::Valid { value } => (None, value),
-            };
             Some(PipedArg {
+                value_ty: piped_input(&pt.ty)?,
                 ident: pi.ident.clone(),
-                pipe,
-                value_ty,
+                carrier: (*pt.ty).clone(),
             })
         })
         .collect()
 }
 
-/// True when the method's return type's last path segment ends with `Result`
-/// (`Result`, `GqlResult`, any `*Result` alias) — the macro only emits the
-/// global guard chain (with its `?`-propagated `async_graphql::Error`) on
-/// `Result`-returning queries/mutations. A bare-return resolver can't surface
-/// an authn/authz failure, so the global chain stays off it (and the posture
-/// check forces it to be `#[public]`). An alias that hides `Result` under an
-/// unrelated name isn't recognised — spell the return type `Result` there.
-fn sig_returns_result(sig: &Signature) -> bool {
-    match &sig.output {
-        syn::ReturnType::Default => false,
-        syn::ReturnType::Type(_, ty) => match &**ty {
-            Type::Path(tp) => tp
-                .path
-                .segments
-                .last()
-                .is_some_and(|s| s.ident.to_string().ends_with("Result")),
-            _ => false,
-        },
-    }
+/// Each decoded argument `args` binds, held to the rules its type declares
+/// and refused as a field error: every typed argument but a borrow (the
+/// `Context`, a provider) and the names `skip`. On the wrapper's signature a
+/// pipe's argument is still its wire value.
+fn validate_args<'a>(
+    args: impl IntoIterator<Item = &'a FnArg>,
+    skip: &[&Ident],
+) -> Vec<TokenStream2> {
+    args.into_iter()
+        .filter_map(|arg| {
+            let FnArg::Typed(pt) = arg else { return None };
+            let syn::Pat::Ident(pi) = &*pt.pat else {
+                return None;
+            };
+            if matches!(&*pt.ty, Type::Reference(_)) || skip.contains(&&pi.ident) {
+                return None;
+            }
+            let ident = &pi.ident;
+            let check = validate_argument(&quote!(::nest_rs_graphql), &quote!(&#ident));
+            Some(quote! {
+                #check.map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
+            })
+        })
+        .collect()
 }
 
-/// The type an operation's signature declares it returns, whole.
+/// What a method's return type is, read the way async-graphql reads it.
 ///
-/// Handed to `OutputType::type_name()` in the emitted claim rather than
-/// unwrapped here, because unwrapping here is a second implementation of
-/// async-graphql's rule and the two drifted immediately. Upstream unwraps only a
-/// **literal** `Result` / `FieldResult`; anything else — a type alias, a `Result`
-/// with its parameters in the other order — is handed whole to `add_keys`, where
-/// `impl OutputType for Result<T, E>` reports `T`'s name. Naming the whole type
-/// therefore agrees with the registry by construction: an alias resolves through
-/// its own `OutputType`, and there is no shape the claim can miss or misread.
-fn declared_return_type(sig: &Signature) -> Option<&Type> {
-    match &sig.output {
-        syn::ReturnType::Type(_, ty) => Some(ty),
-        syn::ReturnType::Default => None,
+/// Fallible when its last segment is exactly `Result` or `FieldResult` with a
+/// type argument, mirroring `async-graphql-derive`'s `OutputType::parse`. A
+/// renamed `Result` reads as a value and is split by `nest_rs_core::__private::Answer`
+/// ([`call_as_result`]).
+enum Returned<'a> {
+    Fallible(&'a Type),
+    /// `()` for a method that declares no return type.
+    Value(Box<Type>),
+}
+
+impl Returned<'_> {
+    fn value(&self) -> Type {
+        match self {
+            Self::Fallible(ty) => (*ty).clone(),
+            Self::Value(ty) => (**ty).clone(),
+        }
     }
 }
 
-/// The return type's last path segment when it *reads* as a `Result` but is not
-/// one of the two spellings async-graphql recognises (`Result` / `FieldResult`).
-/// `None` for a literal `Result`, and for a return type that is not
-/// `Result`-shaped at all — a bare stream is a legitimate `#[public]` shape.
-fn aliased_result_ident(sig: &Signature) -> Option<Ident> {
-    let syn::ReturnType::Type(_, ty) = &sig.output else {
-        return None;
-    };
-    let Type::Path(tp) = &**ty else { return None };
-    let last = tp.path.segments.last()?;
-    let name = last.ident.to_string();
-    let recognised = name == "Result" || name == "FieldResult";
-    (!recognised && name.ends_with("Result")).then(|| last.ident.clone())
+/// Whether `ty` holds an `impl Trait` anywhere but as the whole of itself.
+fn nests_impl_trait(ty: &Type) -> bool {
+    fn inside(ty: &Type) -> bool {
+        match ty {
+            Type::ImplTrait(_) => true,
+            Type::Path(tp) => tp.path.segments.iter().any(|segment| {
+                matches!(&segment.arguments, PathArguments::AngleBracketed(args)
+                    if args.args.iter().any(|arg| matches!(arg, GenericArgument::Type(ty) if inside(ty))))
+            }),
+            Type::Reference(r) => inside(&r.elem),
+            Type::Paren(p) => inside(&p.elem),
+            Type::Group(g) => inside(&g.elem),
+            Type::Tuple(t) => t.elems.iter().any(inside),
+            Type::Array(a) => inside(&a.elem),
+            Type::Slice(sl) => inside(&sl.elem),
+            _ => false,
+        }
+    }
+    !matches!(ty, Type::ImplTrait(_)) && inside(ty)
 }
 
-/// The ident of a method's `&Context<'_>` parameter (matched on the last
-/// path segment), so guard injection reuses it instead of adding a second.
+fn returned(sig: &Signature) -> Returned<'_> {
+    let ty = match &sig.output {
+        syn::ReturnType::Default => return Returned::Value(Box::new(parse_quote!(()))),
+        syn::ReturnType::Type(_, ty) => &**ty,
+    };
+    if let Type::Path(tp) = ty
+        && let Some(last) = tp.path.segments.last()
+        && (last.ident == "Result" || last.ident == "FieldResult")
+        && let PathArguments::AngleBracketed(args) = &last.arguments
+        && let Some(value) = args.args.iter().find_map(|arg| match arg {
+            GenericArgument::Type(value) => Some(value),
+            _ => None,
+        })
+    {
+        return Returned::Fallible(value);
+    }
+    Returned::Value(Box::new(ty.clone()))
+}
+
 pub(crate) fn ctx_param_ident(sig: &Signature) -> Option<Ident> {
     sig.inputs.iter().find_map(ctx_ident_of)
 }
 
-/// Whether one parameter is a `&Context<'_>`, and what it is called.
 fn ctx_ident_of(arg: &FnArg) -> Option<Ident> {
     let FnArg::Typed(pt) = arg else { return None };
     let Type::Reference(reference) = &*pt.ty else {
@@ -508,19 +539,7 @@ fn ctx_ident_of(arg: &FnArg) -> Option<Ident> {
 }
 
 /// Refuse a `&Context` that is not the operation's **first** parameter after
-/// the receiver.
-///
-/// async-graphql's `#[Object]` recognises the context parameter only there and
-/// reads a later one as a schema argument — so what a misplaced one produces is
-/// an `InputType` bound failure against `&ContextBase<…>`, named nowhere in the
-/// developer's source. On an `#[entity]` it is worse than unreadable: the stray
-/// parameter joins the `@key` a router matches references against, silently
-/// changing what the operation is addressed by.
-///
-/// [`ensure_ctx_param`] already knew the rule — it inserts at position 1 — but
-/// only handled the *absent* case: finding a `&Context` anywhere made it decline
-/// to insert one, and the misplaced one then went to async-graphql as an
-/// argument.
+/// the receiver: async-graphql reads a later one as a schema argument.
 fn reject_misplaced_ctx(sig: &Signature) -> syn::Result<()> {
     let expected = usize::from(matches!(sig.inputs.first(), Some(FnArg::Receiver(_))));
     for (index, arg) in sig.inputs.iter().enumerate() {
@@ -539,10 +558,8 @@ fn reject_misplaced_ctx(sig: &Signature) -> syn::Result<()> {
     Ok(())
 }
 
-/// Ensure the delegating signature has a `&Context`. async-graphql's
-/// `#[Object]` recognises the context parameter **only directly after
-/// `&self`** (any later `&Context` is read as a schema argument), so the
-/// added parameter is inserted at position 1.
+/// Ensure the delegating signature has a `&Context`, inserted directly after
+/// `&self`, the only place async-graphql recognises it.
 fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
     if let Some(ident) = ctx_param_ident(sig) {
         return (sig.clone(), ident);
@@ -556,75 +573,263 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
     (sig, ident)
 }
 
-/// Emit the unified Layer System chain for a resolver operation: global +
-/// resolver-scope + per-method guards, deduped by `TypeId`. Resolver-scope
-/// guards are read at runtime via `<Self>::__nestrs_resolver_guard_specs()`
-/// — emitted by `#[resolver]` on the struct, parallel to how
-/// `#[controller]` exposes `__nestrs_controller_guard_specs()` for
-/// `#[routes]` to consume. This is what makes the declaration site uniform:
-/// the developer writes `#[use_guards(...)]` on the struct, same as for
-/// HTTP controllers and WS gateways.
-///
-/// `needs_global = false` (a bare-return resolver that can't surface a
-/// denial) AND no method/force guards skips the chain entirely. Resolver-
-/// scope guards alone still trigger the chain because the struct may have
-/// declared them.
-///
-/// `is_entity` names the site rather than picking a function: the runner is one
-/// seam, and `GraphqlSite` is what decides whether the app-wide pool is folded
-/// here or left to the federation gate in front of `_entities`.
-fn layered_resolver_chain(
-    self_ty: &Type,
-    method_guards: &[Path],
-    force_guards: &[Path],
-    ctx: &Ident,
-    route_label: &str,
-    needs_global: bool,
-    is_entity: bool,
-) -> TokenStream2 {
-    let label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
-    let method_specs = scoped_specs(method_guards, quote!(dyn ::nest_rs_guards::Guard));
-    let force_typeids = force_guard_typeids(force_guards);
-    if !needs_global && method_guards.is_empty() && force_guards.is_empty() {
-        // Bare-return resolver with no method/force guards. Bare-return
-        // can't surface an `Err`, so emitting a chain that propagates `?`
-        // would not compile; it also can't enforce any auth posture, so
-        // skipping is honest. Resolver-scope guards on the struct only
-        // run when the method returns `Result` — which is also where
-        // auth/authz denials make sense semantically.
-        return quote!();
-    }
-    let site = if is_entity {
-        quote!(::nest_rs_guards::GraphqlSite::Entity)
-    } else {
-        quote!(::nest_rs_guards::GraphqlSite::Operation)
-    };
-    quote! {
-        {
-            // Composed once per site against this container, then memoized —
-            // the GraphQL analog of `RouteShaper`'s mount-time composition.
-            static __NESTRS_GUARD_CHAIN: ::nest_rs_guards::SiteChainCell =
-                ::nest_rs_guards::SiteChainCell::new();
-            let __container = #ctx.data_unchecked::<::nest_rs_core::Container>();
-            ::nest_rs_guards::run_layered_graphql_chain(
-                #ctx,
-                __container,
-                &__NESTRS_GUARD_CHAIN,
-                #label_lit,
-                &|| ::nest_rs_guards::SiteChainSources {
-                    provider: <#self_ty>::__nestrs_resolver_guard_specs(),
-                    method: #method_specs,
-                    force: #force_typeids,
-                },
-                #site,
-            ).await?;
+#[derive(Clone, Copy)]
+enum ChainSite {
+    /// A root field: the app-wide pool folds in.
+    Operation,
+    /// An `#[entity]`: the federation site in front of `_entities` runs the pool.
+    Entity,
+    /// A `#[field_resolver]`: the root field it resolves under ran the pool.
+    Field,
+}
+
+impl ChainSite {
+    fn path(self) -> TokenStream2 {
+        match self {
+            Self::Operation => quote!(::nest_rs_graphql::__private::GraphqlSite::Operation),
+            Self::Entity => quote!(::nest_rs_graphql::__private::GraphqlSite::Entity),
+            Self::Field => quote!(::nest_rs_graphql::__private::GraphqlSite::Field),
         }
     }
 }
 
-/// The closed role vocabulary, read by the verb predicate **and** by the
-/// one-role refusal — so the set a method is checked against and the set it is
-/// told about cannot disagree.
+/// One field's site as `#[operations]` declares it.
+struct FieldSite<'a> {
+    self_ty: &'a Type,
+    method: &'a Ident,
+    cfgs: &'a [TokenStream2],
+    site: ChainSite,
+    /// The field as a chain's log line and a refusal name it.
+    label: &'a str,
+    guards: &'a [Path],
+    force_guards: &'a [Path],
+    interceptors: &'a [Path],
+    exception_filters: &'a [Path],
+    /// The class gate the posture declares, a `ClassGate` expression.
+    gate: Option<TokenStream2>,
+    /// Whether the posture withholds the ability from the field's reads, a
+    /// `bool` expression.
+    withheld: TokenStream2,
+    /// What the field's `Ambient<T>` parameters read, a `Vec<TypeId>` expression.
+    ambient: TokenStream2,
+}
+
+/// The hidden items declaring a field's site beside its handler, as
+/// `site_items` writes every site's, its guard stage included. A root field
+/// folds its resolver's interceptors and exception filters and the app's; a
+/// field resolver, no unit, only those declared on it.
+fn field_site(site: &FieldSite<'_>) -> TokenStream2 {
+    let FieldSite {
+        self_ty,
+        method,
+        cfgs,
+        site: kind,
+        label,
+        guards,
+        force_guards,
+        interceptors,
+        exception_filters,
+        gate,
+        withheld,
+        ambient,
+    } = site;
+    let class_gated = gate.is_some();
+    let (host_interceptors, host_exception_filters, global) = match kind {
+        ChainSite::Field => (
+            quote!(::std::vec::Vec::new()),
+            quote!(::std::vec::Vec::new()),
+            quote!(::nest_rs_core::__private::GlobalLayers::NONE),
+        ),
+        ChainSite::Operation | ChainSite::Entity => (
+            quote!(<#self_ty>::__nestrs_resolver_interceptor_specs()),
+            quote!(<#self_ty>::__nestrs_resolver_exception_filter_specs()),
+            quote!(::nest_rs_graphql::__private::ROOT_FIELD),
+        ),
+    };
+    let method_guards = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
+    let force = force_guard_typeids(force_guards);
+    let site_kind = kind.path();
+    let label = LitStr::new(label, proc_macro2::Span::call_site());
+    site_items(&SiteItems {
+        self_ty,
+        method,
+        cfgs,
+        host_interceptors,
+        host_exception_filters,
+        interceptors,
+        exception_filters,
+        global,
+        guards: Some(SiteGuards {
+            build: quote!(::nest_rs_graphql::__private::field_guard_stage),
+            declaration: quote! {
+                ::nest_rs_graphql::__private::FieldGuards {
+                    host: <#self_ty>::__nestrs_resolver_guard_specs(),
+                    method: #method_guards,
+                    force: #force,
+                    site: #site_kind,
+                    label: #label,
+                    withheld: #withheld,
+                    class_gated: #class_gated,
+                    ambient: #ambient,
+                }
+            },
+        }),
+        class_gate: gate.clone(),
+    })
+}
+
+/// The return type of the method the expansion emits: always
+/// `async_graphql::Result<T>`, so the pipeline's failure never bounds the
+/// developer's error.
+fn wrapper_output(sig: &Signature) -> syn::ReturnType {
+    let value = returned(sig).value();
+    parse_quote!(-> ::nest_rs_graphql::async_graphql::Result<#value>)
+}
+
+/// What a root field's wrapper answers: its value as a `FieldAnswer`, resolved
+/// under the unit that built it, a `#[subscription]` each item it streams. A
+/// stream a type names is wrapped as it is, `FieldAnswers<S>`: its item read
+/// through `Stream` here, a type that is no stream would fail this signature,
+/// ahead of the body's refusal saying why (`answers_a_stream`).
+fn root_output(sig: &Signature, root: RootKind) -> syn::ReturnType {
+    let value = returned(sig).value();
+    match (root, &value) {
+        (RootKind::Subscription, Type::ImplTrait(stream)) => {
+            let item = stream_item(stream);
+            parse_quote!(
+                -> ::nest_rs_graphql::async_graphql::Result<
+                    impl ::nest_rs_graphql::async_graphql::futures_util::Stream<
+                        Item = ::nest_rs_graphql::__private::FieldAnswer<#item>,
+                    >,
+                >
+            )
+        }
+        (RootKind::Subscription, _) => parse_quote!(
+            -> ::nest_rs_graphql::async_graphql::Result<
+                ::nest_rs_graphql::__private::FieldAnswers<#value>,
+            >
+        ),
+        (RootKind::Query | RootKind::Mutation, _) => parse_quote!(
+            -> ::nest_rs_graphql::async_graphql::Result<
+                ::nest_rs_graphql::__private::FieldAnswer<#value>,
+            >
+        ),
+    }
+}
+
+/// The item a `#[subscription]` returning the `impl` type `stream` yields, read
+/// as async-graphql reads it: the `Item` its last trait bound names, else that
+/// bound's `Stream::Item`.
+fn stream_item(stream: &TypeImplTrait) -> Type {
+    let Some(bound) = stream
+        .bounds
+        .iter()
+        .filter_map(|bound| match bound {
+            TypeParamBound::Trait(bound) => Some(bound),
+            _ => None,
+        })
+        .next_back()
+    else {
+        return Type::ImplTrait(stream.clone());
+    };
+    let named = bound
+        .path
+        .segments
+        .last()
+        .and_then(|last| match &last.arguments {
+            PathArguments::AngleBracketed(args) => args.args.iter().find_map(|arg| match arg {
+                GenericArgument::AssocType(assoc) if assoc.ident == "Item" => {
+                    Some(assoc.ty.clone())
+                }
+                _ => None,
+            }),
+            _ => None,
+        });
+    named.unwrap_or_else(|| {
+        parse_quote!(
+            <dyn #bound as ::nest_rs_graphql::async_graphql::futures_util::Stream>::Item
+        )
+    })
+}
+
+/// The developer's call as the tail's `Result<T, FieldFailure>`. A value
+/// return goes through `nest_rs_core::__private::Answer`, which knows a
+/// `Result` by its type; a `#[subscription]`'s is refused there at compile
+/// time instead.
+fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenStream2 {
+    if let Returned::Fallible(_) = returned(sig) {
+        // By type, never `Into`: an error nobody meant for the client answers
+        // opaquely, its chain logged (`nest_rs_graphql`'s error tiers). The
+        // report is built by its constructor, never by a call here: on a
+        // `Result<T, !>` that call would be unreachable code.
+        return quote! {
+            ::core::result::Result::map_err(
+                ::core::result::Result::map_err(#call, ::nest_rs_graphql::__private::ErrorReport),
+                |__nestrs_report| {
+                    #[allow(unused_imports)]
+                    use ::nest_rs_graphql::__private::{ErrorReportChain as _, ErrorReportDeliberate as _};
+                    __nestrs_report.into_failure()
+                },
+            )
+        };
+    }
+    if root == RootKind::Subscription {
+        let probe = quote_spanned! {answer_span(sig)=>
+            ::nest_rs_graphql::__private::answers_a_stream(::nest_rs_core::__private::Answer(&__answer).kind());
+        };
+        return quote! {{
+            use ::nest_rs_core::__private::AnswerFallback as _;
+            let __answer = #call;
+            #probe
+            ::core::result::Result::<_, ::nest_rs_graphql::__private::FieldFailure>::Ok(__answer)
+        }};
+    }
+    quote! {{
+        use ::nest_rs_core::__private::AnswerFallback as _;
+        let __answer = #call;
+        ::core::result::Result::map_err(
+            ::nest_rs_core::__private::Answer(&__answer)
+                .split::<::nest_rs_graphql::async_graphql::Error>()(__answer),
+            ::nest_rs_graphql::__private::FieldFailure::from,
+        )
+    }}
+}
+
+/// The parameters of `sig` the tail resolves, each with its type.
+fn tail_args(sig: &Signature) -> Vec<(Ident, Type, TailParam)> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| {
+            let FnArg::Typed(pt) = arg else { return None };
+            let syn::Pat::Ident(pi) = &*pt.pat else {
+                return None;
+            };
+            tail_param(&pt.ty).map(|kind| (pi.ident.clone(), (*pt.ty).clone(), kind))
+        })
+        .collect()
+}
+
+/// The `Scoped<T>` types among `tail`, whose providers the access graph checks.
+fn scoped_types(tail: &[(Ident, Type, TailParam)]) -> impl Iterator<Item = Type> + '_ {
+    tail.iter()
+        .filter(|(_, _, kind)| *kind == TailParam::Scoped)
+        .map(|(_, ty, _)| ty.clone())
+}
+
+/// The tail statements resolving each of `tail`'s parameters.
+fn tail_bindings(tail: &[(Ident, Type, TailParam)]) -> Vec<TokenStream2> {
+    tail.iter()
+        .map(|(ident, ty, kind)| match kind {
+            TailParam::Scoped => quote! {
+                let #ident: #ty = ::nest_rs_graphql::__private::scoped_parameter()?;
+            },
+            TailParam::Ambient => quote! {
+                let #ident: #ty = ::nest_rs_graphql::__private::ambient_parameter()?;
+            },
+        })
+        .collect()
+}
+
 const ROLE_ATTRS: [&str; 5] = [
     "query",
     "mutation",
@@ -634,34 +839,12 @@ const ROLE_ATTRS: [&str; 5] = [
 ];
 
 /// What an `#[entity]` owes beyond what a `#[query]` owes, refused at its own
-/// span rather than inside async-graphql's derive.
-///
-/// **Five, in the order they are checked**, and naming them is the point — a
-/// count drifts the moment one is added:
+/// span rather than inside async-graphql's derive:
 ///
 /// 1. no `#[entity(...)]` arguments — the `@key` is read off the method's own;
-/// 2. `async`;
-/// 3. no `#[graphql(...)]` of the method's own;
-/// 4. at least one argument, since those arguments *are* the key;
-/// 5. a `Result` return.
-///
-/// Four of the five are async-graphql's rules reworded and re-spanned: it
-/// reports "Entity need to have at least one key" and "Must be asynchronous"
-/// against the `#[operations]` attribute, followed by a cascade naming a
-/// generated type the developer never wrote. The fifth is this framework's, and
-/// it is the load-bearing one — see the `Result` arm.
-///
-/// **Two more live outside this function**, because they are not the entity's
-/// alone: `bind = Service` is refused in `resolver_impl_inner` (where the
-/// posture is parsed), and `check_operations` refuses at boot an `#[entity]`
-/// whose resolved type the registry keys nothing on — a fact only the registry
-/// holds. Two others bind every operation, entity included: a misplaced
-/// `&Context` and a `#[version]`.
+/// 2. no `#[graphql(...)]` of the method's own;
+/// 3. at least one argument, since those arguments *are* the key.
 fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> syn::Result<()> {
-    // `#[entity(key = "id")]` is the first thing a developer arriving from
-    // Apollo reaches for, and the key is not theirs to declare: async-graphql
-    // reads it off the resolver's own arguments. Accepting and discarding it
-    // would be the ignored argument the rules call silence.
     if !matches!(attr.meta, syn::Meta::Path(_)) {
         return Err(syn::Error::new_spanned(
             attr,
@@ -670,20 +853,7 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
              parameter to change the key",
         ));
     }
-    if sig.asyncness.is_none() {
-        return Err(syn::Error::new_spanned(
-            &sig.ident,
-            "an `#[entity]` method must be `async` — the router resolves references \
-             concurrently, and async-graphql's entity resolver is awaited",
-        ));
-    }
-    // async-graphql's derive parses the **first** `graphql` attribute on a method
-    // and removes exactly one, so a developer's `#[graphql(name = …)]` consumes
-    // the slot and the `#[graphql(entity)]` this decorator emits is silently
-    // dropped — the method stops being an entity resolver, and what the compiler
-    // then reports is a leftover attribute against `#[operations]`. There is no
-    // working spelling to redirect to, `#[graphql(entity, name = …)]` colliding
-    // the same way, so the refusal names the limit rather than an alternative.
+    // async-graphql's derive reads only the first `graphql` attribute on a method.
     if let Some(attr) = other.iter().find(|a| a.path().is_ident("graphql")) {
         return Err(syn::Error::new_spanned(
             attr,
@@ -694,11 +864,12 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
              type's own `#[graphql(...)]`",
         ));
     }
-    // No argument ⇒ no `@key` ⇒ async-graphql refuses the whole schema, from
-    // inside its derive, naming a generated type.
     let ctx = ctx_param_ident(sig);
     let keys = sig.inputs.iter().filter(|arg| match arg {
         FnArg::Receiver(_) => false,
+        FnArg::Typed(pt) if tail_param(&pt.ty).is_some() || loader_read_by(&pt.ty).is_some() => {
+            false
+        }
         FnArg::Typed(pt) => match &*pt.pat {
             syn::Pat::Ident(pi) => Some(&pi.ident) != ctx.as_ref(),
             _ => true,
@@ -712,22 +883,33 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
              is a type no router can address",
         ));
     }
-    // The one rule that is ours, and the reason it is stricter here than on a
-    // `#[query]`: the resolver-scope guard chain is only emitted for a
-    // `Result`-returning operation, because a bare-return body has nowhere to
-    // put a denial. On a `#[query]` that trade is visible — the operation is in
-    // the document and a reviewer reads its signature. An entity is reached
-    // through `_entities` for a type the client never named, so a silently
-    // omitted chain is invisible from both the schema and the wire.
-    if !sig_returns_result(sig) {
-        return Err(syn::Error::new_spanned(
-            &sig.output,
-            "an `#[entity]` returns `Result<...>`: the guard chain is only emitted where a \
-             denial has somewhere to go, and this is the one operation a client never \
-             names — a resolver-scope `#[use_guards]` compiled out here is invisible in \
-             the schema and on the wire. Spell it `Result<T>`, or `Result<Option<T>>` for \
-             a reference that may resolve to nothing",
-        ));
+    Ok(())
+}
+
+/// async-graphql's `#[graphql(entity)]` on any role but `#[entity]`: it keys
+/// the returned type, so the schema serves `_service` and `_entities` from a
+/// method no entity posture, federation site or boot check reads.
+fn refuse_entity_by_hand(role: &Attribute, attrs: &[Attribute]) -> syn::Result<()> {
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident("graphql")) {
+        let Ok(list) = attr.meta.require_list() else {
+            continue;
+        };
+        let metas = list.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        )?;
+        if let Some(entity) = metas.iter().find(|meta| meta.path().is_ident("entity")) {
+            let role = key_as_written(role.path());
+            return Err(syn::Error::new_spanned(
+                entity,
+                format!(
+                    "`#[graphql(entity)]` beside `#[{role}]` keys its type behind the \
+                     decorator's back: async-graphql then serves `_service` and `_entities` \
+                     whatever `GraphqlConfig::federation` says, outside the guard pool the \
+                     federation fields run and the boot's subgraph check. Write the method as \
+                     an `#[entity]`, which declares its posture and is served only by a subgraph"
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -741,21 +923,13 @@ fn resolver_impl(item: ItemImpl) -> TokenStream {
     }
 }
 
-/// The `#[operations]` expansion, returning `syn::Result<TokenStream2>`
-/// so its gates are unit-testable without the `proc_macro` bridge —
-/// `resolver_impl` is the thin `proc_macro::TokenStream` wrapper, the same
-/// `entry`/`crud` split `#[crud]` uses. The mandatory-posture check below is
-/// security-load-bearing: a `#[query]`/`#[mutation]` carrying neither
-/// `#[authorize(...)]` nor `#[public]` must be a compile error, never an
-/// ungated, unmasked operation.
+/// The `#[operations]` expansion, unit-testable without the `proc_macro` bridge.
+/// The mandatory-posture check is security-load-bearing.
 fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let self_ty = item.self_ty.clone();
 
     let base = impl_self_ident(&self_ty, "#[operations]")?;
 
-    // Module-gating uses `TypeId::of::<Self>()` so `Self` must be `'static`.
-    // Reject generics here for a friendly span — otherwise the user sees a
-    // deep-in-macro `T: 'static` failure on the inventory submission.
     if !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.generics,
@@ -765,13 +939,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         ));
     }
 
-    // `#[use_guards(...)]` belongs on the struct (provider scope), uniform
-    // with `#[controller]` and `#[gateway]`. Catch the legacy impl-block
-    // placement here with a redirect message — the impl-form has no other
-    // role for it (the struct-form parses and exposes it via
-    // `__nestrs_resolver_guard_specs()`).
-    GRAPHQL_PAIR.reject_host_layers(&item.attrs)?;
-    reject_http_only_layers(&item.attrs, "GraphQL", "resolver")?;
+    pair::GRAPHQL.reject_host_layers(&item.attrs)?;
+    reject_meta_on_operations(&pair::GRAPHQL, &item.attrs)?;
 
     let query_obj = format_ident!("__{}Query", base);
     let mutation_obj = format_ident!("__{}Mutation", base);
@@ -780,118 +949,149 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let mut query_methods: Vec<TokenStream2> = Vec::new();
     let mut mutation_methods: Vec<TokenStream2> = Vec::new();
     let mut subscription_methods: Vec<TokenStream2> = Vec::new();
-    // One `(method, resolved GraphQL type name)` per `#[entity]`, submitted with
-    // the `Query` root — see where they are pushed.
     let mut entity_claims: Vec<TokenStream2> = Vec::new();
-    // async-graphql wants one `#[ComplexObject]` per parent type, so a
-    // resolver's `#[field_resolver]` methods for the same parent merge into one impl.
+    // One per operation writing an entity beside `bind`: the service's own.
+    let mut bound_entities: Vec<TokenStream2> = Vec::new();
+    // One per bound operation: the unit of work its subject loads in.
+    let mut unit_requirements: Vec<TokenStream2> = Vec::new();
+    // Each field's handler and site, and the sites the boot composes.
+    let mut sites: Vec<TokenStream2> = Vec::new();
+    let mut site_refs: Vec<(Vec<TokenStream2>, TokenStream2)> = Vec::new();
+    // async-graphql allows one `#[ComplexObject]` per parent type.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
-    // Extra access-contract deps on top of the struct's `#[inject]` keys:
-    // per-method guards + `#[field_resolver]` `&Service` injections.
-    // Resolver-scope guards live in the struct's `__nestrs_injected()`
-    // (parallel to `#[controller]` / `#[gateway]`).
-    let mut all_guard_paths: Vec<Path> = Vec::new();
-    let mut field_dep_types: Vec<Type> = Vec::new();
+    let mut all_guard_paths: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
+    let mut all_layer_paths: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
+    let mut field_dep_types: Vec<(Vec<TokenStream2>, Type)> = Vec::new();
+    // One per field resolver and per `&DataLoader<L>` parameter: what the schema
+    // build reads a served field's needs off.
+    let mut field_needs: Vec<TokenStream2> = Vec::new();
+    let mut scoped_params: Vec<(Vec<TokenStream2>, Type)> = Vec::new();
+    // async-graphql does not refuse two methods on one field: its registry keeps
+    // the last, its dispatch the first.
+    let mut declared = DispatchKeys::new(
+        "#[operations]",
+        "a schema resolves each field of a type with one method, so the SDL would document \
+         one and the dispatch run the other — give one a distinct name",
+    );
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
 
-        let is_verb = |a: &Attribute| ROLE_ATTRS.iter().any(|name| a.path().is_ident(name));
-        let verb_idx = method.attrs.iter().position(&is_verb);
-        let Some(idx) = verb_idx else { continue };
+        let written: Vec<String> = method
+            .attrs
+            .iter()
+            .filter(|a| ROLE_ATTRS.iter().any(|name| a.path().is_ident(name)))
+            .map(|a| key_as_written(a.path()))
+            .collect();
+        let why = if written.iter().any(|role| role == "entity")
+            && written.iter().any(|role| role != "entity")
+        {
+            " An entity resolver is a `Query`-root field — the router reaches it through \
+              `_entities`, which the `Mutation` and `Subscription` roots do not have."
+        } else {
+            ""
+        };
+        let Some(idx) = one_role_per_method("role", &method.attrs, &ROLE_ATTRS, why)? else {
+            continue;
+        };
+        shared_receiver(method, "#[operations]", &base, HostBorrow::Host)?;
+        concrete_signature(method, "#[operations]")?;
+        let cfgs = cfg_attrs(&method.attrs);
 
         let verb_attr = method.attrs.remove(idx);
-        // Not on a `#[field_resolver]`: its position 1 is the **parent**, so a
-        // `&Context` correctly comes second there — see `field_method`, which
-        // forwards it.
+        // A `#[field_resolver]`'s position 1 is the parent; its `&Context` comes second.
         if !verb_attr.path().is_ident("field_resolver") {
             reject_misplaced_ctx(&method.sig)?;
         }
-        // `#[version]` narrows an HTTP *route* out of the versions its
-        // controller mounts. A GraphQL operation has no address to narrow, and
-        // left alone this is `cannot find attribute `version` in this scope` —
-        // which names neither the edge nor the reason, and reads as a missing
-        // import. Same sentence as the one `#[resolver(version = …)]` gets: the
-        // fact is the edge's, not the site's.
         if let Some(version) = method.attrs.iter().find(|a| a.path().is_ident("version")) {
-            return Err(Edge::Graphql.refuse_version(version));
-        }
-        // One method, one role. `#[entity]` beside `#[mutation]` is the shape
-        // that motivates saying so: an entity is resolved **by reference**, from
-        // the `_entities` field the router calls on the `Query` root, and no
-        // other root has one. Silently keeping the first attribute would mount
-        // the operation under a role the developer did not write.
-        if let Some(second) = method.attrs.iter().find(|a| is_verb(a)) {
-            let first = nest_rs_codegen::key_as_written(verb_attr.path());
-            let second_role = nest_rs_codegen::key_as_written(second.path());
-            // The `_entities` clause only when one of the two *is* `#[entity]`:
-            // explaining `#[query]` + `#[mutation]` with the federation root is
-            // an answer to a question the developer did not ask.
-            let why = if first == "entity" || second_role == "entity" {
-                " An entity resolver is a `Query`-root field — the router reaches it through \
-                  `_entities`, which the `Mutation` and `Subscription` roots do not have."
-            } else {
-                ""
-            };
-            // Wraps the shared sentence rather than replacing it: the
-            // `_entities` clause is content the other four sites have nothing
-            // to say, and the module's own convention is that a site with more
-            // to say wraps.
-            let declared = [first, second_role];
-            return Err(syn::Error::new_spanned(
-                second,
-                format!(
-                    "{}{why}",
-                    nest_rs_codegen::one_role_per_method("role", &declared, &ROLE_ATTRS),
-                ),
-            ));
+            return Err(VersionedEdge::Graphql.refuse_version(version));
         }
         let is_entity = verb_attr.path().is_ident("entity");
         if is_entity {
             entity_refusals(&verb_attr, &method.attrs, &method.sig)?;
+        } else {
+            refuse_entity_by_hand(&verb_attr, &method.attrs)?;
         }
 
-        reject_http_only_layers(&method.attrs, "GraphQL", "operation")?;
-        let method_guards = take_use_guards(&mut method.attrs)?;
-        let force_method_guards = take_force_guards(&mut method.attrs)?;
-        // The operation's access posture: `#[authorize(Action, Entity)]`
-        // (class gate + automatic response masking) or `#[public]`
-        // (deliberately ungated). Exactly one is required on every
-        // `#[query]`/`#[mutation]` — see the posture check below.
-        let authorize_spec = take_authorize(&mut method.attrs)?;
-        let is_public = take_flag_attr(&mut method.attrs, "public")?;
-        all_guard_paths.extend(method_guards.iter().cloned());
-        all_guard_paths.extend(force_method_guards.iter().cloned());
-        // `#[field_resolver]` skips resolver-level guards: a field resolver
-        // runs per-row, and the operation's auth posture is already enforced
-        // by the operation guard plus the resolver-level guard on the root
-        // query/mutation. Running it per row would just re-probe the
-        // ability for every element. A `#[field_resolver]` needing its own
-        // gate still binds `#[use_guards]` at the method level. The access
-        // graph still sees the resolver-level dependency via `all_guard_paths`.
+        let Layers {
+            guards: method_guards,
+            force_guards: force_method_guards,
+            interceptors: method_interceptors,
+            exception_filters: method_exception_filters,
+            meta: metas,
+            ..
+        } = take_layers(&pair::GRAPHQL, LayerScope::Method, &mut method.attrs)?;
+        let (authorize_spec, is_public) =
+            take_posture(&mut method.attrs, &method.sig.ident, "operation", gate_of)?;
+        all_guard_paths.extend(
+            method_guards
+                .iter()
+                .map(|guard| (cfgs.clone(), guard.clone())),
+        );
+        all_layer_paths.extend(
+            method_guards
+                .iter()
+                .chain(&method_interceptors)
+                .chain(&method_exception_filters)
+                .map(|layer| (cfgs.clone(), layer.clone())),
+        );
         let is_field = verb_attr.path().is_ident("field_resolver");
+        if is_field && !metas.is_empty() {
+            return Err(syn::Error::new_spanned(
+                &method.sig.ident,
+                "a `#[field_resolver]` runs under the root field that produced its parent, and \
+                 declares no `#[meta]` of its own — declare it on that root field, or on the \
+                 resolver struct",
+            ));
+        }
 
-        // The delegating method keeps the signature and any remaining attrs
-        // (`#[graphql(...)]` belongs there); the inherent method holds the body.
-        let deleg_attrs = method.attrs.clone();
+        // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside `#[cfg_attr]`.
+        let mut deleg_attrs = delegated_attrs(&method.attrs);
+        let mut field = camel_case(&method.sig.ident.unraw().to_string());
+        if !is_entity {
+            match graphql_name(&method.attrs)? {
+                Some(name) => field = name,
+                None => name_the_field(&mut deleg_attrs, &field)?,
+            }
+            let (identity, key) = if is_field {
+                let parent = field_parent_label(&method.sig);
+                (
+                    format!("{parent} {field}"),
+                    format!("#[field_resolver] {parent}.{field}"),
+                )
+            } else {
+                let root = key_as_written(verb_attr.path());
+                (format!("{root} {field}"), format!("#[{root}] {field}"))
+            };
+            declared.declare(
+                "field",
+                &identity,
+                &key,
+                &method.sig.ident,
+                &cfgs,
+                &verb_attr,
+            )?;
+        }
         let mut sig = method.sig.clone();
-        // Give each argument a plain binding name before anything keys off it:
-        // `Valid(Json(input)): Valid<Json<Dto>>` becomes `input: Valid<Json<Dto>>`
-        // here, so the pipe detection, the wrapper signature (whose parameter
-        // names are the SDL argument names) and the forwarded call all see one
-        // ident. The developer's method keeps its pattern — this is a clone.
+        // A plain binding name per argument: the wrapper's parameter names are the SDL's.
         normalize_forwarded_args(sig.inputs.iter_mut())?;
         let sig = sig;
         let method_name = method.sig.ident.clone();
+        // Off the normalized signature, the one the wrapper resolves them from:
+        // `Scoped(x): Scoped<T>` is a `Scoped<T>` whatever its pattern.
+        let tail = tail_args(&sig);
+        scoped_params.extend(scoped_types(&tail).map(|ty| (cfgs.clone(), ty)));
+        let ambient = ambient_type_ids(tail.iter().map(|(_, ty, _)| ty));
+        sites.push(no_row_answered(
+            &method_name,
+            &cfgs,
+            return_type(&method.sig.output).as_slice(),
+        ));
+        sites.push(no_tail_decoded(&method_name, &cfgs, &method.sig.inputs));
 
         if is_field {
-            // A field resolver runs per-row inside an operation whose posture
-            // (`#[authorize]`/`#[public]`) was already enforced on the root
-            // query/mutation — a posture attribute here would be a silent
-            // no-op lie, so reject it (same stance as `#[public]` on a WS
-            // `#[subscribe_message]`).
             if authorize_spec.is_some() || is_public {
                 return Err(syn::Error::new_spanned(
                     &method.sig.ident,
@@ -900,18 +1100,46 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                      for an extra per-field gate bind `#[use_guards(...)]` here",
                 ));
             }
-            // Field resolvers gate per-row — they never replay the global
-            // chain; only their own `#[use_guards]` apply.
-            let field_label = format!("{}.{}", quote!(#self_ty), method_name);
-            let (parent_ty, deleg, deps) = field_method(
-                &self_ty,
-                &deleg_attrs,
-                &sig,
-                &method_guards,
-                &force_method_guards,
-                &field_label,
-            )?;
-            field_dep_types.extend(deps);
+            let field_label = format!("{}.{}", type_label(&self_ty), method_name);
+            sites.push(handler_const(&HandlerSite {
+                unit: quote!(::nest_rs_graphql::unit::FIELD),
+                self_ty: &self_ty,
+                host_name: &base,
+                method: &method_name,
+                address: quote!(#field),
+                posture: SitePosture::Gated,
+                host_meta: HostMeta::Struct,
+                method_meta: &[],
+                cfgs: &cfgs,
+            }));
+            sites.push(field_site(&FieldSite {
+                self_ty: &self_ty,
+                method: &method_name,
+                cfgs: &cfgs,
+                site: ChainSite::Field,
+                label: &field_label,
+                guards: &method_guards,
+                force_guards: &force_method_guards,
+                interceptors: &method_interceptors,
+                exception_filters: &method_exception_filters,
+                gate: None,
+                withheld: quote!(false),
+                ambient,
+            }));
+            site_refs.push((cfgs.clone(), site_ref(&self_ty, &method_name)));
+            let FieldMethod {
+                parent: parent_ty,
+                method: deleg,
+                injected,
+                loaders,
+            } = field_method(&self_ty, &deleg_attrs, &sig)?;
+            field_dep_types.extend(injected.into_iter().map(|dep| (cfgs.clone(), dep)));
+            field_needs.push(field_served(&self_ty, &parent_ty, &field, &cfgs));
+            field_needs.extend(
+                loaders
+                    .iter()
+                    .map(|loader| loader_read(&parent_ty, &field, loader, &cfgs)),
+            );
             let key = field_parent_key(&parent_ty);
             match field_groups
                 .iter_mut()
@@ -921,25 +1149,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 None => field_groups.push((parent_ty, vec![deleg])),
             }
         } else {
-            // Posture is mandatory and fail-secure: an operation the developer
-            // forgot to think about does not compile, instead of shipping
-            // ungated and unmasked. `#[authorize]` needs a `Result` return so
-            // the gate's denial (and a masking failure) can surface.
+            // Posture is mandatory and fail-secure.
             match (&authorize_spec, is_public) {
-                (Some(_), true) => {
-                    return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        nest_rs_codegen::posture_contradiction(),
-                    ));
-                }
-                (Some(_), false) if !sig_returns_result(&method.sig) => {
-                    return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        "`#[authorize(...)]` needs a `Result` return type so a denial (and a \
-                         masking failure) can surface as a GraphQL error; a bare-return \
-                         operation can only be `#[public]`",
-                    ));
-                }
                 (None, false) if is_entity => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
@@ -947,76 +1158,59 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                          forgetting is invisible: the router calls `_entities` with a *reference* \
                          — `{__typename, <key fields>}` — for an entity the client never named, so \
                          an ungated one is readable from outside every `#[authorize]` in the \
-                         schema. Write `#[authorize(Action, Entity)]` (class gate + response mask) \
-                         or `#[public]`",
+                         schema. Write `#[authorize(Action, Subject)]` (class gate, and the \
+                         reads it opens) or `#[public(Action, Subject)]`, or a bare `#[public]` for an \
+                         entity reading nothing a grant guards",
                     ));
                 }
                 (None, false) => {
-                    return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        nest_rs_codegen::posture_required(
-                            "`#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]`",
-                            "no `#[authorize]` gate and no response mask — `#[use_guards]` \
-                             guards still run",
-                        ),
-                    ));
+                    return Err(syn::Error::new_spanned(&method.sig.ident, POSTURE_REQUIRED));
                 }
                 _ => {}
             }
             let root_kind = if verb_attr.path().is_ident("query") || is_entity {
-                // An entity resolver is a `Query`-root field carrying
-                // `#[graphql(entity)]`: async-graphql moves it out of the query
-                // fields and behind `_entities`, and infers the `@key` from its
-                // own arguments. Everything above that — the chain, the gate,
-                // the pipes, the mask — is a `#[query]`'s, because what the
-                // router calls is an operation like any other.
+                // An entity resolver is a `Query`-root field, moved behind `_entities`.
                 RootKind::Query
             } else if verb_attr.path().is_ident("mutation") {
                 RootKind::Mutation
             } else {
                 RootKind::Subscription
             };
-            // async-graphql's `#[Subscription]` awaits the method before it has
-            // a stream to poll, so a synchronous one cannot exist. Caught here
-            // for a span on the method rather than inside the derive's
-            // expansion, where the message names async-graphql's own rule.
-            if root_kind == RootKind::Subscription && sig.asyncness.is_none() {
-                return Err(syn::Error::new_spanned(
-                    &method.sig.ident,
-                    "a `#[subscription]` method must be `async` — it is awaited once to \
-                     produce the stream the client then reads",
-                ));
-            }
-            // async-graphql decides "is this fallible?" by the **spelling** of
-            // the return type's last path segment, so an aliased `Result`
-            // (`use async_graphql::Result as GqlResult`) is read as an ordinary
-            // value and the stream type becomes the `Result` itself. On a query
-            // that is harmless; on a subscription it is a wall of trait errors
-            // pointing at the derive. Same syntactic rule `#[messages]` states
-            // for a masked WS reply — named here rather than discovered.
+            sites.push(handler_const(&HandlerSite {
+                unit: match root_kind {
+                    RootKind::Subscription => quote!(::nest_rs_graphql::unit::SUBSCRIPTION),
+                    RootKind::Query | RootKind::Mutation => {
+                        quote!(::nest_rs_graphql::unit::FIELD)
+                    }
+                },
+                self_ty: &self_ty,
+                host_name: &base,
+                method: &method_name,
+                address: quote!(#field),
+                posture: if is_public {
+                    SitePosture::Public
+                } else {
+                    SitePosture::Gated
+                },
+                host_meta: HostMeta::Struct,
+                method_meta: &metas,
+                cfgs: &cfgs,
+            }));
+            // async-graphql's subscription derive builds paths out of the return
+            // type, and Rust refuses an `impl Trait` inside a path (E0562).
             if root_kind == RootKind::Subscription
-                && let Some(alias) = aliased_result_ident(&sig)
+                && let Returned::Value(ty) = returned(&sig)
+                && nests_impl_trait(&ty)
             {
                 return Err(syn::Error::new_spanned(
                     &method.sig.output,
-                    format!(
-                        "spell a `#[subscription]`'s fallible return as `Result<...>`, not \
-                         `{alias}<...>`: async-graphql reads the last path segment of the \
-                         return type, so an alias is taken for an ordinary value and the \
-                         stream type becomes the `Result`"
-                    ),
+                    "a `#[subscription]` returns `impl Stream<Item = T>`, a stream type, or one \
+                     of those inside `Result<…>` / `FieldResult<…>`. This return nests an `impl \
+                     Trait` inside another path, and async-graphql's derive builds paths from \
+                     the return type, where Rust refuses one (E0562): if it is a `Result` under \
+                     another name, spell it `Result<…>`",
                 ));
             }
-            // `bind = Service`: the operation declares its subject as an
-            // `Authorized<Action, E>` parameter; the wrapper exposes a by-id
-            // GraphQL argument in its place, binds it through `bind_required`
-            // (which mints the proof for the attribute's action), and forwards
-            // it — so the resolver body never parses an id or touches raw ORM.
-            // The HTTP `Bind<A, S>` extractor, expressed for GraphQL through the
-            // posture attribute that already carries the action + entity
-            // (declared once, no duplicate).
-            // Pair the spec with its `bind` service only when set — carries the
-            // action alongside so the prelude never re-derives it from the spec.
             if is_entity
                 && let Some(spec) = authorize_spec.as_ref()
                 && let Some(bind) = spec.bind.as_ref()
@@ -1039,13 +1233,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             {
                 Some((spec, service)) => {
                     let Some(subject_ident) = authorized_param_ident(&sig) else {
-                        return Err(syn::Error::new_spanned(
-                            &method_name,
-                            "`#[authorize(Action, bind = Service)]` needs a parameter of type \
-                             `Authorized<Action, E>` to receive the bound subject — the action in \
-                             the type must match the one in the attribute (e.g. \
-                             `#[authorize(Update, bind = FilesService)]` ⇒ `Authorized<Update, FileEntity>`)",
-                        ));
+                        return Err(syn::Error::new_spanned(&method_name, BIND_NEEDS_AUTHORIZED));
                     };
                     let id_ident = spec.id_arg.clone().unwrap_or_else(|| format_ident!("id"));
                     Some((
@@ -1055,35 +1243,63 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         spec.action.clone(),
                     ))
                 }
-                None => None,
+                None => {
+                    if let Some(param) = authorized_param(&sig) {
+                        return Err(syn::Error::new_spanned(param, AUTHORIZED_NEEDS_BIND));
+                    }
+                    None
+                }
             };
-            // The wrapper signature: with `bind`, the `Authorized<A, E>`
-            // parameter (not a GraphQL `InputType`) is replaced by the `id`
-            // string argument the SDL exposes; without `bind`, it is the
-            // method's own.
-            // Per-argument pipes: `Piped<P, T>` / `Valid<T>` parameters. The
-            // wrapper exposes `T` on the wire, runs the pipe, and forwards the
-            // carrier — the resolver body only ever calls the service.
-            let piped = piped_args(&sig);
-            // A pipe can reject, and a rejection has to reach the client — so
-            // the wrapper propagates it with `?`, which a bare-return operation
-            // has nowhere to put. Named here rather than surfacing as "cannot
-            // use the `?` operator" pointing at `#[operations]`, which says
-            // nothing about the pipe that caused it.
-            if !piped.is_empty() && !sig_returns_result(&method.sig) {
-                return Err(syn::Error::new_spanned(
-                    &method.sig.ident,
-                    "an operation taking a `Piped<P, T>` / `Valid<T>` argument returns \
-                     `Result<...>`: a pipe rejects invalid input, and the rejection has to \
-                     surface as a GraphQL error rather than being swallowed",
-                ));
+            // The bound service resolves per call, so the boot checks its
+            // provider as it checks a `Scoped<T>` parameter's.
+            if let Some((service, ..)) = &bind_info {
+                scoped_params.push((cfgs.clone(), parse_quote!(::nest_rs_core::Scoped<#service>)));
+                unit_requirements.push(unit_of_work_required(&self_ty, &cfgs));
             }
-            // The wrapper signature strips both bind and pipe wrappers from the
-            // wire: the `Authorized<A, E>` subject becomes the `id` string
-            // argument, and each `Piped<P, T>` / `Valid<T>` becomes its wire
-            // value type `T`. Everything else is the method's own.
+            // Under `bind` with no entity written, the posture reads the `E` of
+            // the `Authorized<Action, E>` parameter, asserted the service's once
+            // rather than projected off the service at every use.
+            let subject_entity: Option<TokenStream2> =
+                authorize_spec
+                    .as_ref()
+                    .and_then(|spec| match (&spec.entity, &spec.bind) {
+                        (Some(entity), _) => Some(quote!(#entity)),
+                        (None, Some(_)) => {
+                            authorized_entity(&sig.inputs).map(|entity| quote!(#entity))
+                        }
+                        (None, None) => None,
+                    });
+            if let (
+                Some(entity),
+                Some(AuthorizeSpec {
+                    bind: Some(service),
+                    ..
+                }),
+            ) = (&subject_entity, &authorize_spec)
+            {
+                bound_entities.push(quote_spanned! {entity.span()=>
+                    #(#cfgs)*
+                    const _: () = ::nest_rs_seaorm::__private::bound_entity::<#service, #entity>();
+                });
+            }
+            let piped = piped_args(&sig);
+            // On the wire, the bound subject becomes its `id` string and each pipe its
+            // `T`; a `Scoped<T>`, an `Ambient<T>` or a `&DataLoader<L>` is no argument
+            // at all.
             let wrapper_sig = {
                 let mut s = sig.clone();
+                s.inputs = s
+                    .inputs
+                    .into_iter()
+                    .filter(|input| {
+                        !matches!(
+                            input,
+                            FnArg::Typed(pt)
+                                if tail_param(&pt.ty).is_some()
+                                    || loader_read_by(&pt.ty).is_some()
+                        )
+                    })
+                    .collect();
                 for input in s.inputs.iter_mut() {
                     let FnArg::Typed(pt) = input else { continue };
                     let Some(arg_ident) = (match &*pt.pat {
@@ -1106,8 +1322,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 s
             };
             let arg_idents = forwarded_arg_idents(&sig)?;
-            // Forward the original args, swapping the subject ident for the
-            // locally-bound `__subject` proof when `bind` is set.
             let call_args: Vec<TokenStream2> = arg_idents
                 .iter()
                 .map(|ident| match &bind_info {
@@ -1117,54 +1331,31 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     _ => quote!(#ident),
                 })
                 .collect();
-            let call = if sig.asyncness.is_some() {
-                quote! { self.0.#method_name(#(#call_args),*).await }
-            } else {
-                quote! { self.0.#method_name(#(#call_args),*) }
-            };
-            // Global guard chain runs on `Result`-returning queries/mutations
-            // only (bare-return resolvers can't surface a denial). Local
-            // `#[use_guards]` chain runs through the same chain helper.
-            let needs_global = sig_returns_result(&sig);
+            // By path, never `self.0.method(..)`: method lookup tries the `Arc` first, so
+            // a same-named trait method on `Arc<T>` would run instead.
+            let call = call_as_result(
+                &sig,
+                await_if_async(
+                    &sig,
+                    quote! { <#self_ty>::#method_name(&*self.0, #(#call_args),*) },
+                ),
+                root_kind,
+            );
             let role_label = if is_entity {
                 ENTITY_ROLE
             } else {
                 root_kind.label()
             };
             let route_label = format!("{role_label} {method_name}");
-            // Same label the guard chain logs under, reused as the structured
-            // field on a dropped subscription item so one grep answers "which
-            // operation refused this?" whichever layer refused it.
-            let route_label_lit = LitStr::new(&route_label, proc_macro2::Span::call_site());
-            // Always emit the chain: even when the method declares no
-            // method-scope guards, the struct may have declared
-            // resolver-scope guards (read at runtime through
-            // `__nestrs_resolver_guard_specs()`). Bare-return resolvers
-            // can't surface a denial, so they still skip globals — the
-            // chain helper's `run_layered_graphql_chain` is harmless when
-            // every scope is empty.
-            let (gsig, gctx) = ensure_ctx_param(&wrapper_sig);
-            let checks = layered_resolver_chain(
-                &self_ty,
-                &method_guards,
-                &force_method_guards,
-                &gctx,
-                &route_label,
-                needs_global,
-                is_entity,
-            );
-            // `#[authorize(A, E)]`: class gate before the call, automatic
-            // response masking after it — the same two effects the HTTP
-            // `Authorize<A, E>` extractor + response shaper carry, emitted
-            // here so a hand-written operation writes neither by hand.
-            // The entity the gate + mask act on: written explicitly, or — when
-            // `bind = Service` is set and the entity was omitted — derived from
-            // `<Service as CrudService>::Entity` so it is never retyped. Computed
-            // from the spec at each use site (gate + mask), never an unwrap of a
-            // separately-built `Option`.
-            let authz_entity = |spec: &AuthorizeSpec| match &spec.entity {
-                Some(entity) => quote!(#entity),
+            let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
+            gsig.output = root_output(&sig, root_kind);
+            let authz_entity = |spec: &AuthorizeSpec| match &subject_entity {
+                Some(entity) => entity.clone(),
                 None => {
+                    #[expect(
+                        clippy::expect_used,
+                        reason = "a compile-time invariant of the parse above; a panic in a proc macro is a compile error"
+                    )]
                     let service = spec
                         .bind
                         .as_ref()
@@ -1175,155 +1366,152 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let gate = authorize_spec.as_ref().map(|spec| {
                 let action = &spec.action;
                 let entity = authz_entity(spec);
-                quote! {
-                    ::nest_rs_authz::graphql::authorize::<#action, #entity>(#gctx)?;
-                }
+                quote!(::nest_rs_authz::class_gate::<#action, #entity>)
             });
-            // `bind = Service`: load + authorize the subject row from the id
-            // argument and bind it to `__subject` before the call. Runs after
-            // the class gate (cheap, no DB) so a class-denied caller never hits
-            // the database. Missing row → NOT_FOUND, denied row → FORBIDDEN.
+            let withheld = withheld(authorize_spec.is_some());
+            let chain_site = if is_entity {
+                ChainSite::Entity
+            } else {
+                ChainSite::Operation
+            };
+            sites.push(field_site(&FieldSite {
+                self_ty: &self_ty,
+                method: &method_name,
+                cfgs: &cfgs,
+                site: chain_site,
+                label: &route_label,
+                guards: &method_guards,
+                force_guards: &force_method_guards,
+                interceptors: &method_interceptors,
+                exception_filters: &method_exception_filters,
+                gate,
+                withheld,
+                ambient,
+            }));
+            let site = site_ref(&self_ty, &method_name);
+            site_refs.push((cfgs.clone(), site.clone()));
+            // After the class gate, so a class-denied caller never reaches the database.
             let bind_prelude = bind_info.as_ref().map(|(service, _, id_ident, action)| {
                 quote! {
-                    let __subject = ::nest_rs_seaorm::graphql::bind_required::<#action, #service>(
+                    let __subject = ::nest_rs_seaorm::__private::graphql_bind::<#action, #service>(
                         #gctx, &#id_ident,
-                    ).await?;
+                    )
+                    .await
+                    .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
                 }
             });
-            let body = match authorize_spec.as_ref().filter(|spec| !spec.unmasked) {
-                Some(spec) => {
-                    let action = &spec.action;
-                    let entity = authz_entity(spec);
-                    match root_kind {
-                        // A query or a mutation answers once, so the posture's
-                        // mask runs once, over the value.
-                        RootKind::Query | RootKind::Mutation => quote! {
-                            match #call {
-                                ::core::result::Result::Ok(__out) => ::core::result::Result::Ok(
-                                    ::nest_rs_authz::graphql::masked_value_for::<#action, #entity, _>(
-                                        #gctx, __out,
-                                    )?,
-                                ),
-                                ::core::result::Result::Err(__err) =>
-                                    ::core::result::Result::Err(__err),
-                            }
-                        },
-                        // A subscription answers *many* times, and the gate ran
-                        // once — at subscribe. So the mask moves onto the
-                        // stream: every item is evaluated against **this**
-                        // subscriber's ability before it is pushed, and one the
-                        // ability refuses is dropped rather than nulled. Same
-                        // policy as `mask_many` applies to a row in a list,
-                        // which is what an item over time is.
-                        RootKind::Subscription => quote! {
-                            match #call {
-                                ::core::result::Result::Ok(__stream) => ::core::result::Result::Ok(
-                                    ::nest_rs_graphql::async_graphql::futures_util::StreamExt::filter_map(
-                                        __stream,
-                                        move |__item| ::core::future::ready(
-                                            ::nest_rs_graphql::keep_masked_item(
-                                                #route_label_lit,
-                                                ::nest_rs_authz::graphql::masked_item_for::<
-                                                    #action, #entity, _,
-                                                >(#gctx, __item),
-                                            ),
-                                        ),
-                                    ),
-                                ),
-                                ::core::result::Result::Err(__err) =>
-                                    ::core::result::Result::Err(__err),
-                            }
-                        },
+            // Under a posture naming a subject, an item whose rows refuse leaves the
+            // stream — a row, a list's, one inside an `Option` or a `Result` — so a
+            // subscriber learns no key of a push it may not read; every item is a
+            // push, judged where the socket polls the stream.
+            let body = match (root_kind, authorize_spec.is_some()) {
+                (RootKind::Subscription, true) => quote! {
+                    match #call {
+                        ::core::result::Result::Ok(__stream) => ::core::result::Result::Ok(
+                            ::nest_rs_graphql::async_graphql::futures_util::StreamExt::filter_map(
+                                __stream,
+                                |__item| ::core::future::ready({
+                                    #[allow(unused_imports)]
+                                    use ::nest_rs_authz::__private::PushedItemFallback as _;
+                                    ::nest_rs_authz::__private::PushedItem(__item).kept(#site)
+                                }),
+                            ),
+                        ),
+                        ::core::result::Result::Err(__err) => ::core::result::Result::Err(__err),
                     }
-                }
-                None => call,
+                },
+                _ => call,
             };
-            // Run each per-argument pipe over its extracted wire value, rebinding
-            // the parameter to the `Piped`/`Valid` carrier the body receives. A
-            // rejected pipe surfaces as an `async_graphql::Error` carrying the
-            // `PipeError` message. Runs after the class gate (a class-denied
-            // caller never runs a pipe), before the call.
+            // Captured inside the unit: what its guards attached judged the rows the
+            // answer holds, and async-graphql resolves that answer once the unit ended.
+            let answer = match root_kind {
+                RootKind::Subscription => quote!(FieldAnswers),
+                RootKind::Query | RootKind::Mutation => quote!(FieldAnswer),
+            };
+            let body = quote! {
+                ::core::result::Result::map(#body, |__answer| {
+                    ::nest_rs_graphql::__private::#answer::new(__answer, #site)
+                })
+            };
             let pipe_prelude = piped.iter().map(|pa| {
                 let ident = &pa.ident;
-                let ty = &pa.value_ty;
-                let apply = match &pa.pipe {
-                    Some(pipe) => quote!(::nest_rs_pipes::Piped::<#pipe, #ty>::apply(#ident)),
-                    None => quote!(::nest_rs_pipes::Valid::<#ty>::apply(#ident)),
-                };
+                let carrier = &pa.carrier;
                 quote! {
-                    let #ident = #apply.map_err(|__e| ::nest_rs_graphql::pipe_error(&__e))?;
+                    let #ident = <#carrier>::apply(#ident)
+                        .map_err(::nest_rs_graphql::__private::FieldFailure::from)?;
                 }
             });
-            // The one token that makes it an entity resolver, and it is emitted
-            // rather than written: `#[graphql(entity)]` is what calls
-            // `add_keys`, which is what brings `_service` and `_entities` into
-            // existence at all.
-            // Spelled bare on purpose: `graphql` is an *inert helper* the
-            // `#[Object]` derive reads off the method and strips, not a macro
-            // path to resolve — qualifying it asks the compiler to find a
-            // `graphql` item in async-graphql's root, which is not what it is.
+            // The wire values, before a pipe runs over one and before a bound
+            // subject is read.
+            let bound_id = bind_info.as_ref().map(|(_, _, id_ident, _)| id_ident);
+            let validate_prelude = validate_args(&wrapper_sig.inputs, bound_id.as_slice());
+            let tail_prelude = tail_bindings(&tail);
+            let loaders = loader_args(&sig);
+            field_needs.extend(
+                loaders.iter().map(|(_, loader)| {
+                    root_loader_read(&self_ty, &base, &route_label, loader, &cfgs)
+                }),
+            );
+            // Read inside the unit, so what its own guards attached judges the
+            // rows its batches build. A subscription's stream may borrow its
+            // loader past the opening, so it reads the request's, whose batches
+            // carry its unit's values too: its operation holds no other root field,
+            // a second refused before either opens.
+            let own_loaders = !loaders.is_empty() && root_kind != RootKind::Subscription;
+            let unit_loaders = own_loaders.then(|| {
+                quote! {
+                    let __nestrs_loaders = ::nest_rs_graphql::__private::UnitLoaders::of(#gctx);
+                }
+            });
+            let loader_prelude = loaders.iter().map(|(ident, loader)| {
+                if own_loaders {
+                    quote!(let #ident = __nestrs_loaders.get::<#loader>(#gctx)?;)
+                } else {
+                    quote!(let #ident = ::nest_rs_graphql::__private::seeded_loader::<#loader>(#gctx)?;)
+                }
+            });
+            // Bare on purpose: `graphql` is an inert helper the `#[Object]` derive
+            // strips, not a path to resolve.
             let entity_attr = is_entity.then(|| quote!(#[graphql(entity)]));
-            // What this `#[entity]` claims to key, as a *runtime* pair: the
-            // method's name, and the GraphQL type name async-graphql will resolve
-            // it to. The boot check asks the registry whether that name came back
-            // carrying a `@key` — `add_keys` returns silently for anything that
-            // is not an object or an interface, which is how an `#[entity]`
-            // returning `Vec<T>` compiled, booted, and registered nothing.
-            if is_entity && let Some(declared) = declared_return_type(&sig) {
+            // Checked at boot: `add_keys` returns silently for anything not an object
+            // or an interface (a `Vec<T>`).
+            if is_entity && matches!(sig.output, syn::ReturnType::Type(..)) {
                 let claimed = LitStr::new(&method_name.to_string(), method_name.span());
+                let value = returned(&sig).value();
                 entity_claims.push(quote! {
+                    #(#cfgs)*
                     (
                         #claimed,
-                        <#declared as ::nest_rs_graphql::async_graphql::OutputType>::type_name()
+                        <#value as ::nest_rs_graphql::async_graphql::OutputType>::type_name()
                             .into_owned(),
                     )
                 });
             }
-            // One operation line per dispatched field, and the span it is filed
-            // under — the unit of work this edge opens. Emitted here, where
-            // `#[operations]` composes every role's chain, so a query, a
-            // mutation, an entity and a field resolver all get it rather than
-            // whichever one asked.
-            //
-            // A subscription is the one role left out, and deliberately: its
-            // unit is the connection, filed by `graphql.subscription` when the
-            // socket ends. Wrapping it here would file a second line naming the
-            // *subscribe*, which is not the work.
-            let delegating = if root_kind == RootKind::Subscription {
-                quote! {
-                    #(#deleg_attrs)*
-                    #entity_attr
-                    #gsig { #checks #gate #bind_prelude #(#pipe_prelude)* #body }
+            // A subscription's unit is its connection: its opening runs the
+            // site, its items run nothing.
+            let run = match root_kind {
+                RootKind::Subscription => quote!(::nest_rs_graphql::__private::run_nested),
+                RootKind::Query | RootKind::Mutation => {
+                    quote!(::nest_rs_graphql::__private::run_field)
                 }
-            } else {
-                let role_lit = LitStr::new(role_label, proc_macro2::Span::call_site());
-                // A bare-return operation has no failure channel, so `ok` there
-                // is honest rather than assumed — the same reading the
-                // subscription line's `outcome` takes.
-                let succeeded = if needs_global {
-                    quote!(::core::result::Result::is_ok)
-                } else {
-                    quote!(|_| true)
-                };
-                // The wrapper is `async` whatever the developer's method is: the
-                // unit is awaited, and the body it wraps already had to be —
-                // every emitted guard chain awaits. The developer's own method
-                // keeps its signature; `#call` decides whether to await it.
-                let mut gsig = gsig;
-                gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
-                quote! {
-                    #(#deleg_attrs)*
-                    #entity_attr
-                    #gsig {
-                        let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(#gctx);
-                        ::nest_rs_graphql::run_operation(
-                            #role_lit,
-                            __operation.name(),
-                            #succeeded,
-                            async move { #checks #gate #bind_prelude #(#pipe_prelude)* #body },
-                        )
-                        .await
-                    }
+            };
+            let site_kind = chain_site.path();
+            // async-graphql's `#[Subscription]` awaits the method it is given.
+            gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
+            let delegating = quote! {
+                #(#deleg_attrs)*
+                #entity_attr
+                #gsig {
+                    #run(#site, #gctx, #site_kind, move || async move {
+                        #(#tail_prelude)*
+                        #(#validate_prelude)*
+                        #unit_loaders
+                        #(#loader_prelude)*
+                        #bind_prelude
+                        #(#pipe_prelude)*
+                        #body
+                    })
+                    .await
                 }
             };
             match root_kind {
@@ -1333,7 +1521,16 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
         }
 
-        method.attrs.retain(|a| a.path().is_ident("doc"));
+        // The developer's method keeps its docs, lint levels and `#[cfg]`s.
+        method.attrs.retain(|a| {
+            a.path().is_ident("doc") || a.path().is_ident("allow") || a.path().is_ident("expect")
+        });
+        for condition in &cfgs {
+            method.attrs.extend(syn::parse::Parser::parse2(
+                Attribute::parse_outer,
+                condition.clone(),
+            )?);
+        }
         for input in method.sig.inputs.iter_mut() {
             if let FnArg::Typed(pt) = input {
                 pt.attrs.clear();
@@ -1373,35 +1570,90 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         }
     });
 
-    // `Discoverable::injected` = struct `#[inject]` keys + operation guards +
-    // `#[field_resolver]` deps. `register` is a no-op: the schema builds the resolver
-    // from the assembled container at boot.
-    // Operation guards then `#[field_resolver]` deps, each with the label that
-    // names it in a boot error. Two walks because the two lists have different
-    // token types, concatenated in the order the keys were: `LayerDeps` keeps
-    // each half internally aligned, and appending one to the other preserves it.
-    let mut layers = layer_deps(all_guard_paths.iter());
-    let field_layers = layer_deps(field_dep_types.iter());
+    // Two walks over two token types; appending keeps keys and labels aligned.
+    let mut layers = layer_deps(
+        all_layer_paths
+            .iter()
+            .map(|(cfgs, item)| Conditional { cfgs, item }),
+    );
+    let field_layers = layer_deps(
+        field_dep_types
+            .iter()
+            .map(|(cfgs, item)| Conditional { cfgs, item }),
+    );
     layers.keys.extend(field_layers.keys);
     layers.labels.extend(field_layers.labels);
-    let injected_methods = injected_methods_with_layers(&self_ty, &layers);
-    // Every guard declared at this site runs `Guard::check_graphql`, whose default
-    // is `Ok(())` — so one bound per guard, failing at the `#[use_guards]` line
-    // rather than passing every operation in silence.
+    // A provider a `Scoped<T>` parameter resolves per request is checked like
+    // an `#[inject]`ed one.
+    let injected_methods = injected_methods_with_layers(
+        &self_ty,
+        &layers,
+        scoped_params
+            .iter()
+            .map(|(cfgs, item)| Conditional { cfgs, item }),
+        field_dep_types
+            .iter()
+            .map(|(cfgs, item)| Conditional { cfgs, item }),
+    );
+    let site_pushes = site_refs.iter().map(|(cfgs, site)| {
+        quote! {
+            #(#cfgs)*
+            __nestrs_sites.push(#site);
+        }
+    });
     let capability_bounds = guard_capability_bounds(
-        all_guard_paths.iter(),
-        quote!(::nest_rs_guards::GraphqlGuard),
+        all_guard_paths
+            .iter()
+            .map(|(cfgs, item)| Conditional { cfgs, item }),
+        quote!(::nest_rs_guards::GuardFor<::nest_rs_graphql::GraphqlView>),
+    );
+
+    let crossings = declared.crossings();
+    let host_runtime = host_runtime_entry(
+        &self_ty,
+        &quote!(::nest_rs_graphql::__private::RUNTIME),
+        HostMount::Linked,
+        &[],
     );
 
     Ok(quote! {
         #item
 
+        impl #self_ty {
+            #(#sites)*
+
+            #[doc(hidden)]
+            fn __nestrs_sites() -> ::std::vec::Vec<&'static ::nest_rs_core::__private::Site> {
+                #[allow(unused_mut, reason = "a resolver may declare no field")]
+                let mut __nestrs_sites = ::std::vec::Vec::new();
+                #(#site_pushes)*
+                __nestrs_sites
+            }
+        }
+
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlSiteRegistration {
+                resolver: || ::core::any::TypeId::of::<#self_ty>(),
+                sites: <#self_ty>::__nestrs_sites,
+            }
+        }
+
         #capability_bounds
+
+        #crossings
+
+        #(#bound_entities)*
+
+        #(#unit_requirements)*
+
+        #(#field_needs)*
 
         #query_block
         #mutation_block
         #subscription_block
         #(#field_blocks)*
+
+        #host_runtime
 
         impl ::nest_rs_core::Discoverable for #self_ty {
             #injected_methods
@@ -1409,30 +1661,120 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             fn register(
                 builder: ::nest_rs_core::ContainerBuilder,
             ) -> ::nest_rs_core::ContainerBuilder {
-                builder
+                builder.attach_meta::<#self_ty, ::nest_rs_core::__private::RegisteredHost>(
+                    ::nest_rs_core::__private::RegisteredHost,
+                )
             }
         }
     })
 }
 
-/// Build a field resolver's `#[ComplexObject]` method. The inherent method's
-/// first value argument is the parent (`parent: &ParentType`); the generated
-/// method takes the parent as `&self`, builds the resolver from the container,
-/// and delegates. Owned args become GraphQL field arguments; `&`-reference
-/// args are injected (a `&Service` from the container or a `&DataLoader<…>`
-/// from the request context) and never leak into the schema.
+/// A field resolver's `#[ComplexObject]` method, and what it reads.
+struct FieldMethod {
+    /// The object the field is served on.
+    parent: Type,
+    method: TokenStream2,
+    /// Each provider a `&T` parameter reads off the container.
+    injected: Vec<Type>,
+    /// Each loader a `&DataLoader<L>` parameter reads off the request.
+    loaders: Vec<Type>,
+}
+
+/// The need every `#[field_resolver]` declares: `#[ComplexObject]` serves it with
+/// its parent, so the schema build refuses it when the app does not reach its
+/// resolver.
+fn field_served(self_ty: &Type, parent: &Type, field: &str, cfgs: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        #(#cfgs)*
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlFieldRegistration {
+                parent: ::core::any::type_name::<#parent>,
+                field: #field,
+                resolver: || (
+                    ::core::any::TypeId::of::<#self_ty>(),
+                    ::core::any::type_name::<#self_ty>(),
+                ),
+                origin: ::core::module_path!(),
+            }
+        }
+    }
+}
+
+/// The need a `&DataLoader<loader>` parameter declares on `parent.field`: the
+/// schema build refuses it, as an exposed relation's, when the schema serves
+/// the field and the app does not reach the loader's owner.
+fn loader_read(parent: &Type, field: &str, loader: &Type, cfgs: &[TokenStream2]) -> TokenStream2 {
+    quote! {
+        #(#cfgs)*
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlRelationRegistration {
+                parent: ::core::any::type_name::<#parent>,
+                field: #field,
+                entity: ::core::any::type_name::<#parent>,
+                owner: <#loader as ::nest_rs_graphql::__private::LoaderOwner>::owner,
+                origin: ::core::module_path!(),
+            }
+        }
+    }
+}
+
+/// The need a root field's `&DataLoader<loader>` parameter declares: the schema
+/// build refuses it when the app reaches `self_ty` and not the loader's owner.
+fn root_loader_read(
+    self_ty: &Type,
+    resolver: &Ident,
+    field: &str,
+    loader: &Type,
+    cfgs: &[TokenStream2],
+) -> TokenStream2 {
+    let resolver = resolver.to_string();
+    quote! {
+        #(#cfgs)*
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlRootLoaderRegistration {
+                resolver: || (::core::any::TypeId::of::<#self_ty>(), #resolver),
+                field: #field,
+                owner: <#loader as ::nest_rs_graphql::__private::LoaderOwner>::owner,
+                origin: ::core::module_path!(),
+            }
+        }
+    }
+}
+
+/// The `L` of a `&DataLoader<L>` parameter, which reads the request's loader
+/// rather than a schema argument.
+fn loader_read_by(ty: &Type) -> Option<&Type> {
+    let Type::Reference(reference) = ty else {
+        return None;
+    };
+    nth_generic_type(&reference.elem, "DataLoader", 0)
+}
+
+/// Each `&DataLoader<L>` parameter of a root field, by its binding name, off
+/// the normalized signature.
+fn loader_args(sig: &Signature) -> Vec<(Ident, Type)> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| {
+            let FnArg::Typed(pt) = arg else { return None };
+            let syn::Pat::Ident(pi) = &*pt.pat else {
+                return None;
+            };
+            loader_read_by(&pt.ty).map(|loader| (pi.ident.clone(), loader.clone()))
+        })
+        .collect()
+}
+
+/// Build a field resolver's `#[ComplexObject]` method, the parent as `&self`,
+/// run through its site. Owned args become GraphQL field arguments,
+/// `&`-reference args are injected, a `&DataLoader<L>` reads the request's
+/// loader, a `Scoped<T>` resolves per request and a `Ambient<T>` from what a
+/// guard attached.
 fn field_method(
     self_ty: &Type,
     deleg_attrs: &[Attribute],
     sig: &Signature,
-    guards: &[Path],
-    force_guards: &[Path],
-    field_label: &str,
-) -> syn::Result<(Type, TokenStream2, Vec<Type>)> {
-    // Same normalization as an operation's: a destructured argument gets the
-    // plain name the `#[ComplexObject]` method declares it under (and exposes in
-    // the SDL) and forwards it by, while the developer's method keeps its
-    // pattern. Working on a clone is what keeps that true.
+) -> syn::Result<FieldMethod> {
     let owned_sig = {
         let mut s = sig.clone();
         normalize_forwarded_args(s.inputs.iter_mut())?;
@@ -1441,15 +1783,7 @@ fn field_method(
     let sig = &owned_sig;
 
     let mut inputs = sig.inputs.iter();
-    match inputs.next() {
-        Some(FnArg::Receiver(_)) => {}
-        _ => {
-            return Err(syn::Error::new_spanned(
-                sig,
-                "#[field_resolver] method needs a `&self` receiver (services come from the resolver's `#[inject]` fields)",
-            ));
-        }
-    }
+    inputs.next();
 
     let parent = inputs.next().ok_or_else(|| {
         syn::Error::new_spanned(
@@ -1476,64 +1810,43 @@ fn field_method(
 
     let method_name = &sig.ident;
 
-    // An owned post-parent arg is a GraphQL field argument; a `&`-reference
-    // is an injected dep (a `&T` is never a GraphQL `InputType`). A
-    // `&DataLoader<…>` comes from the request context; any other `&service`
-    // is a container singleton.
     let mut gql_args: Vec<&FnArg> = Vec::new();
     let mut call_args: Vec<TokenStream2> = Vec::new();
     let mut dep_bindings: Vec<TokenStream2> = Vec::new();
-    // Container-resolved `&Service` types (dataloaders excluded), reported up
-    // so the impl macro folds them into `Discoverable::injected`.
-    let mut injected_deps: Vec<Type> = Vec::new();
-    for (arg, ident) in rest.iter().copied().zip(&rest_idents) {
+    let mut tail: Vec<(Ident, Type, TailParam)> = Vec::new();
+    let mut injected: Vec<Type> = Vec::new();
+    let mut loaders: Vec<Type> = Vec::new();
+    for (position, (arg, ident)) in rest.iter().copied().zip(&rest_idents).enumerate() {
         let FnArg::Typed(pt) = arg else { continue };
-        // The documented `#[field_resolver]` shape — `(&self, parent, ctx)` —
-        // and the one site where a `&Context` legitimately follows another
-        // parameter, because position 1 is the parent. Forwarded as the `__ctx`
-        // the wrapper already holds. It used to fall through to the injected-dep
-        // arm below, ask the container for a `Context`, find nothing, and answer
-        // *no provider registered for `& Context < '_ >`* on **every request** —
-        // a shape the docs teach, failing only once served.
+        // Before the injected-dep arm, which would ask the container for a `Context`.
         if ctx_ident_of(arg).is_some() {
             call_args.push(quote! { __ctx });
             continue;
         }
+        if let Some(kind) = tail_param(&pt.ty) {
+            tail.push((ident.clone(), (*pt.ty).clone(), kind));
+            call_args.push(quote! { #ident });
+            continue;
+        }
         if let Type::Reference(reference) = &*pt.ty {
             let dep_ty = &*reference.elem;
-            let dep = format_ident!("__dep_{}", ident);
-            if is_dataloader(dep_ty) {
-                // `data_unchecked` panics only if `GraphqlModule` (and thus
-                // the loader extension) was never imported.
+            // By position: a parameter's own name may lead with `_`, which
+            // `__nestrs_dep_` would join into a name the developer's build warns on.
+            let dep = mixed_site_ident(&format!("__nestrs_dep_{position}"));
+            if let Some(loader) = loader_read_by(&pt.ty) {
                 dep_bindings.push(quote! {
-                    let #dep = __ctx.data_unchecked::<#dep_ty>();
+                    let #dep = ::nest_rs_graphql::__private::seeded_loader::<#loader>(__ctx)?;
                 });
                 call_args.push(quote! { #dep });
+                loaders.push(loader.clone());
             } else {
-                let msg = format!(
-                    "#[field_resolver] `{}`: no provider registered for `{}`",
-                    method_name,
-                    quote!(#dep_ty),
-                );
-                // Non-panicking on `Result`-returning resolvers (the common
-                // case): a missing provider degrades to a named GraphQL
-                // error, matching the `data_opt` pattern the relation
-                // resolvers use. A bare-return resolver has no error channel,
-                // so the named panic stays there — the access graph has
-                // already validated the dep at boot either way.
-                if sig_returns_result(sig) {
-                    dep_bindings.push(quote! {
-                        let #dep = __container.get::<#dep_ty>().ok_or_else(|| {
-                            ::nest_rs_graphql::async_graphql::Error::new(#msg)
-                        })?;
-                    });
-                } else {
-                    dep_bindings.push(quote! {
-                        let #dep = __container.get::<#dep_ty>().expect(#msg);
-                    });
-                }
+                dep_bindings.push(quote! {
+                    let #dep = __container
+                        .get::<#dep_ty>()
+                        .ok_or_else(::nest_rs_graphql::__private::unprovided::<#dep_ty>)?;
+                });
                 call_args.push(quote! { &#dep });
-                injected_deps.push(dep_ty.clone());
+                injected.push(dep_ty.clone());
             }
         } else {
             call_args.push(quote! { #ident });
@@ -1543,42 +1856,22 @@ fn field_method(
 
     let generics = &sig.generics;
     let where_clause = &sig.generics.where_clause;
-    let output = &sig.output;
-    let await_tok = if sig.asyncness.is_some() {
-        quote!(.await)
-    } else {
-        quote!()
-    };
-
-    // `#[field_resolver]` never runs global guards (operation-level
-    // enforcement already happened), so `needs_global` is `false`. The
-    // chain helper still consults `<Self>::__nestrs_resolver_guard_specs()`
-    // for resolver-scope guards declared on the struct — same uniform
-    // mental model. `is_public` is irrelevant: there's no global chain to skip.
-    let checks = layered_resolver_chain(
-        self_ty,
-        guards,
-        force_guards,
-        &format_ident!("__ctx"),
-        field_label,
-        false,
-        false,
+    let output = wrapper_output(sig);
+    let site = site_ref(self_ty, method_name);
+    let site_kind = ChainSite::Field.path();
+    let tail_prelude = tail_bindings(&tail);
+    let validate_prelude = validate_args(gql_args.iter().copied(), &[]);
+    // By path: method lookup on a value tries a trait method taking `self` first.
+    let call = call_as_result(
+        sig,
+        await_if_async(
+            sig,
+            quote! {
+                <#self_ty>::#method_name(&__resolver, self #(, #call_args)*)
+            },
+        ),
+        RootKind::Query,
     );
-    // A field resolver is a dispatched unit of work like any other role — it
-    // runs its own guard chain, hits its own services and has its own duration —
-    // so it files the same line. `#[operations]` is where every role's chain is
-    // composed, and this is that seam for the `#[ComplexObject]` half.
-    let role_lit = LitStr::new(FIELD_ROLE, proc_macro2::Span::call_site());
-    let succeeded = if sig_returns_result(sig) {
-        quote!(::core::result::Result::is_ok)
-    } else {
-        // A bare-return field resolver cannot report a failure, so `ok` is what
-        // it knows rather than what it assumes.
-        quote!(|_| true)
-    };
-    // Always `async`, whatever the developer's method is — see the root
-    // operation's wrapper. `#await_tok` still follows the inner method's own
-    // spelling.
     let method = quote! {
         #(#deleg_attrs)*
         async fn #method_name #generics (
@@ -1586,46 +1879,89 @@ fn field_method(
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>
             #(, #gql_args)*
         ) #output #where_clause {
-            let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(__ctx);
-            ::nest_rs_graphql::run_operation(
-                #role_lit,
-                __operation.name(),
-                #succeeded,
-                async move {
-                    #checks
-                    let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
-                    #(#dep_bindings)*
-                    <#self_ty>::from_container(__container)
-                        .#method_name(self #(, #call_args)*) #await_tok
-                },
-            )
+            {
+                #[allow(unused_imports)]
+                use ::nest_rs_graphql::__private::ParentProbeFallback as _;
+                ::nest_rs_graphql::__private::ParentProbe(self).judged(__ctx, #site)?;
+            }
+            ::nest_rs_graphql::__private::run_nested(#site, __ctx, #site_kind, move || async move {
+                let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
+                #(#tail_prelude)*
+                #(#validate_prelude)*
+                #(#dep_bindings)*
+                let __resolver = <#self_ty>::__nestrs_from_container(__container);
+                #call
+            })
             .await
         }
     };
-    Ok((parent_ty, method, injected_deps))
+    Ok(FieldMethod {
+        parent: parent_ty,
+        method,
+        injected,
+        loaders,
+    })
 }
 
-/// `DataLoader<…>` matched on the final path segment, so both bare and
-/// fully-qualified forms are recognised.
-fn is_dataloader(ty: &Type) -> bool {
-    matches!(ty, Type::Path(tp) if tp
-        .path
-        .segments
-        .last()
-        .is_some_and(|s| s.ident == "DataLoader"))
+fn field_parent_label(sig: &Signature) -> String {
+    match sig.inputs.iter().nth(1) {
+        Some(FnArg::Typed(typed)) => field_parent_key(match &*typed.ty {
+            Type::Reference(reference) => &reference.elem,
+            other => other,
+        }),
+        _ => String::new(),
+    }
 }
 
-/// The framework's re-export of async-graphql — the root every emitted
-/// async-graphql attribute is pinned to.
+fn graphql_name(attrs: &[Attribute]) -> syn::Result<Option<String>> {
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident("graphql")) {
+        let Ok(list) = attr.meta.require_list() else {
+            continue;
+        };
+        let metas = list.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        )?;
+        for meta in metas {
+            if let syn::Meta::NameValue(value) = meta
+                && value.path.is_ident("name")
+                && let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(name),
+                    ..
+                }) = &value.value
+            {
+                return Ok(Some(name.value()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// State `field` as the name async-graphql serves a method under. It joins the
+/// developer's `#[graphql(...)]`: async-graphql strips only the first.
+fn name_the_field(attrs: &mut Vec<Attribute>, field: &str) -> syn::Result<()> {
+    let name = LitStr::new(field, proc_macro2::Span::call_site());
+    match attrs
+        .iter_mut()
+        .find(|attr| attr.path().is_ident("graphql"))
+    {
+        Some(attr) => {
+            let list = attr.meta.require_list()?;
+            let path = &list.path;
+            let tokens = &list.tokens;
+            let comma = (!tokens.is_empty()).then(|| quote!(,));
+            *attr = parse_quote!(#[#path(#tokens #comma name = #name)]);
+        }
+        None => attrs.push(parse_quote!(#[graphql(name = #name)])),
+    }
+    Ok(())
+}
+
 fn async_graphql_root() -> TokenStream2 {
     quote!(::nest_rs_graphql::async_graphql)
 }
 
-/// The same root as the **string** a `crate = ` argument takes, built from
-/// [`async_graphql_root`]'s tokens rather than re-typed: a path that no longer
-/// resolves is a compile error here, while a stale string parses fine and
-/// silently sends the expansion back to the call site's prelude — the failure
-/// the override exists to close.
+/// The same root as the string a `crate = ` argument takes, built from the
+/// tokens: a stale string would parse and fall back to the call site's prelude.
 fn async_graphql_root_str() -> String {
     async_graphql_root()
         .into_iter()
@@ -1634,12 +1970,6 @@ fn async_graphql_root_str() -> String {
 }
 
 /// Which async-graphql root a set of operations becomes.
-///
-/// Everything that differs between the three roots is answered here — the
-/// registry variant, the derive attribute, the registry entry point, the built
-/// member and the log label. A fourth root would be a variant plus five arms,
-/// and the compiler names every one it forgot; the alternative (a bare
-/// `TokenStream2` kind threaded through `root_object`) named none of them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RootKind {
     Query,
@@ -1648,7 +1978,6 @@ enum RootKind {
 }
 
 impl RootKind {
-    /// The `GraphqlResolverKind` variant this root registers under.
     fn variant(self) -> TokenStream2 {
         match self {
             Self::Query => quote!(Query),
@@ -1657,7 +1986,6 @@ impl RootKind {
         }
     }
 
-    /// The async-graphql derive that builds the generated root type.
     fn derive(self) -> Ident {
         match self {
             Self::Query | Self::Mutation => format_ident!("Object"),
@@ -1665,8 +1993,6 @@ impl RootKind {
         }
     }
 
-    /// The registry call that yields the root's `MetaType`. A `#[Subscription]`
-    /// type is not an `OutputType`, so it takes its own entry point.
     fn fake_type(self) -> Ident {
         match self {
             Self::Query | Self::Mutation => format_ident!("create_fake_output_type"),
@@ -1674,7 +2000,6 @@ impl RootKind {
         }
     }
 
-    /// The `GraphqlRootMember` variant the built root is handed back as.
     fn member(self) -> TokenStream2 {
         match self {
             Self::Query | Self::Mutation => quote!(Object),
@@ -1682,7 +2007,6 @@ impl RootKind {
         }
     }
 
-    /// The spec's word for the operation, used in guard-chain and denial logs.
     fn label(self) -> &'static str {
         match self {
             Self::Query => "query",
@@ -1692,14 +2016,7 @@ impl RootKind {
     }
 }
 
-/// The role word an `#[entity]` files under — async-graphql's `_entities`
-/// resolves it, so it is neither of the three [`RootKind`] words.
 const ENTITY_ROLE: &str = "entity";
-
-/// The role word a `#[field_resolver]` files under. Beside [`RootKind::label`]
-/// rather than inline at its emitter, so the four words a line's `role` can take
-/// are one list.
-const FIELD_ROLE: &str = "field";
 
 fn root_object(
     obj: &Ident,
@@ -1711,7 +2028,6 @@ fn root_object(
     if methods.is_empty() {
         return quote!();
     }
-    // Resolver struct name, logged beside each mounted operation at boot.
     let resolver_name = impl_self_ident(self_ty, "#[operations]")
         .map(|i| i.to_string())
         .unwrap_or_else(|_| "resolver".to_string());
@@ -1726,27 +2042,22 @@ fn root_object(
         #[allow(non_camel_case_types)]
         pub struct #obj(::std::sync::Arc<#self_ty>);
 
-        // `crate = ` pins async-graphql's own expansion to the umbrella's
-        // re-export. Without it the derive asks `proc-macro-crate` what the
-        // *call site* declared and falls back to a bare `::async_graphql`, so
-        // every app that installed `nest-rs` with the `graphql` feature — the
-        // documented line, and the only one — failed to compile inside this
-        // attribute. Witnessed by `nest-rs-macro-hygiene`'s `resolver` module.
+        // Without `crate = `, the derive falls back to the call site's bare `::async_graphql`.
         #[#root::#derive(crate = #root_str)]
         impl #obj {
             #(#methods)*
         }
 
-        ::nest_rs_graphql::inventory::submit! {
-            ::nest_rs_graphql::GraphqlResolverRegistration {
-                kind: ::nest_rs_graphql::GraphqlResolverKind::#variant,
+        ::nest_rs_graphql::__private::inventory::submit! {
+            ::nest_rs_graphql::__private::GraphqlResolverRegistration {
+                kind: ::nest_rs_graphql::__private::GraphqlResolverKind::#variant,
                 resolver_name: #resolver_name,
                 resolver_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 entities: || ::std::vec![#(#entity_claims),*],
                 type_info: |__r| __r.#fake_type::<#obj>(),
-                build: |__c| ::nest_rs_graphql::GraphqlRootMember::#member(
+                build: |__c| ::nest_rs_graphql::__private::GraphqlRootMember::#member(
                     ::std::boxed::Box::new(
-                        #obj(::std::sync::Arc::new(<#self_ty>::from_container(__c)))
+                        #obj(::std::sync::Arc::new(<#self_ty>::__nestrs_from_container(__c)))
                     ),
                 ),
             }
@@ -1760,12 +2071,6 @@ mod tests {
 
     use super::*;
 
-    // Every `#[query]`/`#[mutation]` must declare an access posture. This gate
-    // is security-load-bearing: an operation the developer forgot to think
-    // about must *not compile* rather than ship ungated and unmasked. A posture
-    // regression here would silently expose data, so the compile error is the
-    // guarantee — pinned by asserting the expansion fails and the diagnostic
-    // names the rule.
     #[test]
     fn query_without_posture_fails_to_expand() {
         let item: ItemImpl = parse_quote! {
@@ -1793,8 +2098,6 @@ mod tests {
         );
     }
 
-    // The same gate for a `#[mutation]` — a write operation with no posture is
-    // exactly the case that must never slip through.
     #[test]
     fn mutation_without_posture_fails_to_expand() {
         let item: ItemImpl = parse_quote! {
@@ -1810,8 +2113,6 @@ mod tests {
         assert!(err.to_string().contains("posture"), "{}", err);
     }
 
-    // `#[public]` is a valid posture: the operation is deliberately ungated, so
-    // it expands.
     #[test]
     fn public_query_expands() {
         let item: ItemImpl = parse_quote! {
@@ -1826,8 +2127,6 @@ mod tests {
         resolver_impl_inner(item).expect("a #[public] query expands");
     }
 
-    // `#[authorize(Action, Entity)]` is the other valid posture (class gate +
-    // automatic response mask); it expands.
     #[test]
     fn authorized_query_expands() {
         let item: ItemImpl = parse_quote! {
@@ -1842,8 +2141,6 @@ mod tests {
         resolver_impl_inner(item).expect("an #[authorize(...)] query expands");
     }
 
-    // Declaring both postures is a contradiction — an operation is gated or
-    // public, never both.
     #[test]
     fn authorize_and_public_together_fail_to_expand() {
         let item: ItemImpl = parse_quote! {
@@ -1861,21 +2158,93 @@ mod tests {
         assert!(err.to_string().contains("contradict"), "{}", err);
     }
 
-    // `#[authorize]` needs a `Result` return so a denial (or a masking failure)
-    // can surface as a GraphQL error — a bare-return authorized op is rejected.
     #[test]
-    fn authorize_on_bare_return_fails_to_expand() {
+    fn a_bare_return_operation_runs_its_site_through_a_result_wrapper() {
         let item: ItemImpl = parse_quote! {
             impl DemoResolver {
                 #[query]
+                #[public]
+                async fn count(&self) -> i32 { 0 }
+
+                #[query]
                 #[authorize(::nest_rs_authz::Read, Thing)]
-                async fn thing(&self) -> i32 {
-                    0
-                }
+                async fn thing(&self) -> Thing { Thing }
+
+                #[subscription]
+                #[public]
+                async fn ticks(&self) -> impl Stream<Item = i32> { stream() }
+
+                #[field_resolver]
+                async fn label(&self, parent: &Thing) -> String { String::new() }
             }
         };
-        let err = resolver_impl_inner(item)
-            .expect_err("an #[authorize] op with a bare return must fail to expand");
-        assert!(err.to_string().contains("Result"), "{}", err);
+        let expanded = resolver_impl_inner(item)
+            .expect("a bare-return operation expands under either posture")
+            .to_string();
+        assert_eq!(
+            expanded.matches("declare_site").count(),
+            4,
+            "one site per field: {expanded}",
+        );
+        assert_eq!(
+            expanded.matches("__private :: run_field").count(),
+            2,
+            "a root field runs as a unit: {expanded}",
+        );
+        assert_eq!(
+            expanded.matches("__private :: run_nested").count(),
+            2,
+            "a subscription's opening and a field resolver run inside theirs: {expanded}",
+        );
+        for wrapped in [
+            "async_graphql :: Result < :: nest_rs_graphql :: __private :: FieldAnswer < i32 > , >",
+            "async_graphql :: Result < :: nest_rs_graphql :: __private :: FieldAnswer < Thing > , >",
+            "async_graphql :: Result < impl :: nest_rs_graphql :: async_graphql :: futures_util :: \
+             Stream < Item = :: nest_rs_graphql :: __private :: FieldAnswer < i32 > , > , >",
+            "async_graphql :: Result < String >",
+        ] {
+            assert!(
+                expanded.contains(wrapped),
+                "missing `{wrapped}`: {expanded}"
+            );
+        }
+        assert!(
+            expanded.contains("GraphqlSite :: Field"),
+            "a field resolver names its own site: {expanded}",
+        );
+        assert!(
+            !expanded.contains(". expect ("),
+            "no request-path panic in a wrapper: {expanded}",
+        );
+    }
+
+    /// The item a subscription's answer wraps is the one async-graphql registers,
+    /// and a stream a type names is wrapped whole: its item is read in no signature.
+    #[test]
+    fn a_streams_item_is_read_as_async_graphql_reads_it() {
+        for (stream, item) in [
+            (parse_quote!(impl Stream<Item = i32>), "i32"),
+            (parse_quote!(impl Send + Stream<Item = Row>), "Row"),
+            (
+                parse_quote!(impl RowStream),
+                "< dyn RowStream as :: nest_rs_graphql :: async_graphql :: futures_util :: \
+                 Stream > :: Item",
+            ),
+        ] {
+            let stream: TypeImplTrait = stream;
+            let read = stream_item(&stream);
+            assert_eq!(quote!(#read).to_string(), item);
+        }
+        let sig: Signature =
+            parse_quote!(async fn ticks(&self) -> Fallible<BoxStream<'static, i32>>);
+        let output = root_output(&sig, RootKind::Subscription);
+        let output = quote!(#output).to_string();
+        assert!(
+            output.contains(
+                "Result < :: nest_rs_graphql :: __private :: FieldAnswers < Fallible < \
+                 BoxStream < 'static , i32 > > > , >"
+            ),
+            "{output}"
+        );
     }
 }

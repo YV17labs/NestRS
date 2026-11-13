@@ -87,14 +87,25 @@ impl<'a> QuerySummary<'a> {
                 });
             }
         };
-        let collection = match introducer {
-            None => words.next().and_then(|word| identifier(word.text)),
-            Some(introducer) => words
-                .by_ref()
-                .find(|word| word.depth == 0 && word.text.eq_ignore_ascii_case(introducer))
-                .and_then(|_| words.next())
-                .and_then(|word| identifier(word.text)),
+        let introduced = match introducer {
+            None => true,
+            Some(introducer) => {
+                // `IS [NOT] DISTINCT FROM` compares; its `FROM` names no table.
+                let mut previous: Option<&str> = None;
+                words.by_ref().any(|word| {
+                    let introduces = word.depth == 0
+                        && word.text.eq_ignore_ascii_case(introducer)
+                        && !previous.is_some_and(|word| word.eq_ignore_ascii_case("DISTINCT"));
+                    previous = Some(word.text);
+                    introduces
+                })
+            }
         };
+        let collection = introduced
+            .then(|| words.next())
+            .flatten()
+            .filter(|word| !word.follows_gap)
+            .and_then(|word| identifier(word.text));
         Some(Self {
             operation,
             collection,
@@ -155,11 +166,13 @@ fn identifier(word: &str) -> Option<&str> {
     }
 }
 
-/// One word of a statement and the depth of parentheses it sits at.
+/// One word of a statement, the depth of parentheses it sits at, and whether
+/// anything but blanks and comments sits between it and the word before.
 #[derive(Clone, Copy, Debug)]
 struct Word<'a> {
     text: &'a str,
     depth: usize,
+    follows_gap: bool,
 }
 
 /// How a quoted string reads a backslash.
@@ -184,6 +197,8 @@ struct Words<'a> {
     at: usize,
     depth: usize,
     unreadable: bool,
+    /// Something but blanks and comments was skipped since the last word.
+    gap: bool,
 }
 
 impl<'a> Words<'a> {
@@ -193,6 +208,7 @@ impl<'a> Words<'a> {
             at: 0,
             depth: 0,
             unreadable: false,
+            gap: false,
         }
     }
 
@@ -348,6 +364,7 @@ impl<'a> Words<'a> {
             Some(text) => Ok(Some(Word {
                 text,
                 depth: self.depth,
+                follows_gap: std::mem::replace(&mut self.gap, false),
             })),
             None => Err(()),
         }
@@ -372,6 +389,12 @@ impl<'a> Iterator for Words<'a> {
         while !self.unreadable {
             let byte = self.byte(self.at)?;
             let next = self.byte(self.at + 1);
+            let blank = byte.is_ascii_whitespace()
+                || (byte == b'-' && next == Some(b'-'))
+                || (byte == b'/' && next == Some(b'*'));
+            if !blank && byte != b'"' && !starts_identifier(byte) {
+                self.gap = true;
+            }
             let read = match byte {
                 b'(' => {
                     self.depth += 1;
@@ -402,7 +425,11 @@ impl<'a> Iterator for Words<'a> {
                 }
                 byte if byte == b'"' || starts_identifier(byte) => match self.word() {
                     Ok(Some(word)) => return Some(word),
-                    Ok(None) => true,
+                    // A literal a letter opens (`E'…'`, `U&"…"`).
+                    Ok(None) => {
+                        self.gap = true;
+                        true
+                    }
                     Err(()) => false,
                 },
                 _ => {
@@ -424,6 +451,30 @@ mod tests {
 
     fn summary(sql: &str) -> Option<(&'static str, Option<&str>)> {
         QuerySummary::of(sql).map(|summary| (summary.operation(), summary.collection()))
+    }
+
+    /// A table is the word right after its introducer, and a `FROM` closing
+    /// `IS DISTINCT FROM` introduces none: anything else between them — a
+    /// literal, a parameter, an identifier read as a literal is — leaves the
+    /// table unnamed rather than names the word after it.
+    #[test]
+    fn a_table_is_named_only_by_the_word_its_introducer_leads_to() {
+        let cases = [
+            ("SELECT a IS DISTINCT FROM b FROM t", ("SELECT", Some("t"))),
+            (
+                "SELECT a IS NOT DISTINCT FROM $1 FROM t",
+                ("SELECT", Some("t")),
+            ),
+            (r#"SELECT * FROM U&"t\0061" WHERE x = 1"#, ("SELECT", None)),
+            (
+                "SELECT * FROM /* the users */ users",
+                ("SELECT", Some("users")),
+            ),
+            ("UPDATE (SELECT 1) SET x = 1", ("UPDATE", None)),
+        ];
+        for (sql, expected) in cases {
+            assert_eq!(summary(sql), Some(expected), "{sql}");
+        }
     }
 
     #[test]

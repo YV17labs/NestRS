@@ -122,15 +122,8 @@ const PROTOCOL_METHODS: &[&str] = &[
 pub(crate) const fn is_protocol_method(method: &str) -> bool {
     let mut listed = 0;
     while listed < PROTOCOL_METHODS.len() {
-        let (one, other) = (PROTOCOL_METHODS[listed].as_bytes(), method.as_bytes());
-        if one.len() == other.len() {
-            let mut at = 0;
-            while at < one.len() && one[at] == other[at] {
-                at += 1;
-            }
-            if at == one.len() {
-                return true;
-            }
+        if nest_rs_core::__private::str_eq(PROTOCOL_METHODS[listed], method) {
+            return true;
         }
         listed += 1;
     }

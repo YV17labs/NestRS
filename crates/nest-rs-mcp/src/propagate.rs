@@ -75,6 +75,7 @@ use rmcp::model::{
 use rmcp::service::{
     MaybeSendFuture, NotificationContext, Peer, RequestContext, RoleServer, SubscriptionContext,
 };
+use rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 use tracing::Instrument;
 
 use crate::McpError;
@@ -663,6 +664,16 @@ struct Requested {
 }
 
 impl Requested {
+    /// The request of `method` addressing `addressed` that `context` carries.
+    fn request(method: Method, addressed: Addressed, context: &RequestContext<RoleServer>) -> Self {
+        Self {
+            method,
+            id: Some(context.id.clone()),
+            addressed,
+            protocol_version: protocol_version(&context.extensions, &context.peer),
+        }
+    }
+
     /// A notification of `method`, which names nothing, under
     /// `protocol_version`.
     fn notification(method: Method, protocol_version: Option<&'static str>) -> Self {
@@ -698,17 +709,13 @@ impl Requested {
     }
 }
 
-/// The header a client names the negotiated protocol version in, on every
-/// request after its initialization.
-const PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
-
 /// The protocol version an operation runs under: the one its request names,
 /// else the one its session negotiated — a version rmcp knows, `_OTHER`
 /// otherwise, so no client mints a series; `None` where neither says.
 fn protocol_version(extensions: &Extensions, peer: &Peer<RoleServer>) -> Option<&'static str> {
     extensions
         .get::<Parts>()
-        .and_then(|parts| parts.headers.get(PROTOCOL_VERSION_HEADER))
+        .and_then(|parts| parts.headers.get(HEADER_MCP_PROTOCOL_VERSION))
         .map(|named| {
             named
                 .to_str()
@@ -1002,6 +1009,21 @@ impl Line for OperationLine<'_> {
     }
 }
 
+/// `$method`, a method the protocol defines, which keys a duration by name, so
+/// the unit's known set lists it: held where the build instantiates the
+/// handler.
+macro_rules! protocol_method {
+    ($method:path) => {{
+        const {
+            ::core::assert!(
+                crate::unit::is_protocol_method($method),
+                "a method the protocol defines is listed in `unit::PROTOCOL_METHODS`",
+            )
+        };
+        $method
+    }};
+}
+
 /// Delegate one request-shaped method inside the full nesting. Every invocation
 /// states `$addressed`, [`Addressed::Nothing`] out loud; it is read before the
 /// call consumes the parameters.
@@ -1014,12 +1036,7 @@ macro_rules! request_method {
         ) -> impl Future<Output = Result<$out, McpError>> + MaybeSendFuture + '_ {
             async move {
                 let ambient = McpAmbient::from_extensions(&context.extensions);
-                let requested = Requested {
-                    method: Method::from($method),
-                    id: Some(context.id.clone()),
-                    addressed: $addressed,
-                    protocol_version: protocol_version(&context.extensions, &context.peer),
-                };
+                let requested = Requested::request(Method::from($method), $addressed, &context);
                 let cancelled = context.ct.clone().cancelled_owned();
                 let inner: BoxFuture<'_, Result<$out, McpError>> =
                     Box::pin(self.inner.$name($($arg,)* context));
@@ -1045,15 +1062,7 @@ macro_rules! request_method {
         $method:path,
         $addressed:expr $(,)?
     ) => {
-        request_method!(@delegate $name ( $($arg : $arg_ty),* ) -> $out, {
-            const {
-                ::core::assert!(
-                    crate::unit::is_protocol_method($method),
-                    "a method the protocol defines is listed in `unit::PROTOCOL_METHODS`",
-                )
-            };
-            $method
-        }, $addressed);
+        request_method!(@delegate $name ( $($arg : $arg_ty),* ) -> $out, protocol_method!($method), $addressed);
     };
     (
         $name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ) -> $out:ty,
@@ -1113,15 +1122,7 @@ macro_rules! notification_method {
     // As a request's: a notification the protocol defines keys its duration by
     // its method.
     ($name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ), $method:path $(,)?) => {
-        notification_method!(@delegate $name ( $($arg : $arg_ty),* ), {
-            const {
-                ::core::assert!(
-                    crate::unit::is_protocol_method($method),
-                    "a method the protocol defines is listed in `unit::PROTOCOL_METHODS`",
-                )
-            };
-            $method
-        });
+        notification_method!(@delegate $name ( $($arg : $arg_ty),* ), protocol_method!($method));
     };
     ($name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ), $method:expr $(,)?) => {
         notification_method!(@delegate $name ( $($arg : $arg_ty),* ), $method);
@@ -1272,15 +1273,11 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
     /// teardown, and files `cancelled`.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         let ambient = McpAmbient::from_extensions(&context.request_context().extensions);
-        let requested = Requested {
-            method: Method::from(SubscriptionsListenRequestMethod::VALUE),
-            id: Some(context.request_context().id.clone()),
-            addressed: Addressed::Nothing,
-            protocol_version: protocol_version(
-                &context.request_context().extensions,
-                &context.request_context().peer,
-            ),
-        };
+        let requested = Requested::request(
+            Method::from(SubscriptionsListenRequestMethod::VALUE),
+            Addressed::Nothing,
+            context.request_context(),
+        );
         let going_away = self.units.detached.going_away();
         let inner: BoxFuture<'_, Result<(), McpError>> = Box::pin(self.inner.listen(context));
         self.dispatch(

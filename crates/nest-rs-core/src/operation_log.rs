@@ -118,6 +118,11 @@ pub(crate) mod __private {
         Unit, UnitEnd, eq_bytes, is_crate_root, is_edge_root, is_lib_name,
     };
 
+    /// Whether `a` and `b` are the same string, where a `const` needs to know.
+    pub const fn str_eq(a: &str, b: &str) -> bool {
+        a.len() == b.len() && eq_bytes(a.as_bytes(), 0, b.as_bytes(), 0, a.len())
+    }
+
     /// Seed what renames a unit's span its edge names late
     /// ([`record_name`](super::record_name)). Called once, at boot, by the
     /// observability stack — never by an application.

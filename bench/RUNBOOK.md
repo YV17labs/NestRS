@@ -13,6 +13,11 @@ sudo apt-get update && sudo apt-get install -y git curl build-essential jq util-
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y   # Rust stable
 curl -fsSL https://deb.nodesource.com/setup_26.x | sudo bash - && sudo apt-get install -y nodejs
 cargo install oha just
+# The OpenTelemetry Collector an `exported` variant sends to: the core
+# distribution, on PATH as `otelcol`
+v=0.165.0; arch=$(dpkg --print-architecture)   # amd64 or arm64
+curl -fsSL "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$v/otelcol_${v}_linux_${arch}.tar.gz" \
+  | sudo tar -xz -C /usr/local/bin otelcol
 ```
 
 Optional but recommended for stable numbers: pin the CPU governor —

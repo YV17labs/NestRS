@@ -61,8 +61,10 @@ review of the SUT source, which is deliberately small enough to read.
 - No per-request telemetry on either side: `nest new` offers the
   `@nestjs/observe` agent, which reports to a hosted service under an
   account's keys, and the SUT declines it (`--no-observe`, the CLI's own
-  answer without a terminal). Logging stays as each framework ships it:
-  NestJS writes boot lines only, and nestrs writes its access line — one
+  answer without a terminal). nestrs installs OpenTelemetry as the `main`
+  `nestrs new` writes does, which exports nothing until an endpoint is set,
+  as its `exported` variant sets one. Logging stays as each framework ships
+  it: NestJS writes boot lines only, and nestrs writes its access line — one
   line per request at `info` — which its `quiet` variant turns off.
 - No reverse proxy, no TLS, no compression: neither framework compresses
   by default.
@@ -78,9 +80,14 @@ provider that does not declare it has no number for it.
 | `t1-h2c` | `h2c = "true"` | T1 over HTTP/2 with prior knowledge on the cleartext port | The HTTP/2 path, which the transport serves without an option |
 | `t1-quiet` | `quiet_env = "K=V"` | T1, the SUT booted with that environment | The per-request log line's cost, by turning it off |
 | `t5-compressed` | `compressed_env = "K=V"` | T5 with `Accept-Encoding: gzip, br`, the SUT booted with that environment | Content negotiation and compression of a large body |
+| `t1-exported` | `exported_env = "K=V"` | T1, the SUT booted with that environment, exporting over OTLP/HTTP to the OpenTelemetry Collector the harness runs on the load's cores (`harness/otelcol.yaml`), which discards what it takes | Exporting each request's trace, durations and log line, at the SDK's defaults |
 
 The gate checks a variant before it is measured: `h2c` answers `/hello` over
-HTTP/2, `compressed` answers `/large` with a `Content-Encoding`.
+HTTP/2, `compressed` answers `/large` with a `Content-Encoding`, `exported`
+hands the collector a span. An exported tier also records the spans the
+collector took and the requests its warmup and runs sent: a batch processor
+at its defaults drops what its queue cannot hold, and the share it kept is
+read beside the figure it cost.
 
 ## Adding a tier
 

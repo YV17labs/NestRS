@@ -1,0 +1,31 @@
+# The collector the `exported` variant sends to: OTLP over HTTP on the
+# loopback, everything it takes discarded, so a run measures the SUT's export
+# and never a backend's ingestion. Its own counters, on 8888, are the gate's.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+exporters:
+  nop:
+
+service:
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 127.0.0.1
+                port: 8888
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [nop]
+    metrics:
+      receivers: [otlp]
+      exporters: [nop]
+    logs:
+      receivers: [otlp]
+      exporters: [nop]

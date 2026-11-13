@@ -6,7 +6,9 @@ build = "cargo build --release --locked"
 start = "target/release/sut-nestrs"
 # Variants (CONTRACT.md): the transport serves HTTP/2 with prior knowledge on a
 # cleartext port; the access line is on by default and `quiet_env` turns it
-# off; compression is opt-in, and `compressed_env` turns it on.
+# off; compression is opt-in, and `compressed_env` turns it on; OpenTelemetry
+# exports nothing until an endpoint is set, and `exported_env` sets one.
 h2c = "true"
 quiet_env = "RUST_LOG=warn"
 compressed_env = "NESTRS_HTTP__COMPRESSION=true"
+exported_env = "OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318"

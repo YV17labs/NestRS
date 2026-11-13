@@ -24,6 +24,8 @@
 #   h2c = "true"               t1 over HTTP/2 with prior knowledge
 #   quiet_env = "K=V"          t1 with the SUT's per-request line off
 #   compressed_env = "K=V"     t5 with `Accept-Encoding: gzip, br`, compression on
+#   exported_env = "K=V"       t1 exporting over OTLP to the collector this
+#                              script runs (`otelcol` on PATH) on the load's cores
 set -euo pipefail
 
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,6 +48,7 @@ val() { sed -n "s/^$1 *= *\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$manifest" | hea
 name=$(val name); variant=$(val variant); runtime=$(val runtime); port=$(val port)
 build_cmd=$(val build); start_cmd=$(val start)
 h2c=$(val h2c); quiet_env=$(val quiet_env); compressed_env=$(val compressed_env)
+exported_env=$(val exported_env)
 id="$name-$variant${BENCH_LABEL:+-$BENCH_LABEL}"
 base="http://127.0.0.1:$port"
 
@@ -56,8 +59,10 @@ pin() { # pin <cpuset> <cmd...> — "all" means no pinning
 
 tmp="$(mktemp -d)"
 pid=""
+collector=""
 cleanup() {
   if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
+  if [ -n "$collector" ]; then kill "$collector" 2>/dev/null || true; wait "$collector" 2>/dev/null || true; fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -99,7 +104,8 @@ measure_tier() {
   shift 2
   if [ -n "${BENCH_TIERS:-}" ] && [[ ",$BENCH_TIERS," != *",${tier%%-*},"* ]]; then return 0; fi
   echo "=== $id — $tier: warmup ${WARMUP}s + ${RUNS}×${DURATION}s @ ${CONNECTIONS} conns"
-  pin "$LOAD_CPUS" oha -z "${WARMUP}s" -c "$CONNECTIONS" --no-tui --output-format json "$@" "$base$path" >/dev/null
+  pin "$LOAD_CPUS" oha -z "${WARMUP}s" -c "$CONNECTIONS" --no-tui --output-format json "$@" "$base$path" \
+    >"$tmp/$tier-warmup.json"
   for i in $(seq 1 "$RUNS"); do
     pin "$LOAD_CPUS" oha -z "${DURATION}s" -c "$CONNECTIONS" --no-tui --output-format json "$@" "$base$path" \
       >"$tmp/$tier-run$i.json"
@@ -136,7 +142,7 @@ measure_tier t5 /large
 if [ "$h2c" = "true" ]; then measure_tier t1-h2c /hello --http-version 2; fi
 rss_loaded=$(rss)
 stop
-if [ -n "${BENCH_TIERS:-}" ]; then quiet_env=""; compressed_env=""; fi
+if [ -n "${BENCH_TIERS:-}" ]; then quiet_env=""; compressed_env=""; exported_env=""; fi
 
 # ── Measure: the variants a boot of their own carries ────────────────────────
 if [ -n "$quiet_env" ]; then
@@ -155,11 +161,45 @@ if [ -n "$compressed_env" ]; then
   measure_tier t5-compressed /large -H "$COMPRESSED"
   stop
 fi
+# accepted — the spans the collector has taken so far, off its own counters.
+accepted() {
+  curl -s http://127.0.0.1:8888/metrics \
+    | awk '/^otelcol_receiver_accepted_spans/ {n += $NF} END {print n + 0}'
+}
+if [ -n "$exported_env" ]; then
+  command -v otelcol >/dev/null \
+    || { echo "FAIL t1-exported — no otelcol on PATH (RUNBOOK.md, Prerequisites)"; exit 1; }
+  echo "=== $id — exported boot ($exported_env)"
+  pin "$LOAD_CPUS" otelcol --config "$BENCH_DIR/harness/otelcol.yaml" >"$tmp/otelcol.log" 2>&1 &
+  collector=$!
+  for i in $(seq 1 1000); do
+    curl -sf -o /dev/null http://127.0.0.1:8888/metrics && break
+    kill -0 "$collector" 2>/dev/null || { echo "COLLECTOR DIED — $tmp/otelcol.log:"; tail -20 "$tmp/otelcol.log"; exit 1; }
+    sleep 0.01
+  done
+  boot $exported_env
+  # The batch processor sends every 5 s; three periods without a span is a hang.
+  for i in $(seq 1 1500); do [ "$(accepted)" -gt 0 ] && break; sleep 0.01; done
+  [ "$(accepted)" -gt 0 ] || { echo "FAIL t1-exported — the collector took no span from the SUT"; exit 1; }
+  echo "PASS t1-exported /hello — the collector takes the SUT's spans"
+  measure_tier t1-exported /hello
+  # After the SUT's exit, which flushes what its batch still held.
+  stop
+  accepted >"$tmp/t1-exported.spans"
+  kill "$collector"; wait "$collector" 2>/dev/null || true; collector=""
+fi
 
 # ── Assemble provider result ─────────────────────────────────────────────────
 mkdir -p "$RESULTS_DIR"
 tier_json() { # runs[] + medians, straight from oha's own JSON, and the tier's RSS
-  jq -s --arg tier "$1" --argjson rss "$(cat "$tmp/$1.rss")" '{($tier): {
+  local spans=null requests=null
+  if [ -f "$tmp/$1.spans" ]; then # an exported tier: what the collector took of what was sent
+    spans=$(cat "$tmp/$1.spans")
+    requests=$(jq -s '[.[] | (.statusCodeDistribution // {}) | [.[]] | add // 0] | add' \
+      "$tmp/$1-warmup.json" "$tmp/$1-run"*.json)
+  fi
+  jq -s --arg tier "$1" --argjson rss "$(cat "$tmp/$1.rss")" \
+    --argjson spans "$spans" --argjson requests "$requests" '{($tier): ({
     runs: .,
     median: {
       rps: ([.[].summary.requestsPerSec] | sort | .[length/2|floor]),
@@ -170,7 +210,8 @@ tier_json() { # runs[] + medians, straight from oha's own JSON, and the tier's R
       success_rate: ([.[].summary.successRate] | min)
     },
     rss_loaded_kb: $rss
-  }}' "$tmp/$1-run"*.json
+  } + (if $spans == null then {} else {spans_accepted: $spans, requests_sent: $requests} end))}' \
+    "$tmp/$1-run"*.json
 }
 # Through a file, never an argument: Linux caps one argument at 128 KiB, which
 # a provider's tiers of oha runs outgrow.

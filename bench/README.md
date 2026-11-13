@@ -52,7 +52,7 @@ protocol (10 s warmup, 3×15 s, 64 connections); published runs follow
 Reported per provider and tier: RPS, p50/p90/p99/p99.9 latency, RSS idle and
 loaded after each tier, cold start (spawn → first 200). The tiers are the
 contract's T0–T5 and the variants a provider declares (`t1-h2c`, `t1-quiet`,
-`t5-compressed`). Raw oha JSON is kept beside the report.
+`t5-compressed`, `t1-exported`). Raw oha JSON is kept beside the report.
 
 ## Adding a provider
 

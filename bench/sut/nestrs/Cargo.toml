@@ -8,11 +8,12 @@ publish = false
 [workspace]
 
 [dependencies]
-# One line, exactly as a user installs it — `cargo add nest-rs --features http`.
-# This SUT measures the product we ship, so it is wired the way we tell people
-# to wire it: naming `nest-rs-core`/`-http`/`-guards`/… individually would
-# benchmark an install shape that no longer exists.
-nest-rs = { path = "../../../crates/nest-rs", features = ["http"] }
+# One line, exactly as a user installs it — `cargo add nest-rs --features
+# http,opentelemetry`, the two a `nestrs new` app links. This SUT measures the
+# product we ship, so it is wired the way we tell people to wire it: naming
+# `nest-rs-core`/`-http`/`-guards`/… individually would benchmark an install
+# shape that no longer exists.
+nest-rs = { path = "../../../crates/nest-rs", features = ["http", "opentelemetry"] }
 anyhow = "1.0"
 # `serde`/`schemars` stay: `dto.rs` writes those derives itself; the handler's
 # `Json` is `nest_rs::http`'s.

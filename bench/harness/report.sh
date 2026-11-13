@@ -29,9 +29,14 @@ files=("$DIR"/*.json)
       "$f"
   done
   echo
+  jq -r '. as $p | .tiers | to_entries[] | select(.value.spans_accepted != null) |
+    "- **\($p.provider)-\($p.variant) \(.key)**: the collector took \(.value.spans_accepted) spans of the \(.value.requests_sent) requests sent, \(.value.spans_accepted * 1000 / .value.requests_sent | round / 10)%"' \
+    "${files[@]}"
+  echo
   echo "RSS loaded is the SUT's once each tier's last run ended. A tier named"
-  echo "\`t1-h2c\`, \`t1-quiet\` or \`t5-compressed\` is a variant its provider declares"
-  echo "(\`contract/CONTRACT.md\`), never compared with a provider that does not."
+  echo "\`t1-h2c\`, \`t1-quiet\`, \`t5-compressed\` or \`t1-exported\` is a variant its"
+  echo "provider declares (\`contract/CONTRACT.md\`), never compared with a provider"
+  echo "that does not."
   echo
   echo "Raw per-run oha output lives beside this file in \`*.json\`. A number"
   echo "without its fingerprint is not a result — see \`../../README.md\` for the"

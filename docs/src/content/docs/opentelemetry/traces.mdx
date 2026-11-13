@@ -189,10 +189,13 @@ a point in `db.client.operation.duration`.
 | a Redis pipeline or transaction of two commands or more | `BATCH`, or `BATCH GET` when every command is one | the same, and `db.operation.batch.size` |
 
 - **What a statement does, never what it says.** The summary is read off the
-  SQL's operation and the first table it names, skipping its literals, comments
-  and quoted text; `db.query.text` is not exported, since a hand-written
-  statement may carry a value in its text. A Redis command is named by its
-  first word, never a key or an argument.
+  SQL's operation and the first table it names, lexed as Postgres lexes it —
+  every quoting of a literal, nested comments and dollar-quoted bodies skipped
+  unread. A statement it cannot read with certainty — a quote never closed, a
+  backslash in a standard string — is named `postgresql` and carries no
+  summary, never a guessed word. `db.query.text` is not exported, since a
+  hand-written statement may carry a value in its text. A Redis command is
+  named by its first word, never a key or an argument.
 - **A failure says its class.** A Redis refusal records its code (`ERR`,
   `NOSCRIPT`, `WRONGTYPE`) as `error.type`; a failed statement records `_OTHER`,
   since sea-orm reports a failure without its error.

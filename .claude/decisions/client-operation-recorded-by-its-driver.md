@@ -63,6 +63,13 @@ Refused:
   conventions require it to, so a client calling hosts its users choose keys one
   series per host. Said on `HttpClientRequest` and the docs page, rather than
   bounded by a set no app declares.
+- **A summary guessed past what the lexer reads with certainty**: the
+  summary is lexed as Postgres's own scanner reads SQL (every quoting of a
+  literal, nested comments, dollar-quoted bodies, quoted identifiers), and a
+  statement it cannot read with certainty — a quote never closed, a backslash
+  in a standard string, whose meaning `standard_conforming_strings` decides
+  on the server — has none, named `postgresql`: a guessed word could be a
+  value.
 - **The pool's connection gauges** (`db.client.connection.*`) in this change:
   an observable instrument needs a seam of its own from the driver, which
   lands when a pool's saturation is the next thing an operator asks.

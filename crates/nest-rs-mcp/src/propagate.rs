@@ -8,7 +8,7 @@
 //! not delegate silently reverts to rmcp's default, so the impl carries
 //! `#[deny(clippy::missing_trait_methods)]`.
 //!
-//! | Kind | Request context | Unit stage | Unit of work | Deadline | Files a line |
+//! | Kind | Request context | Unit stage | Unit of work | Deadline | Span and line |
 //! |---|---|---|---|---|---|
 //! | Requests (`tools/call`, `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`, `tasks/*`, lifecycle, custom) | yes | yes | yes | yes | yes |
 //! | `subscriptions/listen` | yes | no | no — it outlives any sane transaction | no | yes |
@@ -64,10 +64,11 @@ use rmcp::model::{
     ListToolsResult, PaginatedRequestParams, PingRequestMethod, ProgressNotificationMethod,
     ProgressNotificationParam, ProtocolVersion, ReadResourceDirectoryRequestMethod,
     ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestMethod,
-    ReadResourceRequestParams, ReadResourceResponse, Reference, RootsListChangedNotificationMethod,
-    ServerConfig, SetLevelRequestMethod, SetLevelRequestParams, SubscribeRequestMethod,
-    SubscribeRequestParams, SubscriptionFilter, SubscriptionsListenRequestMethod, Tool,
-    UnsubscribeRequestMethod, UnsubscribeRequestParams, UpdateTaskMethod, UpdateTaskParams,
+    ReadResourceRequestParams, ReadResourceResponse, Reference, RequestId,
+    RootsListChangedNotificationMethod, ServerConfig, SetLevelRequestMethod, SetLevelRequestParams,
+    SubscribeRequestMethod, SubscribeRequestParams, SubscriptionFilter,
+    SubscriptionsListenRequestMethod, Tool, UnsubscribeRequestMethod, UnsubscribeRequestParams,
+    UpdateTaskMethod, UpdateTaskParams,
 };
 use rmcp::service::{
     MaybeSendFuture, NotificationContext, RequestContext, RoleServer, SubscriptionContext,
@@ -84,6 +85,11 @@ use crate::error::{
 use crate::guard::BoxFuture;
 use crate::operation::McpOperationKind;
 use crate::registry::MountIndex;
+use crate::unit::{
+    EXECUTE_TOOL, GEN_AI_OPERATION_NAME, GEN_AI_PROMPT_NAME, GEN_AI_TOOL_NAME, HTTP,
+    JSONRPC_REQUEST_ID, MCP_METHOD_NAME, MCP_RESOURCE_URI, NETWORK_PROTOCOL_NAME,
+    NETWORK_TRANSPORT, RPC_RESPONSE_STATUS_CODE, TCP,
+};
 use crate::view::McpView;
 
 /// The chains every request's own site runs on one mount.
@@ -118,8 +124,7 @@ impl<H> PropagatingHandler<H> {
     /// declared, or the host's `get_tool` knows where the mount cannot say.
     async fn dispatch<T, F, S>(
         &self,
-        method: &Method,
-        addressed: &Addressed,
+        requested: &Requested,
         ambient: Option<McpAmbient>,
         unit: bool,
         stopped: S,
@@ -131,9 +136,11 @@ impl<H> PropagatingHandler<H> {
         F: Future<Output = Result<T, McpError>> + Send,
         S: Future<Output = Result<T, McpError>> + Send,
     {
-        let declared = addressed.declared(&self.inner, self.units.index.as_deref());
+        let declared = requested
+            .addressed
+            .declared(&self.inner, self.units.index.as_deref());
         self.units
-            .dispatch(method, addressed, declared, ambient, unit, stopped, inner)
+            .dispatch(requested, declared, ambient, unit, stopped, inner)
             .await
     }
 }
@@ -180,23 +187,19 @@ impl OperationUnits {
     /// Run `inner` as one operation, under the `/mcp` request's context
     /// `ambient` carries.
     ///
-    /// `method` is the JSON-RPC method and `addressed` what it named, which the
-    /// span and the view record as the conventions ask; the line names
-    /// `declared` alone, what the mount declares under that name. `unit` is
+    /// `requested` is the JSON-RPC request as the client sent it, which the
+    /// span and the view record as the conventions ask; the line, the span's
+    /// tool and prompt and its name read `declared` alone, what the mount
+    /// declares under that name. `unit` is
     /// `false` for an operation that runs neither the request's site, a unit
     /// of work nor the deadline, which cuts the body, never its settle, so a
     /// commit is never cut. `stopped` resolves when the operation is to end
     /// before it answers, with what the client is answered; like the deadline
     /// it cuts the body alone, so a stop arriving while the unit settles leaves
     /// the operation to end as it answered.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each argument is one thing the caller read off the request; a struct would only rename them"
-    )]
     async fn dispatch<T, F, S>(
         &self,
-        method: &Method,
-        addressed: &Addressed,
+        requested: &Requested,
         declared: ServedAddress<'_>,
         ambient: Option<McpAmbient>,
         unit: bool,
@@ -211,7 +214,7 @@ impl OperationUnits {
         // Boxed, as rmcp's own future is: rmcp holds every method's future in
         // its loop, so each stays a pointer there whatever the operation runs.
         let run: BoxFuture<'_, Result<T, McpError>> =
-            Box::pin(self.operation(method, addressed, declared, unit, stopped, inner));
+            Box::pin(self.operation(requested, declared, unit, stopped, inner));
         match ambient {
             Some(ambient) => ambient.carried.carry(run).await,
             None => run.await,
@@ -225,8 +228,7 @@ impl OperationUnits {
     /// operation answers `Ok` with no tool error in band.
     async fn operation<T, F, S>(
         &self,
-        method: &Method,
-        addressed: &Addressed,
+        requested: &Requested,
         declared: ServedAddress<'_>,
         unit: bool,
         stopped: S,
@@ -243,17 +245,12 @@ impl OperationUnits {
             (None, None)
         };
 
+        let Requested {
+            method, addressed, ..
+        } = requested;
         // Its own unit of work: one session request carries many operations.
         let correlation = Correlation::inherited().child();
-        // One `mcp.operation.name` for the conventions' three (`mcp.tool.name`,
-        // `mcp.prompt.name`, `mcp.resource.uri`); `mcp.method.name` says which.
-        let operation = nest_rs_core::operation_span!(
-            crate::unit::OPERATION,
-            &correlation,
-            mcp.method.name = method.sent(),
-            mcp.operation.name = addressed.spanned(),
-            rpc.response.status_code = tracing::field::Empty,
-        );
+        let operation = requested.span(declared, &correlation);
         let named = method.named();
         // Only the `#[resource]` serving a URI knows the template it matched,
         // and the line is filed outside the unit it runs in.
@@ -287,7 +284,7 @@ impl OperationUnits {
             None => spec,
         };
         let stopped_first = &AtomicBool::new(false);
-        let view = || self.view(method, addressed);
+        let view = || self.view(requested);
         let scoped: BoxFuture<'_, Answered<T>> = Box::pin(nest_rs_core::with_request_scope(
             nest_rs_core::current_request_scope(),
             correlation,
@@ -396,7 +393,12 @@ impl OperationUnits {
 
     /// The view of the request `method` addressing `addressed`, naming the
     /// host the mount reads declares it.
-    fn view(&self, method: &Method, addressed: &Addressed) -> McpView {
+    fn view(
+        &self,
+        Requested {
+            method, addressed, ..
+        }: &Requested,
+    ) -> McpView {
         let kind = match addressed {
             Addressed::Tool(_) => Some(McpOperationKind::Tool),
             Addressed::Prompt(_) if method.sent() == GetPromptRequestMethod::VALUE => {
@@ -407,7 +409,7 @@ impl OperationUnits {
             }
             _ => None,
         };
-        let name = addressed.spanned();
+        let name = addressed.as_sent();
         let host = match (kind, name, self.index.as_deref()) {
             (Some(kind), Some(name), Some(index)) => index.host(kind, name),
             _ => None,
@@ -511,10 +513,6 @@ enum FailedAs {
 /// The `error.type` OpenTelemetry's MCP semantic conventions give a
 /// `CallToolResult` answered with `isError: true`.
 const TOOL_ERROR: &str = "tool_error";
-
-/// The span attribute OpenTelemetry's MCP conventions record a JSON-RPC
-/// error's code under, as a string.
-pub(crate) const RPC_RESPONSE_STATUS_CODE: &str = "rpc.response.status_code";
 
 /// Whether OpenTelemetry's MCP conventions read `code`, answered by a server,
 /// as a request the caller sent that the server could not serve — a parse
@@ -651,6 +649,77 @@ impl From<String> for Method {
     }
 }
 
+/// One JSON-RPC request or notification an operation answers, as the client
+/// sent it.
+struct Requested {
+    method: Method,
+    /// `None` for a notification, which carries none.
+    id: Option<RequestId>,
+    addressed: Addressed,
+}
+
+impl Requested {
+    /// A notification of `method`, which names nothing.
+    fn notification(method: Method) -> Self {
+        Self {
+            method,
+            id: None,
+            addressed: Addressed::Nothing,
+        }
+    }
+
+    /// The operation's span, under `correlation`, as the MCP conventions
+    /// describe a request or notification a server processes.
+    fn span(&self, declared: ServedAddress<'_>, correlation: &Correlation) -> tracing::Span {
+        // The name, the tool and the prompt are what a host declares, `_OTHER`
+        // otherwise, so neither a span's name nor the duration keyed by them
+        // holds a word only the client wrote.
+        nest_rs_core::operation_span!(
+            crate::unit::OPERATION,
+            correlation,
+            otel.name = %SpanName::of(&self.method, declared),
+            { MCP_METHOD_NAME } = self.method.sent(),
+            { JSONRPC_REQUEST_ID } = self.id.as_ref().map(tracing::field::display),
+            { GEN_AI_TOOL_NAME } = declared.tool,
+            { GEN_AI_PROMPT_NAME } = declared.prompt,
+            { GEN_AI_OPERATION_NAME } = self.addressed.operation_name(),
+            { MCP_RESOURCE_URI } = self.addressed.resource_uri(),
+            { NETWORK_TRANSPORT } = TCP,
+            { NETWORK_PROTOCOL_NAME } = HTTP,
+            { RPC_RESPONSE_STATUS_CODE } = tracing::field::Empty,
+        )
+    }
+}
+
+/// An operation's exported name, as the MCP conventions form it: the method,
+/// then the tool or prompt a host declares, the method alone where none does —
+/// the server's values alone, `_OTHER` for a custom method.
+struct SpanName<'a> {
+    method: &'static str,
+    target: Option<&'a str>,
+}
+
+impl<'a> SpanName<'a> {
+    fn of(method: &Method, declared: ServedAddress<'a>) -> Self {
+        Self {
+            method: method.named(),
+            target: declared
+                .tool
+                .or(declared.prompt)
+                .filter(|target| *target != operation_log::OTHER),
+        }
+    }
+}
+
+impl std::fmt::Display for SpanName<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.target {
+            Some(target) => write!(f, "{} {target}", self.method),
+            None => f.write_str(self.method),
+        }
+    }
+}
+
 /// What an operation addressed, as the client named it.
 enum Addressed {
     /// Nothing: the method names nothing.
@@ -667,12 +736,25 @@ enum Addressed {
 }
 
 impl Addressed {
-    /// What the span records as `mcp.operation.name`: the conventions' tool,
-    /// prompt or resource, their stated exception.
-    fn spanned(&self) -> Option<&str> {
+    /// The tool, prompt or resource the client named, as it named it.
+    fn as_sent(&self) -> Option<&str> {
         match self {
             Self::Nothing | Self::Task(_) => None,
             Self::Tool(name) | Self::Prompt(name) | Self::Resource(name) => Some(name),
+        }
+    }
+
+    /// The span's `gen_ai.operation.name`: [`EXECUTE_TOOL`] on a tool call.
+    fn operation_name(&self) -> Option<&'static str> {
+        matches!(self, Self::Tool(_)).then_some(EXECUTE_TOOL)
+    }
+
+    /// The span's `mcp.resource.uri`: the URI as the client sent it, the
+    /// conventions' stated exception.
+    fn resource_uri(&self) -> Option<&str> {
+        match self {
+            Self::Resource(uri) => Some(uri),
+            _ => None,
         }
     }
 
@@ -783,8 +865,7 @@ struct OperationLine<'a> {
     address: &'a LineAddress<'a>,
     /// Entered to file the line, which sits outside the scope the operation installs.
     correlation: Correlation,
-    /// The operation's own span; [`Span::none`](tracing::Span::none) for a
-    /// notification, which opens none.
+    /// The operation's own span.
     span: tracing::Span,
     started: std::time::Instant,
 }
@@ -895,14 +976,16 @@ macro_rules! request_method {
         ) -> impl Future<Output = Result<$out, McpError>> + MaybeSendFuture + '_ {
             async move {
                 let ambient = McpAmbient::from_extensions(&context.extensions);
-                let method = Method::from($method);
-                let addressed: Addressed = $addressed;
+                let requested = Requested {
+                    method: Method::from($method),
+                    id: Some(context.id.clone()),
+                    addressed: $addressed,
+                };
                 let cancelled = context.ct.clone().cancelled_owned();
                 let inner: BoxFuture<'_, Result<$out, McpError>> =
                     Box::pin(self.inner.$name($($arg,)* context));
                 self.dispatch(
-                    &method,
-                    &addressed,
+                    &requested,
                     ambient,
                     true,
                     async move {
@@ -912,7 +995,7 @@ macro_rules! request_method {
                     inner,
                 )
                 .await
-                .map_err(|error| addressed.said_by_kind(&method, error))
+                .map_err(|error| requested.addressed.said_by_kind(&requested.method, error))
             }
         }
     };
@@ -942,27 +1025,28 @@ macro_rules! request_method {
     };
 }
 
-/// Delegate one notification: the request's context is installed, and
-/// nothing else is.
+/// Delegate one notification: the request's context is installed, and its
+/// span and line opened, and nothing else is.
 macro_rules! notification_method {
-    ($name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ), $method:expr $(,)?) => {
+    (@delegate $name:ident ( $($arg:ident : $arg_ty:ty),* ), $method:expr) => {
         fn $name(
             &self,
             $($arg: $arg_ty,)*
             context: NotificationContext<RoleServer>,
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
             let ambient = McpAmbient::from_extensions(&context.extensions);
-            let method = Method::from($method);
+            let requested = Requested::notification(Method::from($method));
             let handled: BoxFuture<'_, _> =
                 Box::pin(nest_rs_core::panic::contain(self.inner.$name($($arg,)* context)));
             let run = async move {
-                let correlation = Correlation::inherited();
+                let correlation = Correlation::inherited().child();
+                let operation = requested.span(ServedAddress::default(), &correlation);
                 let address = LineAddress::default();
                 let line = OperationLine::open(
-                    method.named(),
+                    requested.method.named(),
                     &address,
                     correlation.clone(),
-                    tracing::Span::none(),
+                    operation.clone(),
                 );
                 nest_rs_core::with_request_scope(
                     nest_rs_core::current_request_scope(),
@@ -975,6 +1059,7 @@ macro_rules! notification_method {
                         }
                     },
                 )
+                .instrument(operation)
                 .await
             };
             match ambient {
@@ -982,6 +1067,22 @@ macro_rules! notification_method {
                 None => Either::Right(run),
             }
         }
+    };
+    // As a request's: a notification the protocol defines keys its duration by
+    // its method.
+    ($name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ), $method:path $(,)?) => {
+        notification_method!(@delegate $name ( $($arg : $arg_ty),* ), {
+            const {
+                ::core::assert!(
+                    crate::unit::is_protocol_method($method),
+                    "a method the protocol defines is listed in `unit::PROTOCOL_METHODS`",
+                )
+            };
+            $method
+        });
+    };
+    ($name:ident ( $($arg:ident : $arg_ty:ty),* $(,)? ), $method:expr $(,)?) => {
+        notification_method!(@delegate $name ( $($arg : $arg_ty),* ), $method);
     };
 }
 
@@ -1129,11 +1230,15 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
     /// teardown, and files `cancelled`.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         let ambient = McpAmbient::from_extensions(&context.request_context().extensions);
+        let requested = Requested {
+            method: Method::from(SubscriptionsListenRequestMethod::VALUE),
+            id: Some(context.request_context().id.clone()),
+            addressed: Addressed::Nothing,
+        };
         let going_away = self.units.detached.going_away();
         let inner: BoxFuture<'_, Result<(), McpError>> = Box::pin(self.inner.listen(context));
         self.dispatch(
-            &Method::from(SubscriptionsListenRequestMethod::VALUE),
-            &Addressed::Nothing,
+            &requested,
             ambient,
             false,
             async move {
@@ -1269,6 +1374,45 @@ mod tests {
         assert_eq!(
             unserved.data,
             Some(serde_json::json!({ "code": "NOT_FOUND" }))
+        );
+    }
+
+    /// A span is named for its method and the tool or prompt a host declares,
+    /// the method alone where none does, and `_OTHER` for a custom method: the
+    /// server's values, so no client names a span.
+    #[test]
+    fn a_span_is_named_for_its_method_and_what_a_host_declares() {
+        let named = |method: Method, declared| SpanName::of(&method, declared).to_string();
+        let call = || Method::from(CallToolRequestMethod::VALUE);
+
+        assert_eq!(
+            named(call(), ServedAddress::tool("forecast")),
+            "tools/call forecast"
+        );
+        assert_eq!(
+            named(call(), ServedAddress::tool(operation_log::OTHER)),
+            "tools/call"
+        );
+        assert_eq!(
+            named(
+                Method::from(GetPromptRequestMethod::VALUE),
+                ServedAddress::prompt("outlook")
+            ),
+            "prompts/get outlook"
+        );
+        assert_eq!(
+            named(
+                Method::from(ReadResourceRequestMethod::VALUE),
+                ServedAddress::default()
+            ),
+            "resources/read"
+        );
+        assert_eq!(
+            named(
+                Method::from("marked/custom".to_owned()),
+                ServedAddress::default()
+            ),
+            operation_log::OTHER
         );
     }
 

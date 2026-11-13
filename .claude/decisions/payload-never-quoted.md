@@ -127,9 +127,11 @@ spelled it.
   set, `http.request.method_original` (required whenever it differs from
   `http.request.method`); a GraphQL operation's span its
   `graphql.operation.name` (recommended); an MCP operation's span its
-  method, custom or not (required), and the tool, prompt or resource it named
-  (each conditionally required, folded as `mcp.operation.name`), but no task
-  id, which no convention names. Standards over invention: a tracing
+  method, custom or not (required), the resource URI and the JSON-RPC id it
+  named (each conditionally required), a tool or a prompt as a host declares
+  it, `_OTHER` for one it does not (2026-11-13: the duration is keyed by them,
+  and no client mints a series), but no task id, which no convention names,
+  and no `mcp.session.id`, which reaches the session. Standards over invention: a tracing
   backend reads those names, and the span goes to the deployment's own
   collector, never to a client or a shared log. Beyond that set, a header the
   span records is recorded only once it parsed under its grammar — a

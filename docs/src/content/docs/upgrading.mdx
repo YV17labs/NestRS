@@ -1383,7 +1383,9 @@ lists what the boot, a log or the wire shows when one is missed.
       (`/posts/{id}`), not the path; a method outside RFC 9110's is `_OTHER`; a
       WebSocket event no handler serves is `_OTHER`; `user_agent`,
       `operation_name` and an MCP operation's name moved to the spans
-      (`user_agent.original`, `graphql.operation.name`, `mcp.operation.name`). A
+      (`user_agent.original`, `graphql.operation.name`, and the MCP
+      conventions' `gen_ai.tool.name`, `gen_ai.prompt.name` and
+      `mcp.resource.uri`, which replace 6.x's `mcp.operation.name`). A
       root field files `graphql.field`, an operation `graphql.operation`, a
       lifecycle hook `lifecycle.hook`. A `5xx` is filed once, by the edge:
       `service error surfaced as 500` and `token request failed` read

@@ -289,7 +289,7 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         "{ran_under:?}",
     );
     assert_eq!(
-        ran_under.field("mcp.operation.name").as_deref(),
+        ran_under.field("gen_ai.tool.name").as_deref(),
         Some("probe_span"),
         "{ran_under:?}",
     );

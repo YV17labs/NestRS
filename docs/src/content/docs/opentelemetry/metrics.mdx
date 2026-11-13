@@ -32,7 +32,7 @@ ready-made HTTP, messaging and MCP dashboards light up with nothing written:
 |---|---|---|
 | `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `error.type` |
 | `queue.job` | `messaging.process.duration` | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type` |
-| `mcp.operation` | `mcp.server.operation.duration` | `mcp.method.name`, `rpc.response.status_code`, `error.type` |
+| `mcp.operation` | `mcp.server.operation.duration` | `mcp.method.name`, `gen_ai.tool.name`, `gen_ai.prompt.name`, `gen_ai.operation.name`, `network.transport`, `network.protocol.name`, `rpc.response.status_code`, `error.type` |
 
 One histogram is the rate, the errors and the latency at once: a backend counts
 its points per second, splits them on `http.response.status_code` or
@@ -50,7 +50,8 @@ operation, a tool call running long.
 - **Every key is the server's.** `http.route` is the template, never the path;
   a method outside the HTTP conventions' known set is `_OTHER`; an MCP method
   only the client named — a custom one — reads `_OTHER` too, though the span
-  keeps it as sent. A client cannot mint a series.
+  keeps it as sent, and so does a tool or a prompt no host declares, on the
+  span as on the duration. A client cannot mint a series.
 - **A binary exporting no metric pays nothing.** The layer is installed only
   when the metrics export, and `OTEL_METRICS_EXPORTER=none` turns it off with
   them. The instruments are recorded under the instrumentation scope `nest-rs`

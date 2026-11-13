@@ -21,16 +21,20 @@ Three signal types ship in one crate, behind one line of `main`:
 
 - **[Traces](/opentelemetry/traces/)** — every request, job and scheduled tick
   opens a span, and so does every unit a package declares, exported under the
-  same trace and span ids its log lines carry; W3C `traceparent` propagation
-  and sampling, seeded onto the framework's span constructor, stitch
-  distributed traces together.
+  same trace and span ids its log lines carry; each SQL statement and Redis
+  command it sends is a client span beneath it, and so is each request your
+  own `reqwest` client makes through `ReqwestMiddleware`, which carries the
+  trace onward; W3C `traceparent` propagation and sampling, seeded onto the
+  framework's span constructor, stitch distributed traces together.
 - **[Logs](/opentelemetry/logs/)** — `tracing::info!` and friends flow to the
   console **and** to OTel logs (via
   [`opentelemetry-appender-tracing`](https://crates.io/crates/opentelemetry-appender-tracing))
   with structured fields, configurable level per layer, and JSON for prod.
 - **[Metrics](/opentelemetry/metrics/)** — every HTTP request, queue job and
-  MCP operation is timed in the histogram its semantic conventions name,
-  counted whatever the console or the sampler keeps; inject `Arc<Metrics>` and
+  MCP operation is timed in the histogram its semantic conventions name, and
+  every SQL statement and Redis command in `db.client.operation.duration`,
+  counted whatever the console or the sampler keeps; the process and its tokio
+  runtime report their own load; inject `Arc<Metrics>` and
   record on counters / histograms / gauges of your own, named as the
   OpenTelemetry Metrics API names them; metrics batch on a `PeriodicReader` and
   export through the same OTLP endpoint as the traces.

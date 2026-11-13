@@ -120,6 +120,7 @@ requirement compatible with the framework's:
 | `validator` 0.21 | `#[validate(…)]` on a DTO or a config, through `nest_rs::pipes::validator` |
 | `schemars` 1 | `#[derive(JsonSchema)]` |
 | `redis` 1 | your own commands on a `RedisConnection` |
+| `reqwest` 0.13, `reqwest-middleware` 0.5 | your own HTTP client, traced through `nest_rs::opentelemetry::ReqwestMiddleware` |
 | `rust-embed` 8 | `#[derive(Embed)]` for static files |
 | `inventory` 0.3 | a package's registrations |
 | `futures-util` 0.3 | an `#[sse]` route's stream, a subscription's, and what `EventBus::stream` answers |

@@ -104,6 +104,23 @@ queue, the rate limiter and the schedule lock each run on all three, each on
 TLS — [Valkey topologies](/queue/topologies/). Postgres is reached through
 SeaORM, and object storage through one URL whose scheme picks the store.
 
+## Telemetry in the standards' own names
+
+Every unit of work carries a W3C trace context from the edge that accepted it
+and files one line naming it. One line of `main` exports its span, its logs and
+its duration over OTLP. A request, a job and an MCP operation are timed in the
+histogram their semantic conventions name, whatever `RUST_LOG` or the sampler
+keeps. Each SQL statement and Redis command is a client span under its unit
+and a `db.client.operation.duration`. Your own `reqwest` client carries the
+trace onward through one middleware, and the process and its tokio runtime
+report their CPU time, open files, workers and queue depth.
+
+Nothing a client sent becomes a series: a path is read as its route template,
+an unknown method as `_OTHER`, and a statement by its summary, never its
+values. Any OTLP backend reads it in the names its dashboards expect, and
+[OpenTelemetry](/opentelemetry/) shows the one container that opens it on your
+machine.
+
 ## TLS on every connection
 
 A connection the framework opens is TLS it verifies, or plaintext you wrote on

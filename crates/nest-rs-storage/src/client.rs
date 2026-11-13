@@ -1532,6 +1532,75 @@ mod tests {
         }
     }
 
+    /// An S3 double answering `503` to its first request and `200` to every
+    /// later one, so object_store's retry of the first lands.
+    #[derive(Debug, Clone, Default)]
+    struct UnavailableOnce {
+        met: Arc<AtomicBool>,
+    }
+
+    impl HttpConnector for UnavailableOnce {
+        fn connect(&self, _options: &ClientOptions) -> object_store::Result<HttpClient> {
+            Ok(HttpClient::new(self.clone()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HttpService for UnavailableOnce {
+        async fn call(&self, _request: HttpRequest) -> Exchanged {
+            let mut answer = HttpResponse::new(String::new().into());
+            if !self.met.swap(true, Ordering::SeqCst) {
+                *answer.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+                return Ok(answer);
+            }
+            // What a `HEAD` S3 answers for an object of no bytes.
+            let headers = answer.headers_mut();
+            headers.insert("content-length", http::HeaderValue::from_static("0"));
+            headers.insert("etag", http::HeaderValue::from_static("\"etag\""));
+            headers.insert(
+                "last-modified",
+                http::HeaderValue::from_static("Wed, 21 Oct 2015 07:28:00 GMT"),
+            );
+            Ok(answer)
+        }
+    }
+
+    /// The `http.request.resend_count` of each request recorded, in order.
+    static RESENDS: std::sync::Mutex<Vec<Option<i64>>> = std::sync::Mutex::new(Vec::new());
+
+    fn capture_resends(operation: &nest_rs_core::client_operation::ClientOperation<'_>) {
+        RESENDS
+            .lock()
+            .expect("the resends")
+            .push(
+                operation
+                    .attributes()
+                    .iter()
+                    .find_map(|(key, value)| match (*key, value) {
+                        (
+                            "http.request.resend_count",
+                            nest_rs_core::client_operation::ClientValue::Integer(count),
+                        ) => Some(*count),
+                        _ => None,
+                    }),
+            );
+    }
+
+    /// A request object_store sends again after it failed says it is a
+    /// resending; the first sending says nothing.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_the_store_retries_is_recorded_as_sent_again() {
+        nest_rs_core::__private::set_client_recorder(capture_resends);
+        let storage = Storage::dialing(
+            s3_at("http://store.test", Surface::Open),
+            UnavailableOnce::default(),
+        );
+
+        storage.head("k").await.expect("the retry is answered");
+
+        assert_eq!(*RESENDS.lock().expect("the resends"), [None, Some(1)]);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_call_the_budget_cuts_names_what_its_last_attempt_met() {
         let budget = Duration::from_secs(1);

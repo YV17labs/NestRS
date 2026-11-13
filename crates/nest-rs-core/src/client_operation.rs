@@ -319,6 +319,8 @@ const HTTP_RESPONSE_STATUS_CODE: &str = "http.response.status_code";
 const NETWORK_PROTOCOL_VERSION: &str = "network.protocol.version";
 /// `http` or `https`.
 const URL_SCHEME: &str = "url.scheme";
+/// How many times a failed request was sent again before this sending.
+const HTTP_REQUEST_RESEND_COUNT: &str = "http.request.resend_count";
 
 /// The span name the conventions give a request whose method they do not know.
 const UNKNOWN_METHOD_SPAN: &str = "HTTP";
@@ -400,6 +402,21 @@ impl HttpClientRequest {
             announced,
             operation,
         }
+    }
+
+    /// The request is the `count`th sending again of one that failed: the
+    /// conventions' `http.request.resend_count`, on its span alone, and nothing
+    /// for a first sending.
+    #[must_use = "a request is recorded when it is answered, timed out or failed"]
+    pub fn resent(mut self, count: u32) -> Self {
+        if count > 0
+            && let Some(timed) = &mut self.operation.timed
+        {
+            timed
+                .attributes
+                .push((HTTP_REQUEST_RESEND_COUNT, Held::Integer(i64::from(count))));
+        }
+        self
     }
 
     /// Set the request's `traceparent` and `tracestate` on `headers`, inside a

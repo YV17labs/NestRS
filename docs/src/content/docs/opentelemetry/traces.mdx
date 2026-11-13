@@ -246,6 +246,7 @@ conventions' client operation: a `client` span and a point in
 | `server.address`, `server.port` | the server and port the request went to |
 | `http.response.status_code`, `network.protocol.version` | the status and HTTP version it was answered with |
 | `url.scheme` | `http` or `https`, on the span |
+| `http.request.resend_count` | on the span of a storage request object_store sends again after it failed: `1` for its first retry |
 | `error.type` | the status from `400` up; `timeout` or `_OTHER` for a request that never answered |
 
 The `traceparent` a request carries names its span, so the service it called

@@ -476,17 +476,61 @@ fn said(store: &str, budget: Duration) -> impl FnMut(Proving<'_, object_store::E
 tokio::task_local! {
     /// How the last exchange of the unit [`witnessed`] runs ended.
     static LAST_EXCHANGE: Cell<Option<Exchange>>;
+    /// The last request that unit sent, to tell object_store's retry of it.
+    static LAST_SENT: Cell<Option<Sent>>;
 }
 
 /// `unit`'s output, and how its last exchange with the store ended, as every
 /// S3 client of the store keeps it ([`Witnessed`]).
 pub(crate) async fn witnessed<F: Future>(unit: F) -> (F::Output, Option<Exchange>) {
-    LAST_EXCHANGE
-        .scope(Cell::new(None), async {
-            let output = unit.await;
-            (output, LAST_EXCHANGE.with(Cell::take))
-        })
+    LAST_SENT
+        .scope(
+            Cell::new(None),
+            LAST_EXCHANGE.scope(Cell::new(None), async {
+                let output = unit.await;
+                (output, LAST_EXCHANGE.with(Cell::take))
+            }),
+        )
         .await
+}
+
+/// A request a witnessed unit sent: which one — its method and address,
+/// hashed, never kept — whether it failed, and how many times it was sent again
+/// before. object_store retries a failed request as it was, so the next one
+/// alike is its retry.
+#[derive(Clone, Copy)]
+struct Sent {
+    request: u64,
+    failed: bool,
+    resends: u32,
+}
+
+impl Sent {
+    /// How many times `request` was sent again before now: one more than the
+    /// last sending's where that was it and failed, none otherwise.
+    fn resends_of(request: u64) -> u32 {
+        LAST_SENT
+            .try_with(Cell::get)
+            .ok()
+            .flatten()
+            .filter(|last| last.request == request && last.failed)
+            .map_or(0, |last| last.resends.saturating_add(1))
+    }
+
+    /// Keep `self` as the witnessed unit's last sending.
+    fn keep(self) {
+        LAST_SENT.try_with(|last| last.set(Some(self))).ok();
+    }
+}
+
+/// `method` and `uri`, hashed to tell a request sent again from another.
+fn request_identity(method: &http::Method, uri: &http::Uri) -> u64 {
+    use std::hash::{Hash, Hasher};
+    // Fixed keys: two sendings of one request hash alike.
+    let mut hasher = std::hash::DefaultHasher::new();
+    method.hash(&mut hasher);
+    uri.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The HTTP connector of every S3 client the store opens: `C`'s, keeping how
@@ -509,16 +553,28 @@ struct Witness(HttpClient);
 impl HttpService for Witness {
     async fn call(&self, mut request: HttpRequest) -> std::result::Result<HttpResponse, HttpError> {
         let uri = request.uri();
+        let identity = request_identity(request.method(), uri);
+        let resends = Sent::resends_of(identity);
         let sent = HttpClientRequest::start(
             request.method(),
             uri.scheme_str().unwrap_or_default(),
             uri.host(),
             uri.port_u16(),
-        );
+        )
+        .resent(resends);
         // After object_store signed it: SigV4 covers the headers it lists
         // alone, so a trace header leaves the signature whole.
         sent.announce(request.headers_mut());
         let answered = self.0.execute(request).await;
+        let failed = answered.as_ref().map_or(true, |answered| {
+            answered.status().is_client_error() || answered.status().is_server_error()
+        });
+        Sent {
+            request: identity,
+            failed,
+            resends,
+        }
+        .keep();
         match &answered {
             Ok(answered) => sent.answered(answered.status(), answered.version()),
             Err(failed) if failed.kind() == HttpErrorKind::Timeout => sent.timed_out(),

@@ -93,7 +93,9 @@ pub(crate) fn carry(
         match log {
             // Inside the context, outside the span — see `Carried::file`.
             Some(log) => continuation.enter(|| log.emit(&span, status, 0, outcome)),
-            None => nest_rs_core::operation_log::record_outcome(&span, outcome),
+            None => {
+                nest_rs_core::operation_log::record_outcome(&crate::unit::REQUEST, &span, outcome)
+            }
         }
         return Response::from_parts(parts, body);
     }
@@ -171,7 +173,13 @@ impl Carried {
                     .log
                     .emit(&self.span, pending.status, counted, outcome)
             }),
-            None => nest_rs_core::operation_log::record_outcome(&self.span, outcome),
+            None => {
+                nest_rs_core::operation_log::record_outcome(
+                    &crate::unit::REQUEST,
+                    &self.span,
+                    outcome,
+                );
+            }
         }
     }
 

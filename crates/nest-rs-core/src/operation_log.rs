@@ -411,15 +411,14 @@ pub fn known_verb(verb: &str) -> Option<&'static str> {
 /// `version` as the conventions write `network.protocol.version` (`1.1`, `2`),
 /// a request's or an answer's.
 pub fn protocol_version(version: http::Version) -> Option<&'static str> {
-    [
-        (http::Version::HTTP_09, "0.9"),
-        (http::Version::HTTP_10, "1.0"),
-        (http::Version::HTTP_11, "1.1"),
-        (http::Version::HTTP_2, "2"),
-        (http::Version::HTTP_3, "3"),
-    ]
-    .into_iter()
-    .find_map(|(known, written)| (known == version).then_some(written))
+    match version {
+        http::Version::HTTP_09 => Some("0.9"),
+        http::Version::HTTP_10 => Some("1.0"),
+        http::Version::HTTP_11 => Some("1.1"),
+        http::Version::HTTP_2 => Some("2"),
+        http::Version::HTTP_3 => Some("3"),
+        _ => None,
+    }
 }
 
 /// Not an outcome: the word a line names what a client addressed with when
@@ -429,20 +428,20 @@ pub fn protocol_version(version: http::Version) -> Option<&'static str> {
 /// for a method they do not know.
 pub const OTHER: &str = "_OTHER";
 
-/// Record on a unit's span that the unit ended, and how, where OpenTelemetry
-/// reads it: `None` for an answer whose own status says it — an HTTP request
-/// that answered.
+/// Record on `unit`'s span that it ended, and how, where OpenTelemetry reads
+/// it: `None` for an answer whose own status says it — an HTTP request that
+/// answered.
 ///
 /// An outcome but [`OK`] becomes the span's `error.type` and an `Error` status.
 /// [`operation_line!`](crate::operation_line) calls it; an edge calls it directly
 /// only where it ends a unit without filing a line.
-pub fn record_outcome<'a>(span: &tracing::Span, outcome: impl Into<Option<&'a str>>) {
+pub fn record_outcome<'a>(unit: &Unit, span: &tracing::Span, outcome: impl Into<Option<&'a str>>) {
     if let Some(outcome) = outcome.into()
         && outcome != OK
     {
         record_error(span, outcome);
     }
-    record_end(span);
+    record_end(unit, span);
 }
 
 /// Record the name a unit's span is exported under, once its edge knows it —
@@ -450,27 +449,36 @@ pub fn record_outcome<'a>(span: &tracing::Span, outcome: impl Into<Option<&'a st
 /// reads; one that started the span as it opened renames it, a late field
 /// being lost on a started span.
 pub fn record_name(span: &tracing::Span, name: std::fmt::Arguments<'_>) {
-    span.record(OTEL_NAME, tracing::field::display(name));
-    if let Some(rename) = SPAN_RENAME.get() {
-        rename(span, &name.to_string());
+    match SPAN_RENAME.get() {
+        Some(rename) => {
+            let name = name.to_string();
+            span.record(OTEL_NAME, name.as_str());
+            rename(span, name);
+        }
+        None => {
+            span.record(OTEL_NAME, tracing::field::display(name));
+        }
     }
 }
 
 const OTEL_NAME: &str = "otel.name";
 
 /// What an observability stack does to a unit's span its edge names late.
-type SpanRename = fn(&tracing::Span, &str);
+type SpanRename = fn(&tracing::Span, String);
 
 static SPAN_RENAME: OnceLock<SpanRename> = OnceLock::new();
 
-/// Record on a unit's span that the unit ended — its answer given, its work
-/// settled — so a duration read off the span stops here, whatever still holds
-/// the span open: a child span, work carried past the answer.
+/// Record on `unit`'s span that it ended — its answer given, its work settled
+/// — so the duration it declares stops here, whatever still holds the span
+/// open: a child span, work carried past the answer. A unit declaring no
+/// duration records nothing.
 ///
 /// [`record_outcome`] calls it; an edge recording its outcome's class itself
 /// calls it once the class is recorded.
-pub fn record_end(span: &tracing::Span) {
-    if let Some(end) = UNIT_END.get() {
+pub fn record_end(unit: &Unit, span: &tracing::Span) {
+    if unit.duration().is_some()
+        && let Some(end) = UNIT_END.get()
+    {
         end(span);
     }
 }
@@ -652,7 +660,7 @@ macro_rules! operation_line {
             "a unit's line is filed only by the crate that declares the unit",
         );
         let __outcome: ::core::option::Option<&'static str> = ::core::convert::Into::into($outcome);
-        $crate::operation_log::record_outcome($span, __outcome);
+        $crate::operation_log::record_outcome(&$unit, $span, __outcome);
         $crate::tracing::info!(
             name: $unit.name(),
             target: $crate::operation_log::TARGET,

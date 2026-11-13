@@ -148,7 +148,11 @@ impl Drop for Unanswered<'_> {
             Some(log) => self
                 .continuation
                 .enter(|| log.unanswered(self.span, outcome)),
-            None => nest_rs_core::operation_log::record_outcome(self.span, outcome),
+            None => nest_rs_core::operation_log::record_outcome(
+                &crate::unit::REQUEST,
+                self.span,
+                outcome,
+            ),
         }
     }
 }

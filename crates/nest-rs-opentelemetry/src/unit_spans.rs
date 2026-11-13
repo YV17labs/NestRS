@@ -33,7 +33,7 @@ pub(crate) fn is_unit_span(metadata: &Metadata<'_>) -> bool {
 
 impl<S> Filter<S> for UnitSpans {
     fn enabled(&self, metadata: &Metadata<'_>, _: &Context<'_, S>) -> bool {
-        self.exported && is_unit_span(metadata) && nest_rs_core::__private::pending_unit().is_some()
+        self.exported && nest_rs_core::__private::pending_unit().is_some() && is_unit_span(metadata)
     }
 
     fn callsite_enabled(&self, metadata: &'static Metadata<'static>) -> Interest {

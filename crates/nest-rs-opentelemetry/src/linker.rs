@@ -24,8 +24,8 @@ pub(crate) fn install() {
 
 /// Rename the SDK's span: [`enrich`] started it, and `tracing-opentelemetry`
 /// applies no `otel.name` recorded on a started span.
-fn rename(span: &tracing::Span, name: &str) {
-    span.context().span().update_name(name.to_owned());
+fn rename(span: &tracing::Span, name: String) {
+    span.context().span().update_name(name);
 }
 
 /// Link the remote parent, then record what the sampler decided.

@@ -357,7 +357,11 @@ mod tests {
         let exported = recorded(|| {
             let span = nestrs_unit_probe::open_timed(&Correlation::minted(None), "fetch", "read");
             let child = tracing::info_span!(parent: &span, "probe.child");
-            nest_rs_core::operation_log::record_outcome(&span, nest_rs_core::operation_log::OK);
+            nest_rs_core::operation_log::record_outcome(
+                &nestrs_unit_probe::TIMED,
+                &span,
+                nest_rs_core::operation_log::OK,
+            );
             drop(span);
             std::thread::sleep(HELD);
             drop(child);

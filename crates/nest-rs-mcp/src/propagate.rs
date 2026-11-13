@@ -945,7 +945,7 @@ impl<'a> OperationLine<'a> {
             }
             FailedAs::Unit => operation_log::record_error(&span, operation_log::ERROR),
         }
-        operation_log::record_end(&span);
+        operation_log::record_end(&crate::unit::OPERATION, &span);
         line.file(operation_log::ERROR);
     }
 

@@ -522,10 +522,10 @@ mod tests {
     fn a_method_is_named_from_the_known_set_or_other() {
         let method = |name: &str| Method::from_bytes(name.as_bytes()).expect("a method token");
         let known = KnownMethods::with([method("PROPFIND"), Method::GET]);
-        for name in [
-            "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY",
-            "TRACE", "PROPFIND",
-        ] {
+        for name in nest_rs_core::operation_log::KNOWN_VERBS
+            .into_iter()
+            .chain(["PROPFIND"])
+        {
             assert_eq!(known.name(&method(name)), name);
         }
         for other in ["get", "Get", "propfind", "MKCOL", "MARKED"] {

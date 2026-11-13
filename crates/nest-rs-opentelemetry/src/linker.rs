@@ -15,10 +15,17 @@ use tracing_opentelemetry::{OpenTelemetrySpanExt, SetParentError};
 
 use nest_rs_core::Correlation;
 
-/// Install [`enrich`] as the framework's span linker, before any module
-/// registers.
+/// Install [`enrich`] as the framework's span linker, and [`rename`] as what
+/// renames a unit's span its edge names late, before any module registers.
 pub(crate) fn install() {
     nest_rs_core::__private::set_span_linker(enrich);
+    nest_rs_core::__private::set_span_rename(rename);
+}
+
+/// Rename the SDK's span: [`enrich`] started it, and `tracing-opentelemetry`
+/// applies no `otel.name` recorded on a started span.
+fn rename(span: &tracing::Span, name: &str) {
+    span.context().span().update_name(name.to_owned());
 }
 
 /// Link the remote parent, then record what the sampler decided.

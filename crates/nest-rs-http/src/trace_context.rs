@@ -262,14 +262,9 @@ pub(crate) fn name_route(span: &tracing::Span, method: &str, route: Option<&str>
     match route {
         Some(route) => {
             span.record("http.route", route);
-            span.record(
-                "otel.name",
-                tracing::field::display(format_args!("{method} {route}")),
-            );
+            nest_rs_core::operation_log::record_name(span, format_args!("{method} {route}"));
         }
-        None => {
-            span.record("otel.name", tracing::field::display(method));
-        }
+        None => nest_rs_core::operation_log::record_name(span, format_args!("{method}")),
     }
 }
 

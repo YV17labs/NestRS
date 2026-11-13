@@ -91,3 +91,28 @@ fn a_span_shaped_like_a_units_outside_operation_span_stays_out_of_the_trace_expo
         "the lookalike stayed out: {exports:?}",
     );
 }
+
+/// A unit's span starts as it opens, the sampler's verdict read off it; the name
+/// its edge learns later — a request's route — still names the exported span.
+#[test]
+fn a_name_recorded_after_the_unit_opened_names_its_exported_span() {
+    let collector = Collector::serving();
+    let otel = trusting(
+        &collector,
+        &[
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+    );
+
+    let unit = nestrs_unit_probe::open(&Correlation::minted(None));
+    nest_rs_core::operation_log::record_name(&unit, format_args!("GET /probe/{{id}}"));
+    drop(unit);
+    drop(otel);
+
+    let exports = trace_exports(&collector);
+    assert!(
+        exports.iter().any(|export| export.holds("GET /probe/{id}")),
+        "the span was renamed: {exports:?}",
+    );
+}

@@ -301,7 +301,7 @@ pub mod __private {
     pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
     pub use crate::opaque::__private::OpaqueCause;
     pub use crate::operation_log::__private::{
-        declare_unit, measured_unit, set_unit_end, unit_opened_by,
+        declare_unit, measured_unit, set_span_rename, set_unit_end, unit_opened_by,
     };
     pub use crate::outcome::__private::{caught_problem, is_same_failure, kept, settled};
     pub use crate::panic::__private::{Unwound, unwound};

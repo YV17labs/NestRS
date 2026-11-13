@@ -114,9 +114,20 @@ const HARNESS_WORD: &str = "testing";
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use super::{
-        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, UNIT_END, Unit, UnitEnd, eq_bytes,
-        is_crate_root, is_edge_root, is_lib_name,
+        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, SPAN_RENAME, SpanRename, UNIT_END,
+        Unit, UnitEnd, eq_bytes, is_crate_root, is_edge_root, is_lib_name,
     };
+
+    /// Seed what renames a unit's span its edge names late
+    /// ([`record_name`](super::record_name)). Called once, at boot, by the
+    /// observability stack — never by an application.
+    pub fn set_span_rename(rename: SpanRename) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "seeded once at boot; a second install keeps the first"
+        )]
+        let _ = SPAN_RENAME.set(rename);
+    }
 
     /// Seed what runs as each unit ends ([`record_end`](super::record_end)).
     /// Called once, at boot, by the observability stack — never by an
@@ -415,6 +426,24 @@ pub fn record_outcome(span: &tracing::Span, outcome: &str) {
     }
     record_end(span);
 }
+
+/// Record the name a unit's span is exported under, once its edge knows it —
+/// the route a request matched — as `otel.name`, which an observability stack
+/// reads; one that started the span as it opened renames it, a late field
+/// being lost on a started span.
+pub fn record_name(span: &tracing::Span, name: std::fmt::Arguments<'_>) {
+    span.record(OTEL_NAME, tracing::field::display(name));
+    if let Some(rename) = SPAN_RENAME.get() {
+        rename(span, &name.to_string());
+    }
+}
+
+const OTEL_NAME: &str = "otel.name";
+
+/// What an observability stack does to a unit's span its edge names late.
+type SpanRename = fn(&tracing::Span, &str);
+
+static SPAN_RENAME: OnceLock<SpanRename> = OnceLock::new();
 
 /// Record on a unit's span that the unit ended — its answer given, its work
 /// settled — so a duration read off the span stops here, whatever still holds

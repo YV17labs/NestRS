@@ -2543,6 +2543,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-reqwest",
  "reqwest",
  "serde",
  "serde_json",
@@ -2865,6 +2866,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-reqwest",
  "oauth2",
  "reqwest",
  "serde",
@@ -3008,6 +3010,14 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "nest-rs-reqwest"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-core",
+ "reqwest",
 ]
 
 [[package]]

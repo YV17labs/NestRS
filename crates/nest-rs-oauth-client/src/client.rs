@@ -10,7 +10,6 @@ use std::time::Duration;
 use aws_lc_rs::constant_time::verify_slices_are_equal;
 use nest_rs_config::{ClientTls, ConfigError, ConfigService, Environment, Namespaced};
 use nest_rs_core::Secret;
-use nest_rs_core::client_operation::HttpClientRequest;
 use oauth2::basic::{BasicClient, BasicErrorResponse};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpClientError,
@@ -376,30 +375,14 @@ async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, Capped>
 /// the client operation the HTTP conventions name.
 async fn sent(
     http: &reqwest::Client,
-    mut request: reqwest::Request,
+    request: reqwest::Request,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    let url = request.url();
-    let operation = HttpClientRequest::start(
-        request.method(),
-        url.scheme(),
-        url.host_str(),
-        url.port_or_known_default(),
-    );
-    operation.announce(request.headers_mut());
-    match http.execute(request).await {
-        Ok(response) => {
-            operation.answered(response.status(), response.version());
-            Ok(response)
-        }
-        Err(error) => {
-            if error.is_timeout() {
-                operation.timed_out();
-            } else {
-                operation.failed();
-            }
-            Err(error)
-        }
-    }
+    nest_rs_reqwest::__private::traced(
+        request,
+        |request| http.execute(request),
+        reqwest::Error::is_timeout,
+    )
+    .await
 }
 
 /// The client's HTTP backend, keeping the last answer's [`Answered`] — what the

@@ -36,6 +36,8 @@ nest-rs-guards.workspace = true
 # through `oauth2::AsyncHttpClient`, and every TLS client shares one provider.
 oauth2.workspace = true
 reqwest.workspace = true
+# The one traced send every reqwest client the framework opens goes through.
+nest-rs-reqwest.workspace = true
 serde.workspace = true
 # Parsing the OAuth userinfo response: the body is read whole and deserialized
 # here, so a refusal says where it failed without quoting the profile.

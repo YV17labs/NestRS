@@ -1,8 +1,6 @@
-//! [`ReqwestMiddleware`] — reqwest-middleware's seam over the kernel's
-//! [`HttpClientRequest`], which every HTTP client the framework opens goes
-//! through too.
+//! [`ReqwestMiddleware`] — reqwest-middleware's seam over the one traced send
+//! every reqwest client the framework opens goes through too.
 
-use nest_rs_core::client_operation::HttpClientRequest;
 use reqwest::{Request, Response};
 use reqwest_middleware::{Error, Middleware, Next, Result};
 
@@ -41,24 +39,15 @@ impl ReqwestMiddleware {
 impl Middleware for ReqwestMiddleware {
     async fn handle(
         &self,
-        mut req: Request,
+        req: Request,
         extensions: &mut http::Extensions,
         next: Next<'_>,
     ) -> Result<Response> {
-        let url = req.url();
-        let request = HttpClientRequest::start(
-            req.method(),
-            url.scheme(),
-            url.host_str(),
-            url.port_or_known_default(),
-        );
-        request.announce(req.headers_mut());
-        let answer = next.run(req, extensions).await;
-        match &answer {
-            Ok(response) => request.answered(response.status(), response.version()),
-            Err(Error::Reqwest(error)) if error.is_timeout() => request.timed_out(),
-            Err(_) => request.failed(),
-        }
-        answer
+        crate::traced::traced(
+            req,
+            |req| next.run(req, extensions),
+            |error| matches!(error, Error::Reqwest(error) if error.is_timeout()),
+        )
+        .await
     }
 }

@@ -231,7 +231,7 @@ nest-rs-oauth-server = { version = "=7.0.0", path = "crates/nest-rs-oauth-server
 nest-rs-oauth-resource = { version = "=7.0.0", path = "crates/nest-rs-oauth-resource" }
 nest-rs-social = { version = "=7.0.0", path = "crates/nest-rs-social" }
 nest-rs-opentelemetry = { version = "=7.0.0", path = "crates/nest-rs-opentelemetry" }
-nest-rs-reqwest = { version = "=7.0.0", path = "crates/nest-rs-reqwest" }
+nest-rs-reqwest = { version = "=7.0.0", path = "crates/nest-rs-reqwest", default-features = false }
 nest-rs-testing = { version = "=7.0.0", path = "crates/nest-rs-testing" }
 nest-rs-storage = { version = "=7.0.0", path = "crates/nest-rs-storage" }
 nest-rs-static-files = { version = "=7.0.0", path = "crates/nest-rs-static-files" }

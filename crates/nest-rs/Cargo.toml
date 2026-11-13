@@ -206,7 +206,7 @@ opentelemetry = ["dep:nest-rs-opentelemetry"]
 # The trace and the client telemetry on the reqwest client an app builds itself:
 # no HTTP stack of the framework's, and no exporter — a request records through
 # whatever `opentelemetry` installs, and carries its `traceparent` without it.
-reqwest = ["dep:nest-rs-reqwest"]
+reqwest = ["dep:nest-rs-reqwest", "nest-rs-reqwest/middleware"]
 openapi = ["dep:nest-rs-openapi", "http"]
 # A resource the framework opens ships its indicator in its own crate, behind
 # a `health` feature forwarded weakly here: beside `seaorm`, `redis` or

@@ -35,7 +35,6 @@ use tokio::time::Instant;
 
 use nest_rs_config::{ClientTls, ConfigService, Namespaced};
 use nest_rs_core::__private::OpaqueCause;
-use nest_rs_core::client_operation::HttpClientRequest;
 use nest_rs_core::{Backoff, process_seed};
 
 use crate::Algorithm;
@@ -286,33 +285,19 @@ impl Inner {
     /// One fetch of the set, bounded by [`JWKS_FETCH_TIMEOUT`] and
     /// [`JWKS_MAX_BYTES`]; a redirect is an answer like any other `3xx`.
     async fn fetch(&self) -> Result<(JwkSet, Duration), Failure> {
-        let mut request = self
+        let request = self
             .client
             .get(self.url.clone())
             .header(ACCEPT, "application/jwk-set+json, application/json")
             .build()
             .map_err(|error| self.call_failed(error))?;
-        let sent = HttpClientRequest::start(
-            request.method(),
-            self.url.scheme(),
-            self.url.host_str(),
-            self.url.port_or_known_default(),
-        );
-        sent.announce(request.headers_mut());
-        let mut response = match self.client.execute(request).await {
-            Ok(response) => {
-                sent.answered(response.status(), response.version());
-                response
-            }
-            Err(error) => {
-                if error.is_timeout() {
-                    sent.timed_out();
-                } else {
-                    sent.failed();
-                }
-                return Err(self.call_failed(error));
-            }
-        };
+        let mut response = nest_rs_reqwest::__private::traced(
+            request,
+            |request| self.client.execute(request),
+            reqwest::Error::is_timeout,
+        )
+        .await
+        .map_err(|error| self.call_failed(error))?;
         let status = response.status();
         if !status.is_success() {
             let retry_after = (status.as_u16() == 429 || status.is_server_error())

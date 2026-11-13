@@ -11,19 +11,25 @@ keywords = ["framework", "nestrs", "reqwest", "tracing", "http"]
 categories = ["web-programming::http-client"]
 
 
+[features]
+default = ["middleware"]
+# `ReqwestMiddleware`, for an app's own client; the framework's own reqwest
+# clients take the crate without it.
+middleware = ["dep:reqwest-middleware", "dep:async-trait", "dep:http"]
+
 [dependencies]
 # `HttpClientRequest`: the trace a request carries and the client operation it
 # records, one primitive for every HTTP client.
 nest-rs-core.workspace = true
-# The request and the response `ReqwestMiddleware` reads are reqwest's, and its
-# seam is reqwest-middleware's `Middleware`: both public, since an app builds
-# its client in their words.
+# The request and the response every traced send reads are reqwest's, and the
+# middleware's seam is reqwest-middleware's `Middleware`: both public, since an
+# app builds its client in their words.
 reqwest.workspace = true
-reqwest-middleware.workspace = true
+reqwest-middleware = { workspace = true, optional = true }
 # `Middleware` is an `async_trait`.
-async-trait.workspace = true
+async-trait = { workspace = true, optional = true }
 # The `Extensions` `Middleware::handle` takes.
-http.workspace = true
+http = { workspace = true, optional = true }
 
 # The suite sends real requests to a TLS double whose certificate a
 # `TestAuthority` issued. Path-only intra-workspace dev edges, per the

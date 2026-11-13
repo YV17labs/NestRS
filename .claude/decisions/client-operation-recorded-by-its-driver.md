@@ -70,6 +70,50 @@ Refused:
   in a standard string, whose meaning `standard_conforming_strings` decides
   on the server — has none, named `postgresql`: a guessed word could be a
   value.
-- **The pool's connection gauges** (`db.client.connection.*`) in this change:
-  an observable instrument needs a seam of its own from the driver, which
-  lands when a pool's saturation is the next thing an operator asks.
+
+## 2026-11-13 — what sea-orm sends untimed, and the pool
+
+sea-orm 2.0's callback times `execute`, `query_one`, `query_all` and a
+stream, never `execute_unprepared`, `begin`, `commit` or `rollback`. The
+driver times those it sends itself through one path, `Statements::sent`:
+a unit's `BEGIN`, `COMMIT` and `ROLLBACK`, an atomic block's settle, the
+outbox relay's statements and the executor's `execute_unprepared`. The
+conventions are silent on transaction control
+(open-telemetry/semantic-conventions#3695; Java's JDBC instrumentation records
+commit and rollback), so each is the client operation its general rules make
+it, summarised `COMMIT`. A `BEGIN` includes the wait for its pooled
+connection, which sea-orm acquires inside the same call: the only place a
+unit's wait for the pool shows, said in the docs.
+
+The pool's connections reach the export through a kernel seam,
+`nest_rs_core::connection_pool`: a driver implements `ConnectionPool` and
+`observe`s it, the registry holding it weakly so what an app opened goes with
+it, and `nest-rs-opentelemetry` reads every one still open at each export.
+`nest-rs-seaorm`'s observation lives in the statement callback the pool's
+handle holds, so it lasts as long as the pool. The instruments are the
+conventions' 1.42 names (`db.client.connection.max`, renamed `.limit` in 1.45
+with `db.system.name`, `db.namespace` and `server.*` added), the schema the
+export declares; they move with the semantic-conventions crate.
+
+Refused:
+
+- **Recording the boot proof and the health probe**: they are the framework
+  asking, not the app's work, and a probe every few seconds would weigh on the
+  durations an operator reads for the app's statements.
+- **Counting acquire timeouts where each acquire happens**: sea-orm acquires
+  inside `execute`, `begin` and the rest, and the driver sees the failure only
+  as the `DbErr` it returns. `RepoError::from`, where the data layer classifies
+  every failure it hands out once, counts it; one binary holds one pool, so the
+  count is the pool's. A timeout an app meets on the injected connection and
+  never converts is not counted.
+- **What sqlx does not tell**: `pending_requests` (no waiter count),
+  `wait_time`, `create_time` and `use_time` (no acquire or connect timing),
+  `idle.max` (sqlx bounds idle connections by `max_connections` alone). Each
+  needs a hook upstream, in sqlx's pool or sea-orm's connection.
+- **Correcting a stream's report**: sea-orm reports a stream from its `Drop`,
+  with the time spent polling it as its duration and `failed: false` even when
+  it yielded an error, through the same callback as a statement, so the driver
+  cannot tell it apart. `Repo` never streams; an app streaming on its own
+  connection gets sea-orm's report. Fixing it is sea-orm's: a `MetricStream`
+  that records its wall time from the first poll and whether an item was an
+  error.

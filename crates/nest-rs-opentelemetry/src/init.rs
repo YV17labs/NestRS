@@ -118,6 +118,7 @@ impl OpenTelemetry {
                 let meter = crate::durations::framework_meter(provider);
                 crate::process_metrics::ProcessMetrics::observe(&meter, started);
                 crate::tokio_metrics::TokioMetrics::observe(&meter);
+                crate::connection_pool_metrics::ConnectionPoolMetrics::observe(&meter);
             }
             // Seeded here rather than mounted by a module: a queue worker imports no
             // transport.

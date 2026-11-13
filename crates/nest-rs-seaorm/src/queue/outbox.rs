@@ -26,6 +26,7 @@ use tokio::sync::Notify;
 
 use crate::atomic::AtomicExecutor;
 use crate::executor::{Installed, SeaOrmExecutor};
+use crate::statements::Statements;
 
 /// The table the store keeps its records in.
 pub(crate) const TABLE: &str = "nestrs_outbox";
@@ -180,7 +181,10 @@ impl OutboxStore for SeaOrmOutbox {
 
     fn claim(&self, limit: usize) -> BoxFuture<'_, Result<Box<dyn OutboxClaim>, OutboxError>> {
         Box::pin(async move {
-            let txn = self.db.begin().await.map_err(database)?;
+            let statements = Statements::recording(&self.db);
+            let txn = Statements::sent(statements.as_ref(), "BEGIN", self.db.begin())
+                .await
+                .map_err(database)?;
             let limit = i64::try_from(limit).unwrap_or(i64::MAX);
             let rows = txn
                 .query_all_raw(Statement::from_sql_and_values(
@@ -213,7 +217,11 @@ impl OutboxStore for SeaOrmOutbox {
                 })
                 .collect::<Result<Vec<_>, DbErr>>()
                 .map_err(database)?;
-            Ok(Box::new(SeaOrmClaim { txn, records }) as Box<dyn OutboxClaim>)
+            Ok(Box::new(SeaOrmClaim {
+                txn,
+                records,
+                statements,
+            }) as Box<dyn OutboxClaim>)
         })
     }
 }
@@ -223,6 +231,7 @@ impl OutboxStore for SeaOrmOutbox {
 struct SeaOrmClaim {
     txn: DatabaseTransaction,
     records: Vec<ClaimedRecord>,
+    statements: Option<Statements>,
 }
 
 impl OutboxClaim for SeaOrmClaim {
@@ -261,12 +270,21 @@ impl OutboxClaim for SeaOrmClaim {
                     .join(", ")
             ));
         }
-        let SeaOrmClaim { txn, .. } = *self;
+        let SeaOrmClaim {
+            txn,
+            statements: recording,
+            ..
+        } = *self;
         Box::pin(async move {
+            let recording = recording.as_ref();
             for statement in statements {
-                txn.execute_unprepared(&statement).await.map_err(database)?;
+                Statements::sent(recording, &statement, txn.execute_unprepared(&statement))
+                    .await
+                    .map_err(database)?;
             }
-            txn.commit().await.map_err(database)
+            Statements::sent(recording, "COMMIT", txn.commit())
+                .await
+                .map_err(database)
         })
     }
 }

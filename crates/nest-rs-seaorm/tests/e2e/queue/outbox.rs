@@ -1002,3 +1002,36 @@ async fn the_boot_refuses_naming_the_remedy_when_the_table_is_missing() {
          then `nestrs run db up`",
     );
 }
+
+#[tokio::test]
+async fn a_relays_claim_is_recorded_from_its_begin_to_its_commit() {
+    crate::statements::record_operations();
+    let filing = Arc::new(Filing::default());
+    let app = app_over(
+        &filing,
+        Pushing::then_answer(&filing, &Arc::default(), 1, StatusCode::OK),
+    )
+    .await;
+    let store = app
+        .container()
+        .get_dyn::<dyn OutboxStore>()
+        .expect("the binding keeps an outbox");
+    committed_note(&app, &filing, None).await;
+    crate::statements::record_operations();
+
+    let claim = store.claim(10).await.expect("claimed");
+    let seq = claim.records()[0].seq;
+    claim.settle(&[seq], &[]).await.expect("settled");
+
+    let recorded = crate::statements::recorded();
+    let relayed: Vec<&str> = recorded
+        .iter()
+        .map(String::as_str)
+        .filter(|name| matches!(*name, "BEGIN" | "DELETE nestrs_outbox" | "COMMIT"))
+        .collect();
+    assert_eq!(
+        relayed,
+        ["BEGIN", "DELETE nestrs_outbox", "COMMIT"],
+        "{recorded:?}"
+    );
+}

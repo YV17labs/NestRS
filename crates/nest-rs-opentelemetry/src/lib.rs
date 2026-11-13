@@ -30,6 +30,8 @@ mod attribute;
 mod client_operations;
 mod config;
 #[cfg(feature = "otlp")]
+mod connection_pool_metrics;
+#[cfg(feature = "otlp")]
 mod durations;
 mod error;
 #[cfg(feature = "otlp")]

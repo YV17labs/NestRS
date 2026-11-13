@@ -114,6 +114,7 @@ mod backoff;
 mod budget;
 pub mod client_operation;
 mod close;
+pub mod connection_pool;
 mod container;
 pub(crate) mod cycle_guard;
 mod decode_path;
@@ -262,6 +263,7 @@ pub mod __private {
         audience, for_others, is_pushed, refuse_answer,
     };
     pub use crate::client_operation::__private::set_client_recorder;
+    pub use crate::connection_pool::__private::observed_pools;
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
         declaring_site, enter_import, leave_import, overrides_any, reading, record_absent_optional,

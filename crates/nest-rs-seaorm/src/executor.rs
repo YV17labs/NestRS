@@ -12,6 +12,7 @@ use nest_rs_database::{AtomicBlock, Deferred};
 
 use crate::atomic::AtomicExecutor;
 use crate::savepoint::Savepoint;
+use crate::statements::{Statements, sent};
 use crate::turn::Turn;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, ExecResult,
@@ -199,7 +200,11 @@ impl LazyTransaction {
     async fn txn_ref(&self) -> Result<&DatabaseTransaction, DbErr> {
         Ok(self
             .cell
-            .get_or_try_init(|| async { self.pool.begin().await.map(Arc::new) })
+            .get_or_try_init(|| async {
+                sent(&self.pool, "BEGIN", self.pool.begin())
+                    .await
+                    .map(Arc::new)
+            })
             .await?
             .as_ref())
     }
@@ -313,6 +318,8 @@ impl LazyTransaction {
         };
         let flag = lazy.poisoned.load(Ordering::Relaxed);
         let poisoned = (success && flag != POISON_CLEAN).then_some(flag == POISON_TRANSIENT);
+        let statements = Statements::recording(&lazy.pool);
+        let statements = statements.as_ref();
         let Some(txn) = lazy.into_opened() else {
             // A swallowed failed `BEGIN` is not "nothing to settle".
             if let Some(retryable) = poisoned {
@@ -345,7 +352,7 @@ impl LazyTransaction {
         // The transaction is aborted: its `COMMIT` would succeed having written
         // nothing.
         if let Some(retryable) = poisoned {
-            if let Err(err) = txn.rollback().await {
+            if let Err(err) = Statements::sent(statements, "ROLLBACK", txn.rollback()).await {
                 report_rollback_failed(transport, &err, Settled::Poisoned);
             }
             tracing::error!(
@@ -359,12 +366,12 @@ impl LazyTransaction {
             return FinalizeOutcome::Poisoned { retryable };
         }
         if success {
-            match txn.commit().await {
+            match Statements::sent(statements, "COMMIT", txn.commit()).await {
                 Ok(()) => FinalizeOutcome::Committed,
                 Err(err) => FinalizeOutcome::CommitFailed(err),
             }
         } else {
-            if let Err(err) = txn.rollback().await {
+            if let Err(err) = Statements::sent(statements, "ROLLBACK", txn.rollback()).await {
                 report_rollback_failed(transport, &err, Settled::Failed);
             }
             FinalizeOutcome::RolledBack
@@ -638,9 +645,15 @@ impl ConnectionTrait for SeaOrmExecutor {
 
     async fn execute_unprepared(&self, sql: &str) -> Result<ExecResult, DbErr> {
         match self {
-            SeaOrmExecutor::Pool(c) => c.execute_unprepared(sql).await,
-            SeaOrmExecutor::Lazy(l) => l.run(|txn| txn.execute_unprepared(sql)).await,
-            SeaOrmExecutor::Savepoint(s) => s.run(|txn| txn.execute_unprepared(sql)).await,
+            SeaOrmExecutor::Pool(c) => sent(c, sql, c.execute_unprepared(sql)).await,
+            SeaOrmExecutor::Lazy(l) => {
+                l.run(|txn| sent(l.pool(), sql, txn.execute_unprepared(sql)))
+                    .await
+            }
+            SeaOrmExecutor::Savepoint(s) => {
+                s.run(|txn| sent(s.root().pool(), sql, txn.execute_unprepared(sql)))
+                    .await
+            }
         }
     }
 

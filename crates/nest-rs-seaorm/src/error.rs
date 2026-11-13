@@ -420,6 +420,8 @@ impl Error for RepoError {}
 /// means, anything else said by its kind.
 impl From<DbErr> for RepoError {
     fn from(err: DbErr) -> Self {
+        // The one place every failure the data layer hands out passes once.
+        crate::pool::count_timeout(&err);
         match &err {
             DbErr::RecordNotUpdated | DbErr::RecordNotFound(_) => return Self::NotFound,
             DbErr::AccessDenied { .. } => {

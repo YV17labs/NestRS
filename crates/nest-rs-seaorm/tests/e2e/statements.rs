@@ -1,18 +1,28 @@
 //! Covers `src/statements.rs` against Postgres: once something records client
 //! operations, every statement the module's pool sends is handed over by its
-//! summary, under the database and the server the URL names — every one sea-orm
-//! times, which leaves out `execute_unprepared` and `stream`.
+//! summary, under the database and the server the URL names — those sea-orm
+//! times, and the `BEGIN`, `COMMIT`, `ROLLBACK`, savepoint settles and
+//! unprepared text the driver times itself, each once — and the pool is
+//! observed under its name while the app holds it.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use nest_rs_core::client_operation::{ClientOperation, ClientValue};
 use nest_rs_core::{App, module};
-use nest_rs_seaorm::SeaOrmModule;
+use nest_rs_database::__private::with_request_executor;
+use nest_rs_database::atomic;
+use nest_rs_seaorm::__private::{
+    FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor,
+};
+use nest_rs_seaorm::{RepoError, SeaOrmModule};
+use sea_orm::sqlx::postgres::PgConnectOptions;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 
-/// Each operation the seeded recorder was handed: its name, and the database
-/// it named.
-static RECORDED: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
+/// One operation the seeded recorder was handed: its name, the database it
+/// named, and its class if it failed.
+type Recorded = (String, Option<String>, Option<String>);
+
+static RECORDED: Mutex<Vec<Recorded>> = Mutex::new(Vec::new());
 
 fn capture(operation: &ClientOperation<'_>) {
     let namespace = operation
@@ -22,18 +32,36 @@ fn capture(operation: &ClientOperation<'_>) {
             ("db.namespace", ClientValue::Text(namespace)) => Some((*namespace).to_owned()),
             _ => None,
         });
+    RECORDED.lock().expect("the recorded operations").push((
+        operation.name().to_owned(),
+        namespace,
+        operation.error_type().map(str::to_owned),
+    ));
+}
+
+/// Record every client operation of this process from now on, forgetting any
+/// recorded so far.
+pub(crate) fn record_operations() {
+    nest_rs_core::__private::set_client_recorder(capture);
+    RECORDED.lock().expect("the recorded operations").clear();
+}
+
+/// The name of each operation recorded since [`record_operations`].
+pub(crate) fn recorded() -> Vec<String> {
     RECORDED
         .lock()
         .expect("the recorded operations")
-        .push((operation.name().to_owned(), namespace));
+        .iter()
+        .map(|(name, ..)| name.clone())
+        .collect()
 }
 
 #[module(imports = [SeaOrmModule])]
 struct PoolModule;
 
-#[tokio::test]
-async fn every_statement_the_pool_sends_is_recorded_by_its_summary() {
-    nest_rs_core::__private::set_client_recorder(capture);
+/// The module's pool, opened once something records client operations.
+async fn pool() -> (App, Arc<DatabaseConnection>) {
+    record_operations();
     let app = App::builder()
         .provide(crate::module::config(None))
         .module::<PoolModule>()
@@ -44,6 +72,19 @@ async fn every_statement_the_pool_sends_is_recorded_by_its_summary() {
         .container()
         .get::<DatabaseConnection>()
         .expect("the pool");
+    record_operations();
+    (app, db)
+}
+
+fn url_options() -> PgConnectOptions {
+    crate::harness::url()
+        .parse::<PgConnectOptions>()
+        .expect("a Postgres URL")
+}
+
+#[tokio::test]
+async fn every_statement_the_pool_sends_is_recorded_by_its_summary() {
+    let (_app, db) = pool().await;
 
     let statement = |sql: &str| Statement::from_string(DbBackend::Postgres, sql);
     db.query_one_raw(statement("SELECT 1")).await.expect("runs");
@@ -51,17 +92,133 @@ async fn every_statement_the_pool_sends_is_recorded_by_its_summary() {
         .await
         .expect("runs");
 
-    let database = crate::harness::url()
-        .parse::<sea_orm::sqlx::postgres::PgConnectOptions>()
-        .expect("a Postgres URL")
-        .get_database()
-        .map(str::to_owned);
+    let database = url_options().get_database().map(str::to_owned);
     let recorded = RECORDED.lock().expect("the recorded operations").clone();
     assert_eq!(
         recorded,
         vec![
-            ("SELECT".to_owned(), database.clone()),
-            ("SELECT".to_owned(), database),
+            ("SELECT".to_owned(), database.clone(), None),
+            ("SELECT".to_owned(), database, None),
         ],
+    );
+}
+
+/// Run `body` in a unit's lazy transaction on `db`, settled on `success`.
+async fn in_a_unit<F>(db: &DatabaseConnection, success: bool, body: F) -> FinalizeOutcome
+where
+    F: Future<Output = ()>,
+{
+    let lazy = Arc::new(LazyTransaction::new(db.clone(), "test"));
+    with_request_executor(SeaOrmExecutor::Lazy(lazy.clone()).into(), body).await;
+    lazy.finalize(success).await
+}
+
+async fn select(sql: &str) {
+    let executor = current_executor().expect("ambient executor installed");
+    executor.execute_unprepared(sql).await.expect("runs");
+}
+
+#[tokio::test]
+async fn a_unit_that_commits_is_recorded_from_its_begin_to_its_commit_once_each() {
+    let (_app, db) = pool().await;
+
+    let outcome = in_a_unit(&db, true, async {
+        select("SELECT 1").await;
+        let executor = current_executor().expect("ambient executor installed");
+        executor
+            .query_one_raw(Statement::from_string(DbBackend::Postgres, "SELECT 2"))
+            .await
+            .expect("runs");
+    })
+    .await;
+
+    assert!(matches!(outcome, FinalizeOutcome::Committed), "{outcome:?}");
+    assert_eq!(recorded(), ["BEGIN", "SELECT", "SELECT", "COMMIT"]);
+}
+
+#[tokio::test]
+async fn a_unit_that_fails_is_recorded_to_its_rollback() {
+    let (_app, db) = pool().await;
+
+    let outcome = in_a_unit(&db, false, select("SELECT 1")).await;
+
+    assert!(
+        matches!(outcome, FinalizeOutcome::RolledBack),
+        "{outcome:?}"
+    );
+    assert_eq!(recorded(), ["BEGIN", "SELECT", "ROLLBACK"]);
+}
+
+#[tokio::test]
+async fn an_atomic_block_is_recorded_from_its_savepoint_to_its_release_or_its_rollback() {
+    let (_app, db) = pool().await;
+
+    let outcome = in_a_unit(&db, true, async {
+        atomic(async {
+            select("SELECT 1").await;
+            Ok::<_, RepoError>(())
+        })
+        .await
+        .expect("the block keeps its work");
+        let refused = atomic(async {
+            select("SELECT 2").await;
+            Err::<(), _>(RepoError::NotFound)
+        })
+        .await;
+        assert!(refused.is_err());
+    })
+    .await;
+
+    assert!(matches!(outcome, FinalizeOutcome::Committed), "{outcome:?}");
+    assert_eq!(
+        recorded(),
+        [
+            "BEGIN",
+            "SAVEPOINT",
+            "SELECT",
+            "RELEASE",
+            "SAVEPOINT",
+            "SELECT",
+            "ROLLBACK",
+            "COMMIT",
+        ],
+    );
+}
+
+#[tokio::test]
+async fn the_pool_is_observed_under_its_server_and_database_while_the_app_holds_it() {
+    let (app, db) = pool().await;
+    let options = url_options();
+    let name = format!(
+        "{}:{}/{}",
+        options.get_host(),
+        options.get_port(),
+        options
+            .get_database()
+            .expect("the suite's URL names its database"),
+    );
+    let observed = || {
+        nest_rs_core::__private::observed_pools()
+            .into_iter()
+            .find(|pool| pool.name() == name)
+    };
+
+    let pool = observed().expect("the module's pool is observed");
+    db.execute_unprepared("SELECT 1").await.expect("runs");
+    let connections = pool.connections().expect("the pool is open");
+    assert_eq!(
+        connections.max(),
+        u64::from(crate::module::config(None).max_connections),
+    );
+    assert!(
+        connections.idle() + connections.used() >= 1,
+        "{connections:?}"
+    );
+
+    drop((pool, db));
+    app.close().await;
+    assert!(
+        observed().is_none_or(|pool| pool.connections().is_none()),
+        "a closed pool reports no connection",
     );
 }

@@ -60,8 +60,9 @@ operation, a tool call running long.
 GraphQL, WebSocket, scheduled and event units record no duration: no
 convention names one for them, and their spans carry their timings.
 
-Each statement the Postgres pool sends and each command a Redis connection
-sends is timed the same way, in `db.client.operation.duration`, keyed by the
+Each statement the Postgres pool sends — a unit's `BEGIN` and `COMMIT`
+included — and each command a Redis connection sends is timed the same way, in
+`db.client.operation.duration`, keyed by the
 database it ran on and what it did — the statement's operation, table and
 summary, the Redis command — into the buckets the database conventions advise,
 `[0.001, 0.005, … 10]` seconds ([Statements and commands](/opentelemetry/traces/#statements-and-commands)).
@@ -95,6 +96,29 @@ loop utilisation in Rust's words, and a growing `tokio.global_queue.length` as
 work waiting for a worker. Memory and threads are read off `/proc`, so a macOS
 development host exports neither; the scheduling latency tokio counts only
 under `tokio_unstable` is not exported.
+
+## The database pool
+
+The Postgres pool `SeaOrmModule` opens reports its connections in the database
+conventions' pool instruments, each keyed by
+`db.client.connection.pool.name` — `server.address:server.port/db.namespace`,
+as the conventions name a pool that has none of its own,
+`db.internal:5432/publish`:
+
+| Instrument | What it reads |
+|---|---|
+| `db.client.connection.count` | connections open, by `db.client.connection.state`: `idle`, `used` |
+| `db.client.connection.max` | the most the pool opens, its `max_connections` |
+| `db.client.connection.idle.min` | the fewest it keeps open, its `min_connections` |
+| `db.client.connection.timeouts` | callers that gave up waiting for a connection |
+
+A saturated pool reads as `used` at `max` while `timeouts` climbs. sqlx counts
+no caller still waiting and times no acquire, so `pending_requests`,
+`wait_time`, `create_time`, `use_time` and `idle.max` are not exported; a
+unit's `BEGIN`, which waits for its connection, carries that wait in
+`db.client.operation.duration`. The names are those of the conventions' 1.42
+schema, the one the export declares. A Redis connection is one multiplexed
+socket, not a pool, and reports none.
 
 ## A first counter
 

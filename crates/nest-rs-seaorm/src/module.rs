@@ -59,7 +59,7 @@ impl Module for SeaOrmModule {
                 |container| async move {
                     let config = ConfigModule::resolved::<SeaOrmConfig>(&container)?;
                     let mut db = connect(&config, config.app_connect_options()?).await?;
-                    Statements::time(&mut db, &config.probe_options()?);
+                    Statements::install(&mut db);
                     Ok(db)
                 },
             )

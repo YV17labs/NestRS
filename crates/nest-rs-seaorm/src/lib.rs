@@ -69,6 +69,7 @@ mod hidden_columns;
 mod insertion;
 mod module;
 mod page;
+mod pool;
 mod query_summary;
 mod repo;
 pub mod retry;

@@ -205,9 +205,21 @@ a point in `db.client.operation.duration`.
 - **Nothing is timed where nothing records.** With traces and metrics both off,
   no driver reads the clock.
 
-sea-orm times what it sends through `execute`, `query_one` and `query_all`,
-which is every statement `Repo` sends; `execute_unprepared` and `stream` go
-untimed, so a savepoint is not seen. A blocking Redis read
+Every statement the pool sends for the app is timed: what sea-orm times itself
+— every statement `Repo` sends, an atomic block's `SAVEPOINT` — and what it
+sends untimed, which the driver times: a unit's `BEGIN`, `COMMIT` and
+`ROLLBACK`, a block's `RELEASE` and `ROLLBACK TO`, the outbox relay's
+statements, and text sent through the unit's `execute_unprepared`. A `BEGIN`
+counts the wait for a connection, which sea-orm takes from the pool inside the
+same call.
+
+Three things are not timed. A transaction an app opens itself on the injected
+`DatabaseConnection` — its `begin`, `commit` and `rollback` — and the text it
+sends there through `execute_unprepared`: sea-orm times neither, and the
+driver does not see them. The pool's boot proof and health probe, which are
+the framework asking, not the app's work. And a stream an app reads itself is
+recorded by sea-orm once it drops, for the time spent polling it and never as
+failed. A blocking Redis read
 (`XREADGROUP … BLOCK`) is timed for as long as it waited: read its
 `db.operation.name` apart.
 

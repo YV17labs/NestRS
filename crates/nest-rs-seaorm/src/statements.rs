@@ -14,8 +14,8 @@ use std::time::SystemTime;
 
 use nest_rs_core::client_operation::{
     self, ClientOperation, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_COLLECTION_NAME,
-    DB_NAMESPACE, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_SYSTEM_NAME, PendingClientOperation,
-    SERVER_ADDRESS, SERVER_PORT,
+    DB_NAMESPACE, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_RESPONSE_STATUS_CODE, DB_SYSTEM_NAME,
+    PendingClientOperation, SERVER_ADDRESS, SERVER_PORT,
 };
 use nest_rs_core::operation_log::OTHER;
 use sea_orm::metric::Info;
@@ -100,7 +100,14 @@ impl Statements {
             )
         });
         let answer = statement.await;
-        pending.ended(&[], answer.is_err().then_some(OTHER));
+        match answer.as_ref().err().map(Refusal::of) {
+            None => pending.ended(&[], None),
+            Some(Refusal::Answered(code)) => pending.ended(
+                &[(DB_RESPONSE_STATUS_CODE, ClientValue::Text(&code))],
+                Some(&code),
+            ),
+            Some(Refusal::Unanswered(class)) => pending.ended(&[], Some(class)),
+        }
         answer
     }
 
@@ -155,6 +162,31 @@ impl Statements {
         with(text.as_deref().unwrap_or(POSTGRESQL), &attributes)
     }
 }
+
+/// How a statement the driver timed failed.
+enum Refusal {
+    /// The server refused it with this SQLSTATE.
+    Answered(String),
+    /// No server answered: `timeout` for a connection the pool never handed
+    /// over in time — the statement never left — `_OTHER` otherwise.
+    Unanswered(&'static str),
+}
+
+impl Refusal {
+    fn of(err: &DbErr) -> Self {
+        if let Some(code) = crate::error::server_error(err).and_then(|server| server.code()) {
+            return Self::Answered(code.into_owned());
+        }
+        match err {
+            DbErr::ConnectionAcquire(sea_orm::ConnAcquireErr::Timeout) => Self::Unanswered(TIMEOUT),
+            _ => Self::Unanswered(OTHER),
+        }
+    }
+}
+
+/// The class of an operation that never answered because its wait ran out,
+/// as the HTTP client's.
+const TIMEOUT: &str = "timeout";
 
 /// Await `statement`, the text `sql` sea-orm sends on `pool` without timing it,
 /// and hand it over once the database answered.

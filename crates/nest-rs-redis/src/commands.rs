@@ -4,7 +4,7 @@
 
 use nest_rs_core::client_operation::{
     self, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_NAMESPACE, DB_OPERATION_NAME,
-    DB_SYSTEM_NAME, PendingClientOperation, SERVER_ADDRESS, SERVER_PORT,
+    DB_RESPONSE_STATUS_CODE, DB_SYSTEM_NAME, PendingClientOperation, SERVER_ADDRESS, SERVER_PORT,
 };
 use nest_rs_core::operation_log::OTHER;
 use redis::{Arg, Cmd, Pipeline, RedisError, Value};
@@ -132,6 +132,23 @@ pub(crate) fn sending(
     ))
 }
 
+/// End `pending` as its answer says: failed with `failure`, which is the
+/// server's error prefix — the conventions' `db.response.status_code` too —
+/// unless no server answered.
+pub(crate) fn ended(pending: PendingClientOperation, failure: Option<&str>) {
+    match failure {
+        Some(code) if code != OTHER && code != TIMEOUT => pending.ended(
+            &[(DB_RESPONSE_STATUS_CODE, ClientValue::Text(code))],
+            Some(code),
+        ),
+        failure => pending.ended(&[], failure),
+    }
+}
+
+/// The class of a command that never answered because its budget ran out,
+/// as the HTTP client's.
+const TIMEOUT: &str = "timeout";
+
 /// How a command's `answer` failed: the code the server refused it with —
 /// redis-rs hands a refusal back as a value, never as an error — or `_OTHER`
 /// for an answer that never came.
@@ -166,6 +183,9 @@ fn refusal(value: &Value) -> Option<&str> {
 }
 
 fn error_class(error: &RedisError) -> &str {
+    if error.is_timeout() {
+        return TIMEOUT;
+    }
     error.code().map_or(OTHER, |code| word(code.as_bytes()))
 }
 
@@ -193,6 +213,15 @@ mod tests {
         assert_eq!(word(&[b'X'; LONGEST_WORD + 1]), OTHER);
         assert_eq!(word(&[0xff, 0xfe]), OTHER);
         assert_eq!(word(b""), OTHER);
+    }
+
+    #[test]
+    fn a_command_whose_budget_ran_out_reads_as_a_timeout_and_names_no_server_code() {
+        let ran_out = RedisError::from(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "the budget ran out",
+        ));
+        assert_eq!(command_failure(&Err(ran_out)), Some(TIMEOUT));
     }
 
     #[test]

@@ -24,7 +24,24 @@ type Recorded = (String, Option<String>, Option<String>);
 
 static RECORDED: Mutex<Vec<Recorded>> = Mutex::new(Vec::new());
 
+/// The `db.response.status_code` of each operation recorded, in order.
+static STATUS_CODES: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
+
 fn capture(operation: &ClientOperation<'_>) {
+    STATUS_CODES
+        .lock()
+        .expect("the status codes")
+        .push(
+            operation
+                .attributes()
+                .iter()
+                .find_map(|(key, value)| match (*key, value) {
+                    ("db.response.status_code", ClientValue::Text(code)) => {
+                        Some((*code).to_owned())
+                    }
+                    _ => None,
+                }),
+        );
     let namespace = operation
         .attributes()
         .iter()
@@ -44,6 +61,7 @@ fn capture(operation: &ClientOperation<'_>) {
 pub(crate) fn record_operations() {
     nest_rs_core::__private::set_client_recorder(capture);
     RECORDED.lock().expect("the recorded operations").clear();
+    STATUS_CODES.lock().expect("the status codes").clear();
 }
 
 /// The name of each operation recorded since [`record_operations`].
@@ -147,6 +165,37 @@ async fn a_unit_that_fails_is_recorded_to_its_rollback() {
         "{outcome:?}"
     );
     assert_eq!(recorded(), ["BEGIN", "SELECT", "ROLLBACK"]);
+}
+
+/// A statement the server refused is recorded failed with the SQLSTATE it
+/// answered, as `error.type` and `db.response.status_code`, never `_OTHER`.
+#[tokio::test]
+async fn a_statement_the_server_refuses_is_recorded_with_its_sqlstate() {
+    let (_app, db) = pool().await;
+
+    let outcome = in_a_unit(&db, false, async {
+        let executor = current_executor().expect("ambient executor installed");
+        executor
+            .execute_unprepared("SELECT 1/0")
+            .await
+            .expect_err("Postgres refuses a division by zero");
+    })
+    .await;
+
+    assert!(
+        matches!(outcome, FinalizeOutcome::RolledBack),
+        "{outcome:?}"
+    );
+    let recorded = RECORDED.lock().expect("the recorded operations").clone();
+    let refused = recorded
+        .iter()
+        .position(|(name, ..)| name == "SELECT")
+        .expect("the refused SELECT was recorded");
+    assert_eq!(recorded[refused].2.as_deref(), Some("22012"));
+    assert_eq!(
+        STATUS_CODES.lock().expect("the status codes")[refused].as_deref(),
+        Some("22012"),
+    );
 }
 
 #[tokio::test]

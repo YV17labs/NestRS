@@ -36,8 +36,14 @@ pub const DB_CLIENT_OPERATION_DURATION: DurationHistogram = DurationHistogram::n
         MetricAttribute::bounded(DB_QUERY_SUMMARY),
         MetricAttribute::bounded(SERVER_ADDRESS),
         MetricAttribute::bounded(SERVER_PORT),
+        MetricAttribute::bounded(DB_RESPONSE_STATUS_CODE),
     ],
 );
+
+/// The code a database answered a failed operation with, which its
+/// `error.type` repeats: a Postgres SQLSTATE (`40001`), a Redis error prefix
+/// (`WRONGTYPE`).
+pub const DB_RESPONSE_STATUS_CODE: &str = "db.response.status_code";
 
 /// The database system, as the conventions name it (`postgresql`, `redis`).
 pub const DB_SYSTEM_NAME: &str = "db.system.name";

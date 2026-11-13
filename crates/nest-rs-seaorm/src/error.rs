@@ -583,7 +583,7 @@ pub(crate) fn is_cancelled(err: &DbErr) -> bool {
 }
 
 /// The error the database server answered, when `err` carries one.
-fn server_error(err: &DbErr) -> Option<&(dyn DatabaseError + 'static)> {
+pub(crate) fn server_error(err: &DbErr) -> Option<&(dyn DatabaseError + 'static)> {
     match err {
         DbErr::Conn(RuntimeErr::SqlxError(sqlx))
         | DbErr::Exec(RuntimeErr::SqlxError(sqlx))

@@ -197,8 +197,12 @@ a point in `db.client.operation.duration`.
   hand-written statement may carry a value in its text. A Redis command is
   named by its first word, never a key or an argument.
 - **A failure says its class.** A Redis refusal records its code (`ERR`,
-  `NOSCRIPT`, `WRONGTYPE`) as `error.type`; a failed statement records `_OTHER`,
-  since sea-orm reports a failure without its error.
+  `NOSCRIPT`, `WRONGTYPE`), and a statement the driver times the SQLSTATE
+  Postgres answered (`40001`, `22012`), as `error.type` and
+  `db.response.status_code`; a wait that ran out — a Redis command past its
+  budget, a connection the pool never handed over — records `timeout`. A
+  statement sea-orm times records `_OTHER`, since sea-orm reports a failure
+  without its error.
 - **A span only under a unit.** An operation sent outside every traced unit —
   a queue worker's poll, the outbox relay's claim — records its duration and no
   span, so a backend is not handed a root trace per poll.

@@ -29,7 +29,7 @@ use redis::{
 };
 
 use crate::cluster::{ClusterLink, SlotLink};
-use crate::commands::{Sent, batch_failure, command_failure, sending};
+use crate::commands::{Sent, batch_failure, command_failure, ended, sending};
 use crate::error::RedisError;
 use crate::instance::{RedisInstance, instance_phrase, typed_import};
 use crate::script::{Invocation, RedisScript};
@@ -342,7 +342,7 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
                 Link::Slot(link) => link.send(cmd, budget).await,
             };
             if let Some(pending) = pending {
-                pending.ended(&[], command_failure(&answer));
+                ended(pending, command_failure(&answer));
             }
             answer
         })
@@ -368,7 +368,7 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
                 Link::Slot(link) => link.send_pipeline(pipeline, offset, count, budget).await,
             };
             if let Some(pending) = pending {
-                pending.ended(&[], batch_failure(pipeline, &answers));
+                ended(pending, batch_failure(pipeline, &answers));
             }
             answers
         })

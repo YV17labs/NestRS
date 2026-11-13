@@ -85,3 +85,30 @@ async fn every_command_and_pipeline_is_recorded_by_its_name_on_its_database() {
     );
     assert!(!format!("{recorded:?}").contains(&key), "{recorded:?}");
 }
+
+/// A command its caller gave up on — a timeout around it, a unit cut at its
+/// deadline — is recorded all the same, with no failure: the slowest commands
+/// are the ones a histogram must not miss.
+#[tokio::test]
+async fn a_command_its_caller_gives_up_on_is_recorded_with_no_failure() {
+    nest_rs_core::__private::set_client_recorder(capture);
+    let mut conn = connect().await;
+    let key = unique_key("abandoned");
+    let db = redis::aio::ConnectionLike::get_db(&conn).to_string();
+
+    // The server waits a second on a list nothing pushes to; the caller, a tenth.
+    let waited = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        redis::cmd("BLPOP")
+            .arg(&key)
+            .arg(1)
+            .query_async::<Option<(String, String)>>(&mut conn),
+    )
+    .await;
+
+    assert!(waited.is_err(), "the caller gave up first");
+    assert_eq!(
+        RECORDED.lock().expect("the recorded operations").clone(),
+        vec![("BLPOP".to_owned(), Some(db), None)],
+    );
+}

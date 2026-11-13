@@ -2,11 +2,9 @@
 //! client operation the database conventions name for Redis — the command's
 //! name, never a key or an argument — once the server answered it.
 
-use std::time::{Instant, SystemTime};
-
 use nest_rs_core::client_operation::{
-    self, ClientOperation, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_NAMESPACE,
-    DB_OPERATION_NAME, DB_SYSTEM_NAME, SERVER_ADDRESS, SERVER_PORT,
+    self, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_NAMESPACE, DB_OPERATION_NAME,
+    DB_SYSTEM_NAME, PendingClientOperation, SERVER_ADDRESS, SERVER_PORT,
 };
 use nest_rs_core::operation_log::OTHER;
 use redis::{Arg, Cmd, Pipeline, RedisError, Value};
@@ -100,57 +98,38 @@ fn word(bytes: &[u8]) -> &str {
     }
 }
 
-/// A command being timed, from the instant it was sent.
-pub(crate) struct Timing {
-    started: SystemTime,
-    clock: Instant,
-}
-
-impl Timing {
-    /// Started now — where anything records client operations.
-    pub(crate) fn start() -> Option<Self> {
-        client_operation::is_recorded().then(|| Self {
-            started: SystemTime::now(),
-            clock: Instant::now(),
-        })
+/// `sent`, about to leave for the database `db` of `server`: pending until it
+/// answers, or until its caller gives up on it — where anything records client
+/// operations.
+pub(crate) fn sending(
+    sent: Sent<'_>,
+    db: i64,
+    server: Option<(&str, u16)>,
+) -> Option<PendingClientOperation> {
+    if !client_operation::is_recorded() {
+        return None;
     }
-
-    /// Record `sent`, on the database `db` of `server`, as it answered:
-    /// failed with the class `failure` names, if any.
-    pub(crate) fn record(
-        self,
-        sent: Sent<'_>,
-        db: i64,
-        server: Option<(&str, u16)>,
-        failure: Option<&str>,
-    ) {
-        let elapsed = self.clock.elapsed();
-        let operation = sent.operation();
-        let namespace = db.to_string();
-        let mut attributes = Vec::with_capacity(6);
-        attributes.push((DB_SYSTEM_NAME, ClientValue::Text(REDIS)));
-        attributes.push((DB_NAMESPACE, ClientValue::Text(&namespace)));
-        attributes.push((DB_OPERATION_NAME, ClientValue::Text(&operation)));
-        if let Sent::Batch { size, .. } = sent {
-            attributes.push((
-                DB_OPERATION_BATCH_SIZE,
-                ClientValue::Integer(i64::try_from(size).unwrap_or(i64::MAX)),
-            ));
-        }
-        if let Some((address, port)) = server {
-            attributes.push((SERVER_ADDRESS, ClientValue::Text(address)));
-            attributes.push((SERVER_PORT, ClientValue::Integer(i64::from(port))));
-        }
-        ClientOperation::new(
-            &DB_CLIENT_OPERATION_DURATION,
-            &operation,
-            self.started,
-            elapsed,
-            &attributes,
-        )
-        .failed(failure)
-        .record();
+    let operation = sent.operation();
+    let namespace = db.to_string();
+    let mut attributes = Vec::with_capacity(6);
+    attributes.push((DB_SYSTEM_NAME, ClientValue::Text(REDIS)));
+    attributes.push((DB_NAMESPACE, ClientValue::Text(&namespace)));
+    attributes.push((DB_OPERATION_NAME, ClientValue::Text(&operation)));
+    if let Sent::Batch { size, .. } = sent {
+        attributes.push((
+            DB_OPERATION_BATCH_SIZE,
+            ClientValue::Integer(i64::try_from(size).unwrap_or(i64::MAX)),
+        ));
     }
+    if let Some((address, port)) = server {
+        attributes.push((SERVER_ADDRESS, ClientValue::Text(address)));
+        attributes.push((SERVER_PORT, ClientValue::Integer(i64::from(port))));
+    }
+    Some(PendingClientOperation::start(
+        &DB_CLIENT_OPERATION_DURATION,
+        operation.clone(),
+        &attributes,
+    ))
 }
 
 /// How a command's `answer` failed: the code the server refused it with —

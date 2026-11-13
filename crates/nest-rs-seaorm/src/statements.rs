@@ -10,11 +10,12 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 use nest_rs_core::client_operation::{
     self, ClientOperation, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_COLLECTION_NAME,
-    DB_NAMESPACE, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_SYSTEM_NAME, SERVER_ADDRESS, SERVER_PORT,
+    DB_NAMESPACE, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_SYSTEM_NAME, PendingClientOperation,
+    SERVER_ADDRESS, SERVER_PORT,
 };
 use nest_rs_core::operation_log::OTHER;
 use sea_orm::metric::Info;
@@ -81,7 +82,8 @@ impl Statements {
     }
 
     /// Await `statement`, the text `sql` sea-orm sends without timing it, and
-    /// hand it over once the database answered, where `statements` records it.
+    /// hand it over once the database answered — or once its caller gave up on
+    /// it, a unit cut at its deadline — where `statements` records it.
     pub(crate) async fn sent<T>(
         statements: Option<&Self>,
         sql: &str,
@@ -90,28 +92,44 @@ impl Statements {
         let Some(statements) = statements else {
             return statement.await;
         };
-        let started = SystemTime::now();
-        let clock = Instant::now();
+        let pending = statements.described(sql, |name, attributes| {
+            PendingClientOperation::start(
+                &DB_CLIENT_OPERATION_DURATION,
+                name.to_owned(),
+                attributes,
+            )
+        });
         let answer = statement.await;
-        statements.record_sent(sql, started, clock.elapsed(), answer.is_err());
+        pending.ended(&[], answer.is_err().then_some(OTHER));
         answer
     }
 
-    /// Hand the statement sea-orm timed and reports in `info` to the recorder.
+    /// Hand the statement sea-orm timed and reports in `info` to the recorder;
+    /// a failure, which sea-orm reports without its error, is the conventions'
+    /// `_OTHER`.
     fn record(&self, info: &Info<'_>) {
         let answered = SystemTime::now();
-        self.record_sent(
-            &info.statement.sql,
-            answered.checked_sub(info.elapsed).unwrap_or(answered),
-            info.elapsed,
-            info.failed,
-        );
+        let started = answered.checked_sub(info.elapsed).unwrap_or(answered);
+        self.described(&info.statement.sql, |name, attributes| {
+            ClientOperation::new(
+                &DB_CLIENT_OPERATION_DURATION,
+                name,
+                started,
+                info.elapsed,
+                attributes,
+            )
+            .failed(info.failed.then_some(OTHER))
+            .record();
+        });
     }
 
-    /// Hand `sql`, sent at `started` and answered `elapsed` later, to the
-    /// recorder; a failure, which sea-orm reports without its error, is the
-    /// conventions' `_OTHER`.
-    fn record_sent(&self, sql: &str, started: SystemTime, elapsed: Duration, failed: bool) {
+    /// What `sql` is recorded as — its name and its attributes — handed to
+    /// `with`.
+    fn described<R>(
+        &self,
+        sql: &str,
+        with: impl FnOnce(&str, &[(&'static str, ClientValue<'_>)]) -> R,
+    ) -> R {
         let summary = QuerySummary::of(sql);
         let text = summary.as_ref().map(QuerySummary::text);
         let mut attributes = Vec::with_capacity(DB_CLIENT_OPERATION_DURATION.attributes().len());
@@ -134,15 +152,7 @@ impl Statements {
             ClientValue::Integer(i64::from(self.options.get_port())),
         ));
 
-        ClientOperation::new(
-            &DB_CLIENT_OPERATION_DURATION,
-            text.as_deref().unwrap_or(POSTGRESQL),
-            started,
-            elapsed,
-            &attributes,
-        )
-        .failed(failed.then_some(OTHER))
-        .record();
+        with(text.as_deref().unwrap_or(POSTGRESQL), &attributes)
     }
 }
 

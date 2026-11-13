@@ -29,7 +29,7 @@ use redis::{
 };
 
 use crate::cluster::{ClusterLink, SlotLink};
-use crate::commands::{Sent, Timing, batch_failure, command_failure};
+use crate::commands::{Sent, batch_failure, command_failure, sending};
 use crate::error::RedisError;
 use crate::instance::{RedisInstance, instance_phrase, typed_import};
 use crate::script::{Invocation, RedisScript};
@@ -334,20 +334,15 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         let budget = self.budget;
         Box::pin(async move {
-            let timing = Timing::start();
+            let pending = sending(Sent::command(cmd), self.get_db(), self.server());
             let answer = match &self.link {
                 Link::Standalone(link) => link.send(cmd, budget).await,
                 Link::Sentinel(link) => link.send(cmd, budget).await,
                 Link::Cluster(link) => link.send(cmd, budget).await,
                 Link::Slot(link) => link.send(cmd, budget).await,
             };
-            if let Some(timing) = timing {
-                timing.record(
-                    Sent::command(cmd),
-                    self.get_db(),
-                    self.server(),
-                    command_failure(&answer),
-                );
+            if let Some(pending) = pending {
+                pending.ended(&[], command_failure(&answer));
             }
             answer
         })
@@ -361,20 +356,19 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
     ) -> RedisFuture<'a, Vec<Value>> {
         let budget = self.budget;
         Box::pin(async move {
-            let timing = Timing::start();
+            let pending = sending(
+                Sent::batch(pipeline, offset, count),
+                self.get_db(),
+                self.server(),
+            );
             let answers = match &self.link {
                 Link::Standalone(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Sentinel(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Cluster(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Slot(link) => link.send_pipeline(pipeline, offset, count, budget).await,
             };
-            if let Some(timing) = timing {
-                timing.record(
-                    Sent::batch(pipeline, offset, count),
-                    self.get_db(),
-                    self.server(),
-                    batch_failure(pipeline, &answers),
-                );
+            if let Some(pending) = pending {
+                pending.ended(&[], batch_failure(pipeline, &answers));
             }
             answers
         })

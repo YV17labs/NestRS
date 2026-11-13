@@ -221,6 +221,7 @@ pub(crate) fn request_span(
         // As addressed; never in `http.route`, which a backend groups on.
         url.path = req.uri().path(),
         url.scheme = url_scheme(req, origin),
+        network.protocol.version = nest_rs_core::operation_log::protocol_version(req.version()),
         // Filled by `name_route`; a 404 matched no route and leaves it empty.
         http.route = tracing::field::Empty,
         // No `client.address`: an address is personal data a collector would keep.

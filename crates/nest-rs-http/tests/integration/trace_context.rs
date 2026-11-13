@@ -307,6 +307,25 @@ async fn only_a_server_error_exports_its_span_failed() {
     }
 }
 
+/// A request's span says the HTTP version it came over, as the conventions
+/// write `network.protocol.version`.
+#[tokio::test]
+async fn a_requests_span_names_the_http_version_it_came_over() {
+    let logs = LogCapture::install();
+    let client = boot::<OrgsModule>().await;
+
+    client.get("/jobs/7/broken").send().await;
+
+    let request = nest_rs_http::unit::REQUEST;
+    let span = logs.expect_span(request.target(), request.name());
+    assert_eq!(
+        span.field("network.protocol.version").as_deref(),
+        Some("1.1"),
+        "{:?}",
+        span.fields,
+    );
+}
+
 /// Every field a request's duration is keyed by is one its span fills: one it
 /// never filled would key every duration without it.
 #[tokio::test]

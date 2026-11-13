@@ -408,6 +408,20 @@ pub fn known_verb(verb: &str) -> Option<&'static str> {
     KNOWN_VERBS.into_iter().find(|known| *known == verb)
 }
 
+/// `version` as the conventions write `network.protocol.version` (`1.1`, `2`),
+/// a request's or an answer's.
+pub fn protocol_version(version: http::Version) -> Option<&'static str> {
+    [
+        (http::Version::HTTP_09, "0.9"),
+        (http::Version::HTTP_10, "1.0"),
+        (http::Version::HTTP_11, "1.1"),
+        (http::Version::HTTP_2, "2"),
+        (http::Version::HTTP_3, "3"),
+    ]
+    .into_iter()
+    .find_map(|(known, written)| (known == version).then_some(written))
+}
+
 /// Not an outcome: the word a line names what a client addressed with when
 /// the server declares no name for it — a method outside the HTTP conventions'
 /// known set, an event no handler serves, a tool no host declares — since the

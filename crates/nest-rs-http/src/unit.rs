@@ -43,6 +43,7 @@ const REQUEST_DURATION: DurationHistogram = DurationHistogram::new(
         MetricAttribute::known("url.scheme", &["http", "https"]),
         MetricAttribute::bounded("http.route"),
         MetricAttribute::bounded("http.response.status_code"),
+        MetricAttribute::bounded("network.protocol.version"),
     ],
 );
 

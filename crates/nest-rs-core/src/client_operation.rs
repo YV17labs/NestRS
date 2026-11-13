@@ -433,7 +433,7 @@ impl HttpClientRequest {
             HTTP_RESPONSE_STATUS_CODE,
             ClientValue::Integer(i64::from(status.as_u16())),
         ));
-        if let Some(version) = protocol_version(version) {
+        if let Some(version) = crate::operation_log::protocol_version(version) {
             attributes.push((NETWORK_PROTOCOL_VERSION, ClientValue::Text(version)));
         }
         self.operation
@@ -450,19 +450,6 @@ impl HttpClientRequest {
     pub fn failed(self) {
         self.operation.ended(&[], Some(OTHER));
     }
-}
-
-/// `version` as the conventions write `network.protocol.version`.
-fn protocol_version(version: Version) -> Option<&'static str> {
-    [
-        (Version::HTTP_09, "0.9"),
-        (Version::HTTP_10, "1.0"),
-        (Version::HTTP_11, "1.1"),
-        (Version::HTTP_2, "2"),
-        (Version::HTTP_3, "3"),
-    ]
-    .into_iter()
-    .find_map(|(known, written)| (known == version).then_some(written))
 }
 
 /// What records a client operation once it ended.

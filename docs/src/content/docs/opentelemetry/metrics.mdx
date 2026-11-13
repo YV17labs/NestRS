@@ -30,7 +30,7 @@ ready-made HTTP, messaging and MCP dashboards light up with nothing written:
 
 | Unit | Histogram | Keyed by |
 |---|---|---|
-| `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `error.type` |
+| `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `error.type` |
 | `queue.job` | `messaging.process.duration` | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type` |
 | `mcp.operation` | `mcp.server.operation.duration` | `mcp.method.name`, `gen_ai.tool.name`, `gen_ai.prompt.name`, `gen_ai.operation.name`, `network.transport`, `network.protocol.name`, `rpc.response.status_code`, `error.type` |
 

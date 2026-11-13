@@ -136,8 +136,8 @@ spelled exactly, or `_OTHER`), `url.path` (the addressed path), `url.scheme`
 `<PREFIX>_HTTP__TRUSTED_PROXIES` lists, else the listener's),
 `http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
-`http.response.status_code`, `http.response.body.size` and
-`user_agent.original`. It carries no `client.address`, which the conventions
+`http.response.status_code`, `http.response.body.size`,
+`network.protocol.version` (`1.1`, `2`) and `user_agent.original`. It carries no `client.address`, which the conventions
 recommend: a client's address is personal data, and a collector keeps what it
 receives — no access line carries it either.
 

@@ -24,6 +24,8 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use nest_rs_core::duration_histogram::MetricAttribute;
+use nest_rs_core::operation_log::Unit;
 use tracing::field::{Field, Visit};
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::Layer;
@@ -97,6 +99,20 @@ impl CapturedSpan {
     /// One field, if the span carries it.
     pub fn field(&self, name: &str) -> Option<String> {
         self.fields.get(name).cloned()
+    }
+
+    /// The fields `unit`'s duration is keyed by that this span left empty — a
+    /// key no span of the unit fills keys every duration without it — or `None`
+    /// for a unit declaring no duration.
+    pub fn duration_keys_left_empty(&self, unit: &Unit) -> Option<Vec<&'static str>> {
+        Some(
+            unit.duration()?
+                .attributes()
+                .iter()
+                .map(MetricAttribute::field)
+                .filter(|field| !self.fields.contains_key(*field))
+                .collect(),
+        )
     }
 }
 

@@ -337,15 +337,10 @@ async fn every_field_a_requests_duration_is_keyed_by_is_one_its_span_fills() {
 
     let request = nest_rs_http::unit::REQUEST;
     let span = logs.expect_span(request.target(), request.name());
-    let duration = request
-        .duration()
-        .expect("a request's duration is recorded");
-    for attribute in duration.attributes() {
-        assert!(
-            span.field(attribute.field()).is_some(),
-            "{}: {:?}",
-            attribute.field(),
-            span.fields,
-        );
-    }
+    assert_eq!(
+        span.duration_keys_left_empty(&request),
+        Some(vec![]),
+        "{:?}",
+        span.fields,
+    );
 }

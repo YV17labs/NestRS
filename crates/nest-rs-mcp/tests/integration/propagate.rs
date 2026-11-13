@@ -617,18 +617,19 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
         .into_iter()
         .filter(|span| span.target == operation.target() && span.name == operation.name())
         .collect();
-    let duration = operation
-        .duration()
-        .expect("an operation's duration is recorded");
-    for attribute in duration.attributes() {
-        assert!(
-            spans
-                .iter()
-                .any(|span| span.field(attribute.field()).is_some()),
-            "an operation's span fills {}: {spans:#?}",
-            attribute.field(),
-        );
-    }
+    // A tool's name keys a tool call alone: each key is filled by some span.
+    let left_empty_by_every_span = spans
+        .iter()
+        .map(|span| {
+            span.duration_keys_left_empty(&operation)
+                .expect("an operation's duration is recorded")
+        })
+        .reduce(|left, next| left.into_iter().filter(|key| next.contains(key)).collect())
+        .expect("an operation's span");
+    assert!(
+        left_empty_by_every_span.is_empty(),
+        "{left_empty_by_every_span:?}: {spans:#?}"
+    );
 }
 
 const CONVENTIONS: &str = "/mcp/conventions";

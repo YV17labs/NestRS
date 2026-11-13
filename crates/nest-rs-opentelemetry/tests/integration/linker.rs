@@ -3,7 +3,7 @@
 
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
-use crate::otlp::{Collector, Received, trusting};
+use crate::otlp::{Collector, trace_exports, trusting};
 
 /// Fails the day the library applies a late `otel.name` itself.
 #[test]
@@ -24,11 +24,7 @@ fn upstream_tracing_opentelemetry_still_drops_a_name_recorded_on_a_started_span(
     drop(span);
     drop(otel);
 
-    let traces: Vec<Received> = collector
-        .received()
-        .into_iter()
-        .filter(|export| export.path == "/v1/traces")
-        .collect();
+    let traces = trace_exports(&collector);
     assert!(
         traces.iter().any(|export| export.holds("probe.static")),
         "the span was exported: {traces:?}",

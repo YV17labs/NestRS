@@ -82,10 +82,9 @@ fn count(value: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use opentelemetry::metrics::MeterProvider as _;
-    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
-    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 
     use super::*;
+    use crate::testing::{metered, sums};
 
     #[test]
     fn the_runtime_init_runs_on_is_read_when_the_metrics_export() {
@@ -94,32 +93,18 @@ mod tests {
             .enable_all()
             .build()
             .expect("a runtime");
-        let exporter = InMemoryMetricExporter::default();
-        let provider = SdkMeterProvider::builder()
-            .with_reader(PeriodicReader::builder(exporter.clone()).build())
-            .build();
+        let (provider, exporter) = metered();
         runtime.block_on(async { TokioMetrics::observe(&provider.meter("runtime")) });
         provider.force_flush().expect("the provider flushes");
 
         let exported = exporter.get_finished_metrics().expect("exported");
         let value = |name: &str| -> f64 {
-            let metric = exported
+            let points = sums(&exported, name);
+            assert!(!points.is_empty(), "{name} was exported");
+            points
                 .iter()
-                .flat_map(|resource| resource.scope_metrics())
-                .flat_map(|scope| scope.metrics())
-                .find(|metric| metric.name() == name)
-                .unwrap_or_else(|| panic!("{name} was exported"));
-            match metric.data() {
-                AggregatedMetrics::I64(MetricData::Sum(sum)) => {
-                    #[expect(clippy::cast_precision_loss, reason = "a test's small counts")]
-                    let value = sum.data_points().map(|point| point.value()).sum::<i64>() as f64;
-                    value
-                }
-                AggregatedMetrics::F64(MetricData::Sum(sum)) => {
-                    sum.data_points().map(|point| point.value()).sum()
-                }
-                other => panic!("{name}: {other:?}"),
-            }
+                .map(|(_, value)| value.parse::<f64>().expect("a number"))
+                .sum()
         };
         assert_eq!(value("tokio.worker.count"), 2.0);
         assert!(value("tokio.task.count") >= 0.0);
@@ -129,10 +114,7 @@ mod tests {
 
     #[test]
     fn outside_a_runtime_nothing_is_registered() {
-        let exporter = InMemoryMetricExporter::default();
-        let provider = SdkMeterProvider::builder()
-            .with_reader(PeriodicReader::builder(exporter.clone()).build())
-            .build();
+        let (provider, exporter) = metered();
         TokioMetrics::observe(&provider.meter("runtime"));
         provider.force_flush().expect("the provider flushes");
         assert!(

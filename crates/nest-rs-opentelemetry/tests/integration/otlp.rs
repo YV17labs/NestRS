@@ -187,10 +187,20 @@ impl Collector {
 
 /// Every export of metrics `collector` read.
 pub(crate) fn metric_exports(collector: &Collector) -> Vec<Received> {
+    received_on(collector, "/v1/metrics")
+}
+
+/// Every export of traces `collector` read.
+pub(crate) fn trace_exports(collector: &Collector) -> Vec<Received> {
+    received_on(collector, "/v1/traces")
+}
+
+/// Every export `collector` read on `path`.
+fn received_on(collector: &Collector, path: &str) -> Vec<Received> {
     collector
         .received()
         .into_iter()
-        .filter(|export| export.path == "/v1/metrics")
+        .filter(|export| export.path == path)
         .collect()
 }
 

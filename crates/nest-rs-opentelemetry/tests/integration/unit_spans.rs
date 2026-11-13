@@ -4,16 +4,7 @@
 
 use nest_rs_core::Correlation;
 
-use crate::otlp::{Collector, Received, trusting};
-
-/// Every export of traces `collector` read.
-fn trace_exports(collector: &Collector) -> Vec<Received> {
-    collector
-        .received()
-        .into_iter()
-        .filter(|export| export.path == "/v1/traces")
-        .collect()
-}
+use crate::otlp::{Collector, Received, trace_exports, trusting};
 
 /// Open the probe's unit under a console filtered to `warn`, with an `info`
 /// span inside it, and return what the collector read of the traces.

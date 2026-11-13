@@ -115,9 +115,9 @@ mod tests {
     use std::sync::Arc;
 
     use opentelemetry::metrics::MeterProvider as _;
-    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
 
     use super::*;
+    use crate::testing::sums;
 
     struct Probe;
 
@@ -133,47 +133,6 @@ mod tests {
         fn timeouts(&self) -> u64 {
             4
         }
-    }
-
-    /// Each point of `name` in `exported`: its attributes, sorted, and its
-    /// value.
-    fn points(exported: &[ResourceMetrics], name: &str) -> Vec<(Vec<(String, String)>, String)> {
-        exported
-            .iter()
-            .flat_map(ResourceMetrics::scope_metrics)
-            .flat_map(|scope| scope.metrics())
-            .filter(|metric| metric.name() == name)
-            .flat_map(|metric| {
-                let attributes = |attributes: &mut dyn Iterator<Item = &KeyValue>| {
-                    let mut attributes: Vec<_> = attributes
-                        .map(|kv| (kv.key.to_string(), kv.value.to_string()))
-                        .collect();
-                    attributes.sort();
-                    attributes
-                };
-                match metric.data() {
-                    AggregatedMetrics::I64(MetricData::Sum(sum)) => sum
-                        .data_points()
-                        .map(|point| {
-                            (
-                                attributes(&mut point.attributes()),
-                                point.value().to_string(),
-                            )
-                        })
-                        .collect::<Vec<_>>(),
-                    AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
-                        .data_points()
-                        .map(|point| {
-                            (
-                                attributes(&mut point.attributes()),
-                                point.value().to_string(),
-                            )
-                        })
-                        .collect(),
-                    other => panic!("a pool's instrument is a sum: {other:?}"),
-                }
-            })
-            .collect()
     }
 
     #[test]
@@ -196,7 +155,7 @@ mod tests {
             attributes.sort();
             attributes
         };
-        let mut count = points(&exported, DB_CLIENT_CONNECTION_COUNT);
+        let mut count = sums(&exported, DB_CLIENT_CONNECTION_COUNT);
         count.sort();
         assert_eq!(
             count,
@@ -212,15 +171,15 @@ mod tests {
             ],
         );
         assert_eq!(
-            points(&exported, DB_CLIENT_CONNECTION_MAX),
+            sums(&exported, DB_CLIENT_CONNECTION_MAX),
             vec![(name(&[]), "10".to_owned())],
         );
         assert_eq!(
-            points(&exported, DB_CLIENT_CONNECTION_IDLE_MIN),
+            sums(&exported, DB_CLIENT_CONNECTION_IDLE_MIN),
             vec![(name(&[]), "1".to_owned())],
         );
         assert_eq!(
-            points(&exported, DB_CLIENT_CONNECTION_TIMEOUTS),
+            sums(&exported, DB_CLIENT_CONNECTION_TIMEOUTS),
             vec![(name(&[]), "4".to_owned())],
         );
         drop(pool);

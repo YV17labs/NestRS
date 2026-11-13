@@ -211,9 +211,12 @@ sends untimed, which the driver times: a unit's `BEGIN`, `COMMIT` and
 `ROLLBACK`, a block's `RELEASE` and `ROLLBACK TO`, the outbox relay's
 statements, and text sent through the unit's `execute_unprepared`. A `BEGIN`
 counts the wait for a connection, which sea-orm takes from the pool inside the
-same call.
+same call. A Redis command, or a statement the driver times, that its caller
+gave up on — a timeout around it, a unit cut at its deadline — is recorded all
+the same, with no `error.type`, as the conventions record a cancelled call.
 
-Three things are not timed. A transaction an app opens itself on the injected
+A few things are not timed. A statement sea-orm times is recorded only once it
+answered: dropped mid-flight, it is not seen. A transaction an app opens itself on the injected
 `DatabaseConnection` — its `begin`, `commit` and `rollback` — and the text it
 sends there through `execute_unprepared`: sea-orm times neither, and the
 driver does not see them. The pool's boot proof and health probe, which are

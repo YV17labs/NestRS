@@ -671,6 +671,38 @@ struct WeatherModule;
 /// method alone otherwise: a resource's URI is an attribute, never its name, a
 /// tool call alone is `execute_tool`, and a notification, which carries no id,
 /// is an operation of its own.
+/// An operation's span names the protocol version it runs under: the one its
+/// session negotiated, where its request names none.
+#[tokio::test]
+async fn an_operations_span_names_the_protocol_version_its_session_negotiated() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<WeatherModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), CONVENTIONS, None).await;
+    call_method(
+        app.http(),
+        CONVENTIONS,
+        &session,
+        None,
+        "tools/list",
+        json!({}),
+    )
+    .await;
+
+    let spans = logs.spans();
+    let listing = spans
+        .iter()
+        .find(|span| span.field("mcp.method.name").as_deref() == Some("tools/list"))
+        .unwrap_or_else(|| panic!("a `tools/list` span: {spans:#?}"));
+    assert_eq!(
+        listing.field("mcp.protocol.version").as_deref(),
+        Some(nest_rs_testing::mcp::PROTOCOL_VERSION),
+        "{:?}",
+        listing.fields,
+    );
+}
+
 #[tokio::test]
 async fn an_operations_span_follows_the_mcp_conventions_for_its_kind() {
     let logs = LogCapture::install();

@@ -38,6 +38,7 @@ const OPERATION_DURATION: DurationHistogram = DurationHistogram::new(
         MetricAttribute::bounded(GEN_AI_OPERATION_NAME),
         MetricAttribute::bounded(NETWORK_TRANSPORT),
         MetricAttribute::bounded(NETWORK_PROTOCOL_NAME),
+        MetricAttribute::bounded(MCP_PROTOCOL_VERSION),
         MetricAttribute::bounded(RPC_RESPONSE_STATUS_CODE),
     ],
 );
@@ -60,6 +61,9 @@ pub(crate) const GEN_AI_OPERATION_NAME: &str = "gen_ai.operation.name";
 
 /// What [`GEN_AI_OPERATION_NAME`] says of a tool call.
 pub(crate) const EXECUTE_TOOL: &str = "execute_tool";
+
+/// The protocol version an operation runs under, as this SDK knows it.
+pub(crate) const MCP_PROTOCOL_VERSION: &str = "mcp.protocol.version";
 
 /// The URI an operation addressed, as the client sent it: the span's alone,
 /// one value per resource read.

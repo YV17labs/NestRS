@@ -49,7 +49,9 @@ use nest_rs_core::{
 };
 use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
 use nest_rs_http::DetachedWork;
+use nest_rs_http::RequestParts as Parts;
 use rmcp::ServerHandler;
+use rmcp::model::Extensions;
 use rmcp::model::{
     CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
     CancelTaskMethod, CancelTaskParams, CancelledNotificationMethod, CancelledNotificationParam,
@@ -71,7 +73,7 @@ use rmcp::model::{
     UpdateTaskMethod, UpdateTaskParams,
 };
 use rmcp::service::{
-    MaybeSendFuture, NotificationContext, RequestContext, RoleServer, SubscriptionContext,
+    MaybeSendFuture, NotificationContext, Peer, RequestContext, RoleServer, SubscriptionContext,
 };
 use tracing::Instrument;
 
@@ -87,8 +89,8 @@ use crate::operation::McpOperationKind;
 use crate::registry::MountIndex;
 use crate::unit::{
     EXECUTE_TOOL, GEN_AI_OPERATION_NAME, GEN_AI_PROMPT_NAME, GEN_AI_TOOL_NAME, HTTP,
-    JSONRPC_REQUEST_ID, MCP_METHOD_NAME, MCP_RESOURCE_URI, NETWORK_PROTOCOL_NAME,
-    NETWORK_TRANSPORT, RPC_RESPONSE_STATUS_CODE, TCP,
+    JSONRPC_REQUEST_ID, MCP_METHOD_NAME, MCP_PROTOCOL_VERSION, MCP_RESOURCE_URI,
+    NETWORK_PROTOCOL_NAME, NETWORK_TRANSPORT, RPC_RESPONSE_STATUS_CODE, TCP,
 };
 use crate::view::McpView;
 
@@ -656,15 +658,19 @@ struct Requested {
     /// `None` for a notification, which carries none.
     id: Option<RequestId>,
     addressed: Addressed,
+    /// The protocol version it runs under, a version rmcp knows or `_OTHER`.
+    protocol_version: Option<&'static str>,
 }
 
 impl Requested {
-    /// A notification of `method`, which names nothing.
-    fn notification(method: Method) -> Self {
+    /// A notification of `method`, which names nothing, under
+    /// `protocol_version`.
+    fn notification(method: Method, protocol_version: Option<&'static str>) -> Self {
         Self {
             method,
             id: None,
             addressed: Addressed::Nothing,
+            protocol_version,
         }
     }
 
@@ -684,11 +690,43 @@ impl Requested {
             { GEN_AI_PROMPT_NAME } = declared.prompt,
             { GEN_AI_OPERATION_NAME } = self.addressed.operation_name(),
             { MCP_RESOURCE_URI } = self.addressed.resource_uri(),
+            { MCP_PROTOCOL_VERSION } = self.protocol_version,
             { NETWORK_TRANSPORT } = TCP,
             { NETWORK_PROTOCOL_NAME } = HTTP,
             { RPC_RESPONSE_STATUS_CODE } = tracing::field::Empty,
         )
     }
+}
+
+/// The header a client names the negotiated protocol version in, on every
+/// request after its initialization.
+const PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
+
+/// The protocol version an operation runs under: the one its request names,
+/// else the one its session negotiated — a version rmcp knows, `_OTHER`
+/// otherwise, so no client mints a series; `None` where neither says.
+fn protocol_version(extensions: &Extensions, peer: &Peer<RoleServer>) -> Option<&'static str> {
+    extensions
+        .get::<Parts>()
+        .and_then(|parts| parts.headers.get(PROTOCOL_VERSION_HEADER))
+        .map(|named| {
+            named
+                .to_str()
+                .map_or(operation_log::OTHER, known_protocol_version)
+        })
+        .or_else(|| {
+            peer.peer_info()
+                .map(|session| known_protocol_version(session.protocol_version.as_str()))
+        })
+}
+
+/// `sent` as a protocol version rmcp knows, or `_OTHER`.
+fn known_protocol_version(sent: &str) -> &'static str {
+    ProtocolVersion::KNOWN_VERSIONS
+        .iter()
+        .map(ProtocolVersion::as_str)
+        .find(|known| *known == sent)
+        .unwrap_or(operation_log::OTHER)
 }
 
 /// An operation's exported name, as the MCP conventions form it: the method,
@@ -980,6 +1018,7 @@ macro_rules! request_method {
                     method: Method::from($method),
                     id: Some(context.id.clone()),
                     addressed: $addressed,
+                    protocol_version: protocol_version(&context.extensions, &context.peer),
                 };
                 let cancelled = context.ct.clone().cancelled_owned();
                 let inner: BoxFuture<'_, Result<$out, McpError>> =
@@ -1035,7 +1074,10 @@ macro_rules! notification_method {
             context: NotificationContext<RoleServer>,
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
             let ambient = McpAmbient::from_extensions(&context.extensions);
-            let requested = Requested::notification(Method::from($method));
+            let requested = Requested::notification(
+                Method::from($method),
+                protocol_version(&context.extensions, &context.peer),
+            );
             let handled: BoxFuture<'_, _> =
                 Box::pin(nest_rs_core::panic::contain(self.inner.$name($($arg,)* context)));
             let run = async move {
@@ -1234,6 +1276,10 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
             method: Method::from(SubscriptionsListenRequestMethod::VALUE),
             id: Some(context.request_context().id.clone()),
             addressed: Addressed::Nothing,
+            protocol_version: protocol_version(
+                &context.request_context().extensions,
+                &context.request_context().peer,
+            ),
         };
         let going_away = self.units.detached.going_away();
         let inner: BoxFuture<'_, Result<(), McpError>> = Box::pin(self.inner.listen(context));
@@ -1281,6 +1327,15 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_protocol_version_rmcp_does_not_know_reads_as_other() {
+        assert_eq!(known_protocol_version("2025-06-18"), "2025-06-18");
+        assert_eq!(
+            known_protocol_version("any version a client writes"),
+            operation_log::OTHER
+        );
+    }
 
     /// Not `LATEST`, the default, so a substituted request shows.
     const THE_CALLER_ASKS_FOR: ProtocolVersion = ProtocolVersion::V_2025_06_18;

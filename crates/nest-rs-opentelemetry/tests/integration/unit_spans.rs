@@ -29,7 +29,17 @@ fn under_warn(metrics: &str) -> Vec<Received> {
     );
 
     let unit = nestrs_unit_probe::open(&Correlation::minted(None));
-    unit.in_scope(|| drop(tracing::info_span!("probe.inside").entered()));
+    unit.in_scope(|| {
+        drop(tracing::info_span!("probe.inside").entered());
+        drop(
+            tracing::info_span!(
+                target: "probe_library",
+                "probe.lookalike",
+                parent_span_id = "a library's own field",
+            )
+            .entered(),
+        );
+    });
     drop(unit);
     drop(otel);
 
@@ -67,5 +77,17 @@ fn a_span_the_console_filter_closes_stays_out_of_the_trace_export() {
     assert!(
         !exports.iter().any(|export| export.holds("probe.inside")),
         "the `info` span stayed out: {exports:?}",
+    );
+}
+
+/// A library's span declaring a field named as a unit's is no unit: the
+/// console's filter, and its clamps, decide it.
+#[test]
+fn a_span_shaped_like_a_units_outside_operation_span_stays_out_of_the_trace_export() {
+    let exports = under_warn("none");
+
+    assert!(
+        !exports.iter().any(|export| export.holds("probe.lookalike")),
+        "the lookalike stayed out: {exports:?}",
     );
 }

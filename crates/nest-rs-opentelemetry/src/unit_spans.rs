@@ -20,8 +20,9 @@ impl UnitSpans {
     }
 }
 
-/// Whether `metadata` is a span `operation_span!` opens: only it declares the
-/// parent's id.
+/// Whether `metadata` is shaped as the span `operation_span!` opens, which
+/// alone declares the parent's id among the framework's spans; a library may
+/// declare it too, so only a unit pending as the span is created is one.
 pub(crate) fn is_unit_span(metadata: &Metadata<'_>) -> bool {
     metadata.is_span()
         && metadata
@@ -32,12 +33,12 @@ pub(crate) fn is_unit_span(metadata: &Metadata<'_>) -> bool {
 
 impl<S> Filter<S> for UnitSpans {
     fn enabled(&self, metadata: &Metadata<'_>, _: &Context<'_, S>) -> bool {
-        self.exported && is_unit_span(metadata)
+        self.exported && is_unit_span(metadata) && nest_rs_core::__private::pending_unit().is_some()
     }
 
     fn callsite_enabled(&self, metadata: &'static Metadata<'static>) -> Interest {
         if self.exported && is_unit_span(metadata) {
-            Interest::always()
+            Interest::sometimes()
         } else {
             Interest::never()
         }

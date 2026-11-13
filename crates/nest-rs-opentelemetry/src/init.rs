@@ -81,20 +81,6 @@ impl OpenTelemetry {
         {
             let started = std::time::Instant::now();
             let exporters = crate::otlp::build(&config)?;
-            if let Some(provider) = &exporters.meter_provider {
-                let meter = crate::durations::framework_meter(provider);
-                crate::process_metrics::ProcessMetrics::observe(&meter, started);
-                crate::tokio_metrics::TokioMetrics::observe(&meter);
-            }
-            // Seeded here rather than mounted by a module: a queue worker imports no
-            // transport.
-            crate::linker::install();
-            crate::client_operations::install(
-                exporters
-                    .traces_export
-                    .then_some(&exporters.tracer_provider),
-                exporters.meter_provider.as_ref(),
-            );
 
             let appender_layer = exporters
                 .logger_provider
@@ -110,7 +96,7 @@ impl OpenTelemetry {
                 .with_filter(filter);
             let unit_spans = crate::unit_spans::UnitSpans::new(exporters.traces_export);
             let traces = tracing_opentelemetry::layer()
-                .with_tracer(exporters.tracer)
+                .with_tracer(exporters.tracer.clone())
                 .with_filter(log_filter(&console.filter).or(unit_spans));
             let subscriber = match exporters.meter_provider.as_ref() {
                 None => Dispatch::new(Registry::default().with(logs).with(traces)),
@@ -124,6 +110,23 @@ impl OpenTelemetry {
             if !install_global_subscriber(subscriber) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
+            // Nothing global is seeded before the subscriber is the process's:
+            // a refused `init` drops its exporters, and nothing records into them.
+            exporters.seat_globals();
+            if let Some(provider) = &exporters.meter_provider {
+                let meter = crate::durations::framework_meter(provider);
+                crate::process_metrics::ProcessMetrics::observe(&meter, started);
+                crate::tokio_metrics::TokioMetrics::observe(&meter);
+            }
+            // Seeded here rather than mounted by a module: a queue worker imports no
+            // transport.
+            crate::linker::install();
+            crate::client_operations::install(
+                exporters
+                    .traces_export
+                    .then_some(&exporters.tracer_provider),
+                exporters.meter_provider.as_ref(),
+            );
 
             say_retired_variables();
             let summary = exporters.summary;

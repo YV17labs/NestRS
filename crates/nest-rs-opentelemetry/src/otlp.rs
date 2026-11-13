@@ -238,6 +238,20 @@ pub(crate) struct Exporters {
     pub summary: Summary,
 }
 
+impl Exporters {
+    /// Make these exporters the ones the OpenTelemetry API hands out: the
+    /// propagator, the tracer provider and, where the metrics export, the meter
+    /// provider. Called once the subscriber is installed, so an `init` refused
+    /// leaves the process's globals as it found them.
+    pub(crate) fn seat_globals(&self) {
+        global::set_text_map_propagator(global_propagator());
+        global::set_tracer_provider(self.tracer_provider.clone());
+        if let Some(provider) = &self.meter_provider {
+            global::set_meter_provider(provider.clone());
+        }
+    }
+}
+
 /// What the subscriber, once installed, says about what was built.
 pub(crate) struct Summary {
     /// The `service.name` the resource carries.
@@ -369,7 +383,6 @@ fn build_reading(
     let [traces_client, metrics_client, logs_client] = exporter_clients(&exports)?;
     let [traces, metrics, logs] = exports;
 
-    global::set_text_map_propagator(global_propagator());
     let service = resource
         .get(&Key::new(SERVICE_NAME))
         .map_or_default(|name| name.to_string());
@@ -384,7 +397,6 @@ fn build_reading(
     }
     let tracer_provider = tracer_builder.build();
     let tracer = tracer_provider.tracer(service.clone());
-    global::set_tracer_provider(tracer_provider.clone());
 
     let meter_provider = match (&metrics, metrics_client) {
         (Some(export), Some(client)) => {
@@ -406,7 +418,6 @@ fn build_reading(
                 .with_resource(resource.clone())
                 .with_reader(reader)
                 .build();
-            global::set_meter_provider(meter_provider.clone());
             Some(meter_provider)
         }
         _ => None,

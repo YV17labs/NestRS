@@ -821,3 +821,21 @@ fn a_service_name_that_names_nothing_is_refused_naming_where_it_is_set() {
         assert!(said.contains(named), "{set:?}: {said}");
     }
 }
+
+/// An `init` refused because the process already has a subscriber seeds
+/// nothing the refused exporters would serve: no driver times its operations
+/// for a recorder whose pipeline is gone.
+#[cfg(feature = "otlp")]
+#[test]
+fn an_init_refused_for_an_installed_subscriber_leaves_no_recorder_seeded() {
+    tracing::subscriber::set_global_default(tracing_subscriber::registry())
+        .expect("the process's first subscriber");
+
+    let refused = init_under(
+        &[("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")],
+        OpenTelemetryConfig::default(),
+    );
+
+    assert!(matches!(refused, Err(OpenTelemetryError::Init(_))));
+    assert!(!nest_rs_core::client_operation::is_recorded());
+}

@@ -12,7 +12,7 @@ use nest_rs_database::{AtomicBlock, Deferred};
 
 use crate::atomic::AtomicExecutor;
 use crate::savepoint::Savepoint;
-use crate::statements::{Statements, sent};
+use crate::statements::Statements;
 use crate::turn::Turn;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, ExecResult,
@@ -67,6 +67,9 @@ pub struct LazyTransaction {
     /// landed. An atomic block's statements poison the block, never this
     /// boundary; its `SAVEPOINT`, `RELEASE` and `ROLLBACK TO` poison it.
     poisoned: AtomicU8,
+    /// What the statements this boundary times itself are recorded under,
+    /// read off the pool once, as its transaction begins.
+    statements: std::sync::OnceLock<Statements>,
     /// The work [`after_commit`](nest_rs_database::after_commit) handed this
     /// boundary: run by [`finalize`](Self::finalize) once the transaction has
     /// committed, dropped unrun when it has not. `None` once settling begins, so
@@ -102,6 +105,7 @@ impl LazyTransaction {
             cell: tokio::sync::OnceCell::new(),
             settled: std::sync::atomic::AtomicBool::new(false),
             poisoned: AtomicU8::new(POISON_CLEAN),
+            statements: std::sync::OnceLock::new(),
             after_commit: Mutex::new(Some(Vec::new())),
             turn: Turn::new(),
             #[cfg(feature = "queue")]
@@ -201,12 +205,18 @@ impl LazyTransaction {
         Ok(self
             .cell
             .get_or_try_init(|| async {
-                sent(&self.pool, "BEGIN", self.pool.begin())
+                self.statements()
+                    .sent("BEGIN", self.pool.begin())
                     .await
                     .map(Arc::new)
             })
             .await?
             .as_ref())
+    }
+
+    /// What the statements this boundary times itself are recorded under.
+    pub(crate) fn statements(&self) -> &Statements {
+        self.statements.get_or_init(|| Statements::of(&self.pool))
     }
 
     /// The transaction a data-layer touch opened, if any.
@@ -318,8 +328,8 @@ impl LazyTransaction {
         };
         let flag = lazy.poisoned.load(Ordering::Relaxed);
         let poisoned = (success && flag != POISON_CLEAN).then_some(flag == POISON_TRANSIENT);
-        let statements = Statements::recording(&lazy.pool);
-        let statements = statements.as_ref();
+        // Set as the transaction began: a boundary that opened none reads nothing.
+        let statements = lazy.statements.get().cloned().unwrap_or_default();
         let Some(txn) = lazy.into_opened() else {
             // A swallowed failed `BEGIN` is not "nothing to settle".
             if let Some(retryable) = poisoned {
@@ -352,7 +362,7 @@ impl LazyTransaction {
         // The transaction is aborted: its `COMMIT` would succeed having written
         // nothing.
         if let Some(retryable) = poisoned {
-            if let Err(err) = Statements::sent(statements, "ROLLBACK", txn.rollback()).await {
+            if let Err(err) = statements.sent("ROLLBACK", txn.rollback()).await {
                 report_rollback_failed(transport, &err, Settled::Poisoned);
             }
             tracing::error!(
@@ -366,12 +376,12 @@ impl LazyTransaction {
             return FinalizeOutcome::Poisoned { retryable };
         }
         if success {
-            match Statements::sent(statements, "COMMIT", txn.commit()).await {
+            match statements.sent("COMMIT", txn.commit()).await {
                 Ok(()) => FinalizeOutcome::Committed,
                 Err(err) => FinalizeOutcome::CommitFailed(err),
             }
         } else {
-            if let Err(err) = Statements::sent(statements, "ROLLBACK", txn.rollback()).await {
+            if let Err(err) = statements.sent("ROLLBACK", txn.rollback()).await {
                 report_rollback_failed(transport, &err, Settled::Failed);
             }
             FinalizeOutcome::RolledBack
@@ -645,13 +655,13 @@ impl ConnectionTrait for SeaOrmExecutor {
 
     async fn execute_unprepared(&self, sql: &str) -> Result<ExecResult, DbErr> {
         match self {
-            SeaOrmExecutor::Pool(c) => sent(c, sql, c.execute_unprepared(sql)).await,
+            SeaOrmExecutor::Pool(c) => Statements::of(c).sent(sql, c.execute_unprepared(sql)).await,
             SeaOrmExecutor::Lazy(l) => {
-                l.run(|txn| sent(l.pool(), sql, txn.execute_unprepared(sql)))
+                l.run(|txn| l.statements().sent(sql, txn.execute_unprepared(sql)))
                     .await
             }
             SeaOrmExecutor::Savepoint(s) => {
-                s.run(|txn| sent(s.root().pool(), sql, txn.execute_unprepared(sql)))
+                s.run(|txn| s.root().statements().sent(sql, txn.execute_unprepared(sql)))
                     .await
             }
         }

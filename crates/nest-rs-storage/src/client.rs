@@ -1566,31 +1566,21 @@ mod tests {
     }
 
     /// The `http.request.resend_count` of each request recorded, in order.
-    static RESENDS: std::sync::Mutex<Vec<Option<i64>>> = std::sync::Mutex::new(Vec::new());
+    static RESENDS: std::sync::Mutex<Vec<Option<String>>> = std::sync::Mutex::new(Vec::new());
 
     fn capture_resends(operation: &nest_rs_core::client_operation::ClientOperation<'_>) {
-        RESENDS
-            .lock()
-            .expect("the resends")
-            .push(
-                operation
-                    .attributes()
-                    .iter()
-                    .find_map(|(key, value)| match (*key, value) {
-                        (
-                            "http.request.resend_count",
-                            nest_rs_core::client_operation::ClientValue::Integer(count),
-                        ) => Some(*count),
-                        _ => None,
-                    }),
-            );
+        RESENDS.lock().expect("the resends").push(
+            operation
+                .attribute(nest_rs_core::client_operation::HTTP_REQUEST_RESEND_COUNT)
+                .map(|count| count.to_string()),
+        );
     }
 
     /// A request object_store sends again after it failed says it is a
     /// resending; the first sending says nothing.
     #[tokio::test(start_paused = true)]
     async fn a_request_the_store_retries_is_recorded_as_sent_again() {
-        nest_rs_core::__private::set_client_recorder(capture_resends);
+        nest_rs_core::__private::set_client_recorder(capture_resends, true);
         let storage = Storage::dialing(
             s3_at("http://store.test", Surface::Open),
             UnavailableOnce::default(),
@@ -1598,7 +1588,10 @@ mod tests {
 
         storage.head("k").await.expect("the retry is answered");
 
-        assert_eq!(*RESENDS.lock().expect("the resends"), [None, Some(1)]);
+        assert_eq!(
+            *RESENDS.lock().expect("the resends"),
+            [None, Some("1".to_owned())]
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1681,9 +1674,9 @@ mod tests {
         let [Some(inside), None] = heard.as_slice() else {
             panic!("a traceparent inside the unit alone: {heard:?}");
         };
-        let fields: Vec<&str> = inside.split('-').collect();
-        assert_eq!(fields[1], unit.trace_id().to_hex(), "the unit's trace");
-        assert_ne!(fields[2], unit.span_id().to_hex(), "a span of its own");
+        let inside = nest_rs_core::TraceParent::parse(inside).expect("a traceparent");
+        assert_eq!(inside.trace_id, unit.trace_id(), "the unit's trace");
+        assert_ne!(inside.parent_id, unit.span_id(), "a span of its own");
     }
 
     /// An S3 double refusing every connection once it has held its thread for

@@ -234,8 +234,9 @@ pub use secret::Secret;
 pub use served_address::ServedAddress;
 pub use tenant::current_tenant_id;
 pub use trace_context::{
-    Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,
-    current_span_id, current_trace_id, current_traceparent, current_tracestate,
+    Correlation, SpanId, TRACEPARENT_HEADER, TRACESTATE_HEADER, TraceFlags, TraceId, TraceParent,
+    TraceState, current_actor_id, current_span_id, current_trace_id, current_traceparent,
+    current_tracestate,
 };
 pub use transport::{Listening, MAX_STOP_BOUND, Transport, TransportContribution};
 pub use unit_context::{Peer, UnitContext, UnitView};

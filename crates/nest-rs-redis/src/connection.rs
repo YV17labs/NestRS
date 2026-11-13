@@ -29,7 +29,7 @@ use redis::{
 };
 
 use crate::cluster::{ClusterLink, SlotLink};
-use crate::commands::{Sent, batch_failure, command_failure, ended, sending};
+use crate::commands::{Sent, batch_answer, command_answer, sending};
 use crate::error::RedisError;
 use crate::instance::{RedisInstance, instance_phrase, typed_import};
 use crate::script::{Invocation, RedisScript};
@@ -73,6 +73,8 @@ pub struct RedisConnection<I = Unnamed> {
     link: Link<I>,
     /// How long a command on this handle waits for its answer.
     budget: Duration,
+    /// The database the link selects, as each command it times names it.
+    namespace: Arc<str>,
 }
 
 impl<I> Clone for RedisConnection<I> {
@@ -80,6 +82,19 @@ impl<I> Clone for RedisConnection<I> {
         Self {
             link: self.link.clone(),
             budget: self.budget,
+            namespace: Arc::clone(&self.namespace),
+        }
+    }
+}
+
+impl<I: Instance> Link<I> {
+    /// The database the link selects.
+    fn db(&self) -> i64 {
+        match self {
+            Self::Standalone(link) => link.db(),
+            Self::Sentinel(link) => link.db(),
+            Self::Cluster(link) => link.db(),
+            Self::Slot(link) => link.db(),
         }
     }
 }
@@ -184,7 +199,12 @@ impl<I: Instance> RedisConnection<I> {
                 Link::Cluster(ClusterLink::connect(url, &config.tls, instance, budget).await?)
             }
         };
-        Ok(Self { link, budget })
+        let namespace = link.db().to_string().into();
+        Ok(Self {
+            link,
+            budget,
+            namespace,
+        })
     }
 
     /// A connection of its own to the same Redis, opened from the same settings
@@ -206,6 +226,7 @@ impl<I: Instance> RedisConnection<I> {
         Ok(Self {
             link,
             budget: self.budget,
+            namespace: Arc::clone(&self.namespace),
         })
     }
 
@@ -334,16 +355,14 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         let budget = self.budget;
         Box::pin(async move {
-            let pending = sending(Sent::command(cmd), self.get_db(), self.server());
+            let pending = sending(|| Sent::command(cmd), &self.namespace, self.server());
             let answer = match &self.link {
                 Link::Standalone(link) => link.send(cmd, budget).await,
                 Link::Sentinel(link) => link.send(cmd, budget).await,
                 Link::Cluster(link) => link.send(cmd, budget).await,
                 Link::Slot(link) => link.send(cmd, budget).await,
             };
-            if let Some(pending) = pending {
-                ended(pending, command_failure(&answer));
-            }
+            pending.ended_with(command_answer(&answer));
             answer
         })
     }
@@ -357,8 +376,8 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
         let budget = self.budget;
         Box::pin(async move {
             let pending = sending(
-                Sent::batch(pipeline, offset, count),
-                self.get_db(),
+                || Sent::batch(pipeline, offset, count),
+                &self.namespace,
                 self.server(),
             );
             let answers = match &self.link {
@@ -367,20 +386,13 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
                 Link::Cluster(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Slot(link) => link.send_pipeline(pipeline, offset, count, budget).await,
             };
-            if let Some(pending) = pending {
-                ended(pending, batch_failure(pipeline, &answers));
-            }
+            pending.ended_with(batch_answer(pipeline, &answers));
             answers
         })
     }
 
     fn get_db(&self) -> i64 {
-        match &self.link {
-            Link::Standalone(link) => link.db(),
-            Link::Sentinel(link) => link.db(),
-            Link::Cluster(link) => link.db(),
-            Link::Slot(link) => link.db(),
-        }
+        self.link.db()
     }
 }
 

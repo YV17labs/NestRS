@@ -4,22 +4,20 @@
 //!
 //! An operation sent outside every traced unit — a worker's poll, a relay's
 //! claim — records its duration and no span: a root span per poll would bury
-//! the traces an operator reads. The unit is read off the kernel's correlation,
-//! never off the `tracing` span entered: the ids a `traceparent` announced are
-//! the correlation's, and a task can run a unit with no span entered.
+//! the traces an operator reads. The unit is the kernel's correlation the
+//! operation carries, never the `tracing` span entered: the ids a
+//! `traceparent` announced are the correlation's, and a task can run a unit
+//! with no span entered.
 
-use std::borrow::Cow;
 use std::sync::OnceLock;
 
-use nest_rs_core::Correlation;
 use nest_rs_core::client_operation::{ClientOperation, ClientValue};
 use nest_rs_core::duration_histogram::MetricAttribute;
 use nest_rs_core::operation_log::OTHER;
 use opentelemetry::trace::{
-    Span as _, SpanContext, SpanId, SpanKind, Status, TraceContextExt as _, TraceFlags, TraceId,
-    TraceState, Tracer as _, TracerProvider as _,
+    Span as _, SpanKind, Status, TraceFlags, Tracer as _, TracerProvider as _,
 };
-use opentelemetry::{Context, KeyValue, StringValue, Value};
+use opentelemetry::{KeyValue, StringValue, Value};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::{SdkTracerProvider, Tracer};
 use opentelemetry_semantic_conventions::attribute::ERROR_TYPE;
@@ -46,8 +44,9 @@ pub(crate) fn install(traces: Option<&SdkTracerProvider>, metrics: Option<&SdkMe
         tracer: traces.map(|provider| provider.tracer_with_scope(framework_scope())),
         durations: metrics.map(Durations::new),
     };
+    let durations = recording.durations.is_some();
     if RECORDING.set(recording).is_ok() {
-        nest_rs_core::__private::set_client_recorder(record);
+        nest_rs_core::__private::set_client_recorder(record, durations);
     }
 }
 
@@ -59,57 +58,61 @@ fn record(operation: &ClientOperation<'_>) {
 
 impl ClientOperations {
     fn record(&self, operation: &ClientOperation<'_>) {
-        let (attributes, keyed) = attributes(operation);
+        let keyed = keyed_attributes(operation);
         if let Some(durations) = &self.durations {
             durations.record(
                 operation.duration(),
                 operation.elapsed().as_secs_f64(),
-                &attributes[..keyed],
+                &keyed,
             );
         }
         if let Some(tracer) = &self.tracer {
-            span(tracer, operation, attributes);
+            span(tracer, operation, keyed);
         }
     }
 }
 
-/// The operation's attributes in one list, those its duration is keyed by and
-/// `error.type` first, read as the duration declares them; and how many key it.
-fn attributes(operation: &ClientOperation<'_>) -> (Vec<KeyValue>, usize) {
+/// What the operation's duration is keyed by: the attributes it declares, read
+/// as it declares them, then `error.type`.
+fn keyed_attributes(operation: &ClientOperation<'_>) -> Vec<KeyValue> {
     let declared = operation.duration().attributes();
-    let held = operation.attributes();
-    let mut attributes = Vec::with_capacity(held.len() + 1);
-    for (key, value) in held {
-        if let Some(attribute) = declared.iter().find(|attribute| attribute.field() == *key) {
-            attributes.push(KeyValue::new(*key, keyed(attribute, *value)));
-        }
-    }
+    let mut keyed: Vec<KeyValue> = operation
+        .attributes()
+        .iter()
+        .filter_map(|(key, value)| {
+            let attribute = declared
+                .iter()
+                .find(|attribute| attribute.field() == *key)?;
+            Some(KeyValue::new(*key, keyed(attribute, *value)))
+        })
+        .collect();
     if let Some(error_type) = operation.error_type() {
-        attributes.push(KeyValue::new(ERROR_TYPE, error_type.to_owned()));
+        keyed.push(KeyValue::new(ERROR_TYPE, error_type.to_owned()));
     }
-    let keyed = attributes.len();
+    keyed
+}
+
+/// The operation's client span, at the place in its unit's trace the operation
+/// carries — none outside every unit, or where the unit's trace is not sampled
+/// — carrying `keyed` and every attribute its duration is not keyed by.
+fn span(tracer: &Tracer, operation: &ClientOperation<'_>, mut attributes: Vec<KeyValue>) {
+    let Some(own) = operation.correlation() else {
+        return;
+    };
+    if !own.flags().is_sampled() {
+        return;
+    }
+    let Some(parent) = crate::linker::parent_context(own, TraceFlags::SAMPLED, false) else {
+        return;
+    };
+    let declared = operation.duration().attributes();
     attributes.extend(
-        held.iter()
+        operation
+            .attributes()
+            .iter()
             .filter(|(key, _)| declared.iter().all(|attribute| attribute.field() != *key))
             .map(|(key, value)| KeyValue::new(*key, value_of(*value))),
     );
-    (attributes, keyed)
-}
-
-/// The operation's client span, at its place in the unit's trace — the one its
-/// client gave, or a child of the unit it is recorded in — none outside every
-/// unit, or where the unit's trace is not sampled.
-fn span(tracer: &Tracer, operation: &ClientOperation<'_>, attributes: Vec<KeyValue>) {
-    let own = match operation.correlation() {
-        Some(correlation) => Cow::Borrowed(correlation),
-        None => match nest_rs_core::__private::current_correlation() {
-            Some(unit) => Cow::Owned(unit.child()),
-            None => return,
-        },
-    };
-    let Some(parent) = parent_of(&own) else {
-        return;
-    };
     let builder = tracer
         .span_builder(operation.name().to_owned())
         .with_kind(SpanKind::Client)
@@ -117,7 +120,7 @@ fn span(tracer: &Tracer, operation: &ClientOperation<'_>, attributes: Vec<KeyVal
         .with_attributes(attributes);
     // The id generator adopts the ids published while the span starts: the
     // span a peer was told is its parent is this one.
-    let mut span = nest_rs_core::__private::with_pending_ids(&own, || {
+    let mut span = nest_rs_core::__private::with_pending_ids(own, || {
         builder.start_with_context(tracer, &parent)
     });
     if operation.error_type().is_some() {
@@ -126,47 +129,24 @@ fn span(tracer: &Tracer, operation: &ClientOperation<'_>, attributes: Vec<KeyVal
     span.end_with_timestamp(operation.started() + operation.elapsed());
 }
 
-/// The context of the unit `own` is a child of — its trace, its span, its
-/// vendor state — where its trace is sampled.
-fn parent_of(own: &Correlation) -> Option<Context> {
-    let unit = own.parent_id()?;
-    if !own.flags().is_sampled() {
-        return None;
-    }
-    let state = own
-        .tracestate()
-        .as_str()
-        .and_then(|state| state.parse::<TraceState>().ok())
-        .unwrap_or_default();
-    let unit = SpanContext::new(
-        TraceId::from_bytes(own.trace_id().to_bytes()),
-        SpanId::from_bytes(unit.to_bytes()),
-        TraceFlags::SAMPLED,
-        false,
-        state,
-    );
-    Some(Context::new().with_remote_span_context(unit))
-}
-
 /// `value` as the duration is keyed by `attribute`: as it is where the
 /// attribute is bounded, through its known set as written otherwise.
 fn keyed(attribute: &MetricAttribute, value: ClientValue<'_>) -> Value {
     if attribute.is_bounded() {
         return value_of(value);
     }
-    let written = match value {
-        ClientValue::Text(text) => Cow::Borrowed(text),
-        ClientValue::Integer(integer) => Cow::Owned(integer.to_string()),
-        _ => Cow::Borrowed(OTHER),
+    let known = match value {
+        ClientValue::Text(text) => attribute.known_value(text),
+        other => attribute.known_value(&other.to_string()),
     };
-    Value::from(attribute.known_value(&written).unwrap_or(OTHER))
+    Value::from(known.unwrap_or(OTHER))
 }
 
 fn value_of(value: ClientValue<'_>) -> Value {
     match value {
         ClientValue::Integer(integer) => Value::I64(integer),
         ClientValue::Text(text) => Value::String(StringValue::from(text.to_owned())),
-        _ => Value::String(StringValue::from(OTHER)),
+        other => Value::String(StringValue::from(other.to_string())),
     }
 }
 
@@ -183,6 +163,8 @@ mod tests {
     use opentelemetry_sdk::metrics::data::ResourceMetrics;
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData};
     use tracing_subscriber::layer::SubscriberExt as _;
+
+    use nest_rs_core::Correlation;
 
     use super::*;
     use crate::testing::{Point, metered};
@@ -257,6 +239,8 @@ mod tests {
             .expect("the operation's span")
     }
 
+    /// A statement sent from the unit this task runs, placed in it as
+    /// `ClientOperation::record` places one its client gave no place.
     fn select(recording: &ClientOperations, failure: Option<&str>) {
         let attributes = [
             (DB_SYSTEM_NAME, ClientValue::Text("postgresql")),
@@ -265,6 +249,7 @@ mod tests {
             (SERVER_PORT, ClientValue::Integer(5432)),
             ("an.attribute.no.duration.keys", ClientValue::Text("kept")),
         ];
+        let own = nest_rs_core::__private::current_correlation().map(|unit| unit.child());
         recording.record(
             &ClientOperation::new(
                 &DB_CLIENT_OPERATION_DURATION,
@@ -273,7 +258,8 @@ mod tests {
                 Duration::from_millis(4),
                 &attributes,
             )
-            .failed(failure),
+            .failed(failure)
+            .correlated(own.as_ref()),
         );
     }
 

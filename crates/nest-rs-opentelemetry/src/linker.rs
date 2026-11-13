@@ -48,22 +48,14 @@ fn enrich(span: &tracing::Span, correlation: &Correlation) {
 /// in this process. The link is explicit even for a local parent, since a WS
 /// message and an MCP operation run on a task their parent's span never entered.
 fn link_remote_parent(span: &tracing::Span, correlation: &Correlation) {
-    let Some(parent_id) = correlation.parent_id() else {
-        return;
-    };
-    let remote = SpanContext::new(
-        TraceId::from_bytes(correlation.trace_id().to_bytes()),
-        SpanId::from_bytes(parent_id.to_bytes()),
+    let Some(parent) = parent_context(
+        correlation,
         TraceFlags::new(correlation.flags().bits()),
         correlation.parent_is_remote(),
-        // The SDK's own `FromStr`, rather than a private splitter that would drift.
-        correlation
-            .tracestate()
-            .as_str()
-            .and_then(|raw| raw.parse().ok())
-            .unwrap_or_default(),
-    );
-    if let Err(error) = span.set_parent(Context::new().with_remote_span_context(remote))
+    ) else {
+        return;
+    };
+    if let Err(error) = span.set_parent(parent)
         && is_structural(&error)
     {
         static REPORTED: Once = Once::new();
@@ -75,6 +67,29 @@ fn link_remote_parent(span: &tracing::Span, correlation: &Correlation) {
             );
         });
     }
+}
+
+/// The context of the span `correlation` is a child of — its trace, its
+/// parent, its vendor state — flagged `flags`, remote as `remote` says; `None`
+/// for a trace that starts at `correlation`.
+pub(crate) fn parent_context(
+    correlation: &Correlation,
+    flags: TraceFlags,
+    remote: bool,
+) -> Option<Context> {
+    let parent = SpanContext::new(
+        TraceId::from_bytes(correlation.trace_id().to_bytes()),
+        SpanId::from_bytes(correlation.parent_id()?.to_bytes()),
+        flags,
+        remote,
+        // The SDK's own `FromStr`, rather than a private splitter that would drift.
+        correlation
+            .tracestate()
+            .as_str()
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or_default(),
+    );
+    Some(Context::new().with_remote_span_context(parent))
 }
 
 /// Whether a refused link says something about the wiring rather than the span:

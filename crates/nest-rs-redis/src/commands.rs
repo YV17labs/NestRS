@@ -4,7 +4,7 @@
 
 use nest_rs_core::client_operation::{
     self, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_NAMESPACE, DB_OPERATION_NAME,
-    DB_RESPONSE_STATUS_CODE, DB_SYSTEM_NAME, PendingClientOperation, SERVER_ADDRESS, SERVER_PORT,
+    DB_SYSTEM_NAME, DatabaseFailure, PendingClientOperation, SERVER_ADDRESS, SERVER_PORT,
 };
 use nest_rs_core::operation_log::OTHER;
 use redis::{Arg, Cmd, Pipeline, RedisError, Value};
@@ -98,22 +98,22 @@ fn word(bytes: &[u8]) -> &str {
     }
 }
 
-/// `sent`, about to leave for the database `db` of `server`: pending until it
-/// answers, or until its caller gives up on it — where anything records client
-/// operations.
-pub(crate) fn sending(
-    sent: Sent<'_>,
-    db: i64,
+/// What `sent` names, about to leave for the database `namespace` of `server`:
+/// pending until it answers, or until its caller gives up on it — untimed, and
+/// `sent` never read, where nothing would record it.
+pub(crate) fn sending<'s>(
+    sent: impl FnOnce() -> Sent<'s>,
+    namespace: &str,
     server: Option<(&str, u16)>,
-) -> Option<PendingClientOperation> {
-    if !client_operation::is_recorded() {
-        return None;
+) -> PendingClientOperation {
+    if !client_operation::is_recorded_here() {
+        return PendingClientOperation::untimed();
     }
+    let sent = sent();
     let operation = sent.operation();
-    let namespace = db.to_string();
     let mut attributes = Vec::with_capacity(6);
     attributes.push((DB_SYSTEM_NAME, ClientValue::Text(REDIS)));
-    attributes.push((DB_NAMESPACE, ClientValue::Text(&namespace)));
+    attributes.push((DB_NAMESPACE, ClientValue::Text(namespace)));
     attributes.push((DB_OPERATION_NAME, ClientValue::Text(&operation)));
     if let Sent::Batch { size, .. } = sent {
         attributes.push((
@@ -125,54 +125,40 @@ pub(crate) fn sending(
         attributes.push((SERVER_ADDRESS, ClientValue::Text(address)));
         attributes.push((SERVER_PORT, ClientValue::Integer(i64::from(port))));
     }
-    Some(PendingClientOperation::start(
+    PendingClientOperation::start(
         &DB_CLIENT_OPERATION_DURATION,
         operation.clone(),
         &attributes,
-    ))
+    )
 }
 
-/// End `pending` as its answer says: failed with `failure`, which is the
-/// server's error prefix — the conventions' `db.response.status_code` too —
-/// unless no server answered.
-pub(crate) fn ended(pending: PendingClientOperation, failure: Option<&str>) {
-    match failure {
-        Some(code) if code != OTHER && code != TIMEOUT => pending.ended(
-            &[(DB_RESPONSE_STATUS_CODE, ClientValue::Text(code))],
-            Some(code),
-        ),
-        failure => pending.ended(&[], failure),
-    }
-}
-
-/// The class of a command that never answered because its budget ran out,
-/// as the HTTP client's.
-const TIMEOUT: &str = "timeout";
-
-/// How a command's `answer` failed: the code the server refused it with —
-/// redis-rs hands a refusal back as a value, never as an error — or `_OTHER`
-/// for an answer that never came.
-pub(crate) fn command_failure(answer: &Result<Value, RedisError>) -> Option<&str> {
+/// How a command's `answer` ended: the code the server refused it with —
+/// redis-rs hands a refusal back as a value, or as an error carrying it — a
+/// budget run out, or no answer.
+pub(crate) fn command_answer(
+    answer: &Result<Value, RedisError>,
+) -> Result<(), DatabaseFailure<'_>> {
     match answer {
-        Ok(value) => refusal(value),
-        Err(error) => Some(error_class(error)),
+        Ok(value) => refusal(value).map_or(Ok(()), |code| Err(DatabaseFailure::Refused(code))),
+        Err(error) => Err(failure(error)),
     }
 }
 
-/// How `pipeline`'s `answers` failed: by the first refusal among them — inside
+/// How `pipeline`'s `answers` ended: by the first refusal among them — inside
 /// `EXEC`'s answer for a transaction, which answers each command it ran there.
-pub(crate) fn batch_failure<'v>(
+pub(crate) fn batch_answer<'v>(
     pipeline: &Pipeline,
     answers: &'v Result<Vec<Value>, RedisError>,
-) -> Option<&'v str> {
-    match answers {
+) -> Result<(), DatabaseFailure<'v>> {
+    let refused = match answers {
         Ok(values) if pipeline.is_transaction() => values.iter().find_map(|value| match value {
             Value::Array(ran) => ran.iter().find_map(refusal),
             answered => refusal(answered),
         }),
         Ok(values) => values.iter().find_map(refusal),
-        Err(error) => Some(error_class(error)),
-    }
+        Err(error) => return Err(failure(error)),
+    };
+    refused.map_or(Ok(()), |code| Err(DatabaseFailure::Refused(code)))
 }
 
 fn refusal(value: &Value) -> Option<&str> {
@@ -182,11 +168,13 @@ fn refusal(value: &Value) -> Option<&str> {
     }
 }
 
-fn error_class(error: &RedisError) -> &str {
+fn failure(error: &RedisError) -> DatabaseFailure<'_> {
     if error.is_timeout() {
-        return TIMEOUT;
+        return DatabaseFailure::TimedOut;
     }
-    error.code().map_or(OTHER, |code| word(code.as_bytes()))
+    error.code().map_or(DatabaseFailure::Unanswered, |code| {
+        DatabaseFailure::Refused(word(code.as_bytes()))
+    })
 }
 
 #[cfg(test)]
@@ -221,7 +209,10 @@ mod tests {
             std::io::ErrorKind::TimedOut,
             "the budget ran out",
         ));
-        assert_eq!(command_failure(&Err(ran_out)), Some(TIMEOUT));
+        assert_eq!(
+            command_answer(&Err(ran_out)),
+            Err(DatabaseFailure::TimedOut)
+        );
     }
 
     #[test]
@@ -230,14 +221,17 @@ mod tests {
             redis::parse_redis_value(b"-NOSCRIPT No matching script.\r\n")
                 .expect("a refusal, as the server writes one")
         };
-        assert_eq!(command_failure(&Ok(refused())), Some("NOSCRIPT"));
-        assert_eq!(command_failure(&Ok(Value::Okay)), None);
+        assert_eq!(
+            command_answer(&Ok(refused())),
+            Err(DatabaseFailure::Refused("NOSCRIPT"))
+        );
+        assert_eq!(command_answer(&Ok(Value::Okay)), Ok(()));
         let pipeline = redis::pipe();
         assert_eq!(
-            batch_failure(&pipeline, &Ok(vec![Value::Okay, refused(), Value::Nil])),
-            Some("NOSCRIPT"),
+            batch_answer(&pipeline, &Ok(vec![Value::Okay, refused(), Value::Nil])),
+            Err(DatabaseFailure::Refused("NOSCRIPT")),
         );
-        assert_eq!(batch_failure(&pipeline, &Ok(vec![Value::Okay])), None);
+        assert_eq!(batch_answer(&pipeline, &Ok(vec![Value::Okay])), Ok(()));
     }
 
     /// redis-rs sends a transaction as `MULTI`, its commands and `EXEC`, and
@@ -282,11 +276,11 @@ mod tests {
         let mut transaction = redis::pipe();
         transaction.atomic().set("a", 1).lpush("a", 2);
         assert_eq!(
-            batch_failure(
+            batch_answer(
                 &transaction,
                 &Ok(vec![Value::Array(vec![Value::Okay, wrongtype])]),
             ),
-            Some("WRONGTYPE"),
+            Err(DatabaseFailure::Refused("WRONGTYPE")),
         );
     }
 

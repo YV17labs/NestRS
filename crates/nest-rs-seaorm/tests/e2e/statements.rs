@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use nest_rs_core::client_operation::{ClientOperation, ClientValue};
+use nest_rs_core::client_operation::{ClientOperation, DB_NAMESPACE, DB_RESPONSE_STATUS_CODE};
 use nest_rs_core::{App, module};
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_database::atomic;
@@ -28,30 +28,14 @@ static RECORDED: Mutex<Vec<Recorded>> = Mutex::new(Vec::new());
 static STATUS_CODES: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
 
 fn capture(operation: &ClientOperation<'_>) {
-    STATUS_CODES
-        .lock()
-        .expect("the status codes")
-        .push(
-            operation
-                .attributes()
-                .iter()
-                .find_map(|(key, value)| match (*key, value) {
-                    ("db.response.status_code", ClientValue::Text(code)) => {
-                        Some((*code).to_owned())
-                    }
-                    _ => None,
-                }),
-        );
-    let namespace = operation
-        .attributes()
-        .iter()
-        .find_map(|(key, value)| match (*key, value) {
-            ("db.namespace", ClientValue::Text(namespace)) => Some((*namespace).to_owned()),
-            _ => None,
-        });
+    STATUS_CODES.lock().expect("the status codes").push(
+        operation
+            .attribute(DB_RESPONSE_STATUS_CODE)
+            .map(|code| code.to_string()),
+    );
     RECORDED.lock().expect("the recorded operations").push((
         operation.name().to_owned(),
-        namespace,
+        operation.attribute(DB_NAMESPACE).map(|db| db.to_string()),
         operation.error_type().map(str::to_owned),
     ));
 }
@@ -59,7 +43,7 @@ fn capture(operation: &ClientOperation<'_>) {
 /// Record every client operation of this process from now on, forgetting any
 /// recorded so far.
 pub(crate) fn record_operations() {
-    nest_rs_core::__private::set_client_recorder(capture);
+    nest_rs_core::__private::set_client_recorder(capture, true);
     RECORDED.lock().expect("the recorded operations").clear();
     STATUS_CODES.lock().expect("the status codes").clear();
 }

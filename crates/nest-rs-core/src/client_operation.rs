@@ -15,12 +15,13 @@ use std::borrow::Cow;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
-use http::header::{HeaderMap, HeaderName, HeaderValue};
+use http::header::{HeaderMap, HeaderValue};
 use http::{Method, StatusCode, Version};
 
 use crate::Correlation;
 use crate::duration_histogram::{DurationHistogram, MetricAttribute, REQUEST_BOUNDARIES};
 use crate::operation_log::{OTHER, known_verb};
+use crate::trace_context::{TRACEPARENT_HEADER, TRACESTATE_HEADER};
 
 /// The database conventions' client duration, which every database driver
 /// records its operations in.
@@ -68,6 +69,29 @@ pub enum ClientValue<'a> {
     Text(&'a str),
     /// An integer.
     Integer(i64),
+}
+
+/// As the attribute's value is written.
+impl std::fmt::Display for ClientValue<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text(text) => f.write_str(text),
+            Self::Integer(integer) => write!(f, "{integer}"),
+        }
+    }
+}
+
+/// How a database operation failed, as the database conventions record it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DatabaseFailure<'a> {
+    /// The database refused it with this code — a Postgres SQLSTATE, a Redis
+    /// error prefix — its `db.response.status_code` and its `error.type`.
+    Refused(&'a str),
+    /// No answer came within its wait: `timeout`.
+    TimedOut,
+    /// No answer came, for another reason: `_OTHER`.
+    Unanswered,
 }
 
 /// One client operation, as it ended: what it was, when it started and how
@@ -154,18 +178,33 @@ impl<'a> ClientOperation<'a> {
         self.error_type
     }
 
-    /// Its place in the trace of the unit that sent it, where its client gave
-    /// one; a recorder places one given none under the unit it is recorded in.
+    /// Its place in the trace of the unit that sent it: the one its client
+    /// gave, or, once recorded, a child of the unit it was recorded in.
     pub const fn correlation(&self) -> Option<&'a Correlation> {
         self.correlation
     }
 
-    /// Hand it to the recorder the observability stack seeded; nothing
-    /// happens where none was.
+    /// The value of its attribute `key`, if it carries one.
+    pub fn attribute(&self, key: &str) -> Option<ClientValue<'a>> {
+        self.attributes
+            .iter()
+            .find_map(|(held, value)| (*held == key).then_some(*value))
+    }
+
+    /// Hand it to the recorder the observability stack seeded, placed under the
+    /// unit it is recorded in where its client gave it no place; nothing
+    /// happens where no recorder was seeded.
     pub fn record(&self) {
-        if let Some(recorder) = RECORDER.get() {
-            recorder(self);
+        let Some(recording) = RECORDING.get() else {
+            return;
+        };
+        if self.correlation.is_some() {
+            (recording.recorder)(self);
+            return;
         }
+        let own = crate::trace_context::__private::current_correlation().map(|unit| unit.child());
+        let here: ClientOperation<'_> = *self;
+        (recording.recorder)(&here.correlated(own.as_ref()));
     }
 }
 
@@ -226,12 +265,18 @@ impl PendingClientOperation {
         name: impl Into<Cow<'static, str>>,
         attributes: &[(&'static str, ClientValue<'_>)],
     ) -> Self {
-        if !is_recorded() {
-            return Self { timed: None };
+        if !is_recorded_here() {
+            return Self::untimed();
         }
         let correlation =
             crate::trace_context::__private::current_correlation().map(|unit| unit.child());
         Self::timed(duration, name.into(), attributes, correlation)
+    }
+
+    /// An operation nothing records: what a client builds in place of one
+    /// where [`is_recorded_here`] is `false`, so it describes nothing.
+    pub const fn untimed() -> Self {
+        Self { timed: None }
     }
 
     /// The operation, correlated as `correlation`, which a client has told its
@@ -261,6 +306,20 @@ impl PendingClientOperation {
     /// it started with, failed with the class `failure` names if it failed.
     pub fn ended(mut self, attributes: &[(&'static str, ClientValue<'_>)], failure: Option<&str>) {
         self.record(attributes, failure);
+    }
+
+    /// Record a database operation as its database answered: `Ok`, or failed
+    /// as the database conventions record its failure.
+    pub fn ended_with(self, answer: Result<(), DatabaseFailure<'_>>) {
+        match answer {
+            Ok(()) => self.ended(&[], None),
+            Err(DatabaseFailure::Refused(code)) => self.ended(
+                &[(DB_RESPONSE_STATUS_CODE, ClientValue::Text(code))],
+                Some(code),
+            ),
+            Err(DatabaseFailure::TimedOut) => self.ended(&[], Some(TIMEOUT)),
+            Err(DatabaseFailure::Unanswered) => self.ended(&[], Some(OTHER)),
+        }
     }
 
     /// Hand the operation to the recorder, once.
@@ -311,28 +370,23 @@ pub const HTTP_CLIENT_REQUEST_DURATION: DurationHistogram = DurationHistogram::n
     ],
 );
 
-/// The request's method, from the conventions' known set or `_OTHER`.
-const HTTP_REQUEST_METHOD: &str = "http.request.method";
-/// The status the server answered.
-const HTTP_RESPONSE_STATUS_CODE: &str = "http.response.status_code";
-/// The HTTP version the answer came over (`1.1`, `2`).
-const NETWORK_PROTOCOL_VERSION: &str = "network.protocol.version";
+/// A request's method, from the conventions' known set or `_OTHER`.
+pub const HTTP_REQUEST_METHOD: &str = "http.request.method";
+/// The status a server answered.
+pub const HTTP_RESPONSE_STATUS_CODE: &str = "http.response.status_code";
+/// The HTTP version a message came over (`1.1`, `2`).
+pub const NETWORK_PROTOCOL_VERSION: &str = "network.protocol.version";
 /// `http` or `https`.
-const URL_SCHEME: &str = "url.scheme";
+pub const URL_SCHEME: &str = "url.scheme";
 /// How many times a failed request was sent again before this sending.
-const HTTP_REQUEST_RESEND_COUNT: &str = "http.request.resend_count";
+pub const HTTP_REQUEST_RESEND_COUNT: &str = "http.request.resend_count";
 
 /// The span name the conventions give a request whose method they do not know.
 const UNKNOWN_METHOD_SPAN: &str = "HTTP";
 
-/// The class of a request that never answered because its deadline passed.
+/// The class of an operation that never answered because its wait ran out,
+/// whichever client timed it.
 const TIMEOUT: &str = "timeout";
-
-/// The W3C header naming the trace and the span that sent the request.
-const TRACEPARENT: HeaderName = HeaderName::from_static("traceparent");
-
-/// The W3C header carrying the trace's vendor state, forwarded verbatim.
-const TRACESTATE: HeaderName = HeaderName::from_static("tracestate");
 
 /// One HTTP request this process sends, from just before it leaves to its
 /// answer: what carries the unit of work's W3C Trace Context onto it and
@@ -366,10 +420,10 @@ impl HttpClientRequest {
     pub fn start(method: &Method, scheme: &str, host: Option<&str>, port: Option<u16>) -> Self {
         let announced =
             crate::trace_context::__private::current_correlation().map(|unit| unit.child());
-        if !is_recorded() {
+        if !is_recorded_here() {
             return Self {
                 announced,
-                operation: PendingClientOperation { timed: None },
+                operation: PendingClientOperation::untimed(),
             };
         }
         let method = known_verb(method.as_str()).unwrap_or(OTHER);
@@ -427,16 +481,16 @@ impl HttpClientRequest {
         };
         // Hex digits and dashes: always a header value.
         if let Ok(parent) = HeaderValue::from_str(&announced.traceparent().to_string()) {
-            headers.insert(TRACEPARENT, parent);
+            headers.insert(TRACEPARENT_HEADER, parent);
         }
         match announced.tracestate().as_str().map(HeaderValue::from_str) {
             Some(Ok(state)) => {
-                headers.insert(TRACESTATE, state);
+                headers.insert(TRACESTATE_HEADER, state);
             }
             // A `tracestate` was read off a header, so it is one; a peer is told
             // nothing rather than half of it.
             Some(Err(_)) | None => {
-                headers.remove(TRACESTATE);
+                headers.remove(TRACESTATE_HEADER);
             }
         }
     }
@@ -445,16 +499,24 @@ impl HttpClientRequest {
     /// status from `400` up.
     pub fn answered(self, status: StatusCode, version: Version) {
         let failure = (status.is_client_error() || status.is_server_error()).then_some(status);
-        let mut attributes = Vec::with_capacity(2);
-        attributes.push((
-            HTTP_RESPONSE_STATUS_CODE,
-            ClientValue::Integer(i64::from(status.as_u16())),
-        ));
-        if let Some(version) = crate::operation_log::protocol_version(version) {
-            attributes.push((NETWORK_PROTOCOL_VERSION, ClientValue::Text(version)));
-        }
+        let version = crate::operation_log::protocol_version(version);
+        let attributes = [
+            (
+                HTTP_RESPONSE_STATUS_CODE,
+                ClientValue::Integer(i64::from(status.as_u16())),
+            ),
+            (
+                NETWORK_PROTOCOL_VERSION,
+                ClientValue::Text(version.unwrap_or_default()),
+            ),
+        ];
+        let attributes = if version.is_some() {
+            &attributes[..]
+        } else {
+            &attributes[..1]
+        };
         self.operation
-            .ended(&attributes, failure.as_ref().map(StatusCode::as_str));
+            .ended(attributes, failure.as_ref().map(StatusCode::as_str));
     }
 
     /// Record the request as unanswered within its deadline.
@@ -472,27 +534,49 @@ impl HttpClientRequest {
 /// What records a client operation once it ended.
 type ClientRecorder = fn(&ClientOperation<'_>);
 
-static RECORDER: OnceLock<ClientRecorder> = OnceLock::new();
+/// The recorder seeded, and whether it records every operation's duration —
+/// or spans alone, which a trace the sampler dropped has no use for.
+struct Recording {
+    recorder: ClientRecorder,
+    durations: bool,
+}
+
+static RECORDING: OnceLock<Recording> = OnceLock::new();
 
 /// Whether anything records client operations: a client times none when
 /// nothing does.
 pub fn is_recorded() -> bool {
-    RECORDER.get().is_some()
+    RECORDING.get().is_some()
+}
+
+/// Whether an operation this task starts now is recorded: something records
+/// every duration, or the spans of the unit this task runs, whose trace the
+/// sampler kept. A client builds nothing to describe one where it is not.
+pub fn is_recorded_here() -> bool {
+    RECORDING.get().is_some_and(|recording| {
+        recording.durations
+            || crate::trace_context::__private::current_correlation()
+                .is_some_and(|unit| unit.flags().is_sampled())
+    })
 }
 
 /// `client_operation` is public: its tier-2 items live here, reached only
 /// through the crate's `__private`.
 pub(crate) mod __private {
-    use super::{ClientRecorder, RECORDER};
+    use super::{ClientRecorder, RECORDING, Recording};
 
-    /// Seed what records every client operation. Called once, at boot, by the
-    /// observability stack — never by an application.
-    pub fn set_client_recorder(recorder: ClientRecorder) {
+    /// Seed what records every client operation, its durations included where
+    /// `durations` says so. Called once, at boot, by the observability stack —
+    /// never by an application.
+    pub fn set_client_recorder(recorder: ClientRecorder, durations: bool) {
         #[expect(
             clippy::let_underscore_must_use,
             reason = "seeded once at boot; a second install keeps the first recorder"
         )]
-        let _ = RECORDER.set(recorder);
+        let _ = RECORDING.set(Recording {
+            recorder,
+            durations,
+        });
     }
 }
 
@@ -518,10 +602,7 @@ mod tests {
         let attributes = operation
             .attributes()
             .iter()
-            .map(|(key, value)| match value {
-                ClientValue::Text(text) => (*key, (*text).to_owned()),
-                ClientValue::Integer(integer) => (*key, integer.to_string()),
-            })
+            .map(|(key, value)| (*key, value.to_string()))
             .collect();
         RECORDED.lock().expect("the recorded").push(Recorded {
             name: operation.name().to_owned(),
@@ -599,7 +680,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_operation_is_recorded_once_as_it_ended_or_as_it_was_dropped() {
-        __private::set_client_recorder(capture);
+        __private::set_client_recorder(capture, true);
         let unit = Correlation::minted(None);
         let start = || {
             PendingClientOperation::start(
@@ -646,23 +727,28 @@ mod tests {
 
         let headers = announced(Some(unit.clone()), HeaderMap::new()).await;
 
-        let traceparent = headers[TRACEPARENT].to_str().expect("a header value");
-        let [version, trace_id, parent_id, _flags] = traceparent
-            .split('-')
-            .collect::<Vec<_>>()
-            .try_into()
-            .expect("four fields");
-        assert_eq!(version, "00");
-        assert_eq!(trace_id, unit.trace_id().to_hex(), "the unit's trace");
-        assert_ne!(parent_id, unit.span_id().to_hex(), "a span of its own");
+        let traceparent = crate::TraceParent::parse(
+            headers[TRACEPARENT_HEADER]
+                .to_str()
+                .expect("a header value"),
+        )
+        .expect("a traceparent");
+        assert_eq!(traceparent.trace_id, unit.trace_id(), "the unit's trace");
+        assert_ne!(traceparent.parent_id, unit.span_id(), "a span of its own");
         assert!(!headers.contains_key("baggage"));
-        assert!(!headers.contains_key(TRACESTATE), "the unit carries none");
+        assert!(
+            !headers.contains_key(TRACESTATE_HEADER),
+            "the unit carries none"
+        );
     }
 
     #[tokio::test]
     async fn a_request_outside_every_unit_leaves_its_headers_as_they_are() {
         let mut set = HeaderMap::new();
-        set.insert(TRACEPARENT, HeaderValue::from_static("set-by-the-caller"));
+        set.insert(
+            TRACEPARENT_HEADER,
+            HeaderValue::from_static("set-by-the-caller"),
+        );
 
         let headers = announced(None, set.clone()).await;
 
@@ -671,7 +757,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_is_recorded_once_as_it_ended_by_its_method_server_and_status() {
-        __private::set_client_recorder(capture);
+        __private::set_client_recorder(capture, true);
         let unit = Correlation::minted(None);
 
         let headers = crate::with_request_scope(None, unit, async {
@@ -711,11 +797,12 @@ mod tests {
         );
         assert_eq!(answered.error_type, None);
         assert_eq!(
-            answered.span.as_deref(),
-            headers[TRACEPARENT]
+            answered.span,
+            headers[TRACEPARENT_HEADER]
                 .to_str()
                 .ok()
-                .and_then(|parent| parent.split('-').nth(2)),
+                .and_then(crate::TraceParent::parse)
+                .map(|parent| parent.parent_id.to_hex()),
             "the span recorded is the one the peer was told is its parent",
         );
         assert_eq!(refused.error_type.as_deref(), Some("503"));

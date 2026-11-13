@@ -303,9 +303,9 @@ async fn a_fetch_carries_the_trace_of_the_token_that_asked_for_it() {
     let [Some(traceparent)] = traceparents.as_slice() else {
         panic!("one fetch, carrying a traceparent: {traceparents:?}");
     };
-    let fields: Vec<&str> = traceparent.split('-').collect();
-    assert_eq!(fields[1], unit.trace_id().to_hex(), "the unit's trace");
-    assert_ne!(fields[2], unit.span_id().to_hex(), "a span of its own");
+    let traceparent = nest_rs_core::TraceParent::parse(traceparent).expect("a traceparent");
+    assert_eq!(traceparent.trace_id, unit.trace_id(), "the unit's trace");
+    assert_ne!(traceparent.parent_id, unit.span_id(), "a span of its own");
 }
 
 /// A fetch no unit of work asked for carries no trace.

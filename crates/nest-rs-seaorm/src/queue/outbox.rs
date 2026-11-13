@@ -181,8 +181,9 @@ impl OutboxStore for SeaOrmOutbox {
 
     fn claim(&self, limit: usize) -> BoxFuture<'_, Result<Box<dyn OutboxClaim>, OutboxError>> {
         Box::pin(async move {
-            let statements = Statements::recording(&self.db);
-            let txn = Statements::sent(statements.as_ref(), "BEGIN", self.db.begin())
+            let statements = Statements::of(&self.db);
+            let txn = statements
+                .sent("BEGIN", self.db.begin())
                 .await
                 .map_err(database)?;
             let limit = i64::try_from(limit).unwrap_or(i64::MAX);
@@ -231,7 +232,7 @@ impl OutboxStore for SeaOrmOutbox {
 struct SeaOrmClaim {
     txn: DatabaseTransaction,
     records: Vec<ClaimedRecord>,
-    statements: Option<Statements>,
+    statements: Statements,
 }
 
 impl OutboxClaim for SeaOrmClaim {
@@ -245,9 +246,9 @@ impl OutboxClaim for SeaOrmClaim {
         retry: &[(i64, Duration)],
     ) -> BoxFuture<'static, Result<(), OutboxError>> {
         // The places are the claim's own integers, never a caller's text.
-        let mut statements = Vec::new();
+        let mut writes = Vec::new();
         if !done.is_empty() {
-            statements.push(format!(
+            writes.push(format!(
                 "DELETE FROM {TABLE} WHERE seq IN ({})",
                 done.iter()
                     .map(i64::to_string)
@@ -256,7 +257,7 @@ impl OutboxClaim for SeaOrmClaim {
             ));
         }
         if !retry.is_empty() {
-            statements.push(format!(
+            writes.push(format!(
                 "UPDATE {TABLE} SET attempts = attempts + 1, \
                  next_attempt_at = clock_timestamp() + w.wait_ms * interval '1 millisecond' \
                  FROM (VALUES {}) AS w(seq, wait_ms) WHERE {TABLE}.seq = w.seq",
@@ -271,18 +272,17 @@ impl OutboxClaim for SeaOrmClaim {
             ));
         }
         let SeaOrmClaim {
-            txn,
-            statements: recording,
-            ..
+            txn, statements, ..
         } = *self;
         Box::pin(async move {
-            let recording = recording.as_ref();
-            for statement in statements {
-                Statements::sent(recording, &statement, txn.execute_unprepared(&statement))
+            for write in writes {
+                statements
+                    .sent(&write, txn.execute_unprepared(&write))
                     .await
                     .map_err(database)?;
             }
-            Statements::sent(recording, "COMMIT", txn.commit())
+            statements
+                .sent("COMMIT", txn.commit())
                 .await
                 .map_err(database)
         })

@@ -6,8 +6,11 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use nest_rs_core::Correlation;
-use nest_rs_core::client_operation::{ClientOperation, ClientValue, HTTP_CLIENT_REQUEST_DURATION};
+use nest_rs_core::client_operation::{
+    ClientOperation, HTTP_CLIENT_REQUEST_DURATION, HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE,
+    NETWORK_PROTOCOL_VERSION, SERVER_ADDRESS, SERVER_PORT, URL_SCHEME,
+};
+use nest_rs_core::{Correlation, TraceParent};
 
 use crate::{Behaviour, Peer, client};
 
@@ -28,27 +31,27 @@ struct Recorded {
 static RECORDED: Mutex<Vec<Recorded>> = Mutex::new(Vec::new());
 
 fn capture(operation: &ClientOperation<'_>) {
-    let attributes = operation
-        .attributes()
-        .iter()
-        .map(|(key, value)| {
-            let value = match value {
-                ClientValue::Text(text) => (*text).to_owned(),
-                ClientValue::Integer(integer) => integer.to_string(),
-                _ => unreachable!("an HTTP request writes text and integers"),
-            };
-            ((*key).to_owned(), value)
-        })
-        .collect();
     RECORDED.lock().expect("the recorded").push(Recorded {
         name: operation.name().to_owned(),
         duration: operation.duration().name(),
-        attributes,
+        attributes: operation
+            .attributes()
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.to_string()))
+            .collect(),
         error_type: operation.error_type().map(str::to_owned),
         span: operation
             .correlation()
             .map(|correlation| correlation.span_id().to_hex()),
     });
+}
+
+/// The span the `traceparent` a peer received named as its parent.
+fn parent_named(traceparent: Option<String>) -> Option<String> {
+    traceparent
+        .as_deref()
+        .and_then(TraceParent::parse)
+        .map(|parent| parent.parent_id.to_hex())
 }
 
 #[tokio::test]
@@ -65,17 +68,15 @@ async fn a_request_inside_a_unit_carries_a_span_of_its_own_in_the_units_trace() 
     })
     .await;
 
-    let traceparent = peer.header(0, "traceparent").expect("a traceparent");
-    let [version, trace_id, parent_id, _flags] = traceparent
-        .split('-')
-        .collect::<Vec<_>>()
-        .try_into()
-        .expect("four fields");
-    assert_eq!(version, "00");
-    assert_eq!(trace_id, unit.trace_id().to_hex(), "the unit's trace");
+    let traceparent = peer
+        .header(0, "traceparent")
+        .as_deref()
+        .and_then(TraceParent::parse)
+        .expect("a traceparent");
+    assert_eq!(traceparent.trace_id, unit.trace_id(), "the unit's trace");
     assert_ne!(
-        parent_id,
-        unit.span_id().to_hex(),
+        traceparent.parent_id,
+        unit.span_id(),
         "a span of the request's own, under the unit's"
     );
     assert_eq!(peer.header(0, "baggage"), None);
@@ -96,7 +97,7 @@ async fn a_request_outside_every_unit_carries_no_trace_context() {
 
 #[tokio::test]
 async fn a_request_is_recorded_by_its_method_server_and_status_never_its_path_or_query() {
-    nest_rs_core::__private::set_client_recorder(capture);
+    nest_rs_core::__private::set_client_recorder(capture, true);
     let accepting = Peer::serving(Behaviour::Answer(200)).await;
     let refusing = Peer::serving(Behaviour::Answer(503)).await;
     let silent = Peer::serving(Behaviour::Silent).await;
@@ -130,22 +131,19 @@ async fn a_request_is_recorded_by_its_method_server_and_status_never_its_path_or
     assert_eq!(
         accepted.attributes,
         [
-            ("http.request.method", "POST"),
-            ("url.scheme", "https"),
-            ("server.address", "127.0.0.1"),
-            ("server.port", &accepting.port().to_string()),
-            ("http.response.status_code", "200"),
-            ("network.protocol.version", "1.1"),
+            (HTTP_REQUEST_METHOD, "POST"),
+            (URL_SCHEME, "https"),
+            (SERVER_ADDRESS, "127.0.0.1"),
+            (SERVER_PORT, &accepting.port().to_string()),
+            (HTTP_RESPONSE_STATUS_CODE, "200"),
+            (NETWORK_PROTOCOL_VERSION, "1.1"),
         ]
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
     );
     assert_eq!(accepted.error_type, None);
     assert_eq!(
-        accepted.span.as_deref(),
-        accepting
-            .header(0, "traceparent")
-            .as_deref()
-            .and_then(|parent| parent.split('-').nth(2)),
+        accepted.span,
+        parent_named(accepting.header(0, "traceparent")),
         "the span recorded is the one the peer was told is its parent",
     );
 
@@ -157,7 +155,7 @@ async fn a_request_is_recorded_by_its_method_server_and_status_never_its_path_or
 
 #[tokio::test]
 async fn a_request_its_caller_gives_up_on_is_still_the_span_its_peer_was_told_of() {
-    nest_rs_core::__private::set_client_recorder(capture);
+    nest_rs_core::__private::set_client_recorder(capture, true);
     let silent = Peer::serving(Behaviour::Silent).await;
     let unit = Correlation::minted(None);
 
@@ -183,14 +181,11 @@ async fn a_request_its_caller_gives_up_on_is_still_the_span_its_peer_was_told_of
         !given_up
             .attributes
             .iter()
-            .any(|(key, _)| key == "http.response.status_code")
+            .any(|(key, _)| key == HTTP_RESPONSE_STATUS_CODE)
     );
     assert_eq!(
-        given_up.span.as_deref(),
-        silent
-            .header(0, "traceparent")
-            .as_deref()
-            .and_then(|parent| parent.split('-').nth(2)),
+        given_up.span,
+        parent_named(silent.header(0, "traceparent")),
         "the peer's parent exists",
     );
 }

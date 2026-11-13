@@ -17,7 +17,14 @@ point in the histogram the conventions name.
 entered, and a root span (`parent: None`) carries a trace of its own, so either
 made the client span disagree with the `traceparent` a client had announced. An
 operation carries its own child correlation (`ClientOperation::correlated`), or
-the recorder makes one off the unit it is recorded in.
+`ClientOperation::record` makes one off the unit it is recorded in, so a recorder
+reads no ambient state of its own.
+
+**Where only spans record, an operation outside a sampled trace is not timed**
+(2026-11-13): `is_recorded_here()` is `false` there, so a driver builds no
+attribute, reads no clock and hands nothing over — at a one-in-ten sampler, nine
+statements in ten paid for a span never made. Where durations record, every
+operation is timed, sampled or not.
 
 **A client times an operation it may not see end through a
 `PendingClientOperation`** (2026-11-13), which records on drop: an app's

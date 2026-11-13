@@ -19,6 +19,12 @@ use uuid::{NoContext, Timestamp, Uuid};
 
 use crate::request_scope::current_correlation_with;
 
+/// The W3C request header carrying the trace and the caller's span.
+pub const TRACEPARENT_HEADER: http::HeaderName = http::HeaderName::from_static("traceparent");
+
+/// The W3C request header carrying vendor state, forwarded verbatim.
+pub const TRACESTATE_HEADER: http::HeaderName = http::HeaderName::from_static("tracestate");
+
 /// The identifier of one distributed operation — 16 bytes, spelled as 32
 /// lowercase hex characters on the wire.
 ///

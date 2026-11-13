@@ -24,11 +24,7 @@ use crate::response::Response;
 
 use crate::client_ip::ClientOrigin;
 
-/// The W3C request header carrying the trace and the caller's span.
-pub const TRACEPARENT_HEADER: HeaderName = HeaderName::from_static("traceparent");
-
-/// The W3C request header carrying vendor state, forwarded verbatim.
-pub const TRACESTATE_HEADER: HeaderName = HeaderName::from_static("tracestate");
+pub use nest_rs_core::{TRACEPARENT_HEADER, TRACESTATE_HEADER};
 
 /// The response header reporting the trace this service actually used.
 ///

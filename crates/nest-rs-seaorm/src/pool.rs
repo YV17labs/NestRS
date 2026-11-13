@@ -44,9 +44,15 @@ impl SeaOrmPool {
 
 /// Count `err` where it is a caller that gave up waiting for a connection.
 pub(crate) fn count_timeout(err: &DbErr) {
-    if matches!(err, DbErr::ConnectionAcquire(ConnAcquireErr::Timeout)) {
+    if is_acquire_timeout(err) {
         ACQUIRE_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Whether `err` is a caller that gave up waiting for the pool's connection:
+/// no statement left.
+pub(crate) fn is_acquire_timeout(err: &DbErr) -> bool {
+    matches!(err, DbErr::ConnectionAcquire(ConnAcquireErr::Timeout))
 }
 
 impl ConnectionPool for SeaOrmPool {

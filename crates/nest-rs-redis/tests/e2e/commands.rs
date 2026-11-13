@@ -5,7 +5,7 @@
 
 use std::sync::Mutex;
 
-use nest_rs_core::client_operation::{ClientOperation, ClientValue};
+use nest_rs_core::client_operation::{ClientOperation, DB_NAMESPACE};
 
 use crate::{connect, unique_key};
 
@@ -16,23 +16,16 @@ type Recorded = (String, Option<String>, Option<String>);
 static RECORDED: Mutex<Vec<Recorded>> = Mutex::new(Vec::new());
 
 fn capture(operation: &ClientOperation<'_>) {
-    let namespace = operation
-        .attributes()
-        .iter()
-        .find_map(|(key, value)| match (*key, value) {
-            ("db.namespace", ClientValue::Text(namespace)) => Some((*namespace).to_owned()),
-            _ => None,
-        });
     RECORDED.lock().expect("the recorded operations").push((
         operation.name().to_owned(),
-        namespace,
+        operation.attribute(DB_NAMESPACE).map(|db| db.to_string()),
         operation.error_type().map(str::to_owned),
     ));
 }
 
 #[tokio::test]
 async fn every_command_and_pipeline_is_recorded_by_its_name_on_its_database() {
-    nest_rs_core::__private::set_client_recorder(capture);
+    nest_rs_core::__private::set_client_recorder(capture, true);
     let mut conn = connect().await;
     let key = unique_key("commands");
     let db = redis::aio::ConnectionLike::get_db(&conn).to_string();
@@ -91,7 +84,7 @@ async fn every_command_and_pipeline_is_recorded_by_its_name_on_its_database() {
 /// are the ones a histogram must not miss.
 #[tokio::test]
 async fn a_command_its_caller_gives_up_on_is_recorded_with_no_failure() {
-    nest_rs_core::__private::set_client_recorder(capture);
+    nest_rs_core::__private::set_client_recorder(capture, true);
     let mut conn = connect().await;
     let key = unique_key("abandoned");
     let db = redis::aio::ConnectionLike::get_db(&conn).to_string();

@@ -621,12 +621,6 @@ fn traceparent_of(head: &[u8]) -> Option<String> {
     })
 }
 
-/// The trace id and the parent id a `traceparent` names.
-fn named_by(traceparent: &str) -> (String, String) {
-    let fields: Vec<&str> = traceparent.split('-').collect();
-    (fields[1].to_owned(), fields[2].to_owned())
-}
-
 /// The exchange and a read, sent inside a unit of work, each carry the unit's
 /// trace and a span of their own under it.
 #[tokio::test]
@@ -649,18 +643,26 @@ async fn every_call_inside_a_unit_carries_its_trace_and_a_span_of_its_own() {
     })
     .await;
 
-    let named: Vec<(String, String)> = provider
+    let named: Vec<nest_rs_core::TraceParent> = provider
         .traceparents()
         .iter()
-        .map(|traceparent| named_by(traceparent.as_deref().expect("a traceparent")))
+        .map(|traceparent| {
+            traceparent
+                .as_deref()
+                .and_then(nest_rs_core::TraceParent::parse)
+                .expect("a traceparent")
+        })
         .collect();
-    let [(exchange_trace, exchange_span), (read_trace, read_span)] = named.as_slice() else {
+    let [exchange, read] = named.as_slice() else {
         panic!("two calls: {named:?}");
     };
-    assert_eq!(exchange_trace, &unit.trace_id().to_hex());
-    assert_eq!(read_trace, &unit.trace_id().to_hex());
-    assert_ne!(exchange_span, &unit.span_id().to_hex());
-    assert_ne!(exchange_span, read_span, "each call is a span of its own");
+    assert_eq!(exchange.trace_id, unit.trace_id());
+    assert_eq!(read.trace_id, unit.trace_id());
+    assert_ne!(exchange.parent_id, unit.span_id());
+    assert_ne!(
+        exchange.parent_id, read.parent_id,
+        "each call is a span of its own"
+    );
 }
 
 /// A call sent outside every unit of work carries no trace.

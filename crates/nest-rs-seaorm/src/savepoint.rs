@@ -201,7 +201,9 @@ impl Savepoint {
             let root = self.root();
             let sent = match root.opened() {
                 Some(txn) => {
-                    crate::statements::sent(root.pool(), &sql, txn.execute_unprepared(&sql)).await
+                    root.statements()
+                        .sent(&sql, txn.execute_unprepared(&sql))
+                        .await
                 }
                 None => Err(outlived()),
             };

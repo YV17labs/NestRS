@@ -21,6 +21,9 @@
 //! assert_eq!(nest_rs_http::unit::REQUEST.name(), "http.request");
 //! ```
 
+use nest_rs_core::client_operation::{
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, NETWORK_PROTOCOL_VERSION, URL_SCHEME,
+};
 use nest_rs_core::duration_histogram::{DurationHistogram, MetricAttribute, REQUEST_BOUNDARIES};
 use nest_rs_core::operation_log::Unit;
 
@@ -39,11 +42,11 @@ const REQUEST_DURATION: DurationHistogram = DurationHistogram::new(
     "Duration of HTTP server requests.",
     REQUEST_BOUNDARIES,
     &[
-        MetricAttribute::bounded("http.request.method"),
-        MetricAttribute::known("url.scheme", &["http", "https"]),
+        MetricAttribute::bounded(HTTP_REQUEST_METHOD),
+        MetricAttribute::known(URL_SCHEME, &["http", "https"]),
         MetricAttribute::bounded("http.route"),
-        MetricAttribute::bounded("http.response.status_code"),
-        MetricAttribute::bounded("network.protocol.version"),
+        MetricAttribute::bounded(HTTP_RESPONSE_STATUS_CODE),
+        MetricAttribute::bounded(NETWORK_PROTOCOL_VERSION),
     ],
 );
 

@@ -6,15 +6,17 @@
 //! sea-orm times each statement it prepares and calls back with it; what it
 //! sends untimed — `BEGIN`, `COMMIT`, `ROLLBACK` and `execute_unprepared`'s text
 //! — the driver times itself through [`Statements::sent`]. Nothing is installed,
-//! and no clock read, where nothing records client operations.
+//! and no clock read, where nothing records client operations; nothing is
+//! described where nothing would record the statement sent.
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use nest_rs_core::client_operation::{
     self, ClientOperation, ClientValue, DB_CLIENT_OPERATION_DURATION, DB_COLLECTION_NAME,
-    DB_NAMESPACE, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_RESPONSE_STATUS_CODE, DB_SYSTEM_NAME,
+    DB_NAMESPACE, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_SYSTEM_NAME, DatabaseFailure,
     PendingClientOperation, SERVER_ADDRESS, SERVER_PORT,
 };
 use nest_rs_core::operation_log::OTHER;
@@ -22,16 +24,18 @@ use sea_orm::metric::Info;
 use sea_orm::sqlx::postgres::PgConnectOptions;
 use sea_orm::{DatabaseConnection, DbErr};
 
-use crate::pool::SeaOrmPool;
+use crate::pool::{SeaOrmPool, is_acquire_timeout};
 use crate::query_summary::QuerySummary;
 
 /// The conventions' name for the database this driver speaks to.
 const POSTGRESQL: &str = "postgresql";
 
-/// What every statement of one pool is recorded under: its database and its
-/// server, as the options its connections open with name them.
+/// What every statement of one pool is recorded under — its database and its
+/// server, as the options its connections open with name them — or nothing,
+/// where nothing records client operations.
+#[derive(Clone, Default)]
 pub(crate) struct Statements {
-    options: Arc<PgConnectOptions>,
+    options: Option<Arc<PgConnectOptions>>,
 }
 
 /// What the callback sea-orm calls for each statement holds: the recorder, and
@@ -53,9 +57,10 @@ impl Statements {
     /// Time every statement `db` sends, and observe its connections, for as
     /// long as `db` lives — where anything records client operations.
     pub(crate) fn install(db: &mut DatabaseConnection) {
-        let Some(statements) = Self::recording(db) else {
+        let statements = Self::of(db);
+        if statements.options.is_none() {
             return;
-        };
+        }
         let recorder = Recorder {
             statements,
             _observed: SeaOrmPool::observed(db),
@@ -63,50 +68,47 @@ impl Statements {
         db.set_metric_callback(move |info| recorder.record(info));
     }
 
-    /// What `pool`'s statements are recorded under, where anything records
-    /// client operations and `pool` is a Postgres pool.
-    pub(crate) fn recording(pool: &DatabaseConnection) -> Option<Self> {
-        if !client_operation::is_recorded() {
-            return None;
-        }
-        match pool.inner {
-            sea_orm::DatabaseConnectionType::SqlxPostgresPoolConnection(_) => Some(Self::on(
-                pool.get_postgres_connection_pool().connect_options(),
-            )),
-            _ => None,
-        }
-    }
-
-    const fn on(options: Arc<PgConnectOptions>) -> Self {
+    /// What `pool`'s statements are recorded under: nothing where nothing
+    /// records client operations, or where `pool` holds no Postgres pool.
+    pub(crate) fn of(pool: &DatabaseConnection) -> Self {
+        let options = (client_operation::is_recorded()
+            && matches!(
+                pool.inner,
+                sea_orm::DatabaseConnectionType::SqlxPostgresPoolConnection(_)
+            ))
+        .then(|| pool.get_postgres_connection_pool().connect_options());
         Self { options }
     }
 
     /// Await `statement`, the text `sql` sea-orm sends without timing it, and
     /// hand it over once the database answered — or once its caller gave up on
-    /// it, a unit cut at its deadline — where `statements` records it.
+    /// it, a unit cut at its deadline — where it is recorded.
     pub(crate) async fn sent<T>(
-        statements: Option<&Self>,
+        &self,
         sql: &str,
         statement: impl Future<Output = Result<T, DbErr>>,
     ) -> Result<T, DbErr> {
-        let Some(statements) = statements else {
+        let Some(options) = self
+            .options
+            .as_deref()
+            .filter(|_| client_operation::is_recorded_here())
+        else {
             return statement.await;
         };
-        let pending = statements.described(sql, |name, attributes| {
-            PendingClientOperation::start(
-                &DB_CLIENT_OPERATION_DURATION,
-                name.to_owned(),
-                attributes,
-            )
+        let pending = described(options, sql, |name, attributes| {
+            PendingClientOperation::start(&DB_CLIENT_OPERATION_DURATION, name.clone(), attributes)
         });
         let answer = statement.await;
-        match answer.as_ref().err().map(Refusal::of) {
-            None => pending.ended(&[], None),
-            Some(Refusal::Answered(code)) => pending.ended(
-                &[(DB_RESPONSE_STATUS_CODE, ClientValue::Text(&code))],
-                Some(&code),
-            ),
-            Some(Refusal::Unanswered(class)) => pending.ended(&[], Some(class)),
+        match &answer {
+            Ok(_) => pending.ended_with(Ok(())),
+            Err(err) => {
+                let code = crate::error::server_error(err).and_then(|server| server.code());
+                pending.ended_with(Err(match code.as_deref() {
+                    Some(code) => DatabaseFailure::Refused(code),
+                    None if is_acquire_timeout(err) => DatabaseFailure::TimedOut,
+                    None => DatabaseFailure::Unanswered,
+                }));
+            }
         }
         answer
     }
@@ -115,9 +117,12 @@ impl Statements {
     /// a failure, which sea-orm reports without its error, is the conventions'
     /// `_OTHER`.
     fn record(&self, info: &Info<'_>) {
+        let Some(options) = &self.options else {
+            return;
+        };
         let answered = SystemTime::now();
         let started = answered.checked_sub(info.elapsed).unwrap_or(answered);
-        self.described(&info.statement.sql, |name, attributes| {
+        described(options, &info.statement.sql, |name, attributes| {
             ClientOperation::new(
                 &DB_CLIENT_OPERATION_DURATION,
                 name,
@@ -129,73 +134,41 @@ impl Statements {
             .record();
         });
     }
-
-    /// What `sql` is recorded as — its name and its attributes — handed to
-    /// `with`.
-    fn described<R>(
-        &self,
-        sql: &str,
-        with: impl FnOnce(&str, &[(&'static str, ClientValue<'_>)]) -> R,
-    ) -> R {
-        let summary = QuerySummary::of(sql);
-        let text = summary.as_ref().map(QuerySummary::text);
-        let mut attributes = Vec::with_capacity(DB_CLIENT_OPERATION_DURATION.attributes().len());
-        attributes.push((DB_SYSTEM_NAME, ClientValue::Text(POSTGRESQL)));
-        if let Some(namespace) = self.options.get_database() {
-            attributes.push((DB_NAMESPACE, ClientValue::Text(namespace)));
-        }
-        if let Some(summary) = &summary {
-            attributes.push((DB_OPERATION_NAME, ClientValue::Text(summary.operation())));
-            if let Some(collection) = summary.collection() {
-                attributes.push((DB_COLLECTION_NAME, ClientValue::Text(collection)));
-            }
-        }
-        if let Some(text) = &text {
-            attributes.push((DB_QUERY_SUMMARY, ClientValue::Text(text)));
-        }
-        attributes.push((SERVER_ADDRESS, ClientValue::Text(self.options.get_host())));
-        attributes.push((
-            SERVER_PORT,
-            ClientValue::Integer(i64::from(self.options.get_port())),
-        ));
-
-        with(text.as_deref().unwrap_or(POSTGRESQL), &attributes)
-    }
 }
 
-/// How a statement the driver timed failed.
-enum Refusal {
-    /// The server refused it with this SQLSTATE.
-    Answered(String),
-    /// No server answered: `timeout` for a connection the pool never handed
-    /// over in time — the statement never left — `_OTHER` otherwise.
-    Unanswered(&'static str),
-}
-
-impl Refusal {
-    fn of(err: &DbErr) -> Self {
-        if let Some(code) = crate::error::server_error(err).and_then(|server| server.code()) {
-            return Self::Answered(code.into_owned());
-        }
-        match err {
-            DbErr::ConnectionAcquire(sea_orm::ConnAcquireErr::Timeout) => Self::Unanswered(TIMEOUT),
-            _ => Self::Unanswered(OTHER),
-        }
-    }
-}
-
-/// The class of an operation that never answered because its wait ran out,
-/// as the HTTP client's.
-const TIMEOUT: &str = "timeout";
-
-/// Await `statement`, the text `sql` sea-orm sends on `pool` without timing it,
-/// and hand it over once the database answered.
-pub(crate) async fn sent<T>(
-    pool: &DatabaseConnection,
+/// What `sql`, sent to the pool `options` open, is recorded as — its name, which
+/// is its summary, and its attributes — handed to `with`. A summary naming no
+/// table is its operation's word, which allocates nothing: a transaction's
+/// `BEGIN`, `COMMIT` and `ROLLBACK`.
+fn described<R>(
+    options: &PgConnectOptions,
     sql: &str,
-    statement: impl Future<Output = Result<T, DbErr>>,
-) -> Result<T, DbErr> {
-    Statements::sent(Statements::recording(pool).as_ref(), sql, statement).await
+    with: impl FnOnce(&Cow<'static, str>, &[(&'static str, ClientValue<'_>)]) -> R,
+) -> R {
+    let summary = QuerySummary::of(sql);
+    let name: Cow<'static, str> = match &summary {
+        Some(summary) if summary.collection().is_none() => Cow::Borrowed(summary.operation()),
+        Some(summary) => Cow::Owned(summary.text()),
+        None => Cow::Borrowed(POSTGRESQL),
+    };
+    let mut attributes = Vec::with_capacity(DB_CLIENT_OPERATION_DURATION.attributes().len());
+    attributes.push((DB_SYSTEM_NAME, ClientValue::Text(POSTGRESQL)));
+    if let Some(namespace) = options.get_database() {
+        attributes.push((DB_NAMESPACE, ClientValue::Text(namespace)));
+    }
+    if let Some(summary) = &summary {
+        attributes.push((DB_OPERATION_NAME, ClientValue::Text(summary.operation())));
+        if let Some(collection) = summary.collection() {
+            attributes.push((DB_COLLECTION_NAME, ClientValue::Text(collection)));
+        }
+        attributes.push((DB_QUERY_SUMMARY, ClientValue::Text(&name)));
+    }
+    attributes.push((SERVER_ADDRESS, ClientValue::Text(options.get_host())));
+    attributes.push((
+        SERVER_PORT,
+        ClientValue::Integer(i64::from(options.get_port())),
+    ));
+    with(&name, &attributes)
 }
 
 #[cfg(test)]
@@ -207,10 +180,13 @@ mod tests {
         let options: PgConnectOptions = "postgres://nestrs:secret@db.internal:6543/publish"
             .parse()
             .expect("a Postgres URL");
-        let statements = Statements::on(Arc::new(options));
-        assert_eq!(statements.options.get_database(), Some("publish"));
-        assert_eq!(statements.options.get_host(), "db.internal");
-        assert_eq!(statements.options.get_port(), 6543);
+        let statements = Statements {
+            options: Some(Arc::new(options)),
+        };
+        let options = statements.options.as_deref().expect("recorded");
+        assert_eq!(options.get_database(), Some("publish"));
+        assert_eq!(options.get_host(), "db.internal");
+        assert_eq!(options.get_port(), 6543);
     }
 
     /// What the recorder this suite seeds was handed: each operation's name,
@@ -223,14 +199,7 @@ mod tests {
         let attributes = operation
             .attributes()
             .iter()
-            .map(|(key, value)| {
-                let value = match value {
-                    ClientValue::Text(text) => (*text).to_owned(),
-                    ClientValue::Integer(integer) => integer.to_string(),
-                    _ => unreachable!("the driver writes text and integers"),
-                };
-                ((*key).to_owned(), value)
-            })
+            .map(|(key, value)| ((*key).to_owned(), value.to_string()))
             .collect();
         RECORDED.lock().expect("the recorded operations").push((
             operation.name().to_owned(),
@@ -241,11 +210,13 @@ mod tests {
 
     #[test]
     fn a_statement_is_recorded_by_its_summary_and_never_by_what_it_binds() {
-        nest_rs_core::__private::set_client_recorder(capture);
+        nest_rs_core::__private::set_client_recorder(capture, true);
         let options: PgConnectOptions = "postgres://nestrs:secret@db.internal:6543/publish"
             .parse()
             .expect("a Postgres URL");
-        let statements = Statements::on(Arc::new(options));
+        let statements = Statements {
+            options: Some(Arc::new(options)),
+        };
         let statement = sea_orm::Statement::from_sql_and_values(
             sea_orm::DbBackend::Postgres,
             r#"SELECT "posts"."id" FROM "posts" WHERE "posts"."title" = $1"#,

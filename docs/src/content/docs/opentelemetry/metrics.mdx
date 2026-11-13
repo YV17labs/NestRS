@@ -76,9 +76,9 @@ themselves, read at each export and never between:
 
 | Instrument | What it reads |
 |---|---|
-| `process.cpu.time` | CPU seconds, by `cpu.mode`: `user`, `system` |
-| `process.uptime` | seconds since `OpenTelemetry::init` ran, at the top of `main` |
-| `process.unix.file_descriptor.count` | descriptors held open |
+| `process.cpu.time` | CPU seconds, by `cpu.mode`: `user`, `system` — Unix |
+| `process.uptime` | seconds since the process started, as `#[nest_rs::main]` marks it |
+| `process.unix.file_descriptor.count` | descriptors held open — Unix |
 | `process.memory.usage`, `process.memory.virtual` | resident and virtual bytes — Linux |
 | `process.thread.count` | threads — Linux |
 | `tokio.worker.count` | the runtime's worker threads |

@@ -373,7 +373,7 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
                     Sent::batch(pipeline, offset, count),
                     self.get_db(),
                     self.server(),
-                    batch_failure(&answers),
+                    batch_failure(pipeline, &answers),
                 );
             }
             answers

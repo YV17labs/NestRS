@@ -1,28 +1,84 @@
 //! The process's own metrics, as the OpenTelemetry process conventions name
-//! them, read when the metric reader exports and never between: its CPU time,
-//! its uptime and its open descriptors everywhere, and on Linux, the platform a
-//! deployment runs on, its memory and its threads.
+//! them, read when the metric reader exports and never between: its uptime
+//! everywhere, its CPU time and its open descriptors on Unix, and on Linux, the
+//! platform a deployment runs on, its memory and its threads.
 
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::sync::Once;
+use std::sync::OnceLock;
 use std::time::Instant;
 
-use opentelemetry::KeyValue;
 use opentelemetry::metrics::Meter;
-use opentelemetry_semantic_conventions::attribute::CPU_MODE;
-use opentelemetry_semantic_conventions::metric::{
-    PROCESS_CPU_TIME, PROCESS_UNIX_FILE_DESCRIPTOR_COUNT, PROCESS_UPTIME,
-};
+use opentelemetry_semantic_conventions::metric::PROCESS_UPTIME;
 
 use crate::durations::SECONDS;
+
+/// When the process started: the first step `#[nest_rs::main]` runs, before
+/// the runtime exists.
+static PROCESS_STARTED: OnceLock<Instant> = OnceLock::new();
+
+fn mark_process_started() {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a process starts once; a second mark keeps the first"
+    )]
+    let _ = PROCESS_STARTED.set(Instant::now());
+}
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::__private::ProcessStart {
+        name: "nest_rs::opentelemetry::process",
+        run: mark_process_started,
+    }
+}
+
+/// What the uptime counts from: the process's start where `#[nest_rs::main]`
+/// marked it, `telemetry_started` in a binary it does not start.
+fn uptime_origin(telemetry_started: Instant) -> Instant {
+    PROCESS_STARTED.get().copied().unwrap_or(telemetry_started)
+}
 
 /// Registers the process's instruments.
 pub(crate) struct ProcessMetrics;
 
 impl ProcessMetrics {
-    /// Register the process's instruments on `meter`, its uptime counted from
-    /// `started`, when telemetry started at the top of `main`.
+    /// Register the process's instruments on `meter`; `started` is when
+    /// telemetry started, the uptime's origin where nothing marked the
+    /// process's start.
     pub(crate) fn observe(meter: &Meter, started: Instant) {
+        let started = uptime_origin(started);
+        meter
+            .f64_observable_gauge(PROCESS_UPTIME)
+            .with_unit(SECONDS)
+            .with_description("The time the process has been running.")
+            .with_callback(move |observer| observer.observe(started.elapsed().as_secs_f64(), &[]))
+            .build();
+        #[cfg(unix)]
+        unix::observe(meter);
+        #[cfg(target_os = "linux")]
+        linux::observe(meter);
+    }
+}
+
+#[cfg(unix)]
+mod unix {
+    use std::io;
+    use std::sync::Once;
+
+    use opentelemetry::KeyValue;
+    use opentelemetry::metrics::Meter;
+    use opentelemetry_semantic_conventions::attribute::CPU_MODE;
+    use opentelemetry_semantic_conventions::metric::{
+        PROCESS_CPU_TIME, PROCESS_UNIX_FILE_DESCRIPTOR_COUNT,
+    };
+
+    use super::unread;
+    use crate::durations::SECONDS;
+
+    /// Register the CPU time and the open descriptors, which Unix reports.
+    pub(super) fn observe(meter: &Meter) {
         let reported = Once::new();
         meter
             .f64_observable_counter(PROCESS_CPU_TIME)
@@ -36,12 +92,6 @@ impl ProcessMetrics {
                 Err(error) => unread(&reported, PROCESS_CPU_TIME, &error),
             })
             .build();
-        meter
-            .f64_observable_gauge(PROCESS_UPTIME)
-            .with_unit(SECONDS)
-            .with_description("The time the process has been running.")
-            .with_callback(move |observer| observer.observe(started.elapsed().as_secs_f64(), &[]))
-            .build();
         let reported = Once::new();
         meter
             .i64_observable_up_down_counter(PROCESS_UNIX_FILE_DESCRIPTOR_COUNT)
@@ -52,13 +102,43 @@ impl ProcessMetrics {
                 Err(error) => unread(&reported, PROCESS_UNIX_FILE_DESCRIPTOR_COUNT, &error),
             })
             .build();
-        #[cfg(target_os = "linux")]
-        linux::observe(meter);
+    }
+
+    /// The CPU time the process spent in user and in system mode, in seconds.
+    pub(super) fn cpu_time() -> io::Result<(f64, f64)> {
+        // SAFETY: `getrusage` only writes the `rusage` it is handed, which is
+        // plain data and valid zeroed.
+        #[expect(
+            unsafe_code,
+            reason = "the process's CPU time is read through libc, which std lacks"
+        )]
+        let (read, usage) = unsafe {
+            let mut usage: libc::rusage = std::mem::zeroed();
+            (libc::getrusage(libc::RUSAGE_SELF, &mut usage), usage)
+        };
+        if read != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // A `timeval` is never negative; its microseconds are an `i32` on macOS
+        // and an `i64` on Linux.
+        let seconds = |time: libc::timeval| {
+            let whole = u64::try_from(time.tv_sec).unwrap_or(0);
+            let micros = u32::try_from(time.tv_usec).unwrap_or(0);
+            std::time::Duration::new(whole, micros.saturating_mul(1_000)).as_secs_f64()
+        };
+        Ok((seconds(usage.ru_utime), seconds(usage.ru_stime)))
+    }
+
+    /// How many descriptors the process holds open, the listing's own left out.
+    pub(super) fn open_descriptors() -> io::Result<i64> {
+        let listed = std::fs::read_dir("/dev/fd")?.count();
+        Ok(i64::try_from(listed.saturating_sub(1)).unwrap_or(i64::MAX))
     }
 }
 
 /// Say once, at `warn`, that `metric` cannot be read, and why: its series
 /// stops where it stopped.
+#[cfg(unix)]
 fn unread(reported: &Once, metric: &'static str, error: &io::Error) {
     reported.call_once(|| {
         tracing::warn!(
@@ -68,37 +148,6 @@ fn unread(reported: &Once, metric: &'static str, error: &io::Error) {
             "a process metric cannot be read; its series stops",
         );
     });
-}
-
-/// The CPU time the process spent in user and in system mode, in seconds.
-fn cpu_time() -> io::Result<(f64, f64)> {
-    // SAFETY: `getrusage` only writes the `rusage` it is handed, which is
-    // plain data and valid zeroed.
-    #[expect(
-        unsafe_code,
-        reason = "the process's CPU time is read through libc, which std lacks"
-    )]
-    let (read, usage) = unsafe {
-        let mut usage: libc::rusage = std::mem::zeroed();
-        (libc::getrusage(libc::RUSAGE_SELF, &mut usage), usage)
-    };
-    if read != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // A `timeval` is never negative; its microseconds are an `i32` on macOS
-    // and an `i64` on Linux.
-    let seconds = |time: libc::timeval| {
-        let whole = u64::try_from(time.tv_sec).unwrap_or(0);
-        let micros = u32::try_from(time.tv_usec).unwrap_or(0);
-        std::time::Duration::new(whole, micros.saturating_mul(1_000)).as_secs_f64()
-    };
-    Ok((seconds(usage.ru_utime), seconds(usage.ru_stime)))
-}
-
-/// How many descriptors the process holds open, the listing's own left out.
-fn open_descriptors() -> io::Result<i64> {
-    let listed = std::fs::read_dir("/dev/fd")?.count();
-    Ok(i64::try_from(listed.saturating_sub(1)).unwrap_or(i64::MAX))
 }
 
 #[cfg(target_os = "linux")]
@@ -168,13 +217,24 @@ mod linux {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn the_process_has_spent_cpu_time_and_holds_descriptors() {
         let busy = Instant::now();
         while busy.elapsed() < std::time::Duration::from_millis(20) {}
-        let (user, system) = cpu_time().expect("getrusage reads");
+        let (user, system) = unix::cpu_time().expect("getrusage reads");
         assert!(user + system > 0.0, "{user} {system}");
-        assert!(open_descriptors().expect("the descriptors list") > 0);
+        assert!(unix::open_descriptors().expect("the descriptors list") > 0);
+    }
+
+    #[test]
+    fn the_uptime_counts_from_the_process_start_once_marked() {
+        let telemetry_started = Instant::now();
+        assert_eq!(uptime_origin(telemetry_started), telemetry_started);
+
+        mark_process_started();
+        let marked = PROCESS_STARTED.get().copied().expect("marked");
+        assert_eq!(uptime_origin(telemetry_started), marked);
     }
 
     #[cfg(target_os = "linux")]

@@ -1,6 +1,7 @@
 //! Covers `src/commands.rs` against the live server: once something records
 //! client operations, every command and every pipeline a connection sends is
-//! handed over by its name, on its database — never by a key it names.
+//! handed over by its name, on its database — never by a key it names — and a
+//! transaction by the commands it runs, failed by a refusal inside its `EXEC`.
 
 use std::sync::Mutex;
 
@@ -53,6 +54,20 @@ async fn every_command_and_pipeline_is_recorded_by_its_name_on_its_database() {
         .query_async::<()>(&mut conn)
         .await
         .expect_err("the server refuses a command it does not know");
+    // The key expires on its own, however the test ends.
+    redis::pipe()
+        .atomic()
+        .cmd("SET")
+        .arg(&key)
+        .arg("text")
+        .arg("EX")
+        .arg(60)
+        .cmd("LPUSH")
+        .arg(&key)
+        .arg(1)
+        .query_async::<()>(&mut conn)
+        .await
+        .expect_err("EXEC answers the list push on a string with a refusal");
 
     let recorded = RECORDED.lock().expect("the recorded operations").clone();
     assert_eq!(
@@ -60,7 +75,12 @@ async fn every_command_and_pipeline_is_recorded_by_its_name_on_its_database() {
         vec![
             ("GET".to_owned(), Some(db.clone()), None),
             ("BATCH GET".to_owned(), Some(db.clone()), None),
-            ("NOSUCHCOMMAND".to_owned(), Some(db), Some("ERR".to_owned())),
+            (
+                "NOSUCHCOMMAND".to_owned(),
+                Some(db.clone()),
+                Some("ERR".to_owned())
+            ),
+            ("BATCH".to_owned(), Some(db), Some("WRONGTYPE".to_owned())),
         ],
     );
     assert!(!format!("{recorded:?}").contains(&key), "{recorded:?}");

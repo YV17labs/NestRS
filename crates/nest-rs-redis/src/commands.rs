@@ -41,10 +41,22 @@ impl<'a> Sent<'a> {
         Self::Command(name(cmd))
     }
 
-    /// What `count` commands of `pipeline`, from `offset`, are named.
+    /// What the `count` commands of `pipeline` sent from `offset` are named: a
+    /// batch of two or more, the command itself for one, as the database
+    /// conventions count a batch.
     pub(crate) fn batch(pipeline: &'a Pipeline, offset: usize, count: usize) -> Self {
+        // redis-rs sends a transaction as MULTI, its commands and EXEC, and
+        // asks for EXEC's answer alone: its offset is past every command.
+        let (offset, count) = if pipeline.is_transaction() {
+            (0, pipeline.cmd_iter().count())
+        } else {
+            (offset, count)
+        };
         let mut names = pipeline.cmd_iter().skip(offset).take(count).map(name);
         let first = names.next();
+        if count == 1 {
+            return Self::Command(first.unwrap_or(OTHER));
+        }
         let operation = first.filter(|first| names.all(|name| name == *first));
         Self::Batch {
             operation,
@@ -151,9 +163,17 @@ pub(crate) fn command_failure(answer: &Result<Value, RedisError>) -> Option<&str
     }
 }
 
-/// How a pipeline's `answers` failed: by the first refusal among them.
-pub(crate) fn batch_failure(answers: &Result<Vec<Value>, RedisError>) -> Option<&str> {
+/// How `pipeline`'s `answers` failed: by the first refusal among them — inside
+/// `EXEC`'s answer for a transaction, which answers each command it ran there.
+pub(crate) fn batch_failure<'v>(
+    pipeline: &Pipeline,
+    answers: &'v Result<Vec<Value>, RedisError>,
+) -> Option<&'v str> {
     match answers {
+        Ok(values) if pipeline.is_transaction() => values.iter().find_map(|value| match value {
+            Value::Array(ran) => ran.iter().find_map(refusal),
+            answered => refusal(answered),
+        }),
         Ok(values) => values.iter().find_map(refusal),
         Err(error) => Some(error_class(error)),
     }
@@ -204,11 +224,62 @@ mod tests {
         };
         assert_eq!(command_failure(&Ok(refused())), Some("NOSCRIPT"));
         assert_eq!(command_failure(&Ok(Value::Okay)), None);
+        let pipeline = redis::pipe();
         assert_eq!(
-            batch_failure(&Ok(vec![Value::Okay, refused(), Value::Nil])),
+            batch_failure(&pipeline, &Ok(vec![Value::Okay, refused(), Value::Nil])),
             Some("NOSCRIPT"),
         );
-        assert_eq!(batch_failure(&Ok(vec![Value::Okay])), None);
+        assert_eq!(batch_failure(&pipeline, &Ok(vec![Value::Okay])), None);
+    }
+
+    /// redis-rs sends a transaction as `MULTI`, its commands and `EXEC`, and
+    /// asks for one answer past every command: `EXEC`'s.
+    fn sent_as_redis_rs_sends(pipeline: &Pipeline) -> Sent<'_> {
+        let commands = pipeline.cmd_iter().count();
+        if pipeline.is_transaction() {
+            Sent::batch(pipeline, commands + 1, 1)
+        } else {
+            Sent::batch(pipeline, 0, commands)
+        }
+    }
+
+    #[test]
+    fn a_transaction_is_a_batch_of_the_commands_it_runs() {
+        let mut transaction = redis::pipe();
+        transaction.atomic().set("a", 1).set("b", 2);
+        assert_eq!(
+            sent_as_redis_rs_sends(&transaction),
+            Sent::Batch {
+                operation: Some("SET"),
+                size: 2,
+            },
+        );
+    }
+
+    #[test]
+    fn a_pipeline_of_one_command_is_that_command() {
+        let mut one = redis::pipe();
+        one.set("a", 1);
+        assert_eq!(sent_as_redis_rs_sends(&one), Sent::Command("SET"));
+        one.atomic();
+        assert_eq!(sent_as_redis_rs_sends(&one), Sent::Command("SET"));
+    }
+
+    #[test]
+    fn a_refusal_inside_a_transactions_answer_is_its_code() {
+        let wrongtype = redis::parse_redis_value(
+            b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
+        )
+        .expect("a refusal, as the server writes one");
+        let mut transaction = redis::pipe();
+        transaction.atomic().set("a", 1).lpush("a", 2);
+        assert_eq!(
+            batch_failure(
+                &transaction,
+                &Ok(vec![Value::Array(vec![Value::Okay, wrongtype])]),
+            ),
+            Some("WRONGTYPE"),
+        );
     }
 
     #[test]
@@ -236,10 +307,10 @@ mod tests {
         );
         assert_eq!(sent.operation(), BATCH);
         assert_eq!(
-            Sent::batch(&mixed, 1, 1),
+            Sent::batch(&mixed, 1, 2),
             Sent::Batch {
-                operation: Some("SET"),
-                size: 1,
+                operation: None,
+                size: 2,
             },
             "the commands the pipeline sends from its offset",
         );

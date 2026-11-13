@@ -186,7 +186,7 @@ a point in `db.client.operation.duration`.
 |---|---|---|
 | a Postgres statement | its summary, `SELECT posts` | `db.system.name` (`postgresql`), `db.namespace`, `db.operation.name`, `db.collection.name`, `db.query.summary`, `server.address`, `server.port` |
 | a Redis command | the command, `GET` | `db.system.name` (`redis`), `db.namespace` (the database index), `db.operation.name`, `server.address` and `server.port` on one server |
-| a Redis pipeline | `BATCH`, or `BATCH GET` when every command is one | the same, and `db.operation.batch.size` |
+| a Redis pipeline or transaction of two commands or more | `BATCH`, or `BATCH GET` when every command is one | the same, and `db.operation.batch.size` |
 
 - **What a statement does, never what it says.** The summary is read off the
   SQL's operation and the first table it names, skipping its literals, comments

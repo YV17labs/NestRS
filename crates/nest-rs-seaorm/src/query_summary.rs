@@ -312,36 +312,25 @@ impl<'a> Words<'a> {
     fn word(&mut self) -> Result<Option<Word<'a>>, ()> {
         let start = self.at;
         let first = self.byte(start).unwrap_or_default();
-        match (
+        // Where a literal's body starts, what closes it, and how it reads a
+        // backslash.
+        let literal = match (
             first.to_ascii_uppercase(),
             self.byte(start + 1),
             self.byte(start + 2),
         ) {
-            (b'E', Some(b'\''), _) => {
-                return self
-                    .quoted(start + 2, b'\'', Backslash::Escapes)
-                    .then_some(None)
-                    .ok_or(());
+            (b'E', Some(b'\''), _) => Some((start + 2, b'\'', Backslash::Escapes)),
+            (b'B' | b'X' | b'N', Some(b'\''), _) => Some((start + 2, b'\'', Backslash::Unknown)),
+            (b'U', Some(b'&'), Some(quote @ (b'\'' | b'"'))) => {
+                Some((start + 3, quote, Backslash::Literal))
             }
-            (b'B' | b'X' | b'N', Some(b'\''), _) => {
-                return self
-                    .quoted(start + 2, b'\'', Backslash::Unknown)
-                    .then_some(None)
-                    .ok_or(());
-            }
-            (b'U', Some(b'&'), Some(b'\'')) => {
-                return self
-                    .quoted(start + 3, b'\'', Backslash::Literal)
-                    .then_some(None)
-                    .ok_or(());
-            }
-            (b'U', Some(b'&'), Some(b'"')) => {
-                return self
-                    .quoted(start + 3, b'"', Backslash::Literal)
-                    .then_some(None)
-                    .ok_or(());
-            }
-            _ => {}
+            _ => None,
+        };
+        if let Some((body, quote, backslash)) = literal {
+            return self
+                .quoted(body, quote, backslash)
+                .then_some(None)
+                .ok_or(());
         }
         while let Some(byte) = self.byte(self.at) {
             match byte {

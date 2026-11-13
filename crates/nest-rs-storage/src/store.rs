@@ -479,7 +479,7 @@ tokio::task_local! {
     /// The last request that unit sent, where it failed: which one — its method
     /// and address, hashed, never kept — and how many times it had been sent
     /// again before. object_store retries a failed request as it was, so the
-    /// next one alike is its retry.
+    /// next one alike is its retry (`.claude/upstream/object_store.md`).
     static LAST_FAILED: Cell<Option<(u64, u32)>>;
 }
 

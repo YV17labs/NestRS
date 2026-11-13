@@ -5,7 +5,8 @@
 //!
 //! sea-orm times each statement it prepares and calls back with it; what it
 //! sends untimed — `BEGIN`, `COMMIT`, `ROLLBACK` and `execute_unprepared`'s text
-//! — the driver times itself through [`Statements::sent`]. Nothing is installed,
+//! — the driver times itself through [`Statements::sent`]
+//! (`.claude/upstream/sea-orm.md`). Nothing is installed,
 //! and no clock read, where nothing records client operations; nothing is
 //! described where nothing would record the statement sent.
 

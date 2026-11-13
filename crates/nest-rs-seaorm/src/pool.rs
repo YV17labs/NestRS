@@ -3,7 +3,8 @@
 //! through `nest_rs_core::connection_pool`.
 //!
 //! sqlx tells no waiter's count and no acquire's duration, so the pool reports
-//! neither `pending_requests` nor `wait_time`, `create_time` or `use_time`.
+//! neither `pending_requests` nor `wait_time`, `create_time` or `use_time`
+//! (`.claude/upstream/sqlx.md`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

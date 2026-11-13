@@ -13,7 +13,6 @@ use std::sync::OnceLock;
 
 use nest_rs_core::client_operation::{ClientOperation, ClientValue};
 use nest_rs_core::duration_histogram::MetricAttribute;
-use nest_rs_core::operation_log::OTHER;
 use opentelemetry::trace::{
     Span as _, SpanKind, Status, TraceFlags, Tracer as _, TracerProvider as _,
 };
@@ -132,14 +131,10 @@ fn span(tracer: &Tracer, operation: &ClientOperation<'_>, mut attributes: Vec<Ke
 /// `value` as the duration is keyed by `attribute`: as it is where the
 /// attribute is bounded, through its known set as written otherwise.
 fn keyed(attribute: &MetricAttribute, value: ClientValue<'_>) -> Value {
-    if attribute.is_bounded() {
-        return value_of(value);
+    match value {
+        ClientValue::Text(text) => crate::durations::keyed_text(attribute, text),
+        other => crate::durations::keyed_scalar(attribute, value_of(other)),
     }
-    let known = match value {
-        ClientValue::Text(text) => attribute.known_value(text),
-        other => attribute.known_value(&other.to_string()),
-    };
-    Value::from(known.unwrap_or(OTHER))
 }
 
 fn value_of(value: ClientValue<'_>) -> Value {
@@ -153,6 +148,8 @@ fn value_of(value: ClientValue<'_>) -> Value {
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, SystemTime};
+
+    use nest_rs_core::operation_log::OTHER;
 
     use nest_rs_core::client_operation::{
         DB_CLIENT_OPERATION_DURATION, DB_OPERATION_NAME, DB_QUERY_SUMMARY, DB_SYSTEM_NAME,

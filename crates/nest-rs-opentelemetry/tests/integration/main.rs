@@ -12,6 +12,8 @@
 
 mod init;
 #[cfg(feature = "otlp")]
+mod linker;
+#[cfg(feature = "otlp")]
 mod metrics;
 #[cfg(feature = "otlp")]
 mod module;

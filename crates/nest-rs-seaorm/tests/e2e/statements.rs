@@ -16,7 +16,7 @@ use nest_rs_seaorm::__private::{
 };
 use nest_rs_seaorm::{RepoError, SeaOrmModule};
 use sea_orm::sqlx::postgres::PgConnectOptions;
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement, TransactionTrait};
 
 /// One operation the seeded recorder was handed: its name, the database it
 /// named, and its class if it failed.
@@ -269,5 +269,25 @@ async fn the_pool_is_observed_under_its_server_and_database_while_the_app_holds_
     assert!(
         observed().is_none_or(|pool| pool.connections().is_none()),
         "a closed pool reports no connection",
+    );
+}
+
+/// What sea-orm times on its own leaves out the text sent through
+/// `execute_unprepared` and a transaction's control, which is why the driver
+/// times what it sends itself (`.claude/upstream/sea-orm.md`). Fails the day
+/// sea-orm times them.
+#[tokio::test]
+async fn upstream_sea_orm_still_leaves_transaction_control_and_unprepared_text_untimed() {
+    let (_app, db) = pool().await;
+
+    db.execute_unprepared("SELECT 1").await.expect("runs");
+    let txn = db.begin().await.expect("begins");
+    txn.commit().await.expect("commits");
+
+    assert!(
+        recorded().is_empty(),
+        "sea-orm now times {:?}: drop `Statements::sent` where it does, and close \
+         .claude/upstream/sea-orm.md",
+        recorded(),
     );
 }

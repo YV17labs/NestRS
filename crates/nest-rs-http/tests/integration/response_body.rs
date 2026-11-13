@@ -57,6 +57,15 @@ impl StreamController {
     async fn fixed(&self) -> String {
         String::from("hello")
     }
+
+    /// An answer with no body at all.
+    #[get("/empty")]
+    #[public]
+    async fn empty(&self) -> Response {
+        Response::builder()
+            .status(nest_rs_http::StatusCode::NO_CONTENT)
+            .body(Body::empty())
+    }
 }
 
 #[module(imports = [HttpModule], providers = [StreamController])]
@@ -211,4 +220,51 @@ async fn connect(port: u16) -> TcpStream {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("the transport never came up on {port}");
+}
+
+/// How many units have ended, as `record_end` tells the observability stack.
+static ENDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn count_end(_: &tracing::Span) {
+    ENDED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Request `path` from an app booted on `M`, read its whole answer, and say
+/// how many units ended meanwhile.
+async fn ended_answering<M: nest_rs_core::Module + 'static>(path: &str) -> usize {
+    nest_rs_core::__private::set_unit_end(count_end);
+    let client = boot::<M>().await;
+    let before = ENDED.load(std::sync::atomic::Ordering::SeqCst);
+    let resp = client.get(path).send().await.0;
+    let _ = resp.into_body().into_string().await.expect("the answer");
+    ENDED.load(std::sync::atomic::Ordering::SeqCst) - before
+}
+
+/// A request that answered ends its unit with its answer, its status saying
+/// how — so a duration read off its span stops there, whatever holds the span
+/// open after — the access log on or off, its body empty or written.
+#[tokio::test]
+async fn a_request_that_answered_ends_its_unit_with_its_body() {
+    assert_eq!(ended_answering::<StreamModule>("/stream/fixed").await, 1);
+}
+
+#[tokio::test]
+async fn a_request_that_answered_ends_its_unit_with_the_access_log_switched_off() {
+    assert_eq!(
+        ended_answering::<SilentStreamModule>("/stream/fixed").await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_request_answered_with_no_body_ends_its_unit() {
+    assert_eq!(ended_answering::<StreamModule>("/stream/empty").await, 1);
+}
+
+#[tokio::test]
+async fn a_request_answered_with_no_body_ends_its_unit_with_the_access_log_switched_off() {
+    assert_eq!(
+        ended_answering::<SilentStreamModule>("/stream/empty").await,
+        1
+    );
 }

@@ -415,13 +415,17 @@ pub fn known_verb(verb: &str) -> Option<&'static str> {
 /// for a method they do not know.
 pub const OTHER: &str = "_OTHER";
 
-/// Record on a unit's span how the unit ended, where OpenTelemetry reads it.
+/// Record on a unit's span that the unit ended, and how, where OpenTelemetry
+/// reads it: `None` for an answer whose own status says it — an HTTP request
+/// that answered.
 ///
-/// Anything but [`OK`] becomes the span's `error.type` and an `Error` status.
+/// An outcome but [`OK`] becomes the span's `error.type` and an `Error` status.
 /// [`operation_line!`](crate::operation_line) calls it; an edge calls it directly
 /// only where it ends a unit without filing a line.
-pub fn record_outcome(span: &tracing::Span, outcome: &str) {
-    if outcome != OK {
+pub fn record_outcome<'a>(span: &tracing::Span, outcome: impl Into<Option<&'a str>>) {
+    if let Some(outcome) = outcome.into()
+        && outcome != OK
+    {
         record_error(span, outcome);
     }
     record_end(span);
@@ -634,9 +638,7 @@ macro_rules! operation_line {
             "a unit's line is filed only by the crate that declares the unit",
         );
         let __outcome: ::core::option::Option<&'static str> = ::core::convert::Into::into($outcome);
-        if let ::core::option::Option::Some(__outcome) = __outcome {
-            $crate::operation_log::record_outcome($span, __outcome);
-        }
+        $crate::operation_log::record_outcome($span, __outcome);
         $crate::tracing::info!(
             name: $unit.name(),
             target: $crate::operation_log::TARGET,

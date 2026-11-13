@@ -93,11 +93,7 @@ pub(crate) fn carry(
         match log {
             // Inside the context, outside the span — see `Carried::file`.
             Some(log) => continuation.enter(|| log.emit(&span, status, 0, outcome)),
-            None => {
-                if let Some(outcome) = outcome {
-                    nest_rs_core::operation_log::record_outcome(&span, outcome);
-                }
-            }
+            None => nest_rs_core::operation_log::record_outcome(&span, outcome),
         }
         return Response::from_parts(parts, body);
     }
@@ -116,6 +112,7 @@ pub(crate) fn carry(
         reached_end: false,
         outcome,
         ended: false,
+        filed: false,
     };
     Response::from_parts(parts, Body::from_boxed(BoxBody::new(carried)))
 }
@@ -151,12 +148,17 @@ struct Carried {
     /// The body ended before its inner one did — at the signal, or on a poll
     /// that unwound — and polls it no more.
     ended: bool,
+    /// The unit was filed, its line and its end.
+    filed: bool,
 }
 
 impl Carried {
-    /// Files the line at most once: the stream ending and the body being
-    /// dropped both reach here.
+    /// Files the unit at most once — its line, or its outcome and its end on
+    /// its span: the stream ending and the body being dropped both reach here.
     fn file(&mut self) {
+        if std::mem::replace(&mut self.filed, true) {
+            return;
+        }
         self.span.record("http.response.body.size", self.counted);
         let counted = self.counted;
         let outcome = self
@@ -169,11 +171,7 @@ impl Carried {
                     .log
                     .emit(&self.span, pending.status, counted, outcome)
             }),
-            None => {
-                if let Some(outcome) = outcome {
-                    nest_rs_core::operation_log::record_outcome(&self.span, outcome);
-                }
-            }
+            None => nest_rs_core::operation_log::record_outcome(&self.span, outcome),
         }
     }
 

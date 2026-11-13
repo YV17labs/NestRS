@@ -4,12 +4,12 @@
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use nest_rs_authn::__private::sign_unchecked;
 use nest_rs_authn::{AuthError, JwtOptions, JwtService};
 use nest_rs_config::{ClientTls, Config, ConfigService, Namespaced, var_name};
-use nest_rs_core::{App, module};
+use nest_rs_core::{App, Correlation, module};
 use nest_rs_http::{IntoResponse as _, header};
 use nest_rs_oauth_client::{
     AuthorizationRedirect, AuthorizationResponse, OAuthClient, OAuthClientConfig,
@@ -271,10 +271,11 @@ enum Behaviour {
 }
 
 /// An OAuth provider over TLS on loopback, one request per connection, every
-/// request it reads counted.
+/// request it reads counted and its `traceparent` kept.
 struct Provider {
     addr: SocketAddr,
     requests: Arc<AtomicUsize>,
+    traceparents: Arc<Mutex<Vec<Option<String>>>>,
     written: Arc<AtomicUsize>,
     ended: Arc<AtomicBool>,
 }
@@ -291,6 +292,8 @@ impl Provider {
         let addr = listener.local_addr().expect("its address");
         let requests = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&requests);
+        let traceparents = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&traceparents);
         let written = Arc::new(AtomicUsize::new(0));
         let taken = Arc::clone(&written);
         let ended = Arc::new(AtomicBool::new(false));
@@ -299,10 +302,11 @@ impl Provider {
         let paused = Arc::new(AtomicBool::new(false));
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (acceptor, behaviour, counted, taken, stopped, paused) = (
+                let (acceptor, behaviour, counted, kept, taken, stopped, paused) = (
                     acceptor.clone(),
                     behaviour.clone(),
                     Arc::clone(&counted),
+                    Arc::clone(&kept),
                     Arc::clone(&taken),
                     Arc::clone(&stopped),
                     Arc::clone(&paused),
@@ -320,6 +324,9 @@ impl Provider {
                         }
                     }
                     counted.fetch_add(1, Ordering::SeqCst);
+                    kept.lock()
+                        .expect("the traceparents")
+                        .push(traceparent_of(&head));
                     match behaviour {
                         Behaviour::Silent => {
                             if !paused.swap(true, Ordering::SeqCst) {
@@ -342,6 +349,7 @@ impl Provider {
         Self {
             addr,
             requests,
+            traceparents,
             written,
             ended,
         }
@@ -364,6 +372,11 @@ impl Provider {
 
     fn requests(&self) -> usize {
         self.requests.load(Ordering::SeqCst)
+    }
+
+    /// The `traceparent` each request read carried, in the order read.
+    fn traceparents(&self) -> Vec<Option<String>> {
+        self.traceparents.lock().expect("the traceparents").clone()
     }
 
     /// The body bytes a [`Behaviour::Chunked`] double got written.
@@ -596,6 +609,76 @@ async fn a_read_answered_with_an_error_status_names_the_endpoint_and_the_status(
             "the OAuth provider's userinfo endpoint (https://{addr}/userinfo) answered 401 Unauthorized"
         ),
     );
+}
+
+/// The `traceparent` header of a request's `head`, if it carried one.
+fn traceparent_of(head: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(head).lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("traceparent")
+            .then(|| value.trim().to_owned())
+    })
+}
+
+/// The trace id and the parent id a `traceparent` names.
+fn named_by(traceparent: &str) -> (String, String) {
+    let fields: Vec<&str> = traceparent.split('-').collect();
+    (fields[1].to_owned(), fields[2].to_owned())
+}
+
+/// The exchange and a read, sent inside a unit of work, each carry the unit's
+/// trace and a span of their own under it.
+#[tokio::test]
+async fn every_call_inside_a_unit_carries_its_trace_and_a_span_of_its_own() {
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        r#"{"access_token":"issued","token_type":"bearer"}"#,
+    )
+    .await;
+    let client = client_for(provider.addr);
+    let unit = Correlation::minted(None);
+
+    nest_rs_core::with_request_scope(None, unit.clone(), async {
+        exchange(&client).await.expect("the exchange");
+        client
+            .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+            .await
+            .expect("the read");
+    })
+    .await;
+
+    let named: Vec<(String, String)> = provider
+        .traceparents()
+        .iter()
+        .map(|traceparent| named_by(traceparent.as_deref().expect("a traceparent")))
+        .collect();
+    let [(exchange_trace, exchange_span), (read_trace, read_span)] = named.as_slice() else {
+        panic!("two calls: {named:?}");
+    };
+    assert_eq!(exchange_trace, &unit.trace_id().to_hex());
+    assert_eq!(read_trace, &unit.trace_id().to_hex());
+    assert_ne!(exchange_span, &unit.span_id().to_hex());
+    assert_ne!(exchange_span, read_span, "each call is a span of its own");
+}
+
+/// A call sent outside every unit of work carries no trace.
+#[tokio::test]
+async fn a_call_outside_every_unit_carries_no_trace() {
+    let provider = Provider::answering(
+        "200 OK",
+        &[("content-type", "application/json".to_owned())],
+        "{}",
+    )
+    .await;
+
+    client_for(provider.addr)
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect("the read");
+
+    assert_eq!(provider.traceparents(), [None]);
 }
 
 /// A local provider answering every request with `status_line`, an optional

@@ -459,3 +459,24 @@ async fn an_upload_moving_slower_than_the_read_bound_completes() {
 
     direct.delete(&key).await.expect("delete");
 }
+
+/// A signed request sent inside a unit of work carries the unit's
+/// `traceparent` beside the headers SigV4 signed, and the store answers it as
+/// it answers any other.
+#[tokio::test]
+async fn a_signed_request_inside_a_unit_carries_its_trace_and_is_answered() {
+    let s = storage().await;
+    let key = unique("traced.txt");
+
+    let (put, read, deleted) =
+        nest_rs_core::with_request_scope(None, nest_rs_core::Correlation::minted(None), async {
+            let put = s.put_bytes(&key, b"traced".to_vec(), "text/plain").await;
+            let read = s.get_bytes(&key).await;
+            (put, read, s.delete(&key).await)
+        })
+        .await;
+
+    put.expect("the traced put lands");
+    assert_eq!(&read.expect("the traced get answers")[..], b"traced");
+    deleted.expect("the traced delete");
+}

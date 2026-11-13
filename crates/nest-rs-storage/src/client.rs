@@ -1572,6 +1572,51 @@ mod tests {
         }
     }
 
+    /// An S3 double keeping the `traceparent` each request carried, and
+    /// answering `404` to all.
+    #[derive(Debug, Clone, Default)]
+    struct Heard(Arc<std::sync::Mutex<Vec<Option<String>>>>);
+
+    impl HttpConnector for Heard {
+        fn connect(&self, _options: &ClientOptions) -> object_store::Result<HttpClient> {
+            Ok(HttpClient::new(self.clone()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HttpService for Heard {
+        async fn call(&self, request: HttpRequest) -> Exchanged {
+            let traceparent = request
+                .headers()
+                .get("traceparent")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            self.0.lock().expect("the heard").push(traceparent);
+            let mut answer = HttpResponse::new(String::new().into());
+            *answer.status_mut() = StatusCode::NOT_FOUND;
+            Ok(answer)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_inside_a_unit_carries_its_trace_and_one_outside_none() {
+        let heard = Heard::default();
+        let storage = Storage::dialing(s3_at("https://s3.test", Surface::Closed), heard.clone());
+        let unit = nest_rs_core::Correlation::minted(None);
+
+        let absent = || async { storage.head("k").await.expect("a 404 answers").is_none() };
+        assert!(nest_rs_core::with_request_scope(None, unit.clone(), absent()).await);
+        assert!(absent().await);
+
+        let heard = heard.0.lock().expect("the heard").clone();
+        let [Some(inside), None] = heard.as_slice() else {
+            panic!("a traceparent inside the unit alone: {heard:?}");
+        };
+        let fields: Vec<&str> = inside.split('-').collect();
+        assert_eq!(fields[1], unit.trace_id().to_hex(), "the unit's trace");
+        assert_ne!(fields[2], unit.span_id().to_hex(), "a span of its own");
+    }
+
     /// An S3 double refusing every connection once it has held its thread for
     /// as long as it says.
     #[derive(Debug, Clone)]

@@ -21,11 +21,12 @@ Three signal types ship in one crate, behind one line of `main`:
 
 - **[Traces](/opentelemetry/traces/)** — every request, job and scheduled tick
   opens a span, and so does every unit a package declares, exported under the
-  same trace and span ids its log lines carry; each SQL statement and Redis
-  command it sends is a client span beneath it, and so is each request your
-  own `reqwest` client makes through `ReqwestMiddleware`, which carries the
-  trace onward; W3C `traceparent` propagation and sampling, seeded onto the
-  framework's span constructor, stitch distributed traces together.
+  same trace and span ids its log lines carry; each SQL statement, Redis
+  command and HTTP request it sends is a client span beneath it — your own
+  `reqwest` client's through [`ReqwestMiddleware`](/fundamentals/calling-another-service/),
+  which carries the trace onward; W3C `traceparent` propagation and sampling,
+  seeded onto the framework's span constructor, stitch distributed traces
+  together.
 - **[Logs](/opentelemetry/logs/)** — `tracing::info!` and friends flow to the
   console **and** to OTel logs (via
   [`opentelemetry-appender-tracing`](https://crates.io/crates/opentelemetry-appender-tracing))

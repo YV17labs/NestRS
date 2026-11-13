@@ -1427,6 +1427,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 ///
 /// Built on a thread of their own, as the SDK builds its own: a blocking client
 /// built on a runtime's thread panics.
+///
+/// The one HTTP client the framework opens that no `HttpClientRequest` times
+/// or announces: an export recorded as a client operation would be exported
+/// in turn, each export feeding the next.
 fn exporter_clients(
     exports: &[Option<Export>; 3],
 ) -> Result<[Option<reqwest::blocking::Client>; 3], OpenTelemetryError> {

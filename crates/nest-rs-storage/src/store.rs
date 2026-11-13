@@ -12,11 +12,12 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use http::StatusCode;
 use nest_rs_config::{ClientTls, ConfigService, Namespaced, endpoint_shown};
+use nest_rs_core::client_operation::HttpClientRequest;
 use nest_rs_core::{Attempt, Backoff, Proving, Unproved, process_seed, prove};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::client::{
-    HttpClient, HttpConnector, HttpError, HttpRequest, HttpResponse, HttpResponseBody, HttpService,
-    ReqwestConnector,
+    HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpRequest, HttpResponse,
+    HttpResponseBody, HttpService, ReqwestConnector,
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -489,7 +490,8 @@ pub(crate) async fn witnessed<F: Future>(unit: F) -> (F::Output, Option<Exchange
 }
 
 /// The HTTP connector of every S3 client the store opens: `C`'s, keeping how
-/// each exchange ended for the unit [`witnessed`] runs it in.
+/// each exchange ended for the unit [`witnessed`] runs it in, each carrying the
+/// unit's trace and recorded as the client operation the HTTP conventions name.
 #[derive(Debug)]
 struct Witnessed<C>(C);
 
@@ -505,12 +507,24 @@ struct Witness(HttpClient);
 
 #[async_trait::async_trait]
 impl HttpService for Witness {
-    async fn call(&self, request: HttpRequest) -> std::result::Result<HttpResponse, HttpError> {
-        let mut answered = self
-            .0
-            .execute(request)
-            .await
-            .inspect_err(|failed| keep(Exchange::unanswered(failed)))?;
+    async fn call(&self, mut request: HttpRequest) -> std::result::Result<HttpResponse, HttpError> {
+        let uri = request.uri();
+        let sent = HttpClientRequest::start(
+            request.method(),
+            uri.scheme_str().unwrap_or_default(),
+            uri.host(),
+            uri.port_u16(),
+        );
+        // After object_store signed it: SigV4 covers the headers it lists
+        // alone, so a trace header leaves the signature whole.
+        sent.announce(request.headers_mut());
+        let answered = self.0.execute(request).await;
+        match &answered {
+            Ok(answered) => sent.answered(answered.status(), answered.version()),
+            Err(failed) if failed.kind() == HttpErrorKind::Timeout => sent.timed_out(),
+            Err(_) => sent.failed(),
+        }
+        let mut answered = answered.inspect_err(|failed| keep(Exchange::unanswered(failed)))?;
         let status = answered.status();
         // Before the document is read: a budget cutting a read that stalls names
         // what was answered.

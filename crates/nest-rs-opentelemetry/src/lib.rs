@@ -48,8 +48,6 @@ mod otlp;
 #[cfg(feature = "otlp")]
 mod process_metrics;
 mod propagators;
-#[cfg(feature = "otlp")]
-mod reqwest_middleware;
 mod signal;
 #[cfg(test)]
 mod testing;
@@ -71,5 +69,3 @@ pub use instruments::{Counter, Gauge, Histogram, UpDownCounter};
 pub use metrics::{Describe, Metrics};
 #[cfg(feature = "otlp")]
 pub use module::OpenTelemetryModule;
-#[cfg(feature = "otlp")]
-pub use reqwest_middleware::ReqwestMiddleware;

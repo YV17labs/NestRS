@@ -2586,6 +2586,7 @@ dependencies = [
  "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
+ "nest-rs-reqwest",
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
@@ -2752,6 +2753,7 @@ dependencies = [
  "async-trait",
  "constant_time_eq",
  "criterion",
+ "http",
  "inventory",
  "libc",
  "log",
@@ -3106,9 +3108,7 @@ dependencies = [
 name = "nest-rs-opentelemetry"
 version = "7.0.0"
 dependencies = [
- "async-trait",
  "figment",
- "http",
  "libc",
  "log",
  "nest-rs-config",
@@ -3121,7 +3121,6 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "reqwest",
- "reqwest-middleware",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -3207,6 +3206,19 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "nest-rs-reqwest"
+version = "7.0.0"
+dependencies = [
+ "async-trait",
+ "http",
+ "nest-rs-core",
+ "nest-rs-testing",
+ "reqwest",
+ "reqwest-middleware",
+ "tokio",
 ]
 
 [[package]]

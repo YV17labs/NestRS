@@ -1,0 +1,36 @@
+[package]
+name = "nest-rs-reqwest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "W3C Trace Context and HTTP client telemetry on the reqwest client a NestRS app builds itself."
+keywords = ["framework", "nestrs", "reqwest", "tracing", "http"]
+categories = ["web-programming::http-client"]
+
+
+[dependencies]
+# `HttpClientRequest`: the trace a request carries and the client operation it
+# records, one primitive for every HTTP client.
+nest-rs-core.workspace = true
+# The request and the response `ReqwestMiddleware` reads are reqwest's, and its
+# seam is reqwest-middleware's `Middleware`: both public, since an app builds
+# its client in their words.
+reqwest.workspace = true
+reqwest-middleware.workspace = true
+# `Middleware` is an `async_trait`.
+async-trait.workspace = true
+# The `Extensions` `Middleware::handle` takes.
+http.workspace = true
+
+# The suite sends real requests to a TLS double whose certificate a
+# `TestAuthority` issued. Path-only intra-workspace dev edges, per the
+# manifest rule.
+[dev-dependencies]
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -22,7 +22,7 @@ use nest_rs_authn::{
     JWKS_MAX_BYTES, JWKS_REFRESH_FLOOR, JWKS_STALE_CEILING, JwtService, JwtStrategy,
     PrincipalIdentity,
 };
-use nest_rs_core::{App, module};
+use nest_rs_core::{App, Correlation, module};
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_http::{StatusCode, header};
 use nest_rs_testing::{LogCapture, TestApp, TestAuthority, TestCertificate, wait_until};
@@ -179,11 +179,12 @@ impl Answer {
 }
 
 /// An issuer's JWK Set endpoint: HTTPS on loopback, one answer per
-/// connection, every fetch counted.
+/// connection, every fetch counted and its `traceparent` kept.
 struct Issuer {
     addr: SocketAddr,
     answer: Arc<Mutex<Answer>>,
     fetches: Arc<AtomicUsize>,
+    traceparents: Arc<Mutex<Vec<Option<String>>>>,
 }
 
 impl Issuer {
@@ -198,12 +199,21 @@ impl Issuer {
         let addr = listener.local_addr().expect("its address");
         let answer = Arc::new(Mutex::new(answer));
         let fetches = Arc::new(AtomicUsize::new(0));
+        let traceparents = Arc::new(Mutex::new(Vec::new()));
         let acceptor = CERTIFICATE.acceptor(clients);
-        let (served, counted) = (Arc::clone(&answer), Arc::clone(&fetches));
+        let (served, counted, kept) = (
+            Arc::clone(&answer),
+            Arc::clone(&fetches),
+            Arc::clone(&traceparents),
+        );
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (acceptor, answer, fetches) =
-                    (acceptor.clone(), Arc::clone(&served), Arc::clone(&counted));
+                let (acceptor, answer, fetches, kept) = (
+                    acceptor.clone(),
+                    Arc::clone(&served),
+                    Arc::clone(&counted),
+                    Arc::clone(&kept),
+                );
                 tokio::spawn(async move {
                     let Ok(mut tls) = acceptor.accept(stream).await else {
                         return;
@@ -217,6 +227,9 @@ impl Issuer {
                         }
                     }
                     fetches.fetch_add(1, Ordering::SeqCst);
+                    kept.lock()
+                        .expect("the traceparents")
+                        .push(traceparent_of(&head));
                     let answer = answer.lock().expect("the answer").clone();
                     let mut response =
                         format!("HTTP/1.1 {} Answer\r\nconnection: close\r\n", answer.status);
@@ -237,6 +250,7 @@ impl Issuer {
             addr,
             answer,
             fetches,
+            traceparents,
         }
     }
 
@@ -251,6 +265,61 @@ impl Issuer {
     fn fetches(&self) -> usize {
         self.fetches.load(Ordering::SeqCst)
     }
+
+    /// The `traceparent` each fetch carried, in the order read.
+    fn traceparents(&self) -> Vec<Option<String>> {
+        self.traceparents.lock().expect("the traceparents").clone()
+    }
+}
+
+/// The `traceparent` header of a request's `head`, if it carried one.
+fn traceparent_of(head: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(head).lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("traceparent")
+            .then(|| value.trim().to_owned())
+    })
+}
+
+/// A fetch a token asked for inside a unit of work carries the unit's trace and
+/// a span of its own under it.
+#[tokio::test]
+async fn a_fetch_carries_the_trace_of_the_token_that_asked_for_it() {
+    let issuer = Issuer::serving(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")])).await;
+    let signed = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
+    let verifier = verifier(&issuer);
+    let unit = Correlation::minted(None);
+
+    nest_rs_core::with_request_scope(None, unit.clone(), async {
+        verifier
+            .verify::<Claims>(&signed)
+            .await
+            .expect("the token verifies");
+    })
+    .await;
+
+    let traceparents = issuer.traceparents();
+    let [Some(traceparent)] = traceparents.as_slice() else {
+        panic!("one fetch, carrying a traceparent: {traceparents:?}");
+    };
+    let fields: Vec<&str> = traceparent.split('-').collect();
+    assert_eq!(fields[1], unit.trace_id().to_hex(), "the unit's trace");
+    assert_ne!(fields[2], unit.span_id().to_hex(), "a span of its own");
+}
+
+/// A fetch no unit of work asked for carries no trace.
+#[tokio::test]
+async fn a_fetch_outside_every_unit_carries_no_trace() {
+    let issuer = Issuer::serving(Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")])).await;
+    let signed = token(&ED25519.key, Algorithm::EdDSA, Some("ed"));
+
+    verifier(&issuer)
+        .verify::<Claims>(&signed)
+        .await
+        .expect("the token verifies");
+
+    assert_eq!(issuer.traceparents(), [None]);
 }
 
 /// What a deployment verifying `jwks_uri`'s set sets, trusting the test

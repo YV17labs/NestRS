@@ -208,17 +208,29 @@ untimed, so a savepoint is not seen. A blocking Redis read
 (`XREADGROUP … BLOCK`) is timed for as long as it waited: read its
 `db.operation.name` apart.
 
-## An app's own HTTP client
+## Outbound HTTP requests
 
-`ReqwestMiddleware`, added to the reqwest client an app builds
-([Calling another service](/fundamentals/correlation/#calling-another-service)),
-records each request it sends as the HTTP conventions' client operation: a
-`client` span named for its method (`GET`, `HTTP` for a method the conventions do
-not know) and a point in `http.client.request.duration`, keyed by
-`http.request.method`, `server.address`, `server.port` and
-`http.response.status_code`; a `4xx` or `5xx` records its status as `error.type`,
-a request that never answered `timeout` or `_OTHER`. The `traceparent` it sends
-names that span, so the service it called hangs under it.
+Every HTTP request the framework sends — the JWK Set fetch, the OAuth client's
+exchange and reads, object storage's — and every request your own reqwest client
+sends through `ReqwestMiddleware`
+([Calling another service](/fundamentals/calling-another-service/)) is the HTTP
+conventions' client operation: a `client` span and a point in
+`http.client.request.duration`.
+
+| Recorded | Value |
+|---|---|
+| span name | the method, `GET`; `HTTP` for a method the conventions do not know |
+| `http.request.method` | the method, or `_OTHER` |
+| `server.address`, `server.port` | the server and port the request went to |
+| `http.response.status_code`, `network.protocol.version` | the status and HTTP version it was answered with |
+| `url.scheme` | `http` or `https`, on the span |
+| `error.type` | the status from `400` up; `timeout` or `_OTHER` for a request that never answered |
+
+The `traceparent` a request carries names its span, so the service it called
+hangs under it — even when the caller gave up on it, which records no status and
+no `error.type` ([Limits](/fundamentals/calling-another-service/#limits)). The
+OTLP export is the one client that records nothing: an export recorded would be
+exported in turn.
 
 **Neither the path nor the query is recorded**, where the conventions ask for
 `url.full`: a webhook's secret sits in its path, a signed URL's in its query, and

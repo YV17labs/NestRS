@@ -16,6 +16,9 @@
 //! - **Fresh for the answer's `Cache-Control: max-age`**, net of its `Age`,
 //!   between the floor and [`JWKS_MAX_AGE_CEILING`]; [`JWKS_DEFAULT_MAX_AGE`]
 //!   when it states none. A stale set keeps serving while its refresh runs.
+//! - **A fetch carries the trace of the token that asked for it** and is
+//!   recorded as the client operation the HTTP conventions name
+//!   (`HttpClientRequest`).
 //! - **A failed refresh keeps the last good set**, said at `warn`, for
 //!   [`JWKS_STALE_CEILING`] past its freshness. Past it, or before any set was
 //!   fetched, a token is [`AuthError::Unavailable`] — the `503` that never
@@ -32,6 +35,7 @@ use tokio::time::Instant;
 
 use nest_rs_config::{ClientTls, ConfigService, Namespaced};
 use nest_rs_core::__private::OpaqueCause;
+use nest_rs_core::client_operation::HttpClientRequest;
 use nest_rs_core::{Backoff, process_seed};
 
 use crate::Algorithm;
@@ -282,13 +286,33 @@ impl Inner {
     /// One fetch of the set, bounded by [`JWKS_FETCH_TIMEOUT`] and
     /// [`JWKS_MAX_BYTES`]; a redirect is an answer like any other `3xx`.
     async fn fetch(&self) -> Result<(JwkSet, Duration), Failure> {
-        let mut response = self
+        let mut request = self
             .client
             .get(self.url.clone())
             .header(ACCEPT, "application/jwk-set+json, application/json")
-            .send()
-            .await
+            .build()
             .map_err(|error| self.call_failed(error))?;
+        let sent = HttpClientRequest::start(
+            request.method(),
+            self.url.scheme(),
+            self.url.host_str(),
+            self.url.port_or_known_default(),
+        );
+        sent.announce(request.headers_mut());
+        let mut response = match self.client.execute(request).await {
+            Ok(response) => {
+                sent.answered(response.status(), response.version());
+                response
+            }
+            Err(error) => {
+                if error.is_timeout() {
+                    sent.timed_out();
+                } else {
+                    sent.failed();
+                }
+                return Err(self.call_failed(error));
+            }
+        };
         let status = response.status();
         if !status.is_success() {
             let retry_after = (status.as_u16() == 429 || status.is_server_error())

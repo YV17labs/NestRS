@@ -156,6 +156,13 @@ pub mod opentelemetry {
     pub use nest_rs_opentelemetry::*;
 }
 
+/// W3C Trace Context and client telemetry on the reqwest client an app builds.
+#[cfg(feature = "reqwest")]
+pub mod reqwest {
+    #[doc(no_inline)]
+    pub use nest_rs_reqwest::*;
+}
+
 /// The OpenAPI 3.1 document and its Swagger UI.
 #[cfg(feature = "openapi")]
 pub mod openapi {

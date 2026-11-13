@@ -1,0 +1,13 @@
+//! W3C Trace Context and client telemetry on the reqwest client an app builds
+//! itself: [`ReqwestMiddleware`], added once where the client is built, carries
+//! the unit of work's trace onto every request and records each as the client
+//! operation the HTTP conventions name.
+//!
+//! The framework opens no outbound HTTP surface of its own for an app: the app
+//! builds and injects its reqwest client, in reqwest's own words.
+#![warn(missing_docs)]
+#![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
+
+mod middleware;
+
+pub use middleware::ReqwestMiddleware;

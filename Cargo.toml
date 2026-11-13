@@ -124,11 +124,14 @@ sea-orm-migration = { version = "=2.0", default-features = false, features = ["s
 # ring backend, which deny.toml bans.
 sqlx = { version = "0.9", default-features = false, features = ["tls-rustls-aws-lc-rs"] }
 
-# Public through `nest_rs::opentelemetry::ReqwestMiddleware`, which an app adds
-# to its own client: the request and the response it writes are reqwest's.
+# Public through `nest_rs::reqwest::ReqwestMiddleware`, which an app adds to its
+# own client: the request and the response it writes are reqwest's. Every other
+# reqwest client the framework opens is private to the crate whose protocol
+# needs it.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }  # public
-# Public: `ReqwestMiddleware` implements its `Middleware`, the market's seam for
-# a layer around a reqwest client, which reqwest itself has none of.
+# Public in `nest-rs-reqwest` alone: `ReqwestMiddleware` implements its
+# `Middleware`, the market's seam for a layer around a reqwest client, which
+# reqwest itself has none of.
 reqwest-middleware = { version = "0.5", default-features = false }  # public
 
 trybuild = "1.0"
@@ -228,6 +231,7 @@ nest-rs-oauth-server = { version = "=7.0.0", path = "crates/nest-rs-oauth-server
 nest-rs-oauth-resource = { version = "=7.0.0", path = "crates/nest-rs-oauth-resource" }
 nest-rs-social = { version = "=7.0.0", path = "crates/nest-rs-social" }
 nest-rs-opentelemetry = { version = "=7.0.0", path = "crates/nest-rs-opentelemetry" }
+nest-rs-reqwest = { version = "=7.0.0", path = "crates/nest-rs-reqwest" }
 nest-rs-testing = { version = "=7.0.0", path = "crates/nest-rs-testing" }
 nest-rs-storage = { version = "=7.0.0", path = "crates/nest-rs-storage" }
 nest-rs-static-files = { version = "=7.0.0", path = "crates/nest-rs-static-files" }

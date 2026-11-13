@@ -2,9 +2,9 @@
 //! operation's — each made once, under the framework's instrumentation scope,
 //! into the bucket boundaries its declaration carries.
 
-use nest_rs_core::duration_histogram::DurationHistogram;
+use nest_rs_core::duration_histogram::{DurationHistogram, MetricAttribute};
 use opentelemetry::metrics::{Histogram, Meter, MeterProvider as _};
-use opentelemetry::{InstrumentationScope, KeyValue};
+use opentelemetry::{InstrumentationScope, KeyValue, StringValue, Value};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 
 use crate::metrics::Made;
@@ -64,4 +64,25 @@ pub(crate) fn framework_scope() -> InstrumentationScope {
 /// The meter the framework's own instruments are made on.
 pub(crate) fn framework_meter(provider: &SdkMeterProvider) -> Meter {
     provider.meter_with_scope(framework_scope())
+}
+
+/// What the text `value`, held by a field keying a duration as `attribute`
+/// says, keys it as: a member of the field's set as that member, never
+/// copied, and `_OTHER` outside it; a bounded field's value as it is.
+pub(crate) fn keyed_text(attribute: &MetricAttribute, value: &str) -> Value {
+    Value::String(
+        attribute
+            .known_value(value)
+            .map_or_else(|| StringValue::from(value.to_owned()), StringValue::from),
+    )
+}
+
+/// What `value`, which no text carries, keys a duration as: as it is where
+/// the field is bounded, through its set as written otherwise.
+pub(crate) fn keyed_scalar(attribute: &MetricAttribute, value: Value) -> Value {
+    if attribute.is_bounded() {
+        value
+    } else {
+        keyed_text(attribute, &value.as_str())
+    }
 }

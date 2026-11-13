@@ -35,7 +35,7 @@ use crate::{
 
 /// A job span's `messaging.operation.name` and `messaging.operation.type`, per
 /// OpenTelemetry's messaging conventions.
-const PROCESS: &str = "process";
+pub(crate) const PROCESS: &str = "process";
 
 /// How long a job sealed by a newer release waits before it is delivered again,
 /// when a consumer of this release hands it back —

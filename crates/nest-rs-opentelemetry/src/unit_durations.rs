@@ -29,7 +29,7 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::{Context, Filter, Layer};
 use tracing_subscriber::registry::{LookupSpan, SpanRef};
 
-use crate::durations::Durations;
+use crate::durations::{Durations, keyed_scalar, keyed_text};
 
 /// Records each measured unit's duration in the histogram it declares.
 pub(crate) struct UnitDurations(Durations);
@@ -157,29 +157,26 @@ impl Timing {
         }
     }
 
-    /// Key the duration by `field` as the text `value`, read through its known
-    /// set where it has one.
+    /// Key the duration by `field` as the text `value`.
     fn text(&mut self, field: &Field, value: &str) {
         let Some((at, attribute)) = self.slot(field) else {
             return;
         };
-        let keyed = match attribute.and_then(|attribute| attribute.known_value(value)) {
-            Some(known) => StringValue::from(known),
-            None => StringValue::from(value.to_owned()),
-        };
-        self.keyed[at] = Some(Value::String(keyed));
+        self.keyed[at] = Some(match attribute {
+            Some(attribute) => keyed_text(attribute, value),
+            None => Value::String(StringValue::from(value.to_owned())),
+        });
     }
 
-    /// Key the duration by `field` as a value no string carries: as it is
-    /// where the field is bounded, through its known set as written otherwise.
+    /// Key the duration by `field` as a value no string carries.
     fn scalar(&mut self, field: &Field, value: Value) {
         let Some((at, attribute)) = self.slot(field) else {
             return;
         };
-        match attribute {
-            Some(attribute) if !attribute.is_bounded() => self.text(field, &value.as_str()),
-            _ => self.keyed[at] = Some(value),
-        }
+        self.keyed[at] = Some(match attribute {
+            Some(attribute) => keyed_scalar(attribute, value),
+            None => value,
+        });
     }
 
     /// The attributes the duration is keyed by, in their declared order.

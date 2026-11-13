@@ -101,8 +101,9 @@ impl MetricAttribute {
         Self { field, known: None }
     }
 
-    /// `field` where its value is one of `known`, and [`OTHER`] otherwise: a
-    /// field the conventions record as the client sent it.
+    /// `field` read through the set its values come from — one the conventions
+    /// or the server close, or the set a field the client wrote may take — as
+    /// the member it equals, never copied, and [`OTHER`] outside it.
     pub const fn known(field: &'static str, known: &'static [&'static str]) -> Self {
         Self {
             field,

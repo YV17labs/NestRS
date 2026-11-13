@@ -20,7 +20,7 @@ const JOB_DURATION: DurationHistogram = DurationHistogram::new(
     REQUEST_BOUNDARIES,
     &[
         MetricAttribute::bounded("messaging.system"),
-        MetricAttribute::bounded("messaging.operation.name"),
+        MetricAttribute::known("messaging.operation.name", &[crate::consume::PROCESS]),
         MetricAttribute::bounded("messaging.destination.name"),
     ],
 );

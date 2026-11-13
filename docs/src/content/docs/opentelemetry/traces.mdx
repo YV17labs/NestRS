@@ -103,6 +103,11 @@ let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
 })?;
 ```
 
+The sampler decides which traces leave, and `RUST_LOG` does not: every
+unit's span is exported whatever the console writes, so `RUST_LOG=warn`
+quiets the console without emptying your traces. A span of your own, or a
+library's, is exported where `RUST_LOG` writes it.
+
 The sampler comes from
 [`opentelemetry_sdk::trace::Sampler`](https://docs.rs/opentelemetry_sdk).
 A pinned ratio outside `[0.0, 1.0]` fails `init_with`, naming

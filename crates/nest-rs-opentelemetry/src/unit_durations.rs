@@ -95,14 +95,8 @@ impl<S> Filter<S> for MeasuredUnits {
     }
 
     fn callsite_enabled(&self, metadata: &'static Metadata<'static>) -> Interest {
-        // Only `operation_span!` declares the parent's id: every other callsite
-        // is settled once, here.
-        let operation = metadata.is_span()
-            && metadata
-                .fields()
-                .field(nest_rs_core::__private::field::PARENT_SPAN_ID)
-                .is_some();
-        if operation {
+        // Whether a unit declares a duration is read as its span is created.
+        if crate::unit_spans::is_unit_span(metadata) {
             Interest::sometimes()
         } else {
             Interest::never()

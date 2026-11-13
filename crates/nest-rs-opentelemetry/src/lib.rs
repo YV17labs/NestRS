@@ -57,6 +57,8 @@ mod testing;
 mod tokio_metrics;
 #[cfg(feature = "otlp")]
 mod unit_durations;
+#[cfg(feature = "otlp")]
+mod unit_spans;
 
 #[cfg(feature = "otlp")]
 pub use attribute::{Attribute, AttributeValue};

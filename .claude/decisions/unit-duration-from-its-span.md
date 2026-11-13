@@ -24,12 +24,14 @@ Refused:
 - **Recording at the operation line**: HTTP files no line with its access log
   off, and `nest_rs::operation=off` silences every line, so a console setting
   would switch the metrics off.
-- **One filter in front of every layer, where the metrics export**:
-  `RUST_LOG=warn` disabled the operation spans, and with them the durations.
-  There the log filter stands in front of the log layers together and the
-  durations carry their own (`MeasuredUnits`); a filter per log layer was
-  refused, since filters that disagree on a callsite leave it to be asked on
-  every event. Where no metric exports, the one filter stays in front of all.
+- **One filter in front of every layer**: `RUST_LOG=warn` disabled the
+  operation spans, and with them the durations and the exported traces. The log
+  filter stands in front of the console and the log bridge together, the
+  durations carry their own (`MeasuredUnits`), and the trace export takes the
+  log filter or every unit's span where traces export (`UnitSpans`, added
+  2026-11-13): the sampler decides which traces leave, `RUST_LOG` what the
+  console writes. A filter per log layer was refused, since filters that
+  disagree on a callsite leave it to be asked on every event.
 - **Keying by whatever the span holds**: a span keeps what the conventions
   require as the client sent it (an MCP method only the client named), and a
   metric attribute's every value is a series a backend keeps. A field the

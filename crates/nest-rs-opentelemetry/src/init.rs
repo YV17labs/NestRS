@@ -3,6 +3,8 @@ use tracing::Dispatch;
 #[cfg(feature = "otlp")]
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::Registry;
+#[cfg(feature = "otlp")]
+use tracing_subscriber::filter::FilterExt as _;
 use tracing_subscriber::layer::SubscriberExt;
 
 use nest_rs_core::__private::{ConsoleLayer, install_global_subscriber, log_filter};
@@ -98,32 +100,25 @@ impl OpenTelemetry {
                 .logger_provider
                 .as_ref()
                 .map(opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new);
-            // Where a unit's duration is counted, the log filter stands in
-            // front of the log layers alone, so the durations count whatever
-            // the console writes; elsewhere in front of all, where every
-            // callsite it settles stays settled.
+            // The log filter stands in front of the log layers alone: an
+            // exported trace takes every unit's span besides, and the durations
+            // count every unit, whatever the console writes. A `None` layer
+            // would answer every callsite, so the durations' arm is the other's
+            // with one layer more.
+            let logs = ConsoleLayer::new(console.format, console.source_location)
+                .and_then(appender_layer)
+                .with_filter(filter);
+            let unit_spans = crate::unit_spans::UnitSpans::new(exporters.traces_export);
+            let traces = tracing_opentelemetry::layer()
+                .with_tracer(exporters.tracer)
+                .with_filter(log_filter(&console.filter).or(unit_spans));
             let subscriber = match exporters.meter_provider.as_ref() {
-                None => Dispatch::new(
-                    Registry::default()
-                        .with(filter)
-                        .with(ConsoleLayer::new(console.format, console.source_location))
-                        .with(tracing_opentelemetry::layer().with_tracer(exporters.tracer))
-                        .with(appender_layer),
-                ),
+                None => Dispatch::new(Registry::default().with(logs).with(traces)),
                 Some(provider) => Dispatch::new(
-                    Registry::default()
-                        .with(
-                            ConsoleLayer::new(console.format, console.source_location)
-                                .and_then(
-                                    tracing_opentelemetry::layer().with_tracer(exporters.tracer),
-                                )
-                                .and_then(appender_layer)
-                                .with_filter(filter),
-                        )
-                        .with(
-                            crate::unit_durations::UnitDurations::new(provider)
-                                .with_filter(crate::unit_durations::MeasuredUnits),
-                        ),
+                    Registry::default().with(logs).with(traces).with(
+                        crate::unit_durations::UnitDurations::new(provider)
+                            .with_filter(crate::unit_durations::MeasuredUnits),
+                    ),
                 ),
             };
             if !install_global_subscriber(subscriber) {

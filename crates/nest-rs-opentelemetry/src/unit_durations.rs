@@ -1,7 +1,9 @@
 //! The duration of every unit of work whose edge's telemetry conventions name
 //! a histogram for it — `http.server.request.duration`,
 //! `messaging.process.duration`, `mcp.server.operation.duration` — recorded
-//! from the unit's span, from its opening to its close.
+//! from the unit's span, from its opening to the end its edge records
+//! (`record_end`), or to its close for a unit whose end is never recorded: a
+//! child span or work carried past the answer holds the span open beyond it.
 //!
 //! The layer runs under a filter of its own, so a console filtered to `warn`
 //! and a sampler keeping one trace in a hundred still count every unit. Which
@@ -22,9 +24,10 @@ use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::Interest;
 use tracing::{Metadata, Subscriber};
+use tracing_subscriber::Registry;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::{Context, Filter, Layer};
-use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::registry::{LookupSpan, SpanRef};
 
 use crate::durations::Durations;
 
@@ -68,9 +71,16 @@ where
     }
 
     fn on_close(&self, id: Id, ctx: Context<'_, S>) {
-        let Some(span) = ctx.span(&id) else {
-            return;
-        };
+        if let Some(span) = ctx.span(&id) {
+            self.end(&span);
+        }
+    }
+}
+
+impl UnitDurations {
+    /// Record the duration of the unit `span` opened, once: from its opening
+    /// to now.
+    fn end<'a, R: LookupSpan<'a>>(&self, span: &SpanRef<'a, R>) {
         let Some(timing) = span.extensions_mut().remove::<Timing>() else {
             return;
         };
@@ -78,6 +88,22 @@ where
         self.0
             .record(timing.declared, seconds, &timing.into_attributes());
     }
+}
+
+/// End the duration of the unit `span` opened, where the subscriber holding
+/// it records durations; what `init` seeds as `record_end`'s hook.
+pub(crate) fn end_unit(span: &tracing::Span) {
+    span.with_subscriber(|(id, dispatch)| {
+        let (Some(durations), Some(registry)) = (
+            dispatch.downcast_ref::<UnitDurations>(),
+            dispatch.downcast_ref::<Registry>(),
+        ) else {
+            return;
+        };
+        if let Some(span) = registry.span(id) {
+            durations.end(&span);
+        }
+    });
 }
 
 /// The duration the unit whose span is being created declares, if any.
@@ -214,10 +240,13 @@ mod tests {
     use crate::durations::{SCOPE, SECONDS};
     use crate::testing::{metered, points};
 
-    /// Every export of what `work` recorded through the layer.
+    /// Every export of what `work` recorded through the layer, beside a layer
+    /// enabling every span, as a console or a trace export does.
     fn recorded(work: impl FnOnce()) -> Vec<ResourceMetrics> {
+        nest_rs_core::__private::set_unit_end(end_unit);
         let (provider, exporter) = metered();
         let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::layer::Identity::new())
             .with(UnitDurations::new(&provider).with_filter(MeasuredUnits));
         tracing::subscriber::with_default(subscriber, work);
         provider.force_flush().expect("the provider flushes");
@@ -308,6 +337,34 @@ mod tests {
             points(&exported, TIMED_DURATION.name()),
             vec![(attributes(&[(STEP, "fetch"), (VERB, "write")]), 2)],
         );
+    }
+
+    /// What the probe's duration summed in `exported`, in seconds.
+    fn summed(exported: &[ResourceMetrics]) -> f64 {
+        let (_, metric) = timed(exported).expect("the unit's duration was recorded");
+        let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
+            panic!("a duration is an f64 histogram");
+        };
+        histogram.data_points().map(|point| point.sum()).sum()
+    }
+
+    /// A child span, or work carried past the answer, holds the unit's span
+    /// open; the duration ends where the unit's outcome is recorded.
+    #[test]
+    fn a_units_duration_ends_at_its_outcome_whatever_holds_its_span_open() {
+        // The duration had the unit ended at its span's close: the bound.
+        const HELD: std::time::Duration = std::time::Duration::from_millis(100);
+        let exported = recorded(|| {
+            let span = nestrs_unit_probe::open_timed(&Correlation::minted(None), "fetch", "read");
+            let child = tracing::info_span!(parent: &span, "probe.child");
+            nest_rs_core::operation_log::record_outcome(&span, nest_rs_core::operation_log::OK);
+            drop(span);
+            std::thread::sleep(HELD);
+            drop(child);
+        });
+
+        let seconds = summed(&exported);
+        assert!(seconds < HELD.as_secs_f64(), "{seconds} s");
     }
 
     #[test]

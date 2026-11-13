@@ -44,6 +44,9 @@ operation, a tool call running long.
   filter of their own: a console filtered to `RUST_LOG=warn` and a sampler
   keeping one trace in a hundred count every request all the same, where a
   collector deriving metrics from spans counts the ones it was sent.
+- **A duration ends with the answer.** It stops where the edge records the
+  unit's outcome, the same instant as its line's `duration_ms`: a child span
+  or work handed off past the answer keeps the span open, never the clock.
 - **Every key is the server's.** `http.route` is the template, never the path;
   a method outside the HTTP conventions' known set is `_OTHER`; an MCP method
   only the client named — a custom one — reads `_OTHER` too, though the span

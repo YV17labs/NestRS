@@ -11,6 +11,7 @@
 //! ambiguous on a dotted name beside a path target such as [`TARGET`], so
 //! `ws.event = %event` does not compile on the line.
 
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::duration_histogram::DurationHistogram;
@@ -113,9 +114,20 @@ const HARNESS_WORD: &str = "testing";
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use super::{
-        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, Unit, eq_bytes, is_crate_root,
-        is_edge_root, is_lib_name,
+        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, UNIT_END, Unit, UnitEnd, eq_bytes,
+        is_crate_root, is_edge_root, is_lib_name,
     };
+
+    /// Seed what runs as each unit ends ([`record_end`](super::record_end)).
+    /// Called once, at boot, by the observability stack — never by an
+    /// application.
+    pub fn set_unit_end(end: UnitEnd) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "seeded once at boot; a second install keeps the first"
+        )]
+        let _ = UNIT_END.set(end);
+    }
 
     /// Evaluated in a `const` by [`unit!`](macro@crate::unit), which passes the
     /// declaring crate as `owner`: a framework edge's unit, a kernel unit, or
@@ -401,7 +413,25 @@ pub fn record_outcome(span: &tracing::Span, outcome: &str) {
     if outcome != OK {
         record_error(span, outcome);
     }
+    record_end(span);
 }
+
+/// Record on a unit's span that the unit ended — its answer given, its work
+/// settled — so a duration read off the span stops here, whatever still holds
+/// the span open: a child span, work carried past the answer.
+///
+/// [`record_outcome`] calls it; an edge recording its outcome's class itself
+/// calls it once the class is recorded.
+pub fn record_end(span: &tracing::Span) {
+    if let Some(end) = UNIT_END.get() {
+        end(span);
+    }
+}
+
+/// What an observability stack does as a unit ends.
+type UnitEnd = fn(&tracing::Span);
+
+static UNIT_END: OnceLock<UnitEnd> = OnceLock::new();
 
 /// Record on a unit's span that it ended in an error of class `error_type`.
 ///

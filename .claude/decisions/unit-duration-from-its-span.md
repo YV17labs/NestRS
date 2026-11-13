@@ -11,11 +11,17 @@ the unit (`unit!`'s `duration:`, a `DurationHistogram`, which a client operation
 names too): `http.request` records in
 `http.server.request.duration`, `queue.job` in `messaging.process.duration`,
 `mcp.operation` in `mcp.server.operation.duration`. `nest-rs-opentelemetry`
-installs a layer timing each such span from its opening to its close, keyed by
+installs a layer timing each such span from its opening to the end its edge
+records (`record_end`, which `record_outcome` calls), keyed by
 the span fields the declaration names, under a filter of its own, installed
 only when the metrics export.
 
 Refused:
+
+- **Timing to the span's close** (until 2026-11-13): a child span holds its
+  parent open, and so does a `TaskContext` carrying work past the answer, so a
+  request answered in 5 ms with 30 s of work handed off read 30 s. The span's
+  close is the end only for a unit whose edge records none.
 
 - **Deriving the metrics in the collector** (a spanmetrics connector): it
   counts the spans it was sent, so a sampler keeping one trace in a hundred

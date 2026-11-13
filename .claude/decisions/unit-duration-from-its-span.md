@@ -32,12 +32,14 @@ Refused:
   would switch the metrics off.
 - **One filter in front of every layer**: `RUST_LOG=warn` disabled the
   operation spans, and with them the durations and the exported traces. The log
-  filter stands in front of the console and the log bridge together, the
-  durations carry their own (`MeasuredUnits`), and the trace export takes the
-  log filter or every unit's span where traces export (`UnitSpans`, added
+  filter stands in front of the console and the log bridge together; the
+  durations take it or every unit declaring one (`MeasuredUnits`), and the trace
+  export it or every unit's span where traces export (`UnitSpans`, added
   2026-11-13): the sampler decides which traces leave, `RUST_LOG` what the
-  console writes. A filter per log layer was refused, since filters that
-  disagree on a callsite leave it to be asked on every event.
+  console writes. Each extra filter is joined to the log filter so that every
+  layer agrees on a callsite the log filter settles: filters that disagree leave
+  it to be asked on every event, which is why a filter per log layer was
+  refused, and why the durations stopped carrying `MeasuredUnits` alone.
 - **Keying by whatever the span holds**: a span keeps what the conventions
   require as the client sent it (an MCP method only the client named), and a
   metric attribute's every value is a series a backend keeps. A field the

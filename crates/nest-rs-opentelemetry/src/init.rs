@@ -86,11 +86,12 @@ impl OpenTelemetry {
                 .logger_provider
                 .as_ref()
                 .map(opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new);
-            // The log filter stands in front of the log layers alone: an
-            // exported trace takes every unit's span besides, and the durations
-            // count every unit, whatever the console writes. A `None` layer
-            // would answer every callsite, so the durations' arm is the other's
-            // with one layer more.
+            // Every layer takes the log filter, the trace export every unit's
+            // span besides and the durations every unit declaring one, whatever
+            // the console writes: filters agreeing on a callsite the log filter
+            // settles keep it settled, where disagreeing ones would ask it on
+            // every event. A `None` layer would answer every callsite, so the
+            // durations' arm is the other's with one layer more.
             let logs = ConsoleLayer::new(console.format, console.source_location)
                 .and_then(appender_layer)
                 .with_filter(filter);
@@ -100,12 +101,11 @@ impl OpenTelemetry {
                 .with_filter(log_filter(&console.filter).or(unit_spans));
             let subscriber = match exporters.meter_provider.as_ref() {
                 None => Dispatch::new(Registry::default().with(logs).with(traces)),
-                Some(provider) => Dispatch::new(
-                    Registry::default().with(logs).with(traces).with(
-                        crate::unit_durations::UnitDurations::new(provider)
-                            .with_filter(crate::unit_durations::MeasuredUnits),
+                Some(provider) => Dispatch::new(Registry::default().with(logs).with(traces).with(
+                    crate::unit_durations::UnitDurations::new(provider).with_filter(
+                        log_filter(&console.filter).or(crate::unit_durations::MeasuredUnits),
                     ),
-                ),
+                )),
             };
             if !install_global_subscriber(subscriber) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));

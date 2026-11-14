@@ -195,6 +195,54 @@ mod tests {
         );
     }
 
+    /// What a unit's span exports, run through `record` under an SDK exporting
+    /// to memory.
+    fn exported_status(record: impl FnOnce(&tracing::Span)) -> opentelemetry::trace::Status {
+        use opentelemetry::trace::TracerProvider as _;
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        super::install();
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("units")));
+        tracing::subscriber::with_default(subscriber, || {
+            record(&nestrs_unit_probe::open(&Correlation::minted(None)));
+        });
+
+        let exported = exporter.get_finished_spans().expect("the spans exported");
+        let [exported] = exported.as_slice() else {
+            panic!("one span exported: {exported:#?}");
+        };
+        exported.status.clone()
+    }
+
+    /// A cause kept for a failure its unit answered past describes nothing: a
+    /// unit filing `ok` exports no status, one stopped first its class alone.
+    #[test]
+    fn a_cause_its_unit_answered_past_is_never_exported() {
+        use opentelemetry::trace::Status;
+
+        let answered = exported_status(|span| {
+            nest_rs_core::operation_log::record_cause(span, "the store refused the write");
+            nestrs_unit_probe::settle(span, std::time::Instant::now());
+        });
+        assert_eq!(answered, Status::Unset);
+
+        let stopped = exported_status(|span| {
+            nest_rs_core::operation_log::record_cause(span, "the store refused the write");
+            nest_rs_core::operation_log::record_outcome(
+                &nestrs_unit_probe::WORK,
+                span,
+                nest_rs_core::operation_log::CANCELLED,
+            );
+        });
+        assert_eq!(stopped, Status::error(""));
+    }
+
     #[test]
     fn a_restarted_trace_has_no_parent_to_link() {
         assert_eq!(Correlation::minted(None).parent_id(), None);

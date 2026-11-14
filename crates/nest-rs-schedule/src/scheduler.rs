@@ -1483,11 +1483,20 @@ impl Runner {
             move || Err(Failure::from(JobTimedOut::new(timeout))),
         ))
         .await;
+        let said = match &outcome {
+            Ok(Ok(_)) => None,
+            Ok(Err(failure)) => Some(nest_rs_core::error_message(failure.error())),
+            Err(panic) => Some(nest_rs_core::panic::panic_message(panic.as_ref())),
+        };
+        if let Some(said) = &said {
+            nest_rs_core::operation_log::record_cause(&tracing::Span::current(), said);
+        }
         line.file(match &outcome {
             Ok(Ok(_)) => nest_rs_core::operation_log::OK,
             Ok(Err(_)) => nest_rs_core::operation_log::ERROR,
             Err(_) => nest_rs_core::operation_log::PANIC,
         });
+        let said = said.unwrap_or_default();
         match outcome {
             Ok(Ok(_)) if !tail.ran => tracing::debug!(
                 target: crate::TARGET,
@@ -1503,8 +1512,6 @@ impl Runner {
                     || caught_problem(&failure)
                         .is_some_and(|problem| !problem.is_server_error()) =>
             {
-                let said = nest_rs_core::error_message(failure.error());
-                nest_rs_core::operation_log::record_cause(&tracing::Span::current(), &said);
                 tracing::warn!(
                     target: crate::TARGET,
                     host = id.host,
@@ -1514,8 +1521,6 @@ impl Runner {
                 );
             }
             Ok(Err(failure)) => {
-                let said = nest_rs_core::error_message(failure.error());
-                nest_rs_core::operation_log::record_cause(&tracing::Span::current(), &said);
                 tracing::error!(
                     target: crate::TARGET,
                     host = id.host,
@@ -1529,10 +1534,6 @@ impl Runner {
                 );
             }
             Err(panic) => {
-                nest_rs_core::operation_log::record_cause(
-                    &tracing::Span::current(),
-                    &nest_rs_core::panic::panic_message(panic.as_ref()),
-                );
                 nest_rs_core::contained_panic!(
                     target: crate::TARGET,
                     panic.as_ref(),

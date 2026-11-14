@@ -143,10 +143,11 @@ and declaring a field nothing fills is the same defect with the opposite sign.
   their line still filing `error`
   (`.claude/decisions/client-error-is-its-line.md`). A unit the server failed
   says why on its span too: the sentence its failure line files as `error`, or
-  its panic line's, is its status description, recorded where that line is
-  (`operation_log::record_cause`) and never for a failure its caller earned. A
-  request cut before it answered is named for the template its route table
-  entry recorded, never exported anonymous.
+  its panic line's, is its status description, kept where that line is filed
+  (`operation_log::record_cause`) and written only with the error the unit's
+  own line records, never for a failure its caller earned. A request cut
+  before it answered is named for the template its route table entry
+  recorded, never exported anonymous.
 
 ## What a log line carries
 

@@ -97,6 +97,14 @@ impl LedgerController {
         Ok(format!("settled {}", parsed.opaque()?))
     }
 
+    #[get("/recovered")]
+    #[public]
+    async fn recovered(&self) -> Result<String> {
+        let refused = settled().opaque().expect_err("the ledger refuses");
+        drop(refused.into_response());
+        Ok("settled from the replica".to_owned())
+    }
+
     #[get("/opaqued/{id}")]
     #[public]
     async fn opaqued(&self, Path(id): Path<u64>) -> Result<String> {
@@ -339,6 +347,30 @@ async fn a_request_its_caller_failed_describes_nothing_on_its_span() {
         .assert_status(StatusCode::CONFLICT);
 
     let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}
+
+/// A `5xx` a handler rendered by hand, then answered past with a `2xx`, fails
+/// nothing: the chain is filed, and the request's span neither records an
+/// error nor says why.
+#[tokio::test]
+async fn a_5xx_rendered_by_hand_then_answered_2xx_describes_nothing_on_the_requests_span() {
+    let client = crate::boot::<LedgerModule>().await;
+    let logs = LogCapture::install();
+    client
+        .get("/ledger/recovered")
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    logs.expect_one(nest_rs_http::target::HTTP, "request failed");
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(span.field("otel.status_code"), None, "{:?}", span.fields);
     assert_eq!(
         span.field("otel.status_description"),
         None,

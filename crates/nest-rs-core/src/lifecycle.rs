@@ -316,6 +316,16 @@ impl HookUnit {
         let ended = crate::with_request_scope(None, self.correlation.clone(), panic::contain(body))
             .instrument(self.span.clone())
             .await;
+        match &ended {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                crate::operation_log::record_cause(&self.span, &crate::error_message(&**err));
+            }
+            Err(payload) => crate::operation_log::record_cause(
+                &self.span,
+                &crate::panic::panic_message(payload.as_ref()),
+            ),
+        }
         line.file(match &ended {
             Ok(Ok(())) => crate::operation_log::OK,
             Ok(Err(_)) => crate::operation_log::ERROR,
@@ -384,15 +394,8 @@ pub(crate) async fn run_phase(
         {
             Ok(Ok(Ok(()))) => continue,
             Err(interrupted) => interrupted.into(),
-            Ok(Ok(Err(err))) => {
-                crate::operation_log::record_cause(&unit.span, &crate::error_message(&*err));
-                err.context(format!("{step} failed"))
-            }
+            Ok(Ok(Err(err))) => err.context(format!("{step} failed")),
             Ok(Err(payload)) => {
-                crate::operation_log::record_cause(
-                    &unit.span,
-                    &crate::panic::panic_message(payload.as_ref()),
-                );
                 unit.enter(|| {
                     crate::contained_panic!(
                         target: crate::target::LIFECYCLE,
@@ -440,7 +443,6 @@ pub(crate) async fn run_phase_lenient(
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(err))) => {
                 let said = crate::error_message(&*err);
-                crate::operation_log::record_cause(&unit.span, &said);
                 tracing::error!(
                     target: crate::target::LIFECYCLE,
                     phase = phase.as_str(),
@@ -452,10 +454,6 @@ pub(crate) async fn run_phase_lenient(
                 );
             }
             Ok(Err(payload)) => {
-                crate::operation_log::record_cause(
-                    &unit.span,
-                    &crate::panic::panic_message(payload.as_ref()),
-                );
                 crate::contained_panic!(
                     target: crate::target::LIFECYCLE,
                     payload.as_ref(),

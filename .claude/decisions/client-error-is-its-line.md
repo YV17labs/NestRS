@@ -243,9 +243,18 @@ change: each failed unit's span held no `otel.status_description` beside the lin
   GraphQL's and MCP's withheld lines, a job attempt's failure, a tick's, a listener
   call's and a lifecycle hook's; `panic` on a unit's own unwind. `operation_span!`
   declares `otel.status_description`, the field `tracing-opentelemetry` 0.34 reads as
-  the status description; `operation_log::record_cause` records it where the line is
+  the status description; `operation_log::record_cause` keeps it where the line is
   filed, on the unit's span or, from inside code the app instrumented, on the nearest
-  unit's span above.
+  unit's span above, and `record_error` writes it when the unit records its failure.
+  So a description stands beside an `Error` status its unit's line recorded and nowhere
+  else: a `5xx` a handler rendered by hand (`HttpError::into_response` files its chain
+  at once) then answered past with a `2xx`, and a chain a subscription's item filed on
+  a graphql-ws socket, which ends no unit, describe nothing; a unit stopped first
+  (`cancelled`) records its class alone. Seen by tests red before it, where the cause was
+  written as the chain was filed: the request's span and the socket's carried a
+  description and no error. A root field's failure describes its `graphql.field`; a
+  resolver's below it, written by hand or a `#[field_resolver]`, its `graphql.operation`,
+  whose line files `error` — never the `/graphql` request, answered `200`.
 - **A unit no client sent** — a job attempt, a tick, a listener call — fails whatever a
   layer answered: a job a filter acknowledged, a tick or a call a filter skipped or
   said was the client's, its line filing `error` and its span recording it. So it says
@@ -269,6 +278,9 @@ change: each failed unit's span held no `otel.status_description` beside the lin
   tool handled included, so the description is recorded where the operation is known
   to have failed the server's way (`OperationLine::failed`), from the chain its answer
   kept, never where the chain is filed.
-- **The limit**: a chain filed outside every unit — an `HttpError` rendered by hand
-  where no request is in flight, an MCP failure answered outside any operation — has no
-  span to describe.
+- **The limits**:
+  - A chain filed outside every unit — an `HttpError` rendered by hand where no request
+    is in flight, an MCP failure answered outside any operation — has no span to
+    describe.
+  - Without `nest-rs-core`'s `logging` feature, which reads the subscriber's registry,
+    nothing is kept; no OpenTelemetry export runs without it.

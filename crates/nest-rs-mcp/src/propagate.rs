@@ -941,30 +941,22 @@ impl<'a> OperationLine<'a> {
     /// The operation failed as `failed_as` says, which its span records in
     /// place of the outcome word its line files, `error`: `tracing-opentelemetry`
     /// keeps every value a field is recorded with, so the class is recorded once
-    /// and the line files with the span taken out. Where the server failed it,
-    /// the span says why in `cause`, the chain its answer kept.
+    /// and the line files with the span taken out. `cause`, the chain its answer
+    /// kept, says why where the class is the server's.
     fn failed(mut line: FiledOnce<Self>, failed_as: FailedAs, cause: Option<&str>) {
         let span = std::mem::replace(&mut line.span, tracing::Span::none());
-        let the_servers = match failed_as {
-            FailedAs::ToolError => {
-                operation_log::record_error(&span, TOOL_ERROR);
-                true
-            }
+        if let Some(said) = cause {
+            operation_log::record_cause(&span, said);
+        }
+        match failed_as {
+            FailedAs::ToolError => operation_log::record_error(&span, TOOL_ERROR),
             FailedAs::Answered(code) => {
                 span.record(RPC_RESPONSE_STATUS_CODE, tracing::field::display(code.0));
-                let the_servers = !is_the_callers(code);
-                if the_servers {
+                if !is_the_callers(code) {
                     operation_log::record_error(&span, &code.0.to_string());
                 }
-                the_servers
             }
-            FailedAs::Unit => {
-                operation_log::record_error(&span, operation_log::ERROR);
-                true
-            }
-        };
-        if let Some(said) = cause.filter(|_| the_servers) {
-            operation_log::record_cause(&span, said);
+            FailedAs::Unit => operation_log::record_error(&span, operation_log::ERROR),
         }
         operation_log::record_end(&crate::unit::OPERATION, &span);
         line.file(operation_log::ERROR);

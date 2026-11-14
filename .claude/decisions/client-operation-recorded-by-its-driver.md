@@ -137,9 +137,11 @@ the unit is, 2,560 spans reached the exporter — one batch and the queue — an
 another unit's span, ended after them, was dropped.
 
 - **Past `CLIENT_SPANS_PER_UNIT` spans an operation records its duration and no
-  span**: the SDK's export batch (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE`'s default,
-  512, the SDK's constant read rather than copied), so one unit never fills more
-  than one export. The metrics stay exact: every operation is counted.
+  span**: the SDK's default export batch (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE`'s
+  default, 512, the SDK's constant read rather than copied, and not the value a
+  deployment sets), so one unit takes at most that many places of the queue. It
+  bounds one unit's share; it promises the other units nothing. The metrics stay
+  exact: every operation is counted.
 - **The count is the unit's**, one atomic integer its correlation and each of its
   client operations' share (`nest_rs_core::__private::ClientSpans`), incremented
   once per operation of a sampled trace and never where the trace is not

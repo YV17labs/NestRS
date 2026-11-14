@@ -5,10 +5,11 @@
 //! An operation sent outside every traced unit — a worker's poll, a relay's
 //! claim — records its duration and no span: a root span per poll would bury
 //! the traces an operator reads. A unit makes at most
-//! [`CLIENT_SPANS_PER_UNIT`] client spans, one export batch: past it an
-//! operation records its duration and no span, and the unit's span says how
-//! many it did not make, so a loop of a hundred thousand commands costs no
-//! other unit its spans in the exporter's queue. The unit is the kernel's correlation the
+//! [`CLIENT_SPANS_PER_UNIT`] client spans, the SDK's default export batch:
+//! past it an operation records its duration and no span, and the unit's span
+//! says how many it did not make, so a loop of a hundred thousand commands takes
+//! no more of the exporter's queue than that, which bounds its share and
+//! promises the other units nothing. The unit is the kernel's correlation the
 //! operation carries, never the `tracing` span entered: the ids a
 //! `traceparent` announced are the correlation's, and a task can run a unit
 //! with no span entered.
@@ -32,8 +33,8 @@ use tracing_subscriber::registry::LookupSpan as _;
 
 use crate::durations::{Durations, framework_scope};
 
-/// The client spans one unit makes at most: the SDK's export batch, so one
-/// unit never fills more than one export.
+/// The client spans one unit makes at most: the SDK's default export batch,
+/// whatever `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` a deployment sets.
 pub(crate) const CLIENT_SPANS_PER_UNIT: u64 = OTEL_BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT as u64;
 
 /// The attribute on a unit's span counting the client spans it did not make,

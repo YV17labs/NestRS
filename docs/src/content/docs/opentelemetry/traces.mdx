@@ -206,13 +206,16 @@ a point in `db.client.operation.duration`.
 - **A span only under a unit.** An operation sent outside every traced unit —
   a queue worker's poll, the outbox relay's claim — records its duration and no
   span, so a backend is not handed a root trace per poll.
-- **At most 512 spans a unit.** A unit makes no more client spans than one
-  export batch holds: past them, an operation still counts in its duration and
-  makes no span, and the unit's span says how many it did not make in
+- **At most 512 spans a unit.** A unit makes no more client spans than the
+  SDK's default export batch holds — 512, whatever `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`
+  is set to: past them, an operation still counts in its duration and makes no
+  span, and the unit's span says how many it did not make in
   `dropped_client_spans_count`. An import job sending fifty thousand commands
-  then costs the other requests of that moment none of their spans in the
-  exporter's queue. A unit it causes, a WebSocket message on its socket among
-  them, counts its own.
+  then takes at most 512 places of the exporter's queue, 2,048 by default. That
+  leaves the other requests of that moment the rest; it does not promise they
+  lose nothing, since several such jobs at once, or a burst of ordinary
+  requests, still fill it. A unit it causes, a WebSocket message on its socket
+  among them, counts its own.
 - **Nothing is timed where nothing records.** With traces and metrics both off,
   no driver reads the clock.
 

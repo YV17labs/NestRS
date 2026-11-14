@@ -91,7 +91,7 @@ impl UnitDurations {
 }
 
 /// End the duration of the unit `span` opened, where the subscriber holding
-/// it records durations; what `init` seeds as `record_end`'s hook.
+/// it records durations, as the linker ends a unit declaring one.
 pub(crate) fn end_unit(span: &tracing::Span) {
     span.with_subscriber(|(id, dispatch)| {
         let (Some(durations), Some(registry)) = (
@@ -240,7 +240,7 @@ mod tests {
     /// Every export of what `work` recorded through the layer, beside a layer
     /// enabling every span, as a console or a trace export does.
     fn recorded(work: impl FnOnce()) -> Vec<ResourceMetrics> {
-        nest_rs_core::__private::set_unit_end(end_unit);
+        nest_rs_core::__private::set_unit_end(|_, span| end_unit(span), false);
         let (provider, exporter) = metered();
         let subscriber = tracing_subscriber::registry()
             .with(tracing_subscriber::layer::Identity::new())

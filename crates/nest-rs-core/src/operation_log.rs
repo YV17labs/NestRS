@@ -114,8 +114,8 @@ const HARNESS_WORD: &str = "testing";
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use super::{
-        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, SPAN_RENAME, SpanRename, UNIT_END,
-        Unit, UnitEnd, eq_bytes, is_crate_root, is_edge_root, is_lib_name,
+        EVERY_UNIT, Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, SPAN_RENAME,
+        SpanRename, UNIT_END, Unit, UnitEnd, eq_bytes, is_crate_root, is_edge_root, is_lib_name,
     };
 
     /// Whether `a` and `b` are the same string, where a `const` needs to know.
@@ -134,15 +134,16 @@ pub(crate) mod __private {
         let _ = SPAN_RENAME.set(rename);
     }
 
-    /// Seed what runs as each unit ends ([`record_end`](super::record_end)).
-    /// Called once, at boot, by the observability stack — never by an
-    /// application.
-    pub fn set_unit_end(end: UnitEnd) {
+    /// Seed what runs as each unit ends ([`record_end`](super::record_end)):
+    /// for `every_unit`, or for a unit declaring a duration alone. Called once,
+    /// at boot, by the observability stack — never by an application.
+    pub fn set_unit_end(end: UnitEnd, every_unit: bool) {
         #[expect(
             clippy::let_underscore_must_use,
             reason = "seeded once at boot; a second install keeps the first"
         )]
         let _ = UNIT_END.set(end);
+        EVERY_UNIT.store(every_unit, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Evaluated in a `const` by [`unit!`](macro@crate::unit), which passes the
@@ -475,23 +476,27 @@ static SPAN_RENAME: OnceLock<SpanRename> = OnceLock::new();
 
 /// Record on `unit`'s span that it ended — its answer given, its work settled
 /// — so the duration it declares stops here, whatever still holds the span
-/// open: a child span, work carried past the answer. A unit declaring no
-/// duration records nothing.
+/// open: a child span, work carried past the answer; and so its span says
+/// what its observability stack counted of it.
 ///
 /// [`record_outcome`] calls it; an edge recording its outcome's class itself
 /// calls it once the class is recorded.
 pub fn record_end(unit: &Unit, span: &tracing::Span) {
-    if unit.duration().is_some()
+    if (unit.duration().is_some() || EVERY_UNIT.load(std::sync::atomic::Ordering::Relaxed))
         && let Some(end) = UNIT_END.get()
     {
-        end(span);
+        end(unit, span);
     }
 }
 
 /// What an observability stack does as a unit ends.
-type UnitEnd = fn(&tracing::Span);
+type UnitEnd = fn(&Unit, &tracing::Span);
 
 static UNIT_END: OnceLock<UnitEnd> = OnceLock::new();
+
+/// Whether [`UNIT_END`] runs for every unit, or for a unit declaring a
+/// duration alone: a stack counting nothing else costs no other unit a call.
+static EVERY_UNIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Record on a unit's span that it ended in an error of class `error_type`.
 ///
@@ -699,6 +704,28 @@ macro_rules! operation_line {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How many units the seeded hook was called for.
+    static ENDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn count_end(_: &Unit, _: &tracing::Span) {
+        ENDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A stack timing durations alone costs a unit declaring none no call.
+    #[test]
+    fn a_hook_for_measured_units_is_not_called_for_a_unit_declaring_no_duration() {
+        __private::set_unit_end(count_end, false);
+        record_end(&crate::unit::HOOK, &tracing::Span::none());
+        assert_eq!(ENDED.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_hook_for_every_unit_is_called_for_a_unit_declaring_no_duration() {
+        __private::set_unit_end(count_end, true);
+        record_end(&crate::unit::HOOK, &tracing::Span::none());
+        assert_eq!(ENDED.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn the_duration_keeps_microseconds_rather_than_rounding_to_zero() {

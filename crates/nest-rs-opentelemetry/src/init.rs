@@ -114,7 +114,6 @@ impl OpenTelemetry {
             // a refused `init` drops its exporters, and nothing records into them.
             exporters.seat_globals();
             if let Some(provider) = &exporters.meter_provider {
-                nest_rs_core::__private::set_unit_end(crate::unit_durations::end_unit);
                 let meter = crate::durations::framework_meter(provider);
                 crate::process_metrics::ProcessMetrics::observe(&meter, started);
                 crate::tokio_metrics::TokioMetrics::observe(&meter);
@@ -123,6 +122,7 @@ impl OpenTelemetry {
             // Seeded here rather than mounted by a module: a queue worker imports no
             // transport.
             crate::linker::install();
+            crate::linker::end_units(exporters.traces_export, exporters.meter_provider.is_some());
             crate::client_operations::install(
                 exporters
                     .traces_export

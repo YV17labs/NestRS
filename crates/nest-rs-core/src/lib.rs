@@ -323,10 +323,11 @@ pub mod __private {
     };
     pub use crate::tenant::TenantId;
     pub use crate::trace_context::__private::{
-        current_correlation, hex, link_span, minted_unsampled, pending_ids,
-        pending_starts_unsampled, pending_unit, set_actor_id, set_sampled, set_span_linker,
-        with_pending_ids, with_pending_unit,
+        client_operation_of, client_spans, count_client_spans, current_correlation, hex, link_span,
+        minted_unsampled, pending_ids, pending_starts_unsampled, pending_unit, set_actor_id,
+        set_sampled, set_span_linker, with_pending_ids, with_pending_unit,
     };
+    pub use crate::trace_context::ClientSpans;
     pub use crate::trace_context::field;
     pub use crate::type_name::{short_type_name, shorten};
     pub use crate::unit_context::{

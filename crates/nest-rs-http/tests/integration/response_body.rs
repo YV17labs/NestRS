@@ -225,14 +225,14 @@ async fn connect(port: u16) -> TcpStream {
 /// How many units have ended, as `record_end` tells the observability stack.
 static ENDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-fn count_end(_: &tracing::Span) {
+fn count_end(_: &nest_rs_core::operation_log::Unit, _: &tracing::Span) {
     ENDED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Request `path` from an app booted on `M`, read its whole answer, and say
 /// how many units ended meanwhile.
 async fn ended_answering<M: nest_rs_core::Module + 'static>(path: &str) -> usize {
-    nest_rs_core::__private::set_unit_end(count_end);
+    nest_rs_core::__private::set_unit_end(count_end, false);
     let client = boot::<M>().await;
     let before = ENDED.load(std::sync::atomic::Ordering::SeqCst);
     let resp = client.get(path).send().await.0;

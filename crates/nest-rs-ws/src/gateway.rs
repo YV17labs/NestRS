@@ -994,6 +994,7 @@ impl<'a> UnitLine<'a> {
     fn unwound(line: FiledOnce<Self>, payload: &(dyn std::any::Any + Send)) {
         let (unit, path, conn_id) = (line.unit, line.path, line.conn_id);
         let correlation = line.correlation.clone();
+        operation_log::record_cause(&line.span, &nest_rs_core::panic::panic_message(payload));
         line.file(operation_log::PANIC);
         RequestContinuation::new(None, correlation).enter(|| match unit {
             Unit::Message { event } => nest_rs_core::contained_panic!(

@@ -380,3 +380,34 @@ async fn a_request_scoped_layer_a_listener_binds_fails_the_boot_naming_its_scope
     assert_eq!(scoped.host, "AuditListeners");
     assert!(scoped.layer.ends_with("PerRequest"), "{}", scoped.layer);
 }
+
+/// A listener call the server failed says why on its span, in the words its
+/// failure line says it; one a filter said was the client's says nothing there.
+#[tokio::test]
+async fn a_failed_calls_span_describes_its_status_as_its_line_says_the_failure() {
+    let (_app, bus) = bus().await.expect("the app boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    bus.emit(Reindexed).await;
+    let said = logs.expect_one(
+        nest_rs_events::TARGET,
+        "event listener failed — dispatch continues with the next listener",
+    );
+    let span = logs.expect_span(
+        nest_rs_events::TARGET,
+        nest_rs_events::unit::DISPATCH.name(),
+    );
+    assert_eq!(span.field("otel.status_description"), said.field("error"));
+
+    let logs = nest_rs_testing::LogCapture::install();
+    bus.emit(Relisted).await;
+    let span = logs.expect_span(
+        nest_rs_events::TARGET,
+        nest_rs_events::unit::DISPATCH.name(),
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}

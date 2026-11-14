@@ -245,6 +245,7 @@ pub(crate) fn opaque_error(error: &(dyn StdError + 'static)) -> Error {
 /// failure at `error`, a `503` — the server could not serve it in time, which
 /// is no failure of its own — at `warn`.
 fn file(withheld: Withheld, at: ServedAddress<'_>) {
+    nest_rs_core::operation_log::record_cause(&tracing::Span::current(), withheld.said());
     match withheld {
         Withheld::Failed(said) => tracing::error!(
             target: crate::TARGET,

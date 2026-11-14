@@ -226,3 +226,43 @@ hand-written route, a nested resolver written by hand, a subscription's item, a 
   mount — `.opaque()` or `problem_error` in an async-graphql schema an app builds by
   hand, this crate's own unit tests — files nothing its errors keep, since no unit holds
   them.
+
+## 2026-11-14 — a failure the server earned says why on its span: the refusal of `otel.status_message` reopened
+
+The owner reopened the refusal of 2026-11-05 above, "`otel.status_message`, an added
+field carrying a developer's sentence to an exporter", for the failures the server
+earned alone, after the `@nestjs/observe` audit (its `exception` event). A failed span
+read `error.type=500` and an `Error` status and no reason: the reason was on a log line
+with the same `trace_id` and `span_id`, which a deployment exporting traces alone, or
+`OTEL_LOGS_EXPORTER=none`, never sent. Seen by tests on every edge, red before the
+change: each failed unit's span held no `otel.status_description` beside the line's
+`error`.
+
+- **Decided**: a unit the server failed carries, as its span's status description, the
+  sentence its failure line files — `error` on HTTP's `request failed`, WebSocket's,
+  GraphQL's and MCP's withheld lines, a job attempt's failure, a tick's, a listener
+  call's and a lifecycle hook's; `panic` on a unit's own unwind. `operation_span!`
+  declares `otel.status_description`, the field `tracing-opentelemetry` 0.34 reads as
+  the status description; `operation_log::record_cause` records it where the line is
+  filed, on the unit's span or, from inside code the app instrumented, on the nearest
+  unit's span above.
+- **Why it is no new data**: the sentence already leaves on the log line, under the
+  rule that a value is described, never quoted; the description is one more reader of
+  it, held by a test with a marked value as `nest_rs_testing::printed` holds every
+  other. OpenTelemetry's *Recording errors* convention asks for a description where it
+  holds nothing sensitive and repeats neither the status nor `error.type`.
+- **Still refused**: anything on the span for a failure the caller earned — an HTTP
+  `4xx`, a JSON-RPC code the MCP conventions name the caller's, a WebSocket message or a
+  GraphQL field refused before its handler ran, a failure a filter answered as the
+  client's. A description sets the status `Error`, which those spans never carry. Also
+  refused: an `exception` span event — a Rust error has no stack, and OpenTelemetry's
+  OTEP 4430 deprecates the span event API (`RecordException` included) for log-based
+  events; and a description for a failure no sentence explains (a unit cut at its
+  deadline, a cancelled one), whose class `error.type` already says.
+- **MCP**: the chains an operation kept are filed whatever it answered, a failure the
+  tool handled included, so the description is recorded where the operation is known
+  to have failed the server's way (`OperationLine::failed`), from the chain its answer
+  kept, never where the chain is filed.
+- **The limit**: a chain filed outside every unit — an `HttpError` rendered by hand
+  where no request is in flight, an MCP failure answered outside any operation — has no
+  span to describe.

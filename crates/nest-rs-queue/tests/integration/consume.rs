@@ -2532,3 +2532,25 @@ async fn every_field_a_jobs_duration_is_keyed_by_is_one_its_span_fills() {
         );
     }
 }
+
+/// An attempt its handler failed says why on its span, in the words its
+/// failure line says it.
+#[tokio::test]
+async fn a_failed_attempts_span_describes_its_status_as_its_line_says_the_failure() {
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
+    let flaky = method("FlakyProcessor::flaky");
+    let mut delivery = transcode_delivery("x.wav");
+    let logs = nest_rs_testing::LogCapture::install();
+
+    consume::attempt(flaky, &mut delivery, container, None).await;
+
+    let line = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job failed; will retry within the budget",
+    );
+    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
+    assert_eq!(span.field("otel.status_description"), line.field("error"));
+}

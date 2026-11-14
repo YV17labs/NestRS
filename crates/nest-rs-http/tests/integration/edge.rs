@@ -136,6 +136,20 @@ async fn ask_the_oven() -> (StatusCode, String) {
     (status, body)
 }
 
+/// A request whose handler unwound says why on its span, in the words its
+/// panic line says it.
+#[test]
+fn a_request_whose_handler_panicked_describes_its_status_as_its_panic_line_does() {
+    let logs = LogCapture::install();
+
+    drop(ask_the_oven());
+    drop(std::panic::take_hook());
+
+    let said = logs.expect_one(nest_rs_http::target::HTTP, ANSWERED);
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(span.field("otel.status_description"), said.field(FIELD));
+}
+
 /// The edge contains a handler's unwind under the process hook
 /// `#[nest_rs::main]` installs: one event says it, the request's line files
 /// `panic` with the `500` it answered, and the hook stays quiet.

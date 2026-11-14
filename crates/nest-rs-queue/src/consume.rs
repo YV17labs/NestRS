@@ -866,10 +866,12 @@ async fn run(
             (nest_rs_core::operation_log::ERROR, AttemptOutcome::Ok)
         }
         Ok(Ok(Ran::Failed(error))) if error.is_in_doubt() => {
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::error!(
                 target: TARGET,
                 outcome = "in_doubt",
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 "job dead-lettered: its commit did not answer in time, and what it wrote may \
                  have landed",
             );
@@ -881,9 +883,11 @@ async fn run(
         Ok(Ok(Ran::Failed(error))) if !error.retryable => {
             // `errors` is the member name HTTP and the WebSocket error frame use;
             // `error` is the whole chain, since a wrapper names no cause.
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::error!(
                 target: TARGET,
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 errors = error.details.as_ref().map(tracing::field::display),
                 "job dead-lettered: non-retryable failure",
             );
@@ -893,9 +897,11 @@ async fn run(
             )
         }
         Ok(Ok(Ran::Failed(error))) if last => {
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::error!(
                 target: TARGET,
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 attempts = attempt,
                 "job dead-lettered: retry budget spent",
             );
@@ -907,9 +913,11 @@ async fn run(
         Ok(Ok(Ran::Failed(error))) => {
             let retry_after =
                 backoff::honouring(&line.identity.job_id, attempt, error.retry_after_secs);
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::warn!(
                 target: TARGET,
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 retry_after_ms = millis(retry_after),
                 retry_after_asked_ms = error
                     .retry_after_secs
@@ -922,6 +930,7 @@ async fn run(
             )
         }
         Ok(Err(panic)) => {
+            nest_rs_core::operation_log::record_cause(&line.span, &panic_message(panic.as_ref()));
             nest_rs_core::contained_panic!(
                 target: TARGET,
                 panic.as_ref(),

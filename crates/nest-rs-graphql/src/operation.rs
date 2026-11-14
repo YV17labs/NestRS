@@ -560,6 +560,10 @@ where
             }
             Err(unwound) => {
                 if let Some(line) = line {
+                    nest_rs_core::operation_log::record_cause(
+                        &line.span,
+                        &nest_rs_core::panic::panic_message(&*unwound),
+                    );
                     line.file(nest_rs_core::operation_log::PANIC);
                 }
                 std::panic::resume_unwind(unwound)

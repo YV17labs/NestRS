@@ -336,3 +336,25 @@ async fn a_subscription_stopped_mid_item_files_the_chain_its_errors_kept() {
     assert_eq!(completed, Some(json!({ "id": "1", "type": "complete" })));
     assert_names(&logs, "graphql operation failed", "subscription", "shelves");
 }
+
+/// A root field the server failed says why on its span, in the words its
+/// failure line says it; one its caller's request failed says nothing there.
+#[tokio::test]
+async fn a_failed_root_fields_span_describes_its_status_as_its_line_says_the_failure() {
+    let app = boot().await;
+    let logs = LogCapture::install();
+    post(&app, "{ failed }").await;
+    let line = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
+    let span = logs.expect_span(nest_rs_graphql::TARGET, "graphql.field");
+    assert_eq!(span.field("otel.status_description"), line.field("error"));
+
+    let logs = LogCapture::install();
+    post(&app, "mutation { conflicted }").await;
+    let span = logs.expect_span(nest_rs_graphql::TARGET, "graphql.field");
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}

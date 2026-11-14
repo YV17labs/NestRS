@@ -502,9 +502,62 @@ pub fn record_error(span: &tracing::Span, error_type: &str) {
     span.record(STATUS_CODE, STATUS_ERROR);
 }
 
+/// Record on the unit `span` opened why it failed — the sentence its failure
+/// line files as `error`, or the one its panic line files — as the status
+/// description OpenTelemetry exports beside the `Error` status.
+///
+/// For a failure the server earned alone: the description sets the status
+/// `Error`, which a failure the caller earned never does. A span no unit opened
+/// — one the app's own code entered — hands it to the nearest unit's span
+/// above it.
+pub fn record_cause(span: &tracing::Span, said: &str) {
+    if span.field(STATUS_DESCRIPTION).is_some() {
+        span.record(STATUS_DESCRIPTION, said);
+        return;
+    }
+    #[cfg(feature = "logging")]
+    record_cause_above(span, said);
+}
+
+/// [`record_cause`] on the nearest unit's span above `span`, read off the
+/// registry the framework's subscriber is built on.
+#[cfg(feature = "logging")]
+fn record_cause_above(span: &tracing::Span, said: &str) {
+    use tracing_subscriber::registry::LookupSpan as _;
+
+    span.with_subscriber(|(id, dispatch)| {
+        let Some(unit) = dispatch
+            .downcast_ref::<tracing_subscriber::Registry>()
+            .and_then(|registry| registry.span(id))
+            .and_then(|span| {
+                span.scope().find(|above| {
+                    above
+                        .metadata()
+                        .fields()
+                        .field(STATUS_DESCRIPTION)
+                        .is_some()
+                })
+            })
+        else {
+            return;
+        };
+        let fields = unit.metadata().fields();
+        if let Some(field) = fields.field(STATUS_DESCRIPTION) {
+            let values = [(&field, Some(&said as &dyn tracing::Value))];
+            dispatch.record(
+                &unit.id(),
+                &tracing::span::Record::new(&fields.value_set(&values)),
+            );
+        }
+    });
+}
+
 const ERROR_TYPE: &str = "error.type";
 
 const STATUS_CODE: &str = "otel.status_code";
+
+/// What `tracing-opentelemetry` exports as the span's status description.
+const STATUS_DESCRIPTION: &str = "otel.status_description";
 
 /// `tracing-opentelemetry` reads it case-insensitively; the conventions spell it `Error`.
 const STATUS_ERROR: &str = "error";

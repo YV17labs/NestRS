@@ -326,6 +326,8 @@ impl OperationUnits {
             // failure the tool handled, kept a chain all the same.
             let (ended, withheld) =
                 withholding(self.detached.run(nest_rs_core::panic::contain(scoped))).await;
+            // The latest chain is the one the answer kept, as the filing reads it.
+            let cause = withheld.last().map(|kept| kept.said().to_owned());
             for withheld in withheld {
                 crate::error::file(withheld, address.named());
             }
@@ -337,7 +339,7 @@ impl OperationUnits {
                 Some(Ok(answered)) => {
                     match answered.failed_as() {
                         None => line.file(operation_log::OK),
-                        Some(failed_as) => OperationLine::failed(line, failed_as),
+                        Some(failed_as) => OperationLine::failed(line, failed_as, cause.as_deref()),
                     }
                     answered.answer
                 }
@@ -939,18 +941,30 @@ impl<'a> OperationLine<'a> {
     /// The operation failed as `failed_as` says, which its span records in
     /// place of the outcome word its line files, `error`: `tracing-opentelemetry`
     /// keeps every value a field is recorded with, so the class is recorded once
-    /// and the line files with the span taken out.
-    fn failed(mut line: FiledOnce<Self>, failed_as: FailedAs) {
+    /// and the line files with the span taken out. Where the server failed it,
+    /// the span says why in `cause`, the chain its answer kept.
+    fn failed(mut line: FiledOnce<Self>, failed_as: FailedAs, cause: Option<&str>) {
         let span = std::mem::replace(&mut line.span, tracing::Span::none());
-        match failed_as {
-            FailedAs::ToolError => operation_log::record_error(&span, TOOL_ERROR),
+        let the_servers = match failed_as {
+            FailedAs::ToolError => {
+                operation_log::record_error(&span, TOOL_ERROR);
+                true
+            }
             FailedAs::Answered(code) => {
                 span.record(RPC_RESPONSE_STATUS_CODE, tracing::field::display(code.0));
-                if !is_the_callers(code) {
+                let the_servers = !is_the_callers(code);
+                if the_servers {
                     operation_log::record_error(&span, &code.0.to_string());
                 }
+                the_servers
             }
-            FailedAs::Unit => operation_log::record_error(&span, operation_log::ERROR),
+            FailedAs::Unit => {
+                operation_log::record_error(&span, operation_log::ERROR);
+                true
+            }
+        };
+        if let Some(said) = cause.filter(|_| the_servers) {
+            operation_log::record_cause(&span, said);
         }
         operation_log::record_end(&crate::unit::OPERATION, &span);
         line.file(operation_log::ERROR);
@@ -971,6 +985,7 @@ impl<'a> OperationLine<'a> {
         }
         let (mcp_method, address) = (line.mcp_method, line.address);
         let correlation = line.correlation.clone();
+        operation_log::record_cause(&line.span, &nest_rs_core::panic::panic_message(payload));
         line.file(operation_log::PANIC);
         RequestContinuation::new(None, correlation).enter(|| {
             let named = address.named();

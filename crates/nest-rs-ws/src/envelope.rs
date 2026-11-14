@@ -474,6 +474,7 @@ pub fn reply_at<T: Serialize>(value: &T, at: Option<(&Handler, &str)>) -> WsRepl
 /// `path`, withholds: behind a `503`, the server unable to serve it in time, at
 /// `warn`; behind any other failure, at `error`.
 pub(crate) fn file(withheld: Withheld, path: Option<&str>, event: Option<&str>) {
+    nest_rs_core::operation_log::record_cause(&tracing::Span::current(), withheld.said());
     match withheld {
         Withheld::Unavailable(said) => tracing::warn!(
             target: crate::TARGET,

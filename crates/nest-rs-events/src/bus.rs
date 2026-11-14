@@ -319,6 +319,8 @@ async fn dispatch_one(
             });
         }
         Ok(Err(failure)) => {
+            let said = nest_rs_core::error_message(failure.error());
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             line.file(nest_rs_core::operation_log::ERROR);
             continuation.enter(|| {
                 tracing::error!(
@@ -326,12 +328,16 @@ async fn dispatch_one(
                     event = event,
                     host = handler.host_name(),
                     method = handler.method(),
-                    error = %nest_rs_core::error_message(failure.error()),
+                    error = %said,
                     "event listener failed — dispatch continues with the next listener",
                 );
             });
         }
         Err(payload) => {
+            nest_rs_core::operation_log::record_cause(
+                &line.span,
+                &nest_rs_core::panic::panic_message(payload.as_ref()),
+            );
             line.file(nest_rs_core::operation_log::PANIC);
             continuation.enter(|| {
                 nest_rs_core::contained_panic!(

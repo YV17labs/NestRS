@@ -163,6 +163,38 @@ mod tests {
         assert_eq!(*warnings.0.lock().unwrap(), expected);
     }
 
+    /// The description reaches the export as the span's status, and the class
+    /// recorded after it, as an edge records its outcome once its failure line
+    /// is filed, leaves it whole.
+    #[test]
+    fn a_failed_units_cause_is_its_exported_status_description() {
+        use opentelemetry::trace::{Status, TracerProvider as _};
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        super::install();
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("units")));
+        tracing::subscriber::with_default(subscriber, || {
+            let span = nestrs_unit_probe::open(&Correlation::minted(None));
+            nest_rs_core::operation_log::record_cause(&span, "the store refused the write");
+            nest_rs_core::operation_log::record_error(&span, "500");
+        });
+
+        let exported = exporter.get_finished_spans().expect("the spans exported");
+        let [exported] = exported.as_slice() else {
+            panic!("one span exported: {exported:#?}");
+        };
+        assert_eq!(
+            exported.status,
+            Status::error("the store refused the write")
+        );
+    }
+
     #[test]
     fn a_restarted_trace_has_no_parent_to_link() {
         assert_eq!(Correlation::minted(None).parent_id(), None);

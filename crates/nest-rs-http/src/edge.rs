@@ -198,6 +198,10 @@ impl<E> EdgeEndpoint<E> {
         continuation: &RequestContinuation,
         span: &tracing::Span,
     ) -> Response {
+        nest_rs_core::operation_log::record_cause(
+            span,
+            &nest_rs_core::panic::panic_message(payload),
+        );
         continuation.enter(|| {
             span.in_scope(|| {
                 nest_rs_core::contained_panic!(

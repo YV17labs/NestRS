@@ -114,7 +114,8 @@ The edge owes propagation at every boundary it crosses.
 ## The operation span
 
 **`operation_span!` is the only place the canonical fields are declared** —
-`trace_id`, `span_id`, `parent_span_id`, `actor_id`. `tracing` fixes a span's
+`trace_id`, `span_id`, `parent_span_id`, `actor_id`, and the outcome's
+`error.type`, `otel.status_code` and `otel.status_description`. `tracing` fixes a span's
 fields at creation, so recording a field no span declared is a silent no-op,
 and declaring a field nothing fills is the same defect with the opposite sign.
 
@@ -140,9 +141,12 @@ and declaring a field nothing fills is the same defect with the opposite sign.
   field and a graphql-ws socket, which no convention gives such a code, record
   nothing for a failure their caller earned, any answer but a `5xx`'s class,
   their line still filing `error`
-  (`.claude/decisions/client-error-is-its-line.md`). A request cut before it
-  answered is named for the template its route table entry recorded, never
-  exported anonymous.
+  (`.claude/decisions/client-error-is-its-line.md`). A unit the server failed
+  says why on its span too: the sentence its failure line files as `error`, or
+  its panic line's, is its status description, recorded where that line is
+  (`operation_log::record_cause`) and never for a failure its caller earned. A
+  request cut before it answered is named for the template its route table
+  entry recorded, never exported anonymous.
 
 ## What a log line carries
 

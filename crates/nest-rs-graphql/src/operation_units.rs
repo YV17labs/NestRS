@@ -199,6 +199,10 @@ impl<E: Executor> OperationUnits<E> {
                 answered.into_response()
             }
             Err(unwound) => {
+                nest_rs_core::operation_log::record_cause(
+                    &line.span,
+                    &nest_rs_core::panic::panic_message(&*unwound),
+                );
                 line.file(PANIC);
                 std::panic::resume_unwind(unwound)
             }

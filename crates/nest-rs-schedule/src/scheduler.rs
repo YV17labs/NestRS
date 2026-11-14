@@ -1442,12 +1442,14 @@ impl Runner {
         let chains = match task.site.chains(self.scopes.root()) {
             Ok(chains) => chains,
             Err(refused) => {
+                let said = refused.to_string();
+                nest_rs_core::operation_log::record_cause(&tracing::Span::current(), &said);
                 line.file(nest_rs_core::operation_log::ERROR);
                 tracing::error!(
                     target: crate::TARGET,
                     host = id.host,
                     method = id.method,
-                    error = %refused,
+                    error = %said,
                     "scheduled job failed",
                 );
                 return;
@@ -1509,26 +1511,36 @@ impl Runner {
                     "scheduled job failed; a layer answered it",
                 );
             }
-            Ok(Err(failure)) => tracing::error!(
-                target: crate::TARGET,
-                host = id.host,
-                method = id.method,
-                error = %nest_rs_core::error_message(failure.error()),
-                retryable = failure
-                    .find::<Unhonoured>()
-                    .map(|why| why.retryable)
-                    .or_else(|| failure.find::<JobTimedOut>().map(|_| true)),
-                "scheduled job failed",
-            ),
-            Err(panic) => nest_rs_core::contained_panic!(
-                target: crate::TARGET,
-                panic.as_ref(),
-                "scheduled job panicked; the schedule continues",
-                host = id.host,
-                method = id.method,
-                // `panic.as_ref()`, never `&panic`: the box is itself `Any`, so every
-                // downcast inside `panic_message` would miss.
-            ),
+            Ok(Err(failure)) => {
+                let said = nest_rs_core::error_message(failure.error());
+                nest_rs_core::operation_log::record_cause(&tracing::Span::current(), &said);
+                tracing::error!(
+                    target: crate::TARGET,
+                    host = id.host,
+                    method = id.method,
+                    error = %said,
+                    retryable = failure
+                        .find::<Unhonoured>()
+                        .map(|why| why.retryable)
+                        .or_else(|| failure.find::<JobTimedOut>().map(|_| true)),
+                    "scheduled job failed",
+                );
+            }
+            Err(panic) => {
+                nest_rs_core::operation_log::record_cause(
+                    &tracing::Span::current(),
+                    &nest_rs_core::panic::panic_message(panic.as_ref()),
+                );
+                nest_rs_core::contained_panic!(
+                    target: crate::TARGET,
+                    panic.as_ref(),
+                    "scheduled job panicked; the schedule continues",
+                    host = id.host,
+                    method = id.method,
+                    // `panic.as_ref()`, never `&panic`: the box is itself `Any`, so every
+                    // downcast inside `panic_message` would miss.
+                );
+            }
         }
     }
 }

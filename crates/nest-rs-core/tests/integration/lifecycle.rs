@@ -85,6 +85,32 @@ impl BrokenOnDestroy {
 #[module(providers = [BrokenOnDestroy])]
 struct BrokenOnDestroyModule;
 
+/// A hook that failed says why on its span, in the words its failure line
+/// says it.
+#[tokio::test]
+async fn a_failed_hooks_span_describes_its_status_as_its_line_says_the_failure() {
+    let logs = LogCapture::install();
+    App::builder()
+        .module::<BrokenOnDestroyModule>()
+        .build()
+        .await
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("a failed cleanup is swallowed: shutdown is best-effort");
+
+    let event = logs.expect_one(target::LIFECYCLE, "lifecycle hook failed");
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_core::unit::HOOK.name()
+                && span.field("method").as_deref() == Some("release")
+        })
+        .expect("the hook opened its unit");
+    assert_eq!(span.field("otel.status_description"), event.field("error"));
+}
+
 #[tokio::test]
 async fn a_failing_shutdown_hook_is_named_at_error_and_does_not_abort_the_rest() {
     let logs = LogCapture::install();

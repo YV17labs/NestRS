@@ -3115,6 +3115,8 @@ dependencies = [
  "log",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-health",
+ "nest-rs-http",
  "nest-rs-testing",
  "nestrs-unit-probe",
  "opentelemetry",

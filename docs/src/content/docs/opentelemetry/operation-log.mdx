@@ -222,6 +222,10 @@ value the client chose. A request the router's fallback answers — the
 `/{*path}` at the root. A request neither a route nor the fallback claims
 carries no `path` at all.
 
+The line is at `info`, but for a
+[health probe](/health/#what-a-probe-leaves-in-your-telemetry) answered `2xx`,
+which files at `debug`: a kubelet asks it every few seconds.
+
 The line carries the server's values only. `verb` is one of the methods
 OpenTelemetry's HTTP conventions know (`GET`, `POST`, `PATCH`, `QUERY` and the
 rest of RFC 9110's) or one a route registers, spelled exactly, and `_OTHER`

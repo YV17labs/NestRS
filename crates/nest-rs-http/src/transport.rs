@@ -36,6 +36,7 @@ use crate::fallback::{
 };
 use crate::guard_stage::{DeniedStage, HttpGuardStage, StageKind};
 use crate::origin::{OriginChecked, OriginPolicy};
+use crate::probe::{ProbeHost, Probes};
 use crate::problem::Normalized;
 use crate::route_site::{HAND_ROUTE, HAND_ROUTE_SITE};
 use crate::route_template::RouteTemplate;
@@ -416,6 +417,11 @@ impl HttpTransport {
 
     /// `inner` behind the edge, held to the transport's settings: generic, so
     /// the fast path calls its router without a second boxed future.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "what the route table and the settings hand the edge, each read once; one \
+                  call site, `configure`"
+    )]
     fn edge(
         &self,
         inner: impl Endpoint,
@@ -424,6 +430,7 @@ impl HttpTransport {
         headers: Vec<(HeaderName, HeaderValue)>,
         normalize: bool,
         known_methods: KnownMethods,
+        probes: Probes,
     ) -> BoxEndpoint {
         BoxEndpoint::new(EdgeEndpoint::new(
             inner,
@@ -436,6 +443,7 @@ impl HttpTransport {
             // Compression replaces the request body but not its `Content-Length`.
             self.compression,
             known_methods,
+            probes,
             Arc::clone(&self.drain),
         ))
     }
@@ -492,8 +500,17 @@ impl Transport for HttpTransport {
         let mut claims = Claims::default();
         let mut get_routes: Vec<(String, &'static str)> = Vec::new();
         let hand_route = hand_route(container, unit_of_work.clone())?;
+        let probe_hosts: Vec<_> = discovery
+            .meta::<ProbeHost>()
+            .into_iter()
+            .filter_map(|d| d.host_type_id)
+            .collect();
+        let mut probes: Vec<(Method, String)> = Vec::new();
         for d in discovery.meta::<HttpControllerMeta>() {
             let controller = d.meta.controller();
+            let probing = d
+                .host_type_id
+                .is_some_and(|host| probe_hosts.contains(&host));
             let mut served: Vec<(&HttpRouteMeta, String)> = Vec::new();
             let at_root = literal_prefix(d.meta.path()) == "/";
             if !at_root {
@@ -523,6 +540,18 @@ impl Transport for HttpTransport {
                         Some(_) => vec![path.clone(), join_path(d.meta.path(), r.path())],
                         None => vec![path.clone()],
                     };
+                    if probing {
+                        // A request is read as a probe by its path alone, before routing.
+                        RouteTemplate::literal(&path).map_err(|refused| RouteError::Template {
+                            owner: controller.to_owned(),
+                            refused,
+                        })?;
+                        probes.extend(
+                            addresses
+                                .iter()
+                                .map(|address| (r.method().clone(), routes.served(address))),
+                        );
+                    }
                     for address in addresses {
                         if r.method() == Method::GET {
                             get_routes.push((address.clone(), controller));
@@ -824,6 +853,7 @@ impl Transport for HttpTransport {
             edge_headers,
             fuse_normalize,
             known_methods,
+            Probes::new(probes),
         );
         // Outside the edge, so a preflight carries no request scope; compression
         // inside CORS, so a preflight is never encoded.

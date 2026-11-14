@@ -39,9 +39,13 @@ pub const UPSTREAM_REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-re
 const UPSTREAM_REQUEST_ID_ATTR: &str = "http.request.header.x-request-id";
 
 /// The trace this request belongs to: the caller's when a trusted proxy
-/// forwarded a valid `traceparent`, a freshly started one otherwise.
-pub(crate) fn resolve(req: &Request, origin: ClientOrigin) -> Correlation {
-    continued(req, origin).unwrap_or_else(|| Correlation::minted(None))
+/// forwarded a valid `traceparent`, a freshly started one otherwise — started
+/// unsampled for a `probe`, which a platform asks every few seconds.
+pub(crate) fn resolve(req: &Request, origin: ClientOrigin, probe: bool) -> Correlation {
+    continued(req, origin).unwrap_or_else(|| match probe {
+        true => nest_rs_core::__private::minted_unsampled(),
+        false => Correlation::minted(None),
+    })
 }
 
 /// The inbound context, if there is one and it may be believed.
@@ -287,7 +291,7 @@ mod tests {
     }
 
     fn resolve(req: &Request, trusted_proxies: &[TrustedProxy]) -> Correlation {
-        super::resolve(req, ClientOrigin::of_with(req, trusted_proxies).0)
+        super::resolve(req, ClientOrigin::of_with(req, trusted_proxies).0, false)
     }
 
     /// A request from `peer`, carrying `headers`.
@@ -384,6 +388,19 @@ mod tests {
             resolve(&req, &[proxy("10.0.0.1")]).tracestate().as_str(),
             Some("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE"),
         );
+    }
+
+    #[test]
+    fn a_probe_starts_its_trace_unsampled_and_keeps_a_continued_ones_decision() {
+        let started = req_from("10.0.0.1", &[]);
+        let origin = ClientOrigin::of_with(&started, &[]).0;
+        assert!(!super::resolve(&started, origin, true).flags().is_sampled());
+
+        let continued = req_from("10.0.0.1", &[(TRACEPARENT_HEADER, UPSTREAM)]);
+        let origin = ClientOrigin::of_with(&continued, &[proxy("10.0.0.1")]).0;
+        let correlation = super::resolve(&continued, origin, true);
+        assert_eq!(correlation.trace_id().to_hex(), UPSTREAM_TRACE);
+        assert!(correlation.flags().is_sampled(), "the parent decided");
     }
 
     #[test]

@@ -58,6 +58,7 @@ mod paginated;
 mod path;
 mod phase;
 mod pipe;
+mod probe;
 mod problem;
 mod query;
 mod raw_body;
@@ -285,6 +286,7 @@ pub mod __private {
     pub use crate::multipart::{BoundaryRefused, boundary as multipart_boundary};
     pub use crate::origin::OriginScheme;
     pub use crate::pipe::piped;
+    pub use crate::probe::ProbeHost;
     pub use crate::problem::{framework_sentence, method_not_allowed};
     pub use crate::request::ServedRoute;
     pub use crate::response::{IntoResult, RouteReturn, RouteReturnFallback};

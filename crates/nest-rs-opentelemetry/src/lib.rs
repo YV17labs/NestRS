@@ -50,6 +50,8 @@ mod otlp;
 #[cfg(feature = "otlp")]
 mod process_metrics;
 mod propagators;
+#[cfg(feature = "otlp")]
+mod sampler;
 mod signal;
 #[cfg(test)]
 mod testing;

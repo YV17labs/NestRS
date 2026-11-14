@@ -825,13 +825,18 @@ async fn run(
                 Some(_) => "waited unread past the day this release gives a newer one's job",
                 None => "names no id this release reads, so no wait for it can be counted",
             };
+            let dead_letter = JobError::abort(format!(
+                "job sealed by wire-format version {version}, which this consumer (version \
+                 {supported}) cannot read, {why}; its record is kept with the dead letters for a \
+                 consumer of that release"
+            ));
+            nest_rs_core::operation_log::record_cause(
+                &line.span,
+                &nest_rs_core::error_message(&dead_letter),
+            );
             (
                 nest_rs_core::operation_log::ERROR,
-                AttemptOutcome::DeadLetter(JobError::abort(format!(
-                    "job sealed by wire-format version {version}, which this consumer (version \
-                     {supported}) cannot read, {why}; its record is kept with the dead letters \
-                     for a consumer of that release"
-                ))),
+                AttemptOutcome::DeadLetter(dead_letter),
             )
         }
         Err(Unrun::Stalled { deliveries }) => {
@@ -842,13 +847,18 @@ async fn run(
                 stall_limit = STALL_LIMIT,
                 "job dead-lettered: its deliveries ended without an answer past the stall limit",
             );
+            let dead_letter = JobError::abort(format!(
+                "{unanswered} deliveries of the job ended without an answer — the process running \
+                 each was stopped, froze or lost the queue backend past its lease — so it is \
+                 dead-lettered without running"
+            ));
+            nest_rs_core::operation_log::record_cause(
+                &line.span,
+                &nest_rs_core::error_message(&dead_letter),
+            );
             (
                 nest_rs_core::operation_log::ERROR,
-                AttemptOutcome::DeadLetter(JobError::abort(format!(
-                    "{unanswered} deliveries of the job ended without an answer — the process \
-                     running each was stopped, froze or lost the queue backend past its lease — \
-                     so it is dead-lettered without running"
-                ))),
+                AttemptOutcome::DeadLetter(dead_letter),
             )
         }
         Ok(Ok(Ran::Done { method_ran })) => {
@@ -1377,6 +1387,57 @@ mod tests {
                 .is_empty(),
             "no retry is promised on the attempt that has none left",
         );
+    }
+
+    /// A job dead-lettered without running fails its attempt: the span records
+    /// the error its line files, and says why in the sentence its dead letter
+    /// keeps — past the stall limit, and sealed by a newer release.
+    #[tokio::test]
+    async fn a_job_dead_lettered_unrun_says_why_on_its_span() {
+        fn unreachable_handler(_job: &Value, _context: HandlerContext) -> Handler<'_> {
+            Box::pin(async { panic!("a job dead-lettered unrun never runs") })
+        }
+
+        for input in [
+            Input::Stalled {
+                deliveries: STALL_LIMIT + 1,
+            },
+            Input::Unread {
+                version: u64::from(crate::WIRE_FORMAT_VERSION) + 1,
+                waited: Some(NEWER_RELEASE_PATIENCE),
+            },
+        ] {
+            let logs = LogCapture::install();
+            let span =
+                nest_rs_core::operation_span!(unit::JOB, &nest_rs_core::Correlation::minted(None));
+            let outcome = run(
+                method_of(unreachable_handler),
+                input,
+                context(),
+                identity(1),
+                None,
+                false,
+            )
+            .instrument(span)
+            .await;
+
+            let AttemptOutcome::DeadLetter(dead_letter) = outcome else {
+                panic!("a job no attempt ran is dead-lettered: {outcome:?}");
+            };
+            let span = logs.expect_span(TARGET, unit::JOB.name());
+            assert_eq!(
+                span.field("otel.status_code").as_deref(),
+                Some("error"),
+                "{:?}",
+                span.fields
+            );
+            assert_eq!(
+                span.field("otel.status_description"),
+                Some(nest_rs_core::error_message(&dead_letter)),
+                "{:?}",
+                span.fields
+            );
+        }
     }
 
     #[tokio::test]

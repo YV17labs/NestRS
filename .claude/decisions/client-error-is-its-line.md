@@ -246,7 +246,12 @@ on every edge, red before the change: each failed unit's span held no
 - **Decided**: a unit the server failed carries, as its span's status description, the
   sentence its failure line files — `error` on HTTP's `request failed`, WebSocket's,
   GraphQL's and MCP's withheld lines, a job attempt's failure, a tick's, a listener
-  call's and a lifecycle hook's; `panic` on a unit's own unwind. `operation_span!`
+  call's and a lifecycle hook's; `panic` on a unit's own unwind; and, for a job
+  dead-lettered without running — past the stall limit, or sealed by a newer release —
+  whose line files no `error`, the sentence its dead letter keeps (`JobError::abort`),
+  which counts deliveries and names wire-format versions, never a value the job
+  carried. Seen by a test red before it, both cases: the span read `Error` and no
+  reason. `operation_span!`
   declares `otel.status_description`, the field `tracing-opentelemetry` 0.34 reads as
   the status description; `operation_log::record_cause` keeps it where the line is
   filed, on the unit's span or, from inside code the app instrumented, on the nearest

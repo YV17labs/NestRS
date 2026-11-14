@@ -181,7 +181,8 @@ or OTLP export changes.
 ## A failed span says why
 
 A unit the server failed exports an `Error` status with a description: the
-sentence its failure line carries in `error`, or its panic line in `panic`. It
+sentence its failure line carries in `error`, or its panic line in `panic`, or,
+for a job dead-lettered without running, the sentence its dead letter keeps. It
 holds on every edge — an HTTP `5xx`, a WebSocket message, a GraphQL root field,
 an MCP operation, a job attempt, a scheduled tick, a listener call, a lifecycle
 hook. The reason sits where OpenTelemetry's conventions put it, in the span's

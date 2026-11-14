@@ -4,13 +4,19 @@
 //!
 //! An operation sent outside every traced unit — a worker's poll, a relay's
 //! claim — records its duration and no span: a root span per poll would bury
-//! the traces an operator reads. The unit is the kernel's correlation the
+//! the traces an operator reads. A unit makes at most
+//! [`CLIENT_SPANS_PER_UNIT`] client spans, one export batch: past it an
+//! operation records its duration and no span, and the unit's span says how
+//! many it did not make, so a loop of a hundred thousand commands costs no
+//! other unit its spans in the exporter's queue. The unit is the kernel's correlation the
 //! operation carries, never the `tracing` span entered: the ids a
 //! `traceparent` announced are the correlation's, and a task can run a unit
 //! with no span entered.
 
 use std::sync::OnceLock;
 
+use nest_rs_core::__private::ClientSpans;
+use nest_rs_core::Correlation;
 use nest_rs_core::client_operation::{ClientOperation, ClientValue};
 use nest_rs_core::duration_histogram::MetricAttribute;
 use opentelemetry::trace::{
@@ -18,10 +24,22 @@ use opentelemetry::trace::{
 };
 use opentelemetry::{KeyValue, StringValue, Value};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
-use opentelemetry_sdk::trace::{SdkTracerProvider, Tracer};
+use opentelemetry_sdk::trace::{OTEL_BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT, SdkTracerProvider, Tracer};
 use opentelemetry_semantic_conventions::attribute::ERROR_TYPE;
+use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+use tracing_subscriber::Registry;
+use tracing_subscriber::registry::LookupSpan as _;
 
 use crate::durations::{Durations, framework_scope};
+
+/// The client spans one unit makes at most: the SDK's export batch, so one
+/// unit never fills more than one export.
+pub(crate) const CLIENT_SPANS_PER_UNIT: u64 = OTEL_BSP_MAX_EXPORT_BATCH_SIZE_DEFAULT as u64;
+
+/// The attribute on a unit's span counting the client spans it did not make,
+/// read off OTLP's `dropped_attributes_count`, `dropped_events_count` and
+/// `dropped_links_count`: the count of what a span's limit dropped.
+pub(crate) const DROPPED_CLIENT_SPANS_COUNT: &str = "dropped_client_spans_count";
 
 /// What records each client operation: spans where the traces export, the
 /// duration where the metrics do.
@@ -44,14 +62,63 @@ pub(crate) fn install(traces: Option<&SdkTracerProvider>, metrics: Option<&SdkMe
         durations: metrics.map(Durations::new),
     };
     let durations = recording.durations.is_some();
+    let spans = recording.tracer.is_some();
     if RECORDING.set(recording).is_ok() {
         nest_rs_core::__private::set_client_recorder(record, durations);
+        if spans {
+            nest_rs_core::__private::count_client_spans();
+        }
     }
 }
 
 fn record(operation: &ClientOperation<'_>) {
     if let Some(recording) = RECORDING.get() {
         recording.record(operation);
+    }
+}
+
+/// Whether client operations are made spans: the traces export.
+fn spans_record() -> bool {
+    RECORDING
+        .get()
+        .is_some_and(|recording| recording.tracer.is_some())
+}
+
+/// The count the unit `span` opens keeps, held on its span where client
+/// operations are made spans, so its end can say what it did not make.
+pub(crate) fn hold_count(span: &tracing::Span, unit: &Correlation) {
+    if !spans_record() {
+        return;
+    }
+    let count = nest_rs_core::__private::client_spans(unit).clone();
+    span.with_subscriber(|(id, dispatch)| {
+        if let Some(span) = dispatch
+            .downcast_ref::<Registry>()
+            .and_then(|registry| registry.span(id))
+        {
+            span.extensions_mut().insert(count);
+        }
+    });
+}
+
+/// Say on the unit `span` opened how many client spans it did not make, if
+/// it made fewer than it sent.
+pub(crate) fn report_dropped(span: &tracing::Span) {
+    let dropped = span
+        .with_subscriber(|(id, dispatch)| {
+            let span = dispatch.downcast_ref::<Registry>()?.span(id)?;
+            let extensions = span.extensions();
+            extensions
+                .get::<ClientSpans>()
+                .map(|count| count.past(CLIENT_SPANS_PER_UNIT))
+        })
+        .flatten()
+        .filter(|dropped| *dropped > 0);
+    if let Some(dropped) = dropped {
+        span.set_attribute(
+            DROPPED_CLIENT_SPANS_COUNT,
+            i64::try_from(dropped).unwrap_or(i64::MAX),
+        );
     }
 }
 
@@ -92,13 +159,16 @@ fn keyed_attributes(operation: &ClientOperation<'_>) -> Vec<KeyValue> {
 }
 
 /// The operation's client span, at the place in its unit's trace the operation
-/// carries — none outside every unit, or where the unit's trace is not sampled
-/// — carrying `keyed` and every attribute its duration is not keyed by.
+/// carries — none outside every unit, where the unit's trace is not sampled, or
+/// past the unit's [`CLIENT_SPANS_PER_UNIT`] — carrying `keyed` and every
+/// attribute its duration is not keyed by.
 fn span(tracer: &Tracer, operation: &ClientOperation<'_>, mut attributes: Vec<KeyValue>) {
     let Some(own) = operation.correlation() else {
         return;
     };
-    if !own.flags().is_sampled() {
+    if !own.flags().is_sampled()
+        || !nest_rs_core::__private::client_spans(own).claim(CLIENT_SPANS_PER_UNIT)
+    {
         return;
     }
     let Some(parent) = crate::linker::parent_context(own, TraceFlags::SAMPLED, false) else {
@@ -172,9 +242,9 @@ mod tests {
         metrics: Vec<ResourceMetrics>,
     }
 
-    /// Record what `work` sends, as a recorder seeded on both signals would,
-    /// under a subscriber exporting the framework's spans, each unit's span
-    /// started under the kernel's ids as `init` links them.
+    /// Record what `work` sends through the recorder `init` seeds on both
+    /// signals, under a subscriber exporting the framework's spans, each unit's
+    /// span started under the kernel's ids as `init` links them.
     fn exported(work: impl FnOnce(&ClientOperations)) -> Exported {
         crate::linker::install();
         let spans = InMemorySpanExporter::default();
@@ -183,13 +253,11 @@ mod tests {
             .with_simple_exporter(spans.clone())
             .build();
         let (meter_provider, metrics) = metered();
-        let recording = ClientOperations {
-            tracer: Some(tracer_provider.tracer("operations")),
-            durations: Some(Durations::new(&meter_provider)),
-        };
+        install(Some(&tracer_provider), Some(&meter_provider));
+        let recording = RECORDING.get().expect("the recorder is seeded");
         let subscriber = tracing_subscriber::registry()
             .with(tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer("units")));
-        tracing::subscriber::with_default(subscriber, || work(&recording));
+        tracing::subscriber::with_default(subscriber, || work(recording));
         tracer_provider.force_flush().expect("the spans flush");
         meter_provider.force_flush().expect("the metrics flush");
         Exported {
@@ -211,19 +279,21 @@ mod tests {
     /// scope runs.
     fn run_in(correlation: &Correlation, entered: bool, send: impl FnOnce()) {
         let unit = nestrs_unit_probe::open(correlation);
+        scoped(correlation, || match entered {
+            true => unit.in_scope(send),
+            false => send(),
+        });
+    }
+
+    /// Run `send` in the request scope `correlation` names.
+    fn scoped(correlation: &Correlation, send: impl FnOnce()) {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("a runtime")
             .block_on(nest_rs_core::with_request_scope(
                 None,
                 correlation.clone(),
-                async {
-                    if entered {
-                        unit.in_scope(send);
-                    } else {
-                        send();
-                    }
-                },
+                async { send() },
             ));
     }
 
@@ -246,7 +316,8 @@ mod tests {
             (SERVER_PORT, ClientValue::Integer(5432)),
             ("an.attribute.no.duration.keys", ClientValue::Text("kept")),
         ];
-        let own = nest_rs_core::__private::current_correlation().map(|unit| unit.child());
+        let own = nest_rs_core::__private::current_correlation()
+            .map(|unit| nest_rs_core::__private::client_operation_of(&unit));
         recording.record(
             &ClientOperation::new(
                 &DB_CLIENT_OPERATION_DURATION,
@@ -353,7 +424,7 @@ mod tests {
     #[test]
     fn an_operation_correlated_by_its_client_is_the_span_its_peer_was_told_of() {
         let correlation = Correlation::minted(None);
-        let child = correlation.child();
+        let child = nest_rs_core::__private::client_operation_of(&correlation);
         let exported = exported(|recording| {
             run_in(&correlation, true, || {
                 recording.record(
@@ -415,6 +486,161 @@ mod tests {
         assert_eq!(
             operation.parent_span_id.to_string(),
             correlation.span_id().to_hex()
+        );
+    }
+
+    /// More operations than one export batch holds, all sent by one unit.
+    const LOOPED: usize = 10_000;
+
+    fn client_spans(exported: &Exported) -> usize {
+        exported
+            .spans
+            .iter()
+            .filter(|span| span.span_kind == SpanKind::Client)
+            .count()
+    }
+
+    /// Open a unit, send `sent` statements from it, and end it as its edge
+    /// does, its line filed.
+    fn a_unit_sending(recording: &ClientOperations, sent: usize) {
+        let correlation = Correlation::minted(None);
+        let unit = nestrs_unit_probe::open(&correlation);
+        let started = std::time::Instant::now();
+        scoped(&correlation, || {
+            for _ in 0..sent {
+                select(recording, None);
+            }
+        });
+        nest_rs_core::RequestContinuation::new(None, correlation)
+            .enter(|| nestrs_unit_probe::settle(&unit, started));
+    }
+
+    fn the_unit(exported: &Exported) -> &SpanData {
+        exported
+            .spans
+            .iter()
+            .find(|span| span.span_kind != SpanKind::Client)
+            .expect("the unit's span")
+    }
+
+    #[test]
+    fn a_unit_sending_more_operations_than_one_export_batch_makes_no_more_spans_than_it() {
+        let exported = exported(|recording| a_unit_sending(recording, LOOPED));
+
+        assert_eq!(client_spans(&exported) as u64, CLIENT_SPANS_PER_UNIT);
+        assert_eq!(
+            points(&exported)
+                .iter()
+                .map(|(_, count)| count)
+                .sum::<u64>(),
+            LOOPED as u64,
+            "every operation is timed",
+        );
+        assert_eq!(
+            attribute(the_unit(&exported), DROPPED_CLIENT_SPANS_COUNT),
+            Some((LOOPED as u64 - CLIENT_SPANS_PER_UNIT).to_string()),
+            "the unit's span says how many it did not make",
+        );
+    }
+
+    #[test]
+    fn a_unit_within_one_export_batch_makes_every_span_and_says_nothing_dropped() {
+        let exported = exported(|recording| {
+            a_unit_sending(recording, CLIENT_SPANS_PER_UNIT as usize);
+        });
+
+        assert_eq!(client_spans(&exported) as u64, CLIENT_SPANS_PER_UNIT);
+        assert_eq!(
+            attribute(the_unit(&exported), DROPPED_CLIENT_SPANS_COUNT),
+            None
+        );
+    }
+
+    /// The cap is the unit's: a unit it causes, a WebSocket message on its
+    /// socket, makes its own.
+    #[test]
+    fn a_unit_another_caused_makes_spans_of_its_own_past_its_parents_cap() {
+        let exported = exported(|recording| {
+            let parent = Correlation::minted(None);
+            run_in(&parent, false, || {
+                for _ in 0..CLIENT_SPANS_PER_UNIT {
+                    select(recording, None);
+                }
+            });
+            run_in(&parent.child(), false, || select(recording, None));
+        });
+
+        assert_eq!(client_spans(&exported) as u64, CLIENT_SPANS_PER_UNIT + 1);
+    }
+
+    /// An exporter holding every export until the test opens its gate, as a
+    /// collector slower than the unit sending to it.
+    #[derive(Clone, Debug, Default)]
+    struct Stalled {
+        gate: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+        kept: InMemorySpanExporter,
+    }
+
+    impl Stalled {
+        fn open(&self) {
+            let (open, opened) = &*self.gate;
+            *open.lock().expect("the gate") = true;
+            opened.notify_all();
+        }
+    }
+
+    impl opentelemetry_sdk::trace::SpanExporter for Stalled {
+        async fn export(&self, batch: Vec<SpanData>) -> opentelemetry_sdk::error::OTelSdkResult {
+            {
+                let (open, opened) = &*self.gate;
+                let held = open.lock().expect("the gate");
+                drop(opened.wait_while(held, |open| !*open).expect("the gate"));
+            }
+            self.kept.export(batch).await
+        }
+    }
+
+    /// The SDK's batch processor queues what it has not exported, and drops
+    /// whatever arrives once its queue is full, whichever trace it belongs to.
+    #[test]
+    fn a_unit_sending_more_operations_than_one_export_batch_costs_another_unit_no_span() {
+        crate::linker::install();
+        nest_rs_core::__private::count_client_spans();
+        let stalled = Stalled::default();
+        let provider = SdkTracerProvider::builder()
+            .with_id_generator(crate::id_generator::AdoptFrameworkIds::default())
+            .with_span_processor(
+                opentelemetry_sdk::trace::BatchSpanProcessor::builder(stalled.clone()).build(),
+            )
+            .build();
+        let recording = ClientOperations {
+            tracer: Some(provider.tracer("operations")),
+            durations: None,
+        };
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("units")));
+        let other = Correlation::minted(None);
+        tracing::subscriber::with_default(subscriber, || {
+            in_unit(|| {
+                for _ in 0..LOOPED {
+                    select(&recording, None);
+                }
+            });
+            drop(nestrs_unit_probe::open(&other));
+        });
+        stalled.open();
+        provider.force_flush().expect("the spans flush");
+
+        let exported = stalled
+            .kept
+            .get_finished_spans()
+            .expect("the spans exported");
+        assert!(
+            exported
+                .iter()
+                .any(|span| span.span_context.trace_id().to_string() == other.trace_id().to_hex()),
+            "the other unit's span reached the exporter, of {} exported",
+            exported.len(),
         );
     }
 

@@ -124,3 +124,54 @@ Refused:
   connection gets sea-orm's report. Fixing it is sea-orm's: a `MetricStream`
   that records its wall time from the first poll and whether an item was an
   error.
+
+## 2026-11-14 — a unit makes at most one export batch of client spans
+
+A unit that loops — an import job sending fifty thousand Redis commands, an N+1
+over five thousand rows — made a client span per operation, and the SDK's batch
+processor drops whatever arrives once its queue (`OTEL_BSP_MAX_QUEUE_SIZE`, 2,048)
+is full, whichever trace it belongs to. Seen by tests, red before the change: ten
+thousand operations under one unit exported ten thousand client spans; behind
+the SDK's own `BatchSpanProcessor`, its exporter held as a collector slower than
+the unit is, 2,560 spans reached the exporter — one batch and the queue — and
+another unit's span, ended after them, was dropped.
+
+- **Past `CLIENT_SPANS_PER_UNIT` spans an operation records its duration and no
+  span**: the SDK's export batch (`OTEL_BSP_MAX_EXPORT_BATCH_SIZE`'s default,
+  512, the SDK's constant read rather than copied), so one unit never fills more
+  than one export. The metrics stay exact: every operation is counted.
+- **The count is the unit's**, one atomic integer its correlation and each of its
+  client operations' share (`nest_rs_core::__private::ClientSpans`), incremented
+  once per operation of a sampled trace and never where the trace is not
+  sampled. A unit it causes — a WebSocket message on its socket, a GraphQL root
+  field, a job it enqueues — counts its own: `Correlation::child` starts a count,
+  and only a client operation shares its unit's.
+- **The unit's span says how many it did not make**, `dropped_client_spans_count`,
+  recorded once as its edge ends it (`record_end`, whose hook now runs for every
+  unit, a duration declared or not) and only when it is above zero. No
+  convention names a count of child spans not made; OTLP counts what a span's
+  limits dropped as `dropped_attributes_count`, `dropped_events_count` and
+  `dropped_links_count`, and the name joins them. The owner validates it.
+- **What it costs, where traces export**: an `Arc` a unit, about 15 ns
+  (`nest-rs-core`'s `trace_context` bench, `mint/correlation` 56 → 71 ns,
+  `mint/child` 10.6 → 24.4 ns, Apple M-series); one atomic increment an
+  operation of a sampled trace; one extension held on a sampled unit's span,
+  read once at its end. **Where they do not, nothing**: a unit keeps no count
+  until the stack making client spans says so at boot (`count_client_spans`),
+  and the bench reads as before (56.3 ns, 10.8 ns).
+
+Refused:
+
+- **Folding repeated siblings into one node with a count and a summed duration**
+  (`@nestjs/observe`'s `spanCollapse`): it holds a unit's spans in memory until
+  the unit ends to group them, where a cap costs one comparison.
+- **A cap per trace**, through the state a correlation shares with the units it
+  causes: a socket's messages would share one count for the socket's life.
+- **A cap read off the deployment's `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`**: a setting
+  that would move a count a backend reads, for a bound the default already
+  serves; not built.
+
+The limit, stated: the cap bounds one unit's share of the queue, not the
+queue. Four units each sending past the cap within one export interval fill the
+default queue of 2,048 again, and a client operation recorded after its unit's
+end is not in the count its span carries.

@@ -225,7 +225,7 @@ async fn connect(port: u16) -> TcpStream {
 /// How many units have ended, as `record_end` tells the observability stack.
 static ENDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-fn count_end(_: &tracing::Span) {
+fn count_end(_: &nest_rs_core::operation_log::Unit, _: &tracing::Span) {
     ENDED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 

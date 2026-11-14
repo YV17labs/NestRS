@@ -12,7 +12,7 @@
 //! mutation.
 
 use std::fmt;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use uuid::{NoContext, Timestamp, Uuid};
@@ -345,6 +345,45 @@ pub struct Correlation {
     parent_is_remote: bool,
     tracestate: TraceState,
     shared: Arc<Shared>,
+    /// The unit's, shared with its client operations' and never with a unit
+    /// it causes.
+    client_spans: ClientSpans,
+}
+
+/// How many client spans one unit of work has counted: the unit's
+/// correlation and each of its client operations' hold one count, kept only
+/// once an observability stack makes client operations spans.
+#[derive(Clone, Debug, Default)]
+pub struct ClientSpans(Option<Arc<AtomicU64>>);
+
+/// Whether a unit counts its client spans; until a stack says so at boot, a
+/// unit allocates no count.
+static COUNTED: AtomicBool = AtomicBool::new(false);
+
+impl ClientSpans {
+    /// A new unit's count, or none where nothing makes client spans.
+    fn for_unit() -> Self {
+        Self(
+            COUNTED
+                .load(Ordering::Relaxed)
+                .then(|| Arc::new(AtomicU64::new(0))),
+        )
+    }
+
+    /// Count one more client span, and say whether it is within `cap`; a unit
+    /// that keeps no count is never past it.
+    pub fn claim(&self, cap: u64) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|count| count.fetch_add(1, Ordering::Relaxed) < cap)
+    }
+
+    /// How many were counted past `cap`.
+    pub fn past(&self, cap: u64) -> u64 {
+        self.0
+            .as_ref()
+            .map_or(0, |count| count.load(Ordering::Relaxed).saturating_sub(cap))
+    }
 }
 
 #[derive(Debug)]
@@ -401,6 +440,17 @@ impl Correlation {
     /// flags, the state and the actor carry; the span is new and its parent is
     /// this one.
     pub fn child(&self) -> Self {
+        self.beneath(ClientSpans::for_unit())
+    }
+
+    /// A client operation this unit sends: a [`child`](Self::child) in its
+    /// place in the trace, counted among this unit's client spans.
+    pub(crate) fn client_operation(&self) -> Self {
+        self.beneath(self.client_spans.clone())
+    }
+
+    /// A new span below this one, counting its client spans in `client_spans`.
+    fn beneath(&self, client_spans: ClientSpans) -> Self {
         Self {
             trace_id: self.trace_id,
             span_id: SpanId::mint(),
@@ -408,6 +458,7 @@ impl Correlation {
             parent_is_remote: false,
             tracestate: self.tracestate.clone(),
             shared: Arc::clone(&self.shared),
+            client_spans,
         }
     }
 
@@ -432,6 +483,7 @@ impl Correlation {
             parent_is_remote: false,
             tracestate,
             shared: Arc::new(shared),
+            client_spans: ClientSpans::for_unit(),
         }
     }
 
@@ -532,9 +584,27 @@ pub(crate) mod __private {
     use std::sync::OnceLock;
     use std::sync::atomic::Ordering;
 
-    use super::{Correlation, SpanId, TraceFlags, TraceId};
+    use super::{COUNTED, ClientSpans, Correlation, SpanId, TraceFlags, TraceId};
     use crate::operation_log::Unit;
     use crate::request_scope::current_correlation_with;
+
+    /// Count each unit's client spans from now on. Called once, at boot, by
+    /// the observability stack making client operations spans — never by an
+    /// application.
+    pub fn count_client_spans() {
+        COUNTED.store(true, Ordering::Relaxed);
+    }
+
+    /// A client operation `unit` sends, counted among its client spans.
+    pub fn client_operation_of(unit: &Correlation) -> Correlation {
+        unit.client_operation()
+    }
+
+    /// The client spans the unit `correlation` belongs to has counted: the
+    /// unit's own, or, for a client operation, its unit's.
+    pub fn client_spans(correlation: &Correlation) -> &ClientSpans {
+        &correlation.client_spans
+    }
 
     /// Record the sampling decision an installed sampler made, leaving the
     /// reserved bits as they arrived.
@@ -922,6 +992,31 @@ mod tests {
 
         __private::set_sampled(&correlation, true);
         assert_eq!(correlation.flags().bits(), 0xfd);
+    }
+
+    #[test]
+    fn a_units_client_operations_share_its_count_and_a_unit_it_causes_counts_its_own() {
+        __private::count_client_spans();
+        let unit = Correlation::minted(None);
+        let operation = __private::client_operation_of(&unit);
+        assert_eq!(operation.parent_id(), Some(unit.span_id()));
+        assert_eq!(operation.trace_id(), unit.trace_id());
+
+        assert!(__private::client_spans(&operation).claim(1));
+        assert!(!__private::client_spans(&operation).claim(1));
+        assert_eq!(__private::client_spans(&unit).past(1), 1);
+
+        let caused = unit.child();
+        assert_eq!(__private::client_spans(&caused).past(0), 0);
+        assert!(__private::client_spans(&caused).claim(1));
+    }
+
+    #[test]
+    fn a_unit_keeps_no_count_until_a_stack_counts_client_spans() {
+        let unit = Correlation::minted(None);
+        let operation = __private::client_operation_of(&unit);
+        assert!(__private::client_spans(&operation).claim(0), "never past");
+        assert_eq!(__private::client_spans(&unit).past(0), 0);
     }
 
     #[test]

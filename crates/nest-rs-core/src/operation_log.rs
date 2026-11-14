@@ -475,21 +475,19 @@ static SPAN_RENAME: OnceLock<SpanRename> = OnceLock::new();
 
 /// Record on `unit`'s span that it ended — its answer given, its work settled
 /// — so the duration it declares stops here, whatever still holds the span
-/// open: a child span, work carried past the answer. A unit declaring no
-/// duration records nothing.
+/// open: a child span, work carried past the answer; and so its span says
+/// what its observability stack counted of it.
 ///
 /// [`record_outcome`] calls it; an edge recording its outcome's class itself
 /// calls it once the class is recorded.
 pub fn record_end(unit: &Unit, span: &tracing::Span) {
-    if unit.duration().is_some()
-        && let Some(end) = UNIT_END.get()
-    {
-        end(span);
+    if let Some(end) = UNIT_END.get() {
+        end(unit, span);
     }
 }
 
 /// What an observability stack does as a unit ends.
-type UnitEnd = fn(&tracing::Span);
+type UnitEnd = fn(&Unit, &tracing::Span);
 
 static UNIT_END: OnceLock<UnitEnd> = OnceLock::new();
 

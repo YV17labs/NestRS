@@ -14,12 +14,24 @@ use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt, TraceFlags, Tra
 use tracing_opentelemetry::{OpenTelemetrySpanExt, SetParentError};
 
 use nest_rs_core::Correlation;
+use nest_rs_core::operation_log::Unit;
 
-/// Install [`enrich`] as the framework's span linker, and [`rename`] as what
-/// renames a unit's span its edge names late, before any module registers.
+/// Install [`enrich`] as the framework's span linker, [`rename`] as what
+/// renames a unit's span its edge names late, and [`end`] as what runs as a
+/// unit ends, before any module registers.
 pub(crate) fn install() {
     nest_rs_core::__private::set_span_linker(enrich);
     nest_rs_core::__private::set_span_rename(rename);
+    nest_rs_core::__private::set_unit_end(end);
+}
+
+/// End the duration `unit` declares, and say on its span how many client
+/// spans it did not make.
+fn end(unit: &Unit, span: &tracing::Span) {
+    if unit.duration().is_some() {
+        crate::unit_durations::end_unit(span);
+    }
+    crate::client_operations::report_dropped(span);
 }
 
 /// Rename the SDK's span: [`enrich`] started it, and `tracing-opentelemetry`
@@ -38,7 +50,11 @@ fn rename(span: &tracing::Span, name: String) {
 /// span starts under them.
 fn enrich(span: &tracing::Span, correlation: &Correlation) {
     link_remote_parent(span, correlation);
-    nest_rs_core::__private::set_sampled(correlation, is_sampled(span));
+    let sampled = is_sampled(span);
+    nest_rs_core::__private::set_sampled(correlation, sampled);
+    if sampled {
+        crate::client_operations::hold_count(span, correlation);
+    }
 }
 
 /// Tell the SDK this span continues one that ran elsewhere.

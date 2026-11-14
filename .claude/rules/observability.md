@@ -78,7 +78,9 @@ peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
 - **What a driver sends is a client operation** (`nest_rs_core::client_operation`):
   timed by the driver only while something records them, named and keyed by what
   the operation does — a statement's summary, a command's name — never by a value
-  it carries, and a span only under a traced unit.
+  it carries, and a span only under a traced unit, at most one export batch of
+  them per unit, its span counting the rest: the exporter's queue is every
+  unit's, and one unit's loop must not drop another's spans.
 
 ## Propagation — task, process and response
 

@@ -138,9 +138,10 @@ impl<'a> ClientOperation<'a> {
         }
     }
 
-    /// The same operation, correlated as `correlation`: a child of the unit
-    /// that sent it, whose span id is the operation's span — the one a
-    /// `traceparent` sent with it named as its peer's parent.
+    /// The same operation, correlated as `correlation`: a client operation of
+    /// the unit that sent it, counted among that unit's client spans, whose
+    /// span id is the operation's span — the one a `traceparent` sent with it
+    /// named as its peer's parent.
     pub const fn correlated(self, correlation: Option<&'a Correlation>) -> Self {
         Self {
             correlation,
@@ -202,7 +203,8 @@ impl<'a> ClientOperation<'a> {
             (recording.recorder)(self);
             return;
         }
-        let own = crate::trace_context::__private::current_correlation().map(|unit| unit.child());
+        let own = crate::trace_context::__private::current_correlation()
+            .map(|unit| unit.client_operation());
         let here: ClientOperation<'_> = *self;
         (recording.recorder)(&here.correlated(own.as_ref()));
     }
@@ -268,8 +270,8 @@ impl PendingClientOperation {
         if !is_recorded_here() {
             return Self::untimed();
         }
-        let correlation =
-            crate::trace_context::__private::current_correlation().map(|unit| unit.child());
+        let correlation = crate::trace_context::__private::current_correlation()
+            .map(|unit| unit.client_operation());
         Self::timed(duration, name.into(), attributes, correlation)
     }
 
@@ -418,8 +420,8 @@ impl HttpClientRequest {
     /// a port left out is the scheme's own.
     #[must_use = "a request is recorded when it is answered, timed out or failed"]
     pub fn start(method: &Method, scheme: &str, host: Option<&str>, port: Option<u16>) -> Self {
-        let announced =
-            crate::trace_context::__private::current_correlation().map(|unit| unit.child());
+        let announced = crate::trace_context::__private::current_correlation()
+            .map(|unit| unit.client_operation());
         if !is_recorded_here() {
             return Self {
                 announced,

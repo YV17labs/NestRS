@@ -147,18 +147,24 @@ another unit's span, ended after them, was dropped.
   field, a job it enqueues — counts its own: `Correlation::child` starts a count,
   and only a client operation shares its unit's.
 - **The unit's span says how many it did not make**, `dropped_client_spans_count`,
-  recorded once as its edge ends it (`record_end`, whose hook now runs for every
-  unit, a duration declared or not) and only when it is above zero. No
-  convention names a count of child spans not made; OTLP counts what a span's
-  limits dropped as `dropped_attributes_count`, `dropped_events_count` and
-  `dropped_links_count`, and the name joins them. The owner validates it.
+  recorded once as its edge ends it and only when it is above zero: where traces
+  export, `record_end`'s hook runs for every unit, and elsewhere, as before, for a
+  unit declaring a duration alone. No convention names a count of child spans not
+  made; OTLP counts what a span's limits dropped as `dropped_attributes_count`,
+  `dropped_events_count` and `dropped_links_count`, and the name joins them. The
+  owner validated it on 2026-11-14.
 - **What it costs, where traces export**: an `Arc` a unit, about 15 ns
   (`nest-rs-core`'s `trace_context` bench, `mint/correlation` 56 → 71 ns,
   `mint/child` 10.6 → 24.4 ns, Apple M-series); one atomic increment an
   operation of a sampled trace; one extension held on a sampled unit's span,
-  read once at its end. **Where they do not, nothing**: a unit keeps no count
-  until the stack making client spans says so at boot (`count_client_spans`),
-  and the bench reads as before (56.3 ns, 10.8 ns).
+  read at its end, which brings `record_end` on a unit declaring no duration from
+  0.2–0.3 ns to 10.3 ns (release build, five million calls, same machine). **Where
+  they do not, nothing measurable**: a unit keeps no count until the stack making
+  client spans says so at boot (`count_client_spans`), the bench reads as before
+  (56.3 ns, 10.8 ns), and `record_end` runs no hook for a unit declaring no
+  duration, 0.37 ns against the base's 0.22–0.43 ns: one relaxed load is what
+  remains. Seeded for every unit, the hook had cost such an app 9–11 ns a unit,
+  reading a count no span held.
 
 Refused:
 

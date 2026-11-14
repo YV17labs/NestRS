@@ -16,13 +16,20 @@ use tracing_opentelemetry::{OpenTelemetrySpanExt, SetParentError};
 use nest_rs_core::Correlation;
 use nest_rs_core::operation_log::Unit;
 
-/// Install [`enrich`] as the framework's span linker, [`rename`] as what
-/// renames a unit's span its edge names late, and [`end`] as what runs as a
-/// unit ends, before any module registers.
+/// Install [`enrich`] as the framework's span linker, and [`rename`] as what
+/// renames a unit's span its edge names late, before any module registers.
 pub(crate) fn install() {
     nest_rs_core::__private::set_span_linker(enrich);
     nest_rs_core::__private::set_span_rename(rename);
-    nest_rs_core::__private::set_unit_end(end);
+}
+
+/// Install [`end`] as what runs as a unit ends: for every unit where `traces`
+/// export, whose span counts the client spans it did not make; for a unit
+/// declaring a duration where only `metrics` do; for none otherwise.
+pub(crate) fn end_units(traces: bool, metrics: bool) {
+    if traces || metrics {
+        nest_rs_core::__private::set_unit_end(end, traces);
+    }
 }
 
 /// End the duration `unit` declares, and say on its span how many client

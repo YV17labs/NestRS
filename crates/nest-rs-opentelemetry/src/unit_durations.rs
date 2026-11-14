@@ -240,7 +240,7 @@ mod tests {
     /// Every export of what `work` recorded through the layer, beside a layer
     /// enabling every span, as a console or a trace export does.
     fn recorded(work: impl FnOnce()) -> Vec<ResourceMetrics> {
-        nest_rs_core::__private::set_unit_end(|_, span| end_unit(span));
+        nest_rs_core::__private::set_unit_end(|_, span| end_unit(span), false);
         let (provider, exporter) = metered();
         let subscriber = tracing_subscriber::registry()
             .with(tracing_subscriber::layer::Identity::new())

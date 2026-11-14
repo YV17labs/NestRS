@@ -232,7 +232,7 @@ fn count_end(_: &nest_rs_core::operation_log::Unit, _: &tracing::Span) {
 /// Request `path` from an app booted on `M`, read its whole answer, and say
 /// how many units ended meanwhile.
 async fn ended_answering<M: nest_rs_core::Module + 'static>(path: &str) -> usize {
-    nest_rs_core::__private::set_unit_end(count_end);
+    nest_rs_core::__private::set_unit_end(count_end, false);
     let client = boot::<M>().await;
     let before = ENDED.load(std::sync::atomic::Ordering::SeqCst);
     let resp = client.get(path).send().await.0;

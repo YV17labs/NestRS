@@ -122,6 +122,7 @@ impl OpenTelemetry {
             // Seeded here rather than mounted by a module: a queue worker imports no
             // transport.
             crate::linker::install();
+            crate::linker::end_units(exporters.traces_export, exporters.meter_provider.is_some());
             crate::client_operations::install(
                 exporters
                     .traces_export

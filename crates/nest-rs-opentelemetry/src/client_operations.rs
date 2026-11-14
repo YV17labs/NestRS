@@ -104,6 +104,9 @@ pub(crate) fn hold_count(span: &tracing::Span, unit: &Correlation) {
 /// Say on the unit `span` opened how many client spans it did not make, if
 /// it made fewer than it sent.
 pub(crate) fn report_dropped(span: &tracing::Span) {
+    if !spans_record() {
+        return;
+    }
     let dropped = span
         .with_subscriber(|(id, dispatch)| {
             let span = dispatch.downcast_ref::<Registry>()?.span(id)?;
@@ -247,6 +250,7 @@ mod tests {
     /// span started under the kernel's ids as `init` links them.
     fn exported(work: impl FnOnce(&ClientOperations)) -> Exported {
         crate::linker::install();
+        crate::linker::end_units(true, true);
         let spans = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
             .with_id_generator(crate::id_generator::AdoptFrameworkIds::default())
@@ -605,6 +609,7 @@ mod tests {
     #[test]
     fn a_unit_sending_more_operations_than_one_export_batch_costs_another_unit_no_span() {
         crate::linker::install();
+        crate::linker::end_units(true, true);
         nest_rs_core::__private::count_client_spans();
         let stalled = Stalled::default();
         let provider = SdkTracerProvider::builder()

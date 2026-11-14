@@ -193,7 +193,8 @@ It is the line's own sentence, described and never quoted: a value the request
 carried is no more in the description than in the line. A failure the caller
 earned — a `4xx`, a message refused before its handler ran — keeps no status
 and no description, and a failure no sentence explains, a request cut at its
-deadline or stopped by its client, carries its class in `error.type` alone. A
+deadline or stopped by its client, carries its class in `error.type` alone,
+whatever it met before. A
 job, a tick or a listener call has no caller, so it fails whatever a layer
 answered — a job a filter acknowledged, a tick it skipped — and says why all
 the same. No `exception` event is recorded: OpenTelemetry is moving exceptions

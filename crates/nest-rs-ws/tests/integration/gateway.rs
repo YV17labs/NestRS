@@ -1267,11 +1267,16 @@ static STALL_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 #[gateway(path = "/deadline")]
 pub(crate) struct DeadlineGateway;
 
+/// A cause a unit kept before its deadline cut it, which the cut is not.
+const KEPT_BEFORE_THE_CUT: &str = "the replica answered late";
+
 #[messages]
 impl DeadlineGateway {
+    /// Keeps a cause, then never answers.
     #[subscribe_message("stall")]
     #[public]
     async fn stall(&self) -> String {
+        nest_rs_core::operation_log::record_cause(&tracing::Span::current(), KEPT_BEFORE_THE_CUT);
         STALL_STARTED.notify_one();
         std::future::pending::<()>().await;
         "never".to_owned()
@@ -1376,6 +1381,12 @@ async fn a_message_past_its_deadline_is_answered_a_timeout_and_the_socket_goes_o
         span.fields,
     );
     assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "a cut says its class alone, never a cause kept before it: {:?}",
+        span.fields,
+    );
 }
 
 /// How a unit the recording binding opened ended.

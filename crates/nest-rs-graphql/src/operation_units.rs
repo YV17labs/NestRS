@@ -748,6 +748,9 @@ struct OperationLine<'r> {
     span: tracing::Span,
     started: std::time::Instant,
     roots: &'r RootFields,
+    /// Set when the request's deadline cut it: its span then says its class
+    /// alone, never the chains its errors kept.
+    cut_by_deadline: std::sync::atomic::AtomicBool,
 }
 
 impl<'r> OperationLine<'r> {
@@ -766,6 +769,7 @@ impl<'r> OperationLine<'r> {
                 span,
                 started: std::time::Instant::now(),
                 roots,
+                cut_by_deadline: std::sync::atomic::AtomicBool::new(false),
             },
             Unwinding::Shared,
         )
@@ -784,6 +788,8 @@ impl<'r> OperationLine<'r> {
     /// Said inside the operation's unit when the request's deadline cuts it,
     /// so each operation of a cut batch says it under its own ids.
     fn cut(&self, timeout: Duration) {
+        self.cut_by_deadline
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         tracing::warn!(
             target: crate::TARGET,
             kind = self.ty,
@@ -799,6 +805,12 @@ impl Line for OperationLine<'_> {
             let unanswered = self.roots.take_unanswered();
             self.span
                 .in_scope(|| file_kept(&unanswered, self.ty, self.roots));
+            if self
+                .cut_by_deadline
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                nest_rs_core::__private::forget_cause(&self.span);
+            }
             nest_rs_core::operation_line!(
                 crate::unit::OPERATION,
                 span: &self.span,

@@ -540,8 +540,13 @@ struct StalledGateway;
 
 #[messages]
 impl StalledGateway {
+    /// Keeps a cause, then never ends.
     #[on_connect]
     async fn joined(&self) {
+        nest_rs_core::operation_log::record_cause(
+            &tracing::Span::current(),
+            "the session store answered late",
+        );
         CONNECT_STARTED.notify_one();
         std::future::pending::<()>().await;
     }
@@ -609,6 +614,20 @@ async fn a_connect_hook_past_its_deadline_is_cut_and_its_socket_closed_unserved(
     assert_eq!(cut.field("unit").as_deref(), Some("ws.connect"));
     assert_eq!(cut.field("timeout_ms").as_deref(), Some("1000"));
     app.shutdown().await.expect("the transport stops cleanly");
+
+    let span = logs.expect_span(nest_rs_ws::TARGET, nest_rs_ws::unit::CONNECT.name());
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "a cut says its class alone, never a cause kept before it: {:?}",
+        span.fields,
+    );
 }
 
 /// Told once the disconnect hook started, which then never ends.

@@ -134,6 +134,14 @@ pub(crate) mod __private {
         let _ = SPAN_RENAME.set(rename);
     }
 
+    /// Forget the cause the unit's span `span` is or sits under kept
+    /// ([`record_cause`](super::record_cause)): its edge cut it at its
+    /// deadline, which no sentence explains, so the error it then records says
+    /// its class alone. Called by an edge where it cuts a unit.
+    pub fn forget_cause(span: &tracing::Span) {
+        super::take_cause(span);
+    }
+
     /// Seed what runs as each unit ends ([`record_end`](super::record_end)).
     /// Called once, at boot, by the observability stack — never by an
     /// application.
@@ -537,40 +545,41 @@ pub fn record_cause(span: &tracing::Span, said: &str) {
 #[cfg(feature = "logging")]
 struct Cause(String);
 
-/// [`record_cause`] on the registry: the nearest span at or above `span` that
-/// declares the description, a unit's, keeps `said`.
+/// [`record_cause`] on the registry: the unit's span `span` is or sits under
+/// keeps `said`.
 #[cfg(feature = "logging")]
 fn keep_cause(span: &tracing::Span, said: &str) {
-    use tracing_subscriber::registry::LookupSpan as _;
-
-    span.with_subscriber(|(id, dispatch)| {
-        let unit = dispatch
-            .downcast_ref::<tracing_subscriber::Registry>()
-            .and_then(|registry| registry.span(id))
-            .and_then(|span| {
-                span.scope().find(|above| {
-                    above
-                        .metadata()
-                        .fields()
-                        .field(STATUS_DESCRIPTION)
-                        .is_some()
-                })
-            });
-        if let Some(unit) = unit {
-            unit.extensions_mut().replace(Cause(said.to_owned()));
-        }
-    });
+    on_unit_span(span, |unit| unit.replace(Cause(said.to_owned())));
 }
 
-/// The cause `span` kept, taken: a unit's error is described once.
+/// The cause the unit's span `span` is or sits under kept, taken: a unit's
+/// error is described once.
 #[cfg(feature = "logging")]
 fn take_cause(span: &tracing::Span) -> Option<String> {
+    let Cause(said) = on_unit_span(span, |unit| unit.remove::<Cause>()).flatten()?;
+    Some(said)
+}
+
+/// `read` over the extensions of the nearest span at or above `span` that
+/// declares the description, a unit's, read off the registry the framework's
+/// subscriber is built on.
+#[cfg(feature = "logging")]
+fn on_unit_span<T>(
+    span: &tracing::Span,
+    read: impl FnOnce(&mut tracing_subscriber::registry::ExtensionsMut<'_>) -> T,
+) -> Option<T> {
     use tracing_subscriber::registry::LookupSpan as _;
 
     span.with_subscriber(|(id, dispatch)| {
         let registry = dispatch.downcast_ref::<tracing_subscriber::Registry>()?;
-        let Cause(said) = registry.span(id)?.extensions_mut().remove::<Cause>()?;
-        Some(said)
+        let unit = registry.span(id)?.scope().find(|above| {
+            above
+                .metadata()
+                .fields()
+                .field(STATUS_DESCRIPTION)
+                .is_some()
+        })?;
+        Some(read(&mut unit.extensions_mut()))
     })
     .flatten()
 }

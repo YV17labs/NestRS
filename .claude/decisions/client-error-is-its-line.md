@@ -257,7 +257,14 @@ on every edge, red before the change: each failed unit's span held no
   a graphql-ws socket, which ends no unit, describe nothing; a unit stopped first
   (`cancelled`) records its class alone. Seen by tests red before it, where the cause was
   written as the chain was filed: the request's span and the socket's carried a
-  description and no error. A root field's failure describes its `graphql.field`; a
+  description and no error. A unit its edge cuts at its deadline with no sentence on its
+  line — a request, a GraphQL operation, a WebSocket message or connection hook, an MCP
+  operation — records its class alone too: the edge forgets at the cut what the unit
+  kept before it (`nest_rs_core::__private::forget_cause`). Seen by tests red before it
+  on each: the cut span described a `5xx` rendered by hand, a chain a mutation's errors
+  kept, a cause a message or a connect hook kept, a chain an MCP tool handled. A job, a
+  tick or a listener call cut at its deadline fails with the cut's own sentence, which
+  its line files and its span describes. A root field's failure describes its `graphql.field`; a
   resolver's below it, written by hand or a `#[field_resolver]`, its `graphql.operation`,
   whose line files `error` — never the `/graphql` request, answered `200`.
 - **A unit no client sent** — a job attempt, a tick, a listener call — fails whatever a

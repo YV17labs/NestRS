@@ -287,6 +287,7 @@ impl OperationUnits {
             None => spec,
         };
         let stopped_first = &AtomicBool::new(false);
+        let cut_by_deadline = &AtomicBool::new(false);
         let view = || self.view(requested);
         let scoped: BoxFuture<'_, Answered<T>> = Box::pin(nest_rs_core::with_request_scope(
             nest_rs_core::current_request_scope(),
@@ -302,6 +303,7 @@ impl OperationUnits {
                             Some((timeout, at)) => tokio::time::timeout_at(at, dispatched)
                                 .await
                                 .unwrap_or_else(|_| {
+                                    cut_by_deadline.store(true, Ordering::Relaxed);
                                     Answered::refused(timed_out(named, address, timeout))
                                 }),
                             None => dispatched.await,
@@ -326,8 +328,16 @@ impl OperationUnits {
             // failure the tool handled, kept a chain all the same.
             let (ended, withheld) =
                 withholding(self.detached.run(nest_rs_core::panic::contain(scoped))).await;
-            // The latest chain is the one the answer kept, as the filing reads it.
-            let cause = withheld.last().map(|kept| kept.said().to_owned());
+            // The latest chain is the one the answer kept, as the filing reads it;
+            // a cut answer kept none, and no sentence explains it.
+            let cut = cut_by_deadline.load(Ordering::Relaxed);
+            let cause = withheld
+                .last()
+                .filter(|_| !cut)
+                .map(|kept| kept.said().to_owned());
+            if cut {
+                nest_rs_core::__private::forget_cause(&line.span);
+            }
             for withheld in withheld {
                 crate::error::file(withheld, address.named());
             }

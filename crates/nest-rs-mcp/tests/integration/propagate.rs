@@ -1922,10 +1922,15 @@ struct StalledTools;
 
 #[tools]
 impl StalledTools {
+    /// Handles a failure, whose chain the operation keeps, then never answers.
     #[tool(description = "Never answers.")]
     #[public]
     async fn stalled(&self) -> Result<String, McpError> {
         let _dropped = SetOnDrop(&STALLED_DROPPED);
+        let handled: Result<(), McpError> = nest_rs_mcp::Opaque::opaque(Err::<(), _>(
+            std::io::Error::other("the replica answered late"),
+        ));
+        drop(handled);
         STALLED_STARTED.notify_one();
         std::future::pending::<()>().await;
         Ok("never".to_owned())
@@ -2047,6 +2052,26 @@ async fn assert_cut_at_the_operation_deadline(
     assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
     assert_eq!(cut.field("tool").as_deref(), Some("stalled"));
     assert_eq!(cut.field("timeout_ms").as_deref(), Some("20000"));
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_mcp::unit::OPERATION.name()
+                && span.field("gen_ai.tool.name").as_deref() == Some("stalled")
+        })
+        .expect("the call's span");
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "a cut says its class alone, never a chain the tool handled before it: {:?}",
+        span.fields,
+    );
 }
 
 #[tokio::test]

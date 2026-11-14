@@ -105,6 +105,14 @@ impl LedgerController {
         Ok("settled from the replica".to_owned())
     }
 
+    #[get("/stalled")]
+    #[public]
+    async fn stalled(&self) -> Result<String> {
+        let refused = settled().opaque().expect_err("the ledger refuses");
+        drop(refused.into_response());
+        std::future::pending().await
+    }
+
     #[get("/opaqued/{id}")]
     #[public]
     async fn opaqued(&self, Path(id): Path<u64>) -> Result<String> {
@@ -371,6 +379,37 @@ async fn a_5xx_rendered_by_hand_then_answered_2xx_describes_nothing_on_the_reque
     logs.expect_one(nest_rs_http::target::HTTP, "request failed");
     let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
     assert_eq!(span.field("otel.status_code"), None, "{:?}", span.fields);
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}
+
+/// A request cut at its deadline says no sentence: a cause kept for a `5xx` it
+/// rendered by hand before the cut is no reason for it.
+#[tokio::test(start_paused = true)]
+async fn a_request_cut_at_its_deadline_describes_no_cause_it_kept_before() {
+    let client = crate::boot_on::<LedgerModule>(nest_rs_http::HttpConfig {
+        request_timeout: Some(std::time::Duration::from_secs(1)),
+        ..nest_rs_http::HttpConfig::default()
+    })
+    .await;
+    let logs = LogCapture::install();
+    client
+        .get("/ledger/stalled")
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
     assert_eq!(
         span.field("otel.status_description"),
         None,

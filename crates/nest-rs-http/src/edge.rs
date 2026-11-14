@@ -50,8 +50,9 @@ use crate::{response_body, trace_context};
 
 /// What a request whose unit of work did not settle within its `net` past the
 /// deadline is answered: a `500` without `Retry-After`, since what it wrote may
-/// have landed, said once at `error`.
+/// have landed, said once at `error`; its span says the class alone.
 fn unsettled(net: Duration) -> Response {
+    nest_rs_core::__private::forget_cause(&tracing::Span::current());
     tracing::error!(
         target: crate::target::HTTP,
         net_ms = crate::server::millis(net),

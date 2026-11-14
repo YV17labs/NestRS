@@ -658,9 +658,7 @@ macro_rules! unit {
 /// Call it inside the unit's correlation (`RequestContinuation::enter`) and
 /// outside its span, so the line carries the unit's ids and is nobody's child.
 ///
-/// The line is filed at `info`. `debug: <bool>` after `started` files it at
-/// `debug` where that is `true`: the one exception is a health probe's
-/// request answered `2xx`, which a platform asks every few seconds.
+/// The line is filed at `info`.
 #[macro_export]
 macro_rules! operation_line {
     (@settle $unit:path, $span:expr, $outcome:expr) => {{
@@ -682,7 +680,9 @@ macro_rules! operation_line {
             $($($field)*)?
         )
     };
-    ($unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr, debug: $debug:expr $(, $($field:tt)*)?) => {{
+    // The observability rule's one exception to `info`: a health probe's
+    // request answered `2xx`, filed by `nest-rs-http` alone.
+    (@debug $debug:expr, $unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr $(, $($field:tt)*)?) => {{
         let __outcome = $crate::operation_line!(@settle $unit, $span, $outcome);
         if $debug {
             $crate::operation_line!(@file debug, $unit, __outcome, $started $(, $($field)*)?);

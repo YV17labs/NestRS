@@ -33,7 +33,8 @@ line was at `info`.
 - **Its line files at `debug` while it answers `2xx`**, and at `info` otherwise —
   a `503`, a body that unwound, a cut — as every request's does: the one exception
   to `info` for an edge's success, written in `observability.md`. `operation_line!`
-  spells it with its `debug:` key.
+  spells it with an internal arm, `@debug`, which only `nest-rs-http` calls: the
+  owner refused a public key (2026-11-14), so no package files a line below `info`.
 - **Family**: no other edge serves a probe. A probe is the HTTP `GET` an
   orchestrator sends; WebSocket, GraphQL, MCP, the queue, the schedule and the
   events have none.

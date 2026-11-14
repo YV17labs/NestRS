@@ -78,11 +78,11 @@ impl AccessLog {
     ) {
         let path = self.matched.route();
         nest_rs_core::operation_line!(
+            @debug self.probe && outcome.is_none() && (200..300).contains(&status),
             crate::unit::REQUEST,
             span: span,
             outcome: outcome,
             started: self.start,
-            debug: self.probe && outcome.is_none() && (200..300).contains(&status),
             verb = %self.verb,
             path = path.as_deref(),
             status,

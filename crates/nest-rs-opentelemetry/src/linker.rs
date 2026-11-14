@@ -268,6 +268,26 @@ mod tests {
         assert_eq!(stopped, Status::error(""));
     }
 
+    /// Fails the day tracing-opentelemetry no longer fails the span an `error`
+    /// event is filed in: a unit whose line files `ok` exports `Error` all the
+    /// same, a failure line it filed for a chain it then answered past
+    /// included.
+    #[test]
+    fn upstream_tracing_opentelemetry_still_fails_the_span_an_error_event_is_filed_in() {
+        use opentelemetry::trace::Status;
+
+        let status = exported_status(|span| {
+            span.in_scope(|| tracing::error!(target: "probe", error = "refused", "probe failed"));
+            nestrs_unit_probe::settle(span, std::time::Instant::now());
+        });
+        assert_eq!(
+            status,
+            Status::error(""),
+            "tracing-opentelemetry no longer fails the span an `error` event is filed in: \
+             close .claude/upstream/tracing-opentelemetry.md's entry"
+        );
+    }
+
     #[test]
     fn a_restarted_trace_has_no_parent_to_link() {
         assert_eq!(Correlation::minted(None).parent_id(), None);

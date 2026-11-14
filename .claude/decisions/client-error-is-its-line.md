@@ -291,3 +291,8 @@ change: each failed unit's span held no `otel.status_description` beside the lin
     first of two exported over the second.
   - Without `nest-rs-core`'s `logging` feature, which reads the subscriber's registry,
     nothing is kept; no OpenTelemetry export runs without it.
+  - `tracing-opentelemetry` sets the status of the span an `error` line is filed in to
+    `Error` with no description, whatever the unit's line says: a `2xx` request whose
+    handler rendered a `5xx` by hand, a socket whose subscription item failed, an MCP
+    operation whose tool handled a failure, export `Error` all the same. The library's,
+    not worked around (`.claude/upstream/tracing-opentelemetry.md`).

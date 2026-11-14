@@ -200,6 +200,11 @@ whose item failed while its socket stayed open, describes nothing: the failure
 line is there, the unit did not fail. A unit that meets several failures before
 it ends describes the last one; the earlier ones are on their own lines.
 
+One effect comes from `tracing-opentelemetry` rather than the framework: an
+`error` line filed inside a span sets that span's status to `Error`, with no
+description, whatever its unit answered. The request above, which answered
+`2xx`, exports `Error` for that reason.
+
 ## Statements and commands
 
 Once traces or metrics export, every statement the app's Postgres pool sends and

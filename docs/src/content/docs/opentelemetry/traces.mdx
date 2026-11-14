@@ -197,7 +197,8 @@ from span events to log records, where the failure line already is.
 The description goes out with the failure of the unit itself. A request whose
 handler rendered a `5xx` by hand and then answered `2xx`, or a subscription
 whose item failed while its socket stayed open, describes nothing: the failure
-line is there, the unit did not fail.
+line is there, the unit did not fail. A unit that meets several failures before
+it ends describes the last one; the earlier ones are on their own lines.
 
 ## Statements and commands
 

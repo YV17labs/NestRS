@@ -220,6 +220,31 @@ mod tests {
         exported.status.clone()
     }
 
+    /// A unit given several causes before it failed exports one: the last, in
+    /// whichever order their words sort.
+    #[test]
+    fn a_unit_failed_with_several_causes_exports_the_last() {
+        use opentelemetry::trace::Status;
+
+        for (first, last) in [
+            (
+                "the store refused the write",
+                "a replica dropped the connection",
+            ),
+            (
+                "a replica dropped the connection",
+                "the store refused the write",
+            ),
+        ] {
+            let status = exported_status(|span| {
+                nest_rs_core::operation_log::record_cause(span, first);
+                nest_rs_core::operation_log::record_cause(span, last);
+                nest_rs_core::operation_log::record_error(span, "500");
+            });
+            assert_eq!(status, Status::error(last), "{first} then {last}");
+        }
+    }
+
     /// A cause kept for a failure its unit answered past describes nothing: a
     /// unit filing `ok` exports no status, one stopped first its class alone.
     #[test]

@@ -282,5 +282,12 @@ change: each failed unit's span held no `otel.status_description` beside the lin
   - A chain filed outside every unit — an `HttpError` rendered by hand where no request
     is in flight, an MCP failure answered outside any operation — has no span to
     describe.
+  - A unit given several causes before it records its failure — a GraphQL operation two
+    fields failed in, a chain a handler filed by hand before the one its answer kept —
+    describes the last; the others are on their lines alone. Each cause replaces the one
+    before, so the export never chooses among them. Written as they came, they left the
+    choice to the SDK, which keeps the greater status, so the description sorting last
+    in the alphabet went out whichever came last: seen by a test before the change, the
+    first of two exported over the second.
   - Without `nest-rs-core`'s `logging` feature, which reads the subscriber's registry,
     nothing is kept; no OpenTelemetry export runs without it.

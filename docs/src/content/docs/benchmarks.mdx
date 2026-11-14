@@ -55,6 +55,26 @@ is the median of the boots. Absolute figures move with hardware, and a virtualiz
 host is a floor: the **ratios are the claim** — every run embeds its machine
 fingerprint, and the one command above replays the full protocol on yours.
 
+### What exporting telemetry costs
+
+With an OTLP endpoint set, every request exports its span, its access line as a
+log record and a point in its duration histogram. The `exported` variant
+measures that against T1 on the same build, which calls
+`OpenTelemetry::init()` as `nestrs new` writes it, the collector on the load's
+cores discarding what it takes:
+
+- **3.2 to 3.4 µs of CPU per request** on one pinned core, read as
+  `1/rps(exported) − 1/rps(T1)`: 27 to 28 % fewer requests a second.
+- **p99 ×2.9**, from 0.65 ms to 1.9 ms.
+- **5 to 6 MB more memory** under load.
+- **Every span taken**: the collector received one for each request sent.
+
+Measured 2026-11-14 on the same host, in the same Linux VM (OrbStack, kernel
+7.2.12) — rustc 1.100.0, oha 1.16.0, otelcol 0.165.0, the batch processor at the
+SDK's defaults; 64 connections, a discarded 10 s warmup, five timed runs of 15 s,
+two rounds. It is a later session than the table above, so the difference
+between the two tiers is the figure, never their absolute rates.
+
 ## The contract
 
 Every contestant serves the exact same surface, verified before anything is
@@ -87,7 +107,8 @@ measured:
 
 A contestant may declare variants of its own, measured in a boot of their own
 and never compared with a contestant that lacks them: NestRS declares T1 over
-HTTP/2 with prior knowledge, T1 with its access line off, and T5 compressed.
+HTTP/2 with prior knowledge, T1 with its access line off, T5 compressed, and T1
+exporting its telemetry over OTLP.
 
 ## The protocol
 
@@ -106,9 +127,10 @@ HTTP/2 with prior knowledge, T1 with its access line off, and T5 compressed.
 - The harness compares **framework overhead** on a hello-world contract. It
   does not claim your domain logic gets 1.5× faster — it claims the floor
   under it is lower and the ceiling higher.
-- Neither side ships per-request telemetry — measuring "telemetry on" vs
-  "telemetry absent" would compare features, not frameworks. NestRS's
-  access line is measured on, as it ships, and off in its `quiet` variant.
+- The race exports no telemetry on either side: an export raced against
+  NestJS would compare features, not frameworks. NestRS's export is measured
+  against its own T1, in its `exported` variant; its access line is measured
+  on, as it ships, and off in its `quiet` variant.
 - No database route, GraphQL, WebSocket, MCP or queue throughput, no TLS,
   and no PHP or Go contestant yet.
 - Adding a contestant is a directory with a manifest — the harness knows no

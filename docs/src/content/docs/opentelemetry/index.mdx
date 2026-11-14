@@ -40,6 +40,9 @@ Three signal types ship in one crate, behind one line of `main`:
   OpenTelemetry Metrics API names them; metrics batch on a `PeriodicReader` and
   export through the same OTLP endpoint as the traces.
 
+What an export costs a request — a few microseconds of CPU on one core — is
+[measured beside the benchmarks](/benchmarks/#what-exporting-telemetry-costs).
+
 ## Install
 
 ```bash frame="terminal"

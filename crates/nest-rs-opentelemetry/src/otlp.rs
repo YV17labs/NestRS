@@ -467,7 +467,7 @@ fn tracer_provider(
         // The SDK adopts the framework's ids rather than minting a second pair; see
         // `id_generator`.
         .with_id_generator(crate::id_generator::AdoptFrameworkIds::default())
-        .with_sampler(sampler)
+        .with_sampler(crate::sampler::AdoptUnsampledStarts(sampler))
         .with_span_limits(span_limits)
 }
 

@@ -536,6 +536,15 @@ pub(crate) mod __private {
     use crate::operation_log::Unit;
     use crate::request_scope::current_correlation_with;
 
+    /// Start a trace unsampled, which an installed sampler keeps so: the trace
+    /// of a health probe, whose answers are one question a platform asks every
+    /// few seconds.
+    pub fn minted_unsampled() -> Correlation {
+        let correlation = Correlation::minted(None);
+        set_sampled(&correlation, false);
+        correlation
+    }
+
     /// Record the sampling decision an installed sampler made, leaving the
     /// reserved bits as they arrived.
     pub fn set_sampled(correlation: &Correlation, sampled: bool) {
@@ -561,12 +570,14 @@ pub(crate) mod __private {
         current_correlation_with(Correlation::clone)
     }
 
-    /// The span about to be created: the ids it belongs to, and the unit it
-    /// opens where `operation_span!` creates it.
+    /// The span about to be created: the ids it belongs to, the unit it opens
+    /// where `operation_span!` creates it, and whether it starts a trace
+    /// [`minted_unsampled`].
     #[derive(Clone, Copy)]
     struct Pending {
         ids: (TraceId, SpanId),
         unit: Option<&'static Unit>,
+        starts_unsampled: bool,
     }
 
     tokio::task_local! {
@@ -600,7 +611,24 @@ pub(crate) mod __private {
         create: impl FnOnce() -> T,
     ) -> T {
         let ids = (correlation.trace_id(), correlation.span_id());
-        PENDING.sync_scope(Pending { ids, unit }, create)
+        let starts_unsampled =
+            correlation.parent_id().is_none() && !correlation.flags().is_sampled();
+        PENDING.sync_scope(
+            Pending {
+                ids,
+                unit,
+                starts_unsampled,
+            },
+            create,
+        )
+    }
+
+    /// Whether the span being created starts a trace [`minted_unsampled`]:
+    /// `false` outside [`with_pending_ids`].
+    pub fn pending_starts_unsampled() -> bool {
+        PENDING
+            .try_with(|pending| pending.starts_unsampled)
+            .unwrap_or(false)
     }
 
     /// The ids the span being created belongs to, or `None` outside
@@ -922,6 +950,23 @@ mod tests {
 
         __private::set_sampled(&correlation, true);
         assert_eq!(correlation.flags().bits(), 0xfd);
+    }
+
+    #[test]
+    fn a_trace_minted_unsampled_is_pending_as_one_only_where_its_span_starts_it() {
+        let unsampled = __private::minted_unsampled();
+        assert_eq!(
+            unsampled.flags().bits(),
+            TraceFlags::RANDOM,
+            "only the sampled bit is cleared",
+        );
+        let starts = |correlation: &Correlation| {
+            __private::with_pending_ids(correlation, __private::pending_starts_unsampled)
+        };
+        assert!(starts(&unsampled));
+        assert!(!starts(&unsampled.child()), "a child continues the trace");
+        assert!(!starts(&Correlation::minted(None)));
+        assert!(!__private::pending_starts_unsampled(), "no span is pending");
     }
 
     #[test]

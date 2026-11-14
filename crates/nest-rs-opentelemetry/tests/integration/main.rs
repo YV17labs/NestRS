@@ -22,6 +22,8 @@ mod otlp;
 #[cfg(feature = "otlp")]
 mod process_metrics;
 #[cfg(feature = "otlp")]
+mod sampler;
+#[cfg(feature = "otlp")]
 mod unit_durations;
 #[cfg(feature = "otlp")]
 mod unit_spans;

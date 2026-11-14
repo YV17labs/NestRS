@@ -41,6 +41,7 @@ use crate::endpoint::Endpoint;
 use crate::error::{ResponseError, Result};
 use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
+use crate::probe::Probes;
 use crate::problem::ProblemDetails;
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
@@ -75,7 +76,7 @@ fn refused(overrun: Overrun, version: Version) -> Response {
 
 /// The path without its trailing slashes, or `None` when already canonical.
 /// An interior `//` stays: an empty segment mid-path is a different path.
-fn canonical_path(path: &str) -> Option<&str> {
+pub(crate) fn canonical_path(path: &str) -> Option<&str> {
     if !path.ends_with('/') || path == "/" {
         return None;
     }
@@ -137,6 +138,8 @@ pub(crate) struct EdgeEndpoint<E> {
     trusted_proxies: Arc<[TrustedProxy]>,
     /// The methods the line and the span name as sent.
     known_methods: KnownMethods,
+    /// The routes a request is read as a probe at, before it is routed.
+    probes: Probes,
     drain: Arc<Drain>,
 }
 
@@ -156,6 +159,7 @@ impl<E> EdgeEndpoint<E> {
         normalize: bool,
         counts_body: bool,
         known_methods: KnownMethods,
+        probes: Probes,
         drain: Arc<Drain>,
     ) -> Self {
         // Read at boot: the edge runs before the request scope `ClientOrigin::of`
@@ -178,6 +182,7 @@ impl<E> EdgeEndpoint<E> {
             access_log,
             trusted_proxies,
             known_methods,
+            probes,
             drain,
         }
     }
@@ -323,7 +328,9 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         // Resolved once so the context, the echoed header and the access line agree
         // on one id; the origin first, because the id's gate reads it.
         let (origin, refused) = ClientOrigin::of_with(&req, &self.trusted_proxies);
-        let correlation = trace_context::resolve(&req, origin);
+        // Before the span opens: a sampler decides as it does.
+        let probe = self.probes.serves(req.method(), req.uri().path());
+        let correlation = trace_context::resolve(&req, origin, probe);
         let method = self.known_methods.name(req.method());
         req.set_verb(method.clone());
         // Never gated: it carries `trace_id` onto every event and declares the
@@ -333,7 +340,7 @@ impl<E: Endpoint> Endpoint for EdgeEndpoint<E> {
         let matched = MatchedRoute::default();
         let log = self
             .access_log
-            .then(|| AccessLog::open(method.clone(), &matched, arrival.into_std()));
+            .then(|| AccessLog::open(method.clone(), &matched, arrival.into_std(), probe));
         req.extensions_mut().insert(matched.clone());
         // The peer a unit's context names, resolved once.
         req.extensions_mut().insert(origin);
@@ -437,6 +444,7 @@ mod tests {
             false,
             false,
             KnownMethods::default(),
+            Probes::default(),
             Arc::default(),
         )
     }
@@ -457,6 +465,7 @@ mod tests {
             true,
             false,
             KnownMethods::default(),
+            Probes::default(),
             Arc::default(),
         )
     }
@@ -576,6 +585,7 @@ mod tests {
             false,
             false,
             KnownMethods::default(),
+            Probes::default(),
             Arc::default(),
         );
         let resp = answer(&ep, get()).await;

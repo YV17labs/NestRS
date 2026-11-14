@@ -87,7 +87,7 @@ mod under_a_global_prefix {
     use nest_rs_http::{HttpConfig, HttpModule};
     use nest_rs_testing::{LogCapture, TestApp};
 
-    fn prefixed_http() -> nest_rs_http::HttpSetup {
+    pub(super) fn prefixed_http() -> nest_rs_http::HttpSetup {
         HttpModule::for_root(HttpConfig {
             global_prefix: Some("/api/v1".into()),
             ..HttpConfig::default()
@@ -141,6 +141,77 @@ mod under_a_global_prefix {
             .is_empty(),
             "no prefix, no line: {:#?}",
             logs.events(),
+        );
+    }
+}
+
+/// A probe's access line: at `debug` while it answers `2xx`, at `info` as any
+/// other request's line otherwise, so a healthy pod's kubelet fills no console.
+mod its_line {
+    use nest_rs_core::{injectable, module};
+    use nest_rs_health::{HealthModule, indicators};
+    use nest_rs_testing::{LogCapture, TestApp};
+
+    #[injectable]
+    #[derive(Default)]
+    struct Unready;
+
+    #[indicators]
+    impl Unready {
+        #[readiness]
+        async fn upstream_reachable(&self) -> Result<(), std::io::Error> {
+            Err(std::io::Error::other("the upstream refused"))
+        }
+    }
+
+    #[module(imports = [HealthModule], providers = [Unready])]
+    struct UnreadyApp;
+
+    #[module(imports = [super::under_a_global_prefix::prefixed_http(), HealthModule])]
+    struct PrefixedApp;
+
+    /// The level and status of the one access line `path` filed in `M`.
+    async fn line_of<M: nest_rs_core::Module>(path: &str) -> (String, Option<String>) {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<M>().await.expect("the probes boot");
+        drop(
+            app.http()
+                .get(path)
+                .send()
+                .await
+                .0
+                .into_body()
+                .into_string()
+                .await,
+        );
+        let line = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_http::unit::REQUEST.name(),
+        );
+        (line.level.clone(), line.field("status"))
+    }
+
+    #[tokio::test]
+    async fn a_probe_answering_2xx_files_its_line_at_debug() {
+        assert_eq!(
+            line_of::<UnreadyApp>("/health/live").await,
+            ("debug".to_owned(), Some("200".to_owned())),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_probe_answering_otherwise_files_its_line_at_info() {
+        assert_eq!(
+            line_of::<UnreadyApp>("/health/ready").await,
+            ("info".to_owned(), Some("503".to_owned())),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_probe_is_read_at_the_path_the_global_prefix_moved_it_to() {
+        assert_eq!(
+            line_of::<PrefixedApp>("/api/v1/health/live").await,
+            ("debug".to_owned(), Some("200".to_owned())),
         );
     }
 }

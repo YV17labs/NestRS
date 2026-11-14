@@ -70,8 +70,11 @@ tokio = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 
 [dev-dependencies]
-# `TestAuthority` issues the certificate the collector double presents over TLS.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# `TestAuthority` issues the certificate the collector double presents over TLS;
+# `TestApp` boots the health probes, whose traces the sampler starts unsampled.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls", "http"] }
+nest-rs-health = { path = "../nest-rs-health" }
+nest-rs-http = { path = "../nest-rs-http" }
 # The collector double serves on a runtime of its own.
 tokio.workspace = true
 # The console's `RUST_LOG` and `<PREFIX>_LOG_*` and the specification's `OTEL_*` are read off the

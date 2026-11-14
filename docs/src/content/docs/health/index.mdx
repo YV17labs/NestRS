@@ -138,6 +138,19 @@ logs without walking a list, and a vocabulary (`status`, `info`,
 `error`, `details`) operators already know.
 </Aside>
 
+## What a probe leaves in your telemetry
+
+A kubelet asks every few seconds, and a healthy answer is nothing a trace or a
+line would keep for you. So a probe that starts a trace starts it unsampled,
+whatever `OTEL_TRACES_SAMPLER` says, and none of it is exported. Its access line
+files at `debug` while it answers `2xx`, and at `info`, as every request's,
+once it answers anything else.
+
+Its duration still counts in `http.server.request.duration`, under its route,
+so an availability objective reads every probe. A probe sent through a
+[trusted proxy](/fundamentals/correlation/) with a `traceparent` keeps the
+sampler's decision for that trace, as any request does.
+
 ## Configuration
 
 Two ceilings bound a probe response, read from `<PREFIX>_HEALTH__*` or

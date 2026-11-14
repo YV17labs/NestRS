@@ -227,6 +227,15 @@ toggle for it — `nest_rs::operation=off` is the family's one switch, and HTTP'
 `access_log` pin is the one predating it — and the target names a category of
 line rather than a subsystem (`.claude/decisions/operation-target.md`).
 
+**A health probe is the one unit the framework quiets.** A request reaching a
+route its mounting crate declared a probe (`crates/nest-rs-http/src/probe.rs`)
+files its `2xx` line at `debug` — the exception to `info` for an edge's success
+— and any other answer at `info`; one that starts a trace starts it unsampled,
+which the sampler keeps, and its duration still records. A platform asks it every
+few seconds, and a healthy answer says nothing
+(`.claude/decisions/health-probe-starts-unsampled.md`). Held by `nest-rs-health`'s
+and `nest-rs-opentelemetry`'s suites.
+
 **A unit has one name, typed, rooted at the crate that declares it.** A
 framework edge's is `<edge>.<unit>`: the crate that owns the edge declares it
 with `unit!` in its `src/unit.rs`, from the closed edge vocabulary (`Edge`), and

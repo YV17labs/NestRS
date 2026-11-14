@@ -349,6 +349,7 @@ mod tests {
                 std::borrow::Cow::Borrowed("GET"),
                 &crate::matched::MatchedRoute::default(),
                 std::time::Instant::now(),
+                false,
             )),
             None,
             panics_after_one_event(),

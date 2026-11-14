@@ -657,23 +657,42 @@ macro_rules! unit {
 ///
 /// Call it inside the unit's correlation (`RequestContinuation::enter`) and
 /// outside its span, so the line carries the unit's ids and is nobody's child.
+///
+/// The line is filed at `info`. `debug: <bool>` after `started` files it at
+/// `debug` where that is `true`: the one exception is a health probe's
+/// request answered `2xx`, which a platform asks every few seconds.
 #[macro_export]
 macro_rules! operation_line {
-    ($unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr $(, $($field:tt)*)?) => {{
+    (@settle $unit:path, $span:expr, $outcome:expr) => {{
         const _: () = ::core::assert!(
             $crate::__private::unit_opened_by(&$unit, ::core::env!("CARGO_PKG_NAME")),
             "a unit's line is filed only by the crate that declares the unit",
         );
         let __outcome: ::core::option::Option<&'static str> = ::core::convert::Into::into($outcome);
         $crate::operation_log::record_outcome(&$unit, $span, __outcome);
-        $crate::tracing::info!(
+        __outcome
+    }};
+    (@file $level:ident, $unit:path, $outcome:ident, $started:expr $(, $($field:tt)*)?) => {
+        $crate::tracing::$level!(
             name: $unit.name(),
             target: $crate::operation_log::TARGET,
             message = $unit.name(),
-            outcome = __outcome,
+            outcome = $outcome,
             { $crate::operation_log::DURATION_MS } = $crate::operation_log::duration_ms($started),
             $($($field)*)?
-        );
+        )
+    };
+    ($unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr, debug: $debug:expr $(, $($field:tt)*)?) => {{
+        let __outcome = $crate::operation_line!(@settle $unit, $span, $outcome);
+        if $debug {
+            $crate::operation_line!(@file debug, $unit, __outcome, $started $(, $($field)*)?);
+        } else {
+            $crate::operation_line!(@file info, $unit, __outcome, $started $(, $($field)*)?);
+        }
+    }};
+    ($unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr $(, $($field:tt)*)?) => {{
+        let __outcome = $crate::operation_line!(@settle $unit, $span, $outcome);
+        $crate::operation_line!(@file info, $unit, __outcome, $started $(, $($field)*)?);
     }};
 }
 

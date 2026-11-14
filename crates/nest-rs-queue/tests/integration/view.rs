@@ -423,6 +423,38 @@ async fn a_filter_acknowledging_a_failed_job_completes_it_and_says_so() {
     );
 }
 
+/// A failure a layer acknowledged still fails its attempt: the span records the
+/// error its line files, and says why in the words its warning says it.
+#[tokio::test]
+async fn a_failure_a_layer_acknowledged_is_described_on_its_span() {
+    let logs = nest_rs_testing::LogCapture::install();
+    consume::attempt(
+        method("ViewedProcessor::forgiven"),
+        &mut delivery("forgiven"),
+        providing(),
+        None,
+    )
+    .await;
+
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job failed; a layer acknowledged it, so it settles done and its writes rolled back",
+    );
+    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        said.field("error"),
+        "{:?}",
+        span.fields
+    );
+}
+
 #[injectable]
 #[derive(Default, Layer)]
 struct AppReading;

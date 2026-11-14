@@ -246,6 +246,11 @@ change: each failed unit's span held no `otel.status_description` beside the lin
   the status description; `operation_log::record_cause` records it where the line is
   filed, on the unit's span or, from inside code the app instrumented, on the nearest
   unit's span above.
+- **A unit no client sent** — a job attempt, a tick, a listener call — fails whatever a
+  layer answered: a job a filter acknowledged, a tick or a call a filter skipped or
+  said was the client's, its line filing `error` and its span recording it. So it says
+  why too, in the words its warning files. Seen by tests red before it: each span read
+  `Error` and no reason.
 - **Why it is no new data**: the sentence already leaves on the log line, under the
   rule that a value is described, never quoted; the description is one more reader of
   it, held by a test with a marked value as `nest_rs_testing::printed` holds every
@@ -254,7 +259,8 @@ change: each failed unit's span held no `otel.status_description` beside the lin
 - **Still refused**: anything on the span for a failure the caller earned — an HTTP
   `4xx`, a JSON-RPC code the MCP conventions name the caller's, a WebSocket message or a
   GraphQL field refused before its handler ran, a failure a filter answered as the
-  client's. A description sets the status `Error`, which those spans never carry. Also
+  client's where a client sent the unit. A description sets the status `Error`, which
+  those spans never carry. Also
   refused: an `exception` span event — a Rust error has no stack, and OpenTelemetry's
   OTEP 4430 deprecates the span event API (`RecordException` included) for log-based
   events; and a description for a failure no sentence explains (a unit cut at its

@@ -305,6 +305,8 @@ async fn dispatch_one(
             if failure.is_answered()
                 || caught_problem(&failure).is_some_and(|problem| !problem.is_server_error()) =>
         {
+            let said = nest_rs_core::error_message(failure.error());
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             line.file(nest_rs_core::operation_log::ERROR);
             continuation.enter(|| {
                 tracing::warn!(
@@ -312,7 +314,7 @@ async fn dispatch_one(
                     event = event,
                     host = handler.host_name(),
                     method = handler.method(),
-                    error = %nest_rs_core::error_message(failure.error()),
+                    error = %said,
                     "event listener failed; a layer answered it — dispatch continues with the \
                      next listener",
                 );

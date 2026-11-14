@@ -1503,11 +1503,13 @@ impl Runner {
                     || caught_problem(&failure)
                         .is_some_and(|problem| !problem.is_server_error()) =>
             {
+                let said = nest_rs_core::error_message(failure.error());
+                nest_rs_core::operation_log::record_cause(&tracing::Span::current(), &said);
                 tracing::warn!(
                     target: crate::TARGET,
                     host = id.host,
                     method = id.method,
-                    error = %nest_rs_core::error_message(failure.error()),
+                    error = %said,
                     "scheduled job failed; a layer answered it",
                 );
             }

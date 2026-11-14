@@ -858,9 +858,11 @@ async fn run(
             (nest_rs_core::operation_log::OK, AttemptOutcome::Ok)
         }
         Ok(Ok(Ran::Acknowledged(error))) => {
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::warn!(
                 target: TARGET,
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 "job failed; a layer acknowledged it, so it settles done and its writes rolled back",
             );
             (nest_rs_core::operation_log::ERROR, AttemptOutcome::Ok)

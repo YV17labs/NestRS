@@ -316,6 +316,16 @@ impl HookUnit {
         let ended = crate::with_request_scope(None, self.correlation.clone(), panic::contain(body))
             .instrument(self.span.clone())
             .await;
+        match &ended {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                crate::operation_log::record_cause(&self.span, &crate::error_message(&**err));
+            }
+            Err(payload) => crate::operation_log::record_cause(
+                &self.span,
+                &crate::panic::panic_message(payload.as_ref()),
+            ),
+        }
         line.file(match &ended {
             Ok(Ok(())) => crate::operation_log::OK,
             Ok(Err(_)) => crate::operation_log::ERROR,
@@ -431,24 +441,29 @@ pub(crate) async fn run_phase_lenient(
         .await;
         unit.enter(|| match ended {
             Ok(Ok(Ok(()))) => {}
-            Ok(Ok(Err(err))) => tracing::error!(
-                target: crate::target::LIFECYCLE,
-                phase = phase.as_str(),
-                host = hook.host,
-                method = hook.method,
-                origin = hook.origin,
-                error = %crate::error_message(&*err),
-                "lifecycle hook failed",
-            ),
-            Ok(Err(payload)) => crate::contained_panic!(
-                target: crate::target::LIFECYCLE,
-                payload.as_ref(),
-                "shutdown hook panicked, and the hooks after it still run",
-                phase = phase.as_str(),
-                host = hook.host,
-                method = hook.method,
-                origin = hook.origin,
-            ),
+            Ok(Ok(Err(err))) => {
+                let said = crate::error_message(&*err);
+                tracing::error!(
+                    target: crate::target::LIFECYCLE,
+                    phase = phase.as_str(),
+                    host = hook.host,
+                    method = hook.method,
+                    origin = hook.origin,
+                    error = %said,
+                    "lifecycle hook failed",
+                );
+            }
+            Ok(Err(payload)) => {
+                crate::contained_panic!(
+                    target: crate::target::LIFECYCLE,
+                    payload.as_ref(),
+                    "shutdown hook panicked, and the hooks after it still run",
+                    phase = phase.as_str(),
+                    host = hook.host,
+                    method = hook.method,
+                    origin = hook.origin,
+                );
+            }
             Err(_) => tracing::warn!(
                 target: crate::target::LIFECYCLE,
                 phase = phase.as_str(),

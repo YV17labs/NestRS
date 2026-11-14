@@ -195,6 +195,10 @@ impl Carried {
     /// End the body at a poll that unwound: the panic said once, inside the
     /// request, and the line filed `panic` with what was written.
     fn unwound(&mut self, payload: &(dyn Any + Send)) {
+        nest_rs_core::operation_log::record_cause(
+            &self.span,
+            &nest_rs_core::panic::panic_message(payload),
+        );
         self.continuation.enter(|| {
             self.span.in_scope(|| {
                 nest_rs_core::contained_panic!(

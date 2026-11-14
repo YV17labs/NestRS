@@ -134,6 +134,14 @@ pub(crate) mod __private {
         let _ = SPAN_RENAME.set(rename);
     }
 
+    /// Forget the cause the unit's span `span` is or sits under kept
+    /// ([`record_cause`](super::record_cause)): its edge cut it at its
+    /// deadline, which no sentence explains, so the error it then records says
+    /// its class alone. Called by an edge where it cuts a unit.
+    pub fn forget_cause(span: &tracing::Span) {
+        super::take_cause(span);
+    }
+
     /// Seed what runs as each unit ends ([`record_end`](super::record_end)):
     /// for `every_unit`, or for a unit declaring a duration alone. Called once,
     /// at boot, by the observability stack — never by an application.
@@ -438,14 +446,16 @@ pub const OTHER: &str = "_OTHER";
 /// it: `None` for an answer whose own status says it — an HTTP request that
 /// answered.
 ///
-/// An outcome but [`OK`] becomes the span's `error.type` and an `Error` status.
+/// An outcome but [`OK`] becomes the span's `error.type` and an `Error` status,
+/// described by the cause the unit kept ([`record_cause`]) unless it is
+/// [`CANCELLED`].
 /// [`operation_line!`](crate::operation_line) calls it; an edge calls it directly
 /// only where it ends a unit without filing a line.
 pub fn record_outcome<'a>(unit: &Unit, span: &tracing::Span, outcome: impl Into<Option<&'a str>>) {
-    if let Some(outcome) = outcome.into()
-        && outcome != OK
-    {
-        record_error(span, outcome);
+    match outcome.into() {
+        None | Some(OK) => {}
+        Some(CANCELLED) => record_class(span, CANCELLED),
+        Some(outcome) => record_error(span, outcome),
     }
     record_end(unit, span);
 }
@@ -498,18 +508,101 @@ static UNIT_END: OnceLock<UnitEnd> = OnceLock::new();
 /// duration alone: a stack counting nothing else costs no other unit a call.
 static EVERY_UNIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Record on a unit's span that it ended in an error of class `error_type`.
+/// Record on a unit's span that it ended in an error of class `error_type`,
+/// and why: the cause [`record_cause`] kept for it, if any.
 ///
 /// For a class finer than the outcome word: an HTTP `5xx` records its status
 /// code, as OpenTelemetry's HTTP conventions ask.
 pub fn record_error(span: &tracing::Span, error_type: &str) {
+    record_class(span, error_type);
+    // After the class: before its span starts, the exporter keeps the status
+    // written last.
+    if let Some(said) = take_cause(span) {
+        span.record(STATUS_DESCRIPTION, said.as_str());
+    }
+}
+
+/// The class alone: all a unit stopped before it settled records, since no
+/// sentence explains the stop and a cause kept for a failure it answered past
+/// is no reason for it.
+fn record_class(span: &tracing::Span, error_type: &str) {
     span.record(ERROR_TYPE, error_type);
     span.record(STATUS_CODE, STATUS_ERROR);
+}
+
+/// Keep on the unit `span` opened why it failed — the sentence its failure
+/// line files as `error`, or the one its panic line files — for the status
+/// description OpenTelemetry exports beside the `Error` status.
+///
+/// It is written once the unit records its error ([`record_error`]): a unit
+/// that answers past the failure — a `5xx` rendered and dropped, a failure a
+/// layer answered `2xx` — describes nothing, and a unit stopped first
+/// ([`CANCELLED`]) neither. A later cause replaces an earlier one, so the
+/// failure the unit ended on is the one described. A span no unit opened — one
+/// the app's own code entered — keeps it on the nearest unit's span above it.
+/// Without the `logging` feature, which reads the registry the framework's
+/// subscriber is built on, nothing is kept.
+pub fn record_cause(span: &tracing::Span, said: &str) {
+    keep_cause(span, said);
+}
+
+/// The cause a unit's span keeps until its error is recorded.
+#[cfg(feature = "logging")]
+struct Cause(String);
+
+/// [`record_cause`] on the registry: the unit's span `span` is or sits under
+/// keeps `said`.
+#[cfg(feature = "logging")]
+fn keep_cause(span: &tracing::Span, said: &str) {
+    on_unit_span(span, |unit| unit.replace(Cause(said.to_owned())));
+}
+
+/// The cause the unit's span `span` is or sits under kept, taken: a unit's
+/// error is described once.
+#[cfg(feature = "logging")]
+fn take_cause(span: &tracing::Span) -> Option<String> {
+    let Cause(said) = on_unit_span(span, |unit| unit.remove::<Cause>()).flatten()?;
+    Some(said)
+}
+
+/// `read` over the extensions of the nearest span at or above `span` that
+/// declares the description, a unit's, read off the registry the framework's
+/// subscriber is built on.
+#[cfg(feature = "logging")]
+fn on_unit_span<T>(
+    span: &tracing::Span,
+    read: impl FnOnce(&mut tracing_subscriber::registry::ExtensionsMut<'_>) -> T,
+) -> Option<T> {
+    use tracing_subscriber::registry::LookupSpan as _;
+
+    span.with_subscriber(|(id, dispatch)| {
+        let registry = dispatch.downcast_ref::<tracing_subscriber::Registry>()?;
+        let unit = registry.span(id)?.scope().find(|above| {
+            above
+                .metadata()
+                .fields()
+                .field(STATUS_DESCRIPTION)
+                .is_some()
+        })?;
+        Some(read(&mut unit.extensions_mut()))
+    })
+    .flatten()
+}
+
+#[cfg(not(feature = "logging"))]
+fn keep_cause(_: &tracing::Span, _: &str) {}
+
+#[cfg(not(feature = "logging"))]
+fn take_cause(_: &tracing::Span) -> Option<String> {
+    None
 }
 
 const ERROR_TYPE: &str = "error.type";
 
 const STATUS_CODE: &str = "otel.status_code";
+
+/// What `tracing-opentelemetry` exports as the span's status description.
+const STATUS_DESCRIPTION: &str = "otel.status_description";
 
 /// `tracing-opentelemetry` reads it case-insensitively; the conventions spell it `Error`.
 const STATUS_ERROR: &str = "error";

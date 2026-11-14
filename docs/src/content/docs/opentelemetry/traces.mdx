@@ -49,7 +49,10 @@ async fn read(&self, id: Path<Uuid>) -> Result<Json<User>> {
 ```
 
 `#[tracing::instrument]` opens a span that stays current for the *whole* async
-fn, across every `.await`. Inside it, use `tracing::info!` for an event.
+fn, across every `.await`. Inside it, use `tracing::info!` for an event. A line
+filed inside a span, at a level the console's filter (`RUST_LOG`) admits, is
+exported with that span as one of its events, its fields as the event's
+attributes — the framework's own lines included, and with logs exported nowhere.
 Always prefer `field = %value` to `format!("{}", value)` — structured fields
 serialize cleanly to OTLP and stay filterable in the backend.
 
@@ -178,6 +181,40 @@ from an inbound `traceparent` and the sampler's verdict, seeded onto the span
 constructor: no interceptor, and no header the access line reads.
 Toggle the line with `<PREFIX>_HTTP__ACCESS_LOG=false`; nothing about propagation
 or OTLP export changes.
+
+## A failed span says why
+
+A unit the server failed exports an `Error` status with a description: the
+sentence its failure line carries in `error`, or its panic line in `panic`, or,
+for a job dead-lettered without running, the sentence its dead letter keeps. It
+holds on every edge — an HTTP `5xx`, a WebSocket message, a GraphQL root field,
+an MCP operation, a job attempt, a scheduled tick, a listener call, a lifecycle
+hook. The reason sits where OpenTelemetry's conventions put it, in the span's
+status, so your trace backend shows it beside the failure; the failure line
+itself already travels with the span as one of its events
+([Custom spans](#custom-spans)).
+
+It is the line's own sentence, described and never quoted: a value the request
+carried is no more in the description than in the line. A failure the caller
+earned — a `4xx`, a message refused before its handler ran — keeps no status
+and no description, and a failure no sentence explains, a request cut at its
+deadline or stopped by its client, carries its class in `error.type` alone,
+whatever it met before. A
+job, a tick or a listener call has no caller, so it fails whatever a layer
+answered — a job a filter acknowledged, a tick it skipped — and says why all
+the same. No `exception` event is recorded: OpenTelemetry is moving exceptions
+from span events to log records, where the failure line already is.
+
+The description goes out with the failure of the unit itself. A request whose
+handler rendered a `5xx` by hand and then answered `2xx`, or a subscription
+whose item failed while its socket stayed open, describes nothing: the failure
+line is there, the unit did not fail. A unit that meets several failures before
+it ends describes the last one; the earlier ones are on their own lines.
+
+One effect comes from `tracing-opentelemetry` rather than the framework: an
+`error` line filed inside a span sets that span's status to `Error`, with no
+description, whatever its unit answered. The request above, which answered
+`2xx`, exports `Error` for that reason.
 
 ## Statements and commands
 

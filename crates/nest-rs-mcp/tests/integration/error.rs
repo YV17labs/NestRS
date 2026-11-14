@@ -407,3 +407,38 @@ async fn a_filter_answering_another_failure_leaves_a_kept_chain_its_own() {
     assert_eq!(kept.field("tool").as_deref(), Some("fallback"));
     assert_eq!(kept.field("error").as_deref(), Some(LEDGER_REFUSED));
 }
+
+/// The `mcp.operation` span of the call to `tool` among `logs`' spans.
+fn call_span(logs: &LogCapture, tool: &str) -> nest_rs_testing::CapturedSpan {
+    logs.spans()
+        .into_iter()
+        .find(|span| {
+            span.name == "mcp.operation" && span.field("gen_ai.tool.name").as_deref() == Some(tool)
+        })
+        .unwrap_or_else(|| panic!("the call to {tool} opened its unit"))
+}
+
+/// An operation the server failed says why on its span, in the words its
+/// failure line says it; one a filter answered as the caller's says nothing.
+#[tokio::test]
+async fn a_failed_operations_span_describes_its_status_as_its_line_says_the_failure() {
+    let app = TestApp::for_module::<WithheldModule>()
+        .await
+        .expect("the hosts boot");
+
+    let logs = LogCapture::install();
+    nest_rs_testing::mcp::call_tool(app.http(), WITHHELD, "failed", None).await;
+    let line = logs.expect_one(nest_rs_mcp::TARGET, "mcp operation failed");
+    let span = call_span(&logs, "failed");
+    assert_eq!(span.field("otel.status_description"), line.field("error"));
+
+    let logs = LogCapture::install();
+    nest_rs_testing::mcp::call_tool(app.http(), CAUGHT, "opaqued", None).await;
+    let span = call_span(&logs, "opaqued");
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}

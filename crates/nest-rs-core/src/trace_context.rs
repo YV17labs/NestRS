@@ -776,7 +776,10 @@ const fn unhex(byte: u8) -> Option<u8> {
 /// - `actor_id` — filled from an inherited correlation, else by the authn guard;
 /// - `error.type`, `otel.status_code` — filled by
 ///   [`operation_log::record_outcome`](crate::operation_log::record_outcome)
-///   when the unit ends in anything but `ok`.
+///   when the unit ends in anything but `ok`;
+/// - `otel.status_description` — filled by
+///   [`operation_log::record_cause`](crate::operation_log::record_cause) where
+///   the server failed it.
 ///
 /// The first argument is a path to a [`Unit`](crate::operation_log::Unit),
 /// giving the span's name, target and `otel.kind`; a literal does not match,
@@ -809,6 +812,7 @@ macro_rules! operation_span {
                 actor_id = $crate::tracing::field::Empty,
                 "error.type" = $crate::tracing::field::Empty,
                 otel.status_code = $crate::tracing::field::Empty,
+                otel.status_description = $crate::tracing::field::Empty,
                 $($($field)*)?
             );
             $crate::__private::link_span(&__span, __correlation);

@@ -1703,6 +1703,34 @@ async fn a_mutation_cut_at_the_request_deadline_files_the_chains_its_errors_kept
     assert_kept_chain_filed(&logs, "mutation", "maybeShaped");
 }
 
+/// An operation cut inside its unit at the request's deadline says its class
+/// alone: a chain its errors kept, filed as its line is, is no reason for the
+/// cut.
+#[tokio::test(start_paused = true)]
+async fn a_mutation_cut_at_the_request_deadline_describes_no_chain_its_errors_kept() {
+    let logs = LogCapture::install();
+    let (app, _) = boot_with::<DeadlineModule>(Settles::At(Duration::ZERO)).await;
+    post(
+        &app,
+        json!({ "query": "mutation Cut { maybeShaped { opaquedBelow } slowWrite }" }),
+    )
+    .await;
+
+    let span = operation_span(&logs, "Cut");
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}
+
 /// An operation dropped with the request the edge cut files what its errors
 /// kept as it files its `cancelled` line.
 #[tokio::test(start_paused = true)]

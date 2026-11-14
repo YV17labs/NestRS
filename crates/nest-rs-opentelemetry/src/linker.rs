@@ -186,6 +186,131 @@ mod tests {
         assert_eq!(*warnings.0.lock().unwrap(), expected);
     }
 
+    /// The description reaches the export as the span's status, and the class
+    /// recorded after it, as an edge records its outcome once its failure line
+    /// is filed, leaves it whole.
+    #[test]
+    fn a_failed_units_cause_is_its_exported_status_description() {
+        use opentelemetry::trace::{Status, TracerProvider as _};
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        super::install();
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("units")));
+        tracing::subscriber::with_default(subscriber, || {
+            let span = nestrs_unit_probe::open(&Correlation::minted(None));
+            nest_rs_core::operation_log::record_cause(&span, "the store refused the write");
+            nest_rs_core::operation_log::record_error(&span, "500");
+        });
+
+        let exported = exporter.get_finished_spans().expect("the spans exported");
+        let [exported] = exported.as_slice() else {
+            panic!("one span exported: {exported:#?}");
+        };
+        assert_eq!(
+            exported.status,
+            Status::error("the store refused the write")
+        );
+    }
+
+    /// What a unit's span exports, run through `record` under an SDK exporting
+    /// to memory.
+    fn exported_status(record: impl FnOnce(&tracing::Span)) -> opentelemetry::trace::Status {
+        use opentelemetry::trace::TracerProvider as _;
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        super::install();
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("units")));
+        tracing::subscriber::with_default(subscriber, || {
+            record(&nestrs_unit_probe::open(&Correlation::minted(None)));
+        });
+
+        let exported = exporter.get_finished_spans().expect("the spans exported");
+        let [exported] = exported.as_slice() else {
+            panic!("one span exported: {exported:#?}");
+        };
+        exported.status.clone()
+    }
+
+    /// A unit given several causes before it failed exports one: the last, in
+    /// whichever order their words sort.
+    #[test]
+    fn a_unit_failed_with_several_causes_exports_the_last() {
+        use opentelemetry::trace::Status;
+
+        for (first, last) in [
+            (
+                "the store refused the write",
+                "a replica dropped the connection",
+            ),
+            (
+                "a replica dropped the connection",
+                "the store refused the write",
+            ),
+        ] {
+            let status = exported_status(|span| {
+                nest_rs_core::operation_log::record_cause(span, first);
+                nest_rs_core::operation_log::record_cause(span, last);
+                nest_rs_core::operation_log::record_error(span, "500");
+            });
+            assert_eq!(status, Status::error(last), "{first} then {last}");
+        }
+    }
+
+    /// A cause kept for a failure its unit answered past describes nothing: a
+    /// unit filing `ok` exports no status, one stopped first its class alone.
+    #[test]
+    fn a_cause_its_unit_answered_past_is_never_exported() {
+        use opentelemetry::trace::Status;
+
+        let answered = exported_status(|span| {
+            nest_rs_core::operation_log::record_cause(span, "the store refused the write");
+            nestrs_unit_probe::settle(span, std::time::Instant::now());
+        });
+        assert_eq!(answered, Status::Unset);
+
+        let stopped = exported_status(|span| {
+            nest_rs_core::operation_log::record_cause(span, "the store refused the write");
+            nest_rs_core::operation_log::record_outcome(
+                &nestrs_unit_probe::WORK,
+                span,
+                nest_rs_core::operation_log::CANCELLED,
+            );
+        });
+        assert_eq!(stopped, Status::error(""));
+    }
+
+    /// Fails the day tracing-opentelemetry no longer fails the span an `error`
+    /// event is filed in: a unit whose line files `ok` exports `Error` all the
+    /// same, a failure line it filed for a chain it then answered past
+    /// included.
+    #[test]
+    fn upstream_tracing_opentelemetry_still_fails_the_span_an_error_event_is_filed_in() {
+        use opentelemetry::trace::Status;
+
+        let status = exported_status(|span| {
+            span.in_scope(|| tracing::error!(target: "probe", error = "refused", "probe failed"));
+            nestrs_unit_probe::settle(span, std::time::Instant::now());
+        });
+        assert_eq!(
+            status,
+            Status::error(""),
+            "tracing-opentelemetry no longer fails the span an `error` event is filed in: \
+             close .claude/upstream/tracing-opentelemetry.md's entry"
+        );
+    }
+
     #[test]
     fn a_restarted_trace_has_no_parent_to_link() {
         assert_eq!(Correlation::minted(None).parent_id(), None);

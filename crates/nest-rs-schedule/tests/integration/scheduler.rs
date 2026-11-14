@@ -607,6 +607,54 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
     );
 }
 
+/// A tick its job failed says why on its span, in the words its failure line
+/// says it.
+#[tokio::test(start_paused = true)]
+async fn a_failed_ticks_span_describes_its_status_as_its_line_says_the_failure() {
+    struct DescribedFailureHost;
+
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = crate::hermetic()
+        .attach_meta::<DescribedFailureHost, CronJobMeta>(CronJobMeta::new(
+            module_path!(),
+            "DescribedFailureHost",
+            "tick",
+            Trigger::Interval(Duration::from_millis(50)),
+            tick_wrapped_failure,
+        ))
+        .build()
+        .expect("the container builds");
+
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("serve returns Ok");
+
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_schedule::unit::TICK.name()
+                && span.field("host").as_deref() == Some("DescribedFailureHost")
+        })
+        .expect("the tick opened its unit");
+    assert_eq!(
+        span.field("otel.status_description").as_deref(),
+        Some("syncing orgs: the store refused the write"),
+        "{:?}",
+        span.fields,
+    );
+}
+
 /// A reply a tick could not decode, behind a wrapper that hides it from
 /// `source()` — thiserror's `transparent` — and a context line over that.
 fn tick_decode_failure(_: &Container) -> RunFuture<'_> {

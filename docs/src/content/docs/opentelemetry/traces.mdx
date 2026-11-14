@@ -57,6 +57,14 @@ Always prefer `field = %value` to `format!("{}", value)` — structured fields
 serialize cleanly to OTLP and stay filterable in the backend.
 
 <Aside type="caution">
+A span of your own leaves where the console's filter writes it: under
+`RUST_LOG=warn`, the `info` span above reaches neither the console nor your
+traces. To quiet the console and keep your spans, name their target —
+`RUST_LOG=warn,features=info`. The units the framework opens leave whatever the
+filter says ([Sampling](#sampling)).
+</Aside>
+
+<Aside type="caution">
 Never hold an entered span guard across an `.await`
 (`let _g = span.enter(); something.await`). The guard is thread-local; when the
 future yields and resumes on another worker thread the span goes wrong. Use
@@ -109,7 +117,7 @@ let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
 The sampler decides which traces leave, and `RUST_LOG` does not: every
 unit's span is exported whatever the console writes, so `RUST_LOG=warn`
 quiets the console without emptying your traces. A span of your own, or a
-library's, is exported where `RUST_LOG` writes it.
+library's, follows the console's filter ([Custom spans](#custom-spans)).
 
 One trace is the framework's to decide: a
 [health probe](/health/#what-a-probe-leaves-in-your-telemetry) that starts a

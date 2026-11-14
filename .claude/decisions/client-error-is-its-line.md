@@ -232,11 +232,16 @@ hand-written route, a nested resolver written by hand, a subscription's item, a 
 The owner reopened the refusal of 2026-11-05 above, "`otel.status_message`, an added
 field carrying a developer's sentence to an exporter", for the failures the server
 earned alone, after the `@nestjs/observe` audit (its `exception` event). A failed span
-read `error.type=500` and an `Error` status and no reason: the reason was on a log line
-with the same `trace_id` and `span_id`, which a deployment exporting traces alone, or
-`OTEL_LOGS_EXPORTER=none`, never sent. Seen by tests on every edge, red before the
-change: each failed unit's span held no `otel.status_description` beside the line's
-`error`.
+read `error.type=500` and an `Error` status, and its status said no reason. The reason
+was the failure line's `error`, which leaves on the log record and, filed inside the
+span at a level the console's filter admits, with the span as one of its events, fields
+included: a deployment exporting traces alone receives it there, seen by
+`nest-rs-opentelemetry`'s `unit_spans` tests with logs exported nowhere. This entry
+first said such a deployment never received the reason, read off the code and wrong.
+What the span lacked is the description, where OpenTelemetry's *Recording errors*
+convention places the reason and a backend shows it beside the status. Seen by tests
+on every edge, red before the change: each failed unit's span held no
+`otel.status_description` beside the line's `error`.
 
 - **Decided**: a unit the server failed carries, as its span's status description, the
   sentence its failure line files — `error` on HTTP's `request failed`, WebSocket's,
@@ -260,9 +265,9 @@ change: each failed unit's span held no `otel.status_description` beside the lin
   said was the client's, its line filing `error` and its span recording it. So it says
   why too, in the words its warning files. Seen by tests red before it: each span read
   `Error` and no reason.
-- **Why it is no new data**: the sentence already leaves on the log line, under the
-  rule that a value is described, never quoted; the description is one more reader of
-  it, held by a test with a marked value as `nest_rs_testing::printed` holds every
+- **Why it is no new data**: the sentence already leaves on the log line, and with the
+  span as one of its events, under the rule that a value is described, never quoted;
+  the description is one more reader of it, held by a test with a marked value as `nest_rs_testing::printed` holds every
   other. OpenTelemetry's *Recording errors* convention asks for a description where it
   holds nothing sensitive and repeats neither the status nor `error.type`.
 - **Still refused**: anything on the span for a failure the caller earned — an HTTP
@@ -284,11 +289,11 @@ change: each failed unit's span held no `otel.status_description` beside the lin
     describe.
   - A unit given several causes before it records its failure — a GraphQL operation two
     fields failed in, a chain a handler filed by hand before the one its answer kept —
-    describes the last; the others are on their lines alone. Each cause replaces the one
-    before, so the export never chooses among them. Written as they came, they left the
-    choice to the SDK, which keeps the greater status, so the description sorting last
-    in the alphabet went out whichever came last: seen by a test before the change, the
-    first of two exported over the second.
+    describes the last; the others are on their lines, and the span's events. Each cause
+    replaces the one before, so the export never chooses among them. Written as they
+    came, they left the choice to the SDK, which keeps the greater status, so the
+    description sorting last in the alphabet went out whichever came last: seen by a
+    test before the change, the first of two exported over the second.
   - Without `nest-rs-core`'s `logging` feature, which reads the subscriber's registry,
     nothing is kept; no OpenTelemetry export runs without it.
   - `tracing-opentelemetry` sets the status of the span an `error` line is filed in to

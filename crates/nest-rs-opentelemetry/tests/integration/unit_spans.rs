@@ -107,3 +107,70 @@ fn a_name_recorded_after_the_unit_opened_names_its_exported_span() {
         "the span was renamed: {exports:?}",
     );
 }
+
+/// The words a failure line inside the probe's unit carries in `error`, which
+/// nothing else the export holds says.
+const FAILED_BECAUSE: &str = "the ledger at the eu-west warehouse refused";
+
+/// The words an `info` line inside the probe's unit carries, below the filter.
+const NOTED_BECAUSE: &str = "the ledger answered from its replica";
+
+/// Open the probe's unit under a console filtered to `warn`, traces exported
+/// alone, with an `error` line and an `info` line filed inside it — no cause
+/// recorded on the span — and return what the collector read of the traces.
+fn lines_under_warn() -> Vec<Received> {
+    let collector = Collector::serving();
+    let otel = trusting(
+        &collector,
+        &[
+            ("RUST_LOG", "warn"),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+    );
+
+    let unit = nestrs_unit_probe::open(&Correlation::minted(None));
+    unit.in_scope(|| {
+        tracing::error!(target: "probe", error = FAILED_BECAUSE, "probe work failed");
+        tracing::info!(target: "probe", error = NOTED_BECAUSE, "probe work noted");
+    });
+    drop(unit);
+    drop(otel);
+
+    trace_exports(&collector)
+}
+
+/// A line the console's filter admits, filed inside a unit's span, leaves with
+/// it as one of its events, fields included: its words reach the trace
+/// backend with logs exported nowhere.
+#[test]
+fn a_line_filed_in_a_units_span_leaves_with_it_as_an_event_under_traces_alone() {
+    let exports = lines_under_warn();
+
+    assert!(
+        exports
+            .iter()
+            .any(|export| export.holds("probe work failed") && export.holds(FAILED_BECAUSE)),
+        "the line and its `error` reached the collector: {exports:?}",
+    );
+}
+
+/// A line the console's filter closes leaves no event on the span it was filed
+/// in.
+#[test]
+fn a_line_the_console_filter_closes_leaves_no_event_on_its_units_span() {
+    let exports = lines_under_warn();
+
+    assert!(
+        exports
+            .iter()
+            .any(|export| export.holds("probe work failed")),
+        "the span and its admitted line reached the collector: {exports:?}",
+    );
+    assert!(
+        !exports
+            .iter()
+            .any(|export| export.holds("probe work noted") || export.holds(NOTED_BECAUSE)),
+        "the `info` line stayed out: {exports:?}",
+    );
+}

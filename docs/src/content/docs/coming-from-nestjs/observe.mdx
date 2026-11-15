@@ -1,13 +1,13 @@
 ---
 title: "Telemetry, coming from @nestjs/observe"
-description: "Where each @nestjs/observe option and TracerService call lands in NestRS: one line in main, the OpenTelemetry variables, and the backend you choose."
+description: "Where @nestjs/observe's options and every TracerService call land in NestRS: one line in main, the OpenTelemetry variables, and the backend you choose."
 ---
 
 `@nestjs/observe` is the agent of NestJS's hosted observability product: it
 reports to their backend under an app key. NestRS exports what it records to the
 OpenTelemetry backend you point it at, in the names the semantic conventions
-give, and has no hosted product of its own. This page maps each option and call
-you used onto where it lands.
+give, and has no hosted product of its own. This page maps the options you set,
+and every call `TracerService` offers, onto where each lands.
 
 ```rust title="apps/api/src/main.rs"
 use anyhow::Result;
@@ -42,6 +42,10 @@ and every line a log record, sent to the collector the variable names.
 | `serviceId`, `serviceVersion` | the binary's package name and version; `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` override them |
 | `tracesSampleRate` | `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`, parent-based ([sampling](/opentelemetry/traces/#sampling)) |
 | `tracer.createSpan(name, callback)` | `#[tracing::instrument]` on the function ([custom spans](/opentelemetry/traces/#custom-spans)) |
+| `tracer.activeSpan()` | `tracing::Span::current()` |
+| `tracer.captureError(error, tags?)` | return the error: its edge files the chain, and the unit's span says why ([a failed span](/opentelemetry/traces/#a-failed-span-says-why)); for one you handle, `tracing::error!(error = %nest_rs::core::error_message(&err), "…")`, a log record and an event of the current span |
+| `tracer.setAttribute` / `getAttribute` | a value a layer makes ambient with `cx.attach(value)`, read anywhere the unit reaches with `nest_rs::core::ambient::<T>()` ([execution context](/fundamentals/execution-context/#what-a-unit-carries)) |
+| `tracer.setOperationId(id)` | nothing: a unit is named by what the server declares — its route template, root field, event or tool — so its names stay bounded; another grouping is your backend's query |
 | `tracer.currentTraceId()` | `nest_rs::core::current_trace_id()` |
 | `tracer.counter` / `gauge` / `summary` | `Metrics::counter` / `up_down_counter` or `gauge` / `histogram`, on an injected `Arc<Metrics>` ([metrics](/opentelemetry/metrics/)) |
 | `x-request-id` | `traceparent`, continued from a trusted proxy and sent on every request the framework or `ReqwestMiddleware` sends, and `traceresponse` on the answer ([correlation](/fundamentals/correlation/)) |
@@ -49,15 +53,22 @@ and every line a log record, sent to the collector the variable names.
 | `redaction` | a secret is a `nest_rs::core::Secret`, which prints `<redacted>`, and no line quotes a value |
 | outbound `fetch` and `node:http` spans | `ReqwestMiddleware` on your own `reqwest` client ([calling another service](/fundamentals/calling-another-service/)) |
 | `enabled: false` in tests | nothing: a suite boots the module and never runs `main`, so it exports nothing ([tests](/opentelemetry/#tests)) |
+| `http.tags` | `OTEL_RESOURCE_ATTRIBUTES`, on every span, record and point the process exports |
+| `http.setAttributes(req)` | a field of your own on your own span, `#[tracing::instrument(fields(...))]`; the request's span keeps the fields the HTTP conventions name, `user_agent.original` among them |
+| `http.getUserId(req)` | the authentication guard, which records the caller's id as `actor_id` on the unit's span and every line |
+| `http.queryParamsObfuscateRegex` | nothing to mask: a request's span records `url.path` and never its query, and a request the app sends records its server, never its path or query |
 | `http.ignore` | nothing to list: a health probe's trace starts unsampled and its healthy line files at `debug` ([health](/health/#what-a-probe-leaves-in-your-telemetry)); any other route is the sampler's or the collector's to drop |
 | `@Objective()`, the dashboard, alerts | your backend's, computed from `http.server.request.duration` ([metrics](/opentelemetry/metrics/)) |
 
 ## What you will not find
 
-The agent captures what NestRS refuses to send anywhere. A failed or slow
-request's headers and body are payload, and no record the framework writes
-holds a value a client sent. Lines of source shipped with an error are your
-code leaving for a third party; a panic's line carries `panic_location` instead.
+The agent keeps a failed request's inputs: its headers, from a default list
+with nothing that authenticates or identifies anyone, and its body once you turn
+that on, capped at 2 KB; a slow request too, once you set `slowerThanMs`
+(`http.capture`). NestRS captures no request's headers or body: a request's span
+keeps what the HTTP conventions name — its route, its path, its user agent — and
+nothing its body carried. Lines of source shipped with an error are your code
+leaving for a third party; a panic's line carries `panic_location` instead.
 Scrubbing logs by pattern is replaced by holding secrets in a type that never
 prints them.
 

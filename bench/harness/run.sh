@@ -170,7 +170,14 @@ if [ -n "$exported_env" ]; then
   command -v otelcol >/dev/null \
     || { echo "FAIL t1-exported — no otelcol on PATH (RUNBOOK.md, Prerequisites)"; exit 1; }
   echo "=== $id — exported boot ($exported_env)"
-  pin "$LOAD_CPUS" otelcol --config "$BENCH_DIR/harness/otelcol.yaml" >"$tmp/otelcol.log" 2>&1 &
+  # Under `exec`, as `boot` starts the SUT: `$!` is then the collector itself,
+  # where `pin … &` would leave it a subshell's child that `kill` misses.
+  if [ "$LOAD_CPUS" = "all" ]; then
+    (exec otelcol --config "$BENCH_DIR/harness/otelcol.yaml") >"$tmp/otelcol.log" 2>&1 &
+  else
+    (exec taskset -c "$LOAD_CPUS" otelcol --config "$BENCH_DIR/harness/otelcol.yaml") \
+      >"$tmp/otelcol.log" 2>&1 &
+  fi
   collector=$!
   for i in $(seq 1 1000); do
     curl -sf -o /dev/null http://127.0.0.1:8888/metrics && break

@@ -174,3 +174,40 @@ fn a_line_the_console_filter_closes_leaves_no_event_on_its_units_span() {
         "the `info` line stayed out: {exports:?}",
     );
 }
+
+/// An app's `info` span, and a library's, under a console filter that quiets
+/// everything to `warn` but names the app's target, as the traces page says to
+/// write it, returned with what the collector read of the traces.
+fn spans_under_warn_naming_the_app() -> Vec<Received> {
+    let collector = Collector::serving();
+    let otel = trusting(
+        &collector,
+        &[
+            ("RUST_LOG", "warn,features=info"),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+    );
+
+    drop(tracing::info_span!(target: "features::users", "users.lookup").entered());
+    drop(tracing::info_span!(target: "probe_library", "library.lookup").entered());
+    drop(otel);
+
+    trace_exports(&collector)
+}
+
+/// `RUST_LOG=warn,features=info` keeps the console quiet and the app's own
+/// spans exported, and opens nothing else.
+#[test]
+fn an_apps_span_its_target_names_is_exported_under_a_console_quieted_to_warn() {
+    let exports = spans_under_warn_naming_the_app();
+
+    assert!(
+        exports.iter().any(|export| export.holds("users.lookup")),
+        "the app's span reached the collector: {exports:?}",
+    );
+    assert!(
+        !exports.iter().any(|export| export.holds("library.lookup")),
+        "a target the filter does not name stayed out: {exports:?}",
+    );
+}

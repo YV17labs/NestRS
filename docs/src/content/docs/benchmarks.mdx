@@ -61,19 +61,37 @@ With an OTLP endpoint set, every request exports its span, its access line as a
 log record and a point in its duration histogram. The `exported` variant
 measures that against T1 on the same build, which calls
 `OpenTelemetry::init()` as `nestrs new` writes it, the collector on the load's
-cores discarding what it takes:
+cores discarding what it takes. Each launch measures T1, then the variant with
+all three signals or with one alone, the other two set to `none` through
+`OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER` and `OTEL_METRICS_EXPORTER`. A
+variant's cost is `1/rps(variant) − 1/rps(T1)` on one pinned core, read against
+its own launch's T1.
 
-- **3.2 to 3.4 µs of CPU per request** on one pinned core, read as
-  `1/rps(exported) − 1/rps(T1)`: 27 to 28 % fewer requests a second.
-- **p99 ×2.9**, from 0.65 ms to 1.9 ms.
-- **5 to 6 MB more memory** under load.
-- **Every span taken**: the collector received one for each request sent.
+All three signals cost **5.8 µs of CPU a request**, about half of T1's
+requests a second, and traces carry most of it:
 
-Measured 2026-11-14 on the same host, in the same Linux VM (OrbStack, kernel
+| Exported | CPU a request | Of T1's requests a second | p99 | Memory under load |
+|---|---|---|---|---|
+| nothing (T1) | — | — | 0.50 to 0.52 ms | 11.5 to 13.7 MB |
+| all three signals | 5.77 to 5.83 µs | 50 to 53 % | 1.96 ms | 17.3 to 19.5 MB |
+| traces alone | 3.26 to 3.53 µs | 64 to 67 % | 1.51 to 1.55 ms | 15.9 to 16.9 MB |
+| logs alone | 1.05 to 1.10 µs | 84 to 86 % | 0.87 to 0.89 ms | 14.0 to 15.8 MB |
+| metrics alone | 0.64 to 0.89 µs | 87 to 91 % | 0.55 to 0.57 ms | 12.9 to 14.7 MB |
+
+Metrics leave on the periodic export, once a minute, so what a request pays for
+them is recording its point. Of each signal exported, the collector took a span
+or a log record for every request sent, except in one launch of traces alone,
+where it took 99.97 % of the spans.
+
+Measured 2026-11-16 on the same host, in the same Linux VM (OrbStack, kernel
 7.2.12) — rustc 1.100.0, oha 1.16.0, otelcol 0.165.0, the batch processor at the
-SDK's defaults; 64 connections, a discarded 10 s warmup, five timed runs of 15 s,
-two rounds. It is a later session than the table above, so the difference
-between the two tiers is the figure, never their absolute rates.
+SDK's defaults; 64 connections, a discarded 30 s warmup, five timed runs of 30 s
+per tier, in two sittings. Of thirteen launches, the table keeps eight: those
+whose T1 and variant each held their five runs within 5 % of one another, as the
+[runbook](https://github.com/YV17labs/NestRS/blob/main/bench/RUNBOOK.md) asks.
+Each of the five set aside had a run far from the others. It is a later session
+than the table above, so the difference between T1 and a variant is the figure,
+never their absolute rates.
 
 ## The contract
 

@@ -91,6 +91,10 @@ serde_json.workspace = true
 nestrs-unit-probe = { path = "tests/unit-probe" }
 # A `log` logger set before `init`, which keeps the `log` records.
 log.workspace = true
+# The log records a collector double received, decoded to read the ids each
+# one carries.
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "logs"] }
+prost.workspace = true
 # A test's scratch files — the certificate files the specification's
 # variables name — live in a directory removed when it drops, on every exit.
 tempfile.workspace = true

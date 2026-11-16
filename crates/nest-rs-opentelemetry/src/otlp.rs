@@ -436,6 +436,7 @@ fn build_reading(
             Some(
                 SdkLoggerProvider::builder()
                     .with_resource(resource)
+                    .with_log_processor(crate::unit_records::UnitRecords)
                     .with_batch_exporter(log_exporter)
                     .build(),
             )

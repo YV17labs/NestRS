@@ -590,6 +590,15 @@ read 161k to 163k, and one keeping it with no events gained nothing. Every app
   names it, so where traces export a line filed in an app's own span names that
   span, and the correlation fills only what the SDK left empty.
 
+Measured after, the same way, two passes alternated (2026-11-16, 13:38 to 14:03
+UTC): T1 with `init()` and no endpoint read 164,079 and 169,049 requests a second,
+121k and 126k before the change and 171k and 172k without `init()`; what remains
+against no `init()` is 0.1 to 0.25 µs a request, within the run-to-run spread in
+the second pass and outside it in the first. The `exported` variant read 83,288
+and 84,726, against 85,541 and 85,962 before: naming every request's own line in
+its record, which it lacked, costs 0.2 to 0.3 µs a request where logs export (read
+as that cause, not profiled).
+
 **Refused:**
 
 - **A layer of our own filling `Context::current()` with a non-recording span per

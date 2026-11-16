@@ -2683,6 +2683,10 @@ lists what the boot, a log or the wire shows when one is missed.
   beside the zone.
 - **A suite logs what its console allows**: `with_test_telemetry` kept it to `warn`, and a
   project scaffolded before sets `RUST_LOG=warn` in `.env.test`, as `nestrs new` now writes.
+- **A client instrumented through the OpenTelemetry API sends no `traceparent`** where the
+  process exports no trace: `opentelemetry::Context::current()` holds no span inside a unit
+  there. Send the unit's through `ReqwestMiddleware` or `nest_rs::core::current_traceparent()`,
+  which carry it whatever the process exports.
 
 **At build, what your own lines meet:**
 

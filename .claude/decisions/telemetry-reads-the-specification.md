@@ -562,3 +562,51 @@ agreement to the identity audit's second pass ("Tout faire (Recommandé)",
   and a blank one booted, against the docs. A malformed `OTEL_RESOURCE_ATTRIBUTES`
   fails such a binary too: one variable, one reading, whichever binary a platform
   sets it for.
+
+## 2026-11-16 — no span is built for OpenTelemetry where no trace exports
+
+`init` laid `tracing-opentelemetry`'s layer whatever it exported, so with no
+endpoint every unit the console's filter admits built an SDK span on a provider
+holding no processor. Measured on the bench's T1 (one pinned core, the dev
+container, passes alternated, 2026-11-16): 118k to 122k requests a second with
+`init()` and no endpoint, 167k to 169k without it; a build without the trace layer
+read 161k to 163k, and one keeping it with no events gained nothing. Every app
+`nestrs new` writes calls `init()`. Decided by the owner, 2026-11-16.
+
+- **Where no trace exports, `init` lays no `tracing-opentelemetry` layer.** What
+  that span served is kept from the kernel's correlation: the sampling flag, which
+  the linker asks of the sampler itself, a probe's start unsampled included; the
+  ids every line carries, which the formatters already read there; a log record's
+  ids, which `UnitRecords` writes ahead of the batch processor where the SDK found
+  no active span — a request's own line among them, filed as its answer ends, which
+  left naming no trace even where traces export. The linker asks for no parent
+  link and renames no span there, having no layer to take either.
+- **`opentelemetry::Context::current()` holds no span inside a unit where no trace
+  exports**, and the unit's span where traces do. A client instrumented through the
+  OpenTelemetry API propagates only there; the framework's clients and
+  `ReqwestMiddleware` propagate from the correlation everywhere, and
+  `current_traceparent()` is any other client's.
+- **A record keeps the span the SDK found active**: OpenTelemetry's log data model
+  names it, so where traces export a line filed in an app's own span names that
+  span, and the correlation fills only what the SDK left empty.
+
+Measured after, the same way, two passes alternated (2026-11-16, 13:38 to 14:03
+UTC): T1 with `init()` and no endpoint read 164,079 and 169,049 requests a second,
+121k and 126k before the change and 171k and 172k without `init()`; what remains
+against no `init()` is 0.1 to 0.25 µs a request, within the run-to-run spread in
+the second pass and outside it in the first. The `exported` variant read 83,288
+and 84,726, against 85,541 and 85,962 before: naming every request's own line in
+its record, which it lacked, costs 0.2 to 0.3 µs a request where logs export (read
+as that cause, not profiled).
+
+**Refused:**
+
+- **A layer of our own filling `Context::current()` with a non-recording span per
+  unit**: part of the cost paid back for a reader no app has shown, where the
+  correlation is the documented path to propagate.
+- **Keeping the layer and documenting 2.4 µs a request**: every scaffolded app
+  would pay it exporting nothing; projected onto the published table, T0 and T1
+  read behind the contestant they lead.
+- **A record taking the unit's ids over a span the SDK found active**: it would
+  rename every record filed in an app's own span where traces export, against the
+  log data model.

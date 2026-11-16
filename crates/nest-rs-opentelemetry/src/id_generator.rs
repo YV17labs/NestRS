@@ -70,7 +70,7 @@ mod tests {
 
         // As `init_with` does: the linker is what starts the SDK's span while the
         // ids are pending.
-        crate::linker::install();
+        crate::linker::install(true);
         let exporter = InMemorySpanExporter::default();
         let provider = SdkTracerProvider::builder()
             .with_id_generator(AdoptFrameworkIds::default())

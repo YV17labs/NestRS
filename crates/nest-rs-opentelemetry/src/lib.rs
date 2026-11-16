@@ -60,6 +60,8 @@ mod tokio_metrics;
 #[cfg(feature = "otlp")]
 mod unit_durations;
 #[cfg(feature = "otlp")]
+mod unit_records;
+#[cfg(feature = "otlp")]
 mod unit_spans;
 
 #[cfg(feature = "otlp")]

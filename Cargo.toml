@@ -33,6 +33,10 @@ opentelemetry-otlp = "0.33"
 opentelemetry-semantic-conventions = { version = "0.33", features = ["semconv_experimental"] }
 opentelemetry-appender-tracing = "0.33"
 tracing-opentelemetry = "0.34"
+# The messages an OTLP export carries, and the codec they are written in: what a
+# suite's collector double decodes, the versions opentelemetry-otlp sends with.
+opentelemetry-proto = { version = "0.33", default-features = false }
+prost = "0.14"
 
 thiserror = "2.0"
 ref-cast = "1.0"

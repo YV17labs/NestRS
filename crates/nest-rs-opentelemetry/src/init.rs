@@ -39,8 +39,10 @@ impl OpenTelemetry {
     /// `#[nest_rs::main]` started. A signal's batch exporter is added only when
     /// an OTLP endpoint is set for it (`OTEL_EXPORTER_OTLP_ENDPOINT`) and
     /// neither its selector (`OTEL_TRACES_EXPORTER`, `_METRICS_`, `_LOGS_`) nor
-    /// `OTEL_SDK_DISABLED` turns it off, but the tracer is always installed so
-    /// `trace_id` and `traceparent` propagation work out of the box.
+    /// `OTEL_SDK_DISABLED` turns it off. Where no trace exports, no span is built
+    /// for OpenTelemetry: every line and log record still names its unit's
+    /// trace, and every `traceparent` the framework sends carries the sampler's
+    /// verdict, but `opentelemetry::Context::current()` holds no span.
     pub fn init() -> Result<Self, OpenTelemetryError> {
         Self::init_with(OpenTelemetryConfig::from_env()?)
     }
@@ -90,22 +92,28 @@ impl OpenTelemetry {
             // span besides and the durations every unit declaring one, whatever
             // the console writes: filters agreeing on a callsite the log filter
             // settles keep it settled, where disagreeing ones would ask it on
-            // every event. A `None` layer would answer every callsite, so the
-            // durations' arm is the other's with one layer more.
+            // every event. A signal not exported adds no layer, and a `None`
+            // layer would answer every callsite, so each shape is built whole.
             let logs = ConsoleLayer::new(console.format, console.source_location)
                 .and_then(appender_layer)
                 .with_filter(filter);
-            let unit_spans = crate::unit_spans::UnitSpans::new(exporters.traces_export);
-            let traces = tracing_opentelemetry::layer()
-                .with_tracer(exporters.tracer.clone())
-                .with_filter(log_filter(&console.filter).or(unit_spans));
-            let subscriber = match exporters.meter_provider.as_ref() {
-                None => Dispatch::new(Registry::default().with(logs).with(traces)),
-                Some(provider) => Dispatch::new(Registry::default().with(logs).with(traces).with(
-                    crate::unit_durations::UnitDurations::new(provider).with_filter(
-                        log_filter(&console.filter).or(crate::unit_durations::MeasuredUnits),
-                    ),
-                )),
+            let traces = exporters.traces_export.then(|| {
+                tracing_opentelemetry::layer()
+                    .with_tracer(exporters.tracer.clone())
+                    .with_filter(log_filter(&console.filter).or(crate::unit_spans::UnitSpans))
+            });
+            let registry = Registry::default().with(logs);
+            let subscriber = match (traces, &exporters.meter_provider) {
+                (Some(traces), Some(provider)) => Dispatch::new(
+                    registry
+                        .with(traces)
+                        .with(unit_durations(provider, &console.filter)),
+                ),
+                (Some(traces), None) => Dispatch::new(registry.with(traces)),
+                (None, Some(provider)) => {
+                    Dispatch::new(registry.with(unit_durations(provider, &console.filter)))
+                }
+                (None, None) => Dispatch::new(registry),
             };
             if !install_global_subscriber(subscriber) {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
@@ -121,7 +129,7 @@ impl OpenTelemetry {
             }
             // Seeded here rather than mounted by a module: a queue worker imports no
             // transport.
-            crate::linker::install();
+            crate::linker::install(exporters.traces_export);
             crate::linker::sample_with(exporters.unit_sampler.clone());
             crate::linker::end_units(exporters.traces_export, exporters.meter_provider.is_some());
             crate::client_operations::install(
@@ -202,6 +210,22 @@ impl OpenTelemetry {
             Ok(OpenTelemetry {})
         }
     }
+}
+
+/// What records each unit's duration on `provider`, under the console's
+/// `directive` or the filter every unit declaring one passes: a function, since
+/// the layer is typed by the subscriber it stacks on, which the trace layer's
+/// presence changes.
+#[cfg(feature = "otlp")]
+fn unit_durations<S>(
+    provider: &opentelemetry_sdk::metrics::SdkMeterProvider,
+    directive: &str,
+) -> impl tracing_subscriber::Layer<S> + use<S>
+where
+    S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+{
+    crate::unit_durations::UnitDurations::new(provider)
+        .with_filter(log_filter(directive).or(crate::unit_durations::MeasuredUnits))
 }
 
 /// The service a binary built without the `otlp` feature names on its boot

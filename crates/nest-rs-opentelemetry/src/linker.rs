@@ -19,11 +19,17 @@ use crate::sampler::AdoptUnsampledStarts;
 use nest_rs_core::Correlation;
 use nest_rs_core::operation_log::Unit;
 
-/// Install [`enrich`] as the framework's span linker, and [`rename`] as what
-/// renames a unit's span its edge names late, before any module registers.
-pub(crate) fn install() {
-    nest_rs_core::__private::set_span_linker(enrich);
-    nest_rs_core::__private::set_span_rename(rename);
+/// Install the framework's span linker before any module registers: where
+/// `traces` export, [`enrich`], and [`rename`] as what renames a unit's span
+/// its edge names late; otherwise [`record_verdict`], no SDK span existing to
+/// link, read or rename.
+pub(crate) fn install(traces: bool) {
+    if traces {
+        nest_rs_core::__private::set_span_linker(enrich);
+        nest_rs_core::__private::set_span_rename(rename);
+    } else {
+        nest_rs_core::__private::set_span_linker(record_verdict);
+    }
 }
 
 /// The sampler the tracer provider was built with, asked directly where a
@@ -78,6 +84,12 @@ fn enrich(span: &tracing::Span, correlation: &Correlation) {
     if sampled {
         crate::client_operations::hold_count(span, correlation);
     }
+}
+
+/// Record what the sampler decides for the unit `correlation` names, where no
+/// trace exports: whence the flag of every `traceparent` it sends.
+fn record_verdict(_: &tracing::Span, correlation: &Correlation) {
+    nest_rs_core::__private::set_sampled(correlation, decided(correlation));
 }
 
 /// Tell the SDK this span continues one that ran elsewhere.
@@ -139,8 +151,7 @@ fn is_structural(error: &SetParentError) -> bool {
 }
 
 /// What the installed sampler decided for this span, read off the SDK span it
-/// started; `None` where the trace layer holds none — a span the console's
-/// filter closed, while no trace exports.
+/// started; `None` where the trace layer holds none.
 fn sdk_verdict(span: &tracing::Span) -> Option<bool> {
     let context = span.context();
     let span_context = context.span().span_context().clone();
@@ -173,8 +184,54 @@ fn decided(correlation: &Correlation) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use nest_rs_core::{Correlation, TraceParent, TraceState};
+    use tracing::field::{Field, Visit};
     use tracing_opentelemetry::SetParentError;
+    use tracing_subscriber::layer::{Context, SubscriberExt as _};
+
+    /// The messages of the `warn` lines filed on this crate's target.
+    #[derive(Clone, Default)]
+    struct Warnings(Arc<Mutex<Vec<String>>>);
+
+    struct Message<'a>(&'a mut String);
+
+    impl Visit for Message<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                *self.0 = format!("{value:?}");
+            }
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warnings {
+        fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+            if *event.metadata().level() == tracing::Level::WARN
+                && event.metadata().target() == crate::TARGET
+            {
+                let mut message = String::new();
+                event.record(&mut Message(&mut message));
+                self.0.lock().unwrap().push(message);
+            }
+        }
+    }
+
+    /// What this crate warned while `run` ran under a subscriber without the
+    /// OpenTelemetry layer.
+    fn warned_without_the_layer(run: impl FnOnce()) -> Vec<String> {
+        let warnings = Warnings::default();
+        let subscriber = tracing_subscriber::registry().with(warnings.clone());
+        tracing::subscriber::with_default(subscriber, run);
+        warnings.0.lock().unwrap().clone()
+    }
+
+    /// A trace continued from the specification's own example.
+    fn continued() -> Correlation {
+        let parent = TraceParent::parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+            .expect("the spec's own example");
+        Correlation::continued(parent, TraceState::default(), None)
+    }
 
     /// A filtered-out span is the filter working; the other two refusals mean
     /// no continued trace keeps its parent.
@@ -189,45 +246,26 @@ mod tests {
     /// so every continued trace would export parentless: said at `warn`, once.
     #[test]
     fn a_link_the_subscriber_cannot_take_is_reported() {
-        use std::sync::{Arc, Mutex};
-        use tracing::field::{Field, Visit};
-        use tracing_subscriber::layer::{Context, SubscriberExt};
-
-        #[derive(Clone, Default)]
-        struct Warnings(Arc<Mutex<Vec<String>>>);
-        struct Message<'a>(&'a mut String);
-        impl Visit for Message<'_> {
-            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "message" {
-                    *self.0 = format!("{value:?}");
-                }
-            }
-        }
-        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warnings {
-            fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
-                if *event.metadata().level() == tracing::Level::WARN
-                    && event.metadata().target() == crate::TARGET
-                {
-                    let mut message = String::new();
-                    event.record(&mut Message(&mut message));
-                    self.0.lock().unwrap().push(message);
-                }
-            }
-        }
-
-        let warnings = Warnings::default();
-        let subscriber = tracing_subscriber::registry().with(warnings.clone());
-        let parent = TraceParent::parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
-            .expect("the spec's own example");
-        let correlation = Correlation::continued(parent, TraceState::default(), None);
-        tracing::subscriber::with_default(subscriber, || {
+        let correlation = continued();
+        let warned = warned_without_the_layer(|| {
             let span = tracing::info_span!("unit");
             super::link_remote_parent(&span, &correlation);
             super::link_remote_parent(&span, &correlation);
         });
 
         let expected = ["remote parent not linked; continued traces export without their parent"];
-        assert_eq!(*warnings.0.lock().unwrap(), expected);
+        assert_eq!(warned, expected);
+    }
+
+    /// Where no trace exports, `init` lays no OpenTelemetry layer, and a
+    /// continued unit asks for no link it has nowhere to take: nothing said.
+    #[test]
+    fn where_no_trace_exports_a_continued_unit_asks_for_no_link() {
+        super::install(false);
+        let correlation = continued();
+        let warned = warned_without_the_layer(|| drop(nestrs_unit_probe::open(&correlation)));
+
+        assert_eq!(warned, Vec::<String>::new());
     }
 
     /// The description reaches the export as the span's status, and the class
@@ -239,7 +277,7 @@ mod tests {
         use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        super::install();
+        super::install(true);
         let exporter = InMemorySpanExporter::default();
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())
@@ -269,7 +307,7 @@ mod tests {
         use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        super::install();
+        super::install(true);
         let exporter = InMemorySpanExporter::default();
         let provider = SdkTracerProvider::builder()
             .with_simple_exporter(exporter.clone())

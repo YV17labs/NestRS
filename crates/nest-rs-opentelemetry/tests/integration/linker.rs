@@ -1,8 +1,8 @@
 //! Covers `src/linker.rs` against `tracing-opentelemetry` as it is: the library
 //! behaviour its rename works around (`.claude/upstream/tracing-opentelemetry.md`),
-//! and, where no trace is exported, what a unit still holds — the sampler's
-//! verdict on its correlation, whence the flag of every `traceparent` it sends,
-//! and the context an app reads inside it.
+//! where no trace is exported, what a unit still holds — the sampler's verdict
+//! on its correlation, whence the flag of every `traceparent` it sends — and the
+//! context an app reads inside it, the unit's only where traces export.
 
 use nest_rs_core::{Correlation, TraceParent, TraceState};
 use nest_rs_opentelemetry::OpenTelemetryConfig;
@@ -133,14 +133,13 @@ fn with_nothing_exported_and_the_console_quieted_a_trace_started_unsampled_stays
     assert!(!sampled_with_nothing_exported(&vars, &probe));
 }
 
-/// An app reading `opentelemetry::Context::current()` inside a unit reads that
-/// unit's trace and span, exported or not.
-#[test]
-fn with_nothing_exported_an_app_reads_its_units_context() {
-    let otel =
-        crate::init_under(&[], OpenTelemetryConfig::default()).expect("init with no endpoint");
-    let correlation = Correlation::minted(None);
-    let unit = nestrs_unit_probe::open(&correlation);
+/// What an app reading `opentelemetry::Context::current()` inside a unit opened
+/// under `correlation` reads, with `otel` installed.
+fn context_read_in_a_unit(
+    otel: nest_rs_opentelemetry::OpenTelemetry,
+    correlation: &Correlation,
+) -> opentelemetry::trace::SpanContext {
+    let unit = nestrs_unit_probe::open(correlation);
     let read = unit.in_scope(|| {
         opentelemetry::Context::current()
             .span()
@@ -149,10 +148,41 @@ fn with_nothing_exported_an_app_reads_its_units_context() {
     });
     drop(unit);
     drop(otel);
+    read
+}
+
+/// Where traces export, an app reading `opentelemetry::Context::current()`
+/// inside a unit reads that unit's trace and span.
+#[test]
+fn with_traces_exported_an_app_reads_its_units_context() {
+    let collector = Collector::serving();
+    let otel = trusting(
+        &collector,
+        &[
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+    );
+    let correlation = Correlation::minted(None);
+    let read = context_read_in_a_unit(otel, &correlation);
 
     assert_eq!(
         read.trace_id().to_bytes(),
         correlation.trace_id().to_bytes()
     );
     assert_eq!(read.span_id().to_bytes(), correlation.span_id().to_bytes());
+}
+
+/// Where no trace exports, no span is built for OpenTelemetry, so an app
+/// reading `opentelemetry::Context::current()` inside a unit reads none: its
+/// trace is `nest_rs::core::current_traceparent()`
+/// (`.claude/decisions/telemetry-reads-the-specification.md`, 2026-11-16).
+#[test]
+fn with_nothing_exported_an_app_reads_no_span_in_its_unit() {
+    let otel =
+        crate::init_under(&[], OpenTelemetryConfig::default()).expect("init with no endpoint");
+    let correlation = Correlation::minted(None);
+    let read = context_read_in_a_unit(otel, &correlation);
+
+    assert!(!read.is_valid(), "{read:?}");
 }

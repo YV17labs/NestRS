@@ -250,7 +250,7 @@ mod tests {
     /// signals, under a subscriber exporting the framework's spans, each unit's
     /// span started under the kernel's ids as `init` links them.
     fn exported(work: impl FnOnce(&ClientOperations)) -> Exported {
-        crate::linker::install();
+        crate::linker::install(true);
         crate::linker::end_units(true, true);
         let spans = InMemorySpanExporter::default();
         let tracer_provider = SdkTracerProvider::builder()
@@ -609,7 +609,7 @@ mod tests {
     /// whatever arrives once its queue is full, whichever trace it belongs to.
     #[test]
     fn a_unit_sending_more_operations_than_one_export_batch_costs_another_unit_no_span() {
-        crate::linker::install();
+        crate::linker::install(true);
         crate::linker::end_units(true, true);
         nest_rs_core::__private::count_client_spans();
         let stalled = Stalled::default();

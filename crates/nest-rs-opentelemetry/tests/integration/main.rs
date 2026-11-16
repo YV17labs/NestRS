@@ -26,6 +26,8 @@ mod sampler;
 #[cfg(feature = "otlp")]
 mod unit_durations;
 #[cfg(feature = "otlp")]
+mod unit_records;
+#[cfg(feature = "otlp")]
 mod unit_spans;
 
 use nest_rs_core::EnvPrefix;

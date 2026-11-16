@@ -195,6 +195,11 @@ pub(crate) fn trace_exports(collector: &Collector) -> Vec<Received> {
     received_on(collector, "/v1/traces")
 }
 
+/// Every export of logs `collector` read.
+pub(crate) fn log_exports(collector: &Collector) -> Vec<Received> {
+    received_on(collector, "/v1/logs")
+}
+
 /// Every export `collector` read on `path`.
 fn received_on(collector: &Collector, path: &str) -> Vec<Received> {
     collector

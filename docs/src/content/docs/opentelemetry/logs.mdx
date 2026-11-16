@@ -275,8 +275,10 @@ The
 is wired in only when an OTLP endpoint is configured. Without an endpoint, the
 bridge is skipped — it pays a small per-event cost just to drop the event,
 which is not worth paying when console-only logging is the goal. When the
-endpoint is set, every `tracing` event becomes an OTel log record with the
-same target, level, fields and `trace_id`.
+endpoint is set, every event the console's filter admits becomes an OTel log
+record with the same target, level and fields. It names the unit it was filed in
+by `trace_id` and `span_id`, whether or not traces export; where they do, a line
+filed in a span of your own names that span.
 
 ## Going further
 

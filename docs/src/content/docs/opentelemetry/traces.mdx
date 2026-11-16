@@ -83,9 +83,16 @@ client could file its request into a trace of its choosing and set the `sampled`
 flag on traffic it generates. The response carries `traceresponse` so a caller
 can match a span in their backend to a span in yours.
 
-The W3C propagator is installed even when no OTLP endpoint is set — useful when
-a sibling service in your monorepo *does* export and you want the connection
-preserved across the hop.
+Outbound, the trace travels whether or not this process exports. Every request
+the framework sends, and yours through `ReqwestMiddleware`, carries the unit's
+`traceparent` ([Outbound HTTP requests](#outbound-http-requests)); any other
+client sends `nest_rs::core::current_traceparent()`. A sibling service that
+*does* export keeps the connection across the hop.
+
+A client instrumented through the OpenTelemetry API propagates only where traces
+export. It reads `opentelemetry::Context::current()`, which holds the unit's span
+there alone: where no trace exports, no span is built for OpenTelemetry, a
+request pays nothing for one, and such a client sends no `traceparent`.
 
 ## Sampling
 

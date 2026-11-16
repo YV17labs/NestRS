@@ -578,8 +578,9 @@ read 161k to 163k, and one keeping it with no events gained nothing. Every app
   the linker asks of the sampler itself, a probe's start unsampled included; the
   ids every line carries, which the formatters already read there; a log record's
   ids, which `UnitRecords` writes ahead of the batch processor where the SDK found
-  no active span. The linker asks for no parent link and renames no span there,
-  having no layer to take either.
+  no active span — a request's own line among them, filed as its answer ends, which
+  left naming no trace even where traces export. The linker asks for no parent
+  link and renames no span there, having no layer to take either.
 - **`opentelemetry::Context::current()` holds no span inside a unit where no trace
   exports**, and the unit's span where traces do. A client instrumented through the
   OpenTelemetry API propagates only there; the framework's clients and

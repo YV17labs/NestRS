@@ -43,7 +43,7 @@ and every line a log record, sent to the collector the variable names.
 | `tracesSampleRate` | `OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG`, parent-based ([sampling](/opentelemetry/traces/#sampling)) |
 | `tracer.createSpan(name, callback)` | `#[tracing::instrument]` on the function ([custom spans](/opentelemetry/traces/#custom-spans)) |
 | `tracer.activeSpan()` | `tracing::Span::current()` |
-| `tracer.captureError(error, tags?)` | return the error: its edge files the chain, and the unit's span says why ([a failed span](/opentelemetry/traces/#a-failed-span-says-why)); for one you handle, `tracing::error!(error = %nest_rs::core::error_message(&err), "…")`, a log record and an event of the current span |
+| `tracer.captureError(error, tags?)` | return the error: its edge files the chain, and the unit's span says why; for one you handle, `tracing::error!(error = %nest_rs::core::error_message(&err), "…")`, a log record and an event of the current span, which that `error` line marks `Error`, with no description, whatever the unit answers ([a failed span says why](/opentelemetry/traces/#a-failed-span-says-why)) |
 | `tracer.setAttribute` / `getAttribute` | a value a layer makes ambient with `cx.attach(value)`, read anywhere the unit reaches with `nest_rs::core::ambient::<T>()` ([execution context](/fundamentals/execution-context/#what-a-unit-carries)) |
 | `tracer.setOperationId(id)` | nothing: a unit is named by what the server declares — its route template, root field, event or tool — so its names stay bounded; another grouping is your backend's query |
 | `tracer.currentTraceId()` | `nest_rs::core::current_trace_id()` |

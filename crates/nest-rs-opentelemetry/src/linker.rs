@@ -7,11 +7,14 @@
 //! on this one: `tracing_opentelemetry::OtelData` is private and an
 //! `IdGenerator` never sees a span.
 
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 use opentelemetry::Context;
-use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId};
+use opentelemetry::trace::{SpanContext, SpanId, SpanKind, TraceContextExt, TraceFlags, TraceId};
+use opentelemetry_sdk::trace::{Sampler, SamplingDecision, ShouldSample};
 use tracing_opentelemetry::{OpenTelemetrySpanExt, SetParentError};
+
+use crate::sampler::AdoptUnsampledStarts;
 
 use nest_rs_core::Correlation;
 use nest_rs_core::operation_log::Unit;
@@ -21,6 +24,19 @@ use nest_rs_core::operation_log::Unit;
 pub(crate) fn install() {
     nest_rs_core::__private::set_span_linker(enrich);
     nest_rs_core::__private::set_span_rename(rename);
+}
+
+/// The sampler the tracer provider was built with, asked directly where a
+/// unit's span holds no SDK span to read its verdict off.
+static SAMPLER: OnceLock<AdoptUnsampledStarts<Sampler>> = OnceLock::new();
+
+/// Hand [`enrich`] the sampler the tracer provider was built with.
+pub(crate) fn sample_with(sampler: AdoptUnsampledStarts<Sampler>) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "seeded once at boot; a second install keeps the first"
+    )]
+    let _ = SAMPLER.set(sampler);
 }
 
 /// Install [`end`] as what runs as a unit ends: for every unit where `traces`
@@ -57,7 +73,7 @@ fn rename(span: &tracing::Span, name: String) {
 /// span starts under them.
 fn enrich(span: &tracing::Span, correlation: &Correlation) {
     link_remote_parent(span, correlation);
-    let sampled = is_sampled(span);
+    let sampled = sdk_verdict(span).unwrap_or_else(|| decided(correlation));
     nest_rs_core::__private::set_sampled(correlation, sampled);
     if sampled {
         crate::client_operations::hold_count(span, correlation);
@@ -122,9 +138,37 @@ fn is_structural(error: &SetParentError) -> bool {
     !matches!(error, SetParentError::SpanDisabled)
 }
 
-/// What the installed sampler decided for this span.
-fn is_sampled(span: &tracing::Span) -> bool {
-    span.context().span().span_context().is_sampled()
+/// What the installed sampler decided for this span, read off the SDK span it
+/// started; `None` where the trace layer holds none — a span the console's
+/// filter closed, while no trace exports.
+fn sdk_verdict(span: &tracing::Span) -> Option<bool> {
+    let context = span.context();
+    let span_context = context.span().span_context().clone();
+    span_context.is_valid().then(|| span_context.is_sampled())
+}
+
+/// What the sampler decides for the trace `correlation` names, asked as the SDK
+/// asks it of a span, under the same parent; with none handed over, the flag
+/// the correlation already carries.
+fn decided(correlation: &Correlation) -> bool {
+    let Some(sampler) = SAMPLER.get() else {
+        return correlation.flags().is_sampled();
+    };
+    let parent = parent_context(
+        correlation,
+        TraceFlags::new(correlation.flags().bits()),
+        correlation.parent_is_remote(),
+    )
+    .unwrap_or_default();
+    let result = sampler.should_sample(
+        Some(&parent),
+        TraceId::from_bytes(correlation.trace_id().to_bytes()),
+        "",
+        &SpanKind::Internal,
+        &[],
+        &[],
+    );
+    result.decision == SamplingDecision::RecordAndSample
 }
 
 #[cfg(test)]

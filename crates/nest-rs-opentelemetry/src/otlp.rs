@@ -228,6 +228,9 @@ impl Signal {
 pub(crate) struct Exporters {
     pub tracer: opentelemetry_sdk::trace::Tracer,
     pub tracer_provider: SdkTracerProvider,
+    /// The sampler the provider was built with, which the linker asks where a
+    /// unit's span holds no SDK span.
+    pub unit_sampler: crate::sampler::AdoptUnsampledStarts<Sampler>,
     /// Whether the traces export.
     pub traces_export: bool,
     /// `Some` only when the metrics export.
@@ -387,6 +390,7 @@ fn build_reading(
         .get(&Key::new(SERVICE_NAME))
         .map_or_default(|name| name.to_string());
 
+    let unit_sampler = crate::sampler::AdoptUnsampledStarts(sampler.clone());
     let mut tracer_builder = tracer_provider(resource.clone(), sampler, span_limits);
     if let (Some(export), Some(client)) = (&traces, traces_client) {
         let span_exporter = export
@@ -442,6 +446,7 @@ fn build_reading(
     Ok(Exporters {
         tracer,
         tracer_provider,
+        unit_sampler,
         traces_export: traces.is_some(),
         meter_provider,
         logger_provider,

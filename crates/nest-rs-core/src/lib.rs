@@ -132,6 +132,7 @@ mod exception_filter;
 #[cfg(feature = "logging")]
 mod export;
 mod factory_inputs;
+mod fenced;
 mod handler;
 mod host_runtime;
 mod identifier;

@@ -70,16 +70,17 @@ its own launch's T1.
 All three signals cost **5.8 µs of CPU a request**, about half of T1's
 requests a second, and traces carry most of it:
 
-| Exported | CPU a request | Of T1's requests a second | p99 | Memory under load |
+| Exported | CPU a request | Of T1's requests a second | p99 | Memory under load, over T1 |
 |---|---|---|---|---|
-| nothing (T1) | — | — | 0.50 to 0.52 ms | 11.5 to 13.7 MB |
-| all three signals | 5.77 to 5.83 µs | 50 to 53 % | 1.96 ms | 17.3 to 19.5 MB |
-| traces alone | 3.26 to 3.53 µs | 64 to 67 % | 1.51 to 1.55 ms | 15.9 to 16.9 MB |
-| logs alone | 1.05 to 1.10 µs | 84 to 86 % | 0.87 to 0.89 ms | 14.0 to 15.8 MB |
-| metrics alone | 0.64 to 0.89 µs | 87 to 91 % | 0.55 to 0.57 ms | 12.9 to 14.7 MB |
+| all three signals | 5.8 µs | 50 to 53 % | 1.96 ms | 5.6 to 6.4 MB |
+| traces alone | 3.3 to 3.5 µs | 64 to 67 % | 1.51 to 1.55 ms | 3.8 to 5.4 MB |
+| logs alone | 1.0 to 1.1 µs | 84 to 86 % | 0.87 to 0.89 ms | 2.1 to 2.6 MB |
+| metrics alone | 0.6 to 0.9 µs | 87 to 91 % | 0.55 to 0.57 ms | 1.0 to 1.4 MB |
 
-Metrics leave on the periodic export, once a minute, so what a request pays for
-them is recording its point. Of each signal exported, the collector took a span
+T1 itself answers at a p99 of 0.50 to 0.52 ms in those launches, and each
+launch reads its variant's memory against its own T1's, which moves from one
+sitting to the next. Metrics leave on the periodic export, once a minute, so
+what a request pays for them is recording its point. Of each signal exported, the collector took a span
 or a log record for every request sent, except in one launch of traces alone,
 where it took 99.97 % of the spans.
 

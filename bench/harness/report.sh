@@ -30,7 +30,12 @@ files=("$DIR"/*.json)
   done
   echo
   jq -r '. as $p | .tiers | to_entries[] | select(.value.spans_accepted != null) |
-    "- **\($p.provider)-\($p.variant) \(.key)**: the collector took \(.value.spans_accepted) spans of the \(.value.requests_sent) requests sent, \(.value.spans_accepted * 1000 / .value.requests_sent | round / 10)%"' \
+    .key as $tier | .value as $t | def share(n): n * 1000 / $t.requests_sent | round / 10;
+    [ (if $t.spans_accepted > 0 then "\($t.spans_accepted) spans (\(share($t.spans_accepted))%)" else empty end),
+      (($t.log_records_accepted // 0) as $n | if $n > 0 then "\($n) log records (\(share($n))%)" else empty end),
+      (($t.metric_points_accepted // 0) as $n | if $n > 0 then "\($n) metric points" else empty end)
+    ] | join(", ") as $took |
+    "- **\($p.provider)-\($p.variant) \($tier)**: of the \($t.requests_sent) requests sent, the collector took \($took)"' \
     "${files[@]}"
   echo
   echo "RSS loaded is the SUT's once each tier's last run ended. A tier named"

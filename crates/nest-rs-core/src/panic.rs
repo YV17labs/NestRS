@@ -155,14 +155,16 @@ macro_rules! contained_panic {
 
 /// Hold tracing-core on its per-thread dispatch path for the rest of the
 /// process, where a dispatch re-entered on one thread is answered with no
-/// subscriber, once a subscriber is set.
+/// subscriber, once a subscriber no fence wraps is set — the app's own.
 ///
 /// While no scoped dispatcher was ever set, tracing-core hands the global
 /// subscriber out even inside its own dispatch: a layer holding a lock while it
 /// records a field whose `Display` panics would deadlock in [`hook`]'s own
-/// event. One scoped default, set on a thread that ends at once, keeps the
-/// per-thread path taken; the hook then finds no subscriber there and writes
-/// its stderr line.
+/// event. A fenced subscriber tells the hook where it is
+/// ([`fenced::inside`](crate::fenced::inside)); any other gets one scoped
+/// default, set on a thread that ends at once, which keeps the per-thread path
+/// taken: the hook then finds no subscriber there and writes its stderr line,
+/// and every line filed inside an event or a span's creation is discarded.
 pub(crate) fn hold_dispatch_reentrance() {
     static HELD: std::sync::Once = std::sync::Once::new();
     HELD.call_once(|| {
@@ -259,13 +261,14 @@ fn report(contained: bool, subscribed: bool) -> Report {
 
 /// Whether an event emitted on this thread now reaches a subscriber: `false`
 /// before one is installed — the process steps' stderr lines included, which
-/// leave a panic to the hook's own line — and inside a scoped one's own
-/// dispatch.
+/// leave a panic to the hook's own line — and inside a fenced or a scoped
+/// one's own dispatch.
 pub(crate) fn subscribed() -> bool {
-    !tracing::dispatcher::get_default(|dispatch| {
-        dispatch.is::<tracing::subscriber::NoSubscriber>()
-            || dispatch.is::<crate::stderr_lines::StderrLines>()
-    })
+    !crate::fenced::inside()
+        && !tracing::dispatcher::get_default(|dispatch| {
+            dispatch.is::<tracing::subscriber::NoSubscriber>()
+                || dispatch.is::<crate::stderr_lines::StderrLines>()
+        })
 }
 
 /// How many contained panics keep where they happened; one a line never asks

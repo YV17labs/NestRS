@@ -73,6 +73,10 @@ fn logging_child_process() {
         Some("retired-filter") => {
             let _ = retired_filter_child();
         }
+        Some("filing-layer") => filing_layer_child(),
+        Some("filing-field") => {
+            let _ = filing_field_child();
+        }
         Some("app-less-log-logger") => {
             log::set_logger(&STDERR_LOGGER).expect("the child's first `log` logger");
             log::set_max_level(log::LevelFilter::Info);
@@ -115,6 +119,64 @@ async fn retired_filter_child() -> anyhow::Result<()> {
     App::builder().module::<Bare>().build().await?;
     App::builder().module::<Bare>().build().await?;
     tracing::debug!(target: FIXTURE_TARGET, step = 1, "{RETIRED_DEBUG}");
+    Ok(())
+}
+
+/// The line a fixture's own line makes another file while it is written.
+const FILED_INSIDE: &str = "a line filed while another is written";
+
+/// The line whose writing files [`FILED_INSIDE`].
+const FILING: &str = "a line whose writing files another";
+
+/// Where [`FILED_INSIDE`] is filed: never [`FIXTURE_TARGET`], whose lines file it.
+const INSIDE_TARGET: &str = "nest_rs::inside";
+
+/// A layer of an app's own that files a line as it is handed one of the
+/// fixture's.
+struct Filing;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Filing {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        if event.metadata().target() == FIXTURE_TARGET {
+            tracing::info!(target: INSIDE_TARGET, "{FILED_INSIDE}");
+        }
+    }
+}
+
+/// The kernel's console with [`Filing`] beside it, installed as OpenTelemetry's
+/// subscriber is, then one line of the fixture's.
+#[nest_rs_core::main]
+async fn filing_layer_child() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let settings = LogSettings::from_env().expect("the parent's settings");
+    nest_rs_core::__private::install_global_subscriber(
+        tracing_subscriber::Registry::default()
+            .with(nest_rs_core::__private::log_filter(&settings.filter))
+            .with(nest_rs_core::__private::ConsoleLayer::new(
+                settings.format,
+                settings.source_location,
+            ))
+            .with(Filing),
+    );
+    tracing::info!(target: FIXTURE_TARGET, "{FILING}");
+}
+
+/// A field whose text files a line as the console writes it.
+struct Filed;
+
+impl std::fmt::Display for Filed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        tracing::info!(target: INSIDE_TARGET, "{FILED_INSIDE}");
+        f.write_str("filed")
+    }
+}
+
+/// The console an app installs, then one line carrying [`Filed`].
+#[nest_rs_core::main]
+async fn filing_field_child() -> anyhow::Result<()> {
+    let _app = App::builder().module::<Bare>().build().await?;
+    tracing::info!(target: FIXTURE_TARGET, value = %Filed, "{FILING}");
     Ok(())
 }
 
@@ -566,4 +628,35 @@ fn a_set_prefixed_log_opens_nothing_and_is_said_once_naming_rust_log() {
         said[0]
     );
     assert_eq!(said[0]["fields"]["read_as"], RUST_LOG, "{}", said[0]);
+}
+
+/// A line a layer files while the console is handed another reaches the
+/// console too, beside the one it was handed.
+#[test]
+fn a_line_a_layer_files_while_another_is_written_is_written_too() {
+    let mut child = ChildProcess::spawn_with(CHILD_TEST, "filing-layer", &console_env());
+
+    let (code, printed) = child.exit_within(Duration::from_secs(10));
+    assert_eq!(code, Some(0), "{printed:#?}");
+    let events = console_events(&printed);
+    assert_eq!(saying(&events, FILING), 1, "{events:#?}");
+    assert_eq!(saying(&events, FILED_INSIDE), 1, "{events:#?}");
+}
+
+/// A line a field's text files as the console writes that field reaches the
+/// console, and so does the line carrying the field, nothing panicking.
+#[test]
+fn a_line_a_field_s_text_files_as_it_is_written_is_written_too() {
+    let mut child = ChildProcess::spawn_with(CHILD_TEST, "filing-field", &console_env());
+
+    let (code, printed) = child.exit_within(Duration::from_secs(10));
+    assert_eq!(code, Some(0), "{printed:#?}");
+    let events = console_events(&printed);
+    assert_eq!(saying(&events, FILED_INSIDE), 1, "{events:#?}");
+    let filing: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|event| event["fields"]["message"] == FILING)
+        .collect();
+    assert_eq!(filing.len(), 1, "{events:#?}");
+    assert_eq!(filing[0]["fields"]["value"], "filed", "{}", filing[0]);
 }

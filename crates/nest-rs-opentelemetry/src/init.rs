@@ -1,6 +1,4 @@
 #[cfg(feature = "otlp")]
-use tracing::Dispatch;
-#[cfg(feature = "otlp")]
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::Registry;
 #[cfg(feature = "otlp")]
@@ -103,19 +101,19 @@ impl OpenTelemetry {
                     .with_filter(log_filter(&console.filter).or(crate::unit_spans::UnitSpans))
             });
             let registry = Registry::default().with(logs);
-            let subscriber = match (traces, &exporters.meter_provider) {
-                (Some(traces), Some(provider)) => Dispatch::new(
+            let installed = match (traces, &exporters.meter_provider) {
+                (Some(traces), Some(provider)) => install_global_subscriber(
                     registry
                         .with(traces)
                         .with(unit_durations(provider, &console.filter)),
                 ),
-                (Some(traces), None) => Dispatch::new(registry.with(traces)),
-                (None, Some(provider)) => {
-                    Dispatch::new(registry.with(unit_durations(provider, &console.filter)))
-                }
-                (None, None) => Dispatch::new(registry),
+                (Some(traces), None) => install_global_subscriber(registry.with(traces)),
+                (None, Some(provider)) => install_global_subscriber(
+                    registry.with(unit_durations(provider, &console.filter)),
+                ),
+                (None, None) => install_global_subscriber(registry),
             };
-            if !install_global_subscriber(subscriber) {
+            if !installed {
                 return Err(OpenTelemetryError::Init(ALREADY_INSTALLED.to_owned()));
             }
             // Nothing global is seeded before the subscriber is the process's:

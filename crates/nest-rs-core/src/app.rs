@@ -919,7 +919,9 @@ impl AppBuilder {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
         // After the fallback, which reads whether a subscriber was set.
-        crate::panic::hold_dispatch_reentrance();
+        if !crate::fenced::installed() {
+            crate::panic::hold_dispatch_reentrance();
+        }
         let identity = AppIdentity::current();
         tracing::info!(
             target: crate::target::APP,

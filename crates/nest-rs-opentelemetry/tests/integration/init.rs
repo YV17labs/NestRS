@@ -3,7 +3,7 @@
 //! files through, and which `App::run` tells from the kernel's console under an
 //! OTLP endpoint. Process-wide, so the panic's case runs in a child process.
 
-use std::process::{Command, Output};
+use std::process::Output;
 
 use nest_rs_config::Environment;
 use nest_rs_core::logging::LogFormat;
@@ -13,9 +13,6 @@ use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryErr
 use crate::{console_vars, init_under, refused_under};
 
 const CHILD_TEST: &str = "init::init_child_process";
-
-/// The variable a child reads its role from.
-const CHILD_ROLE: &str = "NEST_RS_OPENTELEMETRY_CHILD_ROLE";
 
 /// A value whose text panics as the subscriber writes it.
 struct Unwritable;
@@ -57,35 +54,21 @@ fn boot_line(log_format: LogFormat) {
 }
 
 #[test]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the parent test hands the child its role through the environment"
-)]
 fn init_child_process() {
-    match std::env::var(CHILD_ROLE).as_deref() {
-        Ok(BOOT_LINE) => boot_line(LogFormat::Text),
-        Ok(BOOT_LINE_BY_PROFILE) => boot_line(LogFormat::ByProfile),
-        Ok(_) => {
+    match crate::child_role().as_deref() {
+        Some(BOOT_LINE) => boot_line(LogFormat::Text),
+        Some(BOOT_LINE_BY_PROFILE) => boot_line(LogFormat::ByProfile),
+        Some(_) => {
             let _ = inside_the_subscriber();
         }
-        Err(_) => {}
+        None => {}
     }
 }
 
 /// This test binary, re-run on the child test alone in `role`, with `vars`
-/// set, to its exit, every one of [`console_vars`] removed.
+/// set, to its exit.
 fn child_in(role: &str, vars: &[(&str, &str)]) -> Output {
-    let mut child = Command::new(std::env::current_exe().expect("the test binary"));
-    child
-        .args(["--exact", CHILD_TEST, "--nocapture"])
-        .env(CHILD_ROLE, role);
-    for name in console_vars() {
-        child.env_remove(name);
-    }
-    for (name, value) in vars {
-        child.env(name, value);
-    }
-    child.output().expect("the child runs")
+    crate::child_running(CHILD_TEST, role, vars)
 }
 
 fn child() -> Output {

@@ -132,22 +132,21 @@ of an existing job before it is a job of its own.
 ## 2026-11-17 — a release builds every crate it uploads from its package
 
 `publish.yml` checked the workspace and published with `--no-verify`, so no crate
-was ever built from its archive: a file read outside a crate's directory, a
-dependency without a version or a crate compiling only through the workspace's
-feature union would have shown first on crates.io. Before 7.0, the owner added
-the check to the one workflow that publishes: a step runs `cargo package` over
-the crates the publish uploads, each built from its archive against its
-siblings', and the publish keeps `--no-verify`. It runs on the tag, like the
-rest of the workflow; nothing new runs on a change. On the 45 crates of 7.0 it
-took 112 s in the dev container, minutes on a runner.
+was ever built from its archive: a file read outside a crate's directory or a
+crate compiling only through the workspace's feature union would have shown
+first on crates.io. Before 7.0, the owner added the check to the one workflow
+that publishes: a step runs `cargo package` over the crates the publish uploads,
+each built from its archive against its siblings', and the publish keeps
+`--no-verify`. It runs on the tag, like the rest of the workflow; nothing new
+runs on a change. On the 45 crates of 7.0 it took 112 s in the dev container,
+minutes on a runner.
 
 **Refused:**
 
-- **`cargo package --workspace`.** Cargo packages the `publish = false` members
-  too — the macro witness and the probe packages the suites link, members by
-  Cargo's rule for path dependencies — and refuses each, its path dependencies
-  carrying no version. The set is read off each manifest's `publish` field, the
-  one cargo-workspaces skips a crate by.
+- **`cargo package --workspace`**: it also packages the `publish = false`
+  members — the macro witness and the probes the suites link by path — and
+  refuses each, its path dependencies carrying no version. The step reads the
+  set off each manifest's `publish` field, as cargo-workspaces does.
 - **Those members named in `--exclude`**: the next probe a suite adds would stop
   the release at its tag.
 - **The step in `framework.yml`**: what it finds harms only a release, and the

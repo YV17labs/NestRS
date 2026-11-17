@@ -61,8 +61,8 @@ jobs:
       - name: cargo check (workspace)
         run: cargo check --workspace --all-targets
 
-      # The crates the publish below uploads, each built from its archive. Not
-      # `--workspace`: it packages the `publish = false` members too, and refuses them.
+      # The crates the publish below uploads: `--workspace` would also
+      # package the `publish = false` members, and fail on them.
       - name: Build each crate from its package
         run: |
           set -o pipefail

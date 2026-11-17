@@ -1032,6 +1032,33 @@ const EMITTED: u64 = 64;
 const SPAN_DROPPING_STARTED: &str = "BatchSpanProcessor.SpanDroppingStarted";
 const SPANS_DROPPED: &str = "BatchSpanProcessor.SpansDropped";
 
+/// The role whose child files lines faster than a queue of one exports them.
+const RECORDS_ON_A_FULL_QUEUE: &str = "records-on-a-full-queue";
+
+/// The SDK's own names for its two lines about a full log record queue.
+const LOG_DROPPING_STARTED: &str = "BatchLogProcessor.LogDroppingStarted";
+const LOGS_DROPPED: &str = "BatchLogProcessor.LogsDropped";
+
+#[nest_rs_core::main]
+async fn records_on_a_full_queue() -> nest_rs_core::anyhow::Result<()> {
+    let collector = Collector::serving_to(Behaviour::Silent, None);
+    let format = nest_rs_core::EnvPrefix::var(nest_rs_core::logging::var::FORMAT);
+    let _otel = trusting(
+        &collector,
+        &[
+            (format.as_str(), "json"),
+            ("OTEL_TRACES_EXPORTER", "none"),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_BLRP_MAX_QUEUE_SIZE", "1"),
+            ("OTEL_BLRP_EXPORT_TIMEOUT", "200"),
+        ],
+    );
+    for _ in 0..EMITTED {
+        tracing::info!(target: "probe", "a line the export queue may refuse");
+    }
+    Ok(())
+}
+
 #[nest_rs_core::main]
 async fn spans_on_a_full_queue() -> nest_rs_core::anyhow::Result<()> {
     let collector = Collector::serving_to(Behaviour::Silent, None);
@@ -1054,8 +1081,10 @@ async fn spans_on_a_full_queue() -> nest_rs_core::anyhow::Result<()> {
 
 #[test]
 fn otlp_child_process() {
-    if crate::child_role().as_deref() == Some(SPANS_ON_A_FULL_QUEUE) {
-        spans_on_a_full_queue().expect("the child's main");
+    match crate::child_role().as_deref() {
+        Some(SPANS_ON_A_FULL_QUEUE) => spans_on_a_full_queue().expect("the child's main"),
+        Some(RECORDS_ON_A_FULL_QUEUE) => records_on_a_full_queue().expect("the child's main"),
+        _ => {}
     }
 }
 
@@ -1114,5 +1143,18 @@ fn a_span_the_full_export_queue_refuses_is_said_and_counted_on_the_console() {
         SPAN_DROPPING_STARTED,
         SPANS_DROPPED,
         "dropped_span_count",
+    );
+}
+
+/// A line whose record finds the export queue full is dropped so the unit
+/// never waits, and the console says it at `warn`, then how many at shutdown.
+#[test]
+fn a_record_the_full_export_queue_refuses_is_said_and_counted_on_the_console() {
+    let lines = sdk_lines_of(RECORDS_ON_A_FULL_QUEUE);
+    said_then_counted(
+        &lines,
+        LOG_DROPPING_STARTED,
+        LOGS_DROPPED,
+        "dropped_logs_count",
     );
 }

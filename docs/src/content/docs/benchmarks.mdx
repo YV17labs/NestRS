@@ -82,7 +82,9 @@ launch reads its variant's memory against its own T1's, which moves from one
 sitting to the next. Metrics leave on the periodic export, once a minute, so
 what a request pays for them is recording its point. Of each signal exported, the collector took a span
 or a log record for every request sent, except in one launch of traces alone,
-where it took 99.97 % of the spans.
+where it took 99.97 % of the spans. The SDK drops a span that finds its export
+queue full rather than make a request wait, and says so on the console
+([Traces](/opentelemetry/traces/#limits)); that launch's console was not kept.
 
 Measured 2026-11-16 on the same host, in the same Linux VM (OrbStack, kernel
 7.2.12) — rustc 1.100.0, oha 1.16.0, otelcol 0.165.0, the batch processor at the

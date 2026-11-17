@@ -325,6 +325,14 @@ exported in turn.
 `url.full`: a webhook's secret sits in its path, a signed URL's in its query, and
 a span is kept by a backend no one audits for them.
 
+## Limits
+
+A span that finds the export queue full is dropped, so no request waits on the
+export: the queue holds 2048 spans, and `OTEL_BSP_MAX_QUEUE_SIZE` raises it. The
+SDK says the first drop once, at `warn` on `opentelemetry_sdk`
+(`BatchSpanProcessor.SpanDroppingStarted`), and how many it dropped at shutdown
+(`BatchSpanProcessor.SpansDropped`, with `dropped_span_count`).
+
 ## Going further
 
 - [Logs](/opentelemetry/logs/) — the structured fields on the span.

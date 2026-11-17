@@ -85,7 +85,38 @@ Alternate the two (base, head, base, head) when the spread between runs of
 one commit is near the difference being judged, and state the spread beside
 every figure the report quotes.
 
-## 6. Hand back
+## 6. What exporting costs, signal by signal
+
+The `exported` variant exports the three signals. What each costs alone is
+the same variant with the other two set to `none`, each launch measuring T1
+then its variant, in one session on one host, into one directory:
+
+```bash
+dir="$PWD/results/$(date +%Y-%m-%d)-$(hostname -s)-cost"
+cost() { # cost <label> [K=V…] — T1, then t1-exported with these over the endpoint
+  BENCH_WARMUP=30 BENCH_RUNS=5 BENCH_DURATION=30 BENCH_SUT_CPUS=0 BENCH_LOAD_CPUS=1-7 \
+  BENCH_TIERS=t1 BENCH_LABEL="$1" \
+  BENCH_EXPORTED_ENV="OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318${2:+ $2}" \
+    ./harness/run.sh sut/nestrs "$dir"
+}
+cost all
+cost traces "OTEL_LOGS_EXPORTER=none OTEL_METRICS_EXPORTER=none"
+cost logs "OTEL_TRACES_EXPORTER=none OTEL_METRICS_EXPORTER=none"
+cost metrics "OTEL_TRACES_EXPORTER=none OTEL_LOGS_EXPORTER=none"
+```
+
+`BENCH_TIERS=t1` measures T1 and no variant but the one `BENCH_EXPORTED_ENV`
+asks for; the gate waits for the signal the variant exports, and each
+`nestrs-hyper-<label>.json` records the spans, log records and metric points
+the collector took. A variant's cost is `1/rps(t1-exported) − 1/rps(t1)`,
+against its own launch's T1, and its memory under load is read against that
+T1's too, which moves from one sitting to the next.
+
+Keep a launch only when its T1 and its variant each hold their runs within 5 %
+of one another, `(max − min) / min`; run the four again until each has two
+kept launches, and say how many were set aside and why.
+
+## 7. Hand back
 
 Return the complete `results/` directories from both regimes — JSON files
 and `REPORT.md`, nothing else. Do not edit anything outside `results/`.

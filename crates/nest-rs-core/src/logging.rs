@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tracing::field::{Field, Visit};
-use tracing::{Dispatch, Event, Level, Subscriber};
+use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::field::VisitOutput;
 use tracing_subscriber::filter::{LevelParseError, ParseError};
 use tracing_subscriber::fmt::MakeWriter;
@@ -613,32 +613,34 @@ pub(crate) mod __private {
     /// records into it: `false` when the process already has a global
     /// subscriber, which is kept. A `log` logger set before keeps the `log`
     /// records, said once at `warn` through the subscriber just installed, as
-    /// a set `<PREFIX>_LOG` is.
-    pub fn install_global_subscriber(subscriber: impl Into<Dispatch>) -> bool {
-        let subscriber = subscriber.into();
+    /// a set `<PREFIX>_LOG` is. A line filed while `subscriber` writes another
+    /// reaches it too.
+    pub fn install_global_subscriber<S>(subscriber: S) -> bool
+    where
+        S: Subscriber + Send + Sync + 'static,
+    {
+        let subscriber = Dispatch::new(crate::fenced::Fenced::new(subscriber));
         // `try_init` sets the global subscriber before the `log` bridge, and a
         // global subscriber is leaked, never dropped: the weak handle outlives
         // `subscriber` exactly when it was installed, whatever the bridge says.
-        let installed = subscriber.downgrade();
+        let weak = subscriber.downgrade();
         let tried = subscriber.try_init();
-        crate::panic::hold_dispatch_reentrance();
-        let installed = match tried {
-            Ok(()) => true,
-            Err(error) if installed.upgrade().is_some() => {
-                tracing::warn!(
-                    target: crate::target::APP,
-                    error = %crate::error_message(&error),
-                    "a `log` logger was already set: `log` records keep it, and only `tracing` \
-                     events reach the subscriber installed",
-                );
-                true
-            }
-            Err(_) => false,
-        };
-        if installed {
-            super::say_retired_filter();
+        if weak.upgrade().is_none() {
+            // The process's own subscriber, which no fence wraps.
+            crate::panic::hold_dispatch_reentrance();
+            return false;
         }
-        installed
+        crate::fenced::mark_installed();
+        if let Err(error) = tried {
+            tracing::warn!(
+                target: crate::target::APP,
+                error = %crate::error_message(&error),
+                "a `log` logger was already set: `log` records keep it, and only `tracing` \
+                 events reach the subscriber installed",
+            );
+        }
+        super::say_retired_filter();
+        true
     }
 }
 
@@ -1546,12 +1548,10 @@ pub(crate) fn kernel_console_installed() -> bool {
 }
 
 /// The kernel's console subscriber, as `settings` describe it.
-fn console(settings: &LogSettings) -> Dispatch {
-    Dispatch::new(
-        Registry::default()
-            .with(log_filter(&settings.filter))
-            .with(ConsoleLayer::new(settings.format, settings.source_location)),
-    )
+fn console(settings: &LogSettings) -> impl Subscriber + Send + Sync + 'static {
+    Registry::default()
+        .with(log_filter(&settings.filter))
+        .with(ConsoleLayer::new(settings.format, settings.source_location))
 }
 
 impl<S> ConsoleLayer<S>
@@ -1609,6 +1609,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use tracing::Dispatch;
     use tracing::level_filters::LevelFilter;
     use tracing_subscriber::Layer;
     use tracing_subscriber::Registry;
@@ -2599,11 +2600,11 @@ mod tests {
     #[test]
     fn the_console_subscriber_applies_the_clamps_in_both_formats() {
         for format in [LogFormat::Text, LogFormat::Json] {
-            let console = console(&LogSettings {
+            let console = Dispatch::new(console(&LogSettings {
                 filter: "trace".to_owned(),
                 format,
                 source_location: false,
-            });
+            }));
             assert!(!writes!(console, QUOTING_MODULE, INFO), "{format:?}");
             assert!(writes!(console, QUOTING_MODULE, WARN), "{format:?}");
             assert!(writes!(console, crate::target::APP, TRACE), "{format:?}");
@@ -2614,11 +2615,11 @@ mod tests {
     fn the_console_subscriber_never_opens_what_its_filter_closes_in_either_format() {
         for format in [LogFormat::Text, LogFormat::Json] {
             for (directive, level) in STRICTER {
-                let console = console(&LogSettings {
+                let console = Dispatch::new(console(&LogSettings {
                     filter: directive.to_owned(),
                     format,
                     source_location: false,
-                });
+                }));
                 assert_eq!(LevelFilter::current(), level, "{format:?} {directive}");
                 assert!(!writes!(console, CHATTY, INFO), "{format:?} {directive}");
                 assert_eq!(

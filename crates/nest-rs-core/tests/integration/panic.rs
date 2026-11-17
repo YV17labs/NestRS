@@ -48,12 +48,24 @@ async fn run_child(role: String) -> anyhow::Result<()> {
             tracing::info!(target: TARGET, value = %Unwritable, "never written");
             Ok(())
         }
+        "inside_the_app_s_own_locking_subscriber" => {
+            tracing::subscriber::set_global_default(Locking::default())?;
+            let _app = App::builder().module::<Bare>().build().await?;
+            tracing::info!(target: TARGET, value = %Unwritable, "never written");
+            Ok(())
+        }
+        "recording_inside_a_locking_subscriber" => {
+            nest_rs_core::__private::install_global_subscriber(Locking::default());
+            let span = tracing::info_span!(target: TARGET, "probe", value = tracing::field::Empty);
+            span.record("value", tracing::field::display(Unwritable));
+            Ok(())
+        }
         other => anyhow::bail!("no child role `{other}`"),
     }
 }
 
-/// A subscriber holding a lock while it records an event's fields, as a user's
-/// layer may.
+/// A subscriber holding a lock while it records an event's or a span's fields,
+/// as a user's layer may.
 #[derive(Default)]
 struct Locking(std::sync::Mutex<()>);
 
@@ -74,7 +86,13 @@ impl tracing::Subscriber for Locking {
         tracing::span::Id::from_u64(1)
     }
 
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record(&self, _: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+        let _held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        values.record(&mut Formatting);
+    }
 
     fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
 
@@ -213,6 +231,36 @@ fn a_panic_inside_a_locking_subscriber_is_said_on_stderr_and_never_deadlocks() {
         .collect();
     assert_eq!(said.len(), 1, "one line, the hook's: {stderr:#?}");
     assert!(said[0].contains("the field's text panicked"), "{}", said[0]);
+}
+
+/// The hook's one stderr line, after the child it says exited on its panic.
+fn said_once_on_stderr(role: &str) {
+    let mut child = ChildProcess::spawn(CHILD_TEST, role);
+
+    let (code, stdout) = child.exit_within(Duration::from_secs(20));
+    let stderr = child.stderr();
+
+    assert_eq!(code, Some(101), "a panic's status: {stdout:#?} {stderr:#?}");
+    let said: Vec<&String> = stderr
+        .iter()
+        .filter(|line| line.starts_with("nestrs: panicked at "))
+        .collect();
+    assert_eq!(said.len(), 1, "one line, the hook's: {stderr:#?}");
+    assert!(said[0].contains("the field's text panicked"), "{}", said[0]);
+}
+
+/// A locking subscriber the app set itself before its boot, which no installer
+/// of the framework's wraps: the boot holds tracing-core on its per-thread path.
+#[test]
+fn a_panic_inside_the_app_s_own_locking_subscriber_is_said_on_stderr_and_never_deadlocks() {
+    said_once_on_stderr("inside_the_app_s_own_locking_subscriber");
+}
+
+/// A field recorded on a span after it opened: the subscriber is handed it
+/// directly by the span, never through the thread's current dispatch.
+#[test]
+fn a_panic_recording_a_span_s_field_inside_a_locking_subscriber_is_said_on_stderr() {
+    said_once_on_stderr("recording_inside_a_locking_subscriber");
 }
 
 #[test]

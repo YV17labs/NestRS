@@ -133,9 +133,12 @@ subscriber exists — while the `.env` cascade loads, say — the hook writes on
 line to stderr instead, `nestrs: panicked at <file:line:col>: <message>`, with
 the same message, so no panic goes unsaid. It writes that line too for a
 panic raised inside the subscriber's own dispatch — a field whose `Display`
-panics as a layer records it: filing through the subscriber again there would
-wait on whatever the layer holds, so a layer of your own may lock while it
-records an event's fields.
+panics as a layer records it, on a line or on a span: filing through the
+subscriber again there would wait on whatever the layer holds, so a layer of
+your own may lock while it records. Any other line filed there, by a layer or
+by a field's `Display`, is written. A subscriber you set yourself before the
+boot stays outside this: a line filed inside its dispatch is dropped, and a
+panic as it records a span's field can wait on what it holds.
 
 The unit's span says the same thing to a tracing backend: every span whose unit
 did not end `ok` carries OpenTelemetry's `error.type` — the same word as the

@@ -18,7 +18,7 @@ default = ["logging"]
 # and wants the kernel free of `tracing-subscriber`. Not reachable alongside
 # `nest-rs-opentelemetry`, which enables this feature for the formatters and
 # depends on `tracing-subscriber` itself either way.
-logging = ["dep:tracing-subscriber"]
+logging = ["dep:tracing-subscriber", "dep:tracing-core"]
 # `Secret<T>` as a sea-orm column type over its value's own. `nest-rs-seaorm`
 # enables it: the column traits are sea-orm's and the type is this crate's, so
 # the impls can live only here.
@@ -36,6 +36,9 @@ async-trait.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
+# The subscriber every installer sets hands each method of the trait on,
+# `current_span` too, whose `Current` tracing does not re-export.
+tracing-core = { workspace = true, optional = true }
 # Link-time registry: each `#[hooks]` method submits a lifecycle hook so `App`
 # composes them at boot with no central list (same mechanism as GraphQL).
 inventory.workspace = true

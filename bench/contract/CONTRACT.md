@@ -84,7 +84,9 @@ provider that does not declare it has no number for it.
 
 The gate checks a variant before it is measured: `h2c` answers `/hello` over
 HTTP/2, `compressed` answers `/large` with a `Content-Encoding`, `exported`
-hands the collector a span. An exported tier also records the spans the
+hands the collector what it exports: a span, else a log record, else a metric
+point, read once the SUT has exited, since its reader exports once a minute.
+An exported tier also records the spans, log records and metric points the
 collector took and the requests its warmup and runs sent: a batch processor
 at its defaults drops what its queue cannot hold, and the share it kept is
 read beside the figure it cost.

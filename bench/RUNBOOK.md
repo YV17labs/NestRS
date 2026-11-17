@@ -67,7 +67,8 @@ directory aside first (e.g. suffix `-percore`).
 A change to the framework is judged by the same provider built from two
 commits, in one session on one host: the figures of two sessions are not
 comparable. Build the base in a worktree of its own and label each run, into
-one results directory:
+one results directory; the label is in each result and names its row in the
+report:
 
 ```bash
 dir="$PWD/results/$(date +%Y-%m-%d)-$(hostname -s)-ab"
@@ -108,7 +109,7 @@ cost metrics "OTEL_TRACES_EXPORTER=none OTEL_LOGS_EXPORTER=none"
 `BENCH_TIERS=t1` measures T1 and no variant but the one `BENCH_EXPORTED_ENV`
 asks for; the gate waits for the signal the variant exports, and each
 `nestrs-hyper-<label>.json` records the spans, log records and metric points
-the collector took. A variant's cost is `1/rps(t1-exported) − 1/rps(t1)`,
+the collector took, and the spans and log records the SDK's queues dropped. A variant's cost is `1/rps(t1-exported) − 1/rps(t1)`,
 against its own launch's T1, and its memory under load is read against that
 T1's too, which moves from one sitting to the next.
 

@@ -14,8 +14,9 @@
 # BENCH_WARMUP=30 BENCH_RUNS=5 BENCH_DURATION=30):
 #   BENCH_WARMUP=10 BENCH_RUNS=3 BENCH_DURATION=15 BENCH_CONNECTIONS=64
 #   BENCH_SUT_CPUS=0 BENCH_LOAD_CPUS=1-3     ("all" = no pinning)
-#   BENCH_LABEL=base                         (suffixes the result's name, to
-#                                             keep two commits of one provider)
+#   BENCH_LABEL=base                         (the result's label, in its name
+#                                             and its report row, to keep two
+#                                             commits of one provider apart)
 #   BENCH_TIERS=t0,t1                        (those tiers alone, and no variant
 #                                             this run does not ask for: a
 #                                             commit that predates a tier)
@@ -103,7 +104,16 @@ boot() {
   echo "SUT never answered on $base/ping"; exit 1
 }
 
-stop() { kill "$pid"; wait "$pid" 2>/dev/null || true; pid=""; }
+# stop — end the SUT as an orchestrator does; sets `sut_exit`, its status.
+stop() { kill "$pid"; sut_exit=0; wait "$pid" 2>/dev/null || sut_exit=$?; pid=""; }
+
+# dropped <field> — the count the SDK's shutdown line carries on the SUT's
+# console, where its exit ends: 0 where it filed none, as it files none for an
+# empty count; null where the SUT did not exit cleanly, which says nothing.
+dropped() {
+  [ "$sut_exit" = 0 ] || { echo null; return; }
+  tail -n 1000 "$tmp/sut.log" | grep -oE "\"?$1\"?[:=][0-9]+" | tail -1 | grep -oE '[0-9]+$' || echo 0
+}
 
 measured=()
 # measure_tier <tier> <path> [oha args...] — the tier's runs and its loaded RSS.
@@ -218,6 +228,9 @@ if [ -n "$exported_env" ]; then
     [ "$(accepted metric_points)" -gt 0 ] || { echo "FAIL t1-exported — the collector took no metric_points from the SUT"; exit 1; }
     echo "PASS t1-exported /hello — the collector took the SUT's metric_points, at its exit"
   fi
+  # What the SDK's own queues refused, read before the console is erased.
+  dropped dropped_span_count >"$tmp/t1-exported.spans_dropped"
+  dropped dropped_logs_count >"$tmp/t1-exported.log_records_dropped"
   accepted spans >"$tmp/t1-exported.spans"
   accepted log_records >"$tmp/t1-exported.log_records"
   accepted metric_points >"$tmp/t1-exported.metric_points"
@@ -227,16 +240,18 @@ fi
 # ── Assemble provider result ─────────────────────────────────────────────────
 mkdir -p "$RESULTS_DIR"
 tier_json() { # runs[] + medians, straight from oha's own JSON, and the tier's RSS
-  local spans=null requests=null records=null points=null
+  local spans=null requests=null records=null points=null spans_dropped=null records_dropped=null
   if [ -f "$tmp/$1.spans" ]; then # an exported tier: what the collector took of what was sent
     spans=$(cat "$tmp/$1.spans"); records=$(cat "$tmp/$1.log_records")
     points=$(cat "$tmp/$1.metric_points")
+    spans_dropped=$(cat "$tmp/$1.spans_dropped"); records_dropped=$(cat "$tmp/$1.log_records_dropped")
     requests=$(jq -s '[.[] | (.statusCodeDistribution // {}) | [.[]] | add // 0] | add' \
       "$tmp/$1-warmup.json" "$tmp/$1-run"*.json)
   fi
   jq -s --arg tier "$1" --argjson rss "$(cat "$tmp/$1.rss")" \
     --argjson spans "$spans" --argjson requests "$requests" \
-    --argjson records "$records" --argjson points "$points" '{($tier): ({
+    --argjson records "$records" --argjson points "$points" \
+    --argjson spans_dropped "$spans_dropped" --argjson records_dropped "$records_dropped" '{($tier): ({
     runs: .,
     median: {
       rps: ([.[].summary.requestsPerSec] | sort | .[length/2|floor]),
@@ -247,7 +262,8 @@ tier_json() { # runs[] + medians, straight from oha's own JSON, and the tier's R
       success_rate: ([.[].summary.successRate] | min)
     },
     rss_loaded_kb: $rss
-  } + (if $spans == null then {} else {spans_accepted: $spans, log_records_accepted: $records,
+  } + (if $spans == null then {} else {spans_accepted: $spans, spans_dropped: $spans_dropped,
+    log_records_accepted: $records, log_records_dropped: $records_dropped,
     metric_points_accepted: $points, requests_sent: $requests} end))}' \
     "$tmp/$1-run"*.json
 }
@@ -255,12 +271,13 @@ tier_json() { # runs[] + medians, straight from oha's own JSON, and the tier's R
 # a provider's tiers of oha runs outgrow.
 for tier in "${measured[@]}"; do tier_json "$tier"; done | jq -s 'add // {}' >"$tmp/tiers.json"
 jq -n \
-  --arg name "$name" --arg variant "$variant" --arg runtime "$runtime" \
+  --arg name "$name" --arg variant "$variant" --arg label "${BENCH_LABEL:-}" --arg runtime "$runtime" \
   --argjson fingerprint "$(bash "$BENCH_DIR/harness/fingerprint.sh")" \
   --argjson params "{\"warmup_s\":$WARMUP,\"runs\":$RUNS,\"duration_s\":$DURATION,\"connections\":$CONNECTIONS,\"sut_cpus\":\"$SUT_CPUS\",\"load_cpus\":\"$LOAD_CPUS\"}" \
   --argjson cold "$cold_ms" --argjson rss_idle "$rss_idle" --argjson rss_loaded "$rss_loaded" \
   --slurpfile tiers "$tmp/tiers.json" \
-  '{provider: $name, variant: $variant, runtime: $runtime, fingerprint: $fingerprint,
+  '{provider: $name, variant: $variant, label: (if $label == "" then null else $label end),
+    runtime: $runtime, fingerprint: $fingerprint,
     params: $params, cold_start_ms: $cold, rss_idle_kb: $rss_idle, rss_loaded_kb: $rss_loaded,
     tiers: $tiers[0]}' \
   >"$RESULTS_DIR/$id.json"

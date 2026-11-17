@@ -69,6 +69,8 @@ lists.
 - `bench/` — the standalone HTTP benchmark, nestrs against other frameworks on
   one contract. `docs/` — nestrs.dev.
   `changelog/` — one file per minor line, indexed by `CHANGELOG.md`.
+  `ROADMAP.md` — what 7.x may add next and what would force 8.0; read it
+  before proposing a capability, and start none it lists without the owner's yes.
 
 ```bash
 just lint   # fmt, workflows, clippy, each capability alone, dependency policy

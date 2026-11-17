@@ -380,3 +380,60 @@ async fn a_request_scoped_layer_a_listener_binds_fails_the_boot_naming_its_scope
     assert_eq!(scoped.host, "AuditListeners");
     assert!(scoped.layer.ends_with("PerRequest"), "{}", scoped.layer);
 }
+
+/// A listener call the server failed says why on its span, in the words its
+/// failure line says it.
+#[tokio::test]
+async fn a_failed_calls_span_describes_its_status_as_its_line_says_the_failure() {
+    let (_app, bus) = bus().await.expect("the app boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    bus.emit(Reindexed).await;
+    let said = logs.expect_one(
+        nest_rs_events::TARGET,
+        "event listener failed — dispatch continues with the next listener",
+    );
+    let span = logs.expect_span(
+        nest_rs_events::TARGET,
+        nest_rs_events::unit::DISPATCH.name(),
+    );
+    assert_eq!(span.field("otel.status_description"), said.field("error"));
+}
+
+/// The one call `logs` holds failed, a filter answering it: its span records
+/// the error its line files, and says why in the words its warning says it.
+fn assert_described_as_answered(logs: &nest_rs_testing::LogCapture) {
+    let said = logs.expect_one(
+        nest_rs_events::TARGET,
+        "event listener failed; a layer answered it — dispatch continues with the next listener",
+    );
+    let span = logs.expect_span(
+        nest_rs_events::TARGET,
+        nest_rs_events::unit::DISPATCH.name(),
+    );
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        said.field("error"),
+        "{:?}",
+        span.fields
+    );
+}
+
+/// A failure a filter skipped, or said was the client's, still fails its
+/// call, which no client made, and its span says why.
+#[tokio::test]
+async fn a_failure_a_filter_answered_is_described_on_its_span() {
+    let (_app, bus) = bus().await.expect("the app boots");
+    let logs = nest_rs_testing::LogCapture::install();
+    bus.emit(Withdrawn).await;
+    assert_described_as_answered(&logs);
+
+    let logs = nest_rs_testing::LogCapture::install();
+    bus.emit(Relisted).await;
+    assert_described_as_answered(&logs);
+}

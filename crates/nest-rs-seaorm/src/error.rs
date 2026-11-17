@@ -420,6 +420,8 @@ impl Error for RepoError {}
 /// means, anything else said by its kind.
 impl From<DbErr> for RepoError {
     fn from(err: DbErr) -> Self {
+        // The one place every failure the data layer hands out passes once.
+        crate::pool::count_timeout(&err);
         match &err {
             DbErr::RecordNotUpdated | DbErr::RecordNotFound(_) => return Self::NotFound,
             DbErr::AccessDenied { .. } => {
@@ -581,7 +583,7 @@ pub(crate) fn is_cancelled(err: &DbErr) -> bool {
 }
 
 /// The error the database server answered, when `err` carries one.
-fn server_error(err: &DbErr) -> Option<&(dyn DatabaseError + 'static)> {
+pub(crate) fn server_error(err: &DbErr) -> Option<&(dyn DatabaseError + 'static)> {
     match err {
         DbErr::Conn(RuntimeErr::SqlxError(sqlx))
         | DbErr::Exec(RuntimeErr::SqlxError(sqlx))

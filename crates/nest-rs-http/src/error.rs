@@ -580,6 +580,7 @@ pub(crate) fn withheld_behind(
 /// `http.request` line does: a failure at `error`, a `503` — the server unable
 /// to serve the request in time — at `warn`.
 pub(crate) fn file(withheld: Withheld, at: ServedAddress<'_>) {
+    nest_rs_core::operation_log::record_cause(&tracing::Span::current(), withheld.said());
     match withheld {
         Withheld::Failed(said) => tracing::error!(
             target: crate::target::HTTP,

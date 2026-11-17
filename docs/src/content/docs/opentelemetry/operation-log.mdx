@@ -75,7 +75,12 @@ declares `nestrs_kafka.message`, opens its span with the framework's
 it too. The edge words, the kernel's `lifecycle` and the harness's `testing`
 stay the framework's, and
 the [naming rule](/semver/#naming-a-package) roots everything else a package
-names at its crate. There used to be
+names at its crate. A package whose unit has a duration histogram declares it
+beside the unit, `duration:` a `DurationHistogram` naming the instrument, the
+bucket boundaries its conventions advise and the span fields it is keyed by — `MetricAttribute::bounded` for a value the package
+bounds, `MetricAttribute::known` for one a client sent, read through the set it
+may take — and every unit is recorded in it, as an edge's are
+([Metrics](/opentelemetry/metrics/#what-every-unit-records-on-its-own)). There used to be
 two vocabularies for these units — the spans said `http.request` while
 the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.
@@ -128,9 +133,12 @@ subscriber exists — while the `.env` cascade loads, say — the hook writes on
 line to stderr instead, `nestrs: panicked at <file:line:col>: <message>`, with
 the same message, so no panic goes unsaid. It writes that line too for a
 panic raised inside the subscriber's own dispatch — a field whose `Display`
-panics as a layer records it: filing through the subscriber again there would
-wait on whatever the layer holds, so a layer of your own may lock while it
-records an event's fields.
+panics as a layer records it, on a line or on a span: filing through the
+subscriber again there would wait on whatever the layer holds, so a layer of
+your own may lock while it records. Any other line filed there, by a layer or
+by a field's `Display`, is written. A subscriber you set yourself before the
+boot stays outside this: a line filed inside its dispatch is dropped, and a
+panic as it records a span's field can wait on what it holds.
 
 The unit's span says the same thing to a tracing backend: every span whose unit
 did not end `ok` carries OpenTelemetry's `error.type` — the same word as the
@@ -216,6 +224,10 @@ value the client chose. A request the router's fallback answers — the
 [static files](/http/static-files/), say — carries its mount's catch-all,
 `/{*path}` at the root. A request neither a route nor the fallback claims
 carries no `path` at all.
+
+The line is at `info`, but for a
+[health probe](/health/#what-a-probe-leaves-in-your-telemetry) answered `2xx`,
+which files at `debug`: a kubelet asks it every few seconds.
 
 The line carries the server's values only. `verb` is one of the methods
 OpenTelemetry's HTTP conventions know (`GET`, `POST`, `PATCH`, `QUERY` and the

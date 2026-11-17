@@ -323,13 +323,23 @@ fn parse_several(raw: &str, several: Several, tls: bool) -> Result<RedisUrl, Ref
 /// The server `info` dials, as a diagnostic names it: an IPv6 host in the
 /// brackets [`NodeAddr`] writes, which upstream's `Display` leaves out.
 pub(crate) fn dialled(info: &ConnectionInfo) -> String {
-    match info.addr() {
-        ConnectionAddr::Tcp(host, port) | ConnectionAddr::TcpTls { host, port, .. } => NodeAddr {
-            host: host.clone(),
-            port: *port,
+    match tcp_server(info) {
+        Some((host, port)) => NodeAddr {
+            host: host.to_owned(),
+            port,
         }
         .to_string(),
-        addr => addr.to_string(),
+        None => info.addr().to_string(),
+    }
+}
+
+/// The host and port `info` dials, where it dials one over TCP.
+pub(crate) fn tcp_server(info: &ConnectionInfo) -> Option<(&str, u16)> {
+    match info.addr() {
+        ConnectionAddr::Tcp(host, port) | ConnectionAddr::TcpTls { host, port, .. } => {
+            Some((host, *port))
+        }
+        _ => None,
     }
 }
 

@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use nest_rs_core::__private::field;
 use nest_rs_core::Container;
 use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::__private::{HandlerContext, nest_rs_database};
@@ -1136,7 +1137,7 @@ async fn every_attempt_at_a_delivery_without_a_usable_trace_runs_in_the_first_at
                 Some("false"),
                 "{case}: nothing was continued from the producer",
             );
-            assert_eq!(span.field("actor_id").as_deref(), actor, "{case}");
+            assert_eq!(span.field(field::ENDUSER_ID).as_deref(), actor, "{case}");
         }
         let started = logs.find(nest_rs_queue::TARGET, "job started");
         assert_eq!(started.len(), 2, "{case}: {started:#?}");
@@ -1226,7 +1227,11 @@ async fn an_envelope_carrying_an_unusable_trace_context_runs_and_says_so_once() 
         spans[0].field("trace_id"),
         "the warn is filed inside the first attempt's trace: {event:#?}",
     );
-    assert_eq!(spans[0].field("actor_id"), None, "a number names no actor");
+    assert_eq!(
+        spans[0].field(field::ENDUSER_ID),
+        None,
+        "a number names no actor"
+    );
 }
 
 #[tokio::test]
@@ -1261,7 +1266,7 @@ async fn a_usable_trace_beside_an_actor_naming_nobody_says_only_what_the_job_los
             Some("true"),
             "{case}"
         );
-        assert_eq!(spans[0].field("actor_id"), None, "{case}");
+        assert_eq!(spans[0].field(field::ENDUSER_ID), None, "{case}");
     }
 }
 
@@ -2515,4 +2520,42 @@ async fn a_method_answering_a_job_error_keeps_its_disposition() {
         panic!("an abort the method chose is never retried: {outcome:?}");
     };
     assert_eq!(error.to_string(), "the clip was withdrawn");
+}
+
+/// Every field a job's duration is keyed by is one a failed attempt's span
+/// fills: one it never filled would key every duration without it.
+#[tokio::test]
+async fn every_field_a_jobs_duration_is_keyed_by_is_one_its_span_fills() {
+    let logs = two_attempts(json!({ "file": "x.wav" })).await;
+
+    for span in job_spans(&logs) {
+        assert_eq!(
+            span.duration_keys_left_empty(&nest_rs_queue::unit::JOB),
+            Some(vec![]),
+            "{:?}",
+            span.fields,
+        );
+    }
+}
+
+/// An attempt its handler failed says why on its span, in the words its
+/// failure line says it.
+#[tokio::test]
+async fn a_failed_attempts_span_describes_its_status_as_its_line_says_the_failure() {
+    let container = Container::builder()
+        .provide(FlakyProcessor)
+        .build()
+        .expect("the container builds");
+    let flaky = method("FlakyProcessor::flaky");
+    let mut delivery = transcode_delivery("x.wav");
+    let logs = nest_rs_testing::LogCapture::install();
+
+    consume::attempt(flaky, &mut delivery, container, None).await;
+
+    let line = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job failed; will retry within the budget",
+    );
+    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB.name());
+    assert_eq!(span.field("otel.status_description"), line.field("error"));
 }

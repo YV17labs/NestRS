@@ -64,8 +64,10 @@ impl RequestDeadline {
     }
 
     /// What a request whose body was cut at the deadline is answered — `503`,
-    /// honest since nothing it ran committed — said once at `warn`.
+    /// honest since nothing it ran committed — said once at `warn`; its span
+    /// says the class alone, never a cause the request kept before the cut.
     pub fn timed_out(&self) -> Response {
+        nest_rs_core::__private::forget_cause(&tracing::Span::current());
         let timeout = self.0.timeout;
         tracing::warn!(
             target: crate::target::HTTP,

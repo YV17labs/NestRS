@@ -2586,6 +2586,7 @@ dependencies = [
  "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
+ "nest-rs-reqwest",
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
@@ -2614,6 +2615,7 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-mcp",
+ "nest-rs-reqwest",
  "nest-rs-testing",
  "nest-rs-ws",
  "rcgen",
@@ -2752,6 +2754,7 @@ dependencies = [
  "async-trait",
  "constant_time_eq",
  "criterion",
+ "http",
  "inventory",
  "libc",
  "log",
@@ -2769,6 +2772,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-core",
  "tracing-subscriber",
  "uuid",
  "validator",
@@ -3025,6 +3029,7 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-openapi",
+ "nest-rs-reqwest",
  "nest-rs-testing",
  "oauth2",
  "reqwest",
@@ -3107,16 +3112,23 @@ name = "nest-rs-opentelemetry"
 version = "7.0.0"
 dependencies = [
  "figment",
+ "libc",
  "log",
+ "nest-rs-authn",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-guards",
+ "nest-rs-health",
+ "nest-rs-http",
  "nest-rs-testing",
  "nestrs-unit-probe",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
+ "opentelemetry-proto",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
+ "prost",
  "reqwest",
  "serde_json",
  "tempfile",
@@ -3203,6 +3215,19 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "nest-rs-reqwest"
+version = "7.0.0"
+dependencies = [
+ "async-trait",
+ "http",
+ "nest-rs-core",
+ "nest-rs-testing",
+ "reqwest",
+ "reqwest-middleware",
+ "tokio",
 ]
 
 [[package]]
@@ -4461,6 +4486,20 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+]
+
+[[package]]
+name = "reqwest-middleware"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07bc3f1384cffa4f274dad2d4ddd73aed32fed8f786d96c6be8aa4e5fd3c3b58"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "http",
+ "reqwest",
+ "thiserror 2.0.21",
+ "tower-service",
 ]
 
 [[package]]

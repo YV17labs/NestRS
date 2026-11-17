@@ -12,15 +12,57 @@
 
 mod init;
 #[cfg(feature = "otlp")]
+mod linker;
+#[cfg(feature = "otlp")]
 mod metrics;
 #[cfg(feature = "otlp")]
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
+#[cfg(feature = "otlp")]
+mod process_metrics;
+#[cfg(feature = "otlp")]
+mod sampler;
+#[cfg(feature = "otlp")]
+mod unit_durations;
+#[cfg(feature = "otlp")]
+mod unit_records;
+#[cfg(feature = "otlp")]
+mod unit_spans;
+
+use std::process::{Command, Output};
 
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_opentelemetry::{OpenTelemetry, OpenTelemetryConfig, OpenTelemetryError};
+
+/// The variable a child reads its role from.
+const CHILD_ROLE: &str = "NEST_RS_OPENTELEMETRY_CHILD_ROLE";
+
+/// The role a parent test started this process in, if one did.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the parent test hands the child its role through the environment"
+)]
+fn child_role() -> Option<String> {
+    std::env::var(CHILD_ROLE).ok()
+}
+
+/// This test binary, re-run on the test `child` alone in `role`, with `vars`
+/// set, to its exit, every one of [`console_vars`] removed.
+fn child_running(child: &str, role: &str, vars: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
+    command
+        .args(["--exact", child, "--nocapture"])
+        .env(CHILD_ROLE, role);
+    for name in console_vars() {
+        command.env_remove(name);
+    }
+    for (name, value) in vars {
+        command.env(name, value);
+    }
+    command.output().expect("the child runs")
+}
 
 /// Every variable the console reads, which a test clears so that it reads what
 /// it pinned and set, whatever the shell running it exports.

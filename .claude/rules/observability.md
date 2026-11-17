@@ -30,8 +30,9 @@ a queue job, a scheduled tick — and each names the span that caused it. It is
 minted by whoever accepts the work, or continued from what carried it. A
 primitive cannot be optional, so it depends on no crate an app may decline, no
 collector and no authentication. It is read through `current_trace_id()` and
-`current_span_id()` at every edge; `current_traceparent()` is what an app injects
-into its own outbound client. There is no separate request id:
+`current_span_id()` at every edge; every HTTP request the framework sends, and an
+app's own reqwest client through `nest_rs::reqwest::ReqwestMiddleware`, carries it
+through `HttpClientRequest`, and any other client sends `current_traceparent()`. There is no separate request id:
 `X-Request-Id` is upstream data, recorded as a captured header behind a trusted
 peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
 
@@ -50,7 +51,9 @@ peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
 - **`actor_id` is an audit identity, never an authorization input.** The authn
   guard writes it when it resolves a principal; absent means anonymous. It is
   ambient (`set_actor_id`, write-once; `current_actor_id()` wherever the
-  framework carries work) as well as on the span, and no sentinel is ever
+  framework carries work) as well as on the unit's span, under the semantic
+  conventions' `enduser.id`, personal data that leaves with every span it is on
+  (`.claude/decisions/actor-under-enduser-id.md`), and no sentinel is ever
   returned — `""` or `"anonymous"` would read as an actor of that name. What a
   caller may do is the ambient `Ability`; branching on `actor_id` in a service is
   an authorization decision outside a guard. **The tenant is the opposite**: an
@@ -67,6 +70,19 @@ peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
 - **An app records metrics through `nest_rs::opentelemetry::Metrics`**, whose
   instruments the OpenTelemetry Metrics API names; no `opentelemetry` type
   reaches its code.
+- **A unit's duration is its edge's convention's histogram**, declared beside
+  the unit (`unit!`'s `duration:`) and recorded from its span whatever the
+  console or the sampler keeps, keyed by the server's values alone: a field
+  holding what a client sent is `MetricAttribute::known`, `_OTHER` outside its
+  set. A unit no convention gives a duration declares none
+  (`.claude/decisions/unit-duration-from-its-span.md`). Each declaring edge's
+  suite proves its span fills every field the duration is keyed by.
+- **What a driver sends is a client operation** (`nest_rs_core::client_operation`):
+  timed by the driver only while something records them, named and keyed by what
+  the operation does — a statement's summary, a command's name — never by a value
+  it carries, and a span only under a traced unit, at most the SDK's default
+  export batch of them per unit, its span counting the rest: the exporter's
+  queue is every unit's, and one unit's loop takes no more of it than that.
 
 ## Propagation — task, process and response
 
@@ -102,7 +118,8 @@ The edge owes propagation at every boundary it crosses.
 ## The operation span
 
 **`operation_span!` is the only place the canonical fields are declared** —
-`trace_id`, `span_id`, `parent_span_id`, `actor_id`. `tracing` fixes a span's
+`trace_id`, `span_id`, `parent_span_id`, `enduser.id`, and the outcome's
+`error.type`, `otel.status_code` and `otel.status_description`. `tracing` fixes a span's
 fields at creation, so recording a field no span declared is a silent no-op,
 and declaring a field nothing fills is the same defect with the opposite sign.
 
@@ -128,9 +145,13 @@ and declaring a field nothing fills is the same defect with the opposite sign.
   field and a graphql-ws socket, which no convention gives such a code, record
   nothing for a failure their caller earned, any answer but a `5xx`'s class,
   their line still filing `error`
-  (`.claude/decisions/client-error-is-its-line.md`). A request cut before it
-  answered is named for the template its route table entry recorded, never
-  exported anonymous.
+  (`.claude/decisions/client-error-is-its-line.md`). A unit the server failed
+  says why on its span too: the sentence its failure line files as `error`, or
+  its panic line's, is its status description, kept where that line is filed
+  (`operation_log::record_cause`) and written only with the error the unit's
+  own line records, never for a failure its caller earned. A request cut
+  before it answered is named for the template its route table entry
+  recorded, never exported anonymous.
 
 ## What a log line carries
 
@@ -214,6 +235,15 @@ without it leaves its work anonymous on the console. No edge grows a config
 toggle for it — `nest_rs::operation=off` is the family's one switch, and HTTP's
 `access_log` pin is the one predating it — and the target names a category of
 line rather than a subsystem (`.claude/decisions/operation-target.md`).
+
+**A health probe is the one unit the framework quiets.** A request reaching a
+route its mounting crate declared a probe (`crates/nest-rs-http/src/probe.rs`)
+files its `2xx` line at `debug` — the exception to `info` for an edge's success
+— and any other answer at `info`; one that starts a trace starts it unsampled,
+which the sampler keeps, and its duration still records. A platform asks it every
+few seconds, and a healthy answer says nothing
+(`.claude/decisions/health-probe-starts-unsampled.md`). Held by `nest-rs-health`'s
+and `nest-rs-opentelemetry`'s suites.
 
 **A unit has one name, typed, rooted at the crate that declares it.** A
 framework edge's is `<edge>.<unit>`: the crate that owns the edge declares it

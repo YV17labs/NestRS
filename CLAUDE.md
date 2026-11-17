@@ -8,6 +8,9 @@ This file is the map. The rules for a part of the tree live in
 `.claude/rules/` and load with the files they cover (`architecture.md` always);
 `.claude/decisions/` holds why a design was chosen and what was refused — read
 the entry a rule cites before re-proposing what it refused.
+`.claude/upstream/` holds what a third-party library gets wrong that we work
+around or document, with the ticket to file — read a library's file when its
+version moves.
 
 ## Identity — read first, decide with it
 

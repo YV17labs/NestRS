@@ -42,7 +42,9 @@ paths:
 - **A dependency's events are read when it is added or its version moves**:
   the framework's subscribers write them, so one that quotes a client's
   payload or a secret is clamped (`observability.md`, *What a log line
-  carries*).
+  carries*). So is its file in `.claude/upstream/`, whose canary tests fail
+  when a fix there retires a workaround here; a defect found in it is added
+  there, never patched.
 - **Every third-party requirement is `major.minor`** (`"1.53"`, `"=2.0"`), in
   every manifest the repo owns or the CLI generates: the minor is the floor we
   build against, the patch is the publisher's. Exact pins (`=`) say why at the

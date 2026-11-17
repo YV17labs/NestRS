@@ -26,6 +26,7 @@ use tokio::sync::Notify;
 
 use crate::atomic::AtomicExecutor;
 use crate::executor::{Installed, SeaOrmExecutor};
+use crate::statements::Statements;
 
 /// The table the store keeps its records in.
 pub(crate) const TABLE: &str = "nestrs_outbox";
@@ -180,7 +181,11 @@ impl OutboxStore for SeaOrmOutbox {
 
     fn claim(&self, limit: usize) -> BoxFuture<'_, Result<Box<dyn OutboxClaim>, OutboxError>> {
         Box::pin(async move {
-            let txn = self.db.begin().await.map_err(database)?;
+            let statements = Statements::of(&self.db);
+            let txn = statements
+                .sent("BEGIN", self.db.begin())
+                .await
+                .map_err(database)?;
             let limit = i64::try_from(limit).unwrap_or(i64::MAX);
             let rows = txn
                 .query_all_raw(Statement::from_sql_and_values(
@@ -213,7 +218,11 @@ impl OutboxStore for SeaOrmOutbox {
                 })
                 .collect::<Result<Vec<_>, DbErr>>()
                 .map_err(database)?;
-            Ok(Box::new(SeaOrmClaim { txn, records }) as Box<dyn OutboxClaim>)
+            Ok(Box::new(SeaOrmClaim {
+                txn,
+                records,
+                statements,
+            }) as Box<dyn OutboxClaim>)
         })
     }
 }
@@ -223,6 +232,7 @@ impl OutboxStore for SeaOrmOutbox {
 struct SeaOrmClaim {
     txn: DatabaseTransaction,
     records: Vec<ClaimedRecord>,
+    statements: Statements,
 }
 
 impl OutboxClaim for SeaOrmClaim {
@@ -236,9 +246,9 @@ impl OutboxClaim for SeaOrmClaim {
         retry: &[(i64, Duration)],
     ) -> BoxFuture<'static, Result<(), OutboxError>> {
         // The places are the claim's own integers, never a caller's text.
-        let mut statements = Vec::new();
+        let mut writes = Vec::new();
         if !done.is_empty() {
-            statements.push(format!(
+            writes.push(format!(
                 "DELETE FROM {TABLE} WHERE seq IN ({})",
                 done.iter()
                     .map(i64::to_string)
@@ -247,7 +257,7 @@ impl OutboxClaim for SeaOrmClaim {
             ));
         }
         if !retry.is_empty() {
-            statements.push(format!(
+            writes.push(format!(
                 "UPDATE {TABLE} SET attempts = attempts + 1, \
                  next_attempt_at = clock_timestamp() + w.wait_ms * interval '1 millisecond' \
                  FROM (VALUES {}) AS w(seq, wait_ms) WHERE {TABLE}.seq = w.seq",
@@ -261,12 +271,20 @@ impl OutboxClaim for SeaOrmClaim {
                     .join(", ")
             ));
         }
-        let SeaOrmClaim { txn, .. } = *self;
+        let SeaOrmClaim {
+            txn, statements, ..
+        } = *self;
         Box::pin(async move {
-            for statement in statements {
-                txn.execute_unprepared(&statement).await.map_err(database)?;
+            for write in writes {
+                statements
+                    .sent(&write, txn.execute_unprepared(&write))
+                    .await
+                    .map_err(database)?;
             }
-            txn.commit().await.map_err(database)
+            statements
+                .sent("COMMIT", txn.commit())
+                .await
+                .map_err(database)
         })
     }
 }

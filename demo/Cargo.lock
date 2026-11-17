@@ -2543,6 +2543,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-reqwest",
  "reqwest",
  "serde",
  "serde_json",
@@ -2638,6 +2639,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "constant_time_eq",
+ "http",
  "inventory",
  "nest-rs-core-macros",
  "parking_lot 0.13.0",
@@ -2651,6 +2653,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-core",
  "tracing-subscriber",
  "uuid",
  "validator",
@@ -2864,6 +2867,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-reqwest",
  "oauth2",
  "reqwest",
  "serde",
@@ -2924,6 +2928,7 @@ dependencies = [
 name = "nest-rs-opentelemetry"
 version = "7.0.0"
 dependencies = [
+ "libc",
  "nest-rs-config",
  "nest-rs-core",
  "opentelemetry",
@@ -2933,6 +2938,7 @@ dependencies = [
  "opentelemetry_sdk",
  "reqwest",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -3005,6 +3011,14 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "nest-rs-reqwest"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-core",
+ "reqwest",
 ]
 
 [[package]]

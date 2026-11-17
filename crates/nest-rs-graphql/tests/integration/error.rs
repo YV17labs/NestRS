@@ -336,3 +336,143 @@ async fn a_subscription_stopped_mid_item_files_the_chain_its_errors_kept() {
     assert_eq!(completed, Some(json!({ "id": "1", "type": "complete" })));
     assert_names(&logs, "graphql operation failed", "subscription", "shelves");
 }
+
+/// A root field the server failed says why on its span, in the words its
+/// failure line says it; one its caller's request failed says nothing there.
+#[tokio::test]
+async fn a_failed_root_fields_span_describes_its_status_as_its_line_says_the_failure() {
+    let app = boot().await;
+    let logs = LogCapture::install();
+    post(&app, "{ failed }").await;
+    let line = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
+    let span = logs.expect_span(nest_rs_graphql::TARGET, "graphql.field");
+    assert_eq!(span.field("otel.status_description"), line.field("error"));
+
+    let logs = LogCapture::install();
+    post(&app, "mutation { conflicted }").await;
+    let span = logs.expect_span(nest_rs_graphql::TARGET, "graphql.field");
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}
+
+/// The spans `logs` captured that describe their status: a description sets
+/// the status `Error`, so each records the error its line files, never beside
+/// an `ok` — and their names, for the test to say which unit failed.
+fn described(logs: &LogCapture) -> Vec<String> {
+    let mut named = Vec::new();
+    for span in logs.spans() {
+        if span.field("otel.status_description").is_none() {
+            continue;
+        }
+        assert_eq!(
+            span.field("otel.status_code").as_deref(),
+            Some("error"),
+            "a span describing its status records the error its line files: {span:#?}",
+        );
+        named.push(span.name);
+    }
+    named
+}
+
+/// A resolver nested under a root field — written by hand, or a
+/// `#[field_resolver]` — fails the operation it answers: its operation's span
+/// says why, as its line files `error`, and neither the root field, which
+/// answered, nor the `/graphql` request, answered `200`, says anything.
+#[tokio::test]
+async fn a_nested_resolvers_failure_is_described_on_its_operations_span_alone() {
+    let app = boot().await;
+    for document in ["{ s: shelf { book } }", "{ card { balance } }"] {
+        let logs = LogCapture::install();
+        post(&app, document).await;
+        let line = logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
+
+        assert_eq!(
+            described(&logs),
+            [nest_rs_graphql::unit::OPERATION.name()],
+            "{document}"
+        );
+        let operation = logs.expect_span(
+            nest_rs_graphql::TARGET,
+            nest_rs_graphql::unit::OPERATION.name(),
+        );
+        assert_eq!(
+            operation.field("otel.status_description"),
+            line.field("error"),
+            "{document}"
+        );
+        let field = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_graphql::unit::FIELD.name(),
+        );
+        assert_eq!(
+            field.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::OK),
+            "{document}: the root field answered"
+        );
+    }
+}
+
+/// A subscription's item a resolver no site runs failed in answers that item
+/// alone: no unit ends on it, so no span describes it — the socket, which its
+/// peer then closes, files `ok`.
+#[tokio::test]
+async fn a_subscription_items_failure_describes_no_span_its_line_files_ok() {
+    let logs = LogCapture::install();
+    let app = TestApp::builder()
+        .module::<LedgerModule>()
+        .build_ws()
+        .await
+        .expect("a schema carrying a subscription boots on a real port");
+    let mut socket = app
+        .socket("/graphql")
+        .header("sec-websocket-protocol", "graphql-transport-ws")
+        .connect()
+        .await;
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(
+        crate::next_message(&mut socket).await["type"],
+        "connection_ack"
+    );
+    socket
+        .send_text(
+            json!({
+                "id": "1",
+                "type": "subscribe",
+                "payload": { "query": "subscription { shelves { book } }" },
+            })
+            .to_string(),
+        )
+        .await;
+    let item = crate::next_message(&mut socket).await;
+    assert_eq!(
+        item["payload"]["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{item}"
+    );
+    socket.close(nest_rs_ws::CloseCode::Normal, "done").await;
+    nest_rs_testing::wait_until(Duration::from_secs(5), || {
+        !logs
+            .find(
+                nest_rs_core::operation_log::TARGET,
+                nest_rs_graphql::unit::SUBSCRIPTION.name(),
+            )
+            .is_empty()
+    })
+    .await;
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    logs.expect_one(nest_rs_graphql::TARGET, "graphql operation failed");
+    let socket_line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION.name(),
+    );
+    assert_eq!(
+        socket_line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "{socket_line:#?}"
+    );
+    assert_eq!(described(&logs), Vec::<String>::new());
+}

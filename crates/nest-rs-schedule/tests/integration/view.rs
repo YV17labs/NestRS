@@ -321,6 +321,48 @@ async fn a_failure_a_filter_says_is_the_servers_is_said_at_error() {
     );
 }
 
+/// The one tick `logs` holds failed, a layer answering it: its span records
+/// the error its line files, and says why in the words its warning says it.
+fn assert_described_as_answered(logs: &nest_rs_testing::LogCapture) {
+    let said = logs.expect_one(
+        nest_rs_schedule::TARGET,
+        "scheduled job failed; a layer answered it",
+    );
+    let span = logs.expect_span(
+        nest_rs_schedule::TARGET,
+        nest_rs_schedule::unit::TICK.name(),
+    );
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        said.field("error"),
+        "{:?}",
+        span.fields
+    );
+}
+
+/// A failure a filter skipped still fails its tick, and its span says why.
+#[tokio::test(start_paused = true)]
+async fn a_failure_a_filter_skipped_is_described_on_its_span() {
+    let logs = nest_rs_testing::LogCapture::install();
+    tick(FailingTasks).await;
+    assert_described_as_answered(&logs);
+}
+
+/// A failure a filter said was the client's still fails its tick, which no
+/// client sent, and its span says why.
+#[tokio::test(start_paused = true)]
+async fn a_failure_a_filter_said_was_the_clients_is_described_on_its_span() {
+    let logs = nest_rs_testing::LogCapture::install();
+    tick(ClientFailingTasks).await;
+    assert_described_as_answered(&logs);
+}
+
 #[tokio::test]
 async fn a_layer_a_tick_binds_that_nothing_provides_fails_the_configure_naming_both() {
     let container = Container::builder()

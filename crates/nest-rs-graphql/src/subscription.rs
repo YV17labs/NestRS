@@ -1046,6 +1046,10 @@ impl SubscriptionLine {
             }
             Ended::ByServer => CANCELLED,
             Ended::Unwound(payload) => {
+                nest_rs_core::operation_log::record_cause(
+                    &line.span,
+                    &nest_rs_core::panic::panic_message(&*payload),
+                );
                 nest_rs_core::RequestContinuation::new(None, line.correlation.clone()).enter(
                     || {
                         nest_rs_core::contained_panic!(

@@ -24,11 +24,7 @@ use crate::response::Response;
 
 use crate::client_ip::ClientOrigin;
 
-/// The W3C request header carrying the trace and the caller's span.
-pub const TRACEPARENT_HEADER: HeaderName = HeaderName::from_static("traceparent");
-
-/// The W3C request header carrying vendor state, forwarded verbatim.
-pub const TRACESTATE_HEADER: HeaderName = HeaderName::from_static("tracestate");
+pub use nest_rs_core::{TRACEPARENT_HEADER, TRACESTATE_HEADER};
 
 /// The response header reporting the trace this service actually used.
 ///
@@ -43,9 +39,13 @@ pub const UPSTREAM_REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-re
 const UPSTREAM_REQUEST_ID_ATTR: &str = "http.request.header.x-request-id";
 
 /// The trace this request belongs to: the caller's when a trusted proxy
-/// forwarded a valid `traceparent`, a freshly started one otherwise.
-pub(crate) fn resolve(req: &Request, origin: ClientOrigin) -> Correlation {
-    continued(req, origin).unwrap_or_else(|| Correlation::minted(None))
+/// forwarded a valid `traceparent`, a freshly started one otherwise — started
+/// unsampled for a `probe`, which a platform asks every few seconds.
+pub(crate) fn resolve(req: &Request, origin: ClientOrigin, probe: bool) -> Correlation {
+    continued(req, origin).unwrap_or_else(|| match probe {
+        true => nest_rs_core::__private::minted_unsampled(),
+        false => Correlation::minted(None),
+    })
 }
 
 /// The inbound context, if there is one and it may be believed.
@@ -158,19 +158,7 @@ impl KnownMethods {
 
 /// `method` as the conventions' known set spells it, if it is one.
 pub(crate) fn conventional(method: &Method) -> Option<&'static str> {
-    Some(match method.as_str() {
-        "CONNECT" => "CONNECT",
-        "DELETE" => "DELETE",
-        "GET" => "GET",
-        "HEAD" => "HEAD",
-        "OPTIONS" => "OPTIONS",
-        "PATCH" => "PATCH",
-        "POST" => "POST",
-        "PUT" => "PUT",
-        "QUERY" => "QUERY",
-        "TRACE" => "TRACE",
-        _ => return None,
-    })
+    nest_rs_core::operation_log::known_verb(method.as_str())
 }
 
 /// Report the trace this service used back to the caller.
@@ -233,6 +221,7 @@ pub(crate) fn request_span(
         // As addressed; never in `http.route`, which a backend groups on.
         url.path = req.uri().path(),
         url.scheme = url_scheme(req, origin),
+        network.protocol.version = nest_rs_core::operation_log::protocol_version(req.version()),
         // Filled by `name_route`; a 404 matched no route and leaves it empty.
         http.route = tracing::field::Empty,
         // No `client.address`: an address is personal data a collector would keep.
@@ -274,14 +263,9 @@ pub(crate) fn name_route(span: &tracing::Span, method: &str, route: Option<&str>
     match route {
         Some(route) => {
             span.record("http.route", route);
-            span.record(
-                "otel.name",
-                tracing::field::display(format_args!("{method} {route}")),
-            );
+            nest_rs_core::operation_log::record_name(span, format_args!("{method} {route}"));
         }
-        None => {
-            span.record("otel.name", tracing::field::display(method));
-        }
+        None => nest_rs_core::operation_log::record_name(span, format_args!("{method}")),
     }
 }
 
@@ -307,7 +291,7 @@ mod tests {
     }
 
     fn resolve(req: &Request, trusted_proxies: &[TrustedProxy]) -> Correlation {
-        super::resolve(req, ClientOrigin::of_with(req, trusted_proxies).0)
+        super::resolve(req, ClientOrigin::of_with(req, trusted_proxies).0, false)
     }
 
     /// A request from `peer`, carrying `headers`.
@@ -404,6 +388,19 @@ mod tests {
             resolve(&req, &[proxy("10.0.0.1")]).tracestate().as_str(),
             Some("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE"),
         );
+    }
+
+    #[test]
+    fn a_probe_starts_its_trace_unsampled_and_keeps_a_continued_ones_decision() {
+        let started = req_from("10.0.0.1", &[]);
+        let origin = ClientOrigin::of_with(&started, &[]).0;
+        assert!(!super::resolve(&started, origin, true).flags().is_sampled());
+
+        let continued = req_from("10.0.0.1", &[(TRACEPARENT_HEADER, UPSTREAM)]);
+        let origin = ClientOrigin::of_with(&continued, &[proxy("10.0.0.1")]).0;
+        let correlation = super::resolve(&continued, origin, true);
+        assert_eq!(correlation.trace_id().to_hex(), UPSTREAM_TRACE);
+        assert!(correlation.flags().is_sampled(), "the parent decided");
     }
 
     #[test]
@@ -542,10 +539,10 @@ mod tests {
     fn a_method_is_named_from_the_known_set_or_other() {
         let method = |name: &str| Method::from_bytes(name.as_bytes()).expect("a method token");
         let known = KnownMethods::with([method("PROPFIND"), Method::GET]);
-        for name in [
-            "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY",
-            "TRACE", "PROPFIND",
-        ] {
+        for name in nest_rs_core::operation_log::KNOWN_VERBS
+            .into_iter()
+            .chain(["PROPFIND"])
+        {
             assert_eq!(known.name(&method(name)), name);
         }
         for other in ["get", "Get", "propfind", "MKCOL", "MARKED"] {

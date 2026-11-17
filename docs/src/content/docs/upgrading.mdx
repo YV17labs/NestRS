@@ -1383,7 +1383,9 @@ lists what the boot, a log or the wire shows when one is missed.
       (`/posts/{id}`), not the path; a method outside RFC 9110's is `_OTHER`; a
       WebSocket event no handler serves is `_OTHER`; `user_agent`,
       `operation_name` and an MCP operation's name moved to the spans
-      (`user_agent.original`, `graphql.operation.name`, `mcp.operation.name`). A
+      (`user_agent.original`, `graphql.operation.name`, and the MCP
+      conventions' `gen_ai.tool.name`, `gen_ai.prompt.name` and
+      `mcp.resource.uri`, which replace 6.x's `mcp.operation.name`). A
       root field files `graphql.field`, an operation `graphql.operation`, a
       lifecycle hook `lifecycle.hook`. A `5xx` is filed once, by the edge:
       `service error surfaced as 500` and `token request failed` read
@@ -2681,6 +2683,10 @@ lists what the boot, a log or the wire shows when one is missed.
   beside the zone.
 - **A suite logs what its console allows**: `with_test_telemetry` kept it to `warn`, and a
   project scaffolded before sets `RUST_LOG=warn` in `.env.test`, as `nestrs new` now writes.
+- **A client instrumented through the OpenTelemetry API sends no `traceparent`** where the
+  process exports no trace: `opentelemetry::Context::current()` holds no span inside a unit
+  there. Send the unit's through `ReqwestMiddleware` or `nest_rs::core::current_traceparent()`,
+  which carry it whatever the process exports.
 
 **At build, what your own lines meet:**
 

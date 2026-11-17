@@ -21,11 +21,34 @@
 //! assert_eq!(nest_rs_http::unit::REQUEST.name(), "http.request");
 //! ```
 
+use nest_rs_core::client_operation::{
+    HTTP_REQUEST_METHOD, HTTP_RESPONSE_STATUS_CODE, NETWORK_PROTOCOL_VERSION, URL_SCHEME,
+};
+use nest_rs_core::duration_histogram::{DurationHistogram, MetricAttribute, REQUEST_BOUNDARIES};
 use nest_rs_core::operation_log::Unit;
 
 /// One HTTP request, filed once the response body has been written.
-pub const REQUEST: Unit =
-    nest_rs_core::unit!("http.request", target: crate::target::HTTP, kind: Server);
+pub const REQUEST: Unit = nest_rs_core::unit!(
+    "http.request",
+    target: crate::target::HTTP,
+    kind: Server,
+    duration: REQUEST_DURATION,
+);
+
+/// The HTTP conventions' server duration, keyed by what the span says in the
+/// server's words: the known method, the route template, never the path.
+const REQUEST_DURATION: DurationHistogram = DurationHistogram::new(
+    "http.server.request.duration",
+    "Duration of HTTP server requests.",
+    REQUEST_BOUNDARIES,
+    &[
+        MetricAttribute::bounded(HTTP_REQUEST_METHOD),
+        MetricAttribute::known(URL_SCHEME, &["http", "https"]),
+        MetricAttribute::bounded("http.route"),
+        MetricAttribute::bounded(HTTP_RESPONSE_STATUS_CODE),
+        MetricAttribute::bounded(NETWORK_PROTOCOL_VERSION),
+    ],
+);
 
 #[cfg(test)]
 mod tests {

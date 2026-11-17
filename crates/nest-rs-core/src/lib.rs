@@ -112,7 +112,9 @@ mod app_lifecycle;
 mod audience;
 mod backoff;
 mod budget;
+pub mod client_operation;
 mod close;
+pub mod connection_pool;
 mod container;
 pub(crate) mod cycle_guard;
 mod decode_path;
@@ -120,6 +122,7 @@ mod denial_document;
 mod discoverable;
 mod discovery;
 mod dispatch;
+pub mod duration_histogram;
 mod edge;
 mod env_flag;
 mod env_prefix;
@@ -129,6 +132,7 @@ mod exception_filter;
 #[cfg(feature = "logging")]
 mod export;
 mod factory_inputs;
+mod fenced;
 mod handler;
 mod host_runtime;
 mod identifier;
@@ -231,8 +235,9 @@ pub use secret::Secret;
 pub use served_address::ServedAddress;
 pub use tenant::current_tenant_id;
 pub use trace_context::{
-    Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,
-    current_span_id, current_trace_id, current_traceparent, current_tracestate,
+    Correlation, SpanId, TRACEPARENT_HEADER, TRACESTATE_HEADER, TraceFlags, TraceId, TraceParent,
+    TraceState, current_actor_id, current_span_id, current_trace_id, current_traceparent,
+    current_tracestate,
 };
 pub use transport::{Listening, MAX_STOP_BOUND, Transport, TransportContribution};
 pub use unit_context::{Peer, UnitContext, UnitView};
@@ -259,6 +264,8 @@ pub mod __private {
         AnswerRefusal, Audience, FileRefusal, RefusedAnswer, WireRow, answering, as_pushed,
         audience, for_others, is_pushed, refuse_answer,
     };
+    pub use crate::client_operation::__private::set_client_recorder;
+    pub use crate::connection_pool::__private::observed_pools;
     pub use crate::container::__private::{
         StalledProvider, check_seed, claim_override, claim_own_override, collect_dynamic_import,
         declaring_site, enter_import, leave_import, overrides_any, reading, record_absent_optional,
@@ -295,7 +302,10 @@ pub mod __private {
     };
     pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
     pub use crate::opaque::__private::OpaqueCause;
-    pub use crate::operation_log::__private::{declare_unit, unit_opened_by};
+    pub use crate::operation_log::__private::{
+        declare_unit, forget_cause, measured_unit, set_span_rename, set_unit_end, str_eq,
+        unit_opened_by,
+    };
     pub use crate::outcome::__private::{caught_problem, is_same_failure, kept, settled};
     pub use crate::panic::__private::{Unwound, unwound};
     pub use crate::param::{
@@ -315,9 +325,11 @@ pub mod __private {
     };
     pub use crate::tenant::TenantId;
     pub use crate::trace_context::__private::{
-        current_correlation, hex, link_span, pending_ids, set_actor_id, set_sampled,
-        set_span_linker, with_pending_ids,
+        client_operation_of, client_spans, count_client_spans, current_correlation, hex, link_span,
+        minted_unsampled, pending_ids, pending_starts_unsampled, pending_unit, set_actor_id,
+        set_sampled, set_span_linker, with_pending_ids, with_pending_unit,
     };
+    pub use crate::trace_context::ClientSpans;
     pub use crate::trace_context::field;
     pub use crate::type_name::{short_type_name, shorten};
     pub use crate::unit_context::{

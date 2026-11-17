@@ -9,6 +9,10 @@
 //! conventions know it, `_OTHER` for a token the client chose; no user agent,
 //! which is free text. Both read as the route's `mounted` line says them.
 //!
+//! A health probe's request answered `2xx` files at `debug`, a platform asking
+//! it every few seconds; any other answer to it files at `info`, as every
+//! request does.
+//!
 //! A request dropped before it answers — by the shutdown window or a client's
 //! reset — files its line [`CANCELLED`] through [`Unanswered`], with no `status`
 //! and no `bytes`. A handler that unwinds is answered `500` by the edge, and its
@@ -35,17 +39,26 @@ pub(crate) struct AccessLog {
     /// is filed.
     matched: MatchedRoute,
     start: Instant,
+    /// Whether the request reached a probe.
+    probe: bool,
 }
 
 impl AccessLog {
     /// Snapshot what only the *request* can answer, before it is consumed:
-    /// its method as the line names it. `start` is the instant the request
-    /// arrived, which its budget counts from too.
-    pub(crate) fn open(verb: Cow<'static, str>, matched: &MatchedRoute, start: Instant) -> Self {
+    /// its method as the line names it, and whether it reached a `probe`.
+    /// `start` is the instant the request arrived, which its budget counts
+    /// from too.
+    pub(crate) fn open(
+        verb: Cow<'static, str>,
+        matched: &MatchedRoute,
+        start: Instant,
+        probe: bool,
+    ) -> Self {
         Self {
             verb,
             matched: matched.clone(),
             start,
+            probe,
         }
     }
 
@@ -65,6 +78,7 @@ impl AccessLog {
     ) {
         let path = self.matched.route();
         nest_rs_core::operation_line!(
+            @debug self.probe && outcome.is_none() && (200..300).contains(&status),
             crate::unit::REQUEST,
             span: span,
             outcome: outcome,
@@ -148,7 +162,11 @@ impl Drop for Unanswered<'_> {
             Some(log) => self
                 .continuation
                 .enter(|| log.unanswered(self.span, outcome)),
-            None => nest_rs_core::operation_log::record_outcome(self.span, outcome),
+            None => nest_rs_core::operation_log::record_outcome(
+                &crate::unit::REQUEST,
+                self.span,
+                outcome,
+            ),
         }
     }
 }
@@ -162,7 +180,7 @@ mod tests {
 
     /// A line opened on a request the router matched `matched` for.
     fn held(matched: &MatchedRoute) -> (AccessLog, RequestContinuation) {
-        let log = AccessLog::open(Cow::Borrowed("GET"), matched, Instant::now());
+        let log = AccessLog::open(Cow::Borrowed("GET"), matched, Instant::now(), false);
         let continuation = RequestContinuation::new(None, Correlation::minted(None));
         (log, continuation)
     }
@@ -203,6 +221,22 @@ mod tests {
         assert_eq!(line.field("bytes"), None);
         assert_eq!(line.field("path").as_deref(), Some("/reports/{id}"));
         assert!(line.trace_id.is_some(), "{line:#?}");
+    }
+
+    #[test]
+    fn a_probes_line_files_at_debug_only_for_a_2xx_it_answered() {
+        for (status, outcome, level) in [
+            (200, None, "debug"),
+            (204, None, "debug"),
+            (503, None, "info"),
+            (200, Some(nest_rs_core::operation_log::PANIC), "info"),
+        ] {
+            let logs = LogCapture::install();
+            let route = matched("/health/live");
+            let log = AccessLog::open(Cow::Borrowed("GET"), &route, Instant::now(), true);
+            log.emit(&tracing::Span::none(), status, 2, outcome);
+            assert_eq!(the_line(&logs).level, level, "{status} {outcome:?}");
+        }
     }
 
     /// A path as sent is the client's: the line names the template it matched,

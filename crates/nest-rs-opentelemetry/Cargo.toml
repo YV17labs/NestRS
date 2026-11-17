@@ -30,6 +30,8 @@ otlp = [
     "dep:tracing-opentelemetry",
     "dep:uuid",
     "dep:reqwest",
+    "dep:tokio",
+    "dep:libc",
     "nest-rs-config/reqwest",
 ]
 
@@ -62,10 +64,21 @@ uuid = { workspace = true, optional = true }
 # and its verification depend on no other crate's features: `blocking` is the
 # client the SDK's HTTP exporters take, `rustls` (the workspace's) the TLS.
 reqwest = { workspace = true, features = ["blocking"], optional = true }
+# The runtime's own metrics, read off the runtime `init` runs on.
+tokio = { workspace = true, optional = true }
+# The process's CPU time, which std has no reader for.
+libc = { workspace = true, optional = true }
 
 [dev-dependencies]
-# `TestAuthority` issues the certificate the collector double presents over TLS.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["tls"] }
+# `TestAuthority` issues the certificate the collector double presents over TLS;
+# `TestApp` boots the health probes, whose traces the sampler starts unsampled.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["tls", "http"] }
+nest-rs-health = { path = "../nest-rs-health" }
+nest-rs-http = { path = "../nest-rs-http" }
+# A route an authenticated request reaches, whose span names its actor, behind
+# the guard `#[use_guards]` binds.
+nest-rs-authn = { path = "../nest-rs-authn" }
+nest-rs-guards = { path = "../nest-rs-guards" }
 # The collector double serves on a runtime of its own.
 tokio.workspace = true
 # The console's `RUST_LOG` and `<PREFIX>_LOG_*` and the specification's `OTEL_*` are read off the
@@ -82,6 +95,10 @@ serde_json.workspace = true
 nestrs-unit-probe = { path = "tests/unit-probe" }
 # A `log` logger set before `init`, which keeps the `log` records.
 log.workspace = true
+# The log records a collector double received, decoded to read the ids each
+# one carries.
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "logs"] }
+prost.workspace = true
 # A test's scratch files — the certificate files the specification's
 # variables name — live in a directory removed when it drops, on every exit.
 tempfile.workspace = true

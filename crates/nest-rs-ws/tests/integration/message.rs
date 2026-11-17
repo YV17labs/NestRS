@@ -540,8 +540,13 @@ struct StalledGateway;
 
 #[messages]
 impl StalledGateway {
+    /// Keeps a cause, then never ends.
     #[on_connect]
     async fn joined(&self) {
+        nest_rs_core::operation_log::record_cause(
+            &tracing::Span::current(),
+            "the session store answered late",
+        );
         CONNECT_STARTED.notify_one();
         std::future::pending::<()>().await;
     }
@@ -609,6 +614,20 @@ async fn a_connect_hook_past_its_deadline_is_cut_and_its_socket_closed_unserved(
     assert_eq!(cut.field("unit").as_deref(), Some("ws.connect"));
     assert_eq!(cut.field("timeout_ms").as_deref(), Some("1000"));
     app.shutdown().await.expect("the transport stops cleanly");
+
+    let span = logs.expect_span(nest_rs_ws::TARGET, nest_rs_ws::unit::CONNECT.name());
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "a cut says its class alone, never a cause kept before it: {:?}",
+        span.fields,
+    );
 }
 
 /// Told once the disconnect hook started, which then never ends.
@@ -1855,4 +1874,43 @@ async fn a_filter_answering_503_over_opaque_files_its_chain_at_warn() {
     assert_eq!(line.field("event").as_deref(), Some("settle"));
     assert_eq!(line.field("error").as_deref(), Some(LEDGER_REFUSED));
     logs.expect_none(nest_rs_ws::TARGET, "websocket message failed");
+}
+
+/// A message the server failed says why on its span, in the words its failure
+/// line says it; one a filter answered as the client's says nothing there.
+#[tokio::test]
+async fn a_failed_messages_span_describes_its_status_as_its_line_says_the_failure() {
+    for (module_path, failed) in [("/opaqued", true), ("/opaqued-and-caught", false)] {
+        let logs = LogCapture::install();
+        let app = match failed {
+            true => {
+                TestApp::builder()
+                    .module::<OpaquedModule>()
+                    .build_ws()
+                    .await
+            }
+            false => {
+                TestApp::builder()
+                    .module::<CaughtOpaquedModule>()
+                    .build_ws()
+                    .await
+            }
+        }
+        .expect("the gateway boots");
+        let mut socket = app.socket(module_path).connect().await;
+        socket.send("settle", serde_json::Value::Null).await;
+        drop(socket.next_envelope().await);
+        app.shutdown().await.expect("the transport stops cleanly");
+
+        let span = logs.expect_span(nest_rs_ws::TARGET, "ws.message");
+        let described = span.field("otel.status_description");
+        match failed {
+            true => assert_eq!(
+                described,
+                logs.expect_one(nest_rs_ws::TARGET, "websocket message failed")
+                    .field("error"),
+            ),
+            false => assert_eq!(described, None, "{:?}", span.fields),
+        }
+    }
 }

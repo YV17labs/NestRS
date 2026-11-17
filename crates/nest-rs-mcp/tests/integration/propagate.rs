@@ -490,8 +490,9 @@ async fn every_server_handler_method_reaches_the_wrapped_host() {
 /// a resource, a task — is its own value: the `mcp.operation` line names the
 /// protocol's method or `_OTHER`, and a tool only by the name a host declares,
 /// so no line holds what the client wrote. The span keeps the conventions'
-/// method, tool, prompt and resource, a stated exception, and no task id,
-/// which no convention names.
+/// method and resource URI as sent, a stated exception, a tool or prompt as a
+/// host declares it, `_OTHER` otherwise, as its name does, and no task id,
+/// which no convention names; a notification has a span of its own.
 #[tokio::test]
 async fn an_operation_line_names_nothing_only_the_client_named() {
     let logs = LogCapture::install();
@@ -586,13 +587,196 @@ async fn an_operation_line_names_nothing_only_the_client_named() {
             .find(|span| span.field("mcp.method.name").as_deref() == Some(method))
             .unwrap_or_else(|| panic!("a `{method}` span"))
     };
+    let other = Some(nest_rs_core::operation_log::OTHER);
+    let tool = span("tools/call");
+    assert_eq!(tool.field("gen_ai.tool.name").as_deref(), other);
+    assert_eq!(tool.field("otel.name").as_deref(), Some("tools/call"));
+    let prompt = span("prompts/get");
+    assert_eq!(prompt.field("gen_ai.prompt.name").as_deref(), other);
+    assert_eq!(prompt.field("otel.name").as_deref(), Some("prompts/get"));
     assert_eq!(
-        span("prompts/get").field("mcp.operation.name").as_deref(),
-        Some("marked-prompt"),
-        "the conventions' prompt name"
+        span("resources/read").field("mcp.resource.uri").as_deref(),
+        Some("marked://resource"),
+        "the conventions' resource URI, as sent"
     );
-    assert_eq!(span("tasks/get").field("mcp.operation.name"), None);
-    span("marked/custom");
+    for field in ["gen_ai.tool.name", "gen_ai.prompt.name", "mcp.resource.uri"] {
+        assert_eq!(span("tasks/get").field(field), None, "{field}");
+    }
+    assert_eq!(
+        span("marked/custom").field("otel.name").as_deref(),
+        other,
+        "a custom method names no span"
+    );
+    let notification = span("notifications/marked");
+    assert_eq!(notification.field("otel.name").as_deref(), other);
+    assert_eq!(notification.field("jsonrpc.request.id"), None);
+
+    let operation = nest_rs_mcp::unit::OPERATION;
+    let spans: Vec<_> = logs
+        .spans()
+        .into_iter()
+        .filter(|span| span.target == operation.target() && span.name == operation.name())
+        .collect();
+    // A tool's name keys a tool call alone: each key is filled by some span.
+    let left_empty_by_every_span = spans
+        .iter()
+        .map(|span| {
+            span.duration_keys_left_empty(&operation)
+                .expect("an operation's duration is recorded")
+        })
+        .reduce(|left, next| left.into_iter().filter(|key| next.contains(key)).collect())
+        .expect("an operation's span");
+    assert!(
+        left_empty_by_every_span.is_empty(),
+        "{left_empty_by_every_span:?}: {spans:#?}"
+    );
+}
+
+const CONVENTIONS: &str = "/mcp/conventions";
+
+#[mcp(path = "/mcp/conventions")]
+#[derive(Clone, Default)]
+struct WeatherHost;
+
+#[tools]
+impl WeatherHost {
+    #[tool(description = "Tells the weather.")]
+    #[public]
+    async fn forecast(&self) -> Result<String, McpError> {
+        Ok("sunny".to_owned())
+    }
+
+    /// Outline a forecast.
+    #[prompt]
+    #[public]
+    async fn outlook(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "outlook",
+        )]))
+    }
+
+    /// One city's weather.
+    #[resource(template = "weather://{city}")]
+    #[public]
+    async fn city(&self, city: String) -> Result<String, McpError> {
+        Ok(format!("sunny in {city}"))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [WeatherHost])]
+struct WeatherModule;
+
+/// Each operation's span carries what OpenTelemetry's MCP conventions give its
+/// kind, and is named `{method} {target}` for the tool or prompt it ran, the
+/// method alone otherwise: a resource's URI is an attribute, never its name, a
+/// tool call alone is `execute_tool`, and a notification, which carries no id,
+/// is an operation of its own.
+/// An operation's span names the protocol version it runs under: the one its
+/// session negotiated, where its request names none.
+#[tokio::test]
+async fn an_operations_span_names_the_protocol_version_its_session_negotiated() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<WeatherModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), CONVENTIONS, None).await;
+    call_method(
+        app.http(),
+        CONVENTIONS,
+        &session,
+        None,
+        "tools/list",
+        json!({}),
+    )
+    .await;
+
+    let spans = logs.spans();
+    let listing = spans
+        .iter()
+        .find(|span| span.field("mcp.method.name").as_deref() == Some("tools/list"))
+        .unwrap_or_else(|| panic!("a `tools/list` span: {spans:#?}"));
+    assert_eq!(
+        listing.field("mcp.protocol.version").as_deref(),
+        Some(nest_rs_testing::mcp::PROTOCOL_VERSION),
+        "{:?}",
+        listing.fields,
+    );
+}
+
+#[tokio::test]
+async fn an_operations_span_follows_the_mcp_conventions_for_its_kind() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<WeatherModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), CONVENTIONS, None).await;
+    for (method, params) in [
+        ("tools/call", json!({ "name": "forecast", "arguments": {} })),
+        ("prompts/get", json!({ "name": "outlook" })),
+        ("resources/read", json!({ "uri": "weather://paris" })),
+        ("tools/list", json!({})),
+    ] {
+        call_method(app.http(), CONVENTIONS, &session, None, method, params).await;
+    }
+
+    let spans = logs.spans();
+    let span = |method: &str| {
+        spans
+            .iter()
+            .find(|span| span.field("mcp.method.name").as_deref() == Some(method))
+            .unwrap_or_else(|| panic!("a `{method}` span: {spans:#?}"))
+    };
+    let expected = [
+        (
+            "tools/call",
+            "tools/call forecast",
+            [Some("forecast"), None, Some("execute_tool"), None],
+        ),
+        (
+            "prompts/get",
+            "prompts/get outlook",
+            [None, Some("outlook"), None, None],
+        ),
+        (
+            "resources/read",
+            "resources/read",
+            [None, None, None, Some("weather://paris")],
+        ),
+        ("tools/list", "tools/list", [None; 4]),
+    ];
+    for (method, name, addressed) in expected {
+        let span = span(method);
+        assert_eq!(span.field("otel.name").as_deref(), Some(name), "{method}");
+        let fields = [
+            "gen_ai.tool.name",
+            "gen_ai.prompt.name",
+            "gen_ai.operation.name",
+            "mcp.resource.uri",
+        ];
+        for (field, value) in fields.into_iter().zip(addressed) {
+            assert_eq!(span.field(field).as_deref(), value, "{method}: {field}");
+        }
+        assert_eq!(
+            span.field("jsonrpc.request.id").as_deref(),
+            Some("99"),
+            "{method}"
+        );
+        assert_eq!(span.field("network.transport").as_deref(), Some("tcp"));
+        assert_eq!(span.field("network.protocol.name").as_deref(), Some("http"));
+    }
+
+    let initialized = span("notifications/initialized");
+    assert_eq!(
+        initialized.field("otel.name").as_deref(),
+        Some("notifications/initialized")
+    );
+    assert_eq!(initialized.field("jsonrpc.request.id"), None);
+    assert_ne!(
+        initialized.field("span_id"),
+        initialized.field("parent_span_id"),
+        "a notification is an operation of its own, under the request carrying it",
+    );
 }
 
 const REFUSALS: &str = "/mcp/refusals";
@@ -1336,7 +1520,7 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
         .into_iter()
         .find(|span| {
             span.name == nest_rs_mcp::unit::OPERATION.name()
-                && span.field("mcp.operation.name").as_deref() == Some("boom")
+                && span.field("gen_ai.tool.name").as_deref() == Some("boom")
         })
         .expect("the operation's span");
     assert_eq!(
@@ -1440,7 +1624,7 @@ async fn a_tool_error_in_band_files_its_line_error_and_its_span_tool_error() {
             .into_iter()
             .find(|span| {
                 span.name == nest_rs_mcp::unit::OPERATION.name()
-                    && span.field("mcp.operation.name").as_deref() == Some(tool)
+                    && span.field("gen_ai.tool.name").as_deref() == Some(tool)
             })
             .unwrap_or_else(|| panic!("{tool}: the operation's span"));
         assert_eq!(
@@ -1531,45 +1715,46 @@ async fn a_json_rpc_error_records_its_code_on_the_operations_span() {
     let call = |method: &'static str, params: serde_json::Value| {
         call_method(app.http(), FAILING, &session, None, method, params)
     };
+    let other = nest_rs_core::operation_log::OTHER;
     let answered = [
         (
             "tools/call",
-            "broken",
+            ("gen_ai.tool.name", "broken"),
             json!({ "name": "broken", "arguments": {} }),
             -32603,
             true,
         ),
         (
             "tools/call",
-            "taken",
+            ("gen_ai.tool.name", "taken"),
             json!({ "name": "taken", "arguments": {} }),
             -32600,
             false,
         ),
         (
             "tools/call",
-            "missing",
+            ("gen_ai.tool.name", other),
             json!({ "name": "missing", "arguments": {} }),
             -32602,
             false,
         ),
         (
             "prompts/get",
-            "missing",
+            ("gen_ai.prompt.name", other),
             json!({ "name": "missing" }),
             -32602,
             false,
         ),
         (
             "resources/read",
-            "missing://resource",
+            ("mcp.resource.uri", "missing://resource"),
             json!({ "uri": "missing://resource" }),
             -32601,
             false,
         ),
     ];
     let calls = answered.len();
-    for (method, addressed, params, code, fails) in answered {
+    for (method, (field, addressed), params, code, fails) in answered {
         let body = call(method, params).await;
         let answer = result(&body);
         assert_eq!(answer["error"]["code"], json!(code), "{method}: {answer}");
@@ -1579,7 +1764,7 @@ async fn a_json_rpc_error_records_its_code_on_the_operations_span() {
             logs.spans().into_iter().find(|span| {
                 span.name == nest_rs_mcp::unit::OPERATION.name()
                     && span.field("mcp.method.name").as_deref() == Some(method)
-                    && span.field("mcp.operation.name").as_deref() == Some(addressed)
+                    && span.field(field).as_deref() == Some(addressed)
                     && span.field("rpc.response.status_code").is_some()
             })
         };
@@ -1737,10 +1922,15 @@ struct StalledTools;
 
 #[tools]
 impl StalledTools {
+    /// Handles a failure, whose chain the operation keeps, then never answers.
     #[tool(description = "Never answers.")]
     #[public]
     async fn stalled(&self) -> Result<String, McpError> {
         let _dropped = SetOnDrop(&STALLED_DROPPED);
+        let handled: Result<(), McpError> = nest_rs_mcp::Opaque::opaque(Err::<(), _>(
+            std::io::Error::other("the replica answered late"),
+        ));
+        drop(handled);
         STALLED_STARTED.notify_one();
         std::future::pending::<()>().await;
         Ok("never".to_owned())
@@ -1862,6 +2052,26 @@ async fn assert_cut_at_the_operation_deadline(
     assert_eq!(cut.field("reason").as_deref(), Some("timeout"));
     assert_eq!(cut.field("tool").as_deref(), Some("stalled"));
     assert_eq!(cut.field("timeout_ms").as_deref(), Some("20000"));
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_mcp::unit::OPERATION.name()
+                && span.field("gen_ai.tool.name").as_deref() == Some("stalled")
+        })
+        .expect("the call's span");
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "a cut says its class alone, never a chain the tool handled before it: {:?}",
+        span.fields,
+    );
 }
 
 #[tokio::test]

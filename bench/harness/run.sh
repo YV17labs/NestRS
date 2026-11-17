@@ -14,16 +14,24 @@
 # BENCH_WARMUP=30 BENCH_RUNS=5 BENCH_DURATION=30):
 #   BENCH_WARMUP=10 BENCH_RUNS=3 BENCH_DURATION=15 BENCH_CONNECTIONS=64
 #   BENCH_SUT_CPUS=0 BENCH_LOAD_CPUS=1-3     ("all" = no pinning)
-#   BENCH_LABEL=base                         (suffixes the result's name, to
-#                                             keep two commits of one provider)
-#   BENCH_TIERS=t0,t1                        (those tiers alone: a commit that
-#                                             predates a tier)
+#   BENCH_LABEL=base                         (the result's label, in its name
+#                                             and its report row, to keep two
+#                                             commits of one provider apart)
+#   BENCH_TIERS=t0,t1                        (those tiers alone, and no variant
+#                                             this run does not ask for: a
+#                                             commit that predates a tier)
+#   BENCH_EXPORTED_ENV="K=V K=V"             (the exported variant's environment
+#                                             for this run, over the manifest's;
+#                                             set, it is asked for, BENCH_TIERS
+#                                             or not)
 #
 # Beside the contract's tiers, a provider measures the variants its
 # provider.toml declares (CONTRACT.md, "Variants"), each in a boot of its own:
 #   h2c = "true"               t1 over HTTP/2 with prior knowledge
 #   quiet_env = "K=V"          t1 with the SUT's per-request line off
 #   compressed_env = "K=V"     t5 with `Accept-Encoding: gzip, br`, compression on
+#   exported_env = "K=V"       t1 exporting over OTLP to the collector this
+#                              script runs (`otelcol` on PATH) on the load's cores
 set -euo pipefail
 
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,6 +54,10 @@ val() { sed -n "s/^$1 *= *\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$manifest" | hea
 name=$(val name); variant=$(val variant); runtime=$(val runtime); port=$(val port)
 build_cmd=$(val build); start_cmd=$(val start)
 h2c=$(val h2c); quiet_env=$(val quiet_env); compressed_env=$(val compressed_env)
+exported_env=${BENCH_EXPORTED_ENV-$(val exported_env)}
+if [ -n "${BENCH_TIERS:-}" ]; then
+  h2c=""; quiet_env=""; compressed_env=""; exported_env=${BENCH_EXPORTED_ENV-}
+fi
 id="$name-$variant${BENCH_LABEL:+-$BENCH_LABEL}"
 base="http://127.0.0.1:$port"
 
@@ -56,8 +68,10 @@ pin() { # pin <cpuset> <cmd...> — "all" means no pinning
 
 tmp="$(mktemp -d)"
 pid=""
+collector=""
 cleanup() {
   if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
+  if [ -n "$collector" ]; then kill "$collector" 2>/dev/null || true; wait "$collector" 2>/dev/null || true; fi
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -90,7 +104,16 @@ boot() {
   echo "SUT never answered on $base/ping"; exit 1
 }
 
-stop() { kill "$pid"; wait "$pid" 2>/dev/null || true; pid=""; }
+# stop — end the SUT as an orchestrator does; sets `sut_exit`, its status.
+stop() { kill "$pid"; sut_exit=0; wait "$pid" 2>/dev/null || sut_exit=$?; pid=""; }
+
+# dropped <field> — the count the SDK's shutdown line carries on the SUT's
+# console, where its exit ends: 0 where it filed none, as it files none for an
+# empty count; null where the SUT did not exit cleanly, which says nothing.
+dropped() {
+  [ "$sut_exit" = 0 ] || { echo null; return; }
+  tail -n 1000 "$tmp/sut.log" | grep -oE "\"?$1\"?[:=][0-9]+" | tail -1 | grep -oE '[0-9]+$' || echo 0
+}
 
 measured=()
 # measure_tier <tier> <path> [oha args...] — the tier's runs and its loaded RSS.
@@ -99,7 +122,8 @@ measure_tier() {
   shift 2
   if [ -n "${BENCH_TIERS:-}" ] && [[ ",$BENCH_TIERS," != *",${tier%%-*},"* ]]; then return 0; fi
   echo "=== $id — $tier: warmup ${WARMUP}s + ${RUNS}×${DURATION}s @ ${CONNECTIONS} conns"
-  pin "$LOAD_CPUS" oha -z "${WARMUP}s" -c "$CONNECTIONS" --no-tui --output-format json "$@" "$base$path" >/dev/null
+  pin "$LOAD_CPUS" oha -z "${WARMUP}s" -c "$CONNECTIONS" --no-tui --output-format json "$@" "$base$path" \
+    >"$tmp/$tier-warmup.json"
   for i in $(seq 1 "$RUNS"); do
     pin "$LOAD_CPUS" oha -z "${DURATION}s" -c "$CONNECTIONS" --no-tui --output-format json "$@" "$base$path" \
       >"$tmp/$tier-run$i.json"
@@ -136,7 +160,6 @@ measure_tier t5 /large
 if [ "$h2c" = "true" ]; then measure_tier t1-h2c /hello --http-version 2; fi
 rss_loaded=$(rss)
 stop
-if [ -n "${BENCH_TIERS:-}" ]; then quiet_env=""; compressed_env=""; fi
 
 # ── Measure: the variants a boot of their own carries ────────────────────────
 if [ -n "$quiet_env" ]; then
@@ -155,11 +178,80 @@ if [ -n "$compressed_env" ]; then
   measure_tier t5-compressed /large -H "$COMPRESSED"
   stop
 fi
+# accepted <spans|log_records|metric_points> — what the collector has taken so
+# far, off its own counters.
+accepted() {
+  curl -s http://127.0.0.1:8888/metrics \
+    | awk -v m="^otelcol_receiver_accepted_$1" '$0 ~ m {n += $NF} END {print n + 0}'
+}
+# The signal the gate waits for: spans where traces export, else log records
+# where logs do, else metric points, which a reader exports once a minute and
+# the SUT's exit flushes.
+case " $exported_env " in
+  *" OTEL_TRACES_EXPORTER=none "*)
+    case " $exported_env " in
+      *" OTEL_LOGS_EXPORTER=none "*) gate=metric_points ;;
+      *) gate=log_records ;;
+    esac ;;
+  *) gate=spans ;;
+esac
+if [ -n "$exported_env" ]; then
+  command -v otelcol >/dev/null \
+    || { echo "FAIL t1-exported — no otelcol on PATH (RUNBOOK.md, Prerequisites)"; exit 1; }
+  echo "=== $id — exported boot ($exported_env)"
+  # Under `exec`, as `boot` starts the SUT: `$!` is then the collector itself,
+  # where `pin … &` would leave it a subshell's child that `kill` misses.
+  if [ "$LOAD_CPUS" = "all" ]; then
+    (exec otelcol --config "$BENCH_DIR/harness/otelcol.yaml") >"$tmp/otelcol.log" 2>&1 &
+  else
+    (exec taskset -c "$LOAD_CPUS" otelcol --config "$BENCH_DIR/harness/otelcol.yaml") \
+      >"$tmp/otelcol.log" 2>&1 &
+  fi
+  collector=$!
+  for i in $(seq 1 1000); do
+    curl -sf -o /dev/null http://127.0.0.1:8888/metrics && break
+    kill -0 "$collector" 2>/dev/null || { echo "COLLECTOR DIED — $tmp/otelcol.log:"; tail -20 "$tmp/otelcol.log"; exit 1; }
+    sleep 0.01
+  done
+  boot $exported_env
+  if [ "$gate" != metric_points ]; then
+    # A batch processor sends every 5 s (spans) or 1 s (log records); fifteen
+    # seconds without one is a hang.
+    for i in $(seq 1 1500); do [ "$(accepted $gate)" -gt 0 ] && break; sleep 0.01; done
+    [ "$(accepted $gate)" -gt 0 ] || { echo "FAIL t1-exported — the collector took no $gate from the SUT"; exit 1; }
+    echo "PASS t1-exported /hello — the collector takes the SUT's $gate"
+  fi
+  measure_tier t1-exported /hello
+  # After the SUT's exit, which flushes what its batch and its reader still held.
+  stop
+  if [ "$gate" = metric_points ]; then
+    [ "$(accepted metric_points)" -gt 0 ] || { echo "FAIL t1-exported — the collector took no metric_points from the SUT"; exit 1; }
+    echo "PASS t1-exported /hello — the collector took the SUT's metric_points, at its exit"
+  fi
+  # What the SDK's own queues refused, read before the console is erased.
+  dropped dropped_span_count >"$tmp/t1-exported.spans_dropped"
+  dropped dropped_logs_count >"$tmp/t1-exported.log_records_dropped"
+  accepted spans >"$tmp/t1-exported.spans"
+  accepted log_records >"$tmp/t1-exported.log_records"
+  accepted metric_points >"$tmp/t1-exported.metric_points"
+  kill "$collector"; wait "$collector" 2>/dev/null || true; collector=""
+fi
 
 # ── Assemble provider result ─────────────────────────────────────────────────
 mkdir -p "$RESULTS_DIR"
 tier_json() { # runs[] + medians, straight from oha's own JSON, and the tier's RSS
-  jq -s --arg tier "$1" --argjson rss "$(cat "$tmp/$1.rss")" '{($tier): {
+  local spans=null requests=null records=null points=null spans_dropped=null records_dropped=null
+  if [ -f "$tmp/$1.spans" ]; then # an exported tier: what the collector took of what was sent
+    spans=$(cat "$tmp/$1.spans"); records=$(cat "$tmp/$1.log_records")
+    points=$(cat "$tmp/$1.metric_points")
+    spans_dropped=$(cat "$tmp/$1.spans_dropped"); records_dropped=$(cat "$tmp/$1.log_records_dropped")
+    requests=$(jq -s '[.[] | (.statusCodeDistribution // {}) | [.[]] | add // 0] | add' \
+      "$tmp/$1-warmup.json" "$tmp/$1-run"*.json)
+  fi
+  jq -s --arg tier "$1" --argjson rss "$(cat "$tmp/$1.rss")" \
+    --argjson spans "$spans" --argjson requests "$requests" \
+    --argjson records "$records" --argjson points "$points" \
+    --argjson spans_dropped "$spans_dropped" --argjson records_dropped "$records_dropped" '{($tier): ({
     runs: .,
     median: {
       rps: ([.[].summary.requestsPerSec] | sort | .[length/2|floor]),
@@ -170,18 +262,22 @@ tier_json() { # runs[] + medians, straight from oha's own JSON, and the tier's R
       success_rate: ([.[].summary.successRate] | min)
     },
     rss_loaded_kb: $rss
-  }}' "$tmp/$1-run"*.json
+  } + (if $spans == null then {} else {spans_accepted: $spans, spans_dropped: $spans_dropped,
+    log_records_accepted: $records, log_records_dropped: $records_dropped,
+    metric_points_accepted: $points, requests_sent: $requests} end))}' \
+    "$tmp/$1-run"*.json
 }
 # Through a file, never an argument: Linux caps one argument at 128 KiB, which
 # a provider's tiers of oha runs outgrow.
 for tier in "${measured[@]}"; do tier_json "$tier"; done | jq -s 'add // {}' >"$tmp/tiers.json"
 jq -n \
-  --arg name "$name" --arg variant "$variant" --arg runtime "$runtime" \
+  --arg name "$name" --arg variant "$variant" --arg label "${BENCH_LABEL:-}" --arg runtime "$runtime" \
   --argjson fingerprint "$(bash "$BENCH_DIR/harness/fingerprint.sh")" \
   --argjson params "{\"warmup_s\":$WARMUP,\"runs\":$RUNS,\"duration_s\":$DURATION,\"connections\":$CONNECTIONS,\"sut_cpus\":\"$SUT_CPUS\",\"load_cpus\":\"$LOAD_CPUS\"}" \
   --argjson cold "$cold_ms" --argjson rss_idle "$rss_idle" --argjson rss_loaded "$rss_loaded" \
   --slurpfile tiers "$tmp/tiers.json" \
-  '{provider: $name, variant: $variant, runtime: $runtime, fingerprint: $fingerprint,
+  '{provider: $name, variant: $variant, label: (if $label == "" then null else $label end),
+    runtime: $runtime, fingerprint: $fingerprint,
     params: $params, cold_start_ms: $cold, rss_idle_kb: $rss_idle, rss_loaded_kb: $rss_loaded,
     tiers: $tiers[0]}' \
   >"$RESULTS_DIR/$id.json"

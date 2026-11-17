@@ -11,8 +11,10 @@
 //! ambiguous on a dotted name beside a path target such as [`TARGET`], so
 //! `ws.event = %event` does not compile on the line.
 
+use std::sync::OnceLock;
 use std::time::Instant;
 
+use crate::duration_histogram::DurationHistogram;
 use crate::edge::Edge;
 
 /// The target every operation line is emitted on, whichever edge files it;
@@ -58,6 +60,7 @@ pub struct Unit {
     target: &'static str,
     kind: Kind,
     edge: Option<Edge>,
+    duration: Option<&'static DurationHistogram>,
 }
 
 impl Unit {
@@ -86,6 +89,12 @@ impl Unit {
     pub const fn edge(&self) -> Option<Edge> {
         self.edge
     }
+
+    /// The histogram this unit's duration is recorded in, when its edge's
+    /// telemetry conventions name one.
+    pub const fn duration(&self) -> Option<&'static DurationHistogram> {
+        self.duration
+    }
 }
 
 /// The crate that declares the kernel's units.
@@ -105,9 +114,45 @@ const HARNESS_WORD: &str = "testing";
 /// through the crate's `__private`.
 pub(crate) mod __private {
     use super::{
-        Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, Unit, eq_bytes, is_crate_root,
-        is_edge_root, is_lib_name,
+        EVERY_UNIT, Edge, HARNESS, HARNESS_WORD, KERNEL, KERNEL_WORD, Kind, SPAN_RENAME,
+        SpanRename, UNIT_END, Unit, UnitEnd, eq_bytes, is_crate_root, is_edge_root, is_lib_name,
     };
+
+    /// Whether `a` and `b` are the same string, where a `const` needs to know.
+    pub const fn str_eq(a: &str, b: &str) -> bool {
+        a.len() == b.len() && eq_bytes(a.as_bytes(), 0, b.as_bytes(), 0, a.len())
+    }
+
+    /// Seed what renames a unit's span its edge names late
+    /// ([`record_name`](super::record_name)). Called once, at boot, by the
+    /// observability stack — never by an application.
+    pub fn set_span_rename(rename: SpanRename) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "seeded once at boot; a second install keeps the first"
+        )]
+        let _ = SPAN_RENAME.set(rename);
+    }
+
+    /// Forget the cause the unit's span `span` is or sits under kept
+    /// ([`record_cause`](super::record_cause)): its edge cut it at its
+    /// deadline, which no sentence explains, so the error it then records says
+    /// its class alone. Called by an edge where it cuts a unit.
+    pub fn forget_cause(span: &tracing::Span) {
+        super::take_cause(span);
+    }
+
+    /// Seed what runs as each unit ends ([`record_end`](super::record_end)):
+    /// for `every_unit`, or for a unit declaring a duration alone. Called once,
+    /// at boot, by the observability stack — never by an application.
+    pub fn set_unit_end(end: UnitEnd, every_unit: bool) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "seeded once at boot; a second install keeps the first"
+        )]
+        let _ = UNIT_END.set(end);
+        EVERY_UNIT.store(every_unit, std::sync::atomic::Ordering::Relaxed);
+    }
 
     /// Evaluated in a `const` by [`unit!`](macro@crate::unit), which passes the
     /// declaring crate as `owner`: a framework edge's unit, a kernel unit, or
@@ -164,6 +209,7 @@ pub(crate) mod __private {
                 target,
                 kind,
                 edge: None,
+                duration: None,
             };
         }
 
@@ -179,6 +225,7 @@ pub(crate) mod __private {
                 target,
                 kind,
                 edge: None,
+                duration: None,
             };
         }
 
@@ -210,6 +257,7 @@ pub(crate) mod __private {
                 target,
                 kind,
                 edge: known,
+                duration: None,
             };
         }
 
@@ -240,6 +288,19 @@ pub(crate) mod __private {
             target,
             kind,
             edge: None,
+            duration: None,
+        }
+    }
+
+    /// `unit`, its duration recorded in `duration` — evaluated in a `const` by
+    /// [`unit!`](macro@crate::unit)'s `duration:`.
+    pub const fn measured_unit(
+        unit: Unit,
+        duration: &'static crate::duration_histogram::DurationHistogram,
+    ) -> Unit {
+        Unit {
+            duration: Some(duration),
+            ..unit
         }
     }
 
@@ -350,6 +411,30 @@ pub const PANIC: &str = "panic";
 /// dropped with the unit's future.
 pub const CANCELLED: &str = "cancelled";
 
+/// The methods the HTTP conventions know, spelled as they spell them.
+pub const KNOWN_VERBS: [&str; 10] = [
+    "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE",
+];
+
+/// `verb` as the HTTP conventions spell it, if it is one of the methods they
+/// know; methods are case-sensitive.
+pub fn known_verb(verb: &str) -> Option<&'static str> {
+    KNOWN_VERBS.into_iter().find(|known| *known == verb)
+}
+
+/// `version` as the conventions write `network.protocol.version` (`1.1`, `2`),
+/// a request's or an answer's.
+pub fn protocol_version(version: http::Version) -> Option<&'static str> {
+    match version {
+        http::Version::HTTP_09 => Some("0.9"),
+        http::Version::HTTP_10 => Some("1.0"),
+        http::Version::HTTP_11 => Some("1.1"),
+        http::Version::HTTP_2 => Some("2"),
+        http::Version::HTTP_3 => Some("3"),
+        _ => None,
+    }
+}
+
 /// Not an outcome: the word a line names what a client addressed with when
 /// the server declares no name for it — a method outside the HTTP conventions'
 /// known set, an event no handler serves, a tool no host declares — since the
@@ -357,29 +442,167 @@ pub const CANCELLED: &str = "cancelled";
 /// for a method they do not know.
 pub const OTHER: &str = "_OTHER";
 
-/// Record on a unit's span how the unit ended, where OpenTelemetry reads it.
+/// Record on `unit`'s span that it ended, and how, where OpenTelemetry reads
+/// it: `None` for an answer whose own status says it — an HTTP request that
+/// answered.
 ///
-/// Anything but [`OK`] becomes the span's `error.type` and an `Error` status.
+/// An outcome but [`OK`] becomes the span's `error.type` and an `Error` status,
+/// described by the cause the unit kept ([`record_cause`]) unless it is
+/// [`CANCELLED`].
 /// [`operation_line!`](crate::operation_line) calls it; an edge calls it directly
 /// only where it ends a unit without filing a line.
-pub fn record_outcome(span: &tracing::Span, outcome: &str) {
-    if outcome != OK {
-        record_error(span, outcome);
+pub fn record_outcome<'a>(unit: &Unit, span: &tracing::Span, outcome: impl Into<Option<&'a str>>) {
+    match outcome.into() {
+        None | Some(OK) => {}
+        Some(CANCELLED) => record_class(span, CANCELLED),
+        Some(outcome) => record_error(span, outcome),
+    }
+    record_end(unit, span);
+}
+
+/// Record the name a unit's span is exported under, once its edge knows it —
+/// the route a request matched — as `otel.name`, which an observability stack
+/// reads; one that started the span as it opened renames it, a late field
+/// being lost on a started span.
+pub fn record_name(span: &tracing::Span, name: std::fmt::Arguments<'_>) {
+    match SPAN_RENAME.get() {
+        Some(rename) => {
+            let name = name.to_string();
+            span.record(OTEL_NAME, name.as_str());
+            rename(span, name);
+        }
+        None => {
+            span.record(OTEL_NAME, tracing::field::display(name));
+        }
     }
 }
 
-/// Record on a unit's span that it ended in an error of class `error_type`.
+const OTEL_NAME: &str = "otel.name";
+
+/// What an observability stack does to a unit's span its edge names late.
+type SpanRename = fn(&tracing::Span, String);
+
+static SPAN_RENAME: OnceLock<SpanRename> = OnceLock::new();
+
+/// Record on `unit`'s span that it ended — its answer given, its work settled
+/// — so the duration it declares stops here, whatever still holds the span
+/// open: a child span, work carried past the answer; and so its span says
+/// what its observability stack counted of it.
+///
+/// [`record_outcome`] calls it; an edge recording its outcome's class itself
+/// calls it once the class is recorded.
+pub fn record_end(unit: &Unit, span: &tracing::Span) {
+    if (unit.duration().is_some() || EVERY_UNIT.load(std::sync::atomic::Ordering::Relaxed))
+        && let Some(end) = UNIT_END.get()
+    {
+        end(unit, span);
+    }
+}
+
+/// What an observability stack does as a unit ends.
+type UnitEnd = fn(&Unit, &tracing::Span);
+
+static UNIT_END: OnceLock<UnitEnd> = OnceLock::new();
+
+/// Whether [`UNIT_END`] runs for every unit, or for a unit declaring a
+/// duration alone: a stack counting nothing else costs no other unit a call.
+static EVERY_UNIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Record on a unit's span that it ended in an error of class `error_type`,
+/// and why: the cause [`record_cause`] kept for it, if any.
 ///
 /// For a class finer than the outcome word: an HTTP `5xx` records its status
 /// code, as OpenTelemetry's HTTP conventions ask.
 pub fn record_error(span: &tracing::Span, error_type: &str) {
+    record_class(span, error_type);
+    // After the class: before its span starts, the exporter keeps the status
+    // written last.
+    if let Some(said) = take_cause(span) {
+        span.record(STATUS_DESCRIPTION, said.as_str());
+    }
+}
+
+/// The class alone: all a unit stopped before it settled records, since no
+/// sentence explains the stop and a cause kept for a failure it answered past
+/// is no reason for it.
+fn record_class(span: &tracing::Span, error_type: &str) {
     span.record(ERROR_TYPE, error_type);
     span.record(STATUS_CODE, STATUS_ERROR);
+}
+
+/// Keep on the unit `span` opened why it failed — the sentence its failure
+/// line files as `error`, or the one its panic line files — for the status
+/// description OpenTelemetry exports beside the `Error` status.
+///
+/// It is written once the unit records its error ([`record_error`]): a unit
+/// that answers past the failure — a `5xx` rendered and dropped, a failure a
+/// layer answered `2xx` — describes nothing, and a unit stopped first
+/// ([`CANCELLED`]) neither. A later cause replaces an earlier one, so the
+/// failure the unit ended on is the one described. A span no unit opened — one
+/// the app's own code entered — keeps it on the nearest unit's span above it.
+/// Without the `logging` feature, which reads the registry the framework's
+/// subscriber is built on, nothing is kept.
+pub fn record_cause(span: &tracing::Span, said: &str) {
+    keep_cause(span, said);
+}
+
+/// The cause a unit's span keeps until its error is recorded.
+#[cfg(feature = "logging")]
+struct Cause(String);
+
+/// [`record_cause`] on the registry: the unit's span `span` is or sits under
+/// keeps `said`.
+#[cfg(feature = "logging")]
+fn keep_cause(span: &tracing::Span, said: &str) {
+    on_unit_span(span, |unit| unit.replace(Cause(said.to_owned())));
+}
+
+/// The cause the unit's span `span` is or sits under kept, taken: a unit's
+/// error is described once.
+#[cfg(feature = "logging")]
+fn take_cause(span: &tracing::Span) -> Option<String> {
+    let Cause(said) = on_unit_span(span, |unit| unit.remove::<Cause>()).flatten()?;
+    Some(said)
+}
+
+/// `read` over the extensions of the nearest span at or above `span` that
+/// declares the description, a unit's, read off the registry the framework's
+/// subscriber is built on.
+#[cfg(feature = "logging")]
+fn on_unit_span<T>(
+    span: &tracing::Span,
+    read: impl FnOnce(&mut tracing_subscriber::registry::ExtensionsMut<'_>) -> T,
+) -> Option<T> {
+    use tracing_subscriber::registry::LookupSpan as _;
+
+    span.with_subscriber(|(id, dispatch)| {
+        let registry = dispatch.downcast_ref::<tracing_subscriber::Registry>()?;
+        let unit = registry.span(id)?.scope().find(|above| {
+            above
+                .metadata()
+                .fields()
+                .field(STATUS_DESCRIPTION)
+                .is_some()
+        })?;
+        Some(read(&mut unit.extensions_mut()))
+    })
+    .flatten()
+}
+
+#[cfg(not(feature = "logging"))]
+fn keep_cause(_: &tracing::Span, _: &str) {}
+
+#[cfg(not(feature = "logging"))]
+fn take_cause(_: &tracing::Span) -> Option<String> {
+    None
 }
 
 const ERROR_TYPE: &str = "error.type";
 
 const STATUS_CODE: &str = "otel.status_code";
+
+/// What `tracing-opentelemetry` exports as the span's status description.
+const STATUS_DESCRIPTION: &str = "otel.status_description";
 
 /// `tracing-opentelemetry` reads it case-insensitively; the conventions spell it `Error`.
 const STATUS_ERROR: &str = "error";
@@ -480,7 +703,8 @@ impl<L: Line> Drop for FiledOnce<L> {
 /// Declare one [`Unit`] of this crate —
 /// `pub const REQUEST: Unit = nest_rs_core::unit!("http.request", target:
 /// crate::target::HTTP, kind: Server);`, compiled in `nest_rs_http::unit`'s
-/// example.
+/// example — and, after `duration:`, the [`DurationHistogram`] its edge's telemetry
+/// conventions record it in.
 ///
 /// The declaring crate (`CARGO_PKG_NAME`, `-` read as `_`) decides the tier:
 ///
@@ -511,6 +735,13 @@ macro_rules! unit {
         );
         __UNIT
     }};
+    ($name:literal, target: $target:expr, kind: $kind:ident, duration: $duration:expr $(,)?) => {{
+        const __UNIT: $crate::operation_log::Unit = $crate::__private::measured_unit(
+        $crate::unit!($name, target: $target, kind: $kind),
+            &$duration,
+        );
+        __UNIT
+    }};
 }
 
 /// File the operation line of `$unit` — the one line per unit of work — and
@@ -524,31 +755,70 @@ macro_rules! unit {
 ///
 /// Call it inside the unit's correlation (`RequestContinuation::enter`) and
 /// outside its span, so the line carries the unit's ids and is nobody's child.
+///
+/// The line is filed at `info`.
 #[macro_export]
 macro_rules! operation_line {
-    ($unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr $(, $($field:tt)*)?) => {{
+    (@settle $unit:path, $span:expr, $outcome:expr) => {{
         const _: () = ::core::assert!(
             $crate::__private::unit_opened_by(&$unit, ::core::env!("CARGO_PKG_NAME")),
             "a unit's line is filed only by the crate that declares the unit",
         );
         let __outcome: ::core::option::Option<&'static str> = ::core::convert::Into::into($outcome);
-        if let ::core::option::Option::Some(__outcome) = __outcome {
-            $crate::operation_log::record_outcome($span, __outcome);
-        }
-        $crate::tracing::info!(
+        $crate::operation_log::record_outcome(&$unit, $span, __outcome);
+        __outcome
+    }};
+    (@file $level:ident, $unit:path, $outcome:ident, $started:expr $(, $($field:tt)*)?) => {
+        $crate::tracing::$level!(
             name: $unit.name(),
             target: $crate::operation_log::TARGET,
             message = $unit.name(),
-            outcome = __outcome,
+            outcome = $outcome,
             { $crate::operation_log::DURATION_MS } = $crate::operation_log::duration_ms($started),
             $($($field)*)?
-        );
+        )
+    };
+    // The observability rule's one exception to `info`: a health probe's
+    // request answered `2xx`, filed by `nest-rs-http` alone.
+    (@debug $debug:expr, $unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr $(, $($field:tt)*)?) => {{
+        let __outcome = $crate::operation_line!(@settle $unit, $span, $outcome);
+        if $debug {
+            $crate::operation_line!(@file debug, $unit, __outcome, $started $(, $($field)*)?);
+        } else {
+            $crate::operation_line!(@file info, $unit, __outcome, $started $(, $($field)*)?);
+        }
+    }};
+    ($unit:path, span: $span:expr, outcome: $outcome:expr, started: $started:expr $(, $($field:tt)*)?) => {{
+        let __outcome = $crate::operation_line!(@settle $unit, $span, $outcome);
+        $crate::operation_line!(@file info, $unit, __outcome, $started $(, $($field)*)?);
     }};
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How many units the seeded hook was called for.
+    static ENDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn count_end(_: &Unit, _: &tracing::Span) {
+        ENDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// A stack timing durations alone costs a unit declaring none no call.
+    #[test]
+    fn a_hook_for_measured_units_is_not_called_for_a_unit_declaring_no_duration() {
+        __private::set_unit_end(count_end, false);
+        record_end(&crate::unit::HOOK, &tracing::Span::none());
+        assert_eq!(ENDED.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_hook_for_every_unit_is_called_for_a_unit_declaring_no_duration() {
+        __private::set_unit_end(count_end, true);
+        record_end(&crate::unit::HOOK, &tracing::Span::none());
+        assert_eq!(ENDED.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn the_duration_keeps_microseconds_rather_than_rounding_to_zero() {
@@ -873,5 +1143,38 @@ mod tests {
                 "{name} from {owner} on {target}: {refused}"
             );
         }
+    }
+
+    const MEASURED: crate::duration_histogram::DurationHistogram =
+        crate::duration_histogram::DurationHistogram::new(
+            "lifecycle.hook.duration",
+            "Duration of a hook.",
+            crate::duration_histogram::REQUEST_BOUNDARIES,
+            &[],
+        );
+
+    #[test]
+    fn a_unit_declared_with_a_duration_carries_it_and_one_without_carries_none() {
+        let measured = __private::measured_unit(
+            __private::declare_unit(
+                "nest-rs-core",
+                "nest_rs::lifecycle",
+                Kind::Internal,
+                "lifecycle.hook",
+            ),
+            &MEASURED,
+        );
+        assert_eq!(measured.duration(), Some(&MEASURED));
+        assert_eq!(measured.name(), crate::unit::HOOK.name());
+        assert_eq!(crate::unit::HOOK.duration(), None);
+    }
+
+    #[test]
+    fn a_verb_reads_as_the_http_conventions_spell_it_and_no_other_does() {
+        for verb in KNOWN_VERBS {
+            assert_eq!(known_verb(verb), Some(verb));
+        }
+        assert_eq!(known_verb("PURGE"), None);
+        assert_eq!(known_verb("get"), None, "methods are case-sensitive");
     }
 }

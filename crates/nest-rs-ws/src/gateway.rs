@@ -851,6 +851,7 @@ async fn under_connection<F: Future<Output = ()> + Send>(
             false
         }
         HookEnd::TimedOut(timeout) => {
+            nest_rs_core::__private::forget_cause(&line.span);
             line.file(operation_log::ERROR);
             tracing::warn!(
                 target: crate::TARGET,
@@ -994,6 +995,7 @@ impl<'a> UnitLine<'a> {
     fn unwound(line: FiledOnce<Self>, payload: &(dyn std::any::Any + Send)) {
         let (unit, path, conn_id) = (line.unit, line.path, line.conn_id);
         let correlation = line.correlation.clone();
+        operation_log::record_cause(&line.span, &nest_rs_core::panic::panic_message(payload));
         line.file(operation_log::PANIC);
         RequestContinuation::new(None, correlation).enter(|| match unit {
             Unit::Message { event } => nest_rs_core::contained_panic!(
@@ -1224,8 +1226,10 @@ fn reply_frame(reply: WsReply, event: &str, named: &str, path: &str) -> Option<S
 
 /// What a message past its deadline is answered: an error frame in the
 /// class HTTP's request timeout answers (`UNAVAILABLE`), with `timeout` as its
-/// reason, said once at `warn` for the operator, naming the message at `path`.
+/// reason, said once at `warn` for the operator, naming the message at `path`;
+/// its span says the class alone, never a cause the message kept before.
 fn timed_out(conn_id: ConnId, path: &str, event: &str, timeout: Duration) -> Answered {
+    nest_rs_core::__private::forget_cause(&tracing::Span::current());
     tracing::warn!(
         target: crate::TARGET,
         conn_id,

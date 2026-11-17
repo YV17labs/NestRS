@@ -35,7 +35,7 @@ use crate::{
 
 /// A job span's `messaging.operation.name` and `messaging.operation.type`, per
 /// OpenTelemetry's messaging conventions.
-const PROCESS: &str = "process";
+pub(crate) const PROCESS: &str = "process";
 
 /// How long a job sealed by a newer release waits before it is delivered again,
 /// when a consumer of this release hands it back —
@@ -825,13 +825,18 @@ async fn run(
                 Some(_) => "waited unread past the day this release gives a newer one's job",
                 None => "names no id this release reads, so no wait for it can be counted",
             };
+            let dead_letter = JobError::abort(format!(
+                "job sealed by wire-format version {version}, which this consumer (version \
+                 {supported}) cannot read, {why}; its record is kept with the dead letters for a \
+                 consumer of that release"
+            ));
+            nest_rs_core::operation_log::record_cause(
+                &line.span,
+                &nest_rs_core::error_message(&dead_letter),
+            );
             (
                 nest_rs_core::operation_log::ERROR,
-                AttemptOutcome::DeadLetter(JobError::abort(format!(
-                    "job sealed by wire-format version {version}, which this consumer (version \
-                     {supported}) cannot read, {why}; its record is kept with the dead letters \
-                     for a consumer of that release"
-                ))),
+                AttemptOutcome::DeadLetter(dead_letter),
             )
         }
         Err(Unrun::Stalled { deliveries }) => {
@@ -842,13 +847,18 @@ async fn run(
                 stall_limit = STALL_LIMIT,
                 "job dead-lettered: its deliveries ended without an answer past the stall limit",
             );
+            let dead_letter = JobError::abort(format!(
+                "{unanswered} deliveries of the job ended without an answer — the process running \
+                 each was stopped, froze or lost the queue backend past its lease — so it is \
+                 dead-lettered without running"
+            ));
+            nest_rs_core::operation_log::record_cause(
+                &line.span,
+                &nest_rs_core::error_message(&dead_letter),
+            );
             (
                 nest_rs_core::operation_log::ERROR,
-                AttemptOutcome::DeadLetter(JobError::abort(format!(
-                    "{unanswered} deliveries of the job ended without an answer — the process \
-                     running each was stopped, froze or lost the queue backend past its lease — \
-                     so it is dead-lettered without running"
-                ))),
+                AttemptOutcome::DeadLetter(dead_letter),
             )
         }
         Ok(Ok(Ran::Done { method_ran })) => {
@@ -858,18 +868,22 @@ async fn run(
             (nest_rs_core::operation_log::OK, AttemptOutcome::Ok)
         }
         Ok(Ok(Ran::Acknowledged(error))) => {
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::warn!(
                 target: TARGET,
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 "job failed; a layer acknowledged it, so it settles done and its writes rolled back",
             );
             (nest_rs_core::operation_log::ERROR, AttemptOutcome::Ok)
         }
         Ok(Ok(Ran::Failed(error))) if error.is_in_doubt() => {
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::error!(
                 target: TARGET,
                 outcome = "in_doubt",
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 "job dead-lettered: its commit did not answer in time, and what it wrote may \
                  have landed",
             );
@@ -881,9 +895,11 @@ async fn run(
         Ok(Ok(Ran::Failed(error))) if !error.retryable => {
             // `errors` is the member name HTTP and the WebSocket error frame use;
             // `error` is the whole chain, since a wrapper names no cause.
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::error!(
                 target: TARGET,
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 errors = error.details.as_ref().map(tracing::field::display),
                 "job dead-lettered: non-retryable failure",
             );
@@ -893,9 +909,11 @@ async fn run(
             )
         }
         Ok(Ok(Ran::Failed(error))) if last => {
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::error!(
                 target: TARGET,
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 attempts = attempt,
                 "job dead-lettered: retry budget spent",
             );
@@ -907,9 +925,11 @@ async fn run(
         Ok(Ok(Ran::Failed(error))) => {
             let retry_after =
                 backoff::honouring(&line.identity.job_id, attempt, error.retry_after_secs);
+            let said = nest_rs_core::error_message(&error);
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
             tracing::warn!(
                 target: TARGET,
-                error = %nest_rs_core::error_message(&error),
+                error = %said,
                 retry_after_ms = millis(retry_after),
                 retry_after_asked_ms = error
                     .retry_after_secs
@@ -922,6 +942,7 @@ async fn run(
             )
         }
         Ok(Err(panic)) => {
+            nest_rs_core::operation_log::record_cause(&line.span, &panic_message(panic.as_ref()));
             nest_rs_core::contained_panic!(
                 target: TARGET,
                 panic.as_ref(),
@@ -1366,6 +1387,57 @@ mod tests {
                 .is_empty(),
             "no retry is promised on the attempt that has none left",
         );
+    }
+
+    /// A job dead-lettered without running fails its attempt: the span records
+    /// the error its line files, and says why in the sentence its dead letter
+    /// keeps — past the stall limit, and sealed by a newer release.
+    #[tokio::test]
+    async fn a_job_dead_lettered_unrun_says_why_on_its_span() {
+        fn unreachable_handler(_job: &Value, _context: HandlerContext) -> Handler<'_> {
+            Box::pin(async { panic!("a job dead-lettered unrun never runs") })
+        }
+
+        for input in [
+            Input::Stalled {
+                deliveries: STALL_LIMIT + 1,
+            },
+            Input::Unread {
+                version: u64::from(crate::WIRE_FORMAT_VERSION) + 1,
+                waited: Some(NEWER_RELEASE_PATIENCE),
+            },
+        ] {
+            let logs = LogCapture::install();
+            let span =
+                nest_rs_core::operation_span!(unit::JOB, &nest_rs_core::Correlation::minted(None));
+            let outcome = run(
+                method_of(unreachable_handler),
+                input,
+                context(),
+                identity(1),
+                None,
+                false,
+            )
+            .instrument(span)
+            .await;
+
+            let AttemptOutcome::DeadLetter(dead_letter) = outcome else {
+                panic!("a job no attempt ran is dead-lettered: {outcome:?}");
+            };
+            let span = logs.expect_span(TARGET, unit::JOB.name());
+            assert_eq!(
+                span.field("otel.status_code").as_deref(),
+                Some("error"),
+                "{:?}",
+                span.fields
+            );
+            assert_eq!(
+                span.field("otel.status_description"),
+                Some(nest_rs_core::error_message(&dead_letter)),
+                "{:?}",
+                span.fields
+            );
+        }
     }
 
     #[tokio::test]

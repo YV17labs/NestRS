@@ -43,10 +43,10 @@ four-transport story.
 
 The endpoint's guards answer *who is calling*, and they answer it in the logs
 too.
-Every operation runs in its own [`mcp.operation`
-span](/fundamentals/correlation/), under the trace of the HTTP request it
-arrived on and carrying the `actor_id` the authn guard resolved. A model
-calling a tool is still a caller you can name afterwards.
+Every operation — a request or a notification — runs in its own
+[`mcp.operation` span](/fundamentals/correlation/), under the trace of the HTTP
+request it arrived on and carrying the `actor_id` the authn guard resolved. A
+model calling a tool is still a caller you can name afterwards.
 
 Every operation files its own line, and that matters more here than on a request
 edge: rmcp addresses many operations over one HTTP request, so the endpoint's
@@ -62,8 +62,11 @@ different `span_id`s, so "what did this call do" is answerable on its own.
 The line names what the server declares: the protocol's method, `_OTHER` for a
 custom one, and a tool by the name a host gives it, `_OTHER` for one no host
 declares. A prompt name, a resource URI or a task id is the client's to write
-and stays off the line; the span records the prompt and the resource, as the
-telemetry conventions ask.
+and stays off the line. The span reads as OpenTelemetry's MCP conventions name
+it: `tools/call hello` for a tool a host declares, the method alone
+otherwise, with `gen_ai.tool.name` or `gen_ai.prompt.name` as a host declares
+it, `_OTHER` for one it does not, and the resource URI and the JSON-RPC id as
+the client sent them.
 Everything the tool and the data layer below it log carries the operation's ids
 and its `actor_id`. See [Logs](/opentelemetry/logs/).
 

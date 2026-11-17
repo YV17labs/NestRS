@@ -22,6 +22,104 @@ importing it registered first — registered before, it fails the boot. The
 import beside each injection is what puts the module first. In a suite, which
 never runs `main`, `Metrics` record on a meter nothing exports.
 
+## What every unit records on its own
+
+Before an app records anything, the framework times each unit of work whose
+edge's semantic conventions name a duration histogram for it, so a backend's
+ready-made HTTP, messaging and MCP dashboards light up with nothing written:
+
+| Unit | Histogram | Keyed by |
+|---|---|---|
+| `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `error.type` |
+| `queue.job` | `messaging.process.duration` | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type` |
+| `mcp.operation` | `mcp.server.operation.duration` | `mcp.method.name`, `gen_ai.tool.name`, `gen_ai.prompt.name`, `gen_ai.operation.name`, `network.transport`, `network.protocol.name`, `mcp.protocol.version`, `rpc.response.status_code`, `error.type` |
+
+One histogram is the rate, the errors and the latency at once: a backend counts
+its points per second, splits them on `http.response.status_code` or
+`error.type`, and reads its percentiles off the buckets each convention advises:
+`[0.005, 0.01, … 10]` seconds for HTTP and messaging, up to 300 for an MCP
+operation, a tool call running long.
+
+- **Every unit is counted.** The durations come from the unit's span, under a
+  filter of their own: a console filtered to `RUST_LOG=warn` and a sampler
+  keeping one trace in a hundred count every request all the same, where a
+  collector deriving metrics from spans counts the ones it was sent.
+- **A duration ends with the answer.** It stops where the edge records the
+  unit's outcome, the same instant as its line's `duration_ms`: a child span
+  or work handed off past the answer keeps the span open, never the clock.
+- **Every key is the server's.** `http.route` is the template, never the path;
+  a method outside the HTTP conventions' known set is `_OTHER`; an MCP method
+  only the client named — a custom one — reads `_OTHER` too, though the span
+  keeps it as sent, and so does a tool or a prompt no host declares, on the
+  span as on the duration. A client cannot mint a series.
+- **A binary exporting no metric pays nothing.** The layer is installed only
+  when the metrics export, and `OTEL_METRICS_EXPORTER=none` turns it off with
+  them. The instruments are recorded under the instrumentation scope `nest-rs`
+  and the framework's version.
+
+GraphQL, WebSocket, scheduled and event units record no duration: no
+convention names one for them, and their spans carry their timings.
+
+Each statement the Postgres pool sends — a unit's `BEGIN` and `COMMIT`
+included — and each command a Redis connection sends is timed the same way, in
+`db.client.operation.duration`, keyed by the
+database it ran on and what it did — the statement's operation, table and
+summary, the Redis command — into the buckets the database conventions advise,
+`[0.001, 0.005, … 10]` seconds ([Statements and commands](/opentelemetry/traces/#statements-and-commands)).
+
+A package's unit declares its own with `unit!`'s `duration:`, keyed by fields
+its span declares, and records in it the same way
+([the operation log](/opentelemetry/operation-log/)).
+
+## The process and its runtime
+
+The same export carries what the process and its async runtime say of
+themselves, read at each export and never between:
+
+| Instrument | What it reads |
+|---|---|
+| `process.cpu.time` | CPU seconds, by `cpu.mode`: `user`, `system` — Unix |
+| `process.uptime` | seconds since the process started, as `#[nest_rs::main]` marks it |
+| `process.unix.file_descriptor.count` | descriptors held open — Unix |
+| `process.memory.usage`, `process.memory.virtual` | resident and virtual bytes — Linux |
+| `process.thread.count` | threads — Linux |
+| `tokio.worker.count` | the runtime's worker threads |
+| `tokio.task.count` | tasks alive on it |
+| `tokio.global_queue.length` | tasks waiting in the queue every worker takes from |
+| `tokio.worker.busy_time` | seconds the workers spent running tasks |
+
+The `process.*` names are the OpenTelemetry process conventions'. No convention
+names a tokio runtime, so its four follow the conventions' runtime metrics
+(`dotnet.thread_pool.*`) under `tokio.`: a backend reads the runtime's
+saturation as `rate(tokio.worker.busy_time) / tokio.worker.count`, Node's event
+loop utilisation in Rust's words, and a growing `tokio.global_queue.length` as
+work waiting for a worker. Memory and threads are read off `/proc`, so a macOS
+development host exports neither; the scheduling latency tokio counts only
+under `tokio_unstable` is not exported.
+
+## The database pool
+
+The Postgres pool `SeaOrmModule` opens reports its connections in the database
+conventions' pool instruments, each keyed by
+`db.client.connection.pool.name` — `server.address:server.port/db.namespace`,
+as the conventions name a pool that has none of its own,
+`db.internal:5432/publish`:
+
+| Instrument | What it reads |
+|---|---|
+| `db.client.connection.count` | connections open, by `db.client.connection.state`: `idle`, `used` |
+| `db.client.connection.max` | the most the pool opens, its `max_connections` |
+| `db.client.connection.idle.min` | the fewest it keeps open, its `min_connections` |
+| `db.client.connection.timeouts` | callers that gave up waiting for a connection |
+
+A saturated pool reads as `used` at `max` while `timeouts` climbs. sqlx counts
+no caller still waiting and times no acquire, so `pending_requests`,
+`wait_time`, `create_time`, `use_time` and `idle.max` are not exported; a
+unit's `BEGIN`, which waits for its connection, carries that wait in
+`db.client.operation.duration`. The names are those of the conventions' 1.42
+schema, the one the export declares. A Redis connection is one multiplexed
+socket, not a pool, and reports none.
+
 ## A first counter
 
 Ask `Metrics` for the instrument by name, then record on it. The first call

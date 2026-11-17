@@ -96,7 +96,9 @@ never decides what a request is called.
 
 You declare it once, on your principal, and the authentication guard publishes it
 the moment it resolves one — see [Authentication](/security/authentication/).
-From then on `current_actor_id()` answers anywhere the framework carries work.
+From then on `current_actor_id()` answers anywhere the framework carries work. A
+unit's exported span carries it as `enduser.id`, the OpenTelemetry conventions'
+key ([Traces](/opentelemetry/traces/#the-request-span)).
 
 It answers **who**, for a log line, an audit row, a `created_by` column. It does
 not answer what they may do: that is the ambient `Ability`, decided in a guard.
@@ -131,27 +133,15 @@ system — starts a trace instead of being refused. The envelope carries the
 actor beside the trace, and any W3C `baggage` the job came with, which every
 push the job makes carries on unread.
 
-## Calling another service
+## Onto the services you call
 
-The framework ships no general outbound HTTP client, by decision — wrapping one
-costs you every option it has and buys a module. So you inject your own, and
-propagating the trace is one line in it:
-
-```rust title="crates/features/src/media/client.rs"
-let mut request = self.http.get(url);
-if let Some(traceparent) = nest_rs::core::current_traceparent() {
-    request = request.header("traceparent", traceparent.to_string());
-}
-// Forwarding `tracestate` untouched is a MUST, including when you understand
-// none of it: a vendor's sampling or routing rides in there, and dropping it
-// breaks them through you.
-if let Some(state) = nest_rs::core::current_tracestate().and_then(|s| s.as_str().map(str::to_owned)) {
-    request = request.header("tracestate", state);
-}
-```
-
-The service you call continues your trace, and its spans appear under the request
-that caused them.
+Your own reqwest client carries the trace once you add `ReqwestMiddleware`
+where you build it: every request it sends inside a unit names a span of its
+own under the unit, so the service you call continues your trace —
+[Calling another service](/fundamentals/calling-another-service/). A client
+that is not reqwest reads the same context itself:
+`nest_rs::core::current_traceparent()` and `current_tracestate()` are the
+headers to send.
 
 ## Limits
 

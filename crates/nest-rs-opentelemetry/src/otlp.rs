@@ -228,12 +228,31 @@ impl Signal {
 pub(crate) struct Exporters {
     pub tracer: opentelemetry_sdk::trace::Tracer,
     pub tracer_provider: SdkTracerProvider,
+    /// The sampler the provider was built with, which the linker asks where a
+    /// unit's span holds no SDK span.
+    pub unit_sampler: crate::sampler::AdoptUnsampledStarts<Sampler>,
+    /// Whether the traces export.
+    pub traces_export: bool,
     /// `Some` only when the metrics export.
     pub meter_provider: Option<SdkMeterProvider>,
     /// `Some` only when the logs export.
     pub logger_provider: Option<SdkLoggerProvider>,
     /// What the console's line about the exporters says.
     pub summary: Summary,
+}
+
+impl Exporters {
+    /// Make these exporters the ones the OpenTelemetry API hands out: the
+    /// propagator, the tracer provider and, where the metrics export, the meter
+    /// provider. Called once the subscriber is installed, so an `init` refused
+    /// leaves the process's globals as it found them.
+    pub(crate) fn seat_globals(&self) {
+        global::set_text_map_propagator(global_propagator());
+        global::set_tracer_provider(self.tracer_provider.clone());
+        if let Some(provider) = &self.meter_provider {
+            global::set_meter_provider(provider.clone());
+        }
+    }
 }
 
 /// What the subscriber, once installed, says about what was built.
@@ -367,11 +386,11 @@ fn build_reading(
     let [traces_client, metrics_client, logs_client] = exporter_clients(&exports)?;
     let [traces, metrics, logs] = exports;
 
-    global::set_text_map_propagator(global_propagator());
     let service = resource
         .get(&Key::new(SERVICE_NAME))
         .map_or_default(|name| name.to_string());
 
+    let unit_sampler = crate::sampler::AdoptUnsampledStarts(sampler.clone());
     let mut tracer_builder = tracer_provider(resource.clone(), sampler, span_limits);
     if let (Some(export), Some(client)) = (&traces, traces_client) {
         let span_exporter = export
@@ -382,7 +401,6 @@ fn build_reading(
     }
     let tracer_provider = tracer_builder.build();
     let tracer = tracer_provider.tracer(service.clone());
-    global::set_tracer_provider(tracer_provider.clone());
 
     let meter_provider = match (&metrics, metrics_client) {
         (Some(export), Some(client)) => {
@@ -404,7 +422,6 @@ fn build_reading(
                 .with_resource(resource.clone())
                 .with_reader(reader)
                 .build();
-            global::set_meter_provider(meter_provider.clone());
             Some(meter_provider)
         }
         _ => None,
@@ -419,6 +436,7 @@ fn build_reading(
             Some(
                 SdkLoggerProvider::builder()
                     .with_resource(resource)
+                    .with_log_processor(crate::unit_records::UnitRecords)
                     .with_batch_exporter(log_exporter)
                     .build(),
             )
@@ -429,6 +447,8 @@ fn build_reading(
     Ok(Exporters {
         tracer,
         tracer_provider,
+        unit_sampler,
+        traces_export: traces.is_some(),
         meter_provider,
         logger_provider,
         summary: Summary {
@@ -453,7 +473,7 @@ fn tracer_provider(
         // The SDK adopts the framework's ids rather than minting a second pair; see
         // `id_generator`.
         .with_id_generator(crate::id_generator::AdoptFrameworkIds::default())
-        .with_sampler(sampler)
+        .with_sampler(crate::sampler::AdoptUnsampledStarts(sampler))
         .with_span_limits(span_limits)
 }
 
@@ -1424,6 +1444,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 ///
 /// Built on a thread of their own, as the SDK builds its own: a blocking client
 /// built on a runtime's thread panics.
+///
+/// The one HTTP client the framework opens that no `HttpClientRequest` times
+/// or announces: an export recorded as a client operation would be exported
+/// in turn, each export feeding the next.
 fn exporter_clients(
     exports: &[Option<Export>; 3],
 ) -> Result<[Option<reqwest::blocking::Client>; 3], OpenTelemetryError> {

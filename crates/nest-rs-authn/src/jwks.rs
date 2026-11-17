@@ -16,6 +16,9 @@
 //! - **Fresh for the answer's `Cache-Control: max-age`**, net of its `Age`,
 //!   between the floor and [`JWKS_MAX_AGE_CEILING`]; [`JWKS_DEFAULT_MAX_AGE`]
 //!   when it states none. A stale set keeps serving while its refresh runs.
+//! - **A fetch carries the trace of the token that asked for it** and is
+//!   recorded as the client operation the HTTP conventions name
+//!   (`HttpClientRequest`).
 //! - **A failed refresh keeps the last good set**, said at `warn`, for
 //!   [`JWKS_STALE_CEILING`] past its freshness. Past it, or before any set was
 //!   fetched, a token is [`AuthError::Unavailable`] — the `503` that never
@@ -282,13 +285,19 @@ impl Inner {
     /// One fetch of the set, bounded by [`JWKS_FETCH_TIMEOUT`] and
     /// [`JWKS_MAX_BYTES`]; a redirect is an answer like any other `3xx`.
     async fn fetch(&self) -> Result<(JwkSet, Duration), Failure> {
-        let mut response = self
+        let request = self
             .client
             .get(self.url.clone())
             .header(ACCEPT, "application/jwk-set+json, application/json")
-            .send()
-            .await
+            .build()
             .map_err(|error| self.call_failed(error))?;
+        let mut response = nest_rs_reqwest::__private::traced(
+            request,
+            |request| self.client.execute(request),
+            reqwest::Error::is_timeout,
+        )
+        .await
+        .map_err(|error| self.call_failed(error))?;
         let status = response.status();
         if !status.is_success() {
             let retry_after = (status.as_u16() == 429 || status.is_server_error())

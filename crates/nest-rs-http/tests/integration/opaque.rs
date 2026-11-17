@@ -90,6 +90,29 @@ impl LedgerController {
         Err(anyhow::anyhow!(LEDGER_REFUSED))
     }
 
+    #[get("/decoded")]
+    #[public]
+    async fn decoded(&self) -> Result<String> {
+        let parsed: std::result::Result<u64, nest_rs_core::DecodeError> = Err(marked_decode());
+        Ok(format!("settled {}", parsed.opaque()?))
+    }
+
+    #[get("/recovered")]
+    #[public]
+    async fn recovered(&self) -> Result<String> {
+        let refused = settled().opaque().expect_err("the ledger refuses");
+        drop(refused.into_response());
+        Ok("settled from the replica".to_owned())
+    }
+
+    #[get("/stalled")]
+    #[public]
+    async fn stalled(&self) -> Result<String> {
+        let refused = settled().opaque().expect_err("the ledger refuses");
+        drop(refused.into_response());
+        std::future::pending().await
+    }
+
     #[get("/opaqued/{id}")]
     #[public]
     async fn opaqued(&self, Path(id): Path<u64>) -> Result<String> {
@@ -263,4 +286,134 @@ async fn a_hand_written_routes_chain_is_filed_naming_its_route() {
     assert_eq!(line.field("error").as_deref(), Some(LEDGER_REFUSED));
     assert_eq!(line.field("verb").as_deref(), Some("DELETE"));
     assert_eq!(line.field("path").as_deref(), Some("/drafts/{id}"));
+}
+
+/// A failed request's span says why, in the words its failure line says it.
+#[tokio::test]
+async fn a_failed_requests_span_describes_its_status_as_its_line_says_the_failure() {
+    let client = crate::boot::<LedgerModule>().await;
+    let logs = LogCapture::install();
+    client
+        .get("/ledger/failed")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+    let line = logs.expect_one(nest_rs_http::target::HTTP, "request failed");
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(
+        span.field("otel.status_description"),
+        line.field("error"),
+        "{:?}",
+        span.fields
+    );
+}
+
+/// A value the request carried, which nothing the server says may quote.
+const MARKED: &str = "sk_live_51HmarkedVALUE";
+
+/// A decode failure of a payload holding [`MARKED`], as an edge reports one.
+fn marked_decode() -> nest_rs_core::DecodeError {
+    let refused =
+        serde_json::from_str::<u64>(&format!("\"{MARKED}\"")).expect_err("a string is no number");
+    nest_rs_core::DecodeError::new(&refused)
+}
+
+/// The span's description is one more reader of the failure: what every other
+/// reader leaves out, it leaves out too.
+#[tokio::test]
+async fn a_failed_requests_span_describes_its_failure_without_the_value_it_refused() {
+    assert!(!nest_rs_testing::printed(&marked_decode()).contains(MARKED));
+    let client = crate::boot::<LedgerModule>().await;
+    let logs = LogCapture::install();
+    client
+        .get("/ledger/decoded")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    let described = span
+        .field("otel.status_description")
+        .expect("the span says why");
+    assert!(!described.contains(MARKED), "{described}");
+    assert!(
+        described.contains("expected u64"),
+        "what failed is said: {described}"
+    );
+}
+
+/// A request its caller failed — a `4xx` — says nothing on its span.
+#[tokio::test]
+async fn a_request_its_caller_failed_describes_nothing_on_its_span() {
+    let client = crate::boot::<LedgerModule>().await;
+    let logs = LogCapture::install();
+    client
+        .get("/ledger/conflicted")
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}
+
+/// A `5xx` a handler rendered by hand, then answered past with a `2xx`, fails
+/// nothing: the chain is filed, and the request's span neither records an
+/// error nor says why.
+#[tokio::test]
+async fn a_5xx_rendered_by_hand_then_answered_2xx_describes_nothing_on_the_requests_span() {
+    let client = crate::boot::<LedgerModule>().await;
+    let logs = LogCapture::install();
+    client
+        .get("/ledger/recovered")
+        .send()
+        .await
+        .assert_status_is_ok();
+
+    logs.expect_one(nest_rs_http::target::HTTP, "request failed");
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(span.field("otel.status_code"), None, "{:?}", span.fields);
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
+}
+
+/// A request cut at its deadline says no sentence: a cause kept for a `5xx` it
+/// rendered by hand before the cut is no reason for it.
+#[tokio::test(start_paused = true)]
+async fn a_request_cut_at_its_deadline_describes_no_cause_it_kept_before() {
+    let client = crate::boot_on::<LedgerModule>(nest_rs_http::HttpConfig {
+        request_timeout: Some(std::time::Duration::from_secs(1)),
+        ..nest_rs_http::HttpConfig::default()
+    })
+    .await;
+    let logs = LogCapture::install();
+    client
+        .get("/ledger/stalled")
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    let span = logs.expect_span(nest_rs_http::target::HTTP, "http.request");
+    assert_eq!(
+        span.field("otel.status_code").as_deref(),
+        Some("error"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("otel.status_description"),
+        None,
+        "{:?}",
+        span.fields
+    );
 }

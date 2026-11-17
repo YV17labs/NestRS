@@ -539,6 +539,12 @@ pub(crate) mod __private {
     }
 
     impl Withheld {
+        /// The chain, as the operator's line files it in `error`.
+        pub fn said(&self) -> &str {
+            let (Self::Failed(said) | Self::Unavailable(said)) = self;
+            said
+        }
+
         /// The same chain, at the level an answer of `status`, a `5xx`, files
         /// it: what a failure kept for itself, answered by another's `5xx`.
         #[must_use]

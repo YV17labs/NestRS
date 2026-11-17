@@ -1,5 +1,7 @@
 //! OAuth2 Authorization Code client (PKCE). Provider endpoints come from [`OAuthClientConfig`];
-//! profile mapping stays in the app's [`Strategy`](nest_rs_authn::Strategy).
+//! profile mapping stays in the app's [`Strategy`](nest_rs_authn::Strategy). Every call it
+//! sends carries the unit's trace and is recorded as the client operation the HTTP conventions
+//! name (`HttpClientRequest`).
 
 use std::fmt;
 use std::sync::PoisonError;
@@ -369,6 +371,20 @@ async fn read_capped(mut response: reqwest::Response) -> Result<Vec<u8>, Capped>
     Ok(body)
 }
 
+/// `request`, sent through `http` carrying the unit's trace, and recorded as
+/// the client operation the HTTP conventions name.
+async fn sent(
+    http: &reqwest::Client,
+    request: reqwest::Request,
+) -> Result<reqwest::Response, reqwest::Error> {
+    nest_rs_reqwest::__private::traced(
+        request,
+        |request| http.execute(request),
+        reqwest::Error::is_timeout,
+    )
+    .await
+}
+
 /// The client's HTTP backend, keeping the last answer's [`Answered`] — what the
 /// exchange hands `oauth2` in place of the backend itself.
 struct Observed<'a> {
@@ -387,7 +403,7 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
     fn call(&'c self, request: oauth2::HttpRequest) -> Self::Future {
         Box::pin(async move {
             let request = reqwest::Request::try_from(request).map_err(Box::new)?;
-            let response = self.http.execute(request).await.map_err(Box::new)?;
+            let response = sent(self.http, request).await.map_err(Box::new)?;
             let status = response.status().as_u16();
             let retry_after = response
                 .headers()
@@ -848,11 +864,13 @@ impl OAuthClient {
         endpoint: &Endpoint<'_>,
         access_token: &str,
     ) -> Result<T, AuthError> {
-        let response = self
+        let request = self
             .http
             .get(endpoint.url)
             .bearer_auth(access_token)
-            .send()
+            .build()
+            .map_err(|error| call_failed(endpoint, error))?;
+        let response = sent(&self.http, request)
             .await
             .map_err(|error| call_failed(endpoint, error))?;
         let status = response.status();

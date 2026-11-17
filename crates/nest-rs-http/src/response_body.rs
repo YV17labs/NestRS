@@ -94,9 +94,7 @@ pub(crate) fn carry(
             // Inside the context, outside the span — see `Carried::file`.
             Some(log) => continuation.enter(|| log.emit(&span, status, 0, outcome)),
             None => {
-                if let Some(outcome) = outcome {
-                    nest_rs_core::operation_log::record_outcome(&span, outcome);
-                }
+                nest_rs_core::operation_log::record_outcome(&crate::unit::REQUEST, &span, outcome)
             }
         }
         return Response::from_parts(parts, body);
@@ -116,6 +114,7 @@ pub(crate) fn carry(
         reached_end: false,
         outcome,
         ended: false,
+        filed: false,
     };
     Response::from_parts(parts, Body::from_boxed(BoxBody::new(carried)))
 }
@@ -151,12 +150,17 @@ struct Carried {
     /// The body ended before its inner one did — at the signal, or on a poll
     /// that unwound — and polls it no more.
     ended: bool,
+    /// The unit was filed, its line and its end.
+    filed: bool,
 }
 
 impl Carried {
-    /// Files the line at most once: the stream ending and the body being
-    /// dropped both reach here.
+    /// Files the unit at most once — its line, or its outcome and its end on
+    /// its span: the stream ending and the body being dropped both reach here.
     fn file(&mut self) {
+        if std::mem::replace(&mut self.filed, true) {
+            return;
+        }
         self.span.record("http.response.body.size", self.counted);
         let counted = self.counted;
         let outcome = self
@@ -170,9 +174,11 @@ impl Carried {
                     .emit(&self.span, pending.status, counted, outcome)
             }),
             None => {
-                if let Some(outcome) = outcome {
-                    nest_rs_core::operation_log::record_outcome(&self.span, outcome);
-                }
+                nest_rs_core::operation_log::record_outcome(
+                    &crate::unit::REQUEST,
+                    &self.span,
+                    outcome,
+                );
             }
         }
     }
@@ -189,6 +195,10 @@ impl Carried {
     /// End the body at a poll that unwound: the panic said once, inside the
     /// request, and the line filed `panic` with what was written.
     fn unwound(&mut self, payload: &(dyn Any + Send)) {
+        nest_rs_core::operation_log::record_cause(
+            &self.span,
+            &nest_rs_core::panic::panic_message(payload),
+        );
         self.continuation.enter(|| {
             self.span.in_scope(|| {
                 nest_rs_core::contained_panic!(
@@ -343,6 +353,7 @@ mod tests {
                 std::borrow::Cow::Borrowed("GET"),
                 &crate::matched::MatchedRoute::default(),
                 std::time::Instant::now(),
+                false,
             )),
             None,
             panics_after_one_event(),

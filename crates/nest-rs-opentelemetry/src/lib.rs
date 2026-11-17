@@ -8,7 +8,9 @@
 //! returned guard flushes on drop, so it must outlive `main`.
 //!
 //! That line is the whole wiring: no module to import, nothing for a suite to
-//! call. Under the `otlp` feature, `OpenTelemetryModule` provides `Metrics`
+//! call. Once the metrics export, every unit of work whose edge's conventions
+//! name a duration histogram is timed in it, whatever the console writes. Under
+//! the `otlp` feature, `OpenTelemetryModule` provides `Metrics`
 //! to the module whose provider injects them, where an app records its
 //! measurements through instruments named by the OpenTelemetry Metrics API —
 //! `Counter`, `UpDownCounter`, `Histogram`, `Gauge` — with no `opentelemetry`
@@ -24,7 +26,13 @@ pub const TARGET: &str = "nest_rs::opentelemetry";
 
 #[cfg(feature = "otlp")]
 mod attribute;
+#[cfg(feature = "otlp")]
+mod client_operations;
 mod config;
+#[cfg(feature = "otlp")]
+mod connection_pool_metrics;
+#[cfg(feature = "otlp")]
+mod durations;
 mod error;
 #[cfg(feature = "otlp")]
 mod id_generator;
@@ -39,10 +47,22 @@ mod metrics;
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
+#[cfg(feature = "otlp")]
+mod process_metrics;
 mod propagators;
+#[cfg(feature = "otlp")]
+mod sampler;
 mod signal;
 #[cfg(test)]
 mod testing;
+#[cfg(feature = "otlp")]
+mod tokio_metrics;
+#[cfg(feature = "otlp")]
+mod unit_durations;
+#[cfg(feature = "otlp")]
+mod unit_records;
+#[cfg(feature = "otlp")]
+mod unit_spans;
 
 #[cfg(feature = "otlp")]
 pub use attribute::{Attribute, AttributeValue};

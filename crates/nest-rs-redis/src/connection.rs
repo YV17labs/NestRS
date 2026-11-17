@@ -29,6 +29,7 @@ use redis::{
 };
 
 use crate::cluster::{ClusterLink, SlotLink};
+use crate::commands::{Sent, batch_answer, command_answer, sending};
 use crate::error::RedisError;
 use crate::instance::{RedisInstance, instance_phrase, typed_import};
 use crate::script::{Invocation, RedisScript};
@@ -72,6 +73,8 @@ pub struct RedisConnection<I = Unnamed> {
     link: Link<I>,
     /// How long a command on this handle waits for its answer.
     budget: Duration,
+    /// The database the link selects, as each command it times names it.
+    namespace: Arc<str>,
 }
 
 impl<I> Clone for RedisConnection<I> {
@@ -79,6 +82,19 @@ impl<I> Clone for RedisConnection<I> {
         Self {
             link: self.link.clone(),
             budget: self.budget,
+            namespace: Arc::clone(&self.namespace),
+        }
+    }
+}
+
+impl<I: Instance> Link<I> {
+    /// The database the link selects.
+    fn db(&self) -> i64 {
+        match self {
+            Self::Standalone(link) => link.db(),
+            Self::Sentinel(link) => link.db(),
+            Self::Cluster(link) => link.db(),
+            Self::Slot(link) => link.db(),
         }
     }
 }
@@ -183,7 +199,12 @@ impl<I: Instance> RedisConnection<I> {
                 Link::Cluster(ClusterLink::connect(url, &config.tls, instance, budget).await?)
             }
         };
-        Ok(Self { link, budget })
+        let namespace = link.db().to_string().into();
+        Ok(Self {
+            link,
+            budget,
+            namespace,
+        })
     }
 
     /// A connection of its own to the same Redis, opened from the same settings
@@ -205,6 +226,7 @@ impl<I: Instance> RedisConnection<I> {
         Ok(Self {
             link,
             budget: self.budget,
+            namespace: Arc::clone(&self.namespace),
         })
     }
 
@@ -307,6 +329,17 @@ impl<I: Instance> RedisConnection<I> {
     }
 }
 
+impl<I> RedisConnection<I> {
+    /// The server a command is sent to, where one server serves them all: a
+    /// Sentinel's primary and a Cluster's nodes change under the link.
+    fn server(&self) -> Option<(&str, u16)> {
+        match &self.link {
+            Link::Standalone(link) => link.server(),
+            Link::Sentinel(_) | Link::Cluster(_) | Link::Slot(_) => None,
+        }
+    }
+}
+
 impl<I: Instance> nest_rs_core::CarriesRemedy for RedisConnection<I> {
     fn remedy() -> Cow<'static, str> {
         format!(
@@ -321,14 +354,16 @@ impl<I: Instance> nest_rs_core::CarriesRemedy for RedisConnection<I> {
 impl<I: Instance> ConnectionLike for RedisConnection<I> {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         let budget = self.budget;
-        let link = &self.link;
         Box::pin(async move {
-            match link {
+            let pending = sending(|| Sent::command(cmd), &self.namespace, self.server());
+            let answer = match &self.link {
                 Link::Standalone(link) => link.send(cmd, budget).await,
                 Link::Sentinel(link) => link.send(cmd, budget).await,
                 Link::Cluster(link) => link.send(cmd, budget).await,
                 Link::Slot(link) => link.send(cmd, budget).await,
-            }
+            };
+            pending.ended_with(command_answer(&answer));
+            answer
         })
     }
 
@@ -339,24 +374,25 @@ impl<I: Instance> ConnectionLike for RedisConnection<I> {
         count: usize,
     ) -> RedisFuture<'a, Vec<Value>> {
         let budget = self.budget;
-        let link = &self.link;
         Box::pin(async move {
-            match link {
+            let pending = sending(
+                || Sent::batch(pipeline, offset, count),
+                &self.namespace,
+                self.server(),
+            );
+            let answers = match &self.link {
                 Link::Standalone(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Sentinel(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Cluster(link) => link.send_pipeline(pipeline, offset, count, budget).await,
                 Link::Slot(link) => link.send_pipeline(pipeline, offset, count, budget).await,
-            }
+            };
+            pending.ended_with(batch_answer(pipeline, &answers));
+            answers
         })
     }
 
     fn get_db(&self) -> i64 {
-        match &self.link {
-            Link::Standalone(link) => link.db(),
-            Link::Sentinel(link) => link.db(),
-            Link::Cluster(link) => link.db(),
-            Link::Slot(link) => link.db(),
-        }
+        self.link.db()
     }
 }
 

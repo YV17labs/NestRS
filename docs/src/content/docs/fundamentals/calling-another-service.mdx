@@ -1,0 +1,82 @@
+---
+title: Calling another service
+description: "Carry the unit's trace onto every request your own reqwest client sends, and see each one as a client span and a duration."
+sidebar:
+  order: 11.5
+---
+
+The framework ships no general outbound HTTP client, by decision: wrapping one
+would cost you every option reqwest has and buy you a module. You build your
+own reqwest client and add one middleware where you build it. From then on,
+every request it sends inside a unit of work carries that unit's
+[trace](/fundamentals/correlation/), so the service you call continues it, and
+once telemetry exports each request is a client span and a duration.
+
+```rust title="crates/features/src/media/client.rs"
+use nest_rs::reqwest::ReqwestMiddleware;
+
+let http = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+    .with(ReqwestMiddleware::new())
+    .build();
+```
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features reqwest
+cargo add reqwest@0.13 reqwest-middleware@0.5
+```
+
+The second line is there because the client is yours: your code builds it and
+calls it in reqwest's own words, so it names both crates, at the versions
+NestRS holds for the whole of 7.x ([semver policy](/semver/#third-party-libraries)).
+
+## What a request carries
+
+Inside a unit of work, every request gets a `traceparent` naming a span of the
+request's own under the unit, and the unit's `tracestate` untouched — forwarding
+it is a MUST, since a vendor's sampling or routing rides in there. `baggage`
+never leaves: what a queue job carries is for your own services, not for the
+ones you call. Outside every unit, a request carries no trace context at all.
+
+The service you call continues your trace, and its spans hang under the request
+that caused them. A client that is not reqwest reads the same context itself:
+`nest_rs::core::current_traceparent()` and `current_tracestate()` are the
+headers to send.
+
+## What a request records
+
+Once traces or metrics export, each request is the HTTP conventions' client
+operation: a `client` span named for its method, and a point in
+`http.client.request.duration`, by its method, its server, its status and the
+HTTP version it was answered over. [Traces](/opentelemetry/traces/#outbound-http-requests)
+lists every attribute. The clients the framework opens itself — the JWK Set
+fetch, the OAuth client, object storage — carry the trace and record their
+requests the same way.
+
+With telemetry off, nothing reads a clock: the middleware sets the headers and
+gets out of the way.
+
+## Limits
+
+- **Neither the path nor the query is recorded.** The conventions ask for
+  `url.full` and redact a few signature parameters; a webhook's token sits in
+  its path, and a span is kept by a backend no one audits for it.
+- **One series per server.** `server.address` keys the duration, as the
+  conventions require, so a client calling hosts your users choose — a
+  webhook's delivery — keys one series per host.
+- **A request you give up on is not a failure.** One cut by your own timeout,
+  a `select!` or the unit's deadline is recorded with no status and no
+  `error.type`, as the conventions record a cancelled request; its span still
+  exists, so the service you called keeps its parent.
+- **The duration ends at the answer's head.** Reading a body you stream is
+  your code's time, not the request's.
+
+## Going further
+
+- [Correlation](/fundamentals/correlation/) — the trace every unit of work
+  runs under, and where it travels.
+- [Traces](/opentelemetry/traces/) — the client spans of statements, commands
+  and requests.
+- [Metrics](/opentelemetry/metrics/) — the durations, and the ones every unit
+  records on its own.

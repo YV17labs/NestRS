@@ -118,9 +118,9 @@ pub struct Claims {
 
 `#[derive(PrincipalIdentity)]` reads each role off the field marked for it.
 `#[principal(actor)]` is the audit identity: on a successful authentication
-`AuthnGuard` records it as `actor_id` onto the request span, so every
-downstream event — denials included — is attributable without threading the
-identity through each call site. `#[principal(tenant)]` is the tenant the
+`AuthnGuard` records it on the request span, as `enduser.id`, and on every
+line, as `actor_id`, so every downstream event — denials included — is
+attributable without threading the identity through each call site. `#[principal(tenant)]` is the tenant the
 caller acts within, made ambient for the request and every job it pushes
 ([Multi-tenant SaaS](/security/multi-tenant-saas/)), and `#[principal(scopes)]`
 the token's `scope` claim ([Scopes](/security/authorization/scopes/)); both are

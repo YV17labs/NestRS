@@ -49,9 +49,20 @@ async fn read(&self, id: Path<Uuid>) -> Result<Json<User>> {
 ```
 
 `#[tracing::instrument]` opens a span that stays current for the *whole* async
-fn, across every `.await`. Inside it, use `tracing::info!` for an event.
+fn, across every `.await`. Inside it, use `tracing::info!` for an event. A line
+filed inside a span, at a level the console's filter (`RUST_LOG`) admits, is
+exported with that span as one of its events, its fields as the event's
+attributes — the framework's own lines included, and with logs exported nowhere.
 Always prefer `field = %value` to `format!("{}", value)` — structured fields
 serialize cleanly to OTLP and stay filterable in the backend.
+
+<Aside type="caution">
+A span of your own leaves where the console's filter writes it: under
+`RUST_LOG=warn`, the `info` span above reaches neither the console nor your
+traces. To quiet the console and keep your spans, name their target —
+`RUST_LOG=warn,features=info`. The units the framework opens leave whatever the
+filter says ([Sampling](#sampling)).
+</Aside>
 
 <Aside type="caution">
 Never hold an entered span guard across an `.await`
@@ -72,9 +83,16 @@ client could file its request into a trace of its choosing and set the `sampled`
 flag on traffic it generates. The response carries `traceresponse` so a caller
 can match a span in their backend to a span in yours.
 
-The W3C propagator is installed even when no OTLP endpoint is set — useful when
-a sibling service in your monorepo *does* export and you want the connection
-preserved across the hop.
+Outbound, the trace travels whether or not this process exports. Every request
+the framework sends, and yours through `ReqwestMiddleware`, carries the unit's
+`traceparent` ([Outbound HTTP requests](#outbound-http-requests)); any other
+client sends `nest_rs::core::current_traceparent()`. A sibling service that
+*does* export keeps the connection across the hop.
+
+A client instrumented through the OpenTelemetry API propagates only where traces
+export. It reads `opentelemetry::Context::current()`, which holds the unit's span
+there alone: where no trace exports, no span is built for OpenTelemetry, a
+request pays nothing for one, and such a client sends no `traceparent`.
 
 ## Sampling
 
@@ -102,6 +120,15 @@ let _otel = OpenTelemetry::init_with(OpenTelemetryConfig {
     ..OpenTelemetryConfig::from_env()?
 })?;
 ```
+
+The sampler decides which traces leave, and `RUST_LOG` does not: every
+unit's span is exported whatever the console writes, so `RUST_LOG=warn`
+quiets the console without emptying your traces. A span of your own, or a
+library's, follows the console's filter ([Custom spans](#custom-spans)).
+
+One trace is the framework's to decide: a
+[health probe](/health/#what-a-probe-leaves-in-your-telemetry) that starts a
+trace starts it unsampled, and the sampler keeps it so.
 
 The sampler comes from
 [`opentelemetry_sdk::trace::Sampler`](https://docs.rs/opentelemetry_sdk).
@@ -131,10 +158,17 @@ spelled exactly, or `_OTHER`), `url.path` (the addressed path), `url.scheme`
 `<PREFIX>_HTTP__TRUSTED_PROXIES` lists, else the listener's),
 `http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
-`http.response.status_code`, `http.response.body.size` and
-`user_agent.original`. It carries no `client.address`, which the conventions
+`http.response.status_code`, `http.response.body.size`,
+`network.protocol.version` (`1.1`, `2`) and `user_agent.original`. It carries no `client.address`, which the conventions
 recommend: a client's address is personal data, and a collector keeps what it
 receives — no access line carries it either.
+
+Once a guard identified the caller, the span carries `enduser.id`, the
+conventions' key for the identity your lines carry as `actor_id`. The
+conventions flag it as personal data, and it leaves on the span of every unit
+served for that caller — a request, a message, an operation, a job it enqueued —
+to every collector the export reaches. A principal that names no actor sends
+none.
 
 **The span is the one place a value the client chose is kept, and only what
 the conventions ask for.** `url.path`, `user_agent.original` and — for a
@@ -169,6 +203,142 @@ from an inbound `traceparent` and the sampler's verdict, seeded onto the span
 constructor: no interceptor, and no header the access line reads.
 Toggle the line with `<PREFIX>_HTTP__ACCESS_LOG=false`; nothing about propagation
 or OTLP export changes.
+
+## A failed span says why
+
+A unit the server failed exports an `Error` status with a description: the
+sentence its failure line carries in `error`, or its panic line in `panic`, or,
+for a job dead-lettered without running, the sentence its dead letter keeps. It
+holds on every edge — an HTTP `5xx`, a WebSocket message, a GraphQL root field,
+an MCP operation, a job attempt, a scheduled tick, a listener call, a lifecycle
+hook. The reason sits where OpenTelemetry's conventions put it, in the span's
+status, so your trace backend shows it beside the failure; the failure line
+itself already travels with the span as one of its events
+([Custom spans](#custom-spans)).
+
+It is the line's own sentence, described and never quoted: a value the request
+carried is no more in the description than in the line. A failure the caller
+earned — a `4xx`, a message refused before its handler ran — keeps no status
+and no description, and a failure no sentence explains, a request cut at its
+deadline or stopped by its client, carries its class in `error.type` alone,
+whatever it met before. A
+job, a tick or a listener call has no caller, so it fails whatever a layer
+answered — a job a filter acknowledged, a tick it skipped — and says why all
+the same. No `exception` event is recorded: OpenTelemetry is moving exceptions
+from span events to log records, where the failure line already is.
+
+The description goes out with the failure of the unit itself. A request whose
+handler rendered a `5xx` by hand and then answered `2xx`, or a subscription
+whose item failed while its socket stayed open, describes nothing: the failure
+line is there, the unit did not fail. A unit that meets several failures before
+it ends describes the last one; the earlier ones are on their own lines.
+
+One effect comes from `tracing-opentelemetry` rather than the framework: an
+`error` line filed inside a span sets that span's status to `Error`, with no
+description, whatever its unit answered. The request above, which answered
+`2xx`, exports `Error` for that reason.
+
+## Statements and commands
+
+Once traces or metrics export, every statement the app's Postgres pool sends and
+every command a Redis connection sends is a **client operation**, as the
+database conventions name it: a `client` span under the unit that sent it, and
+a point in `db.client.operation.duration`.
+
+| Sent | Span name | Attributes |
+|---|---|---|
+| a Postgres statement | its summary, `SELECT posts` | `db.system.name` (`postgresql`), `db.namespace`, `db.operation.name`, `db.collection.name`, `db.query.summary`, `server.address`, `server.port` |
+| a Redis command | the command, `GET` | `db.system.name` (`redis`), `db.namespace` (the database index), `db.operation.name`, `server.address` and `server.port` on one server |
+| a Redis pipeline or transaction of two commands or more | `BATCH`, or `BATCH GET` when every command is one | the same, and `db.operation.batch.size` |
+
+- **What a statement does, never what it says.** The summary is read off the
+  SQL's operation and the first table it names, lexed as Postgres lexes it —
+  every quoting of a literal, nested comments and dollar-quoted bodies skipped
+  unread. A statement it cannot read with certainty — a quote never closed, a
+  backslash in a standard string — is named `postgresql` and carries no
+  summary, never a guessed word. `db.query.text` is not exported, since a
+  hand-written statement may carry a value in its text. A Redis command is
+  named by its first word, never a key or an argument.
+- **A failure says its class.** A Redis refusal records its code (`ERR`,
+  `NOSCRIPT`, `WRONGTYPE`), and a statement the driver times the SQLSTATE
+  Postgres answered (`40001`, `22012`), as `error.type` and
+  `db.response.status_code`; a wait that ran out — a Redis command past its
+  budget, a connection the pool never handed over — records `timeout`. A
+  statement sea-orm times records `_OTHER`, since sea-orm reports a failure
+  without its error.
+- **A span only under a unit.** An operation sent outside every traced unit —
+  a queue worker's poll, the outbox relay's claim — records its duration and no
+  span, so a backend is not handed a root trace per poll.
+- **At most 512 spans a unit.** A unit makes no more client spans than the
+  SDK's default export batch holds — 512, whatever `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`
+  is set to: past them, an operation still counts in its duration and makes no
+  span, and the unit's span says how many it did not make in
+  `dropped_client_spans_count`. An import job sending fifty thousand commands
+  then takes at most 512 places of the exporter's queue, 2,048 by default. That
+  leaves the other requests of that moment the rest; it does not promise they
+  lose nothing, since several such jobs at once, or a burst of ordinary
+  requests, still fill it. A unit it causes, a WebSocket message on its socket
+  among them, counts its own.
+- **Nothing is timed where nothing records.** With traces and metrics both off,
+  no driver reads the clock.
+
+Every statement the pool sends for the app is timed: what sea-orm times itself
+— every statement `Repo` sends, an atomic block's `SAVEPOINT` — and what it
+sends untimed, which the driver times: a unit's `BEGIN`, `COMMIT` and
+`ROLLBACK`, a block's `RELEASE` and `ROLLBACK TO`, the outbox relay's
+statements, and text sent through the unit's `execute_unprepared`. A `BEGIN`
+counts the wait for a connection, which sea-orm takes from the pool inside the
+same call. A Redis command, or a statement the driver times, that its caller
+gave up on — a timeout around it, a unit cut at its deadline — is recorded all
+the same, with no `error.type`, as the conventions record a cancelled call.
+
+A few things are not timed. A statement sea-orm times is recorded only once it
+answered: dropped mid-flight, it is not seen. A transaction an app opens itself on the injected
+`DatabaseConnection` — its `begin`, `commit` and `rollback` — and the text it
+sends there through `execute_unprepared`: sea-orm times neither, and the
+driver does not see them. The pool's boot proof and health probe, which are
+the framework asking, not the app's work. And a stream an app reads itself is
+recorded by sea-orm once it drops, for the time spent polling it and never as
+failed. A blocking Redis read
+(`XREADGROUP … BLOCK`) is timed for as long as it waited: read its
+`db.operation.name` apart.
+
+## Outbound HTTP requests
+
+Every HTTP request the framework sends — the JWK Set fetch, the OAuth client's
+exchange and reads, object storage's — and every request your own reqwest client
+sends through `ReqwestMiddleware`
+([Calling another service](/fundamentals/calling-another-service/)) is the HTTP
+conventions' client operation: a `client` span and a point in
+`http.client.request.duration`.
+
+| Recorded | Value |
+|---|---|
+| span name | the method, `GET`; `HTTP` for a method the conventions do not know |
+| `http.request.method` | the method, or `_OTHER` |
+| `server.address`, `server.port` | the server and port the request went to |
+| `http.response.status_code`, `network.protocol.version` | the status and HTTP version it was answered with |
+| `url.scheme` | `http` or `https`, on the span |
+| `http.request.resend_count` | on the span of a storage request object_store sends again after it failed: `1` for its first retry |
+| `error.type` | the status from `400` up; `timeout` or `_OTHER` for a request that never answered |
+
+The `traceparent` a request carries names its span, so the service it called
+hangs under it — even when the caller gave up on it, which records no status and
+no `error.type` ([Limits](/fundamentals/calling-another-service/#limits)). The
+OTLP export is the one client that records nothing: an export recorded would be
+exported in turn.
+
+**Neither the path nor the query is recorded**, where the conventions ask for
+`url.full`: a webhook's secret sits in its path, a signed URL's in its query, and
+a span is kept by a backend no one audits for them.
+
+## Limits
+
+A span that finds the export queue full is dropped, so no request waits on the
+export: the queue holds 2048 spans, and `OTEL_BSP_MAX_QUEUE_SIZE` raises it. The
+SDK says the first drop once, at `warn` on `opentelemetry_sdk`
+(`BatchSpanProcessor.SpanDroppingStarted`), and how many it dropped at shutdown
+(`BatchSpanProcessor.SpansDropped`, with `dropped_span_count`).
 
 ## Going further
 

@@ -98,8 +98,8 @@ tracing::info!(
 ```
 
 `user_id` is the subject the event is *about*. Who asked for it is not a field
-you write: the operation span carries `actor_id`, and restating it here gives a
-backend two spellings of one fact.
+you write: the line carries `actor_id` and the operation span `enduser.id`, and
+restating it here gives a backend a third spelling of one fact.
 
 Always prefer `field = %value` to `format!("{}", value)`. The OTLP bridge
 serializes structured fields directly; a formatted string becomes opaque text
@@ -107,8 +107,8 @@ the backend cannot filter on.
 
 Every event runs under the **operation span** its edge opened, which already
 carries `trace_id` and `span_id` — the OpenTelemetry log-record vocabulary, so a
-backend joins logs to traces with no field mapping — and `actor_id` once an authn
-guard resolved a principal.
+backend joins logs to traces with no field mapping — and the actor, as
+`enduser.id`, once an authn guard resolved a principal.
 Your structured fields layer on top of those, and you never write either by
 hand.
 
@@ -275,8 +275,19 @@ The
 is wired in only when an OTLP endpoint is configured. Without an endpoint, the
 bridge is skipped — it pays a small per-event cost just to drop the event,
 which is not worth paying when console-only logging is the goal. When the
-endpoint is set, every `tracing` event becomes an OTel log record with the
-same target, level, fields and `trace_id`.
+endpoint is set, every event the console's filter admits becomes an OTel log
+record with the same target, level and fields. It names the unit it was filed in
+by `trace_id` and `span_id`, whether or not traces export; where they do, a line
+filed in a span of your own names that span.
+
+## Limits
+
+A log record that finds the export queue full is dropped, so no line waits on
+the export: the queue holds 2048 records, and `OTEL_BLRP_MAX_QUEUE_SIZE` raises
+it. The SDK says the first drop once, at `warn` on `opentelemetry_sdk`
+(`BatchLogProcessor.LogDroppingStarted`), and how many it dropped at shutdown
+(`BatchLogProcessor.LogsDropped`, with `dropped_logs_count`). The console still
+writes the line whose record was dropped.
 
 ## Going further
 

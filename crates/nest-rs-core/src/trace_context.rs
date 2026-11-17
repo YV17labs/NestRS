@@ -12,12 +12,18 @@
 //! mutation.
 
 use std::fmt;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use uuid::{NoContext, Timestamp, Uuid};
 
 use crate::request_scope::current_correlation_with;
+
+/// The W3C request header carrying the trace and the caller's span.
+pub const TRACEPARENT_HEADER: http::HeaderName = http::HeaderName::from_static("traceparent");
+
+/// The W3C request header carrying vendor state, forwarded verbatim.
+pub const TRACESTATE_HEADER: http::HeaderName = http::HeaderName::from_static("tracestate");
 
 /// The identifier of one distributed operation — 16 bytes, spelled as 32
 /// lowercase hex characters on the wire.
@@ -248,8 +254,11 @@ pub mod field {
     /// The unit of work that caused this one; a span field, never a line field.
     pub const PARENT_SPAN_ID: &str = "parent_span_id";
     /// Who the work is being served for — an audit identity, never an
-    /// authorization input; absent means anonymous.
+    /// authorization input; absent means anonymous. On every log line.
     pub const ACTOR_ID: &str = "actor_id";
+    /// The same identity on a unit's span, under the OpenTelemetry semantic
+    /// conventions' key, which flags it as personal data.
+    pub const ENDUSER_ID: &str = "enduser.id";
     /// The sampling byte, on JSON lines only.
     pub const TRACE_FLAGS: &str = "trace_flags";
 }
@@ -339,6 +348,45 @@ pub struct Correlation {
     parent_is_remote: bool,
     tracestate: TraceState,
     shared: Arc<Shared>,
+    /// The unit's, shared with its client operations' and never with a unit
+    /// it causes.
+    client_spans: ClientSpans,
+}
+
+/// How many client spans one unit of work has counted: the unit's
+/// correlation and each of its client operations' hold one count, kept only
+/// once an observability stack makes client operations spans.
+#[derive(Clone, Debug, Default)]
+pub struct ClientSpans(Option<Arc<AtomicU64>>);
+
+/// Whether a unit counts its client spans; until a stack says so at boot, a
+/// unit allocates no count.
+static COUNTED: AtomicBool = AtomicBool::new(false);
+
+impl ClientSpans {
+    /// A new unit's count, or none where nothing makes client spans.
+    fn for_unit() -> Self {
+        Self(
+            COUNTED
+                .load(Ordering::Relaxed)
+                .then(|| Arc::new(AtomicU64::new(0))),
+        )
+    }
+
+    /// Count one more client span, and say whether it is within `cap`; a unit
+    /// that keeps no count is never past it.
+    pub fn claim(&self, cap: u64) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|count| count.fetch_add(1, Ordering::Relaxed) < cap)
+    }
+
+    /// How many were counted past `cap`.
+    pub fn past(&self, cap: u64) -> u64 {
+        self.0
+            .as_ref()
+            .map_or(0, |count| count.load(Ordering::Relaxed).saturating_sub(cap))
+    }
 }
 
 #[derive(Debug)]
@@ -395,6 +443,17 @@ impl Correlation {
     /// flags, the state and the actor carry; the span is new and its parent is
     /// this one.
     pub fn child(&self) -> Self {
+        self.beneath(ClientSpans::for_unit())
+    }
+
+    /// A client operation this unit sends: a [`child`](Self::child) in its
+    /// place in the trace, counted among this unit's client spans.
+    pub(crate) fn client_operation(&self) -> Self {
+        self.beneath(self.client_spans.clone())
+    }
+
+    /// A new span below this one, counting its client spans in `client_spans`.
+    fn beneath(&self, client_spans: ClientSpans) -> Self {
         Self {
             trace_id: self.trace_id,
             span_id: SpanId::mint(),
@@ -402,6 +461,7 @@ impl Correlation {
             parent_is_remote: false,
             tracestate: self.tracestate.clone(),
             shared: Arc::clone(&self.shared),
+            client_spans,
         }
     }
 
@@ -426,6 +486,7 @@ impl Correlation {
             parent_is_remote: false,
             tracestate,
             shared: Arc::new(shared),
+            client_spans: ClientSpans::for_unit(),
         }
     }
 
@@ -526,8 +587,36 @@ pub(crate) mod __private {
     use std::sync::OnceLock;
     use std::sync::atomic::Ordering;
 
-    use super::{Correlation, SpanId, TraceFlags, TraceId};
+    use super::{COUNTED, ClientSpans, Correlation, SpanId, TraceFlags, TraceId};
+    use crate::operation_log::Unit;
     use crate::request_scope::current_correlation_with;
+
+    /// Start a trace unsampled, which an installed sampler keeps so: the trace
+    /// of a health probe, whose answers are one question a platform asks every
+    /// few seconds.
+    pub fn minted_unsampled() -> Correlation {
+        let correlation = Correlation::minted(None);
+        set_sampled(&correlation, false);
+        correlation
+    }
+
+    /// Count each unit's client spans from now on. Called once, at boot, by
+    /// the observability stack making client operations spans — never by an
+    /// application.
+    pub fn count_client_spans() {
+        COUNTED.store(true, Ordering::Relaxed);
+    }
+
+    /// A client operation `unit` sends, counted among its client spans.
+    pub fn client_operation_of(unit: &Correlation) -> Correlation {
+        unit.client_operation()
+    }
+
+    /// The client spans the unit `correlation` belongs to has counted: the
+    /// unit's own, or, for a client operation, its unit's.
+    pub fn client_spans(correlation: &Correlation) -> &ClientSpans {
+        &correlation.client_spans
+    }
 
     /// Record the sampling decision an installed sampler made, leaving the
     /// reserved bits as they arrived.
@@ -554,9 +643,19 @@ pub(crate) mod __private {
         current_correlation_with(Correlation::clone)
     }
 
+    /// The span about to be created: the ids it belongs to, the unit it opens
+    /// where `operation_span!` creates it, and whether it starts a trace
+    /// [`minted_unsampled`].
+    #[derive(Clone, Copy)]
+    struct Pending {
+        ids: (TraceId, SpanId),
+        unit: Option<&'static Unit>,
+        starts_unsampled: bool,
+    }
+
     tokio::task_local! {
-        /// The ids the span about to be created belongs to — see [`with_pending_ids`].
-        static PENDING_IDS: (TraceId, SpanId);
+        /// The span about to be created — see [`with_pending_ids`].
+        static PENDING: Pending;
     }
 
     /// Publish this unit of work's ids for the duration of **creating and
@@ -566,13 +665,55 @@ pub(crate) mod __private {
     /// A scope of its own because the generator runs inside `info_span!`, before
     /// the edge installs the request context.
     pub fn with_pending_ids<T>(correlation: &Correlation, create: impl FnOnce() -> T) -> T {
-        PENDING_IDS.sync_scope((correlation.trace_id(), correlation.span_id()), create)
+        pending_scope(correlation, None, create)
+    }
+
+    /// [`with_pending_ids`], publishing as well the `unit` the span opens, so
+    /// a layer reading what the unit declares reads it as the span is created.
+    pub fn with_pending_unit<T>(
+        unit: &'static Unit,
+        correlation: &Correlation,
+        create: impl FnOnce() -> T,
+    ) -> T {
+        pending_scope(correlation, Some(unit), create)
+    }
+
+    fn pending_scope<T>(
+        correlation: &Correlation,
+        unit: Option<&'static Unit>,
+        create: impl FnOnce() -> T,
+    ) -> T {
+        let ids = (correlation.trace_id(), correlation.span_id());
+        let starts_unsampled =
+            correlation.parent_id().is_none() && !correlation.flags().is_sampled();
+        PENDING.sync_scope(
+            Pending {
+                ids,
+                unit,
+                starts_unsampled,
+            },
+            create,
+        )
+    }
+
+    /// Whether the span being created starts a trace [`minted_unsampled`]:
+    /// `false` outside [`with_pending_ids`].
+    pub fn pending_starts_unsampled() -> bool {
+        PENDING
+            .try_with(|pending| pending.starts_unsampled)
+            .unwrap_or(false)
     }
 
     /// The ids the span being created belongs to, or `None` outside
     /// [`with_pending_ids`].
     pub fn pending_ids() -> Option<(TraceId, SpanId)> {
-        PENDING_IDS.try_with(|ids| *ids).ok()
+        PENDING.try_with(|pending| pending.ids).ok()
+    }
+
+    /// The unit the span being created opens, or `None` outside
+    /// [`with_pending_unit`].
+    pub fn pending_unit() -> Option<&'static Unit> {
+        PENDING.try_with(|pending| pending.unit).ok().flatten()
     }
 
     /// What an observability stack does to a span the framework just opened.
@@ -635,10 +776,14 @@ const fn unhex(byte: u8) -> Option<u8> {
 ///
 /// - `trace_id`, `span_id` — from the correlation;
 /// - `parent_span_id` — recorded only when the work arrived from somewhere;
-/// - `actor_id` — filled from an inherited correlation, else by the authn guard;
+/// - `enduser.id` — the actor, under the semantic conventions' key; filled from
+///   an inherited correlation, else by the authn guard;
 /// - `error.type`, `otel.status_code` — filled by
 ///   [`operation_log::record_outcome`](crate::operation_log::record_outcome)
-///   when the unit ends in anything but `ok`.
+///   when the unit ends in anything but `ok`;
+/// - `otel.status_description` — filled by
+///   [`operation_log::record_cause`](crate::operation_log::record_cause) where
+///   the server failed it.
 ///
 /// The first argument is a path to a [`Unit`](crate::operation_log::Unit),
 /// giving the span's name, target and `otel.kind`; a literal does not match,
@@ -660,7 +805,7 @@ macro_rules! operation_span {
         let __correlation = &$correlation;
         // The link runs inside the pending ids: an exporter may start its span
         // only when first asked for it, and must start it under these ids.
-        let __span = $crate::__private::with_pending_ids(__correlation, || {
+        let __span = $crate::__private::with_pending_unit(const { &$unit }, __correlation, || {
             let __span = $crate::tracing::info_span!(
                 target: $unit.target(),
                 $unit.name(),
@@ -668,9 +813,10 @@ macro_rules! operation_span {
                 trace_id = %__correlation.trace_id(),
                 span_id = %__correlation.span_id(),
                 parent_span_id = $crate::tracing::field::Empty,
-                actor_id = $crate::tracing::field::Empty,
+                "enduser.id" = $crate::tracing::field::Empty,
                 "error.type" = $crate::tracing::field::Empty,
                 otel.status_code = $crate::tracing::field::Empty,
+                otel.status_description = $crate::tracing::field::Empty,
                 $($($field)*)?
             );
             $crate::__private::link_span(&__span, __correlation);
@@ -685,7 +831,7 @@ macro_rules! operation_span {
         // Nothing re-authenticates an inherited unit (a WS message, a job), so
         // the span is filled here or never.
         if let Some(actor_id) = __correlation.actor_id() {
-            __span.record($crate::__private::field::ACTOR_ID, actor_id);
+            __span.record($crate::__private::field::ENDUSER_ID, actor_id);
         }
         __span
     }};
@@ -885,6 +1031,48 @@ mod tests {
     }
 
     #[test]
+    fn a_trace_minted_unsampled_is_pending_as_one_only_where_its_span_starts_it() {
+        let unsampled = __private::minted_unsampled();
+        assert_eq!(
+            unsampled.flags().bits(),
+            TraceFlags::RANDOM,
+            "only the sampled bit is cleared",
+        );
+        let starts = |correlation: &Correlation| {
+            __private::with_pending_ids(correlation, __private::pending_starts_unsampled)
+        };
+        assert!(starts(&unsampled));
+        assert!(!starts(&unsampled.child()), "a child continues the trace");
+        assert!(!starts(&Correlation::minted(None)));
+        assert!(!__private::pending_starts_unsampled(), "no span is pending");
+    }
+
+    #[test]
+    fn a_units_client_operations_share_its_count_and_a_unit_it_causes_counts_its_own() {
+        __private::count_client_spans();
+        let unit = Correlation::minted(None);
+        let operation = __private::client_operation_of(&unit);
+        assert_eq!(operation.parent_id(), Some(unit.span_id()));
+        assert_eq!(operation.trace_id(), unit.trace_id());
+
+        assert!(__private::client_spans(&operation).claim(1));
+        assert!(!__private::client_spans(&operation).claim(1));
+        assert_eq!(__private::client_spans(&unit).past(1), 1);
+
+        let caused = unit.child();
+        assert_eq!(__private::client_spans(&caused).past(0), 0);
+        assert!(__private::client_spans(&caused).claim(1));
+    }
+
+    #[test]
+    fn a_unit_keeps_no_count_until_a_stack_counts_client_spans() {
+        let unit = Correlation::minted(None);
+        let operation = __private::client_operation_of(&unit);
+        assert!(__private::client_spans(&operation).claim(0), "never past");
+        assert_eq!(__private::client_spans(&unit).past(0), 0);
+    }
+
+    #[test]
     fn tracestate_is_carried_verbatim_and_refused_whole_when_unusable() {
         assert_eq!(
             TraceState::adopt("  rojo=00f067aa0ba902b7,congo=t61rcWkgMzE  ").as_str(),
@@ -1014,5 +1202,42 @@ mod tests {
         assert!(current_trace_id().is_none());
         assert!(current_span_id().is_none());
         assert!(current_traceparent().is_none());
+    }
+
+    /// A layer reads the unit a span opens while `tracing` creates it, and
+    /// nothing is pending once it is created.
+    #[test]
+    fn the_unit_a_span_opens_is_pending_while_the_span_is_created() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::{Context, SubscriberExt as _};
+
+        #[derive(Clone, Default)]
+        struct Seen(Arc<Mutex<Option<&'static str>>>);
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Seen {
+            fn on_new_span(
+                &self,
+                _: &tracing::span::Attributes<'_>,
+                _: &tracing::span::Id,
+                _: Context<'_, S>,
+            ) {
+                *self.0.lock().expect("the seen unit") =
+                    __private::pending_unit().map(crate::operation_log::Unit::name);
+            }
+        }
+
+        let seen = Seen::default();
+        let subscriber = tracing_subscriber::registry().with(seen.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            drop(crate::operation_span!(
+                crate::unit::HOOK,
+                &Correlation::minted(None)
+            ));
+            assert!(__private::pending_unit().is_none());
+        });
+
+        assert_eq!(
+            *seen.0.lock().expect("the seen unit"),
+            Some(crate::unit::HOOK.name()),
+        );
     }
 }

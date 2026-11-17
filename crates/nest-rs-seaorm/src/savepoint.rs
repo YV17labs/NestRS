@@ -198,8 +198,13 @@ impl Savepoint {
                 format!("ROLLBACK TO SAVEPOINT {name}; RELEASE SAVEPOINT {name}")
             };
             let mut unsettled = Unsettled::armed(&self.enclosing, transport);
-            let sent = match self.root().opened() {
-                Some(txn) => txn.execute_unprepared(&sql).await,
+            let root = self.root();
+            let sent = match root.opened() {
+                Some(txn) => {
+                    root.statements()
+                        .sent(&sql, txn.execute_unprepared(&sql))
+                        .await
+                }
                 None => Err(outlived()),
             };
             unsettled.disarm();

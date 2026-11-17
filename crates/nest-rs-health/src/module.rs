@@ -7,6 +7,7 @@ use std::any::TypeId;
 use nest_rs_config::{ConfigModule, ConfigSetup};
 use nest_rs_core::__private::{ModuleDescriptor, ProbeRuntime};
 use nest_rs_core::{Container, ContainerBuilder, Module, ReachableProviders, Registering, module};
+use nest_rs_http::__private::ProbeHost;
 use nest_rs_http::HttpModule;
 
 use crate::config::HealthConfig;
@@ -67,14 +68,16 @@ fn indicator_hosts() -> Vec<(&'static str, TypeId)> {
         .collect()
 }
 
-/// Attaches the indicator wiring and the close that undoes it: `#[module]`
-/// takes only imports and providers, so this hand-written module carries the
-/// steps for [`HealthModule`].
+/// Attaches the indicator wiring, the close that undoes it, and the mark that
+/// makes the controller's routes probes: `#[module]` takes only imports and
+/// providers, so this hand-written module carries the steps for
+/// [`HealthModule`].
 struct HealthWiring;
 
 impl Module for HealthWiring {
     fn register(builder: ContainerBuilder, _: Registering<Self>) -> ContainerBuilder {
         builder
+            .attach_meta::<HealthController, _>(ProbeHost)
             .provide_wiring("nest_rs::health::indicators", wire_indicators)
             .provide_close::<HealthService, _, _>(|svc| async move {
                 svc.release_container();

@@ -17,13 +17,13 @@ use crate::{init_under, refused_under};
 
 /// The authority the collector's certificate chains to; the system's store
 /// does not hold it.
-static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
+pub(crate) static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
 
 static CERTIFICATE: LazyLock<TestCertificate> = LazyLock::new(|| AUTHORITY.server(&["127.0.0.1"]));
 
 /// What a collector does with each export it reads.
 #[derive(Clone)]
-enum Behaviour {
+pub(crate) enum Behaviour {
     /// Writes this raw HTTP/1.1 answer, then closes.
     Answer(String),
     /// Holds the connection and never answers.
@@ -36,16 +36,24 @@ const ACCEPTED: &str = "HTTP/1.1 200 OK\r\ncontent-type: application/x-protobuf\
 
 /// One export a collector read: where it was posted, its headers and its body.
 #[derive(Clone)]
-struct Received {
-    path: String,
+pub(crate) struct Received {
+    pub(crate) path: String,
     /// Every header line, name and value lowercased.
     headers: Vec<(String, String)>,
-    body: Vec<u8>,
+    pub(crate) body: Vec<u8>,
 }
 
 impl Received {
+    /// Whether the body holds `name`: an OTLP/protobuf export writes a
+    /// metric's name as its bytes.
+    pub(crate) fn holds(&self, name: &str) -> bool {
+        self.body
+            .windows(name.len())
+            .any(|window| window == name.as_bytes())
+    }
+
     /// The value of the header `name` (lowercase), if the export carried it.
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(crate) fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
             .find(|(header, _)| header == name)
@@ -68,20 +76,20 @@ impl std::fmt::Debug for Received {
 
 /// An OTLP/HTTP collector over TLS on loopback, on a runtime of its own, every
 /// export it reads kept.
-struct Collector {
+pub(crate) struct Collector {
     addr: SocketAddr,
     exports: Arc<Mutex<Vec<Received>>>,
 }
 
 impl Collector {
     /// A collector taking every export.
-    fn serving() -> Self {
+    pub(crate) fn serving() -> Self {
         Self::serving_to(Behaviour::Answer(ACCEPTED.to_owned()), None)
     }
 
     /// A collector doing `behaviour` with every export, requiring a client
     /// certificate `clients` issued when it names an authority.
-    fn serving_to(behaviour: Behaviour, clients: Option<&TestAuthority>) -> Self {
+    pub(crate) fn serving_to(behaviour: Behaviour, clients: Option<&TestAuthority>) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
         listener.set_nonblocking(true).expect("non-blocking");
         let addr = listener.local_addr().expect("its address");
@@ -155,7 +163,7 @@ impl Collector {
         Self { addr, exports }
     }
 
-    fn endpoint(&self) -> String {
+    pub(crate) fn endpoint(&self) -> String {
         format!("https://127.0.0.1:{}", self.addr.port())
     }
 
@@ -172,9 +180,33 @@ impl Collector {
     }
 
     /// Every export read so far.
-    fn received(&self) -> Vec<Received> {
+    pub(crate) fn received(&self) -> Vec<Received> {
         self.exports.lock().expect("the exports").clone()
     }
+}
+
+/// Every export of metrics `collector` read.
+pub(crate) fn metric_exports(collector: &Collector) -> Vec<Received> {
+    received_on(collector, "/v1/metrics")
+}
+
+/// Every export of traces `collector` read.
+pub(crate) fn trace_exports(collector: &Collector) -> Vec<Received> {
+    received_on(collector, "/v1/traces")
+}
+
+/// Every export of logs `collector` read.
+pub(crate) fn log_exports(collector: &Collector) -> Vec<Received> {
+    received_on(collector, "/v1/logs")
+}
+
+/// Every export `collector` read on `path`.
+fn received_on(collector: &Collector, path: &str) -> Vec<Received> {
+    collector
+        .received()
+        .into_iter()
+        .filter(|export| export.path == path)
+        .collect()
 }
 
 /// A file `name` holding `contents` in `scratch`, which the test holds: the
@@ -193,7 +225,7 @@ fn export_through(otel: OpenTelemetry) {
 
 /// `OpenTelemetry::init_with` exporting to `collector`, trusting [`AUTHORITY`]
 /// through `OTEL_EXPORTER_OTLP_CERTIFICATE`, with `vars` over it.
-fn trusting(collector: &Collector, vars: &[(&str, &str)]) -> OpenTelemetry {
+pub(crate) fn trusting(collector: &Collector, vars: &[(&str, &str)]) -> OpenTelemetry {
     let endpoint = collector.endpoint();
     let scratch = tempfile::tempdir().expect("a scratch directory");
     let authority = written(&scratch, "authority.pem", AUTHORITY.pem());
@@ -984,4 +1016,145 @@ fn a_variable_this_build_serves_nowhere_is_said_at_warn_unless_its_value_is_what
         "each said once, and always_off, what the build does, not at all"
     );
     drop(otel);
+}
+
+const CHILD_TEST: &str = "otlp::otlp_child_process";
+
+/// The role whose child ends spans faster than a queue of one exports them.
+const SPANS_ON_A_FULL_QUEUE: &str = "spans-on-a-full-queue";
+
+/// What a child emits: far more than a queue of one holds while its one export
+/// waits on a collector that never answers.
+const EMITTED: u64 = 64;
+
+/// The SDK's own names for its two lines about a full span queue
+/// (opentelemetry_sdk 0.33): the first drop, then the count at shutdown.
+const SPAN_DROPPING_STARTED: &str = "BatchSpanProcessor.SpanDroppingStarted";
+const SPANS_DROPPED: &str = "BatchSpanProcessor.SpansDropped";
+
+/// The role whose child files lines faster than a queue of one exports them.
+const RECORDS_ON_A_FULL_QUEUE: &str = "records-on-a-full-queue";
+
+/// The SDK's own names for its two lines about a full log record queue.
+const LOG_DROPPING_STARTED: &str = "BatchLogProcessor.LogDroppingStarted";
+const LOGS_DROPPED: &str = "BatchLogProcessor.LogsDropped";
+
+#[nest_rs_core::main]
+async fn records_on_a_full_queue() -> nest_rs_core::anyhow::Result<()> {
+    let collector = Collector::serving_to(Behaviour::Silent, None);
+    let format = nest_rs_core::EnvPrefix::var(nest_rs_core::logging::var::FORMAT);
+    let _otel = trusting(
+        &collector,
+        &[
+            (format.as_str(), "json"),
+            ("OTEL_TRACES_EXPORTER", "none"),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_BLRP_MAX_QUEUE_SIZE", "1"),
+            ("OTEL_BLRP_EXPORT_TIMEOUT", "200"),
+        ],
+    );
+    for _ in 0..EMITTED {
+        tracing::info!(target: "probe", "a line the export queue may refuse");
+    }
+    Ok(())
+}
+
+#[nest_rs_core::main]
+async fn spans_on_a_full_queue() -> nest_rs_core::anyhow::Result<()> {
+    let collector = Collector::serving_to(Behaviour::Silent, None);
+    let format = nest_rs_core::EnvPrefix::var(nest_rs_core::logging::var::FORMAT);
+    let _otel = trusting(
+        &collector,
+        &[
+            (format.as_str(), "json"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_BSP_MAX_QUEUE_SIZE", "1"),
+            ("OTEL_BSP_EXPORT_TIMEOUT", "200"),
+        ],
+    );
+    for _ in 0..EMITTED {
+        tracing::info_span!(target: "probe", "probe").in_scope(|| {});
+    }
+    Ok(())
+}
+
+#[test]
+fn otlp_child_process() {
+    match crate::child_role().as_deref() {
+        Some(SPANS_ON_A_FULL_QUEUE) => spans_on_a_full_queue().expect("the child's main"),
+        Some(RECORDS_ON_A_FULL_QUEUE) => records_on_a_full_queue().expect("the child's main"),
+        _ => {}
+    }
+}
+
+/// Every line the console of a child in `role` wrote on `opentelemetry_sdk`,
+/// in order, once it exited.
+fn sdk_lines_of(role: &str) -> Vec<serde_json::Value> {
+    let output = crate::child_running(CHILD_TEST, role, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout} {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|line| line["target"] == "opentelemetry_sdk")
+        .collect()
+}
+
+/// Where among `lines` the one line the SDK named `name` sits, said at `warn`.
+fn one_warn(lines: &[serde_json::Value], name: &str) -> usize {
+    let named: Vec<usize> = (0..lines.len())
+        .filter(|at| lines[*at]["fields"]["name"] == name)
+        .collect();
+    assert_eq!(named.len(), 1, "{name} said once: {lines:#?}");
+    assert_eq!(lines[named[0]]["level"], "WARN", "{:#?}", lines[named[0]]);
+    named[0]
+}
+
+/// A drop on a full queue is said once, then counted at shutdown with the
+/// queue's size, never waited for: the SDK's two lines, through the console
+/// `#[nest_rs::main]` queues, under the filter the console starts with.
+fn said_then_counted(lines: &[serde_json::Value], started: &str, counted: &str, count: &str) {
+    let first = one_warn(lines, started);
+    let at_shutdown = one_warn(lines, counted);
+    assert!(
+        first < at_shutdown,
+        "the first drop, then the count: {lines:#?}"
+    );
+    let fields = &lines[at_shutdown]["fields"];
+    assert!(
+        fields[count].as_u64().is_some_and(|dropped| dropped >= 1),
+        "{fields:#?}"
+    );
+    assert_eq!(fields["max_queue_size"], 1, "{fields:#?}");
+}
+
+/// A span ended on a full export queue is dropped so the unit never waits, and
+/// the console says it at `warn`, then how many at shutdown.
+#[test]
+fn a_span_the_full_export_queue_refuses_is_said_and_counted_on_the_console() {
+    let lines = sdk_lines_of(SPANS_ON_A_FULL_QUEUE);
+    said_then_counted(
+        &lines,
+        SPAN_DROPPING_STARTED,
+        SPANS_DROPPED,
+        "dropped_span_count",
+    );
+}
+
+/// A line whose record finds the export queue full is dropped so the unit
+/// never waits, and the console says it at `warn`, then how many at shutdown.
+#[test]
+fn a_record_the_full_export_queue_refuses_is_said_and_counted_on_the_console() {
+    let lines = sdk_lines_of(RECORDS_ON_A_FULL_QUEUE);
+    said_then_counted(
+        &lines,
+        LOG_DROPPING_STARTED,
+        LOGS_DROPPED,
+        "dropped_logs_count",
+    );
 }

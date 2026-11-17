@@ -61,6 +61,15 @@ jobs:
       - name: cargo check (workspace)
         run: cargo check --workspace --all-targets
 
+      # The crates the publish below uploads, each built from its archive. Not
+      # `--workspace`: it packages the `publish = false` members too, and refuses them.
+      - name: Build each crate from its package
+        run: |
+          set -o pipefail
+          cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.publish != []) | "--package=\(.name)"' \
+            | xargs cargo package
+
       - name: Install cargo-workspaces
         run: cargo install cargo-workspaces --version 0.4.2 --locked
 

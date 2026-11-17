@@ -226,7 +226,10 @@ list.
 
 ## Release
 
-The tag equals the workspace `version`; `publish.yml` publishes. The changelog
+The tag equals the workspace `version`; `publish.yml` publishes after every crate
+it uploads has built from its package alone (`cargo package`,
+`decisions/ci-on-change.md`), so a published crate reads no file outside its
+directory and compiles on its own features. The changelog
 follows Keep a Changelog, one file per minor line — `changelog/<major>.<minor>.md`
 holds that line's releases and patches — and `CHANGELOG.md` is their index, newest
 first. A new line opens its file under `[Unreleased]` and its index row; a breaking

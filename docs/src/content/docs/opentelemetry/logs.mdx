@@ -280,6 +280,15 @@ record with the same target, level and fields. It names the unit it was filed in
 by `trace_id` and `span_id`, whether or not traces export; where they do, a line
 filed in a span of your own names that span.
 
+## Limits
+
+A log record that finds the export queue full is dropped, so no line waits on
+the export: the queue holds 2048 records, and `OTEL_BLRP_MAX_QUEUE_SIZE` raises
+it. The SDK says the first drop once, at `warn` on `opentelemetry_sdk`
+(`BatchLogProcessor.LogDroppingStarted`), and how many it dropped at shutdown
+(`BatchLogProcessor.LogsDropped`, with `dropped_logs_count`). The console still
+writes the line whose record was dropped.
+
 ## Going further
 
 - [Traces](/opentelemetry/traces/) — the spans logs correlate against.

@@ -55,7 +55,7 @@ and every line a log record, sent to the collector the variable names.
 | `enabled: false` in tests | nothing: a suite boots the module and never runs `main`, so it exports nothing ([tests](/opentelemetry/#tests)) |
 | `http.tags` | `OTEL_RESOURCE_ATTRIBUTES`, on every span, record and point the process exports |
 | `http.setAttributes(req)` | a field of your own on your own span, `#[tracing::instrument(fields(...))]`; the request's span keeps the fields the HTTP conventions name, `user_agent.original` among them |
-| `http.getUserId(req)` | the authentication guard, which records the caller's id as `actor_id` on the unit's span and every line |
+| `http.getUserId(req)` | the authentication guard, which records the caller's id as `enduser.id` on the unit's span and `actor_id` on every line |
 | `http.queryParamsObfuscateRegex` | nothing to mask: a request's span records `url.path` and never its query, and a request the app sends records its server, never its path or query |
 | `http.ignore` | nothing to list: a health probe's trace starts unsampled and its healthy line files at `debug` ([health](/health/#what-a-probe-leaves-in-your-telemetry)); any other route is the sampler's or the collector's to drop |
 | `@Objective()`, the dashboard, alerts | your backend's, computed from `http.server.request.duration` ([metrics](/opentelemetry/metrics/)) |

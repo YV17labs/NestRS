@@ -47,8 +47,8 @@ impl Strategy for ApiKeyStrategy {
 
 `#[derive(PrincipalIdentity)]` makes `ApiKey` a principal: the guard attaches
 it for the rest of the request, and records the field marked
-`#[principal(actor)]` as `actor_id` on the request span, so every denial is
-attributable. A custom strategy binds exactly like the shipped one:
+`#[principal(actor)]` as `enduser.id` on the request span and `actor_id` on its
+lines, so every denial is attributable. A custom strategy binds exactly like the shipped one:
 `AuthnGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
 bound with `#[use_guards(...)]`.
 

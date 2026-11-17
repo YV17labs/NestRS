@@ -310,8 +310,8 @@ pub async fn authenticate<S: Strategy>(
     }
 }
 
-/// Make `principal` the request's: its `actor_id` on the span and in the
-/// ambient context, its granted scopes and its tenant beside it.
+/// Make `principal` the request's: its actor on the span (`enduser.id`) and in
+/// the ambient context (`actor_id`), its granted scopes and its tenant beside it.
 fn attach<P: PrincipalIdentity + AmbientValue>(
     cx: &mut UnitContext<'_>,
     principal: P,
@@ -320,7 +320,7 @@ fn attach<P: PrincipalIdentity + AmbientValue>(
     // The field is declared by the kernel's `operation_span!`, never by the
     // observability crate an app may not install.
     if let Some(actor_id) = principal.actor_id() {
-        tracing::Span::current().record(field::ACTOR_ID, actor_id.as_str());
+        tracing::Span::current().record(field::ENDUSER_ID, actor_id.as_str());
         // …and into the ambient context for the layers below. Write-once.
         nest_rs_core::__private::set_actor_id(&actor_id);
     }

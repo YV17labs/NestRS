@@ -96,7 +96,9 @@ never decides what a request is called.
 
 You declare it once, on your principal, and the authentication guard publishes it
 the moment it resolves one — see [Authentication](/security/authentication/).
-From then on `current_actor_id()` answers anywhere the framework carries work.
+From then on `current_actor_id()` answers anywhere the framework carries work. A
+unit's exported span carries it as `enduser.id`, the OpenTelemetry conventions'
+key ([Traces](/opentelemetry/traces/#the-request-span)).
 
 It answers **who**, for a log line, an audit row, a `created_by` column. It does
 not answer what they may do: that is the ambient `Ability`, decided in a guard.

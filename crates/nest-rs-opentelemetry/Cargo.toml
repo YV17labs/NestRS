@@ -75,6 +75,10 @@ libc = { workspace = true, optional = true }
 nest-rs-testing = { path = "../nest-rs-testing", features = ["tls", "http"] }
 nest-rs-health = { path = "../nest-rs-health" }
 nest-rs-http = { path = "../nest-rs-http" }
+# A route an authenticated request reaches, whose span names its actor, behind
+# the guard `#[use_guards]` binds.
+nest-rs-authn = { path = "../nest-rs-authn" }
+nest-rs-guards = { path = "../nest-rs-guards" }
 # The collector double serves on a runtime of its own.
 tokio.workspace = true
 # The console's `RUST_LOG` and `<PREFIX>_LOG_*` and the specification's `OTEL_*` are read off the

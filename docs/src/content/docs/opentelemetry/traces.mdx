@@ -163,6 +163,13 @@ spelled exactly, or `_OTHER`), `url.path` (the addressed path), `url.scheme`
 recommend: a client's address is personal data, and a collector keeps what it
 receives — no access line carries it either.
 
+Once a guard identified the caller, the span carries `enduser.id`, the
+conventions' key for the identity your lines carry as `actor_id`. The
+conventions flag it as personal data, and it leaves on the span of every unit
+served for that caller — a request, a message, an operation, a job it enqueued —
+to every collector the export reaches. A principal that names no actor sends
+none.
+
 **The span is the one place a value the client chose is kept, and only what
 the conventions ask for.** `url.path`, `user_agent.original` and — for a
 method outside the known set — `http.request.method_original` are the client's

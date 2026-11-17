@@ -98,8 +98,8 @@ tracing::info!(
 ```
 
 `user_id` is the subject the event is *about*. Who asked for it is not a field
-you write: the operation span carries `actor_id`, and restating it here gives a
-backend two spellings of one fact.
+you write: the line carries `actor_id` and the operation span `enduser.id`, and
+restating it here gives a backend a third spelling of one fact.
 
 Always prefer `field = %value` to `format!("{}", value)`. The OTLP bridge
 serializes structured fields directly; a formatted string becomes opaque text
@@ -107,8 +107,8 @@ the backend cannot filter on.
 
 Every event runs under the **operation span** its edge opened, which already
 carries `trace_id` and `span_id` — the OpenTelemetry log-record vocabulary, so a
-backend joins logs to traces with no field mapping — and `actor_id` once an authn
-guard resolved a principal.
+backend joins logs to traces with no field mapping — and the actor, as
+`enduser.id`, once an authn guard resolved a principal.
 Your structured fields layer on top of those, and you never write either by
 hand.
 

@@ -51,7 +51,9 @@ peer, never an identity (`.claude/decisions/trace-context-over-request-id.md`).
 - **`actor_id` is an audit identity, never an authorization input.** The authn
   guard writes it when it resolves a principal; absent means anonymous. It is
   ambient (`set_actor_id`, write-once; `current_actor_id()` wherever the
-  framework carries work) as well as on the span, and no sentinel is ever
+  framework carries work) as well as on the unit's span, under the semantic
+  conventions' `enduser.id`, personal data that leaves with every span it is on
+  (`.claude/decisions/actor-under-enduser-id.md`), and no sentinel is ever
   returned — `""` or `"anonymous"` would read as an actor of that name. What a
   caller may do is the ambient `Ability`; branching on `actor_id` in a service is
   an authorization decision outside a guard. **The tenant is the opposite**: an
@@ -116,7 +118,7 @@ The edge owes propagation at every boundary it crosses.
 ## The operation span
 
 **`operation_span!` is the only place the canonical fields are declared** —
-`trace_id`, `span_id`, `parent_span_id`, `actor_id`, and the outcome's
+`trace_id`, `span_id`, `parent_span_id`, `enduser.id`, and the outcome's
 `error.type`, `otel.status_code` and `otel.status_description`. `tracing` fixes a span's
 fields at creation, so recording a field no span declared is a silent no-op,
 and declaring a field nothing fills is the same defect with the opposite sign.

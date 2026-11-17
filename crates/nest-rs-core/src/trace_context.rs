@@ -254,8 +254,11 @@ pub mod field {
     /// The unit of work that caused this one; a span field, never a line field.
     pub const PARENT_SPAN_ID: &str = "parent_span_id";
     /// Who the work is being served for — an audit identity, never an
-    /// authorization input; absent means anonymous.
+    /// authorization input; absent means anonymous. On every log line.
     pub const ACTOR_ID: &str = "actor_id";
+    /// The same identity on a unit's span, under the OpenTelemetry semantic
+    /// conventions' key, which flags it as personal data.
+    pub const ENDUSER_ID: &str = "enduser.id";
     /// The sampling byte, on JSON lines only.
     pub const TRACE_FLAGS: &str = "trace_flags";
 }
@@ -773,7 +776,8 @@ const fn unhex(byte: u8) -> Option<u8> {
 ///
 /// - `trace_id`, `span_id` — from the correlation;
 /// - `parent_span_id` — recorded only when the work arrived from somewhere;
-/// - `actor_id` — filled from an inherited correlation, else by the authn guard;
+/// - `enduser.id` — the actor, under the semantic conventions' key; filled from
+///   an inherited correlation, else by the authn guard;
 /// - `error.type`, `otel.status_code` — filled by
 ///   [`operation_log::record_outcome`](crate::operation_log::record_outcome)
 ///   when the unit ends in anything but `ok`;
@@ -809,7 +813,7 @@ macro_rules! operation_span {
                 trace_id = %__correlation.trace_id(),
                 span_id = %__correlation.span_id(),
                 parent_span_id = $crate::tracing::field::Empty,
-                actor_id = $crate::tracing::field::Empty,
+                "enduser.id" = $crate::tracing::field::Empty,
                 "error.type" = $crate::tracing::field::Empty,
                 otel.status_code = $crate::tracing::field::Empty,
                 otel.status_description = $crate::tracing::field::Empty,
@@ -827,7 +831,7 @@ macro_rules! operation_span {
         // Nothing re-authenticates an inherited unit (a WS message, a job), so
         // the span is filled here or never.
         if let Some(actor_id) = __correlation.actor_id() {
-            __span.record($crate::__private::field::ACTOR_ID, actor_id);
+            __span.record($crate::__private::field::ENDUSER_ID, actor_id);
         }
         __span
     }};

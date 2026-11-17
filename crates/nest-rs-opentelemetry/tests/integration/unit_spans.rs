@@ -2,7 +2,11 @@
 //! the trace export whatever the console writes, and a span the console's
 //! filter closes stays out of it.
 
-use nest_rs_core::Correlation;
+use nest_rs_authn::{AuthError, AuthnGuard, PrincipalIdentity, Strategy};
+use nest_rs_core::__private::field;
+use nest_rs_core::{AmbientValue, Correlation, async_trait, injectable, module};
+use nest_rs_http::{HttpModule, Request, controller, routes};
+use nest_rs_testing::TestApp;
 
 use crate::otlp::{Collector, Received, trace_exports, trusting};
 
@@ -209,5 +213,95 @@ fn an_apps_span_its_target_names_is_exported_under_a_console_quieted_to_warn() {
     assert!(
         !exports.iter().any(|export| export.holds("library.lookup")),
         "a target the filter does not name stayed out: {exports:?}",
+    );
+}
+
+/// The identity [`Signing`] authenticates every request as.
+const ACTOR: &str = "user-5f2e9c";
+
+/// A principal naming [`ACTOR`].
+#[derive(Clone)]
+struct Signed;
+
+impl AmbientValue for Signed {}
+
+impl PrincipalIdentity for Signed {
+    fn actor_id(&self) -> Option<String> {
+        Some(ACTOR.to_owned())
+    }
+}
+
+/// A strategy admitting every request as [`ACTOR`].
+#[injectable]
+#[derive(Default)]
+struct Signing;
+
+#[async_trait]
+impl Strategy for Signing {
+    type Principal = Signed;
+
+    async fn authenticate(&self, _req: &mut Request) -> Result<Self::Principal, AuthError> {
+        Ok(Signed)
+    }
+}
+
+type SignedAuthn = AuthnGuard<Signing>;
+
+#[controller(path = "/signed")]
+#[use_guards(SignedAuthn)]
+struct SignedController;
+
+#[routes]
+impl SignedController {
+    #[get("/")]
+    async fn read(&self) -> &'static str {
+        "read"
+    }
+}
+
+#[module(imports = [HttpModule], providers = [Signing, SignedAuthn, SignedController])]
+struct SignedModule;
+
+/// An authenticated request's exported span names its actor under the
+/// conventions' key, and no span exports the key its lines carry.
+#[test]
+fn an_authenticated_request_s_span_names_its_actor_under_enduser_id() {
+    let collector = Collector::serving();
+    let otel = trusting(
+        &collector,
+        &[
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    runtime.block_on(async {
+        let app = TestApp::for_module::<SignedModule>()
+            .await
+            .expect("the guarded route boots");
+        app.http().get("/signed").send().await.assert_status_is_ok();
+    });
+    drop(runtime);
+    drop(otel);
+
+    let exports = trace_exports(&collector);
+    let named: Vec<&Received> = exports
+        .iter()
+        .filter(|export| export.holds(ACTOR))
+        .collect();
+    assert!(
+        !named.is_empty(),
+        "the request's span names its actor: {exports:?}"
+    );
+    assert!(
+        named.iter().all(|export| export.holds(field::ENDUSER_ID)),
+        "under the conventions' key: {exports:?}",
+    );
+    assert!(
+        !exports.iter().any(|export| export.holds(field::ACTOR_ID)),
+        "no span exports the lines' key: {exports:?}",
     );
 }

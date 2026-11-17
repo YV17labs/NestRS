@@ -10,6 +10,12 @@ description = "OpenTelemetry for NestRS: logs, traces, metrics, W3C propagation,
 keywords = ["framework", "nestrs", "opentelemetry", "tracing", "otlp"]
 categories = ["development-tools::debugging", "asynchronous"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
+
 
 [features]
 # OTLP exporter is default so a deployment that sets OTEL_EXPORTER_OTLP_ENDPOINT
@@ -17,7 +23,7 @@ categories = ["development-tools::debugging", "asynchronous"]
 #
 # There is no `http` feature, and its removal is the point: this crate used to
 # mount a per-request interceptor, which reached one edge. What it did now hangs
-# off the framework's span constructor, so a headless worker gets it too â and
+# off the framework's span constructor, so a headless worker gets it too — and
 # nothing here compiles the HTTP stack. Every `optional` dependency is named
 # by a `dep:` below: one that is not becomes a public feature Cargo synthesises.
 default = ["otlp"]

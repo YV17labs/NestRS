@@ -229,7 +229,10 @@ list.
 The tag equals the workspace `version`; `publish.yml` publishes after every crate
 it uploads has built from its package alone (`cargo package`,
 `decisions/ci-on-change.md`), so a published crate reads no file outside its
-directory and compiles on its own features. The changelog
+directory and compiles on its own features. A published crate declaring a
+feature sets `all-features = true` under `[package.metadata.docs.rs]`: docs.rs
+builds the default features alone, and its page shows what `just doc` checks
+(`decisions/docs-rs-renders-every-feature.md`). The changelog
 follows Keep a Changelog, one file per minor line — `changelog/<major>.<minor>.md`
 holds that line's releases and patches — and `CHANGELOG.md` is their index, newest
 first. A new line opens its file under `[Unreleased]` and its index row; a breaking

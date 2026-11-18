@@ -257,7 +257,6 @@ export default defineConfig({
             { label: 'Benchmarks', slug: 'benchmarks' },
             { label: 'Coming from NestJS', slug: 'coming-from-nestjs' },
             { label: 'What runs differently from NestJS', slug: 'coming-from-nestjs/what-runs-differently' },
-            { label: 'Telemetry from @nestjs/observe', slug: 'coming-from-nestjs/observe' },
             { label: 'Getting started', slug: 'getting-started' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
             { label: 'Semver policy', slug: 'semver' },

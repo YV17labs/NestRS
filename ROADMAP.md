@@ -109,7 +109,7 @@ to what NestRS already ships:
 
 | NestJS package | NestRS today |
 |---|---|
-| `@nestjs/observe` | `nest-rs-opentelemetry`: OTLP for logs, traces and metrics to any backend (`docs/src/content/docs/coming-from-nestjs/observe.mdx`) |
+| `@nestjs/observe` | `nest-rs-opentelemetry`: OTLP for logs, traces and metrics to any backend |
 | `@nestjs/mcp` | `nest-rs-mcp`: Streamable HTTP, guards per tool, sessions bound to their principal. No stdio (see § 4) |
 | `@nestjs/authorization` | `nest-rs-authz`: abilities, row-level filtering, per-field masking, on every edge |
 | `@nestjs/outbox` | the queue's transactional push: a push inside a unit commits with it, and a relay files it (`transactional-outbox.md`) |

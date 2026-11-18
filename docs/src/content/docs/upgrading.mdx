@@ -26,14 +26,17 @@ lists what the boot, a log or the wire shows when one is missed.
 1. **Move the CLI and the manifest.** `nestrs update` installs the 7.0 CLI,
    whose scaffolds, `lint` and `doctor` follow the release. In the root
    `Cargo.toml`, the `nest-rs` requirement under `[workspace.dependencies]` goes
-   from `6.1` to `7.0`, and a few features move with it — the umbrella counts
-   30 capabilities:
+   from `6.1` to `7.0`, and a few features and crates move with it — the
+   umbrella counts 31 capabilities, and a manifest names no other `nest-rs-*`
+   crate:
 
    | 6.1 | 7.0 |
    |---|---|
-   | `interceptors`, `exception-filters` | nothing: `nest_rs::core::{Interceptor, ExceptionFilter, interceptor}` |
-   | `filters` | nothing: an exception filter whose `Exception` is `dyn Error + Send + Sync` (step 10) |
-   | `worker` | nothing: `queue` and `schedule` carry what a job needs; the job deadline is `nest_rs::core::JOB_TIMEOUT` |
+   | `interceptors`, `exception-filters`; the crates `nest-rs-interceptors`, `nest-rs-exception-filters` | nothing: `nest_rs::core::{Interceptor, ExceptionFilter, interceptor}` (step 10) |
+   | `filters`; the crate `nest-rs-filters` | nothing: an exception filter whose `Exception` is `dyn Error + Send + Sync` (step 10) |
+   | `worker`; the crate `nest-rs-worker` | nothing: `queue` and `schedule` carry what a job needs; the job deadline is `nest_rs::core::JOB_TIMEOUT`, the unit of work `nest_rs::database::UnitOfWork` (step 11) |
+   | the crates `nest-rs-resource`, `nest-rs-resource-macros` | `seaorm`: `#[expose]` is `nest_rs::seaorm::expose`, and `#[wire_enum]` is `nest_rs::core::wire_enum` (step 5) |
+   | the crate `nest-rs-conformance` | nothing: it was never published |
    | `redis`, for a queue on Redis | `redis-queue` — `redis` alone is now the connection |
    | `graphql`, with `#[authorize]` on a resolver | `graphql` and `authz` |
    | `testing`, with `TestApp` and no other HTTP feature | `testing` and `http`, or `HeadlessApp` |
@@ -277,7 +280,6 @@ lists what the boot, a log or the wire shows when one is missed.
    | `RedisWorker::new()`, spawned in a test | `QueueWorker::new()`, from `nest_rs::queue` |
    | the queue crate's `tracing` re-export | a `tracing` dependency of your own |
    | `async fn hit(&self, key: &str, limit: Throttle) -> Decision` on a rate-limit store of your own | `-> Result<Decision, ThrottlerStoreError>`: your client's failure as `Err(ThrottlerStoreError::new(error))`, never a decision of your own, and no log line |
-   | `MaskReplyError::Irreconcilable(serde_json::Error)` | `MaskReplyError::Irreconcilable(DecodeError)` |
    | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
    | `problem.extensions` moved or compared as a `serde_json::Map` | `*problem.extensions`: the map is boxed, so a `Result` carrying the problem stays under clippy's `result_large_err` threshold; indexing, `get` and `insert` read through the box unchanged |
    | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
@@ -709,7 +711,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | a blanket of your own over one of those traits, `impl<T: Serialize> Audited for T`, beside a specific impl on an `#[expose]`d `Model` or `ModelEx`, `impl Audited for Model` | `E0119`, since rustc reads what `#[expose]` emits on the row as an impl upstream could make hold. Delete the row's impl: the exposed type already meets the blanket, `User::from(&model).audit()`, and an impl on it would overlap the same way. A row that keeps its own bounds the blanket on a trait of yours, implemented on the exposed types |
    | `#[derive(Default)]` and `#[wire_enum]` on an enum a hidden column alone holds, there for the mask | optional: drop both — a hidden column's type needs no serde, and no reply rebuilds it |
    | a hand-written `impl WireModelDefaults`, or `use nest_rs::authz::WireModelDefaults` | `#[expose(name = "…")]` on the entity: the trait is gone, and the wire type is the decorator's alone |
-   | `Ability::mask`, `mask_many` or `masked_reply` on a row or a value | gone: build the exposed type from the row, `User::from(&row)`, which judges it for the caller whose ability is installed there |
+   | `Ability::mask`, `mask_many` or `masked_reply` on a row or a value, and the `MaskReplyError` `masked_reply` answered | gone: build the exposed type from the row, `User::from(&row)`, which judges it for the caller whose ability is installed there |
    | a subscription pushing the wire row its publisher built (`PostPublishedEvent { post: Post }`) | carry the row, `post: Model`, and build the wire row in the stream: a wire row answers only the caller whose ability judged it, so the publisher's answers no subscriber and leaves the stream, one `error` line each |
    | `ab.can(Action::Read, E).fields([...])`, or on `Manage`, leaving out a column the reply cannot answer `null` | `#[expose(nullable)]` on each column the grant may withhold, or an `Option` column: the grant fails `build()` otherwise, naming the column. The field reads `null` for that caller, nullable in every edge's schema, its key still required |
    | a GraphQL client of a member selecting a column the member's grant withholds, which answered `FORBIDDEN` refusing the selection (or `data: null` over a list) | the column reads `null` on each row and nothing is refused, since the schema now says it is nullable |

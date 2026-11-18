@@ -196,7 +196,7 @@ async-graphql's `dataloader::LruCache`, which `nest_rs::graphql::async_graphql`
 reaches: it stores into `lru` 0.16, whose `LruCache::pop` frees a node it still
 links when a key's `Drop` panics
 ([RUSTSEC-2026-0253](https://rustsec.org/advisories/RUSTSEC-2026-0253.html)).
-The fix ships in async-graphql 8, a NestRS major away.
+No async-graphql release fixes it yet, 8.0's release candidates included.
 </Aside>
 
 ## The cross-entity rule

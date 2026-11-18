@@ -127,3 +127,41 @@
   > statement. Either a way to begin on a connection already acquired, or the
   > acquire duration reported beside the transaction, would let it export the
   > wait as OpenTelemetry's `db.client.connection.wait_time`.
+
+## sea-orm-migration turns sea-orm's default features on
+
+- **Seen** — sea-orm-migration 2.0.4 requires `sea-orm` with
+  `features = ["schema-sync"]` and no `default-features = false`
+  (`Cargo.toml`, `[dependencies.sea-orm]`), so sea-orm's defaults — `macros`,
+  `with-json`, `with-chrono`, `with-rust_decimal`, `with-uuid`, `with-time`,
+  `sqlite-use-returning-for-3_35`, `stream` — are on in every build linking it.
+  `cargo tree -e features,no-dev -i sea-orm` on `nest-rs-seaorm --features queue`
+  and on `nest-rs-testing --features orm` shows `sea-orm feature "default"` from
+  `sea-orm-migration v2.0.4`.
+- **Effect** — an app with a migrations crate, the one `nestrs new` writes
+  included, compiles sea-orm with chrono, time and rust_decimal whatever its own
+  `sea-orm` line turns off, and so do the queue's outbox binding and the testing
+  kit's `orm`. chrono, declared unmaintained (RUSTSEC-2026-0543), stays in such
+  an app's tree even where nestrs would stop naming it.
+- **Our side** — the documented fact, in
+  `.claude/decisions/public-dependencies.md` (2026-11-18, chrono) and
+  `deny.toml`'s reason for RUSTSEC-2026-0543; the framework's own `sea-orm` and
+  `sea-orm-migration` lines set `default-features = false`.
+- **Canary** — none: a manifest line, read when the version moves.
+- **Upstream** — not filed.
+- **When fixed** — the sentence leaves the decision and `deny.toml`'s reason;
+  chrono leaves an app's tree with nestrs's own move off it, in nestrs 8.
+  Minutes.
+- **Ticket** —
+
+  > **sea-orm-migration: depend on sea-orm with `default-features = false`**
+  >
+  > sea-orm-migration 2.0.4 depends on `sea-orm` with `features =
+  > ["schema-sync"]` and sea-orm's default features on, so every crate linking
+  > it compiles `with-chrono`, `with-time`, `with-rust_decimal`, `with-json` and
+  > `sqlite-use-returning-for-3_35`, whatever the application's own `sea-orm`
+  > line turns off. An application that leaves chrono out (declared
+  > unmaintained in RUSTSEC-2026-0543), or SQLite's flag out of a Postgres
+  > build, cannot once it has migrations. Could the dependency set
+  > `default-features = false`, sea-orm-migration's own features forwarding
+  > what a migration needs?

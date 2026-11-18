@@ -487,3 +487,10 @@ app reads. **The first of two `boundary` parameters**, mime 0.3's reading, which
 another reader may take as the last. **Handing async-graphql the client's
 type**, which answered a type RFC 9110 admits "the `operations` part does not
 decode" and kept a second parse of the type beside the edge's.
+
+## 2026-11-18 — RUSTSEC-2026-0253 is fixed in no async-graphql release
+
+The measurement of 2026-10-04 says the advisory is fixed only in async-graphql
+8.0. It is not: 8.0.0-rc.5 still requires `lru` 0.16, and lru fixes it from
+0.18.2 (`public-dependencies.md`, this date). The decision rests on poem's own
+state, which that measurement read correctly.

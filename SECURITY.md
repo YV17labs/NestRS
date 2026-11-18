@@ -45,7 +45,7 @@ upgrading guide.
 | Line | Receives |
 | --- | --- |
 | latest minor of the current major | every fix |
-| previous major | security fixes, for three months after the current major's release — the end date is written here when it ships |
+| previous major (6.1) | security fixes, for three months after the current major's release: until 2027-02-18 |
 | anything older | nothing: upgrade to a supported line |
 
 Never more than two lines are supported at once. [`CHANGELOG.md`](CHANGELOG.md)

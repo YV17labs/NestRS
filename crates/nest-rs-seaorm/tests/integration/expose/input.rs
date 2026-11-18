@@ -2,7 +2,7 @@
 //! the macro *emits* must compile with nothing but `nest-rs-seaorm`'s own
 //! `graphql` feature turned on, its `DateTime*` `InputType` impls included. The
 //! rules an input declares hold at the edge that decodes it, a hand-written
-//! create's included, and so does the one it puts on an id: a UUID v7.
+//! create's included, and an id it carries takes a UUID of any version.
 
 use std::sync::Arc;
 
@@ -194,8 +194,11 @@ struct TicketsModule;
 #[module(imports = [TicketsModule], providers = [GlobalGuards<(GrantsCreate,)>])]
 struct TicketsApp;
 
+/// What the edge admits reaches a pool refusing every acquire, an ordinary
+/// failure, never a panic of the driver's.
 async fn tickets() -> TestApp {
-    crate::over_an_unconnected_pool()
+    crate::over_a_pool_refusing_every_acquire()
+        .await
         .module::<TicketsApp>()
         .build()
         .await
@@ -243,60 +246,233 @@ async fn a_hand_written_create_taking_the_bare_input_is_validated_over_graphql()
     );
 }
 
-/// An id no framework mints: a UUID, version 4.
-const NOT_V7: &str = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+/// A key no framework mints: a UUID, version 4, as an identity provider, a table
+/// imported from elsewhere or a browser's `crypto.randomUUID()` draws one.
+const V4: &str = "67e55044-10b1-426f-9247-bb680e5fe0c8";
 
-/// A refusal of an id an input carries, by its field: the class every edge
-/// answers a broken rule with, and the sentence a `#[crud]` id argument says.
-fn assert_refuses_the_id(errors: &serde_json::Value, field: &str, said: &str) {
-    assert_eq!(errors[field][0]["code"], "uuid_v7", "{said}");
-    assert_eq!(
-        errors[field][0]["message"],
-        nest_rs_core::UUID_V7_REQUIRED,
-        "{said}"
-    );
-    assert!(!said.contains(NOT_V7), "quotes the value: {said}");
-}
-
+/// A create whose input relates the row to a key of any UUID version passes the
+/// edge and reaches the service, whose pool has no server: the opaque `INTERNAL`,
+/// never the edge's refusal.
 #[tokio::test]
-async fn an_id_an_input_carries_is_held_to_a_uuid_v7_over_http() {
+async fn a_create_relates_a_row_to_a_key_of_any_uuid_version_over_http() {
     let app = tickets().await;
 
-    let refused = app
+    let reached = app
         .http()
         .post("/tickets")
-        .body_json(&serde_json::json!({ "label": "aisle", "board_id": NOT_V7 }))
+        .body_json(&serde_json::json!({ "label": "aisle", "board_id": V4 }))
         .send()
         .await;
 
-    refused.assert_status(StatusCode::BAD_REQUEST);
-    let problem: serde_json::Value = refused.json().await.value().deserialize();
-    let said = problem.to_string();
-    assert_eq!(problem["code"], "INVALID_ARGUMENT", "{said}");
-    assert_refuses_the_id(&problem["errors"], "board_id", &said);
+    reached.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    let problem: serde_json::Value = reached.json().await.value().deserialize();
+    assert_eq!(problem["code"], "INTERNAL", "{problem}");
 }
 
 #[tokio::test]
-async fn an_id_an_input_carries_is_held_to_a_uuid_v7_over_graphql() {
+async fn a_create_relates_a_row_to_a_key_of_any_uuid_version_over_graphql() {
     let app = tickets().await;
 
-    let resp = app
+    let reply: serde_json::Value = app
         .http()
         .post("/graphql")
         .body_json(&serde_json::json!({
             "query": format!(
-                "mutation {{ createTicket(input: {{ label: \"aisle\", boardId: \"{NOT_V7}\" }}) {{ id }} }}"
+                "mutation {{ createTicket(input: {{ label: \"aisle\", boardId: \"{V4}\" }}) {{ id }} }}"
             )
         }))
         .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize();
+
+    assert_eq!(
+        reply["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{reply}"
+    );
+}
+
+/// A ledger an app holds: its own key the framework minted, its account's key a
+/// value another system drew, which a replacement carries back as it reads it.
+mod ledger {
+    use super::*;
+
+    #[expose(name = "Ledger", graphql)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "held_ledgers")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose(input(create, update))]
+        pub account_id: Uuid,
+        #[expose(input(create, update))]
+        pub label: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    #[injectable]
+    #[derive(Default)]
+    pub(super) struct LedgersService;
+
+    impl CrudService for LedgersService {
+        type Entity = Entity;
+    }
+
+    impl Creatable for LedgersService {
+        type Create = CreateLedger;
+    }
+
+    impl Updatable for LedgersService {
+        type Update = UpdateLedger;
+    }
+
+    /// The row as the app holds it.
+    pub(super) const ROW: &str = "01920000-0000-7000-8000-0000000001a1";
+}
+
+#[injectable]
+#[derive(Default)]
+struct WritesLedgers;
+
+impl nest_rs_authz::AbilityFactory for WritesLedgers {
+    type Actor = crate::Anyone;
+
+    fn define(&self, _actor: &crate::Anyone, ab: &mut AbilityBuilder) {
+        ab.can(nest_rs_authz::Action::Read, ledger::Entity);
+        ab.can(nest_rs_authz::Action::Update, ledger::Entity);
+    }
+}
+
+#[controller(path = "/ledgers")]
+#[use_guards(
+    crate::always_authenticated::AlwaysAuthenticated,
+    nest_rs_authz::AbilityGuard<WritesLedgers>
+)]
+struct LedgersController {
+    #[inject]
+    svc: Arc<ledger::LedgersService>,
+}
+
+#[nest_rs_http::crud(service = ledger::LedgersService, ops = [update])]
+impl LedgersController {}
+
+#[resolver]
+struct LedgersResolver {
+    #[inject]
+    svc: Arc<ledger::LedgersService>,
+}
+
+#[nest_rs_graphql::crud(service = ledger::LedgersService, ops = [update])]
+impl LedgersResolver {}
+
+/// The row the app holds, as a read of it answers.
+#[resolver]
+struct HeldLedgerResolver;
+
+#[operations]
+impl HeldLedgerResolver {
+    #[query]
+    #[authorize(nest_rs_authz::Read, ledger::Entity)]
+    async fn held_ledger(&self) -> Result<ledger::Ledger, nest_rs_seaorm::ServiceError> {
+        Ok(ledger::Ledger::from(&ledger::Model {
+            id: ledger::ROW.parse().expect("a UUID"),
+            account_id: V4.parse().expect("a UUID"),
+            label: "rent".to_owned(),
+        }))
+    }
+}
+
+#[module(
+    imports = [
+        nest_rs_seaorm::SeaOrmDatabaseModule,
+        GraphqlModule::for_root(nest_rs_graphql::GraphqlConfig::default()),
+    ],
+    providers = [
+        ledger::LedgersService,
+        WritesLedgers,
+        nest_rs_authz::AbilityGuard<WritesLedgers>,
+        crate::always_authenticated::AlwaysAuthenticated,
+        nest_rs_http::EndpointGuards<
+            nest_rs_graphql::GraphqlView,
+            (
+                crate::always_authenticated::AlwaysAuthenticated,
+                nest_rs_authz::AbilityGuard<WritesLedgers>,
+            ),
+        >,
+        LedgersController,
+        LedgersResolver,
+        HeldLedgerResolver,
+    ],
+)]
+struct LedgersModule;
+
+/// An app whose every statement reaches a pool refusing every acquire: what the
+/// edge admits answers the opaque `500`.
+async fn ledgers() -> TestApp {
+    crate::over_a_pool_refusing_every_acquire()
+        .await
+        .module::<LedgersModule>()
+        .build()
+        .await
+        .expect("the app boots: the server's absence is a runtime fact")
+}
+
+/// A replacement carrying back the account key the row holds, as it reads it,
+/// passes the edge whatever the key's UUID version, and reaches the service.
+#[tokio::test]
+async fn an_update_carries_back_a_key_of_any_uuid_version_over_http() {
+    let app = ledgers().await;
+
+    let reached = app
+        .http()
+        .put(format!("/ledgers/{}", ledger::ROW))
+        .body_json(&serde_json::json!({ "account_id": V4, "label": "renamed" }))
+        .send()
         .await;
 
-    resp.assert_status_is_ok();
-    let reply: serde_json::Value = resp.json().await.value().deserialize();
-    let said = reply.to_string();
-    let error = &reply["errors"][0];
-    assert_eq!(error["extensions"]["code"], "INVALID_ARGUMENT", "{said}");
-    assert_refuses_the_id(&error["extensions"]["errors"], "boardId", &said);
+    reached.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    let problem: serde_json::Value = reached.json().await.value().deserialize();
+    assert_eq!(problem["code"], "INTERNAL", "{problem}");
+}
+
+#[tokio::test]
+async fn an_update_carries_back_a_key_of_any_uuid_version_over_graphql() {
+    let app = ledgers().await;
+    let ask = |body: serde_json::Value| {
+        let app = &app;
+        async move {
+            app.http()
+                .post("/graphql")
+                .body_json(&body)
+                .send()
+                .await
+                .json()
+                .await
+                .value()
+                .deserialize::<serde_json::Value>()
+        }
+    };
+
+    let held = ask(serde_json::json!({ "query": "{ heldLedger { id accountId } }" })).await;
+    let row = &held["data"]["heldLedger"];
+    assert_eq!(row["accountId"], V4, "{held}");
+
+    let replaced = ask(serde_json::json!({
+        "query": "mutation($id: ID!, $accountId: ID!) { updateLedger(id: $id, input: { accountId: $accountId, label: \"renamed\" }) { id } }",
+        "variables": { "id": row["id"], "accountId": row["accountId"] },
+    }))
+    .await;
+    assert_eq!(
+        replaced["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{replaced}"
+    );
 }
 
 /// An input's id that is no UUID at all is refused where the edge decodes it,

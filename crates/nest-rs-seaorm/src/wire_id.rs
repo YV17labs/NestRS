@@ -1,16 +1,23 @@
 use std::borrow::Cow;
+use std::fmt;
 
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use uuid::Uuid;
-use validator::ValidationError;
 
 /// An id on an `#[expose]` wire row or in its `Create`/`Update` input, whether
 /// its column is an `Option` or not: the UUID's hyphenated text on every edge,
-/// and on GraphQL the `ID` a `#[crud]` id argument takes. It reads back as the
-/// column's `Uuid` through `AsRef` and `Into`, and is built from one with `into()`.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+/// and on GraphQL the `ID` a `#[crud]` id argument takes. It is as a `Uuid` is —
+/// copied, compared, hashed and printed alike — reads back as the column's `Uuid`
+/// through `AsRef` and `Into`, and is built from one with `into()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct WireId(Uuid);
+
+impl fmt::Display for WireId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
 
 impl From<Uuid> for WireId {
     fn from(id: Uuid) -> Self {
@@ -54,16 +61,6 @@ impl JsonSchema for WireId {
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         <Uuid as JsonSchema>::json_schema(generator)
     }
-}
-
-/// The rule `#[expose]` puts on an id its input carries: a UUID v7, the
-/// framework's identifier contract, refused in the sentence a `#[crud]` id
-/// argument answers.
-pub fn uuid_v7(id: &WireId) -> Result<(), ValidationError> {
-    if id.0.get_version_num() == 7 {
-        return Ok(());
-    }
-    Err(ValidationError::new("uuid_v7").with_message(Cow::Borrowed(nest_rs_core::UUID_V7_REQUIRED)))
 }
 
 #[cfg(feature = "graphql")]
@@ -117,7 +114,7 @@ mod tests {
     #[test]
     fn an_id_serializes_and_reads_back_as_the_uuid_s_text() {
         let id = id(V7);
-        assert_eq!(serde_json::to_value(&id).expect("serializes"), V7);
+        assert_eq!(serde_json::to_value(id).expect("serializes"), V7);
         let read: WireId = serde_json::from_value(V7.into()).expect("reads back");
         assert_eq!(Uuid::from(read), *id.as_ref());
     }
@@ -127,16 +124,26 @@ mod tests {
         assert_eq!(schemars::schema_for!(WireId), schemars::schema_for!(Uuid),);
     }
 
+    /// Any version reads back, a key another system drew included.
     #[test]
-    fn an_id_is_held_to_a_uuid_v7_and_refused_in_the_framework_s_sentence() {
-        assert!(uuid_v7(&id(V7)).is_ok());
-        let refused = uuid_v7(&id(V4)).expect_err("a v4 is no framework id");
-        assert_eq!(refused.code, "uuid_v7");
-        assert_eq!(
-            refused.message.as_deref(),
-            Some(nest_rs_core::UUID_V7_REQUIRED)
-        );
-        assert!(refused.params.is_empty(), "no value quoted: {refused:?}");
+    fn an_id_of_any_uuid_version_reads_back() {
+        for text in [V7, V4] {
+            let read: WireId = serde_json::from_value(text.into()).expect("a UUID reads back");
+            assert_eq!(read.to_string(), text);
+        }
+    }
+
+    /// Borrowed where a field resolver holds its parent, an id is copied out,
+    /// compared, hashed and printed as the `Uuid` it holds.
+    #[test]
+    fn an_id_is_as_its_uuid_is() {
+        let parent = (id(V7), id(V7), id(V4));
+        let (held, same, other) = (&parent.0, &parent.1, &parent.2);
+        assert_eq!(Uuid::from(*held), Uuid::parse_str(V7).expect("a UUID"));
+        assert!(held == same && held != other);
+        assert_eq!(held.to_string(), Uuid::from(*held).to_string());
+        let set: std::collections::HashSet<WireId> = [*held, *same, *other].into();
+        assert_eq!(set.len(), 2);
     }
 
     #[cfg(feature = "graphql")]

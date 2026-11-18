@@ -94,3 +94,32 @@ two ways depending on the edge. 6.x read the same types, and wrote the bare colu
 `postgres-array` feature, which neither the framework nor `nestrs new` turns on;
 and an app's own GraphQL type holding a chrono instant, which async-graphql
 spells `+00:00` (`.claude/upstream/async-graphql.md`).
+
+## 2026-11-18 — an input's id takes any UUID version, and an instant reads back as `DateTimeWithTimeZone`
+
+The entry above held an input's id to a UUID v7, as a `#[crud]` id argument
+is held. A review saw what that refused (in process, a `#[crud]` update and
+create over HTTP and GraphQL): a row holding a key no framework mints — an
+account an identity provider keeps, a table imported from elsewhere, a client's
+`crypto.randomUUID()`, the v4 `jti` the authentication crate signs itself — could
+no longer be replaced by `#[crud]`, since a replacement carries every writable
+column back as it reads it, and nothing could relate a row to such a key. 6.1
+took any version.
+
+**Decided:** an input's id is `ID`, parsed as a UUID of any version, and one
+that is no UUID at all is refused where the edge decodes it. The v7 stays where
+the framework addresses a row it minted: a `#[crud]` id argument, the argument
+`bind` reads, a route's path, an MCP resource's template. No input carries the
+key the framework mints — the insert fills it — so every id an input holds names
+another row, or a value another system drew; a foreign key to a row the
+framework minted is a v7 already, and the database's constraint says whether it
+exists.
+
+**Refused: a UUID v7 on an input's id.** It added nothing a foreign key's
+constraint does not hold, and refused every key another system drew.
+
+The read-back is said exactly: an id reads back as its column's `Uuid`, which
+`WireId` is beside — `Copy`, compared, hashed and printed as one — so a field
+resolver's borrowed parent gives it up as `Uuid::from(parent.id)`; an instant
+reads back as `DateTimeWithTimeZone` (`DateTime<FixedOffset>`), whatever zone
+its column holds, where the entry above said "its column's type".

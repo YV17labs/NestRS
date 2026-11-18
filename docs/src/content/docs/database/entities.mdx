@@ -174,18 +174,20 @@ one `#[expose(nullable)]` declares, or neither:
 | `Date`, `Time`, `DateTime` (naive) | `NaiveDate`, `NaiveTime`, `NaiveDateTime` | `"2026-10-08"`, `"12:30:00.250"`, `"2026-10-08T12:30:00.250"` | `date`, `partial-time`, `partial-date-time` |
 
 An id is GraphQL's `ID` wherever it appears: a reply, a create or update input,
-a `#[crud]` id argument. An input holds it to a UUID v7, refused with
-`INVALID_ARGUMENT` in the sentence a `#[crud]` id argument answers. An instant
-reads as one RFC 3339 string on every edge, the one chrono's serde writes: `Z` at
-UTC, and the fraction to the precision the column holds. RFC 9557 gives `Z` to an
-instant whose local offset is unknown, which a `timestamptz` read back is. On
-GraphQL the instant is the `DateTime` scalar, the one an input already takes.
+a `#[crud]` id argument. An input takes a UUID of any version — a key another
+system drew, a client's `crypto.randomUUID()` — where a `#[crud]` id argument,
+which addresses a row the framework minted, takes a UUID v7. An instant reads as
+one RFC 3339 string on every edge, the one chrono's serde writes: `Z` at UTC, and
+the fraction to the precision the column holds. RFC 9557 gives `Z` to an instant
+whose local offset is unknown, which a `timestamptz` read back is. On GraphQL the
+instant is the `DateTime` scalar, the one an input already takes.
 
-The wire row reads each back as its column's type — `row.created_at.as_ref()` is
-a `&DateTimeWithTimeZone`, `Uuid::from(row.id)` the key — and an input's id is
-built with `id.into()`. `#[expose]` knows these types by their names: a column
-spelled through an alias of your own keeps async-graphql's own mapping, `UUID` and
-`+00:00`.
+The wire row reads an id back as its column's `Uuid`, from a borrowed row too —
+`Uuid::from(row.id)`, compared and printed as one — and an instant as a
+`DateTimeWithTimeZone` whatever zone its column holds: `row.created_at.as_ref()`.
+An input's id is built with `id.into()`. `#[expose]` knows these types by their
+names: a column spelled through an alias of your own keeps async-graphql's own
+mapping, `UUID` and `+00:00`.
 
 ### Enum columns
 

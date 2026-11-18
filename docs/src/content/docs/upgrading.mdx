@@ -914,8 +914,8 @@ lists what the boot, a log or the wire shows when one is missed.
     | `active.status = Set(Draft)` before a create | `#[expose(default = Status::Draft)]` on the column, which the create input does not carry |
     | `id: Set(Uuid::now_v7())`, `created_at: Set(now)` on a row built for `Repo::insert_unscoped` | `..Default::default()`: the insert fills the key on an exposed entity, and `created_at` under `timestamps`; a table no transport exposes takes `DEFAULT uuidv7()` on its key in its migration |
     | `#[expose(..., timestamps)]` on an entity with `created_at` and no `updated_at`, refused | accepted: `updated_at` is stamped when the entity has one |
-    | an `#[expose]`d wire row's id read as a `String` (`user.id`) or, from an `Option<Uuid>` column, as the `Uuid`; its timestamp read as a `String` (`user.created_at`) or, from an `Option` column or a bare `DateTimeUtc` or `DateTimeLocal`, as chrono's value | the column's own type through `AsRef` and `Into`: `Uuid::from(user.id)`, `user.created_at.as_ref()` (a `&DateTimeWithTimeZone`). The field holds the framework's id or instant, which serializes and answers GraphQL |
-    | a `Uuid` field of a `Create` or `Update` input, built as `CreateUser { org_id: org, … }` and read as a `Uuid` | `org_id: org.into()`, read back with `Uuid::from(input.org_id)`: the input carries the id as GraphQL's `ID`, and refuses one that is no UUID v7 |
+    | an `#[expose]`d wire row's id read as a `String` (`user.id`) or, from an `Option<Uuid>` column, as the `Uuid`; its timestamp read as a `String` (`user.created_at`) or, from an `Option` column or a bare `DateTimeUtc` or `DateTimeLocal`, as chrono's value | `Uuid::from(user.id)`, from a borrowed row too, the id comparing and printing as the `Uuid`; `user.created_at.as_ref()`, a `&DateTimeWithTimeZone` whatever zone the column holds. The field holds the framework's id or instant, which serializes and answers GraphQL |
+    | a `Uuid` field of a `Create` or `Update` input, built as `CreateUser { org_id: org, … }` and read as a `Uuid` | `org_id: org.into()`, read back with `Uuid::from(input.org_id)`: the input carries the id as GraphQL's `ID`, a UUID of any version |
     | a unique column on a `soft_delete` table, `unique_key()` | a partial unique index, `… WHERE deleted_at IS NULL` |
     | `params.after_uuid()` | `params.cursor().map_err(\|refused\| nest_rs::http::pipe_error(&refused))?` |
     | `Page::next_cursor: Option<Uuid>`; `Repo::page`, `Repo::relation_pages`, `CrudService::page`, `RelationKey::after` taking `Option<Uuid>` | `Option<PageCursor>`: `PageCursor::from(uuid)` builds one, `cursor.to_string()` is its text |
@@ -1223,8 +1223,8 @@ lists what the boot, a log or the wire shows when one is missed.
       update input's id, and the `id` argument of a `#[crud]` or bound
       operation, where they read `String!` (`UUID` for a nullable column and in
       an input). Declare `$id: ID!` in a document, and type `ID` as a string in
-      your code generator. An input's id that is no UUID v7 is refused
-      `INVALID_ARGUMENT` on every edge, as a `#[crud]` id argument is.
+      your code generator. An input takes an id of any UUID version, as 6.x did;
+      a `#[crud]` id argument stays a UUID v7.
     - **Sockets close by their standard**: a frame past the cap closes `1009
       Message Too Big` on a gateway and on graphql-ws, where it closed `1011`; an
       admitted upgrade an in-process test drives answers `426`; a handshake

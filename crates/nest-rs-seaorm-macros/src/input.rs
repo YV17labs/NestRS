@@ -2,7 +2,9 @@
 //! fields. `validate(...)` bodies are re-emitted verbatim as `#[validate(...)]`,
 //! so every edge decoding one, and a service validating one it built, enforce
 //! the same rules. An id is carried as its wire row reads it, `WireId`,
-//! GraphQL's `ID`, held to a UUID v7 as a `#[crud]` id argument is.
+//! GraphQL's `ID`, a UUID of any version: it names another row, or a key another
+//! system drew, and only an argument addressing a row the framework minted is
+//! held to a v7 (`.claude/decisions/a-column-reads-in-one-type.md`).
 
 use nest_rs_codegen::__private::nth_generic_type;
 use proc_macro2::TokenStream as TokenStream2;
@@ -55,7 +57,6 @@ fn input_struct(
         };
         quote! {
             #(#validate)*
-            #[validate(custom(function = ::nest_rs_seaorm::__private::uuid_v7))]
             pub #name: #ty
         }
     });

@@ -749,15 +749,17 @@ async fn an_id_is_one_graphql_type_on_a_reply_and_in_an_input() {
 
 /// What a wire row holds reads back as its column's own type — an id as the
 /// `Uuid`, an instant as sea-orm's `DateTimeWithTimeZone` — so a field resolver
-/// computing over its parent names no framework type.
+/// computing over its borrowed parent names no framework type.
 #[cfg(feature = "graphql")]
 #[test]
 fn a_wire_row_reads_back_as_its_columns_types() {
     let row = hearing::row();
     let wire = hearing::Hearing::from(&row);
-    let scheduled: &DateTimeWithTimeZone = wire.scheduled_at.as_ref();
+    let parent: &hearing::Hearing = &wire;
+    let scheduled: &DateTimeWithTimeZone = parent.scheduled_at.as_ref();
     assert_eq!(*scheduled, row.scheduled_at);
-    let court: &Uuid = wire.court_id.as_ref();
+    let court: &Uuid = parent.court_id.as_ref();
     assert_eq!(*court, row.court_id);
-    assert_eq!(Uuid::from(wire.id), row.id);
+    assert_eq!(Uuid::from(parent.id), row.id);
+    assert_eq!(parent.id.to_string(), row.id.to_string());
 }

@@ -144,7 +144,7 @@ pub mod __private {
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use crate::unique_key::UniqueKeyRegistration;
     pub use crate::wire_date_time::WireDateTime;
-    pub use crate::wire_id::{WireId, uuid_v7};
+    pub use crate::wire_id::WireId;
     pub use inventory;
 
     // What `#[expose]` emits, so an entity crate declares none of these; each
@@ -268,13 +268,16 @@ pub mod __private {
 ///
 /// **An id and an instant read alike on every edge, an `Option` or not.** A
 /// `Uuid` column is GraphQL's `ID` in a reply and in an input, its text on every
-/// other edge, and an input holds it to a UUID v7, as a `#[crud]` id argument is
-/// held. A chrono instant — sea-orm's `DateTimeWithTimeZone`, `DateTimeUtc` or
-/// `DateTimeLocal`, chrono's `DateTime<Tz>` — is GraphQL's `DateTime`, written on
-/// every edge as chrono's `Serialize` writes it, `Z` at UTC. The decorator knows
-/// both by those names: a column spelled through an alias of your own keeps
-/// async-graphql's mapping, `UUID` and `+00:00`. The wire row reads each back as
-/// its column's type, and an input's id is built from one:
+/// other edge; an input takes a UUID of any version, where a `#[crud]` id
+/// argument, addressing a row the framework minted, takes a v7. A chrono instant —
+/// sea-orm's `DateTimeWithTimeZone`, `DateTimeUtc` or `DateTimeLocal`, chrono's
+/// `DateTime<Tz>` — is GraphQL's `DateTime`, written on every edge as chrono's
+/// `Serialize` writes it, `Z` at UTC. The decorator knows both by those names: a
+/// column spelled through an alias of your own keeps async-graphql's mapping,
+/// `UUID` and `+00:00`. The wire row reads an id back as its column's `Uuid`,
+/// borrowed as a field resolver holds its parent too, and an instant as a
+/// `DateTimeWithTimeZone` whatever zone its column holds; an input's id is built
+/// from a `Uuid`:
 ///
 /// ```
 /// # use nest_rs_seaorm::expose;
@@ -302,9 +305,12 @@ pub mod __private {
 /// # use sea_orm::prelude::{DateTimeWithTimeZone, Uuid};
 /// # let (id, at) = (Uuid::now_v7(), nest_rs_seaorm::now());
 /// let row = Note::from(&Model { id, author_id: id, created_at: at });
-/// let created: &DateTimeWithTimeZone = row.created_at.as_ref();
+/// let parent: &Note = &row;
+/// let created: &DateTimeWithTimeZone = parent.created_at.as_ref();
 /// assert_eq!(*created, at);
-/// assert_eq!(Uuid::from(row.id), id);
+/// assert_eq!(Uuid::from(parent.id), id);
+/// assert!(parent.id == parent.author_id);
+/// assert_eq!(parent.id.to_string(), id.to_string());
 ///
 /// let input = CreateNote { author_id: id.into() };
 /// assert_eq!(Uuid::from(input.author_id), id);

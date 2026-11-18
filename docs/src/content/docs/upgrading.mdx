@@ -238,6 +238,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `input` from `nest_rs::http`, `ws`, `mcp` or `queue` | `nest_rs::core::input`, or `use nest_rs::prelude::*` |
    | `use nest_rs::guards::prelude::*;` | `use nest_rs::core::{Layer, UnitContext, async_trait, injectable};` and `use nest_rs::guards::{Denial, Guard, GuardFor};` — the names the guard uses |
    | `nest_rs::http::{current_request_scope, with_request_scope}` | `nest_rs::core::{current_request_scope, with_request_scope}` |
+   | `nest_rs::http::{TRACEPARENT_HEADER, TRACESTATE_HEADER}` | `nest_rs::core::{TRACEPARENT_HEADER, TRACESTATE_HEADER}`, beside `TraceParent`; a reqwest client sets both through `nest_rs::reqwest::ReqwestMiddleware` |
    | `nest_rs::opentelemetry::LogFormat` | `nest_rs::core::logging::LogFormat`, the one type it re-exported |
    | `EnvPrefix::var(nest_rs::core::logging::var::FILTER)` | `"RUST_LOG"`: the console's filter is the ecosystem's variable, which no prefix renames |
    | `nest_rs::http::{version_path, versions_declare, join_path, normalize_mount_path, literal_mount_path, declared_versions}` | nothing public: `#[controller]`, `#[gateway]` and the framework's own mounts call them |

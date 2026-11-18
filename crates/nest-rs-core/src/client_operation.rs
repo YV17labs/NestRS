@@ -20,7 +20,8 @@ use http::{Method, StatusCode, Version};
 
 use crate::Correlation;
 use crate::duration_histogram::{DurationHistogram, MetricAttribute, REQUEST_BOUNDARIES};
-use crate::operation_log::{OTHER, known_verb};
+use crate::operation_log::__private::{known_verb, protocol_version};
+use crate::operation_log::OTHER;
 use crate::trace_context::{TRACEPARENT_HEADER, TRACESTATE_HEADER};
 
 /// The database conventions' client duration, which every database driver
@@ -501,7 +502,7 @@ impl HttpClientRequest {
     /// status from `400` up.
     pub fn answered(self, status: StatusCode, version: Version) {
         let failure = (status.is_client_error() || status.is_server_error()).then_some(status);
-        let version = crate::operation_log::protocol_version(version);
+        let version = protocol_version(version);
         let attributes = [
             (
                 HTTP_RESPONSE_STATUS_CODE,

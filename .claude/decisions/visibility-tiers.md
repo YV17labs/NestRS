@@ -198,3 +198,14 @@ fixture was refused for the same fact: a name-resolution error is no refusal a
 developer reads from a decorator, and `testing.md` keeps such errors out of a
 snapshot. `#[non_exhaustive]` stays on the two enums, as `exhaustive_enums`
 asks of a tier-2 enum no other framework crate matches.
+
+**2026-11-18 — what the telemetry work added is held to the same test.** The audit of
+the tier-1 surface added since 2026-10-31 found two cases, both added after the passes
+above. W3C Trace Context's header names moved to the kernel, which sends them through
+`HttpClientRequest`, and `nest-rs-http` kept re-exporting them at their 6.x path: one
+item at two paths, the second an alias of what the move replaced. They are read at
+`nest_rs::core` alone. And `operation_log`'s readings of an HTTP message —
+`KNOWN_VERBS`, `known_verb` and `protocol_version`, which only the HTTP edge and the
+outbound client call — sat in tier 1, the first an array whose length a method the
+conventions add would change; they are tier 2. A hidden `compile_fail` doctest per
+name holds each, as for the SeaORM executor above.

@@ -17,14 +17,25 @@ use std::sync::Arc;
 use http::uri::Scheme;
 use http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use nest_rs_core::operation_log::OTHER;
-use nest_rs_core::{Correlation, TraceParent, TraceState};
+use nest_rs_core::{Correlation, TRACEPARENT_HEADER, TRACESTATE_HEADER, TraceParent, TraceState};
 
 use crate::request::Request;
 use crate::response::Response;
 
 use crate::client_ip::ClientOrigin;
 
-pub use nest_rs_core::{TRACEPARENT_HEADER, TRACESTATE_HEADER};
+/// W3C Trace Context's header names have one path, the kernel's, beside
+/// `TraceParent` and `current_traceparent` (`decisions/visibility-tiers.md`).
+///
+/// ```compile_fail,E0425
+/// let _ = nest_rs_http::TRACEPARENT_HEADER;
+/// ```
+///
+/// ```compile_fail,E0425
+/// let _ = nest_rs_http::TRACESTATE_HEADER;
+/// ```
+#[cfg(doctest)]
+struct HeaderNamesHaveOnePath;
 
 /// The response header reporting the trace this service actually used.
 ///
@@ -158,7 +169,7 @@ impl KnownMethods {
 
 /// `method` as the conventions' known set spells it, if it is one.
 pub(crate) fn conventional(method: &Method) -> Option<&'static str> {
-    nest_rs_core::operation_log::known_verb(method.as_str())
+    nest_rs_core::__private::known_verb(method.as_str())
 }
 
 /// Report the trace this service used back to the caller.
@@ -221,7 +232,7 @@ pub(crate) fn request_span(
         // As addressed; never in `http.route`, which a backend groups on.
         url.path = req.uri().path(),
         url.scheme = url_scheme(req, origin),
-        network.protocol.version = nest_rs_core::operation_log::protocol_version(req.version()),
+        network.protocol.version = nest_rs_core::__private::protocol_version(req.version()),
         // Filled by `name_route`; a 404 matched no route and leaves it empty.
         http.route = tracing::field::Empty,
         // No `client.address`: an address is personal data a collector would keep.
@@ -539,7 +550,7 @@ mod tests {
     fn a_method_is_named_from_the_known_set_or_other() {
         let method = |name: &str| Method::from_bytes(name.as_bytes()).expect("a method token");
         let known = KnownMethods::with([method("PROPFIND"), Method::GET]);
-        for name in nest_rs_core::operation_log::KNOWN_VERBS
+        for name in nest_rs_core::__private::KNOWN_VERBS
             .into_iter()
             .chain(["PROPFIND"])
         {

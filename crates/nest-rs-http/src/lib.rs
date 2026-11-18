@@ -244,9 +244,7 @@ pub use security_headers::HttpSecurityHeaders;
 pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};
 pub use sse::{SseEvent, SseSettings, SseStream};
 pub use tls::HttpTls;
-pub use trace_context::{
-    TRACEPARENT_HEADER, TRACERESPONSE_HEADER, TRACESTATE_HEADER, UPSTREAM_REQUEST_ID_HEADER,
-};
+pub use trace_context::{TRACERESPONSE_HEADER, UPSTREAM_REQUEST_ID_HEADER};
 pub use transport::HttpTransport;
 pub use trusted_proxy::TrustedProxy;
 pub use versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM};

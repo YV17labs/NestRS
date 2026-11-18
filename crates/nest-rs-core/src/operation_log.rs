@@ -342,6 +342,30 @@ pub(crate) mod __private {
         }
         true
     }
+
+    /// The methods the HTTP conventions know, spelled as they spell them.
+    pub const KNOWN_VERBS: [&str; 10] = [
+        "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE",
+    ];
+
+    /// `verb` as the HTTP conventions spell it, if it is one of the methods they
+    /// know; methods are case-sensitive.
+    pub fn known_verb(verb: &str) -> Option<&'static str> {
+        KNOWN_VERBS.into_iter().find(|known| *known == verb)
+    }
+
+    /// `version` as the conventions write `network.protocol.version` (`1.1`, `2`),
+    /// a request's or an answer's.
+    pub fn protocol_version(version: http::Version) -> Option<&'static str> {
+        match version {
+            http::Version::HTTP_09 => Some("0.9"),
+            http::Version::HTTP_10 => Some("1.0"),
+            http::Version::HTTP_11 => Some("1.1"),
+            http::Version::HTTP_2 => Some("2"),
+            http::Version::HTTP_3 => Some("3"),
+            _ => None,
+        }
+    }
 }
 
 /// `whole == prefix + <the edge of name>`; `name` must hold a dot.
@@ -411,29 +435,23 @@ pub const PANIC: &str = "panic";
 /// dropped with the unit's future.
 pub const CANCELLED: &str = "cancelled";
 
-/// The methods the HTTP conventions know, spelled as they spell them.
-pub const KNOWN_VERBS: [&str; 10] = [
-    "CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE",
-];
-
-/// `verb` as the HTTP conventions spell it, if it is one of the methods they
-/// know; methods are case-sensitive.
-pub fn known_verb(verb: &str) -> Option<&'static str> {
-    KNOWN_VERBS.into_iter().find(|known| *known == verb)
-}
-
-/// `version` as the conventions write `network.protocol.version` (`1.1`, `2`),
-/// a request's or an answer's.
-pub fn protocol_version(version: http::Version) -> Option<&'static str> {
-    match version {
-        http::Version::HTTP_09 => Some("0.9"),
-        http::Version::HTTP_10 => Some("1.0"),
-        http::Version::HTTP_11 => Some("1.1"),
-        http::Version::HTTP_2 => Some("2"),
-        http::Version::HTTP_3 => Some("3"),
-        _ => None,
-    }
-}
+/// What the HTTP edge and the outbound client read of a message in the
+/// conventions' words is tier 2: the methods the conventions know grow, and an
+/// array's length is its type (`decisions/visibility-tiers.md`).
+///
+/// ```compile_fail,E0425
+/// let _ = nest_rs_core::operation_log::KNOWN_VERBS;
+/// ```
+///
+/// ```compile_fail,E0425
+/// let _ = nest_rs_core::operation_log::known_verb;
+/// ```
+///
+/// ```compile_fail,E0425
+/// let _ = nest_rs_core::operation_log::protocol_version;
+/// ```
+#[cfg(doctest)]
+struct HttpReadingsAreTierTwo;
 
 /// Not an outcome: the word a line names what a client addressed with when
 /// the server declares no name for it — a method outside the HTTP conventions'
@@ -1171,6 +1189,8 @@ mod tests {
 
     #[test]
     fn a_verb_reads_as_the_http_conventions_spell_it_and_no_other_does() {
+        use __private::{KNOWN_VERBS, known_verb};
+
         for verb in KNOWN_VERBS {
             assert_eq!(known_verb(verb), Some(verb));
         }

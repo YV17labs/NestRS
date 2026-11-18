@@ -303,8 +303,8 @@ pub mod __private {
     pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
     pub use crate::opaque::__private::OpaqueCause;
     pub use crate::operation_log::__private::{
-        declare_unit, forget_cause, measured_unit, set_span_rename, set_unit_end, str_eq,
-        unit_opened_by,
+        KNOWN_VERBS, declare_unit, forget_cause, known_verb, measured_unit, protocol_version,
+        set_span_rename, set_unit_end, str_eq, unit_opened_by,
     };
     pub use crate::outcome::__private::{caught_problem, is_same_failure, kept, settled};
     pub use crate::panic::__private::{Unwound, unwound};

@@ -12,10 +12,11 @@ _default:
 fmt:
     cargo fmt --all
 
-# Formatting, the workflows' hardening, clippy, each capability alone, and the dependency policy
+# Formatting, the workflows' hardening, clippy, each capability alone, the dependency policy, and the licence every published crate carries
 lint:
     cargo fmt --all --check
     cargo deny check bans licenses sources
+    cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.publish != []) | .manifest_path' | while read -r manifest; do test -f "${manifest%/Cargo.toml}/LICENSE" || { echo "${manifest%/Cargo.toml} carries no LICENSE"; exit 1; }; done
     actionlint
     zizmor --offline --quiet .github
     cargo clippy --workspace --all-targets --all-features --keep-going -- -D warnings

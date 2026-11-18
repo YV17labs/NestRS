@@ -2,7 +2,8 @@
 name = "nest-rs-openapi"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+# Swagger UI's assets are Apache-2.0: assets/LICENSE and assets/NOTICE.
+license = "MIT AND Apache-2.0"
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true

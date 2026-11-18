@@ -238,6 +238,12 @@ list.
 
 ## Release
 
+Every
+published crate carries `LICENSE`, a link to the root's that `cargo package`
+copies into its archive, held by `just lint`; `nest-rs-openapi`, which serves
+Swagger UI, also carries its Apache-2.0 `LICENSE`, `NOTICE` and each bundle's
+`.LICENSE.txt` from the same `swagger-ui-dist` release, and declares
+`MIT AND Apache-2.0`, held by review.
 The tag equals the workspace `version`; `publish.yml` publishes after every crate
 it uploads has built from its package alone (`cargo package`,
 `decisions/ci-on-change.md`), so a published crate, on its default features,

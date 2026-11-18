@@ -223,6 +223,41 @@ latest, its locked version left where it was.
   its `jiff` feature), and 0.2.46 does not re-export 1.0's types. jiff moves
   when croner does, a private change.
 
+## 2026-11-17 — a nestrs major waits for a public dependency's active release candidate
+
+The owner's rule for publishing a major, given for 7.0. A public dependency's
+major moves only with a nestrs major, so the major a release builds on is the
+one its whole line keeps:
+
+- **A nestrs major is published on the latest stable major of each public
+  dependency** (the table above; a `0.x` library's minor counts as its major).
+- **An active release candidate delays the publication**: a release candidate
+  of a public dependency's next major, published within the last 30 days, holds
+  the release until that major is final, or until the date the owner sets for
+  it, past which the release ships on the stable major.
+- **A stalled release candidate delays nothing**: one with no release in the
+  last 30 days leaves the release on the stable major, and the next major of
+  that library waits for the next nestrs major.
+- **On the day of the tag, crates.io is read again for each public
+  dependency**, and the release's report says what it found.
+
+Applied on 2026-11-17:
+
+- **redis 2.0 is an active release candidate** (2.0.0-rc.1 on 2026-10-24, rc.2
+  on 2026-10-30, rc.3 on 2026-11-14): 7.0 waits for 2.0 until 2026-12-31, and
+  with no final release by then it ships on redis 1.8.
+- **async-graphql 8.0 is stalled** (8.0.0-rc.5 on 2026-04-21, and no release of
+  either line since): 7.0 ships on 7.2, and 8.0 waits for nestrs 8, with
+  RUSTSEC-2026-0253's ignore and its reason.
+- **rustls has development snapshots of 0.24, no release candidate**
+  (0.24.0-dev.2 on 2026-10-14, dev.3 on 2026-11-12): its publisher names none a
+  candidate, so nothing waits for it; rustls is public in `nest-rs-testing`
+  alone.
+
+**Refused:** a release candidate in a published release. Its API is not yet
+its publisher's promise, and a public dependency's would be nestrs's for the
+whole line.
+
 ## 2026-11-18 — chrono stays a public dependency of 7.x, unmaintained
 
 RUSTSEC-2026-0543 declares chrono unmaintained, every version, with no release

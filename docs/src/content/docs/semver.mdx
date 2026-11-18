@@ -28,7 +28,7 @@ in the middle column holds until 8.0:
 | Decorators | every key and what it means — refusing a program that used to compile is a break | the wording of a compile error |
 | Configuration | every `<PREFIX>_<NAMESPACE>__<KEY>` variable, its spellings and its default, and every `#[config]` field name | a literal naming every field of a config (below) |
 | Wire and storage | `nest_rs::queue::Envelope` and its `WIRE_FORMAT_VERSION`, the `nest_rs::http::ProblemDetails` body, the `nest_rs::ws::WsEnvelope` frame, every `nestrs:` key, and every header NestRS reads or writes, among them the W3C's `traceparent`, `tracestate`, `traceresponse` and `Server-Timing`, the IETF's `Deprecation`, `Forwarded`, `Link`, `Retry-After` and `WWW-Authenticate`, and `X-Forwarded-For`, `X-Real-IP` and `X-Request-Id` behind a trusted proxy | — |
-| Observability | span targets, unit names, the operation line's field names and its outcome words, and the words a field such as `cause` takes | the prose of a log message |
+| Observability | span targets, unit names, the operation line's field names and its outcome words, the words a field such as `cause` takes, and every exported name a stable OpenTelemetry convention or NestRS gives ([Telemetry names](#telemetry-names)) | the prose of a log message, and a name from a convention still in development |
 | Features and the CLI | the umbrella's feature names, and every `nestrs` command and flag | what `nestrs new` and `nestrs generate` write, which follows the release |
 
 A new refusal is a break too: a program that compiled keeps compiling, and an
@@ -59,6 +59,29 @@ OWASP, never merely unusual. Safe by default cannot wait for 8.0, so it ships
 under the changelog's **Security** heading, and the upgrading guide names the
 configuration refused and the secure one to write instead. Nothing else that
 used to compile or boot is refused before 8.0.
+
+## Telemetry names
+
+What NestRS exports through [OpenTelemetry](/opentelemetry/) — the attributes
+on a span, a log record or the resource, a span's name, a metric and the
+attributes it is recorded under — is named by a semantic convention or by
+NestRS itself, and each name promises what its namer does:
+
+| The name comes from | For example | Until 8.0 |
+|---|---|---|
+| a stable convention | `http.server.request.duration`, `http.route`, `db.query.summary` | kept |
+| a convention still in development | `enduser.id`, `messaging.process.duration`, `process.memory.usage` | follows its convention: a rename comes in a minor, named in the changelog |
+| NestRS itself | `tokio.worker.count`, `dropped_client_spans_count` | kept |
+
+A name's status is the one in the conventions release NestRS builds on — 1.42
+in 7.0, the schema every export declares — and the OpenTelemetry pages say it
+beside each name they list. An alert on a stable name, or on one of NestRS's
+own, keeps matching until 8.0; one on a name in development reads each minor's
+changelog. Two of NestRS's own sit under a convention still in development,
+`graphql.operation.role` and `graphql.field.name`, and follow it as its names
+do. What a library adds on its own — the code location and thread
+`tracing-opentelemetry` writes on every span, the SDK's `telemetry.sdk.*` on
+the resource — is that library's, and moves with it the same way.
 
 ## Build a config the way it grows
 

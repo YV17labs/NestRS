@@ -29,6 +29,11 @@ field by field; `OpenTelemetry::init()` starts from the defaults, and
 | `OTEL_METRIC_EXPORT_INTERVAL` (milliseconds) | `metric_interval` | 60 s |
 | `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY` (and per signal) | `tls` | the system's authorities, no client certificate |
 
+The four resource attributes the first rows set — `service.name`,
+`service.version`, `deployment.environment.name`, `service.instance.id` — are
+stable conventions' names, kept until 8.0
+([Telemetry names](/semver/#telemetry-names)).
+
 The batch processors' `OTEL_BSP_*` and `OTEL_BLRP_*` the SDK reads as it
 always does; the span limits — `OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT`,
 `OTEL_SPAN_EVENT_COUNT_LIMIT`, `OTEL_SPAN_LINK_COUNT_LIMIT`,

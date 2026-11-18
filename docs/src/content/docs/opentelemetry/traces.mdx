@@ -158,15 +158,17 @@ spelled exactly, or `_OTHER`), `url.path` (the addressed path), `url.scheme`
 `<PREFIX>_HTTP__TRUSTED_PROXIES` lists, else the listener's),
 `http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
-`http.response.status_code`, `http.response.body.size`,
-`network.protocol.version` (`1.1`, `2`) and `user_agent.original`. It carries no `client.address`, which the conventions
+`http.response.status_code`, `http.response.body.size` (a name still in
+development), `network.protocol.version` (`1.1`, `2`) and
+`user_agent.original`. It carries no `client.address`, which the conventions
 recommend: a client's address is personal data, and a collector keeps what it
 receives — no access line carries it either.
 
 Once a guard identified the caller, the span carries `enduser.id`, the
-conventions' key for the identity your lines carry as `actor_id`. The
-conventions flag it as personal data, and it leaves on the span of every unit
-served for that caller — a request, a message, an operation, a job it enqueued —
+conventions' key for the identity your lines carry as `actor_id`, still in
+development in their 1.42 release. The conventions flag it as personal data,
+and it leaves on the span of every unit served for that caller — a request, a
+message, an operation, a job it enqueued —
 to every collector the export reaches. A principal that names no actor sends
 none.
 
@@ -177,10 +179,11 @@ to write. The conventions require or recommend them and the span goes to your
 own collector, so it keeps them: a stated exception to the rule that no line
 and no reply quotes a client's value, which the
 [access line](/opentelemetry/operation-log/#access-log) follows. A header the span
-records beyond that set is one that parsed under its grammar: a `traceparent`
-the transport did not continue is recorded as the four hex fields it parsed
-to, and an `X-Request-Id` from a trusted proxy only in the shape a proxy mints
-it — a UUID, or 16 to 64 hex digits, as nginx's `$request_id` is. Anything
+records beyond that set, under the conventions' `http.request.header.<key>`, is
+one that parsed under its grammar: a `traceparent` the transport did not
+continue is recorded as the four hex fields it parsed to, and an
+`X-Request-Id` from a trusted proxy only in the shape a proxy mints it — a
+UUID, or 16 to 64 hex digits, as nginx's `$request_id` is. Anything
 else is not recorded. The shape is all the span can check: behind a proxy
 that forwards a client's `X-Request-Id`, hex text the client wrote — a secret
 minted as hex or as a UUID included — is recorded as a minted id would be.
@@ -331,6 +334,37 @@ exported in turn.
 **Neither the path nor the query is recorded**, where the conventions ask for
 `url.full`: a webhook's secret sits in its path, a signed URL's in its query, and
 a span is kept by a backend no one audits for them.
+
+## Every name a span exports
+
+A name in the middle column comes from a stable OpenTelemetry convention, or is
+NestRS's own, and is kept until 8.0. One in the last column follows a
+convention still in development, which may rename it in a minor, named in the
+changelog ([Telemetry names](/semver/#telemetry-names)):
+
+| Span | Stable, or NestRS's own | In development |
+|---|---|---|
+| every unit's | `trace_id`, `span_id`, `parent_span_id`, `error.type`, `dropped_client_spans_count` | `enduser.id` |
+| `http.request` | `http.request.method`, `http.request.method_original`, `url.path`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `user_agent.original`, `http.request.header.traceparent`, `http.request.header.x-request-id` | `http.response.body.size` |
+| `ws.connect`, `ws.disconnect`, `ws.message` | `ws.connection_id`, and on a message `ws.event` | — |
+| `graphql.operation` | — | `graphql.operation.type`, `graphql.operation.name` |
+| `graphql.field` | — | `graphql.operation.role`, `graphql.field.name`: NestRS's own, under the GraphQL conventions' namespace |
+| `mcp.operation` | `network.transport`, `network.protocol.name` | `mcp.method.name`, `jsonrpc.request.id`, `gen_ai.tool.name`, `gen_ai.prompt.name`, `gen_ai.operation.name`, `mcp.resource.uri`, `mcp.protocol.version`, `rpc.response.status_code` |
+| `queue.job` | `backend_id`, `host`, `method`, `attempt`, `continued_trace` | `messaging.system`, `messaging.operation.name`, `messaging.operation.type`, `messaging.destination.name`, `messaging.message.id` |
+| `schedule.tick` | `host`, `method`, `occurrence` | — |
+| `events.dispatch` | `event`, `host`, `method` | — |
+| `lifecycle.hook` | `phase`, `host`, `method`, `origin` | — |
+| a statement, a command, an outbound request | every name [Statements and commands](#statements-and-commands) and [Outbound HTTP requests](#outbound-http-requests) list | — |
+
+A span's name follows the same rule. `{method} {route}`, a statement's summary
+and an outbound request's method are the stable HTTP and database conventions';
+a job's `process <queue>` and an MCP operation's method, then its tool or
+prompt, are the messaging and MCP conventions', in development; every other
+unit's span is named for its unit, NestRS's own. What `tracing-opentelemetry`
+writes on every span it exports — `code.file.path`, `code.line.number`, `code.module.name`,
+`thread.id`, `thread.name`, `busy_ns` and `idle_ns`, and `level` and `target`
+on a line the span carries as an event — is that library's, and moves with it
+the same way.
 
 ## Limits
 

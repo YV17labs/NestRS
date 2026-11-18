@@ -11,10 +11,9 @@ metrics through the official
 [`opentelemetry`](https://crates.io/crates/opentelemetry) +
 [`opentelemetry_sdk`](https://crates.io/crates/opentelemetry_sdk) +
 [`opentelemetry-otlp`](https://crates.io/crates/opentelemetry-otlp) crates,
-follows the
+names what it exports after the semantic conventions' 1.42 release, which
 [`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions)
-for resource and HTTP attributes, and links the `tracing` span tree to its OTel
-counterpart through
+carries, and links the `tracing` span tree to its OTel counterpart through
 [`tracing-opentelemetry`](https://crates.io/crates/tracing-opentelemetry).
 
 Three signal types ship in one crate, behind one line of `main`:
@@ -39,6 +38,11 @@ Three signal types ship in one crate, behind one line of `main`:
   record on counters / histograms / gauges of your own, named as the
   OpenTelemetry Metrics API names them; metrics batch on a `PeriodicReader` and
   export through the same OTLP endpoint as the traces.
+
+Each page of this section says what a name it lists promises. One from a
+stable OpenTelemetry convention, or NestRS's own, is kept until 8.0; one whose
+convention is still in development follows it, and may be renamed in a minor,
+named in the changelog ([Telemetry names](/semver/#telemetry-names)).
 
 What an export costs a request — 5.8 µs of CPU on one core for the three
 signals, most of it the traces — is

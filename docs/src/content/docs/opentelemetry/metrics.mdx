@@ -28,11 +28,15 @@ Before an app records anything, the framework times each unit of work whose
 edge's semantic conventions name a duration histogram for it, so a backend's
 ready-made HTTP, messaging and MCP dashboards light up with nothing written:
 
-| Unit | Histogram | Keyed by |
-|---|---|---|
-| `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `error.type` |
-| `queue.job` | `messaging.process.duration` | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type` |
-| `mcp.operation` | `mcp.server.operation.duration` | `mcp.method.name`, `gen_ai.tool.name`, `gen_ai.prompt.name`, `gen_ai.operation.name`, `network.transport`, `network.protocol.name`, `mcp.protocol.version`, `rpc.response.status_code`, `error.type` |
+| Unit | Histogram | Keyed by | Convention |
+|---|---|---|---|
+| `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `error.type` | HTTP, stable |
+| `queue.job` | `messaging.process.duration` | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type` | messaging, in development; `error.type` stable |
+| `mcp.operation` | `mcp.server.operation.duration` | `mcp.method.name`, `gen_ai.tool.name`, `gen_ai.prompt.name`, `gen_ai.operation.name`, `network.transport`, `network.protocol.name`, `mcp.protocol.version`, `rpc.response.status_code`, `error.type` | MCP, in development; `network.transport`, `network.protocol.name` and `error.type` stable |
+
+A name from a stable convention, or NestRS's own, is kept until 8.0; one from a
+convention still in development may be renamed in a minor, named in the
+changelog ([Telemetry names](/semver/#telemetry-names)).
 
 One histogram is the rate, the errors and the latency at once: a backend counts
 its points per second, splits them on `http.response.status_code` or
@@ -62,7 +66,7 @@ convention names one for them, and their spans carry their timings.
 
 Each statement the Postgres pool sends — a unit's `BEGIN` and `COMMIT`
 included — and each command a Redis connection sends is timed the same way, in
-`db.client.operation.duration`, keyed by the
+`db.client.operation.duration`, the stable database conventions', keyed by the
 database it ran on and what it did — the statement's operation, table and
 summary, the Redis command — into the buckets the database conventions advise,
 `[0.001, 0.005, … 10]` seconds ([Statements and commands](/opentelemetry/traces/#statements-and-commands)).
@@ -76,17 +80,17 @@ its span declares, and records in it the same way
 The same export carries what the process and its async runtime say of
 themselves, read at each export and never between:
 
-| Instrument | What it reads |
-|---|---|
-| `process.cpu.time` | CPU seconds, by `cpu.mode`: `user`, `system` — Unix |
-| `process.uptime` | seconds since the process started, as `#[nest_rs::main]` marks it |
-| `process.unix.file_descriptor.count` | descriptors held open — Unix |
-| `process.memory.usage`, `process.memory.virtual` | resident and virtual bytes — Linux |
-| `process.thread.count` | threads — Linux |
-| `tokio.worker.count` | the runtime's worker threads |
-| `tokio.task.count` | tasks alive on it |
-| `tokio.global_queue.length` | tasks waiting in the queue every worker takes from |
-| `tokio.worker.busy_time` | seconds the workers spent running tasks |
+| Instrument | What it reads | Convention |
+|---|---|---|
+| `process.cpu.time` | CPU seconds, by `cpu.mode`: `user`, `system` — Unix | process, in development |
+| `process.uptime` | seconds since the process started, as `#[nest_rs::main]` marks it | process, in development |
+| `process.unix.file_descriptor.count` | descriptors held open — Unix | process, in development |
+| `process.memory.usage`, `process.memory.virtual` | resident and virtual bytes — Linux | process, in development |
+| `process.thread.count` | threads — Linux | process, in development |
+| `tokio.worker.count` | the runtime's worker threads | NestRS's own |
+| `tokio.task.count` | tasks alive on it | NestRS's own |
+| `tokio.global_queue.length` | tasks waiting in the queue every worker takes from | NestRS's own |
+| `tokio.worker.busy_time` | seconds the workers spent running tasks | NestRS's own |
 
 The `process.*` names are the OpenTelemetry process conventions'. No convention
 names a tokio runtime, so its four follow the conventions' runtime metrics
@@ -117,8 +121,10 @@ no caller still waiting and times no acquire, so `pending_requests`,
 `wait_time`, `create_time`, `use_time` and `idle.max` are not exported; a
 unit's `BEGIN`, which waits for its connection, carries that wait in
 `db.client.operation.duration`. The names are those of the conventions' 1.42
-schema, the one the export declares. A Redis connection is one multiplexed
-socket, not a pool, and reports none.
+schema, the one the export declares, where each of them — the instruments and
+their two attributes — is still in development: a minor may rename it, named in
+the changelog. A Redis connection is one multiplexed socket, not a pool, and
+reports none.
 
 ## A first counter
 
@@ -257,8 +263,10 @@ Every exported metric carries the service-level resource attributes built from
 
 These come from the
 [`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions)
-schema, so any backend that understands OTel semconv (Grafana Cloud, Honeycomb,
-Datadog OTLP, …) keys on them out of the box.
+schema, all four from stable conventions and kept until 8.0, so any backend that
+understands OTel semconv (Grafana Cloud, Honeycomb, Datadog OTLP, …) keys on
+them out of the box. Beside them the SDK writes its own `telemetry.sdk.name`,
+`telemetry.sdk.language` and `telemetry.sdk.version`, which move with it.
 
 ## Going further
 

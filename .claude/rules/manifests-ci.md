@@ -189,10 +189,20 @@ readers, and the two move in one change.
   field name; the wire and storage formats (the queue envelope, the
   problem-details body, the WebSocket envelope, every `nestrs:` key, every
   header the framework reads or writes); span targets, unit names, the
-  operation line's fields and the words a field takes; the umbrella's features.
+  operation line's fields and the words a field takes, and every name the
+  OpenTelemetry export carries that a stable semantic convention or the
+  framework gives; the umbrella's features.
   A refusal that turns a compiling program into a compile error, or a booting
   app or configuration into a boot refusal, is a break. Prose is not API: a
   compile error, a refusal or a log message is reworded in a patch.
+- **A name drawn from an OpenTelemetry convention in development follows its
+  convention, and its rename is a minor named in the changelog**, never a
+  patch; so does a name the framework gives under such a convention's
+  namespace (`graphql.field.name`), and a name a library adds on its own moves
+  with that library the same way. The status is the one the pinned
+  `opentelemetry-semantic-conventions` gives (behind `semconv_experimental`:
+  in development); each `/opentelemetry/` page says it beside the names it
+  lists, read again when the pin moves.
 - **A minor adds**: a tier-1 item; a variant or field where the type is
   `#[non_exhaustive]` or has a private field; a field to a configuration — a
   `#[config]` struct, a `Default` struct nested in one, `OpenTelemetryConfig`,

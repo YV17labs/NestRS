@@ -98,8 +98,9 @@ tracing::info!(
 ```
 
 `user_id` is the subject the event is *about*. Who asked for it is not a field
-you write: the line carries `actor_id` and the operation span `enduser.id`, and
-restating it here gives a backend a third spelling of one fact.
+you write: the line carries `actor_id` and the operation span `enduser.id`, a
+name its convention still has in development, and restating it here gives a
+backend a third spelling of one fact.
 
 Always prefer `field = %value` to `format!("{}", value)`. The OTLP bridge
 serializes structured fields directly; a formatted string becomes opaque text
@@ -278,7 +279,10 @@ which is not worth paying when console-only logging is the goal. When the
 endpoint is set, every event the console's filter admits becomes an OTel log
 record with the same target, level and fields. It names the unit it was filed in
 by `trace_id` and `span_id`, whether or not traces export; where they do, a line
-filed in a span of your own names that span.
+filed in a span of your own names that span. A record's body is its line's
+message and its attributes the line's other fields: an operation line's are
+kept until 8.0, as the [Semver policy](/semver/#what-7x-keeps) promises, and
+your own are yours.
 
 ## Limits
 

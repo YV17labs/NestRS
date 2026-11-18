@@ -86,6 +86,8 @@ points apply that file's rule of 2026-11-17: an active release candidate holds t
 6. **Every crate builds from its package before any is published**: `publish.yml` runs `cargo package` first.
 7. **The public surface added since 2026-10-31 was audited**, and the three items that would have frozen a mistake
    moved (changelog, *Tier 1 holds what a developer writes*).
+8. **A GraphQL id is `ID` and a timestamp `DateTime` at every position, an instant spelled once on every edge**
+   (`a-column-reads-in-one-type.md`).
 
 **When a forced major comes**, 8.0 stays mechanical: it moves the dependency, takes what that move requires, and ships an
 upgrade guide. No redesign rides along. `SECURITY.md` already bounds its pace: a major ships at most every six months,

@@ -7,7 +7,9 @@
 //! The FK-side dataloader (`by_<fk_col>`) and its `RelatedTo<Parent, Via>` impl
 //! are emitted by the entity declaring `belongs_to`, never by the parent.
 
-use nest_rs_codegen::__private::{camel_case, last_segment_ident, site, unit_of_work_required};
+use nest_rs_codegen::__private::{
+    camel_case, last_segment_ident, nth_generic_type, site, unit_of_work_required,
+};
 use nest_rs_codegen::pascal_case;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -16,7 +18,7 @@ use syn::{Ident, Type};
 
 use crate::attr::{
     RelationKind, ResourceField, ResourceModel, complexity_attr, graphql_root, graphql_root_str,
-    is_uuid, option_inner,
+    is_uuid,
 };
 use crate::dto::withholdable_doc;
 
@@ -576,7 +578,7 @@ fn emit_has_many_method(
 /// dataloader expects: a `Uuid` is a `String` on the wire, an `Option`'s too, so
 /// it is parsed back.
 fn wire_key_expr(ty: &Type, place: TokenStream2) -> TokenStream2 {
-    if is_uuid(option_inner(ty).unwrap_or(ty)) {
+    if is_uuid(nth_generic_type(ty, "Option", 0).unwrap_or(ty)) {
         let root = graphql_root();
         quote! {
             ::nest_rs_seaorm::__private::uuid::Uuid::parse_str(#place)

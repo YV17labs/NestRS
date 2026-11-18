@@ -54,7 +54,6 @@ mod graphql {
         }
     }
 
-    /// The `DateTime` scalar, written as every other edge writes the instant.
     #[Scalar(
         name = "DateTime",
         specified_by_url = "https://datatracker.ietf.org/doc/html/rfc3339",
@@ -76,7 +75,7 @@ mod graphql {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{FixedOffset, NaiveDate, TimeZone, Utc};
+    use chrono::{NaiveDate, Utc};
 
     use super::*;
 

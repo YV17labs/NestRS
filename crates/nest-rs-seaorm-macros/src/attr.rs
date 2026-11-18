@@ -726,21 +726,6 @@ pub(crate) fn is_instant(ty: &Type) -> bool {
     }
 }
 
-/// `T` when the type is spelled `Option<T>`.
-pub(crate) fn option_inner(ty: &Type) -> Option<&Type> {
-    let Type::Path(TypePath { path, .. }) = ty else {
-        return None;
-    };
-    let last = path.segments.last().filter(|s| s.ident == "Option")?;
-    let PathArguments::AngleBracketed(args) = &last.arguments else {
-        return None;
-    };
-    match args.args.first()? {
-        GenericArgument::Type(inner) => Some(inner),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use syn::parse_quote;
@@ -773,16 +758,5 @@ mod tests {
         for ty in &others {
             assert!(!is_instant(ty), "{}", ty.to_token_stream());
         }
-    }
-
-    #[test]
-    fn an_option_is_read_through_to_what_it_holds() {
-        let held: Type = parse_quote!(DateTimeUtc);
-        let ty: Type = parse_quote!(Option<DateTimeUtc>);
-        assert_eq!(option_inner(&ty), Some(&held));
-        let ty: Type = parse_quote!(::core::option::Option<Uuid>);
-        assert!(option_inner(&ty).is_some_and(is_uuid));
-        let ty: Type = parse_quote!(Uuid);
-        assert_eq!(option_inner(&ty), None);
     }
 }

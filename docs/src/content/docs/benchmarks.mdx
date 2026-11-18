@@ -51,9 +51,13 @@ cores.
 Measured 2026-11-11 on a 14-core Apple-silicon host, in a Linux VM (OrbStack,
 kernel 7.2) — rustc 1.97.1, Node 26.13.0, `@nestjs/core` 12.4.2, [oha](https://github.com/hatoo/oha) 1.16; 64
 connections, a discarded 10 s warmup, five timed runs of 15 s per tier; cold start
-is the median of the boots. Absolute figures move with hardware, and a virtualized
-host is a floor: the **ratios are the claim** — every run embeds its machine
-fingerprint, and the one command above replays the full protocol on yours.
+is the median of the boots. That session's NestRS server called no
+`OpenTelemetry::init()`. The harness's server has called it since 2026-11-13, as
+`nestrs new` writes it, and builds on rustc 1.100, as 7.0 does: the command above
+measures a later binary than this table. Absolute figures move with hardware,
+and a virtualized host is a floor: the **ratios are the claim** — every run
+embeds its machine fingerprint, and the one command above replays the full
+protocol on yours.
 
 ### What exporting telemetry costs
 

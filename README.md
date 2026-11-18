@@ -117,21 +117,21 @@ off — a headless worker compiles no HTTP stack. Each has a reference section o
 
 | Concern | What ships |
 |---|---|
-| **Transports** | HTTP controllers with versioning, extractors, uploads, streaming · OpenAPI 3 + Swagger UI from the route table · GraphQL with dataloaders, subscriptions and federation · WebSocket gateways · MCP tools, prompts and resources |
+| **Transports** | HTTP controllers with versioning, extractors, uploads, streaming, static files · OpenAPI 3 + Swagger UI from the route table · GraphQL with dataloaders, subscriptions and federation · WebSocket gateways · MCP tools, prompts and resources · guards, pipes, interceptors and exception filters, one pipeline on every edge |
 | **Data** | SeaORM entities, `Repo`, ambient transactions, pagination, migrations, seeding · S3-compatible object storage |
-| **Security** | JWT on EdDSA keys, OAuth2 with PKCE, Argon2id passwords, social login · abilities, row-level filtering, per-field masking, one policy across every transport |
-| **Background work** | Valkey-backed queues with retries, cron schedules, a typed in-process event bus |
-| **Platform** | Typed config with an `.env` cascade · liveness/readiness/startup probes · rate limiting · OpenTelemetry logs, traces, metrics · `Server-Timing` |
+| **Security** | JWT on EdDSA keys or a JWK Set, OAuth 2.0 client with PKCE, token endpoint and resource metadata, Argon2id passwords, social login · abilities, row-level filtering, per-field masking, one policy across every transport |
+| **Background work** | Valkey-backed queues with retries, cron schedules that run on one replica when asked, a typed in-process event bus |
+| **Platform** | Typed config with an `.env` cascade · liveness/readiness/startup probes · rate limiting · OpenTelemetry logs, traces, metrics, your own `reqwest` client's calls included · `Server-Timing` |
 | **Tooling** | The `nestrs` CLI — scaffold, generate a feature or an adapter, run, migrate · an in-process test harness booting the real DI graph |
 
 ## What holds it up
 
 Claims a clone of this repository lets you check:
 
-- **75 decorators**, one per integration contract, each expanding to plain Rust
+- **77 decorators**, one per integration contract, each expanding to plain Rust
   you can print with `cargo expand` — the index is on
   [nestrs.dev/decorators](https://nestrs.dev/decorators/).
-- **1,800+ tests** across the framework workspace, with the end-to-end suites
+- **7,000+ tests** across the framework workspace, with the end-to-end suites
   running against live Postgres, Valkey and S3 rather than mocks — the dev
   container brings all three up before you get a shell.
 - **Rules held by the toolchain** — types that make the wrong code

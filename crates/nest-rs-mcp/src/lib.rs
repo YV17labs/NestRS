@@ -105,8 +105,7 @@ pub use access::McpAccess;
 pub use composite::CompositeHandler;
 pub use config::McpConfig;
 pub use error::{Opaque, pipe_error, problem_error};
-pub use guard::{BoxFuture, denial_to_mcp_error};
-pub use host::McpHost;
+pub use guard::denial_to_mcp_error;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpSetup};
 pub use operation::McpOperationKind;
@@ -126,6 +125,8 @@ pub mod __private {
         ErrorReport, ErrorReportChain, OperationAnswer, OperationFailure, answer_of,
         resource_not_found,
     };
+    pub use crate::guard::BoxFuture;
+    pub use crate::host::McpHost;
     pub use crate::identity::declared_identity;
     pub use crate::module::RUNTIME;
     pub use crate::operation::{

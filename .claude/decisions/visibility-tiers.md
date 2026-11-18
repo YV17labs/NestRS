@@ -209,3 +209,15 @@ item at two paths, the second an alias of what the move replaced. They are read 
 outbound client call — sat in tier 1, the first an array whose length a method the
 conventions add would change; they are tier 2. A hidden `compile_fail` doctest per
 name holds each, as for the SeaORM executor above.
+
+**2026-11-18 — MCP's host view is the expansion's.** `McpHost` restates rmcp's
+`ServerHandler` with boxed futures, so a mount holds several hosts behind one
+pointer, and it gains each method rmcp adds, or a host answers rmcp's default in
+silence. In tier 1 that was a required method per rmcp minor for anything
+implementing it by hand: an implementation written against the trait of 2026-10-30
+fails today, rmcp 3.9 having added three. No developer writes it — `#[mcp]` emits
+it, and a host written by hand implements `ServerHandler`, which the blanket impl
+makes one — so it is tier 2, with the `BoxFuture` only its methods named. Sealing
+it in tier 1 was refused: a sealed trait no program implements or names is a path
+frozen for nothing, and its proof would be a hand implementation of every method
+kept in step with rmcp, since stable rustdoc checks no `compile_fail` error code.

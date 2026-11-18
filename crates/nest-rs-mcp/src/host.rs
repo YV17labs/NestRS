@@ -157,3 +157,17 @@ dyn_host! {
             -> Result<InitializeResult, McpError>,
     ],
 }
+
+/// The object-safe view a mount holds its hosts through is the expansion's: it
+/// restates each method rmcp adds to `ServerHandler`, so a host written by hand
+/// implements `ServerHandler` (`decisions/visibility-tiers.md`).
+///
+/// ```compile_fail,E0405
+/// fn named(_: &dyn nest_rs_mcp::McpHost) {}
+/// ```
+///
+/// ```compile_fail,E0412
+/// fn named(_: nest_rs_mcp::BoxFuture<'static, ()>) {}
+/// ```
+#[cfg(doctest)]
+struct HostViewIsTheExpansions;

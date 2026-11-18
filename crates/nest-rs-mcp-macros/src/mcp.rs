@@ -215,7 +215,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                     #path,
                     #host_name,
                     ::nest_rs_mcp::__private::declared_identity(#identity_name, #identity_title),
-                    |__c| -> ::std::sync::Arc<dyn ::nest_rs_mcp::McpHost> {
+                    |__c| -> ::std::sync::Arc<dyn ::nest_rs_mcp::__private::McpHost> {
                         ::std::sync::Arc::new(<Self>::__nestrs_from_container(__c))
                     },
                     || {

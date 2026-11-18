@@ -65,11 +65,12 @@ therefore set by these libraries' release clocks, not by this roadmap.** The tab
 
 **Settled before 7.0 is published.** A public dependency's major is free until the first publish
 (`public-dependencies.md`), and what the semver policy does not say before then, it cannot say after. The first two
-points apply that file's rule of 2026-11-17: an active release candidate holds the publication, a stalled one does not.
+points apply that file's rule of 2026-11-18: a release ships when it is tagged, on each public dependency's latest
+stable major, and no release candidate holds it.
 
-1. **`redis` 2.0 is waited for until 2026-12-31**; with no final release by then, 7.0 ships on 1.8 and 2.0 waits for
-   NestRS 8. Built against rc.3, `nest-rs-redis` already passes every topology's suite, and the move waits for the
-   final release. Waiting has a cost: 6.x queue users do not compile on Rust 1.100 until 7.0 ships
+1. **`redis` 2.0 is taken only if it is final before the tag**; tagged first, 7.0 ships on 1.8 and 2.0 waits for
+   NestRS 8. Built against rc.3, `nest-rs-redis` already passes every topology's suite, so a final release out first is
+   a pin and its gates away. Shipping early has a gain: 6.x queue users do not compile on Rust 1.100 until 7.0 ships
    (`queue-redis-streams.md`). Past 2.0, a NestRS command API in place of implementing redis's `ConnectionLike` would
    turn redis majors into NestRS minors, at the price of the vocabulary an app writes today.
 2. **`async-graphql` 8 waits for NestRS 8.** rc.5 cannot be taken: one failing nullable field answers `data: null` for

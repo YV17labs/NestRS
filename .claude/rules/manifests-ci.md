@@ -238,7 +238,8 @@ list.
 
 ## Release
 
-Every
+A release ships when the owner tags it: no cadence holds it, and no dependency's
+release candidate (`decisions/public-dependencies.md`, 2026-11-18). Every
 published crate carries `LICENSE`, a link to the root's that `cargo package`
 copies into its archive, held by `just lint`; `nest-rs-openapi`, which serves
 Swagger UI, also carries its Apache-2.0 `LICENSE`, `NOTICE` and each bundle's

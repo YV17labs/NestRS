@@ -203,3 +203,16 @@ page, and a move of the conventions pin reads every mark again.
   files some 470 lines, whose fields no page lists, and a line's default event
   name moves with its file and line; a field would be kept over OTLP and free on
   the console, where the operation line alone is kept.
+
+## 2026-11-18 — a release ships when it is ready
+
+The owner's answer, before 7.0's first publish. `SECURITY.md` spaced majors six
+months apart and announced each four weeks ahead; both go. Every release —
+major, minor or patch — ships when it is ready, a major with its upgrading
+guide. What a supported line receives is unchanged: the latest minor of the
+current major every fix, the previous major security fixes for three months
+after the current major ships, its end date written when it does.
+
+**Refused:** keeping the six months as a floor. A fix that needs a major — a
+public dependency's next major carrying a security fix, among them — would wait
+on a date rather than on its readiness.

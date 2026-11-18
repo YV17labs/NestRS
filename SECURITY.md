@@ -39,8 +39,8 @@ only once its fix is published.
 ## Supported versions
 
 Every `nest-rs-*` crate versions in **lockstep** (one number across the
-workspace). A major ships at most every six months, announced four weeks ahead
-with its upgrading guide; minors and patches ship when ready.
+workspace). Every release ships when it is ready; a major ships with its
+upgrading guide.
 
 | Line | Receives |
 | --- | --- |

@@ -282,3 +282,24 @@ jiff, the advisory's other recommendation, is carried by neither sea-orm 2.0.4
 nor sqlx 0.9: it is nestrs 8's target. `deny.toml` ignores RUSTSEC-2026-0543
 with this reason, and RUSTSEC-2026-0542, humantime, which object_store alone
 brings, with its own.
+
+## 2026-11-18 — a release candidate never holds a release
+
+The owner's rule replaces the second and third points of 2026-11-17: nothing
+outside the tree holds a nestrs release, which ships the day the owner tags it.
+
+- **A release builds on the latest stable major of each public dependency**,
+  read on crates.io the day of the tag. A release candidate never enters it
+  (refused on 2026-11-17, and still refused).
+- **A next major still in release candidate, active or stalled, holds
+  nothing**: the release ships on the stable major, and that next major waits
+  for the next nestrs major. One released final before the tag is taken in the
+  release, after its gates.
+
+Applied: **redis** is still 2.0.0-rc.3. Tagged first, 7.0 ships on redis 1.8
+and 2.0 waits for nestrs 8; final first, 7.0 takes it, `nest-rs-redis` having
+passed every topology's suite against rc.3. async-graphql 8 and rustls 0.24
+are unchanged: both wait for nestrs 8.
+
+**Refused:** a date set per release candidate. It is still a wait, and the
+owner decides when a release ships, not a third party's calendar.

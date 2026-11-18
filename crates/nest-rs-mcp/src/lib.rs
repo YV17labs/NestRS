@@ -125,7 +125,6 @@ pub mod __private {
         ErrorReport, ErrorReportChain, OperationAnswer, OperationFailure, answer_of,
         resource_not_found,
     };
-    pub use crate::guard::BoxFuture;
     pub use crate::host::McpHost;
     pub use crate::identity::declared_identity;
     pub use crate::module::RUNTIME;

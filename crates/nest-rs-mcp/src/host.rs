@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 
+use futures_util::future::BoxFuture;
 use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CancelTaskParams, CancelledNotificationParam,
@@ -26,7 +27,6 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 
 use crate::McpError;
-use crate::guard::BoxFuture;
 
 /// Restate `ServerHandler` with boxed futures, and blanket-implement it; `listen`
 /// is hand-written, its context neither a `RequestContext` nor a `NotificationContext`.

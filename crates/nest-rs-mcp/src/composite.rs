@@ -25,6 +25,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use futures_util::future::BoxFuture;
 use nest_rs_core::Container;
 use rmcp::ServerHandler;
 use rmcp::model::{
@@ -44,7 +45,6 @@ use serde_json::Value;
 
 use crate::McpError;
 use crate::error::{opaque_answer, prompt_not_found, refuses_task, refuses_tool};
-use crate::guard::BoxFuture;
 use crate::host::McpHost;
 use crate::identity::ResolvedIdentity;
 use crate::registry::{McpHostMeta, MountIndex, RouteIndex};

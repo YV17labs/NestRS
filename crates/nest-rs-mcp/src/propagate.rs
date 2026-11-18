@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use futures_util::future::Either;
+use futures_util::future::{BoxFuture, Either};
 use nest_rs_core::__private::{Tail, UnitChains, dispatch, new_unit_context, settled};
 use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::{
@@ -85,7 +85,6 @@ use crate::error::{
     method_not_found, opaque_answer, prompt_not_found, refuses_method, refuses_prompt,
     refuses_task, refuses_tool, task_not_found, tool_not_found, withholding,
 };
-use crate::guard::BoxFuture;
 use crate::operation::McpOperationKind;
 use crate::registry::MountIndex;
 use crate::unit::{

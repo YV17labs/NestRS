@@ -1,15 +1,8 @@
 //! A guard's refusal as the JSON-RPC error one MCP operation answers with.
 
-use std::future::Future;
-use std::pin::Pin;
-
 use nest_rs_guards::Denial;
 
 use crate::McpError;
-
-/// A boxed, `Send` future — the return type of an async method in a
-/// dyn-compatible trait ([`McpHost`](crate::host::McpHost)).
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Render a guard's [`Denial`] as the JSON-RPC error one MCP operation answers
 /// with.

@@ -81,9 +81,9 @@ Add typed parameters and they become required GraphQL arguments;
 impl UsersResolver {
     #[query]
     #[public]
-    async fn label(&self, id: String, locale: Option<String>) -> String {
+    async fn label(&self, id: ID, locale: Option<String>) -> String {
         let locale = locale.as_deref().unwrap_or("en");
-        format!("user {id} in {locale}")
+        format!("user {} in {locale}", id.as_str())
     }
 }
 ```
@@ -128,12 +128,12 @@ For anything beyond a scalar, define a `SimpleObject` (output) and
 optionally an `InputObject` (input):
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
-use async_graphql::SimpleObject;
+use async_graphql::{ID, SimpleObject};
 use nest_rs::graphql::{operations, resolver};
 
 #[derive(SimpleObject)]
 pub struct User {
-    id: String,
+    id: ID,
     name: String,
     email: String,
 }
@@ -145,7 +145,7 @@ pub struct UsersResolver;
 impl UsersResolver {
     #[query]
     #[public]
-    async fn user(&self, id: String) -> User {
+    async fn user(&self, id: ID) -> User {
         User { id, name: "Ada".into(), email: "ada@example.com".into() }
     }
 }
@@ -169,7 +169,7 @@ plugs into this slot directly — no second `SimpleObject` to maintain
 operation root.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
-use async_graphql::{InputObject, SimpleObject};
+use async_graphql::{ID, InputObject, SimpleObject};
 use nest_rs::graphql::{operations, resolver};
 
 #[derive(InputObject)]
@@ -180,7 +180,7 @@ pub struct NewUserInput {
 
 #[derive(SimpleObject)]
 pub struct User {
-    id: String,
+    id: ID,
     name: String,
     email: String,
 }
@@ -248,11 +248,11 @@ work, but a `Result` lets you short-circuit with a typed GraphQL
 error:
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
-use nest_rs::graphql::async_graphql::{Error, Result};
+use nest_rs::graphql::async_graphql::{Error, ID, Result};
 
 #[query]
 #[public]
-async fn user(&self, id: String) -> Result<User> {
+async fn user(&self, id: ID) -> Result<User> {
     if id.is_empty() {
         return Err(Error::new("id must not be empty"));
     }

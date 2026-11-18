@@ -62,7 +62,7 @@ controller's included: a bound route's whole path names it alone (`/{id}`,
 and any other count does not compile.
 
 GraphQL takes the same attribute on a `#[query]` or `#[mutation]`: the
-operation's `Authorized<A, E>` parameter becomes an `id: String` argument
+operation's `Authorized<A, E>` parameter becomes an `id: ID!` argument
 on the schema (`id_arg = …` renames it), loaded the same way, a missing row
 answering `NOT_FOUND`.
 

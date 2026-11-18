@@ -575,14 +575,14 @@ fn emit_has_many_method(
 }
 
 /// The wire representation of a column, borrowed at `place`, → key the
-/// dataloader expects: a `Uuid` is a `String` on the wire, an `Option`'s too, so
-/// it is parsed back.
+/// dataloader expects: a `Uuid` is a `WireId` on the wire, an `Option`'s too,
+/// which holds the column's own value.
 fn wire_key_expr(ty: &Type, place: TokenStream2) -> TokenStream2 {
     if is_uuid(nth_generic_type(ty, "Option", 0).unwrap_or(ty)) {
-        let root = graphql_root();
         quote! {
-            ::nest_rs_seaorm::__private::uuid::Uuid::parse_str(#place)
-                .map_err(|__e| #root::Error::new(__e.to_string()))?
+            *<::nest_rs_seaorm::__private::WireId as ::core::convert::AsRef<
+                ::nest_rs_seaorm::__private::uuid::Uuid,
+            >>::as_ref(#place)
         }
     } else {
         quote! { ::core::clone::Clone::clone(#place) }

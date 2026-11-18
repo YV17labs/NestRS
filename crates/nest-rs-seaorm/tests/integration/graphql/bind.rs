@@ -406,3 +406,58 @@ async fn a_query_bound_for_a_visitor_loads_and_answers_by_its_grant() {
         "the row holds nothing the visitor's grant does not read: {body}"
     );
 }
+
+/// The id a bound operation reads is GraphQL's `ID`, as a reply and a write's
+/// input carry it, and one that is no UUID v7 is refused before any load, in the
+/// framework's sentence, quoting nothing it was sent.
+#[tokio::test]
+async fn a_bound_operation_reads_an_id_held_to_a_uuid_v7() {
+    let app = crate::over_an_unconnected_pool()
+        .module::<VisitedModule>()
+        .build()
+        .await
+        .expect("boots");
+    let ask = |query: String| {
+        let app = &app;
+        async move {
+            app.http()
+                .post("/graphql")
+                .body_json(&serde_json::json!({ "query": query }))
+                .send()
+                .await
+                .json()
+                .await
+                .value()
+                .deserialize::<serde_json::Value>()
+        }
+    };
+
+    let typed = ask(
+        r#"{ __type(name: "Query") { fields { name args { name type { kind ofType { name } } } } } }"#
+            .to_owned(),
+    )
+    .await;
+    let field = typed["data"]["__type"]["fields"]
+        .as_array()
+        .expect("the root's fields")
+        .iter()
+        .find(|field| field["name"] == "visitedNote")
+        .expect("the bound field");
+    assert_eq!(field["args"][0]["name"], "id", "{typed}");
+    assert_eq!(field["args"][0]["type"]["kind"], "NON_NULL", "{typed}");
+    assert_eq!(field["args"][0]["type"]["ofType"]["name"], "ID", "{typed}");
+
+    let not_v7 = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+    let refused = ask(format!(r#"{{ visitedNote(id: "{not_v7}") {{ title }} }}"#)).await;
+    let error = &refused["errors"][0];
+    assert_eq!(error["extensions"]["code"], "INVALID_ARGUMENT", "{refused}");
+    assert_eq!(
+        error["message"],
+        nest_rs_core::UUID_V7_REQUIRED,
+        "{refused}"
+    );
+    assert!(
+        !refused.to_string().contains(not_v7),
+        "quotes the value: {refused}"
+    );
+}

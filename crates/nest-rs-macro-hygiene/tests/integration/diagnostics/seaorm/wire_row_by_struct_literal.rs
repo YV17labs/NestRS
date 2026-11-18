@@ -24,7 +24,7 @@ mod thing {
 
 fn invented() -> thing::Thing {
     thing::Thing {
-        id: String::new(),
+        id: sea_orm::prelude::Uuid::nil().into(),
         name: "invented".to_owned(),
     }
 }

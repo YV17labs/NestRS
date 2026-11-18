@@ -126,7 +126,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             #[authorize(::nest_rs_authz::Read, #entity)]
             async fn #get_op(
                 &self,
-                id: ::std::string::String,
+                id: ::nest_rs_graphql::async_graphql::ID,
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 #parse_id
                 match ::nest_rs_seaorm::CrudService::access(
@@ -173,7 +173,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             #[authorize(::nest_rs_authz::Update, #entity)]
             async fn #update_op(
                 &self,
-                id: ::std::string::String,
+                id: ::nest_rs_graphql::async_graphql::ID,
                 input: #update,
             ) -> ::nest_rs_graphql::async_graphql::Result<::core::option::Option<#output>> {
                 #parse_id
@@ -214,7 +214,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             #[authorize(::nest_rs_authz::Delete, #entity)]
             async fn #delete_op(
                 &self,
-                id: ::std::string::String,
+                id: ::nest_rs_graphql::async_graphql::ID,
             ) -> ::nest_rs_graphql::async_graphql::Result<bool> {
                 #parse_id
                 match ::nest_rs_seaorm::CrudService::access(

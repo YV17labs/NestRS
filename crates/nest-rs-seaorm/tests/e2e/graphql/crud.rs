@@ -220,7 +220,7 @@ struct PlatesModule;
 const CREATE: &str =
     "mutation($input: CreateGizmo!) { createGizmo(input: $input) { id email note } }";
 
-const GET: &str = "query($id: String!) { gizmo(id: $id) { id } }";
+const GET: &str = "query($id: ID!) { gizmo(id: $id) { id } }";
 
 const CREATE_PLATE: &str = "mutation($input: CreatePlate!) { createPlate(input: $input) { id } }";
 

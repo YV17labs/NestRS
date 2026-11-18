@@ -87,17 +87,17 @@ The schema you get:
 
 ```graphql title="the SDL it produces"
 type User {
-    id: String!
+    id: ID!
     name: String!
     """
     Field-level authorization applies: reads `null` where the caller's ability withholds it.
     """
     org: Org             # belongs_to side — PK loader on OrgsService
-    orgId: String!
+    orgId: ID!
 }
 
 type Org {
-    id: String!
+    id: ID!
     name: String!
     # has_many side — FK loader on UsersService, paged
     users(after: String, first: Int): UserConnection!

@@ -237,8 +237,8 @@ pub(super) mod notes {
     }
 }
 
-/// A key a row may lack: its column is an `Option`, which reads as a `String`
-/// like any id, and the relation parses it back to load its row.
+/// A key a row may lack: its column is an `Option`, which reads as GraphQL's `ID`
+/// like any id, and the relation reads the key it holds to load its row.
 pub(super) mod drafts {
     use super::*;
 
@@ -266,10 +266,10 @@ pub(super) mod drafts {
     }
 }
 
-/// An optional key reads as the `String` a present one reads as, and its relation
+/// An optional key reads as the `ID` a present one reads as, and its relation
 /// may read `null`.
 #[tokio::test]
-async fn an_optional_key_reads_as_a_string_and_its_relation_may_read_null() {
+async fn an_optional_key_reads_as_an_id_and_its_relation_may_read_null() {
     use nest_rs_graphql::async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
 
     struct Query;
@@ -310,8 +310,8 @@ async fn an_optional_key_reads_as_a_string_and_its_relation_may_read_null() {
         fields,
         [
             ("editor", "OBJECT", Some("Person")),
-            ("editorId", "SCALAR", Some("String")),
-            ("id", "NON_NULL", Some("String")),
+            ("editorId", "SCALAR", Some("ID")),
+            ("id", "NON_NULL", Some("ID")),
         ],
         "{introspected}",
     );

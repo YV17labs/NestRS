@@ -1,8 +1,8 @@
 //! The GraphQL inputs of `#[expose]` (`src/input.rs` in the macro crate): what
 //! the macro *emits* must compile with nothing but `nest-rs-seaorm`'s own
-//! `graphql` feature turned on, `Uuid` and `DateTime*` `InputType` impls
-//! included. The rules an input declares hold at the edge that decodes it, a
-//! hand-written create's included.
+//! `graphql` feature turned on, its `DateTime*` `InputType` impls included. The
+//! rules an input declares hold at the edge that decodes it, a hand-written
+//! create's included, and so does the one it puts on an id: a UUID v7.
 
 use std::sync::Arc;
 
@@ -55,17 +55,18 @@ mod booking {
     impl Deletable for BookingsService {}
 }
 
-/// The assertion is the compile above; this pins the shape so the fixture
-/// keeps a `Uuid` and a timestamp reaching the GraphQL input, unconverted.
+/// The assertion is the compile above; this pins the shape: an input carries an
+/// instant in the entity's own type, and an id as the wire row reads it, built
+/// from the column's `Uuid` and read back as one.
 #[test]
-fn a_graphql_input_carries_the_entitys_own_uuid_and_timestamp_types() {
+fn a_graphql_input_carries_an_instant_as_its_column_and_an_id_as_the_wire_reads_it() {
     let guest_id = Uuid::now_v7();
     let create = booking::CreateBooking {
-        guest_id,
+        guest_id: guest_id.into(),
         starts_at: None,
         label: "window seat".into(),
     };
-    assert_eq!(create.guest_id, guest_id);
+    assert_eq!(Uuid::from(create.guest_id), guest_id);
     assert!(create.starts_at.is_none());
 
     let wire = booking::Booking::from(&booking::Model {
@@ -74,7 +75,7 @@ fn a_graphql_input_carries_the_entitys_own_uuid_and_timestamp_types() {
         starts_at: None,
         label: "window seat".into(),
     });
-    assert_eq!(wire.id, guest_id.to_string());
+    assert_eq!(Uuid::from(wire.id), guest_id);
 }
 
 mod ticket {
@@ -89,6 +90,8 @@ mod ticket {
         pub id: Uuid,
         #[expose(input(create), validate(length(min = 1)))]
         pub label: String,
+        #[expose(input(create))]
+        pub board_id: Option<Uuid>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -238,6 +241,134 @@ async fn a_hand_written_create_taking_the_bare_input_is_validated_over_graphql()
         reply["errors"][0]["extensions"]["code"], "INVALID_ARGUMENT",
         "{reply}"
     );
+}
+
+/// An id no framework mints: a UUID, version 4.
+const NOT_V7: &str = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+
+/// A refusal of an id an input carries, by its field: the class every edge
+/// answers a broken rule with, and the sentence a `#[crud]` id argument says.
+fn assert_refuses_the_id(errors: &serde_json::Value, field: &str, said: &str) {
+    assert_eq!(errors[field][0]["code"], "uuid_v7", "{said}");
+    assert_eq!(
+        errors[field][0]["message"],
+        nest_rs_core::UUID_V7_REQUIRED,
+        "{said}"
+    );
+    assert!(!said.contains(NOT_V7), "quotes the value: {said}");
+}
+
+#[tokio::test]
+async fn an_id_an_input_carries_is_held_to_a_uuid_v7_over_http() {
+    let app = tickets().await;
+
+    let refused = app
+        .http()
+        .post("/tickets")
+        .body_json(&serde_json::json!({ "label": "aisle", "board_id": NOT_V7 }))
+        .send()
+        .await;
+
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    let problem: serde_json::Value = refused.json().await.value().deserialize();
+    let said = problem.to_string();
+    assert_eq!(problem["code"], "INVALID_ARGUMENT", "{said}");
+    assert_refuses_the_id(&problem["errors"], "board_id", &said);
+}
+
+#[tokio::test]
+async fn an_id_an_input_carries_is_held_to_a_uuid_v7_over_graphql() {
+    let app = tickets().await;
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({
+            "query": format!(
+                "mutation {{ createTicket(input: {{ label: \"aisle\", boardId: \"{NOT_V7}\" }}) {{ id }} }}"
+            )
+        }))
+        .send()
+        .await;
+
+    resp.assert_status_is_ok();
+    let reply: serde_json::Value = resp.json().await.value().deserialize();
+    let said = reply.to_string();
+    let error = &reply["errors"][0];
+    assert_eq!(error["extensions"]["code"], "INVALID_ARGUMENT", "{said}");
+    assert_refuses_the_id(&error["extensions"]["errors"], "boardId", &said);
+}
+
+/// An input's id that is no UUID at all is refused where the edge decodes it,
+/// quoting nothing it was sent.
+#[tokio::test]
+async fn an_id_an_input_carries_that_is_no_uuid_is_refused_quoting_nothing() {
+    const NO_UUID: &str = "board-SECRET-MARK";
+    let app = tickets().await;
+
+    let refused = app
+        .http()
+        .post("/tickets")
+        .body_json(&serde_json::json!({ "label": "aisle", "board_id": NO_UUID }))
+        .send()
+        .await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    let problem: serde_json::Value = refused.json().await.value().deserialize();
+    assert_eq!(problem["code"], "INVALID_ARGUMENT", "{problem}");
+    assert!(
+        !problem.to_string().contains(NO_UUID),
+        "quotes the value: {problem}"
+    );
+
+    let reply: serde_json::Value = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({
+            "query": format!(
+                "mutation {{ createTicket(input: {{ label: \"aisle\", boardId: \"{NO_UUID}\" }}) {{ id }} }}"
+            )
+        }))
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize();
+    assert!(reply["errors"][0].is_object(), "refused: {reply}");
+    assert!(reply["data"]["createTicket"].is_null(), "{reply}");
+    assert!(
+        !reply.to_string().contains(NO_UUID),
+        "quotes the value: {reply}"
+    );
+}
+
+/// The id an input carries is GraphQL's `ID`, as a reply and a `#[crud]` id
+/// argument read it.
+#[tokio::test]
+async fn an_id_an_input_carries_is_graphql_s_id() {
+    let app = tickets().await;
+
+    let reply: serde_json::Value = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({
+            "query": r#"{ __type(name: "CreateTicket") { inputFields { name type { name } } } }"#
+        }))
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize();
+
+    let fields = reply["data"]["__type"]["inputFields"]
+        .as_array()
+        .expect("the input's fields");
+    let board = fields
+        .iter()
+        .find(|field| field["name"] == "boardId")
+        .expect("the id field");
+    assert_eq!(board["type"]["name"], "ID", "{reply}");
 }
 
 mod enum_column {

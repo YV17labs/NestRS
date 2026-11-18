@@ -206,11 +206,11 @@ INFO nest_rs::graphql: wrote GraphQL SDL path=/home/dev/blog/apps/api/schema.gra
 
 $ grep -A7 '^type Query' apps/api/schema.graphql
 type Query {
-	org(id: String!): Org
+	org(id: ID!): Org
 	orgs(after: String, first: Int): [Org!]!
-	post(id: String!): Post
+	post(id: ID!): Post
 	posts(after: String, first: Int): [Post!]!
-	user(id: String!): User
+	user(id: ID!): User
 	users(after: String, first: Int): [User!]!
 }
 ```

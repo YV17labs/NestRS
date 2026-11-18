@@ -85,6 +85,7 @@ mod turn;
 mod unique_key;
 mod unit;
 mod wire_date_time;
+mod wire_id;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;
@@ -143,6 +144,7 @@ pub mod __private {
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use crate::unique_key::UniqueKeyRegistration;
     pub use crate::wire_date_time::WireDateTime;
+    pub use crate::wire_id::{WireId, uuid_v7};
     pub use inventory;
 
     // What `#[expose]` emits, so an entity crate declares none of these; each
@@ -263,6 +265,51 @@ pub mod __private {
 /// an `Option` column, or one `#[expose(nullable)]` declares, whose field is an
 /// `Option` and whose schema is nullable on every edge, its description saying a
 /// grant may withhold it. The primary key names its row and takes no `nullable`.
+///
+/// **An id and an instant read alike on every edge, an `Option` or not.** A
+/// `Uuid` column is GraphQL's `ID` in a reply and in an input, its text on every
+/// other edge, and an input holds it to a UUID v7, as a `#[crud]` id argument is
+/// held. A chrono instant — sea-orm's `DateTimeWithTimeZone`, `DateTimeUtc` or
+/// `DateTimeLocal`, chrono's `DateTime<Tz>` — is GraphQL's `DateTime`, written on
+/// every edge as chrono's `Serialize` writes it, `Z` at UTC. The decorator knows
+/// both by those names: a column spelled through an alias of your own keeps
+/// async-graphql's mapping, `UUID` and `+00:00`. The wire row reads each back as
+/// its column's type, and an input's id is built from one:
+///
+/// ```
+/// # use nest_rs_seaorm::expose;
+/// # mod note {
+/// #     use super::*;
+/// #     use sea_orm::entity::prelude::*;
+/// #[expose(name = "Note")]
+/// # #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+/// # #[sea_orm(table_name = "notes")]
+/// pub struct Model {
+///     #[sea_orm(primary_key, auto_increment = false)]
+///     #[expose]
+///     pub id: Uuid,
+///     #[expose(input(create))]
+///     pub author_id: Uuid,
+///     #[expose]
+///     pub created_at: DateTimeWithTimeZone,
+/// }
+/// #     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// #     pub enum Relation {}
+/// #     impl ActiveModelBehavior for ActiveModel {}
+/// # }
+/// # fn main() {
+/// # use note::{CreateNote, Model, Note};
+/// # use sea_orm::prelude::{DateTimeWithTimeZone, Uuid};
+/// # let (id, at) = (Uuid::now_v7(), nest_rs_seaorm::now());
+/// let row = Note::from(&Model { id, author_id: id, created_at: at });
+/// let created: &DateTimeWithTimeZone = row.created_at.as_ref();
+/// assert_eq!(*created, at);
+/// assert_eq!(Uuid::from(row.id), id);
+///
+/// let input = CreateNote { author_id: id.into() };
+/// assert_eq!(Uuid::from(input.author_id), id);
+/// # }
+/// ```
 ///
 /// Add the `graphql` flag, with this crate's `graphql` feature, and the DTO is
 /// also a GraphQL object, its `#[expose]`d relations resolved through

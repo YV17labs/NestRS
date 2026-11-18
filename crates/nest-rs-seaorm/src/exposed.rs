@@ -79,17 +79,11 @@ pub trait Exposed: EntityTrait + ExposeDeclared {
 pub trait ExposeDeclared {}
 
 /// The schema of a wire field `#[expose(nullable)]` declares: its value's, or
-/// `null`, in `format` where its column's type keeps one. The field stays required,
-/// since a reply always writes its key.
+/// `null`. The field stays required, since a reply always writes its key.
 pub fn nullable_schema<T: schemars::JsonSchema>(
     generator: &mut schemars::SchemaGenerator,
-    format: Option<&'static str>,
 ) -> schemars::Schema {
-    let mut schema = generator.subschema_for::<Option<T>>();
-    if let Some(format) = format {
-        schema.insert("format".to_owned(), format.into());
-    }
-    schema
+    generator.subschema_for::<Option<T>>()
 }
 
 /// The doc `#[expose]` writes on each wire property a grant may withhold, which

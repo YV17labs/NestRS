@@ -29,7 +29,7 @@ returns its service result and the wire shape just works.
 ## The smallest error
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
-use nest_rs::graphql::async_graphql::{Error, Result};
+use nest_rs::graphql::async_graphql::{Error, ID, Result};
 use nest_rs::graphql::{operations, resolver};
 
 #[resolver]
@@ -39,11 +39,11 @@ pub struct PostsResolver;
 impl PostsResolver {
     #[query]
     #[public]
-    async fn post(&self, id: String) -> Result<String> {
+    async fn post(&self, id: ID) -> Result<String> {
         if id.is_empty() {
             return Err(Error::new("id must not be empty"));
         }
-        Ok(format!("post {id}"))
+        Ok(format!("post {}", id.as_str()))
     }
 }
 ```
@@ -111,6 +111,7 @@ gives one, its cause at `warn`. A resolver returns such a method's result as it 
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::authz::Read;
+use nest_rs::graphql::async_graphql::ID;
 use nest_rs::graphql::{operations, resolver};
 use nest_rs::seaorm::ServiceError;
 
@@ -118,7 +119,7 @@ use nest_rs::seaorm::ServiceError;
 impl PostsResolver {
     #[query]
     #[authorize(Read, posts::Entity)]
-    async fn post(&self, id: String) -> Result<Post, ServiceError> {
+    async fn post(&self, id: ID) -> Result<Post, ServiceError> {
         self.svc.find_by_id(&id).await
     }
 }
@@ -148,10 +149,11 @@ WebSockets and MCP:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::graphql::Opaque;
+use nest_rs::graphql::async_graphql::ID;
 
 #[query]
 #[authorize(Read, posts::Entity)]
-async fn post(&self, id: String) -> nest_rs::graphql::async_graphql::Result<Post> {
+async fn post(&self, id: ID) -> nest_rs::graphql::async_graphql::Result<Post> {
     Ok(self.svc.find_by_id(&id).await.opaque()?)
 }
 ```

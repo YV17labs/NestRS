@@ -1,7 +1,8 @@
 //! `src/service.rs` in process: a `#[crud]` create a grant's `.fields` refuses
 //! answers `403` on HTTP and GraphQL, naming the input's field by its client's
 //! spelling, on a pool whose every acquire is refused, so an attempt at a statement
-//! would answer its `500`; and a service's `?` on the same refusal.
+//! would answer its `500`; a service's `?` on the same refusal; and a `#[crud]` id
+//! argument, GraphQL's `ID`, refused before any load unless a UUID v7.
 
 use std::sync::Arc;
 
@@ -112,7 +113,7 @@ struct NotesResolver {
     svc: Arc<NotesService>,
 }
 
-#[nest_rs_graphql::crud(service = NotesService, ops = [list, create])]
+#[nest_rs_graphql::crud(service = NotesService, ops = [list, create, get])]
 impl NotesResolver {}
 
 #[module(
@@ -220,5 +221,60 @@ async fn a_services_write_answers_forbidden_naming_the_column() {
     assert_eq!(
         body["detail"], "the caller may not write review_state",
         "{body}"
+    );
+}
+
+/// A `#[crud]` id argument is GraphQL's `ID`, as a reply and a write's input carry
+/// it, and one that is no UUID v7 is refused before any load, in the framework's
+/// sentence, quoting nothing it was sent.
+#[tokio::test]
+async fn a_crud_id_argument_is_graphql_s_id_held_to_a_uuid_v7() {
+    let app = boot().await;
+    let ask = |query: String| {
+        let app = &app;
+        async move {
+            app.http()
+                .post("/graphql")
+                .body_json(&json!({ "query": query }))
+                .send()
+                .await
+                .json()
+                .await
+                .value()
+                .deserialize::<Value>()
+        }
+    };
+
+    let typed = ask(
+        r#"{ __type(name: "Query") { fields { name args { name type { kind ofType { name } } } } } }"#
+            .to_owned(),
+    )
+    .await;
+    let field = typed["data"]["__type"]["fields"]
+        .as_array()
+        .expect("the root's fields")
+        .iter()
+        .find(|field| field["name"] == "note")
+        .expect("the get operation");
+    assert_eq!(field["args"][0]["name"], "id", "{typed}");
+    assert_eq!(field["args"][0]["type"]["kind"], "NON_NULL", "{typed}");
+    assert_eq!(field["args"][0]["type"]["ofType"]["name"], "ID", "{typed}");
+
+    let not_v7 = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+    let refused = ask(format!(r#"{{ note(id: "{not_v7}") {{ id }} }}"#)).await;
+    let error = &refused["errors"][0];
+    assert_eq!(
+        error["extensions"]["code"],
+        code::INVALID_ARGUMENT.as_str(),
+        "{refused}"
+    );
+    assert_eq!(
+        error["message"],
+        nest_rs_core::UUID_V7_REQUIRED,
+        "{refused}"
+    );
+    assert!(
+        !refused.to_string().contains(not_v7),
+        "quotes the value: {refused}"
     );
 }

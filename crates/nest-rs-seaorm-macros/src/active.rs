@@ -9,10 +9,12 @@
 //! included, and an update which of them a reply also shows (`reads_back`), which
 //! a caller may carry back as they stand under a grant narrowing what it writes.
 
+use nest_rs_codegen::__private::nth_generic_type;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
 use crate::attr::{ResourceField, ResourceModel, is_uuid};
+use crate::input::carries_an_id;
 
 pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     let create = emit_create(model);
@@ -42,6 +44,20 @@ fn emit_registration() -> TokenStream2 {
     }
 }
 
+/// The statement setting `field`'s column from the input, an id turned back from
+/// the `WireId` it carries into the column's `Uuid`.
+fn setter(field: &ResourceField) -> TokenStream2 {
+    let name = &field.ident;
+    let value = if !carries_an_id(field) {
+        quote! { self.#name }
+    } else if nth_generic_type(&field.ty, "Option", 0).is_some() {
+        quote! { ::core::option::Option::map(self.#name, ::core::convert::Into::into) }
+    } else {
+        quote! { ::core::convert::Into::into(self.#name) }
+    };
+    quote! { __am.#name = ::nest_rs_seaorm::sea_orm::ActiveValue::Set(#value); }
+}
+
 /// `field_for`, over the fields an input sets: each column's name, as the
 /// table spells it, against the key serde reads the field under.
 fn emit_field_for(fields: &[&ResourceField]) -> TokenStream2 {
@@ -67,13 +83,7 @@ fn emit_create(model: &ResourceModel) -> TokenStream2 {
         .iter()
         .filter(|f| f.in_create && !f.is_pk)
         .collect();
-    let setters: Vec<TokenStream2> = carried
-        .iter()
-        .map(|f| {
-            let name = &f.ident;
-            quote! { __am.#name = ::nest_rs_seaorm::sea_orm::ActiveValue::Set(self.#name); }
-        })
-        .collect();
+    let setters: Vec<TokenStream2> = carried.iter().map(|f| setter(f)).collect();
     if setters.is_empty() {
         return quote! {};
     }
@@ -108,13 +118,7 @@ fn emit_update(model: &ResourceModel) -> TokenStream2 {
         .iter()
         .filter(|f| f.in_update && !f.is_pk)
         .collect();
-    let setters: Vec<TokenStream2> = carried
-        .iter()
-        .map(|f| {
-            let name = &f.ident;
-            quote! { __am.#name = ::nest_rs_seaorm::sea_orm::ActiveValue::Set(self.#name); }
-        })
-        .collect();
+    let setters: Vec<TokenStream2> = carried.iter().map(|f| setter(f)).collect();
     if setters.is_empty() {
         return quote! {};
     }

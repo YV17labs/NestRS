@@ -23,7 +23,7 @@ service — on HTTP, from the route's path:
     }
 ```
 
-and on GraphQL, from an `id: String!` argument the attribute synthesises:
+and on GraphQL, from an `id: ID!` argument the attribute synthesises:
 
 ```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
     #[mutation]
@@ -74,7 +74,7 @@ The service is resolved through the request's scope, and the boot checks it
 like an injected one: a controller or resolver whose module does not import
 the service's own fails the boot rather than its first call. On GraphQL the
 synthesised `id` argument means the method must not declare an `id`
-parameter of its own: writing `id: String` alongside it is `E0415: identifier
+parameter of its own: writing `id: ID` alongside it is `E0415: identifier
 'id' is bound more than once in this parameter list`, reported against the
 `#[crud(…)]` attribute on the impl block rather than the method — drop the
 parameter, not the attribute; `id_arg = …` renames the argument. On HTTP the

@@ -169,17 +169,23 @@ one `#[expose(nullable)]` declares, or neither:
 
 | Column | GraphQL | JSON — REST, WebSocket, MCP | JSON Schema |
 |---|---|---|---|
-| `Uuid` | `String` | `"01920000-0000-7000-8000-0000000001a1"` | `format: uuid` |
+| `Uuid` | `ID` | `"01920000-0000-7000-8000-0000000001a1"` | `format: uuid` |
 | `DateTimeWithTimeZone`, `DateTimeUtc`, `DateTimeLocal` | `DateTime` | `"2026-10-08T12:30:00.250Z"` | `format: date-time` |
 | `Date`, `Time`, `DateTime` (naive) | `NaiveDate`, `NaiveTime`, `NaiveDateTime` | `"2026-10-08"`, `"12:30:00.250"`, `"2026-10-08T12:30:00.250"` | `date`, `partial-time`, `partial-date-time` |
 
-An id reads as the `String` a `#[crud]` id argument takes. An instant reads as
-one RFC 3339 string on every edge, the one chrono's serde writes: `Z` at UTC,
-and the fraction to the precision the column holds. RFC 9557 gives `Z` to an
+An id is GraphQL's `ID` wherever it appears: a reply, a create or update input,
+a `#[crud]` id argument. An input holds it to a UUID v7, refused with
+`INVALID_ARGUMENT` in the sentence a `#[crud]` id argument answers. An instant
+reads as one RFC 3339 string on every edge, the one chrono's serde writes: `Z` at
+UTC, and the fraction to the precision the column holds. RFC 9557 gives `Z` to an
 instant whose local offset is unknown, which a `timestamptz` read back is. On
-GraphQL the instant is the `DateTime` scalar, the one a create or update input
-already takes. The wire row's field holds the framework's own instant type,
-which serializes and answers GraphQL: compute with the value off the `Model`.
+GraphQL the instant is the `DateTime` scalar, the one an input already takes.
+
+The wire row reads each back as its column's type — `row.created_at.as_ref()` is
+a `&DateTimeWithTimeZone`, `Uuid::from(row.id)` the key — and an input's id is
+built with `id.into()`. `#[expose]` knows these types by their names: a column
+spelled through an alias of your own keeps async-graphql's own mapping, `UUID` and
+`+00:00`.
 
 ### Enum columns
 

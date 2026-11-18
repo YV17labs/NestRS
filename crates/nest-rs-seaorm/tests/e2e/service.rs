@@ -194,7 +194,7 @@ async fn put(app: &TestApp, row: &article::Model, body: Value) -> (StatusCode, V
 /// `updateArticle` on `row`, selecting `selection`.
 async fn update(app: &TestApp, row: &article::Model, input: Value, selection: &str) -> Value {
     let query = format!(
-        "mutation($id: String!, $input: UpdateArticle!) {{ \
+        "mutation($id: ID!, $input: UpdateArticle!) {{ \
              updateArticle(id: $id, input: $input) {{ {selection} }} \
          }}"
     );

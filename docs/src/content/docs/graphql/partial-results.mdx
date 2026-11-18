@@ -30,7 +30,7 @@ lookup written by hand reads the same three outcomes off the service's
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 #[query]
 #[authorize(Read, UserEntity)]
-async fn user(&self, id: String) -> Result<Option<User>> {
+async fn user(&self, id: ID) -> Result<Option<User>> {
     let id = parse_v7(&id)?;
     match self.svc.access(Action::Read, id).await.opaque()? {
         Access::Found(user) => Ok(Some(User::from(&user))),

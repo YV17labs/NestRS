@@ -116,7 +116,8 @@ impl ColumnType {
             Self::Integer | Self::Bigint => "1".to_owned(),
             Self::Float => "1.5".to_owned(),
             Self::Boolean => "true".to_owned(),
-            Self::Uuid => "\"00000000-0000-0000-0000-000000000001\"".to_owned(),
+            // A UUID v7: an input holds an id to the framework's identifier contract.
+            Self::Uuid => "\"01920000-0000-7000-8000-000000000001\"".to_owned(),
             Self::Date => "\"2026-01-01\"".to_owned(),
             // chrono writes an instant at offset zero with `Z`, as Postgres
             // hands every `timestamptz` back.

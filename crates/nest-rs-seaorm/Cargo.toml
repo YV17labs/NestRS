@@ -112,8 +112,9 @@ tokio.workspace = true
 tokio-util.workspace = true
 
 # Optional deps for transport-binding features.
-# `uuid` / `chrono`: `#[expose(…, graphql)]` puts `Uuid` and `DateTime*` columns
-# on GraphQL objects, so their scalar impls are this crate's requirement.
+# `chrono`: `#[expose(…, graphql)]` puts `DateTime*` columns on a write's GraphQL
+# input, so its scalar impls are this crate's requirement. `uuid`: an app on
+# `seaorm` reads `Uuid` as a GraphQL scalar, which `changelog/7.0.md` promises.
 async-graphql = { workspace = true, optional = true, features = ["uuid", "chrono"] }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-health = { workspace = true, optional = true }

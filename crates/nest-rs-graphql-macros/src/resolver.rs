@@ -1311,7 +1311,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     if let Some((_, subject_ident, id_ident, _)) = &bind_info
                         && arg_ident == *subject_ident
                     {
-                        *input = parse_quote!(#id_ident: ::std::string::String);
+                        *input = parse_quote!(#id_ident: ::nest_rs_graphql::async_graphql::ID);
                         continue;
                     }
                     if let Some(pa) = piped.iter().find(|pa| pa.ident == arg_ident) {

@@ -19,9 +19,10 @@
 - **Canary** — `nest-rs-seaorm`'s unit test
   `wire_date_time::tests::async_graphql_still_spells_offset_zero_plus_zero`.
 - **Upstream** — not filed.
-- **When fixed** — an `#[expose]`d instant can keep its column's own type on
-  the wire and `WireDateTime` goes, if the scalar's description and
-  `@specifiedBy` URL stay what they are. About an hour, the macro's tests
+- **When fixed** — in nestrs 8, an `#[expose]`d instant can keep its column's
+  own type on the wire and `WireDateTime` goes, if the scalar's description and
+  `@specifiedBy` URL stay what they are: a wire row's field changes type, which
+  an app reading it through `as_ref()` sees. About an hour, the macro's tests
   included.
 - **Ticket** —
 

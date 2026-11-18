@@ -2,10 +2,9 @@
 //! impl naming it — the one association from an entity to its wire type,
 //! which `#[crud]` and the relation resolvers read. Only `#[expose]`d
 //! columns appear — an unexposed field is absent. A column reads in one type
-//! whether it is an `Option` or not: a `Uuid` as its `String`, its schema
-//! keeping the `uuid` format, and a chrono instant as `WireDateTime`, one
-//! RFC 3339 string on every edge and GraphQL's `DateTime`
-//! (`.claude/decisions/a-column-reads-in-one-type.md`).
+//! whether it is an `Option` or not: a `Uuid` as `WireId`, GraphQL's `ID`, and a
+//! chrono instant as `WireDateTime`, one RFC 3339 string on every edge and
+//! GraphQL's `DateTime` (`.claude/decisions/a-column-reads-in-one-type.md`).
 //!
 //! **The row is judged where it is built**: `From<&Model>` asks the ability
 //! installed there which columns the caller may read, so a column a grant
@@ -18,8 +17,8 @@
 use nest_rs_codegen::__private::nth_generic_type;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::Ident;
 use syn::ext::IdentExt as _;
+use syn::{Ident, Type};
 
 use crate::attr::{
     ResourceField, ResourceModel, complexity_attr, graphql_crate_attr, graphql_object_derive,
@@ -39,68 +38,61 @@ struct Wire {
     ty: TokenStream2,
     /// The column's value in `ty`, read off `model`.
     value: TokenStream2,
-    /// The format a `String` keeps from its column's type.
-    format: Option<&'static str>,
 }
 
-/// `field` on the wire, its `Option` read through: an id as its `String`, an
-/// instant as `WireDateTime`, anything else as the column's own type.
+/// The type the framework writes a column of `leaf`'s type as on every edge — an
+/// id's `WireId`, an instant's `WireDateTime` — or `None` for one every edge
+/// already writes alike. Read by spelling: an alias keeps its own type.
+pub(crate) fn wire_type(leaf: &Type) -> Option<TokenStream2> {
+    if is_uuid(leaf) {
+        Some(quote! { ::nest_rs_seaorm::__private::WireId })
+    } else if is_instant(leaf) {
+        Some(quote! { ::nest_rs_seaorm::__private::WireDateTime })
+    } else {
+        None
+    }
+}
+
+/// `field` on the wire, its `Option` read through: an id as `WireId`, an instant
+/// as `WireDateTime`, anything else as the column's own type.
 fn wire(field: &ResourceField) -> Wire {
     let name = &field.ident;
     let column = &field.ty;
     let held = nth_generic_type(column, "Option", 0);
-    let leaf = held.unwrap_or(column);
-    let (ty, format, convert) = if is_uuid(leaf) {
-        (
-            quote! { ::std::string::String },
-            Some("uuid"),
-            quote! { ::std::string::ToString::to_string },
-        )
-    } else if is_instant(leaf) {
-        (
-            quote! { ::nest_rs_seaorm::__private::WireDateTime },
-            None,
-            quote! { ::nest_rs_seaorm::__private::WireDateTime::from },
-        )
-    } else {
+    let Some(ty) = wire_type(held.unwrap_or(column)) else {
         return Wire {
             ty: quote! { #column },
             value: quote! { ::core::clone::Clone::clone(&model.#name) },
-            format: None,
         };
     };
-    let (ty, value) = if held.is_some() {
-        (
-            quote! { ::core::option::Option<#ty> },
-            quote! {
-                ::core::option::Option::map(::core::option::Option::as_ref(&model.#name), #convert)
+    if held.is_some() {
+        Wire {
+            value: quote! {
+                ::core::option::Option::map(
+                    ::core::option::Option::as_ref(&model.#name),
+                    <#ty as ::core::convert::From<_>>::from,
+                )
             },
-        )
+            ty: quote! { ::core::option::Option<#ty> },
+        }
     } else {
-        (ty, quote! { #convert(&model.#name) })
-    };
-    Wire { ty, value, format }
+        Wire {
+            value: quote! { <#ty as ::core::convert::From<_>>::from(&model.#name) },
+            ty,
+        }
+    }
 }
 
 /// The schema function a nullable field's `#[schemars(schema_with)]` names: its
-/// value's schema or `null`, in `format`, the key required, since a reply always
-/// writes it.
-fn nullable_schema_fn(
-    field: &ResourceField,
-    base: &TokenStream2,
-    format: Option<&str>,
-) -> (Ident, TokenStream2) {
+/// value's schema or `null`, the key required, since a reply always writes it.
+fn nullable_schema_fn(field: &ResourceField, base: &TokenStream2) -> (Ident, TokenStream2) {
     let ident = format_ident!("__nullable_schema_{}", field.ident.unraw());
-    let format = match format {
-        Some(format) => quote! { ::core::option::Option::Some(#format) },
-        None => quote! { ::core::option::Option::None },
-    };
     let body = quote! {
         #[doc(hidden)]
         fn #ident(
             __generator: &mut ::nest_rs_seaorm::__private::schemars::SchemaGenerator,
         ) -> ::nest_rs_seaorm::__private::schemars::Schema {
-            ::nest_rs_seaorm::__private::nullable_schema::<#base>(__generator, #format)
+            ::nest_rs_seaorm::__private::nullable_schema::<#base>(__generator)
         }
     };
     (ident, body)
@@ -134,12 +126,11 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
         } else {
             TokenStream2::new()
         };
-        let Wire { ty, value, format } = wire(field);
-        let stated = format.map(|format| quote! { #[schemars(extend("format" = #format))] });
+        let Wire { ty, value } = wire(field);
         let withheld = field.column.as_ref().filter(|_| field.withholdable());
         match (field.nullable, withheld) {
             (true, Some(column)) => {
-                let (schema_fn, body) = nullable_schema_fn(field, &ty, format);
+                let (schema_fn, body) = nullable_schema_fn(field, &ty);
                 let schema_with = format!("{output}::{schema_fn}");
                 schema_fns.push(body);
                 decls.push(quote! {
@@ -154,7 +145,7 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
                 });
             }
             (false, Some(column)) => {
-                decls.push(quote! { #withholdable #complexity #guard #stated pub #name: #ty });
+                decls.push(quote! { #withholdable #complexity #guard pub #name: #ty });
                 inits.push(quote! {
                     #name: if __judgement.permits(Column::#column) {
                         #value
@@ -164,7 +155,7 @@ pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
                 });
             }
             (_, None) => {
-                decls.push(quote! { #complexity #guard #stated pub #name: #ty });
+                decls.push(quote! { #complexity #guard pub #name: #ty });
                 inits.push(quote! { #name: #value });
                 if let Some(column) = &field.column {
                     answered.push(quote! {

@@ -109,7 +109,7 @@ impl GhostsResolver {
 )]
 struct GhostModule;
 
-const QUERY: &str = r#"query($id: String!) { ghost(id: $id) { id title } }"#;
+const QUERY: &str = r#"query($id: ID!) { ghost(id: $id) { id title } }"#;
 
 #[tokio::test]
 async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {

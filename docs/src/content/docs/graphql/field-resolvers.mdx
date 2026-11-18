@@ -20,12 +20,12 @@ The first argument after `&self` is the parent object; the return is the
 field's value.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
-use async_graphql::SimpleObject;
+use async_graphql::{ID, SimpleObject};
 use nest_rs::graphql::{operations, resolver};
 
 #[derive(SimpleObject, Clone)]
 pub struct User {
-    id: String,
+    id: ID,
     name: String,
 }
 
@@ -36,7 +36,7 @@ pub struct UsersResolver;
 impl UsersResolver {
     #[query]
     #[public]
-    async fn user(&self, id: String) -> User {
+    async fn user(&self, id: ID) -> User {
         User { id, name: "Ada".into() }
     }
 
@@ -65,12 +65,12 @@ Beyond `parent`, a `#[field_resolver]` accepts the same shapes a
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 use std::sync::Arc;
-use async_graphql::{Context, Result, SimpleObject};
+use async_graphql::{Context, ID, Result, SimpleObject};
 use nest_rs::graphql::{operations, resolver};
 
 #[derive(SimpleObject, Clone)]
 pub struct User {
-    id: String,
+    id: ID,
     name: String,
 }
 
@@ -84,7 +84,7 @@ pub struct UsersResolver {
 impl UsersResolver {
     #[query]
     #[public]
-    async fn user(&self, id: String) -> User {
+    async fn user(&self, id: ID) -> User {
         User { id, name: "Ada".into() }
     }
 

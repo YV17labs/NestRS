@@ -59,7 +59,7 @@ impl ToProblem for PublishError {
 ```rust title="crates/features/src/posts/graphql/resolver.rs"
 #[mutation]
 #[authorize(Update, posts::Entity)]
-async fn publish(&self, id: String) -> Result<Post, PublishError> {
+async fn publish(&self, id: ID) -> Result<Post, PublishError> {
     self.svc.publish(&id).await
 }
 ```

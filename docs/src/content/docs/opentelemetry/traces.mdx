@@ -248,8 +248,8 @@ a point in `db.client.operation.duration`.
 
 | Sent | Span name | Attributes |
 |---|---|---|
-| a Postgres statement | its summary, `SELECT posts` | `db.system.name` (`postgresql`), `db.namespace`, `db.operation.name`, `db.collection.name`, `db.query.summary`, `server.address`, `server.port` |
-| a Redis command | the command, `GET` | `db.system.name` (`redis`), `db.namespace` (the database index), `db.operation.name`, `server.address` and `server.port` on one server |
+| a Postgres statement | its summary, `SELECT posts` | `db.system.name` (`postgresql`, a stable value), `db.namespace`, `db.operation.name`, `db.collection.name`, `db.query.summary`, `server.address`, `server.port` |
+| a Redis command | the command, `GET` | `db.system.name` (`redis`, a value still in development), `db.namespace` (the database index), `db.operation.name`, `server.address` and `server.port` on one server |
 | a Redis pipeline or transaction of two commands or more | `BATCH`, or `BATCH GET` when every command is one | the same, and `db.operation.batch.size` |
 
 - **What a statement does, never what it says.** The summary is read off the
@@ -341,7 +341,7 @@ Each span exports the names in its row, and
 | Span | Stable, or NestRS's own | In development |
 |---|---|---|
 | every unit's | `trace_id`, `span_id`, `parent_span_id`, `error.type`, `dropped_client_spans_count` | `enduser.id` |
-| `http.request` | `http.request.method`, `http.request.method_original`, `url.path`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `user_agent.original`, `http.request.header.traceparent`, `http.request.header.x-request-id` | `http.response.body.size` |
+| `http.request` | `http.request.method`, `http.request.method_original`, `url.path`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `user_agent.original`, `http.request.header.traceparent`, `http.request.header.x-request-id` | `http.response.body.size`, and `QUERY` as a value of `http.request.method` |
 | `ws.connect`, `ws.disconnect`, `ws.message` | `ws.connection_id`, and on a message `ws.event` | — |
 | `graphql.operation` | — | `graphql.operation.type`, `graphql.operation.name` |
 | `graphql.field` | — | `graphql.operation.role`, `graphql.field.name`: NestRS's own, under the GraphQL conventions' namespace |
@@ -350,7 +350,7 @@ Each span exports the names in its row, and
 | `schedule.tick` | `host`, `method`, `occurrence` | — |
 | `events.dispatch` | `event`, `host`, `method` | — |
 | `lifecycle.hook` | `phase`, `host`, `method`, `origin` | — |
-| a statement, a command, an outbound request | every name [Statements and commands](#statements-and-commands) and [Outbound HTTP requests](#outbound-http-requests) list | — |
+| a statement, a command, an outbound request | every name [Statements and commands](#statements-and-commands) and [Outbound HTTP requests](#outbound-http-requests) list | `redis` as a value of `db.system.name`, and `QUERY` as a value of `http.request.method` |
 
 A span's name is stable for `{method} {route}`, a statement's summary and an
 outbound request's method; in development for a job's `process <queue>` and an

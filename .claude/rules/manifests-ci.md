@@ -193,21 +193,25 @@ readers, and the two move in one change.
   A refusal that turns a compiling program into a compile error, or a booting
   app or configuration into a boot refusal, is a break. Prose is not API: a
   compile error, a refusal or a log message is reworded in a patch.
-- **An exported OpenTelemetry name from a stable semantic convention or the
-  framework is API; one from a convention in development follows its
-  convention, and its rename is a minor named in the changelog**, as is the
-  rename of one the framework gives under such a convention's namespace
-  (`graphql.field.name`) or a library adds on its own. Its status is the pinned
-  `opentelemetry-semantic-conventions`' (behind `semconv_experimental`: in
-  development), marked beside it on its `/opentelemetry/` page and read again
-  when the pin moves.
+- **An OpenTelemetry name a span, a metric or the resource carries, from a
+  stable semantic convention or the framework, is API; one from a convention
+  in development follows its convention, and its rename is a minor named in
+  the changelog**, as is the rename of one the framework gives under such a
+  convention's namespace (`graphql.field.name`) or a library adds on its own.
+  A log record, and a span event, keep what their line keeps on the console.
+  A name's status is the pinned `opentelemetry-semantic-conventions`' (behind
+  `semconv_experimental`: in development), a listed value's its member's in
+  that release's model; each is marked on its `/opentelemetry/` page and read
+  again when the pin moves.
 - **A minor adds**: a tier-1 item; a variant or field where the type is
   `#[non_exhaustive]` or has a private field; a field to a configuration — a
   `#[config]` struct, a `Default` struct nested in one, `OpenTelemetryConfig`,
   `McpIdentity` — documented as built over its base (`..Default::default()`,
   `from_env`), a complete literal not covered; a key, a variable, a feature, a
   unit, a `nest_rs::prelude` name; a public dependency's minor; the MSRV, named in the
-  changelog. **A patch fixes** behaviour and tier 2, and never raises the MSRV.
+  changelog. It also takes the rename of a name, or a listed value, its
+  convention in development makes (above). **A patch fixes** behaviour and tier
+  2, and never raises the MSRV.
 - **A security fix refusing an insecure configuration that used to boot is a
   patch** (`decisions/semver-7x.md`, 2026-10-12): it ships under the
   changelog's `### Security`, with an upgrading line naming the refused

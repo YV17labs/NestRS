@@ -5,7 +5,9 @@ description: "What every 7.x release keeps until 8.0 — the code, names and for
 
 Every `nest-rs-*` crate ships at one version, and no 7.x release breaks what
 you build on: your code compiles, your configuration boots, and your log
-filters and alerts keep matching. A minor adds, a patch fixes, and a break
+filters and alerts keep matching — but on a name an OpenTelemetry convention
+still has in development, which a minor may rename, named in the changelog
+([Telemetry names](#telemetry-names)). A minor adds, a patch fixes, and a break
 waits for 8.0. This page is that contract — what it covers, what it leaves
 out, and how a package of your own depends on NestRS.
 
@@ -28,7 +30,7 @@ in the middle column holds until 8.0:
 | Decorators | every key and what it means — refusing a program that used to compile is a break | the wording of a compile error |
 | Configuration | every `<PREFIX>_<NAMESPACE>__<KEY>` variable, its spellings and its default, and every `#[config]` field name | a literal naming every field of a config (below) |
 | Wire and storage | `nest_rs::queue::Envelope` and its `WIRE_FORMAT_VERSION`, the `nest_rs::http::ProblemDetails` body, the `nest_rs::ws::WsEnvelope` frame, every `nestrs:` key, and every header NestRS reads or writes, among them the W3C's `traceparent`, `tracestate`, `traceresponse` and `Server-Timing`, the IETF's `Deprecation`, `Forwarded`, `Link`, `Retry-After` and `WWW-Authenticate`, and `X-Forwarded-For`, `X-Real-IP` and `X-Request-Id` behind a trusted proxy | — |
-| Observability | span targets, unit names, the operation line's field names and its outcome words, the words a field such as `cause` takes, and every exported name a stable OpenTelemetry convention or NestRS gives ([Telemetry names](#telemetry-names)) | the prose of a log message, and a name from a convention still in development |
+| Observability | span targets, unit names, the operation line's field names and its outcome words, the words a field such as `cause` takes, and every name a stable OpenTelemetry convention or NestRS gives a span, a metric or the resource ([Telemetry names](#telemetry-names)) | the prose of a log message, the fields of any other line, and a name from a convention still in development |
 | Features and the CLI | the umbrella's feature names, and every `nestrs` command and flag | what `nestrs new` and `nestrs generate` write, which follows the release |
 
 A new refusal is a break too: a program that compiled keeps compiling, and an
@@ -49,6 +51,10 @@ for the whole line.
 - a third-party library's minor;
 - the minimum supported Rust version, named in the changelog.
 
+It also takes the rename of a name, or of a value, that an OpenTelemetry
+convention still in development makes, named in the changelog
+([Telemetry names](#telemetry-names)).
+
 **A patch fixes.** It corrects behaviour that disagrees with these docs, and
 may change anything in the `__private` tier. It never raises the minimum Rust
 version: a project held to its toolchain takes a patch without reading it.
@@ -62,13 +68,24 @@ used to compile or boot is refused before 8.0.
 
 ## Telemetry names
 
-Every name NestRS exports through [OpenTelemetry](/opentelemetry/) — a span's
-name and attributes, a log record's, the resource's, a metric and its
-attributes — promises what its namer does. A name from a stable semantic
-convention, or one NestRS gives itself, is kept until 8.0; a name from a
-convention still in development follows its convention, and its rename comes in
-a minor, named in the changelog. If an alert of yours matches a name in
+Every name a span, a metric or the resource carries through NestRS's
+[OpenTelemetry](/opentelemetry/) export, a span's own name included, promises
+what its namer does. A name from a stable
+semantic convention, or one NestRS gives itself, is kept until 8.0; a name from
+a convention still in development follows its convention, and its rename comes
+in a minor, named in the changelog. If an alert of yours matches a name in
 development, read the changelog of each minor you take.
+
+A value a convention lists for a name carries the status the convention gives
+that value, not its name's: `db.system.name` is stable, its `redis` still in
+development. A value NestRS chooses for a convention's name, such as
+`error.type`'s `timeout`, is NestRS's own.
+
+A log record, and a line a span carries as an event, promise what the line
+does on the console: an operation line's event name — its unit's — and its
+fields are kept, as are the words `cause` takes. Any other line's event name,
+`event <file>:<line>` unless the line names one, and its fields are outside the
+contract, like its prose.
 
 Each OpenTelemetry page marks the names it lists: `http.route` stable,
 `enduser.id` in development, `tokio.worker.count` NestRS's own. A convention's

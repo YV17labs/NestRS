@@ -30,7 +30,7 @@ ready-made HTTP, messaging and MCP dashboards light up with nothing written:
 
 | Unit | Histogram | Keyed by | Convention |
 |---|---|---|---|
-| `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `error.type` | HTTP, stable |
+| `http.request` | `http.server.request.duration` | `http.request.method`, `url.scheme`, `http.route`, `http.response.status_code`, `network.protocol.version`, `error.type` | HTTP, stable; the method `QUERY` in development |
 | `queue.job` | `messaging.process.duration` | `messaging.system`, `messaging.operation.name`, `messaging.destination.name`, `error.type` | messaging, in development; `error.type` stable |
 | `mcp.operation` | `mcp.server.operation.duration` | `mcp.method.name`, `gen_ai.tool.name`, `gen_ai.prompt.name`, `gen_ai.operation.name`, `network.transport`, `network.protocol.name`, `mcp.protocol.version`, `rpc.response.status_code`, `error.type` | MCP, in development; `network.transport`, `network.protocol.name` and `error.type` stable |
 
@@ -65,7 +65,8 @@ convention names one for them, and their spans carry their timings.
 
 Each statement the Postgres pool sends — a unit's `BEGIN` and `COMMIT`
 included — and each command a Redis connection sends is timed the same way, in
-`db.client.operation.duration` (stable), keyed by the
+`db.client.operation.duration` (stable, Redis's `db.system.name` value
+`redis` in development), keyed by the
 database it ran on and what it did — the statement's operation, table and
 summary, the Redis command — into the buckets the database conventions advise,
 `[0.001, 0.005, … 10]` seconds ([Statements and commands](/opentelemetry/traces/#statements-and-commands)).

@@ -158,17 +158,15 @@ spelled exactly, or `_OTHER`), `url.path` (the addressed path), `url.scheme`
 `<PREFIX>_HTTP__TRUSTED_PROXIES` lists, else the listener's),
 `http.route` (the
 **matched template**, so a backend groups on something low-cardinality),
-`http.response.status_code`, `http.response.body.size` (a name still in
-development), `network.protocol.version` (`1.1`, `2`) and
-`user_agent.original`. It carries no `client.address`, which the conventions
+`http.response.status_code`, `http.response.body.size`,
+`network.protocol.version` (`1.1`, `2`) and `user_agent.original`. It carries no `client.address`, which the conventions
 recommend: a client's address is personal data, and a collector keeps what it
 receives — no access line carries it either.
 
 Once a guard identified the caller, the span carries `enduser.id`, the
-conventions' key for the identity your lines carry as `actor_id`, still in
-development in their 1.42 release. The conventions flag it as personal data,
-and it leaves on the span of every unit served for that caller — a request, a
-message, an operation, a job it enqueued —
+conventions' key for the identity your lines carry as `actor_id`. The
+conventions flag it as personal data, and it leaves on the span of every unit
+served for that caller — a request, a message, an operation, a job it enqueued —
 to every collector the export reaches. A principal that names no actor sends
 none.
 
@@ -337,10 +335,8 @@ a span is kept by a backend no one audits for them.
 
 ## Every name a span exports
 
-A name in the middle column comes from a stable OpenTelemetry convention, or is
-NestRS's own, and is kept until 8.0. One in the last column follows a
-convention still in development, which may rename it in a minor, named in the
-changelog ([Telemetry names](/semver/#telemetry-names)):
+Each span exports the names in its row, and
+[Telemetry names](/semver/#telemetry-names) says what each column promises:
 
 | Span | Stable, or NestRS's own | In development |
 |---|---|---|
@@ -356,15 +352,13 @@ changelog ([Telemetry names](/semver/#telemetry-names)):
 | `lifecycle.hook` | `phase`, `host`, `method`, `origin` | — |
 | a statement, a command, an outbound request | every name [Statements and commands](#statements-and-commands) and [Outbound HTTP requests](#outbound-http-requests) list | — |
 
-A span's name follows the same rule. `{method} {route}`, a statement's summary
-and an outbound request's method are the stable HTTP and database conventions';
-a job's `process <queue>` and an MCP operation's method, then its tool or
-prompt, are the messaging and MCP conventions', in development; every other
-unit's span is named for its unit, NestRS's own. What `tracing-opentelemetry`
-writes on every span it exports — `code.file.path`, `code.line.number`, `code.module.name`,
-`thread.id`, `thread.name`, `busy_ns` and `idle_ns`, and `level` and `target`
-on a line the span carries as an event — is that library's, and moves with it
-the same way.
+A span's name is stable for `{method} {route}`, a statement's summary and an
+outbound request's method; in development for a job's `process <queue>` and an
+MCP operation's method, then its tool or prompt; and NestRS's own for every
+other span, named for its unit. What `tracing-opentelemetry` writes on every
+span it exports — `code.file.path`, `code.line.number`, `code.module.name`,
+`thread.id`, `thread.name`, `busy_ns`, `idle_ns`, and `level` and `target` on a
+line the span carries as an event — is the library's.
 
 ## Limits
 

@@ -62,26 +62,22 @@ used to compile or boot is refused before 8.0.
 
 ## Telemetry names
 
-What NestRS exports through [OpenTelemetry](/opentelemetry/) — the attributes
-on a span, a log record or the resource, a span's name, a metric and the
-attributes it is recorded under — is named by a semantic convention or by
-NestRS itself, and each name promises what its namer does:
+Every name NestRS exports through [OpenTelemetry](/opentelemetry/) — a span's
+name and attributes, a log record's, the resource's, a metric and its
+attributes — promises what its namer does. A name from a stable semantic
+convention, or one NestRS gives itself, is kept until 8.0; a name from a
+convention still in development follows its convention, and its rename comes in
+a minor, named in the changelog. If an alert of yours matches a name in
+development, read the changelog of each minor you take.
 
-| The name comes from | For example | Until 8.0 |
-|---|---|---|
-| a stable convention | `http.server.request.duration`, `http.route`, `db.query.summary` | kept |
-| a convention still in development | `enduser.id`, `messaging.process.duration`, `process.memory.usage` | follows its convention: a rename comes in a minor, named in the changelog |
-| NestRS itself | `tokio.worker.count`, `dropped_client_spans_count` | kept |
-
-A name's status is the one in the conventions release NestRS builds on — 1.42
-in 7.0, the schema every export declares — and the OpenTelemetry pages say it
-beside each name they list. An alert on a stable name, or on one of NestRS's
-own, keeps matching until 8.0; one on a name in development reads each minor's
-changelog. Two of NestRS's own sit under a convention still in development,
-`graphql.operation.role` and `graphql.field.name`, and follow it as its names
-do. What a library adds on its own — the code location and thread
-`tracing-opentelemetry` writes on every span, the SDK's `telemetry.sdk.*` on
-the resource — is that library's, and moves with it the same way.
+Each OpenTelemetry page marks the names it lists: `http.route` stable,
+`enduser.id` in development, `tokio.worker.count` NestRS's own. A convention's
+status is the one its 1.42 release gives, the schema every export declares. Two
+of NestRS's own sit under a convention in development, `graphql.operation.role`
+and `graphql.field.name`, and follow it as its names do. What a library adds on
+its own is the library's, and moves with it the same way: the code location and
+thread `tracing-opentelemetry` writes on every span, the SDK's
+`telemetry.sdk.*` on the resource.
 
 ## Build a config the way it grows
 

@@ -137,56 +137,50 @@ standard (an RFC, OWASP), never merely unusual.
 
 ## 2026-11-18 — an exported telemetry name promises what its convention does
 
-The owner's answer of 2026-11-17, before 7.0's first publish, written here on
-2026-11-18. The list above froze what an operator reads off the console — span
-targets, unit names, the operation line's fields — and said nothing of what
-leaves through the OpenTelemetry export: an attribute on a span, a log record
-or the resource, a span's name, a metric and the attributes it is recorded
-under. 7.0 exports names from semantic conventions still in development —
-`enduser.id`, `messaging.*`, `process.*`, `db.client.connection.*`, the MCP
-conventions' `mcp.*` and `gen_ai.*` — which their convention may rename before
-it is stable.
+The owner's answer of 2026-11-17, before 7.0's first publish. The list above
+froze what an operator reads off the console — span targets, unit names, the
+operation line's fields — and said nothing of what leaves through the
+OpenTelemetry export: an attribute on a span, a log record or the resource, a
+span's name, a metric and the attributes it is recorded under. 7.0 exports
+names from semantic conventions still in development — `enduser.id`,
+`messaging.*`, `process.*`, `db.client.connection.*`, the MCP conventions'
+`mcp.*` and `gen_ai.*` — which their convention may rename before it is
+stable.
 
-- **A name drawn from a stable OpenTelemetry convention is API**, kept until
-  8.0 as a span target is.
-- **A name drawn from a convention in development follows its convention, and
-  its rename is a minor named in the changelog** — never a patch, which a
-  deployment takes without reading it. A value the convention lists for such a
-  name (`db.client.connection.state`'s `idle`) follows it the same way.
+**A name drawn from a stable OpenTelemetry convention is API; a name drawn from
+a convention in development follows its convention, and its rename is a minor
+named in the changelog** — never a patch, which a deployment takes without
+reading it. Decided with it, from the rule above (API is what a program or an
+operator matches) and correctness (an export never keeps a name against the
+standard a backend reads it by):
+
 - **The status is read in the conventions release the workspace pins**, never
-  from memory, and so is a name the code writes by hand:
+  from memory, a name the code writes by hand included:
   `opentelemetry-semantic-conventions` 0.33 generates release 1.42.0, the
-  schema every export declares, where a name behind the crate's
-  `semconv_experimental` feature is in development and a metric's
-  documentation states its status. There `http.request.resend_count` is
-  stable, and the MCP conventions are in development and marked moved to
-  OpenTelemetry's GenAI conventions repository, where the framework follows
-  them.
-- **A name the framework gives itself is API**, read as a unit name is: the tokio runtime's four metrics, `dropped_client_spans_count`,
-  and the fields a unit's span carries beside its line's (`trace_id`,
-  `ws.connection_id`, `backend_id`). One given under a convention's namespace
-  still in development — `graphql.operation.role` and `graphql.field.name`,
-  under GraphQL's — follows that convention as its own names do, so the
-  framework never keeps a name the standard comes to define otherwise.
-- **A name a library adds on its own is the library's**: `tracing-opentelemetry`
-  writes `code.*`, `thread.*`, `busy_ns` and `idle_ns` on every span it exports,
-  the SDK `telemetry.sdk.*` on the resource. Each moves with that library, in a
-  minor named in the changelog, as a name in development does.
+  schema every export declares. There `http.request.resend_count` is stable,
+  and the MCP conventions are in development, marked moved to OpenTelemetry's
+  GenAI conventions repository, where the framework follows them. A value the
+  convention lists for a name (`db.client.connection.state`'s `idle`) follows
+  that name.
+- **A name the framework gives itself is API**, as a unit name is: the tokio
+  runtime's four metrics, `dropped_client_spans_count`, and the fields a unit's
+  span carries beside its line's (`trace_id`, `ws.connection_id`,
+  `backend_id`). One given under the namespace of a convention in development
+  — `graphql.operation.role` and `graphql.field.name`, under GraphQL's —
+  follows that convention as its own names do.
+- **A name a library adds on its own moves with that library**, in a minor
+  named in the changelog: `tracing-opentelemetry`'s `code.*`, `thread.*`,
+  `busy_ns` and `idle_ns` on every span it exports, the SDK's
+  `telemetry.sdk.*` on the resource.
 
-The owner's answer is the first two points, and the third is how it is read;
-the last two were decided with it, from the rule above — API is what a program
-or an operator matches — and correctness: an export never keeps a name against
-the standard a backend reads it by. The pages under `/opentelemetry/` say beside each name what it promises,
-and `semver.mdx` what each kind does. Held by review: a change exporting a name
-says its status on its page, and a move of the conventions pin reads every
-mark again.
+Held by review: a change exporting a name marks it on its `/opentelemetry/`
+page, and a move of the conventions pin reads every mark again.
 
 **Refused:**
 
 - **Freezing every exported name until 8.0**, one in development included: the
-  framework would keep a name its convention renamed, and the dashboards a
-  backend ships for that convention, which read the new name, would stay dark
-  for the rest of the line (standards over invention).
+  dashboards a backend ships for a convention read the name it renamed to, and
+  would stay dark for the rest of the line (standards over invention).
 - **Exporting the old and the new spelling side by side until 8.0**: two
   spellings of one fact on one span, which `actor-under-enduser-id.md` refused,
   and every metric series twice.

@@ -32,10 +32,9 @@ carry no `host` or `method`: the edge files each around the dispatch, and it joi
 `mounted` line through its coordinates, `verb` and `path`, `event`, or `tool`, `prompt`
 or `resource`. A request, a field or an operation's other names
 keep their protocol's word on the span: `http.request.method`, `mcp.method.name`,
-`graphql.operation.type`. A unit's name and its line's names are kept until 8.0;
-a span's names keep what their convention promises, and the last two here come
-from conventions still in development
-([Every name a span exports](/opentelemetry/traces/#every-name-a-span-exports)).
+`graphql.operation.type`. A unit's name and its line's names are NestRS's own,
+and a span's are marked on
+[Every name a span exports](/opentelemetry/traces/#every-name-a-span-exports).
 
 A GraphQL document files one `graphql.operation` line per query or mutation
 it runs — `error` when its response carries an error — and one `graphql.field`
@@ -48,8 +47,8 @@ selecting a root field twice alike resolves it once, one line
 ([GraphQL: one unit per operation](/database/transactions/#graphql-one-unit-per-operation)).
 The operation's name is the document's, which
 the client writes, so it rides the operation's span as `graphql.operation.name`
-(a name in development) and never the line; the root fields' lines say what
-ran, by the names your schema declares. A GraphQL `#[field_resolver]` files no line and
+and never the line; the root fields' lines say what ran, by the names your
+schema declares. A GraphQL `#[field_resolver]` files no line and
 opens no span of its own: it runs once per row its parent returns, so a line
 per call would let one document fill the log. Its guards still run on every call, and its failure
 reaches the client as a field error.
@@ -149,8 +148,8 @@ line's `outcome` — and an `Error` status. Where a convention asks for a finer
 class, the span carries it instead: an HTTP request answered `5xx` its status
 code, an MCP tool call answered with its error in band `tool_error`, an MCP
 operation answered with a JSON-RPC error that code (`-32603`), also in
-`rpc.response.status_code`, a name in development. A failure the convention
-reads as the caller's own fails nothing on the server's span. An HTTP `4xx` records its status alone, and
+`rpc.response.status_code`. A failure the convention reads as the caller's own
+fails nothing on the server's span. An HTTP `4xx` records its status alone, and
 a JSON-RPC code the MCP conventions name the caller's (`-32700`, `-32600`,
 `-32601`, `-32602`, `-32002`) its code alone. A WebSocket message, a GraphQL
 operation or root field and a graphql-ws socket the protocol refused have no such

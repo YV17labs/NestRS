@@ -39,10 +39,9 @@ Three signal types ship in one crate, behind one line of `main`:
   OpenTelemetry Metrics API names them; metrics batch on a `PeriodicReader` and
   export through the same OTLP endpoint as the traces.
 
-Each page of this section says what a name it lists promises. One from a
-stable OpenTelemetry convention, or NestRS's own, is kept until 8.0; one whose
-convention is still in development follows it, and may be renamed in a minor,
-named in the changelog ([Telemetry names](/semver/#telemetry-names)).
+Each page of this section marks the names it lists stable, in development,
+NestRS's own or the library's, and [Telemetry names](/semver/#telemetry-names)
+says what each mark promises until 8.0.
 
 What an export costs a request — 5.8 µs of CPU on one core for the three
 signals, most of it the traces — is

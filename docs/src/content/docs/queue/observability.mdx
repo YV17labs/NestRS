@@ -46,9 +46,8 @@ the attempt. Its attributes speak the messaging conventions:
 | `trace_id`, `span_id`, `parent_span_id` | This attempt's [W3C trace context](/fundamentals/correlation/). The parent is the span that enqueued the job; for a job that started a trace of its own, the first attempt has none and every later attempt's is the first attempt's span. |
 | `enduser.id` | Who the *enqueue* was served for, what its lines carry as `actor_id`: personal data, exported with the span. Absent when nobody was authenticated — a job pushed by a scheduled tick has none. |
 
-The span's name, the `messaging.*` names and `enduser.id` come from conventions
-still in development, which may rename them in a minor, named in the changelog;
-the others are kept until 8.0 ([Telemetry names](/semver/#telemetry-names)).
+Each of these names, and the span's name, is marked on
+[Every name a span exports](/opentelemetry/traces/#every-name-a-span-exports).
 
 A log line renders none of those: it carries the ids of the trace it ran in,
 and the attempt's identity rides the `queue.job` line below. The trace crosses

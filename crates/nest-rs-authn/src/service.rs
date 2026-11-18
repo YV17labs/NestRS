@@ -341,7 +341,7 @@ enum Verifier {
     /// `alg` picks among them, and only among them.
     Jwks {
         set: Jwks,
-        /// One per algorithm: jsonwebtoken 11 refuses every token under a
+        /// One per algorithm: jsonwebtoken 12 refuses every token under a
         /// `Validation` whose algorithms span two key families.
         validations: Vec<(Algorithm, Validation)>,
     },
@@ -506,13 +506,19 @@ impl JwtService {
                     )));
                 }
                 let bytes = secret.as_bytes();
+                let unusable = |e: jsonwebtoken::errors::Error| {
+                    AuthError::failed_because(
+                        format!("{}, is not an HMAC key", crate::config::secret_setting()),
+                        e,
+                    )
+                };
                 (
                     Some(Signer {
-                        key: EncodingKey::from_secret(bytes),
+                        key: EncodingKey::from_secret(bytes).map_err(unusable)?,
                         header,
                     }),
                     Verifier::Static {
-                        key: DecodingKey::from_secret(bytes),
+                        key: DecodingKey::from_secret(bytes).map_err(unusable)?,
                         validation: validation(&options, signing, issuers),
                         handshake: validation(&options, signing, options.issuer.as_slice()),
                     },

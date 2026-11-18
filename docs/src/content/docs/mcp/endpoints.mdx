@@ -42,9 +42,11 @@ INFO nest_rs::routes: mounted host="UsersTool" method="list_people" path="/mcp" 
 
 Nothing in a host changes: it stays a plain `ServerHandler` and never learns
 that it shares. `tools/list`, `prompts/list` and `resources/list` are the union
-of every host on the path; a `tools/call` and a `prompts/get` are routed to the
-host that declares the name, and its answer is the client's, an error
-included; the endpoint's advertised capabilities are the union of theirs.
+of every host on the path that serves them, and a path where none does answers
+`Method not found`, as each of its hosts does; a `tools/call` and a
+`prompts/get` are routed to the host that declares the name, and its answer is
+the client's, an error included; the endpoint's advertised capabilities are the
+union of theirs.
 Anything else a request addresses — a resource, a task, a method of your own —
 is offered to each host in turn, and when every host refuses it, the client
 hears the refusal of a host that serves that method, never `Method not found`

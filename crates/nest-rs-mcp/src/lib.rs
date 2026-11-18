@@ -155,7 +155,8 @@ pub use rmcp::{ErrorData as McpError, ServerHandler};
 
 /// `Parameters<T>` deserializes an operation's typed input — the framework's
 /// own, refusing without the value; `Json<T>` returns a typed structured result
-/// (`structuredContent`, SEP-2106).
+/// (`structuredContent`), which a session below protocol `2026-07-28` receives
+/// as text unless it is a JSON object (SEP-2106).
 pub use parameters::Parameters;
 pub use rmcp::handler::server::wrapper::Json;
 

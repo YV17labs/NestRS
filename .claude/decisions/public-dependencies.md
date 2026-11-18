@@ -190,3 +190,35 @@ toolchain*), and Cargo's own marker still is not there: cargo 1.100.0 reads
 pass `-Zpublic-dependency` to enable support for it", and none of the 1.98, 1.99
 and 1.100 changelogs stabilises it. The pin's `# public` comment stays the
 marker, as the body says, until a stable cargo reads the key.
+
+## 2026-11-17 — rmcp 3.11, jsonwebtoken 12, jiff-tzdb 1.0; jiff waits for croner
+
+7.0 builds on the latest release of each library it names (2026-10-27, above).
+crates.io was read again for every third-party requirement of both workspaces
+and of the manifests `nestrs new` and the generators write: four libraries had
+a newer `major.minor`, and every other requirement already named its library's
+latest, its locked version left where it was.
+
+- **rmcp's floor is 3.11**, a minor of a public dependency. Every refusal
+  `nest-rs-mcp` matches word for word reads the same in 3.11, and its
+  streamable-HTTP server still quotes the session id a client named at `error`,
+  so `rmcp=off` stays. 3.11's `ServerHandler` refuses a listing whose
+  capability a host does not advertise (`-32601`, where it answered an empty
+  list), as a client calls only what a server advertises: a shared path's
+  listing is the union of the hosts serving it, and a path none serves answers
+  `-32601`, as each of its hosts does. Refused: an empty listing there, which
+  would keep 6.x's wire but say the endpoint serves what none of its hosts does.
+- **jsonwebtoken moves to 12**, private as before. `EncodingKey::from_secret`
+  and `DecodingKey::from_secret` answer a `Result`, refusing an empty secret the
+  service refuses before them, and a token whose header lists a critical
+  parameter other than `b64` is refused (RFC 7515 §4.1.11), where `JwtService`
+  verified it under 11.1. Its fix for a `sub`, `iss` or `aud` of the wrong type
+  changes nothing here: the service requires `iss` and `aud`, which 11.1 already
+  refused when they did not parse, and checks no `sub`.
+- **jiff-tzdb moves to 1.0**, private: it holds the same 598 zone names as
+  0.1.9, so `#[cron(tz)]` accepts what it accepted, and its `VERSION` is the
+  IANA release it bundles (2026f), no longer optional.
+- **jiff stays on 0.2**, though 1.0 was released on 2026-11-15: croner 4.0.3,
+  its latest, evaluates a pattern over 0.2's `Zoned` (`jiff = "^0.2.35"` behind
+  its `jiff` feature), and 0.2.46 does not re-export 1.0's types. jiff moves
+  when croner does, a private change.

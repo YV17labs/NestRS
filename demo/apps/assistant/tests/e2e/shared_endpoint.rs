@@ -1,5 +1,5 @@
 use nest_rs::mcp::endpoint_identity;
-use nest_rs::testing::mcp::{call_method, call_tool, initialize, open_session, result};
+use nest_rs::testing::mcp::{call_method, call_tool_statelessly, initialize, open_session, result};
 use serde_json::json;
 
 use crate::*;
@@ -137,11 +137,13 @@ async fn a_merged_endpoint_still_row_filters_the_tool_body() {
     let acme = seed_org_with_post(&app, "Acme", "acme-only-post").await;
     seed_org_with_post(&app, "Globex", "globex-only-post").await;
 
-    let body = call_tool(
+    let body = call_tool_statelessly(
         app.http(),
         SHARED_ENDPOINT,
         "list_people",
         Some(&sign(&app, acme)),
+        &[],
+        json!({}),
     )
     .await;
 
@@ -157,7 +159,7 @@ async fn a_merged_endpoint_still_row_filters_the_tool_body() {
     );
     assert!(
         body.contains("structuredContent"),
-        "…and the rows travel as structured content (SEP-2106), the shape the \
-         tool's output schema declares, never a hand-joined string: {body}",
+        "…and at `2026-07-28` the rows travel as structured content (SEP-2106), the \
+         shape the tool's output schema declares, never a hand-joined string: {body}",
     );
 }

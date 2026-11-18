@@ -6,7 +6,7 @@
 //!
 //! | Kind | Methods | Behaviour |
 //! |---|---|---|
-//! | **Listing** | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `skills/list` | Every host is asked; the entries are concatenated in registration order onto the first host's envelope. |
+//! | **Listing** | `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `skills/list` | Every host is asked; the entries are concatenated in registration order onto the first serving host's envelope, a host not serving the listing (`-32601`) adding nothing. |
 //! | **Addressed** | `tools/call`, `prompts/get`, `resources/read`, `resources/directory/read`, `skills/get`, `tasks/*`, `resources/subscribe`, custom methods | Routed to the host that declares the name, whatever it answers; failing that, offered to each host in turn until one does not answer *not-found* — a task, until one holds it; a skill or a directory, until one serves its URI; a prompt, to the host whose own listing names it. Refused by all, the first host serving the method answers. |
 //! | **Broadcast** | `logging/setLevel`, every notification | Delivered to every host. |
 //!
@@ -30,14 +30,14 @@ use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CancelTaskParams, CancelledNotificationParam,
     CompleteRequestParams, CompleteResult, CustomNotification, CustomRequest, CustomResult,
-    DiscoverResult, ErrorCode, ExtensionCapabilities, GetPromptRequestParams, GetPromptResponse,
-    GetSkillRequestParams, GetSkillResult, GetTaskParams, GetTaskResult, InitializeRequestParams,
-    InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListSkillsResult, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
-    ProtocolVersion, ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult,
-    ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities, ServerConfig,
-    SetLevelRequestParams, SubscribeRequestParams, SubscriptionFilter, Tool,
-    UnsubscribeRequestParams, UpdateTaskParams,
+    DiscoverResult, ErrorCode, ExtensionCapabilities, GetPromptRequestMethod,
+    GetPromptRequestParams, GetPromptResponse, GetSkillRequestParams, GetSkillResult,
+    GetTaskParams, GetTaskResult, InitializeRequestParams, InitializeResult, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListSkillsResult, ListToolsResult,
+    PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion,
+    ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestParams,
+    ReadResourceResponse, ServerCapabilities, ServerConfig, SetLevelRequestParams,
+    SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
@@ -285,7 +285,10 @@ pub(crate) fn common_protocol_versions(
         .collect()
 }
 
-/// One listing method: ask every host, concatenate onto the first's envelope.
+/// One listing method: ask every host, concatenate onto the first serving host's
+/// envelope. A host not serving the listing (`-32601`, rmcp's answer where its
+/// capability is not advertised) adds nothing, and a path none serves answers
+/// as its hosts do.
 macro_rules! merged_listing {
     ($name:ident, $out:ty, $items:ident, $method:literal) => {
         async fn $name(
@@ -293,26 +296,36 @@ macro_rules! merged_listing {
             request: Option<PaginatedRequestParams>,
             context: RequestContext<RoleServer>,
         ) -> Result<$out, McpError> {
-            let Some((first, rest)) = self.hosts.split_first() else {
-                return Err(no_hosts());
-            };
-            let mut merged = first.host.$name(request.clone(), context.clone()).await?;
-            if rest.is_empty() {
+            if let Some(only) = self.single() {
                 // A lone host's cursor is still followable.
-                return Ok(merged);
+                return only.host.$name(request, context).await;
             }
-            if merged.next_cursor.is_some() {
-                self.warn_cursor(first, $method);
-            }
-            for host in rest {
-                let more = host.host.$name(request.clone(), context.clone()).await?;
+            let mut merged: Option<$out> = None;
+            let mut unserved = None;
+            for host in &self.hosts {
+                let more = match host.host.$name(request.clone(), context.clone()).await {
+                    Ok(more) => more,
+                    Err(err) if err.code == ErrorCode::METHOD_NOT_FOUND => {
+                        unserved.get_or_insert(err);
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                };
                 if more.next_cursor.is_some() {
                     self.warn_cursor(host, $method);
                 }
-                merged.$items.extend(more.$items);
+                match merged.as_mut() {
+                    Some(merged) => merged.$items.extend(more.$items),
+                    None => merged = Some(more),
+                }
             }
-            merged.next_cursor = None;
-            Ok(merged)
+            match merged {
+                Some(mut merged) => {
+                    merged.next_cursor = None;
+                    Ok(merged)
+                }
+                None => Err(unserved.unwrap_or_else(no_hosts)),
+            }
         }
     };
 }
@@ -472,7 +485,8 @@ impl ServerHandler for CompositeHandler {
     /// meaning *not found* included; a host the mount could not read declares
     /// what its own listing names. None declaring it, the refusal lists every
     /// host's prompts, as `prompts/list` on the path does, and never the name
-    /// sent.
+    /// sent; a path no host serves prompts on refuses the method, as each of
+    /// its hosts does.
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
@@ -485,7 +499,11 @@ impl ServerHandler for CompositeHandler {
             return owner.host.get_prompt(request, context).await;
         }
         for host in self.unread(&self.index.prompts) {
-            let listed = host.host.list_prompts(None, context.clone()).await?;
+            let listed = match host.host.list_prompts(None, context.clone()).await {
+                Ok(listed) => listed,
+                Err(err) if err.code == ErrorCode::METHOD_NOT_FOUND => continue,
+                Err(err) => return Err(err),
+            };
             if listed
                 .prompts
                 .iter()
@@ -494,7 +512,13 @@ impl ServerHandler for CompositeHandler {
                 return host.host.get_prompt(request, context).await;
             }
         }
-        let listed = ServerHandler::list_prompts(self, None, context).await?;
+        let listed = match ServerHandler::list_prompts(self, None, context).await {
+            Ok(listed) => listed,
+            Err(err) if err.code == ErrorCode::METHOD_NOT_FOUND => {
+                return Err(McpError::method_not_found::<GetPromptRequestMethod>());
+            }
+            Err(err) => return Err(err),
+        };
         let names: Vec<String> = listed
             .prompts
             .into_iter()

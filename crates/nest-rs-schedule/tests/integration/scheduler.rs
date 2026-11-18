@@ -363,7 +363,7 @@ async fn a_cron_jobs_boot_line_names_its_zone_and_the_database_release_it_read()
         Some("America/Vancouver"),
         "the zone as the database spells it: {zoned:?}"
     );
-    assert_eq!(zoned.field("tzdb").as_deref(), jiff_tzdb::VERSION);
+    assert_eq!(zoned.field("tzdb").as_deref(), Some(jiff_tzdb::VERSION));
     let utc = line("UtcHost");
     assert_eq!(utc.field("timezone").as_deref(), Some("UTC"));
     assert_eq!(utc.field("tzdb"), None, "UTC is read from no database");

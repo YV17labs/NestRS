@@ -448,7 +448,7 @@ impl Transport for Scheduler {
                     method = id.method,
                     trigger = "cron",
                     timezone = tz.as_ref().and_then(TimeZone::iana_name).unwrap_or("UTC"),
-                    tzdb = tz.as_ref().and(jiff_tzdb::VERSION),
+                    tzdb = tz.as_ref().map(|_| jiff_tzdb::VERSION),
                     replicas,
                     key,
                     "mounted",

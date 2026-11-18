@@ -19,7 +19,7 @@
 //! # use nest_rs_http::EndpointGuards;
 //! # use nest_rs_mcp::{Json, McpError, McpView, mcp, tools};
 //! # use nest_rs_testing::TestApp;
-//! # use nest_rs_testing::mcp::call_tool_as;
+//! # use nest_rs_testing::mcp::call_tool_statelessly;
 //! # mod users {
 //! #     use nest_rs_seaorm::expose;
 //! #     use sea_orm::entity::prelude::*;
@@ -102,10 +102,10 @@
 //! # let app = TestApp::for_module::<UsersModule>().await?;
 //! # let args = serde_json::json!({});
 //!
-//! let viewer = call_tool_as(app.http(), "/mcp", "list_people", None, &[("x-viewer", "")], args.clone()).await;
+//! let viewer = call_tool_statelessly(app.http(), "/mcp", "list_people", None, &[("x-viewer", "")], args.clone()).await;
 //! assert!(viewer.contains(r#""id":1"#) && !viewer.contains("ada"));
 //!
-//! let stranger = call_tool_as(app.http(), "/mcp", "list_people", None, &[], args).await;
+//! let stranger = call_tool_statelessly(app.http(), "/mcp", "list_people", None, &[], args).await;
 //! assert!(stranger.contains("forbidden"));
 //! # Ok(())
 //! # }

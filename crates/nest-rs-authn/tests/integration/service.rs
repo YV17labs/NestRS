@@ -218,7 +218,7 @@ async fn audience_omitted_is_rejected_when_configured() {
     let forged = jsonwebtoken::encode(
         &at_jwt_header(Algorithm::HS256),
         &omitted,
-        &EncodingKey::from_secret(secret.as_bytes()),
+        &EncodingKey::from_secret(secret.as_bytes()).expect("an HMAC key"),
     )
     .expect("encode");
     assert!(matches!(
@@ -269,7 +269,7 @@ async fn a_configured_issuer_is_stamped_and_required() {
     let forged = jsonwebtoken::encode(
         &at_jwt_header(Algorithm::HS256),
         &minted,
-        &EncodingKey::from_secret(secret.as_bytes()),
+        &EncodingKey::from_secret(secret.as_bytes()).expect("an HMAC key"),
     )
     .expect("encode");
     assert!(matches!(
@@ -282,7 +282,7 @@ async fn a_configured_issuer_is_stamped_and_required() {
 async fn invalid_algorithm_is_rejected() {
     let jwt = service("alg-secret");
     let header = at_jwt_header(Algorithm::HS384);
-    let key = EncodingKey::from_secret(b"alg-secret");
+    let key = EncodingKey::from_secret(b"alg-secret").expect("an HMAC key");
     let token = jsonwebtoken::encode(&header, &claims(in_an_hour(), None), &key)
         .expect("encode with mismatched alg");
     assert!(matches!(
@@ -307,6 +307,30 @@ async fn unsigned_alg_none_token_is_rejected() {
         jwt.verify::<TestClaims>(&token).await.is_err(),
         "an alg=none unsigned token must never verify",
     );
+}
+
+/// RFC 7515 §4.1.11: an extension the header lists as critical, which the
+/// verifier does not understand, makes the token invalid whatever its signature.
+#[tokio::test]
+async fn a_token_listing_a_critical_extension_it_does_not_understand_is_refused() {
+    let secret = "crit-secret-padded-to-thirty-two-bytes";
+    let jwt = JwtService::new(crate::named(JwtOptions::new(secret))).expect("service");
+    let claims = addressed(claims(in_an_hour(), None));
+    let key = EncodingKey::from_secret(secret.as_bytes()).expect("an HMAC key");
+    let mut header = at_jwt_header(Algorithm::HS256);
+    header.extras.insert("urn:example:policy", "strict");
+    let ignored = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
+    assert!(
+        jwt.verify::<TestClaims>(&ignored).await.is_ok(),
+        "a parameter it does not understand, unlisted, is ignored",
+    );
+
+    header.crit = Some(vec!["urn:example:policy".into()]);
+    let critical = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
+    assert!(matches!(
+        jwt.verify::<TestClaims>(&critical).await,
+        Err(AuthError::InvalidToken)
+    ));
 }
 
 #[tokio::test]
@@ -373,7 +397,7 @@ async fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
     let token = jsonwebtoken::encode(
         &at_jwt_header(Algorithm::HS256),
         &foreign,
-        &EncodingKey::from_secret(secret.as_bytes()),
+        &EncodingKey::from_secret(secret.as_bytes()).expect("an HMAC key"),
     )
     .expect("encode");
     assert!(
@@ -593,7 +617,7 @@ async fn a_token_typed_as_anything_else_is_refused() {
         let token = jsonwebtoken::encode(
             &header,
             &addressed(claims(get_current_timestamp() + 3600, None)),
-            &EncodingKey::from_secret(secret.as_bytes()),
+            &EncodingKey::from_secret(secret.as_bytes()).expect("an HMAC key"),
         )
         .expect("encode");
         assert!(
@@ -619,7 +643,7 @@ async fn the_long_media_type_and_odd_casing_both_verify() {
         let token = jsonwebtoken::encode(
             &header,
             &addressed(claims(get_current_timestamp() + 3600, None)),
-            &EncodingKey::from_secret(secret.as_bytes()),
+            &EncodingKey::from_secret(secret.as_bytes()).expect("an HMAC key"),
         )
         .expect("encode");
         assert!(jwt.verify::<TestClaims>(&token).await.is_ok(), "typ={typ}");
@@ -638,7 +662,7 @@ async fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
     let token = jsonwebtoken::encode(
         &Header::new(Algorithm::HS256),
         &addressed(claims(get_current_timestamp() + 3600, None)),
-        &EncodingKey::from_secret(secret.as_bytes()),
+        &EncodingKey::from_secret(secret.as_bytes()).expect("an HMAC key"),
     )
     .expect("encode");
     assert!(jwt.verify::<TestClaims>(&token).await.is_ok());

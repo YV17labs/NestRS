@@ -61,7 +61,7 @@ fn minted(iss: Option<&str>, aud: Option<&str>) -> String {
     jsonwebtoken::encode(
         &header,
         &claims,
-        &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()),
+        &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()).expect("an HMAC key"),
     )
     .expect("encode")
 }

@@ -528,7 +528,7 @@ async fn an_hmac_or_unsigned_token_is_refused_without_asking_the_issuer() {
 
     let as_secret = serde_json::to_vec(&published).expect("JSON");
     let confused = token(
-        &EncodingKey::from_secret(&as_secret),
+        &EncodingKey::from_secret(&as_secret).expect("an HMAC key"),
         Algorithm::HS256,
         Some("rsa"),
     );

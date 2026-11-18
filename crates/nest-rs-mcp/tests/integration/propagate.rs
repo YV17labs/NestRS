@@ -1198,8 +1198,15 @@ async fn every_address_no_host_serves_names_the_not_found_class_at_every_version
     for path in CLASS_PATHS {
         for version in SPOKEN {
             let client = Speaking::open(&app, path, version).await;
+            // No host on the unread path serves prompts: it refuses the method,
+            // as each of its hosts does.
+            let unknown_prompt = if path == CLASS_UNREAD { -32601 } else { -32602 };
             let mut addressed = vec![
-                ("prompts/get", json!({ "name": "marked-prompt" }), -32602),
+                (
+                    "prompts/get",
+                    json!({ "name": "marked-prompt" }),
+                    unknown_prompt,
+                ),
                 ("marked/custom", json!({}), -32601),
                 ("resources/read", json!({ "uri": "file:///marked" }), -32601),
             ];

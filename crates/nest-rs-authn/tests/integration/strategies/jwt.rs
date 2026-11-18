@@ -91,7 +91,7 @@ async fn a_token_naming_another_or_no_issuer_or_audience_is_refused() {
         let token = jsonwebtoken::encode(
             &crate::at_jwt_header(jsonwebtoken::Algorithm::HS256),
             &claims,
-            &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()),
+            &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()).expect("an HMAC key"),
         )
         .expect("encode");
         crate::request(&[("Authorization", &format!("Bearer {token}"))])

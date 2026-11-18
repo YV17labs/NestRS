@@ -222,3 +222,19 @@ latest, its locked version left where it was.
   its latest, evaluates a pattern over 0.2's `Zoned` (`jiff = "^0.2.35"` behind
   its `jiff` feature), and 0.2.46 does not re-export 1.0's types. jiff moves
   when croner does, a private change.
+
+## 2026-11-18 — chrono stays a public dependency of 7.x, unmaintained
+
+RUSTSEC-2026-0543 declares chrono unmaintained, every version, with no release
+to move to, and recommends jiff or time. nestrs names it in tier 1 through
+sea-orm's `DateTimeWithTimeZone` — `nest_rs::seaorm::now`, the timestamps and
+soft deletes `#[expose]` writes — and turns it on in schemars (`chrono04`, in
+every build), sea-orm (`with-chrono`) and async-graphql (`chrono`); rmcp,
+object_store and oauth2 alone require it outright, behind the `mcp`, `storage`
+and `oauth-client` features.
+
+**7.0 keeps chrono.** Replacing it — with time, since sea-orm 2.0 has
+`with-time` and no `with-jiff` — changes the public surface of the seaorm
+capability, `#[expose]`, the GraphQL scalars and schemars; after 7.0 it is a
+nestrs major. `deny.toml` ignores RUSTSEC-2026-0543 with this reason, and
+RUSTSEC-2026-0542, humantime, which object_store alone brings, with its own.

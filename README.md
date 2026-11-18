@@ -119,7 +119,7 @@ off — a headless worker compiles no HTTP stack. Each has a reference section o
 |---|---|
 | **Transports** | HTTP controllers with versioning, extractors, uploads, streaming, static files · OpenAPI 3 + Swagger UI from the route table · GraphQL with dataloaders, subscriptions and federation · WebSocket gateways · MCP tools, prompts and resources · guards, pipes, interceptors and exception filters, one pipeline on every edge |
 | **Data** | SeaORM entities, `Repo`, ambient transactions, pagination, migrations, seeding · S3-compatible object storage |
-| **Security** | JWT on EdDSA keys or a JWK Set, OAuth 2.0 client with PKCE, token endpoint and protected resource metadata, Argon2id passwords, social login · abilities, row-level filtering, per-field masking, one policy across every transport |
+| **Security** | JWT on a shared secret, EdDSA keys or a JWK Set, OAuth 2.0 client with PKCE, token endpoint and protected resource metadata, Argon2id passwords, social login · abilities, row-level filtering, per-field masking, one policy across every transport |
 | **Background work** | Valkey-backed queues with retries, cron schedules that run on one replica when asked, a typed in-process event bus |
 | **Platform** | Typed config with an `.env` cascade · liveness/readiness/startup probes · rate limiting · OpenTelemetry logs, traces, metrics, your own `reqwest` client's calls included · `Server-Timing` |
 | **Tooling** | The `nestrs` CLI — scaffold, generate a feature or an adapter, run, migrate · an in-process test harness booting the real DI graph |

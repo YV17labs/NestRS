@@ -60,17 +60,18 @@ therefore set by these libraries' release clocks, not by this roadmap.** The tab
 | `rustls`, `tokio-rustls` | 0.23, 0.26 | 0.24 in development builds, no release candidate | — | `nest-rs-testing` alone |
 | `sea-orm` | `=2.0` | — | 1.0 in 2024, 2.0 in July 2026 | entities, `Repo`'s builder |
 | `chrono` | 0.4 | none: declared unmaintained (RUSTSEC-2026-0543), with no release to move to (point 3) | 0.4.45 in June 2026 | the instants `nest_rs::seaorm::now` and an entity's timestamps hold |
-| `tokio`, `serde`, `http`, `tracing`, `schemars`, `syn`, `uuid` | — | none in sight | stable for years | — |
+| `syn` | 3.0 | none in sight | 2.0 in 2023, 3.0 in July 2026 | a decorator crate, through `nest-rs-codegen`'s root |
+| `tokio`, `serde`, `http`, `tracing`, `schemars`, `uuid` | — | none in sight | stable for years | — |
 
 **Settled before 7.0 is published.** A public dependency's major is free until the first publish
 (`public-dependencies.md`), and what the semver policy does not say before then, it cannot say after. The first two
 points apply that file's rule of 2026-11-17: an active release candidate holds the publication, a stalled one does not.
 
 1. **`redis` 2.0 is waited for until 2026-12-31**; with no final release by then, 7.0 ships on 1.8 and 2.0 waits for
-   NestRS 8. `nest-rs-redis` already passes every topology's suite against rc.3, on the `chore/redis-2` branch. Waiting
-   has a cost: 6.x queue users do not compile on Rust 1.100 until 7.0 ships (`queue-redis-streams.md`). Past 2.0, a
-   NestRS command API in place of implementing redis's `ConnectionLike` would turn redis majors into NestRS minors, at
-   the price of the vocabulary an app writes today.
+   NestRS 8. Built against rc.3, `nest-rs-redis` already passes every topology's suite, and the move waits for the
+   final release. Waiting has a cost: 6.x queue users do not compile on Rust 1.100 until 7.0 ships
+   (`queue-redis-streams.md`). Past 2.0, a NestRS command API in place of implementing redis's `ConnectionLike` would
+   turn redis majors into NestRS minors, at the price of the vocabulary an app writes today.
 2. **`async-graphql` 8 waits for NestRS 8.** rc.5 cannot be taken: one failing nullable field answers `data: null` for
    the whole response, and it still requires the `lru` RUSTSEC-2026-0253 names, so the advisory's ignore stays either
    way (`.claude/upstream/async-graphql.md`). 7.2.1 crosses the twelve-month freshness bar on 2027-01-20 if nothing

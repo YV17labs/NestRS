@@ -28,7 +28,7 @@ lists what the boot, a log or the wire shows when one is missed.
    `Cargo.toml`, the `nest-rs` requirement under `[workspace.dependencies]` goes
    from `6.1` to `7.0`, and a few features and crates move with it — the
    umbrella counts 31 capabilities, and a manifest names no other `nest-rs-*`
-   crate:
+   crate but `nest-rs-codegen`, in a decorator crate (step 4):
 
    | 6.1 | 7.0 |
    |---|---|
@@ -877,9 +877,9 @@ lists what the boot, a log or the wire shows when one is missed.
     |---|---|
     | `nest_rs::worker::JobContext` | `nest_rs::database::UnitOfWork` (with `OpenUnit`) |
     | `nest_rs::worker::JobTransaction` (`PerAttempt`, `Pool`), `ScheduledMethod::transaction`, `CronJobMeta::transaction` | `nest_rs::database::TransactionPolicy` (`PerUnit`, `Pool`) |
-    | `nest_rs::worker::JobSettlement`, `Unhonoured`, `BACKEND_REMEDY` | `nest_rs::database::{Settlement, Unhonoured, BACKEND_REMEDY}` |
+    | `nest_rs::worker::JobSettlement`, `Unhonoured` | `nest_rs::database::{Settlement, Unhonoured}` |
     | `nest_rs::worker::run_in_job_context(ctx, transaction, fut, ok, unhonoured)` | `nest_rs::database::run_unit(unit_of_work, UnitSpec::new(unit, scope, policy), fut, ok, unhonoured)` |
-    | `nest_rs::worker::TARGET`, `nest_rs::worker::context`, `nest_rs::schedule::nest_rs_worker::JOB_TIMEOUT` | gone; the job bound is `nest_rs::core::JOB_TIMEOUT`, and nothing files on `nest_rs::worker` any more |
+    | `nest_rs::worker::TARGET`, `nest_rs::worker::context`, and the crate re-exported as `nest_rs::schedule::nest_rs_worker` | gone, and nothing files on `nest_rs::worker` any more; the job bound, new in 7.0, is `nest_rs::core::JOB_TIMEOUT` |
     | `nest_rs::seaorm::WorkerDbContext`; `nest_rs::seaorm::ws::WsDataContext`, `mcp::McpDataContext`; the seaorm `ws` and `mcp` features | `nest_rs::seaorm::SeaOrmUnitOfWork`; nothing: delete them |
     | a database driver's request interceptor and `JobContext` | one `UnitOfWork`, bound through `nest_rs::database::provide_unit_of_work`, which also runs every lifecycle hook in a unit; it implements `settle_net`, and `Executor::atomic` to offer an atomic block (*Writing a driver*) |
     | a `match` on `ExecutorScope`, `TransactionPolicy` or `RepoError` outside its crate | add a `_` arm that fails closed |

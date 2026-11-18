@@ -165,7 +165,7 @@ dyn_host! {
 /// fn named(_: &dyn nest_rs_mcp::McpHost) {}
 /// ```
 ///
-/// ```compile_fail,E0412
+/// ```compile_fail,E0425
 /// fn named(_: nest_rs_mcp::BoxFuture<'static, ()>) {}
 /// ```
 #[cfg(doctest)]

@@ -84,6 +84,7 @@ mod time;
 mod turn;
 mod unique_key;
 mod unit;
+mod wire_date_time;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;
@@ -141,12 +142,12 @@ pub mod __private {
     pub use crate::hidden_columns::{AModelCrossesNoWire, HiddenColumns};
     pub use crate::soft_delete::{SoftDeleteDeclared, SoftDeleteRegistration};
     pub use crate::unique_key::UniqueKeyRegistration;
+    pub use crate::wire_date_time::WireDateTime;
     pub use inventory;
 
     // What `#[expose]` emits, so an entity crate declares none of these; each
     // derive carries a `crate = ` override pointing here.
     pub use async_trait::async_trait;
-    pub use chrono;
     #[cfg(feature = "graphql")]
     pub use nest_rs_graphql::__private::{
         FieldFailure, GraphqlRelationRegistration, LoaderOwner, seeded_loader,

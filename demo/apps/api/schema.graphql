@@ -7,6 +7,13 @@ input CreateUser {
 	name: String!
 }
 
+"""
+Implement the DateTime<FixedOffset> scalar
+
+The input/output is a string in RFC3339 format.
+"""
+scalar DateTime
+
 type Mutation {
 	createOrg(input: CreateOrg!): Org!
 	createUser(input: CreateUser!): User!
@@ -18,11 +25,11 @@ type Mutation {
 }
 
 type Org {
-	createdAt: String!
+	createdAt: DateTime!
 	id: String!
 	name: String!
 	posts(after: String, first: Int): PostConnection!
-	updatedAt: String!
+	updatedAt: DateTime!
 	users(after: String, first: Int): UserConnection!
 }
 
@@ -55,7 +62,7 @@ type Post {
 	author: User
 	authorId: String!
 	body: String!
-	createdAt: String!
+	createdAt: DateTime!
 	id: String!
 	"""
 	Field-level authorization applies: reads `null` where the caller's ability withholds it.
@@ -64,7 +71,7 @@ type Post {
 	orgId: String!
 	status: PostStatus!
 	title: String!
-	updatedAt: String!
+	updatedAt: DateTime!
 }
 
 type PostConnection {
@@ -127,7 +134,7 @@ type User {
 	"""
 	Field-level authorization applies: reads `null` where the caller's ability withholds it.
 	"""
-	createdAt: String
+	createdAt: DateTime
 	"""
 	Field-level authorization applies: reads `null` where the caller's ability withholds it.
 	"""
@@ -146,7 +153,7 @@ type User {
 	"""
 	Field-level authorization applies: reads `null` where the caller's ability withholds it.
 	"""
-	updatedAt: String
+	updatedAt: DateTime
 }
 
 type UserConnection {
@@ -186,6 +193,10 @@ directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 Directs the executor to skip this field or fragment when the `if` argument is true.
 """
 directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Provides a scalar specification URL for specifying the behavior of custom scalar types.
+"""
+directive @specifiedBy(url: String!) on SCALAR
 schema {
 	query: Query
 	mutation: Mutation

@@ -139,6 +139,69 @@ mod docket {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// A hearing: an instant in each shape a column holds one — bare, an `Option`,
+/// one a grant may withhold, at UTC and at the server's offset, one a write
+/// sets — and an id a row may lack.
+#[cfg(feature = "graphql")]
+mod hearing {
+    use super::*;
+
+    #[expose(name = "Hearing", graphql)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "hearings")]
+    pub(super) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose(input(create))]
+        pub scheduled_at: DateTimeWithTimeZone,
+        #[expose]
+        pub held_at: Option<DateTimeWithTimeZone>,
+        #[expose(nullable)]
+        pub adjourned_at: DateTimeWithTimeZone,
+        #[expose]
+        pub recorded_at: DateTimeUtc,
+        #[expose]
+        pub noted_at: Option<DateTimeUtc>,
+        #[expose]
+        pub sealed_at: DateTimeLocal,
+        #[expose]
+        pub clerk_id: Option<Uuid>,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub(super) enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    /// The instant each column of `row` holds, at UTC, as Postgres reads one back.
+    pub(super) const AT: &str = "2026-10-08T12:30:00.250Z";
+
+    pub(super) fn row() -> Model {
+        let at = DateTimeWithTimeZone::parse_from_rfc3339(AT).expect("a timestamp");
+        Model {
+            id: Uuid::nil(),
+            scheduled_at: at,
+            held_at: Some(at),
+            adjourned_at: at,
+            recorded_at: at.to_utc(),
+            noted_at: Some(at.to_utc()),
+            sealed_at: at.into(),
+            clerk_id: Some(Uuid::nil()),
+        }
+    }
+
+    /// Every instant column, as the wire keys it and as GraphQL names it.
+    pub(super) const INSTANTS: [(&str, &str); 6] = [
+        ("scheduled_at", "scheduledAt"),
+        ("held_at", "heldAt"),
+        ("adjourned_at", "adjournedAt"),
+        ("recorded_at", "recordedAt"),
+        ("noted_at", "notedAt"),
+        ("sealed_at", "sealedAt"),
+    ];
+}
+
 /// `f` run under an ability `build` grants.
 async fn under<T>(build: impl FnOnce(&mut AbilityBuilder), f: impl FnOnce() -> T) -> T {
     let mut ab = AbilityBuilder::new();
@@ -395,4 +458,228 @@ fn a_reply_grant_withholding_a_column_no_null_answers_fails_the_build() {
         refused.to_string().contains("withholds `type`"),
         "{refused}"
     );
+}
+
+/// Serves `Hearing` from its one root field, which builds the row where it
+/// answers, beside the field a write's input would reach.
+#[cfg(feature = "graphql")]
+struct HearingQuery;
+
+#[cfg(feature = "graphql")]
+#[nest_rs_graphql::async_graphql::Object]
+impl HearingQuery {
+    async fn hearing(&self) -> hearing::Hearing {
+        hearing::Hearing::from(&hearing::row())
+    }
+
+    async fn file(&self, input: hearing::CreateHearing) -> bool {
+        let _ = input;
+        true
+    }
+}
+
+#[cfg(feature = "graphql")]
+fn hearing_schema() -> nest_rs_graphql::async_graphql::Schema<
+    HearingQuery,
+    nest_rs_graphql::async_graphql::EmptyMutation,
+    nest_rs_graphql::async_graphql::EmptySubscription,
+> {
+    use nest_rs_graphql::async_graphql::{EmptyMutation, EmptySubscription, Schema};
+
+    Schema::new(HearingQuery, EmptyMutation, EmptySubscription)
+}
+
+/// `f` run under an ability reading every hearing.
+#[cfg(feature = "graphql")]
+async fn as_a_reader_of_hearings<T>(f: impl Future<Output = T>) -> T {
+    let mut ab = AbilityBuilder::new();
+    ab.can(Action::Read, hearing::Entity);
+    install_ability(Arc::new(ab.build().expect("a valid ability")), f).await
+}
+
+/// What introspection says of an object's fields, or an input's: each named type,
+/// and whether it is Non-Null.
+#[cfg(feature = "graphql")]
+fn typed(fields: &serde_json::Value) -> std::collections::HashMap<&str, (&str, bool)> {
+    fields
+        .as_array()
+        .expect("the fields")
+        .iter()
+        .map(|field| {
+            let ty = &field["type"];
+            let typed = if ty["kind"] == "NON_NULL" {
+                (ty["ofType"]["name"].as_str().expect("a named type"), true)
+            } else {
+                (ty["name"].as_str().expect("a named type"), false)
+            };
+            (field["name"].as_str().expect("a field's name"), typed)
+        })
+        .collect()
+}
+
+/// An instant is one GraphQL scalar, `DateTime`, whether its column is an `Option`,
+/// one a grant may withhold or neither, whichever zone it holds — the scalar a
+/// write's input takes — and a `date-time` in every schema the other edges publish.
+#[cfg(feature = "graphql")]
+#[tokio::test]
+async fn an_instant_is_one_graphql_scalar_and_a_date_time_in_every_schema() {
+    let introspected = hearing_schema()
+        .execute(
+            r#"{
+                read: __type(name: "Hearing") { fields { name type { kind name ofType { name } } } }
+                write: __type(name: "CreateHearing") {
+                    inputFields { name type { kind name ofType { name } } }
+                }
+            }"#,
+        )
+        .await
+        .into_result()
+        .expect("introspection answers")
+        .data
+        .into_json()
+        .expect("the answer is JSON");
+    let read = typed(&introspected["read"]["fields"]);
+    for (_, field) in hearing::INSTANTS {
+        let non_null = matches!(field, "scheduledAt" | "recordedAt" | "sealedAt");
+        assert_eq!(
+            read[field],
+            ("DateTime", non_null),
+            "{field}: {introspected}"
+        );
+    }
+    let write = typed(&introspected["write"]["inputFields"]);
+    assert_eq!(write["scheduledAt"], ("DateTime", true), "{introspected}");
+
+    let json_schema = nest_rs_seaorm::__private::schemars::schema_for!(hearing::Hearing);
+    let json_schema = serde_json::to_value(&json_schema).expect("the schema serializes");
+    let output = nest_rs_mcp::rmcp::handler::server::tool::schema_for_output::<hearing::Hearing>();
+    let output = serde_json::Value::Object((*output).clone());
+    for (key, _) in hearing::INSTANTS {
+        assert_eq!(
+            json_schema["properties"][key]["format"], "date-time",
+            "{key}: {json_schema}"
+        );
+        assert_eq!(
+            output["properties"][key]["format"], "date-time",
+            "MCP {key}: {output}"
+        );
+    }
+}
+
+/// An instant is spelled alike on GraphQL and on every edge serde writes — a REST
+/// body, a WebSocket message, an MCP tool's answer — `Z` at offset zero, whether its
+/// column is an `Option` or not.
+#[cfg(feature = "graphql")]
+#[tokio::test]
+async fn an_instant_is_spelled_alike_on_graphql_and_on_every_edge_serde_writes() {
+    let selection: Vec<&str> = hearing::INSTANTS.iter().map(|(_, field)| *field).collect();
+    let query = format!("{{ hearing {{ {} }} }}", selection.join(" "));
+    let schema = hearing_schema();
+    let (answered, serialized) = as_a_reader_of_hearings(async {
+        let answered = schema
+            .execute(query.as_str())
+            .await
+            .into_result()
+            .expect("the query answers")
+            .data
+            .into_json()
+            .expect("the answer is JSON");
+        let serialized = serde_json::to_value(hearing::Hearing::from(&hearing::row()))
+            .expect("the row serializes");
+        (answered, serialized)
+    })
+    .await;
+    for (key, field) in hearing::INSTANTS {
+        assert_eq!(
+            answered["hearing"][field], serialized[key],
+            "{field}: {answered} where serde wrote {serialized}",
+        );
+        if key != "sealed_at" {
+            assert_eq!(serialized[key], hearing::AT, "{key}: {serialized}");
+        }
+    }
+}
+
+/// The `DateTime` a wire row registers says what async-graphql's own says, the one
+/// a write's input registers, so a schema reads alike whichever comes first.
+#[cfg(feature = "graphql")]
+#[tokio::test]
+async fn the_date_time_a_row_registers_is_described_as_the_one_an_input_registers() {
+    use nest_rs_graphql::async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+
+    struct Chrono;
+
+    #[Object]
+    impl Chrono {
+        async fn at(&self) -> DateTimeWithTimeZone {
+            DateTimeWithTimeZone::default()
+        }
+    }
+
+    const DESCRIBED: &str = r#"{ __type(name: "DateTime") { kind description specifiedByURL } }"#;
+    let ours = hearing_schema()
+        .execute(DESCRIBED)
+        .await
+        .into_result()
+        .expect("introspection answers")
+        .data
+        .into_json()
+        .expect("the answer is JSON");
+    let theirs = Schema::new(Chrono, EmptyMutation, EmptySubscription)
+        .execute(DESCRIBED)
+        .await
+        .into_result()
+        .expect("introspection answers")
+        .data
+        .into_json()
+        .expect("the answer is JSON");
+    assert_eq!(ours, theirs);
+    assert_eq!(
+        ours["__type"]["specifiedByURL"], "https://datatracker.ietf.org/doc/html/rfc3339",
+        "{ours}",
+    );
+}
+
+/// An id reads as a `String` whether its column is an `Option` or not — the type a
+/// `#[crud]` id argument takes — and every schema keeps its `uuid` format.
+#[cfg(feature = "graphql")]
+#[tokio::test]
+async fn an_id_is_one_graphql_type_whether_its_column_is_an_option_or_not() {
+    let schema = hearing_schema();
+    let introspected = schema
+        .execute(
+            r#"{ __type(name: "Hearing") { fields { name type { kind name ofType { name } } } } }"#,
+        )
+        .await
+        .into_result()
+        .expect("introspection answers")
+        .data
+        .into_json()
+        .expect("the answer is JSON");
+    let read = typed(&introspected["__type"]["fields"]);
+    assert_eq!(read["id"], ("String", true), "{introspected}");
+    assert_eq!(read["clerkId"], ("String", false), "{introspected}");
+
+    let (answered, serialized) = as_a_reader_of_hearings(async {
+        let answered = schema
+            .execute("{ hearing { clerkId } }")
+            .await
+            .into_result()
+            .expect("the query answers")
+            .data
+            .into_json()
+            .expect("the answer is JSON");
+        let serialized = serde_json::to_value(hearing::Hearing::from(&hearing::row()))
+            .expect("the row serializes");
+        (answered, serialized)
+    })
+    .await;
+    assert_eq!(answered["hearing"]["clerkId"], json!(Uuid::nil()));
+    assert_eq!(serialized["clerk_id"], json!(Uuid::nil()));
+
+    let json_schema = nest_rs_seaorm::__private::schemars::schema_for!(hearing::Hearing);
+    let json_schema = serde_json::to_value(&json_schema).expect("the schema serializes");
+    let clerk = &json_schema["properties"]["clerk_id"];
+    assert_eq!(clerk["type"], json!(["string", "null"]), "{json_schema}");
+    assert_eq!(clerk["format"], "uuid", "{json_schema}");
 }

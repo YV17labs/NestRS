@@ -16,7 +16,7 @@ use syn::{Ident, Type};
 
 use crate::attr::{
     RelationKind, ResourceField, ResourceModel, complexity_attr, graphql_root, graphql_root_str,
-    is_uuid,
+    is_uuid, option_inner,
 };
 use crate::dto::withholdable_doc;
 
@@ -573,9 +573,10 @@ fn emit_has_many_method(
 }
 
 /// The wire representation of a column, borrowed at `place`, → key the
-/// dataloader expects: a `Uuid` is a `String` on the wire, so it is parsed back.
+/// dataloader expects: a `Uuid` is a `String` on the wire, an `Option`'s too, so
+/// it is parsed back.
 fn wire_key_expr(ty: &Type, place: TokenStream2) -> TokenStream2 {
-    if is_uuid(ty) {
+    if is_uuid(option_inner(ty).unwrap_or(ty)) {
         let root = graphql_root();
         quote! {
             ::nest_rs_seaorm::__private::uuid::Uuid::parse_str(#place)

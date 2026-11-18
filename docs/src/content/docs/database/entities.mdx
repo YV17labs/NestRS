@@ -162,6 +162,25 @@ leaving out any other column fails when the ability builds, naming it.
 See [Response masking](/security/authorization/response-masking/#what-a-grant-may-withhold--exposenullable).
 </Aside>
 
+### Ids, dates and times
+
+An exposed column reads in one type on every edge, whether it is an `Option`,
+one `#[expose(nullable)]` declares, or neither:
+
+| Column | GraphQL | JSON — REST, WebSocket, MCP | JSON Schema |
+|---|---|---|---|
+| `Uuid` | `String` | `"01920000-0000-7000-8000-0000000001a1"` | `format: uuid` |
+| `DateTimeWithTimeZone`, `DateTimeUtc`, `DateTimeLocal` | `DateTime` | `"2026-10-08T12:30:00.250Z"` | `format: date-time` |
+| `Date`, `Time`, `DateTime` (naive) | `NaiveDate`, `NaiveTime`, `NaiveDateTime` | `"2026-10-08"`, `"12:30:00.250"`, `"2026-10-08T12:30:00.250"` | `date`, `partial-time`, `partial-date-time` |
+
+An id reads as the `String` a `#[crud]` id argument takes. An instant reads as
+one RFC 3339 string on every edge, the one chrono's serde writes: `Z` at UTC,
+and the fraction to the precision the column holds. RFC 9557 gives `Z` to an
+instant whose local offset is unknown, which a `timestamptz` read back is. On
+GraphQL the instant is the `DateTime` scalar, the one a create or update input
+already takes. The wire row's field holds the framework's own instant type,
+which serializes and answers GraphQL: compute with the value off the `Model`.
+
 ### Enum columns
 
 An exposed column whose type is your own enum passes through to the wire

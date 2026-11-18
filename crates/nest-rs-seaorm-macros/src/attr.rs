@@ -697,21 +697,92 @@ pub(crate) fn graphql_crate_attr(model: &ResourceModel) -> TokenStream2 {
     quote! { #[graphql(crate = #root)] }
 }
 
-/// Whether the type's last path segment is `Uuid` (a `String` on the wire).
-/// Purely syntactic: `Option<Uuid>` and aliases keep their native type.
+/// Whether the type's last path segment is `Uuid`. Purely syntactic: an alias
+/// keeps its own type.
 pub(crate) fn is_uuid(ty: &Type) -> bool {
     matches!(ty, Type::Path(tp) if tp.path.segments.last().is_some_and(|s| s.ident == "Uuid"))
 }
 
-/// Whether the type is SeaORM's `DateTimeWithTimeZone`, an RFC 3339 `String` on
-/// the wire (async-graphql has no native chrono mapping).
-pub(crate) fn is_datetime_tz(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Path(tp) if tp
-            .path
-            .segments
-            .last()
-            .is_some_and(|s| s.ident == "DateTimeWithTimeZone")
-    )
+/// Whether the type is a chrono instant by its spelling: chrono's `DateTime<Tz>`,
+/// or one of sea-orm's aliases for it. sea-orm's bare `DateTime` is the naive
+/// one, which no edge spells differently. Purely syntactic: an alias of the
+/// app's own keeps its own type.
+pub(crate) fn is_instant(ty: &Type) -> bool {
+    let Type::Path(tp) = ty else {
+        return false;
+    };
+    let Some(last) = tp.path.segments.last() else {
+        return false;
+    };
+    match last.ident.to_string().as_str() {
+        "DateTimeWithTimeZone"
+        | "DateTimeUtc"
+        | "DateTimeLocal"
+        | "ChronoDateTimeWithTimeZone"
+        | "ChronoDateTimeUtc"
+        | "ChronoDateTimeLocal" => true,
+        "DateTime" => matches!(last.arguments, PathArguments::AngleBracketed(_)),
+        _ => false,
+    }
+}
+
+/// `T` when the type is spelled `Option<T>`.
+pub(crate) fn option_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return None;
+    };
+    let last = path.segments.last().filter(|s| s.ident == "Option")?;
+    let PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    match args.args.first()? {
+        GenericArgument::Type(inner) => Some(inner),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    #[test]
+    fn an_instant_is_read_off_chrono_and_sea_orm_spellings() {
+        let instants: [Type; 8] = [
+            parse_quote!(DateTimeWithTimeZone),
+            parse_quote!(DateTimeUtc),
+            parse_quote!(DateTimeLocal),
+            parse_quote!(ChronoDateTimeWithTimeZone),
+            parse_quote!(ChronoDateTimeUtc),
+            parse_quote!(ChronoDateTimeLocal),
+            parse_quote!(chrono::DateTime<chrono::Utc>),
+            parse_quote!(sea_orm::prelude::DateTimeWithTimeZone),
+        ];
+        for ty in &instants {
+            assert!(is_instant(ty), "{}", ty.to_token_stream());
+        }
+        let others: [Type; 6] = [
+            parse_quote!(DateTime),
+            parse_quote!(ChronoDateTime),
+            parse_quote!(Date),
+            parse_quote!(Time),
+            parse_quote!(Option<DateTimeWithTimeZone>),
+            parse_quote!(Stamp),
+        ];
+        for ty in &others {
+            assert!(!is_instant(ty), "{}", ty.to_token_stream());
+        }
+    }
+
+    #[test]
+    fn an_option_is_read_through_to_what_it_holds() {
+        let held: Type = parse_quote!(DateTimeUtc);
+        let ty: Type = parse_quote!(Option<DateTimeUtc>);
+        assert_eq!(option_inner(&ty), Some(&held));
+        let ty: Type = parse_quote!(::core::option::Option<Uuid>);
+        assert!(option_inner(&ty).is_some_and(is_uuid));
+        let ty: Type = parse_quote!(Uuid);
+        assert_eq!(option_inner(&ty), None);
+    }
 }

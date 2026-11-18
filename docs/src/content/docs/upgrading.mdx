@@ -912,6 +912,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `active.status = Set(Draft)` before a create | `#[expose(default = Status::Draft)]` on the column, which the create input does not carry |
     | `id: Set(Uuid::now_v7())`, `created_at: Set(now)` on a row built for `Repo::insert_unscoped` | `..Default::default()`: the insert fills the key on an exposed entity, and `created_at` under `timestamps`; a table no transport exposes takes `DEFAULT uuidv7()` on its key in its migration |
     | `#[expose(..., timestamps)]` on an entity with `created_at` and no `updated_at`, refused | accepted: `updated_at` is stamped when the entity has one |
+    | an `#[expose]`d wire row's timestamp read as a `String` (`user.created_at`), or an `Option` one as chrono's value | the row's `Model` for a value your code computes with: the wire row's field holds the framework's instant, which serializes and answers GraphQL alone; a nullable `Uuid` field holds its `String` |
     | a unique column on a `soft_delete` table, `unique_key()` | a partial unique index, `… WHERE deleted_at IS NULL` |
     | `params.after_uuid()` | `params.cursor().map_err(\|refused\| nest_rs::http::pipe_error(&refused))?` |
     | `Page::next_cursor: Option<Uuid>`; `Repo::page`, `Repo::relation_pages`, `CrudService::page`, `RelationKey::after` taking `Option<Uuid>` | `Option<PageCursor>`: `PageCursor::from(uuid)` builds one, `cursor.to_string()` is its text |
@@ -1209,9 +1210,13 @@ lists what the boot, a log or the wire shows when one is missed.
       `PostsController` — and a `#[crud]` route no longer takes its entity's
       name (`Post`). A generator grouping by tag renames its classes or files;
       keep a name with `tags("…")`.
-    - **An `#[expose]`d timestamp reads `…Z` at UTC**, where an unmasked route
-      wrote `+00:00`: one instant, now spelled as a masked route already spelled
-      it. A client parsing RFC 3339 sees no change; one comparing strings does.
+    - **An `#[expose]`d timestamp reads `…Z` at UTC on every edge**, where an
+      unmasked route and GraphQL wrote `+00:00`: one instant, now spelled as a
+      masked route already spelled it. A client parsing RFC 3339 sees no change;
+      one comparing strings does. On GraphQL it is the `DateTime` scalar whether
+      its column is nullable or not, where a non-null one read `String!`: map
+      `DateTime` in your code generator. A nullable `Uuid` column reads `String`,
+      as a non-null one does, where it read `UUID`.
     - **Sockets close by their standard**: a frame past the cap closes `1009
       Message Too Big` on a gateway and on graphql-ws, where it closed `1011`; an
       admitted upgrade an in-process test drives answers `426`; a handshake

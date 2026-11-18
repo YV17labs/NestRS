@@ -237,6 +237,86 @@ pub(super) mod notes {
     }
 }
 
+/// A key a row may lack: its column is an `Option`, which reads as a `String`
+/// like any id, and the relation parses it back to load its row.
+pub(super) mod drafts {
+    use super::*;
+
+    #[expose(name = "Draft", service = DraftsService, graphql)]
+    #[sea_orm::model]
+    #[derive(Clone, Debug, DeriveEntityModel)]
+    #[sea_orm(table_name = "drafts")]
+    pub(crate) struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        #[expose]
+        pub id: Uuid,
+        #[expose]
+        pub editor_id: Option<Uuid>,
+        #[sea_orm(belongs_to, from = "editor_id", to = "id")]
+        #[expose]
+        pub editor: HasOne<super::people::Entity>,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+
+    pub(crate) struct DraftsService;
+
+    impl CrudService for DraftsService {
+        type Entity = Entity;
+    }
+}
+
+/// An optional key reads as the `String` a present one reads as, and its relation
+/// may read `null`.
+#[tokio::test]
+async fn an_optional_key_reads_as_a_string_and_its_relation_may_read_null() {
+    use nest_rs_graphql::async_graphql::{EmptyMutation, EmptySubscription, Object, Schema};
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn draft(&self) -> Option<drafts::Draft> {
+            None
+        }
+    }
+
+    let introspected = Schema::new(Query, EmptyMutation, EmptySubscription)
+        .execute(
+            r#"{ __type(name: "Draft") { fields { name type { kind name ofType { name } } } } }"#,
+        )
+        .await
+        .into_result()
+        .expect("introspection answers")
+        .data
+        .into_json()
+        .expect("the answer is JSON");
+    let mut fields: Vec<(&str, &str, Option<&str>)> = introspected["__type"]["fields"]
+        .as_array()
+        .expect("the object's fields")
+        .iter()
+        .map(|field| {
+            (
+                field["name"].as_str().expect("a field's name"),
+                field["type"]["kind"].as_str().expect("a kind"),
+                field["type"]["name"]
+                    .as_str()
+                    .or_else(|| field["type"]["ofType"]["name"].as_str()),
+            )
+        })
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        [
+            ("editor", "OBJECT", Some("Person")),
+            ("editorId", "SCALAR", Some("String")),
+            ("id", "NON_NULL", Some("String")),
+        ],
+        "{introspected}",
+    );
+}
+
 /// A key sea-orm names through heck and through `enum_name`: `ownerID`'s
 /// variant is `OwnerId`, the primary key's `Key`. The compile is the assertion
 /// — a loader spelling either variant otherwise names a `Column` that does

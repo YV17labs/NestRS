@@ -158,9 +158,8 @@ dyn_host! {
     ],
 }
 
-/// The object-safe view a mount holds its hosts through is the expansion's: it
-/// restates each method rmcp adds to `ServerHandler`, so a host written by hand
-/// implements `ServerHandler` (`decisions/visibility-tiers.md`).
+/// The object-safe view a mount holds its hosts through is the expansion's: a
+/// host written by hand implements `ServerHandler` (`decisions/visibility-tiers.md`).
 ///
 /// ```compile_fail,E0405
 /// fn named(_: &dyn nest_rs_mcp::McpHost) {}

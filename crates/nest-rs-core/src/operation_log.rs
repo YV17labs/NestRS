@@ -436,8 +436,7 @@ pub const PANIC: &str = "panic";
 pub const CANCELLED: &str = "cancelled";
 
 /// What the HTTP edge and the outbound client read of a message in the
-/// conventions' words is tier 2: the methods the conventions know grow, and an
-/// array's length is its type (`decisions/visibility-tiers.md`).
+/// conventions' words is tier 2 (`decisions/visibility-tiers.md`).
 ///
 /// ```compile_fail,E0425
 /// let _ = nest_rs_core::operation_log::KNOWN_VERBS;

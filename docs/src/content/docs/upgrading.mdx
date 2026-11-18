@@ -238,7 +238,7 @@ lists what the boot, a log or the wire shows when one is missed.
    | `input` from `nest_rs::http`, `ws`, `mcp` or `queue` | `nest_rs::core::input`, or `use nest_rs::prelude::*` |
    | `use nest_rs::guards::prelude::*;` | `use nest_rs::core::{Layer, UnitContext, async_trait, injectable};` and `use nest_rs::guards::{Denial, Guard, GuardFor};` — the names the guard uses |
    | `nest_rs::http::{current_request_scope, with_request_scope}` | `nest_rs::core::{current_request_scope, with_request_scope}` |
-   | `nest_rs::http::{TRACEPARENT_HEADER, TRACESTATE_HEADER}` | `nest_rs::core::{TRACEPARENT_HEADER, TRACESTATE_HEADER}`, beside `TraceParent`; a reqwest client sets both through `nest_rs::reqwest::ReqwestMiddleware` |
+   | `nest_rs::http::{TRACEPARENT_HEADER, TRACESTATE_HEADER}` | `nest_rs::core::{TRACEPARENT_HEADER, TRACESTATE_HEADER}` |
    | `nest_rs::opentelemetry::LogFormat` | `nest_rs::core::logging::LogFormat`, the one type it re-exported |
    | `EnvPrefix::var(nest_rs::core::logging::var::FILTER)` | `"RUST_LOG"`: the console's filter is the ecosystem's variable, which no prefix renames |
    | `nest_rs::http::{version_path, versions_declare, join_path, normalize_mount_path, literal_mount_path, declared_versions}` | nothing public: `#[controller]`, `#[gateway]` and the framework's own mounts call them |
@@ -971,7 +971,7 @@ lists what the boot, a log or the wire shows when one is missed.
     | `refused.origin()`, `refused.expected()` on an `OriginRefused` | nothing public: the surface files each refused origin itself, at `warn` |
     | `ServerInfo`, returned by a host's `get_info` | `nest_rs::mcp::ServerConfig` |
     | rmcp's `Parameters`, named from rmcp in an operation's signature | `nest_rs::mcp::Parameters`, the framework's own type with rmcp's shape |
-    | an `impl McpHost` written by hand, `nest_rs::mcp::{McpHost, BoxFuture}` | `impl ServerHandler` for the host, `nest_rs::mcp::ServerHandler`: every `ServerHandler` is one, and the object-safe view a mount holds it through is no API |
+    | an `impl McpHost` written by hand, `nest_rs::mcp::{McpHost, BoxFuture}` | `impl nest_rs::mcp::ServerHandler` for the host: every `ServerHandler` is one |
     | `McpIdentity::declared(name, title)` | `#[mcp(name = …, title = …)]`, or the app's own `McpIdentity` literal |
     | `McpIdentity::new("assistant", env!("CARGO_PKG_VERSION"))` in `McpOptions::server` | `McpModule::for_root(McpIdentity { title: Some(…), ..Default::default() })`, or the bare import: the name, version and description are the binary's; its `name` and `version` fields report others |
     | `McpIdentity::new(name, version).title(…).instructions(…)`, any setter | a literal over `Default`: `McpIdentity { name: Some(…), version: Some(…), title: Some(…), instructions: Some(…), ..Default::default() }` |

@@ -24,8 +24,8 @@ use crate::response::Response;
 
 use crate::client_ip::ClientOrigin;
 
-/// W3C Trace Context's header names have one path, the kernel's, beside
-/// `TraceParent` and `current_traceparent` (`decisions/visibility-tiers.md`).
+/// W3C Trace Context's header names have one path, the kernel's
+/// (`decisions/visibility-tiers.md`).
 ///
 /// ```compile_fail,E0425
 /// let _ = nest_rs_http::TRACEPARENT_HEADER;

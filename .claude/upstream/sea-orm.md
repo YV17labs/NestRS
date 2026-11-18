@@ -144,14 +144,13 @@
   kit's `orm`. chrono, declared unmaintained (RUSTSEC-2026-0543), stays in such
   an app's tree even where nestrs would stop naming it.
 - **Our side** — the documented fact, in
-  `.claude/decisions/public-dependencies.md` (2026-11-18, chrono) and
-  `deny.toml`'s reason for RUSTSEC-2026-0543; the framework's own `sea-orm` and
-  `sea-orm-migration` lines set `default-features = false`.
+  `.claude/decisions/public-dependencies.md` (2026-11-18, chrono); the
+  framework's own `sea-orm` and `sea-orm-migration` lines set
+  `default-features = false`.
 - **Canary** — none: a manifest line, read when the version moves.
 - **Upstream** — not filed.
-- **When fixed** — the sentence leaves the decision and `deny.toml`'s reason;
-  chrono leaves an app's tree with nestrs's own move off it, in nestrs 8.
-  Minutes.
+- **When fixed** — the sentence leaves the decision; chrono leaves an app's
+  tree with nestrs's own move off it, in nestrs 8. Minutes.
 - **Ticket** —
 
   > **sea-orm-migration: depend on sea-orm with `default-features = false`**

@@ -52,7 +52,7 @@ therefore set by these libraries' release clocks, not by this roadmap.** The tab
 | Library | 7.0 pins | Next major | Recent pace | What an app writes in it |
 |---|---|---|---|---|
 | `redis` | `=1.8` | **2.0.0-rc.3** (rc.1 on 2026-10-24, rc.3 on 2026-11-14); no date given for the final | 1.0 in December 2025 | `RedisConnection` implements its `ConnectionLike` |
-| `async-graphql` | `=7.2` | 8.0.0-rc.5, unchanged since 2026-04-21; it does not fix RUSTSEC-2026-0253 either (point 2) | 7.0 in January 2024; last stable release on 2026-01-20 | resolvers, derives, `Context` |
+| `async-graphql` | `=7.2` | 8.0.0-rc.5, unchanged since 2026-04-21 (point 2) | 7.0 in January 2024; last stable release on 2026-01-20 | resolvers, derives, `Context` |
 | `rmcp` | 3.11 | none on its roadmap | 1.0, 2.0 and 3.0 between March and July 2026, the last with the MCP `2026-07-28` rewrite | MCP tool and model types |
 | `validator` | 0.21 | its next minor (a `0.x`) | 0.20 in January 2025, 0.21 in July 2026 | `#[validate(…)]` |
 | `reqwest` | 0.13 | its next minor (a `0.x`) | 0.12 in 2024, 0.13 in December 2025 | the client an app builds |
@@ -64,36 +64,27 @@ therefore set by these libraries' release clocks, not by this roadmap.** The tab
 
 **Settled before 7.0 is published.** A public dependency's major is free until the first publish
 (`public-dependencies.md`), and what the semver policy does not say before then, it cannot say after. The first two
-points follow that file's rule of 2026-11-17: a NestRS major is published on each public dependency's latest stable
-major, an active release candidate holds it, and a stalled one does not.
+points apply that file's rule of 2026-11-17: an active release candidate holds the publication, a stalled one does not.
 
-1. **`redis` 2.0 is waited for until 2026-12-31.** Its release candidates came three weeks apart or less, so 7.0 waits
-   for the final; with none by that date, 7.0 ships on 1.8 and 2.0 waits for NestRS 8. `nest-rs-redis` already passes
-   every topology's suite against rc.3, on the `chore/redis-2` branch, and the `#[doc(hidden)]` cluster constructor the
-   exact pin leans on is unchanged there. Waiting has a cost: 6.x queue users do not compile on Rust 1.100 until 7.0
-   ships (`queue-redis-streams.md`). Past 2.0, a NestRS command API in place of implementing redis's `ConnectionLike`
-   would turn redis majors into NestRS minors, at the price of the vocabulary an app writes today.
-2. **`async-graphql` 8 waits for NestRS 8.** Neither line has released since April 2026, and rc.5 cannot be taken: one
-   failing nullable field answers `data: null` for the whole response there, and it still requires the `lru` that
-   RUSTSEC-2026-0253 names, so the advisory's ignore stays either way (`.claude/upstream/async-graphql.md`). 7.2.1
-   crosses the twelve-month freshness bar on 2027-01-20 if nothing ships before.
-3. **`chrono` stays in 7.x.** It is declared unmaintained, and the public API names it through sea-orm's
-   `DateTimeWithTimeZone`. `time`, the alternative sea-orm 2.0 carries, would change how REST spells an instant, leave an
-   app writing two attributes on every `time` field of its DTOs, and still leave chrono in every app with migrations.
-   jiff, the advisory's other recommendation, is NestRS 8's target once sea-orm and sqlx carry it.
+1. **`redis` 2.0 is waited for until 2026-12-31**; with no final release by then, 7.0 ships on 1.8 and 2.0 waits for
+   NestRS 8. `nest-rs-redis` already passes every topology's suite against rc.3, on the `chore/redis-2` branch. Waiting
+   has a cost: 6.x queue users do not compile on Rust 1.100 until 7.0 ships (`queue-redis-streams.md`). Past 2.0, a
+   NestRS command API in place of implementing redis's `ConnectionLike` would turn redis majors into NestRS minors, at
+   the price of the vocabulary an app writes today.
+2. **`async-graphql` 8 waits for NestRS 8.** rc.5 cannot be taken: one failing nullable field answers `data: null` for
+   the whole response, and it still requires the `lru` RUSTSEC-2026-0253 names, so the advisory's ignore stays either
+   way (`.claude/upstream/async-graphql.md`). 7.2.1 crosses the twelve-month freshness bar on 2027-01-20 if nothing
+   ships before.
+3. **`chrono` stays in 7.x**: `time` would change how REST spells an instant and still leave chrono in every app with
+   migrations; jiff, NestRS 8's target, waits for sea-orm and sqlx to carry it (`public-dependencies.md`, 2026-11-18).
 4. **7.0 builds on rmcp 3.11 and jsonwebtoken 12**, the latest of each. `rmcp` is a smaller risk than its count of
    majors suggests: its majors followed the protocol's rewrite, 3.x passes the `2025-11-25` and `2026-07-28` conformance
    suites, `nest-rs-mcp` serves both, and the specification now keeps a deprecated feature for at least twelve months.
-   jsonwebtoken is private, and 12 refuses a token listing a critical header parameter it does not understand.
-5. **An exported telemetry name promises what its convention does.** A name from a stable OpenTelemetry convention, or
-   of NestRS's own, is API; one from a convention in development (`enduser.id`, `messaging.*`, `process.*`, the MCP
-   conventions' `mcp.*` and `gen_ai.*`) follows it, its rename a minor named in the changelog, as the semver policy now
-   says.
-6. **Every crate builds from its package before any is published**: `publish.yml` runs `cargo package` first, so a crate
-   reading a file outside its directory fails the release before crates.io holds anything.
+5. **An exported telemetry name promises what its convention does**: one from a convention in development follows it,
+   its rename a minor named in the changelog (`semver-7x.md`, 2026-11-18).
+6. **Every crate builds from its package before any is published**: `publish.yml` runs `cargo package` first.
 7. **The public surface added since 2026-10-31 was audited**, and the three items that would have frozen a mistake
-   moved: the W3C Trace Context header names have one path, the operation log's HTTP readings are tier 2, and so is
-   `McpHost`, which takes each method rmcp adds.
+   moved (changelog, *Tier 1 holds what a developer writes*).
 
 **When a forced major comes**, 8.0 stays mechanical: it moves the dependency, takes what that move requires, and ships an
 upgrade guide. No redesign rides along. `SECURITY.md` already bounds its pace: a major ships at most every six months,

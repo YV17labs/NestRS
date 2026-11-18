@@ -28,7 +28,7 @@ until it stabilises.
 
 | Library | Decision |
 |---|---|
-| async-graphql 7 (`=7.2`; `=7.2.1` until 2026-11-05, three segments against the requirement form every other third-party pin takes) | **Public**: its derives and `Context` are what a resolver is written in. If 8.0 is released final before 7.0 is published, 7.0 takes it — a public dependency's major is free until the first publish; after that, 8.0 waits for nestrs 8. 8.0 does not carry RUSTSEC-2026-0253's fix, as this row said until 2026-11-18: 8.0.0-rc.5 still requires `lru` 0.16, and lru fixes it from 0.18.2. Its poem integration, `async-graphql-poem`, left with `nest_rs::graphql::async_graphql_poem` on 2026-10-19: `/graphql` is served on the transport's own types. |
+| async-graphql 7 (`=7.2`; `=7.2.1` until 2026-11-05, three segments against the requirement form every other third-party pin takes) | **Public**: its derives and `Context` are what a resolver is written in. If 8.0 is released final before 7.0 is published, 7.0 takes it — a public dependency's major is free until the first publish; after that, 8.0 waits for nestrs 8. Until 2026-11-18 this row said 8.0 carries RUSTSEC-2026-0253's fix; no release does (below). Its poem integration, `async-graphql-poem`, left with `nest_rs::graphql::async_graphql_poem` on 2026-10-19: `/graphql` is served on the transport's own types. |
 | rmcp 3 | **Public**: the MCP SDK under the protocol's own organisation; its model types are the MCP schema. |
 | sea-orm 2 (`=2.0`), sea-orm-migration 2 | **Public**: `Repo`'s API by design, and `nest_rs::testing::EphemeralDatabase` takes a `MigratorTrait`. |
 | validator 0.21 | **Public**: `#[validate(…)]` is the app's. A `0.x`, so its next minor is a nestrs major. |
@@ -247,9 +247,8 @@ Applied on 2026-11-17:
   on 2026-10-30, rc.3 on 2026-11-14): 7.0 waits for 2.0 until 2026-12-31, and
   with no final release by then it ships on redis 1.8.
 - **async-graphql 8.0 is stalled** (8.0.0-rc.5 on 2026-04-21, and no release of
-  either line since): 7.0 ships on 7.2, and 8.0 waits for nestrs 8.
-  RUSTSEC-2026-0253's ignore stays either way: 8.0.0-rc.5 still requires `lru`
-  0.16, and the fix is lru 0.18.2.
+  either line since): 7.0 ships on 7.2, and 8.0 waits for nestrs 8;
+  RUSTSEC-2026-0253's ignore stays either way (above).
 - **rustls has development snapshots of 0.24, no release candidate**
   (0.24.0-dev.2 on 2026-10-14, dev.3 on 2026-11-12): its publisher names none a
   candidate, so nothing waits for it; rustls is public in `nest-rs-testing`
@@ -272,14 +271,14 @@ on, `with-chrono` among them, wherever it is linked: an app's migrations crate,
 `nest-rs-seaorm`'s `queue` and `nest-rs-testing`'s `orm`
 (`.claude/upstream/sea-orm.md`).
 
-**7.0 keeps chrono.** Replacing it — with time, since sea-orm 2.0 has
-`with-time` and no `with-jiff` — changes the public surface of the seaorm
-capability, `#[expose]`, the GraphQL scalars and schemars; after 7.0 it is a
-nestrs major. Measured on 2026-11-18, the move compiles, but REST then spells an
-instant otherwise (`.250Z` becomes `.25Z`), an app writes two attributes on each
-`time` field of its DTOs, since time's default serde is a tuple of nine integers
-and schemars 1.2.3 has no `time` support, and chrono stays in every app with
-migrations. jiff, the advisory's other recommendation, is carried by neither
-sea-orm 2.0.4 nor sqlx 0.9: it is nestrs 8's target. `deny.toml` ignores RUSTSEC-2026-0543
+**7.0 keeps chrono.** Replacing it — with time, the alternative sea-orm 2.0
+carries — changes the public surface of the seaorm capability, `#[expose]`, the
+GraphQL scalars and schemars; after 7.0 it is a nestrs major. Measured on
+2026-11-18, the move compiles, but REST then spells an instant otherwise
+(`.250Z` becomes `.25Z`), an app writes two attributes on each `time` field of
+its DTOs, since time's default serde is a tuple of nine integers and schemars
+1.2.3 has no `time` support, and chrono stays in every app with migrations.
+jiff, the advisory's other recommendation, is carried by neither sea-orm 2.0.4
+nor sqlx 0.9: it is nestrs 8's target. `deny.toml` ignores RUSTSEC-2026-0543
 with this reason, and RUSTSEC-2026-0542, humantime, which object_store alone
 brings, with its own.

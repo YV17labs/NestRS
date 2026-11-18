@@ -47,23 +47,21 @@
   records each field's error with `ctx.add_error` and keeps the other fields
   (`src/resolver_utils/container.rs:180-208`, #1746 in 7.1.0). Over
   `Query { fine: i32, broken: Result<Option<i32>> }`, `{ fine broken }` answers
-  `{"errors":[…],"data":null}` on rc.5 alone, with no nestrs code in the build
-  (measured on 2026-11-18); 8.0.0-rc.3's changelog lists #1806, which reworked
-  `data` when a result carries errors.
-- **Effect** — none in 7.x, which stays on 7.2: it blocks the move to 8.0. On
-  rc.5 a failing nullable field nulls every other field of the response, where
-  the specification nulls that field alone; a mutation's fields run serially,
-  so one already executed loses its answer and those after it never run.
-  `nest-rs-graphql`'s in-process suite fails 35 of its 546 tests on rc.5, about
-  28 of them this.
+  `{"errors":[…],"data":null}` on rc.5 alone, with no nestrs code in the build;
+  8.0.0-rc.3's changelog lists #1806, which reworked `data` when a result
+  carries errors.
+- **Effect** — it blocks the move to 8.0: on rc.5 a failing nullable field
+  nulls every other field of the response, where the specification nulls that
+  field alone; a mutation's fields run serially, so one already executed loses
+  its answer and those after it never run. `nest-rs-graphql`'s in-process suite
+  fails 35 of its 546 tests on rc.5, about 28 of them this.
 - **Our side** — none: 7.x stays on `=7.2`, and 8.0 waits for nestrs 8
   (`.claude/decisions/public-dependencies.md`, 2026-11-17).
 - **Canary** — none in the tree: the move to 8.0 runs `nest-rs-graphql`'s
   null-propagation suite, which fails while this holds.
 - **Upstream** — not filed.
-- **When fixed** — the move to 8.0 can be measured again on the final release;
-  this entry closes there, and nestrs's own null propagation is re-read against
-  the release's. Nothing changes in 7.x.
+- **When fixed** — nothing in 7.x; the move to 8.0 is measured again on the
+  final release, nestrs's own null propagation re-read against it.
 - **Ticket** —
 
   > **8.0.0-rc: one failing nullable field answers `data: null`**
@@ -89,8 +87,7 @@
   links when a key's `Drop` panics, is patched from lru 0.18.2.
 - **Effect** — every lockfile building async-graphql's `dataloader` feature
   holds the unsound `pop`, and an app building `dataloader::LruCache`, which
-  `nest_rs::graphql::async_graphql` reaches, can call it. No release of
-  async-graphql fixes it, 8.0's candidates included.
+  `nest_rs::graphql::async_graphql` reaches, can call it.
 - **Our side** — `#[dataloader]` builds `DataLoader::new`, which caches
   nothing, so nestrs never builds the cache; `deny.toml` ignores the advisory
   with that reason, and the dataloaders page tells an app not to build it

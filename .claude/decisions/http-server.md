@@ -490,7 +490,6 @@ decode" and kept a second parse of the type beside the edge's.
 
 ## 2026-11-18 — RUSTSEC-2026-0253 is fixed in no async-graphql release
 
-The measurement of 2026-10-04 says the advisory is fixed only in async-graphql
-8.0. It is not: 8.0.0-rc.5 still requires `lru` 0.16, and lru fixes it from
-0.18.2 (`public-dependencies.md`, this date). The decision rests on poem's own
-state, which that measurement read correctly.
+The measurement of 2026-10-04 says async-graphql 8.0 alone fixes the advisory;
+8.0.0-rc.5 still requires the `lru` it names (`.claude/upstream/async-graphql.md`).
+The decision rests on poem's own state, which that measurement read correctly.

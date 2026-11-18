@@ -33,8 +33,7 @@ same types, and wrote the bare column `+00:00` on every edge.
   and zod's `z.iso.datetime()` accepts no other by default.
 - **The wire field holds `nest_rs_seaorm::__private::WireDateTime`**, tier 2:
   chrono's own `Serialize` and JSON Schema, and an async-graphql scalar named
-  `DateTime` that writes the same string. A program serializes it, clones it and
-  prints it with `{:?}`, and names it nowhere; a value for logic is read off the
+  `DateTime` that writes the same string; a value for logic is read off the
   `Model`. Its description and `@specifiedBy` URL are async-graphql's own, word
   for word, because a schema prints the first `DateTime` it registers, a row's or
   an input's: held by `nest-rs-seaorm`'s

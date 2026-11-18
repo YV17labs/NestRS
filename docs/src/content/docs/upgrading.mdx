@@ -1233,12 +1233,12 @@ lists what the boot, a log or the wire shows when one is missed.
       it answered `-32602`. A tool's `Json<T>` that is no JSON object reaches a
       session below `2026-07-28` as the call's text, with no output schema in
       `tools/list`, as those revisions require (SEP-2106): a list wrapped in an
-      object stays structured there. A request naming no session that is no `initialize`
-      answers `400`, where it answered `422`; a JSON-RPC response sent with no
-      session answers `400` with `-32600`, where it was accepted `202`. A tool or prompt
-      asking its client for input at `2026-07-28` answers an
-      `InputRequiredResult`: the peer's `elicit` and `create_message` are refused
-      at that revision.
+      object stays structured there. A request naming no session that is no
+      `initialize` answers `400`, where it answered `422`; a JSON-RPC response
+      sent with no session answers `400` with `-32600`, where it was accepted
+      `202`. A tool or prompt asking its client for input at `2026-07-28`
+      answers an `InputRequiredResult`: the peer's `elicit` and `create_message`
+      are refused at that revision.
     - **A token endpoint answers RFC 6749 §5.2's JSON**: `401 invalid_client`
       with a `Basic` challenge for a client refused over the `Authorization`
       header, `400 invalid_client` for one that sent its credentials in the body

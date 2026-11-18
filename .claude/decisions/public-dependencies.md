@@ -208,16 +208,14 @@ latest, its locked version left where it was.
   listing is the union of the hosts serving it, and a path none serves answers
   `-32601`, as each of its hosts does. Refused: an empty listing there, which
   would keep 6.x's wire but say the endpoint serves what none of its hosts does.
-- **jsonwebtoken moves to 12**, private as before. `EncodingKey::from_secret`
-  and `DecodingKey::from_secret` answer a `Result`, refusing an empty secret the
-  service refuses before them, and a token whose header lists a critical
-  parameter other than `b64` is refused (RFC 7515 §4.1.11), where `JwtService`
-  verified it under 11.1. Its fix for a `sub`, `iss` or `aud` of the wrong type
-  changes nothing here: the service requires `iss` and `aud`, which 11.1 already
-  refused when they did not parse, and checks no `sub`.
+- **jsonwebtoken moves to 12**, private as before. A token whose header lists a
+  critical parameter other than `b64` is refused (RFC 7515 §4.1.11), where
+  `JwtService` verified it under 11.1. Its refusal of an empty HMAC key and its
+  fix for a `sub`, `iss` or `aud` of the wrong type change nothing here: the
+  service refuses an empty secret first, requires `iss` and `aud`, which 11.1
+  already refused when they did not parse, and checks no `sub`.
 - **jiff-tzdb moves to 1.0**, private: it holds the same 598 zone names as
-  0.1.9, so `#[cron(tz)]` accepts what it accepted, and its `VERSION` is the
-  IANA release it bundles (2026f), no longer optional.
+  0.1.9, so `#[cron(tz)]` accepts what it accepted.
 - **jiff stays on 0.2**, though 1.0 was released on 2026-11-15: croner 4.0.3,
   its latest, evaluates a pattern over 0.2's `Zoned` (`jiff = "^0.2.35"` behind
   its `jiff` feature), and 0.2.46 does not re-export 1.0's types. jiff moves

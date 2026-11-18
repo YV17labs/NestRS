@@ -586,27 +586,16 @@ async fn a_task_reaches_the_host_holding_it_past_another_host_s_refusal() {
 }
 
 /// Two hosts on `$path`: `$none` serves no method a test asks — rmcp's
-/// `-32601`, completion included, as a host written without them answers —
-/// and `$all` serves each, refusing a resource and a logger it does not hold
-/// and answering an empty completion, which rmcp's default no longer does for
-/// a host advertising no completions.
+/// `-32601`, as a host written without them answers — and `$all` serves each,
+/// refusing a resource and a logger it does not hold and answering an empty
+/// completion.
 macro_rules! serving_hosts {
     ($path:literal, $none:ident, $all:ident) => {
         #[mcp(path = $path)]
         #[derive(Clone)]
         struct $none;
 
-        impl ServerHandler for $none {
-            async fn complete(
-                &self,
-                _request: CompleteRequestParams,
-                _context: RequestContext<RoleServer>,
-            ) -> Result<CompleteResult, McpError> {
-                Err(McpError::method_not_found::<
-                    rmcp::model::CompleteRequestMethod,
-                >())
-            }
-        }
+        impl ServerHandler for $none {}
 
         #[mcp(path = $path)]
         #[derive(Clone)]

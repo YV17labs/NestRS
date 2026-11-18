@@ -319,13 +319,9 @@ macro_rules! merged_listing {
                     None => merged = Some(more),
                 }
             }
-            match merged {
-                Some(mut merged) => {
-                    merged.next_cursor = None;
-                    Ok(merged)
-                }
-                None => Err(unserved.unwrap_or_else(no_hosts)),
-            }
+            let mut merged = merged.ok_or_else(|| unserved.unwrap_or_else(no_hosts))?;
+            merged.next_cursor = None;
+            Ok(merged)
         }
     };
 }

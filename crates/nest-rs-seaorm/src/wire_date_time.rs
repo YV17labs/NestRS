@@ -6,7 +6,8 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 /// An instant on an `#[expose]` wire row, whatever chrono type its column holds:
 /// one RFC 3339 string on every edge, as chrono's `Serialize` writes it — `Z` at
 /// offset zero, the fraction to the precision held — and on GraphQL the
-/// `DateTime` scalar a write's input already takes.
+/// `DateTime` scalar a write's input already takes. It reads back as sea-orm's
+/// `DateTimeWithTimeZone` through `AsRef` and `Into`.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(transparent)]
 pub struct WireDateTime(DateTime<FixedOffset>);
@@ -14,6 +15,18 @@ pub struct WireDateTime(DateTime<FixedOffset>);
 impl<Tz: TimeZone> From<&DateTime<Tz>> for WireDateTime {
     fn from(at: &DateTime<Tz>) -> Self {
         Self(at.fixed_offset())
+    }
+}
+
+impl From<WireDateTime> for DateTime<FixedOffset> {
+    fn from(at: WireDateTime) -> Self {
+        at.0
+    }
+}
+
+impl AsRef<DateTime<FixedOffset>> for WireDateTime {
+    fn as_ref(&self) -> &DateTime<FixedOffset> {
+        &self.0
     }
 }
 
@@ -120,6 +133,18 @@ mod tests {
             serde_json::to_value(WireDateTime::from(&at)).expect("serializes"),
             "2026-10-08T14:30:59.250+02:00",
         );
+    }
+
+    /// What a wire row holds reads back as sea-orm's `DateTimeWithTimeZone`, with no
+    /// framework type named.
+    #[test]
+    fn an_instant_reads_back_as_the_column_s_own_type() {
+        let at = corpus()[3];
+        let wire = WireDateTime::from(&at);
+        let borrowed: &DateTime<FixedOffset> = wire.as_ref();
+        assert_eq!(*borrowed, at);
+        let owned: DateTime<FixedOffset> = wire.into();
+        assert_eq!(owned, at);
     }
 
     #[test]

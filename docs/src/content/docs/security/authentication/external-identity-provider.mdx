@@ -13,8 +13,9 @@ and your nestrs API must accept the access tokens that sign-in hands out. The
 API holds no key and mints nothing: it reads the JWK Set the provider
 publishes, and `JwtStrategy` verifies every bearer token against it. This page
 does it with better-auth, whose
-[JWT plugin](https://www.better-auth.com/docs/plugins/jwt) publishes one; any
-provider exposing a `jwks_uri` takes the same three variables.
+[JWT plugin](https://www.better-auth.com/docs/plugins/jwt) publishes one, in
+TypeScript or in its Rust port; any provider exposing a `jwks_uri` takes the
+same three variables.
 
 You need a better-auth server reachable over `https`, and the API's
 `AuthnModule` and `JwtStrategy` wired as on [JWT](/security/authentication/jwt/#the-three-line-setup).
@@ -43,6 +44,22 @@ You need a better-auth server reachable over `https`, and the API's
    });
    ```
 
+   The Rust port, [better-auth-rs](https://github.com/better-auth-rs/better-auth-rs),
+   publishes the same set from its `JwtPlugin`, registered beside your other
+   plugins: EdDSA by default, a `kid` in each token, the audience set the same
+   way.
+
+   ```rust title="the better-auth-rs server"
+   use better_auth::plugins::JwtPlugin;
+
+   let jwt = JwtPlugin::new().audience("https://api.example.com".into());
+   ```
+
+   Its routes sit under the path you nest its router at — `/auth` in its quick
+   start — so the set is at `/auth/jwks` there, and step 2's `JWKS_URI` names
+   that path. Steps 2 and 3 read the same for both, checked against its
+   `1.0.0-alpha.5`, an alpha whose Rust API may still move.
+
    Checkpoint: `curl https://auth.example.com/api/auth/jwks` answers a JSON
    document whose `keys` each carry a `kid`, an `alg` and the public key.
 
@@ -59,8 +76,9 @@ You need a better-auth server reachable over `https`, and the API's
 
    `ALGORITHMS` accepts the one algorithm better-auth signs with, so no other
    reaches a key. `EXPLICIT_TYPING=false` because better-auth's plugin stamps no
-   `typ` header on what it mints (`plugins/jwt/sign.ts` in its source), while
-   the framework asks for RFC 9068's `at+jwt` by default. Set no `SECRET`,
+   `typ` header on what it mints (`plugins/jwt/sign.ts` in its source, and the
+   Rust port stamps none either), while the framework asks for RFC 9068's
+   `at+jwt` by default. Set no `SECRET`,
    `PUBLIC_KEY` or `PRIVATE_KEY` beside them: two key sources fail the boot.
 
    Checkpoint: the API boots without asking better-auth for anything — the set

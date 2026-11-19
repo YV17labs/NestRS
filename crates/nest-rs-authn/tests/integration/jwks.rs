@@ -600,6 +600,75 @@ async fn a_token_without_a_kid_needs_exactly_one_fitting_key() {
     ));
 }
 
+/// The variables the external identity provider guide gives for better-auth
+/// verify a token as its JWT plugin mints one — no `typ` member, a `kid`, the
+/// user's fields beside the registered claims — against a set it serves as
+/// `application/json`; explicit typing left on refuses that token.
+#[tokio::test]
+async fn the_variables_the_guide_gives_for_better_auth_verify_a_token_as_it_mints_one() {
+    use nest_rs_config::{Config, ConfigService, Namespaced};
+
+    let issuer = Issuer::serving(Answer {
+        headers: vec![("content-type", "application/json".to_owned())],
+        ..Answer::keys(&[jwk(&ED25519, Algorithm::EdDSA, "ed")])
+    })
+    .await;
+    let mut header = Header::new(Algorithm::EdDSA);
+    header.typ = None;
+    header.kid = Some("ed".into());
+    let issued = get_current_timestamp();
+    let minted = jsonwebtoken::encode(
+        &header,
+        &serde_json::json!({
+            "iat": issued,
+            "id": "ada",
+            "email": "ada@example.test",
+            "emailVerified": false,
+            "name": "Ada",
+            "sub": "ada",
+            "exp": issued + 900,
+            "iss": crate::ISSUER,
+            "aud": crate::AUDIENCE,
+        }),
+        &ED25519.key,
+    )
+    .expect("the token signs");
+    let jwks_uri = issuer.uri();
+    let named = [
+        ("JWKS_URI", jwks_uri.as_str()),
+        ("ISSUER", crate::ISSUER),
+        ("AUDIENCE", crate::AUDIENCE),
+        ("ALGORITHMS", "EdDSA"),
+    ];
+    let reading = |vars: &[(&str, &str)]| {
+        AuthnConfig::from_env(
+            &ConfigService::with_vars(AuthnConfig::NAMESPACE, vars.iter().copied()),
+            AuthnConfig {
+                tls: AUTHORITY.client_tls(),
+                ..AuthnConfig::default()
+            },
+        )
+        .expect("the guide's variables")
+    };
+
+    let untyped = [&named[..], &[("EXPLICIT_TYPING", "false")]].concat();
+    let claims = verifier_with(reading(&untyped))
+        .verify::<Claims>(&minted)
+        .await
+        .expect("the guide's variables verify what better-auth mints");
+    assert_eq!(claims.sub, "ada");
+
+    assert!(
+        matches!(
+            verifier_with(reading(&named))
+                .verify::<Claims>(&minted)
+                .await,
+            Err(AuthError::InvalidToken)
+        ),
+        "explicit typing left on refuses a token stamping no `typ`"
+    );
+}
+
 /// A rotation reaches the verifier through the one fetch a new `kid` earns,
 /// once the floor since the last fetch has passed.
 #[tokio::test]

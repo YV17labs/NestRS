@@ -694,7 +694,7 @@ async fn provider_answering(status_line: &str, retry_after: Option<&str>) -> Pro
 }
 
 /// A `5xx` or `429` is the provider's outage, never the caller's failed sign-in,
-/// on the read and on the exchange; a delay-seconds `Retry-After` travels.
+/// on the read and on the exchange; its `Retry-After` travels, in either form.
 #[tokio::test]
 async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
     let provider = provider_answering("503 Service Unavailable", Some("7")).await;
@@ -717,8 +717,16 @@ async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
     unavailable_sentence_of(&error, &[]);
     assert_eq!(error.retry_after_secs(), None, "no wait is invented");
 
-    let provider =
-        provider_answering("502 Bad Gateway", Some("Wed, 21 Oct 2015 07:28:00 GMT")).await;
+    let provider = Provider::answering(
+        "502 Bad Gateway",
+        &[
+            ("content-type", "text/html".to_owned()),
+            ("retry-after", "Wed, 21 Oct 2015 07:28:30 GMT".to_owned()),
+            ("date", "Wed, 21 Oct 2015 07:28:00 GMT".to_owned()),
+        ],
+        "<html>down for maintenance</html>",
+    )
+    .await;
     let addr = provider.addr;
     let client = client_for(addr);
     let (response, tx) = matched(&client);
@@ -731,8 +739,8 @@ async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
     );
     assert_eq!(
         error.retry_after_secs(),
-        None,
-        "an HTTP-date is not converted against this clock"
+        Some(30),
+        "an HTTP-date is counted from the answer's own `Date`, so no clock skew enters"
     );
 }
 

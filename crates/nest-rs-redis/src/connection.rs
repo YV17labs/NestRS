@@ -31,12 +31,13 @@ use redis::{
 use crate::cluster::{ClusterLink, SlotLink};
 use crate::commands::{Sent, batch_answer, command_answer, sending};
 use crate::error::RedisError;
-use crate::instance::{RedisInstance, instance_phrase, typed_import};
+use crate::instance::RedisInstance;
 use crate::script::{Invocation, RedisScript};
 use crate::sentinel::SentinelLink;
 use crate::standalone::StandaloneLink;
 use crate::url::{NodeAddr, RedisUrl};
 use crate::{RedisConfig, tls};
+use nest_rs_core::__private::{instance_phrase, typed_import};
 
 /// How many times one call loads its script, at most: a `SCRIPT FLUSH` or a
 /// failover landing between a load and the call that follows it would

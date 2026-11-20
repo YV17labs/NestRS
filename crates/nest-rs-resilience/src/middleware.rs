@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use http::Extensions;
 use nest_rs_core::{Instance, Unnamed};
-use nest_rs_reqwest::__private::{Resent, delay_seconds};
-use reqwest::header::{HeaderName, RETRY_AFTER};
+use nest_rs_reqwest::__private::{Resent, Traced, retry_after};
+use reqwest::header::{DATE, HeaderName, HeaderValue, RETRY_AFTER};
 use reqwest::{Request, Response, StatusCode};
 use reqwest_middleware::{Error, Middleware, Next, Result};
 
@@ -29,15 +29,17 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// `Idempotency-Key` — and its body can be sent twice (a streamed body cannot).
 /// What is sent again is a transport failure, a timeout, or a `408`, `429`,
 /// `500`, `502`, `503` or `504`, and each counts as a failure in the breaker;
-/// any other answer is the dependency's answer. A `Retry-After` in seconds on a
-/// `429` or a `503` is waited whole, and one past the policy's backoff ceiling
-/// ends the run with that answer. The last answer is returned as it came; a
+/// any other answer is the dependency's answer. A `429`'s or a `503`'s
+/// `Retry-After` is waited whole — in seconds, or an HTTP-date counted from the
+/// answer's own `Date` — and one past the policy's backoff ceiling ends the run
+/// with that answer. The last answer is returned as it came; a
 /// refusal of the policy's is a [`reqwest_middleware::Error::Middleware`]
 /// holding a `ResilienceError<Infallible>`, whose `503` every edge answers.
 ///
-/// Added before [`ReqwestMiddleware`](nest_rs_reqwest::ReqwestMiddleware), so
-/// each attempt is a client span of its own, numbered by its
-/// `http.request.resend_count`:
+/// It is added before [`ReqwestMiddleware`](nest_rs_reqwest::ReqwestMiddleware),
+/// so each attempt is a client span of its own, numbered by its
+/// `http.request.resend_count`; added after it, it refuses every request,
+/// unsent, saying so:
 ///
 /// ```
 /// use std::sync::Arc;
@@ -79,6 +81,9 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
         extensions: &mut Extensions,
         next: Next<'_>,
     ) -> Result<Response> {
+        if extensions.get::<Traced>().is_some() {
+            return Err(Error::middleware(TracedOutside));
+        }
         let replayed = req.method().is_idempotent() || req.headers().contains_key(IDEMPOTENCY_KEY);
         let mut run = self.policy.begin().await.map_err(refused)?;
         loop {
@@ -105,6 +110,15 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
     }
 }
 
+/// What the middleware answers, sending nothing, when `ReqwestMiddleware` runs
+/// before it: one span would cover every attempt, and none would be numbered.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "ResilienceMiddleware was added after ReqwestMiddleware: add it before, so each attempt is a \
+     client span of its own"
+)]
+struct TracedOutside;
+
 /// A transport failure and the statuses a retry may cure fail; any other answer
 /// is the dependency's.
 fn judged(answer: &Result<Response>) -> Verdict {
@@ -113,10 +127,12 @@ fn judged(answer: &Result<Response>) -> Verdict {
     };
     match response.status() {
         StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => Verdict::Failed {
-            asked: response
-                .headers()
-                .get(RETRY_AFTER)
-                .and_then(|asked| delay_seconds(asked.as_bytes())),
+            asked: response.headers().get(RETRY_AFTER).and_then(|asked| {
+                retry_after(
+                    asked.as_bytes(),
+                    response.headers().get(DATE).map(HeaderValue::as_bytes),
+                )
+            }),
         },
         StatusCode::REQUEST_TIMEOUT
         | StatusCode::INTERNAL_SERVER_ERROR

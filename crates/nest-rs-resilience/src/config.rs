@@ -107,7 +107,8 @@ const CONCURRENCY_WAIT: DurationBounds = DurationBounds::millis(
 #[derive(Clone, Debug)]
 pub struct ResilienceConfig {
     /// How long one attempt waits for its call's answer before giving it up,
-    /// `TIMEOUT_MS`, from 1 ms to ten minutes; defaults to 5 seconds.
+    /// `TIMEOUT_MS`, from 1 ms to ten minutes; defaults to 5 seconds. The
+    /// unit's deadline, when it comes first, ends the attempt sooner.
     #[config(bounds = TIMEOUT)]
     pub timeout: Duration,
     /// How many times an idempotent call is attempted again after its attempt

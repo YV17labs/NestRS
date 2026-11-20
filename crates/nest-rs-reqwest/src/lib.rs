@@ -13,6 +13,7 @@
 mod delay_seconds;
 #[cfg(feature = "middleware")]
 mod middleware;
+mod retry_after;
 mod traced;
 
 #[cfg(feature = "middleware")]
@@ -22,5 +23,6 @@ pub use middleware::ReqwestMiddleware;
 #[doc(hidden)]
 pub mod __private {
     pub use crate::delay_seconds::delay_seconds;
-    pub use crate::traced::{Resent, traced};
+    pub use crate::retry_after::retry_after;
+    pub use crate::traced::{Resent, Traced, traced};
 }

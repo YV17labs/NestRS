@@ -2,7 +2,6 @@
 //! the call's own error, or the policy's refusal, which every edge answers
 //! `503` with the wait it knows.
 
-use std::error::Error;
 use std::time::Duration;
 
 use nest_rs_core::{Problem, ToProblem, code};
@@ -19,14 +18,28 @@ const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 /// on, and a queue job failing with it waits at least that long before its
 /// retry.
 ///
+/// It answers an edge when the call's error does, through [`ToProblem`], so the
+/// call's error says what a client of its failure is told — nothing, for a
+/// failure no client should read:
+///
 /// ```
 /// use std::time::Duration;
 ///
-/// use nest_rs_core::{ToProblem, code};
+/// use nest_rs_core::{Problem, ToProblem, code};
 /// use nest_rs_resilience::{ResilienceError, ResiliencePolicy};
 ///
+/// #[derive(Debug, thiserror::Error)]
+/// #[error("the payment provider failed")]
+/// struct ProviderDown;
+///
+/// impl ToProblem for ProviderDown {
+///     fn to_problem(&self) -> Option<Problem> {
+///         None
+///     }
+/// }
+///
 /// # async fn charge(policy: &ResiliencePolicy) {
-/// match policy.run(|_cancel| async { Ok::<_, std::io::Error>("charged") }).await {
+/// match policy.run(|_cancel| async { Ok::<_, ProviderDown>("charged") }).await {
 ///     Ok(receipt) => assert_eq!(receipt, "charged"),
 ///     Err(ResilienceError::Open { retry_after, .. }) => {
 ///         assert!(retry_after > Duration::ZERO);
@@ -42,14 +55,18 @@ const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 #[non_exhaustive]
 pub enum ResilienceError<E> {
     /// The call answered its own error on its last attempt. Every edge answers
-    /// it by the problem its chain carries, opaquely when it carries none.
+    /// it as the error's own [`to_problem`](ToProblem::to_problem) says, else
+    /// by a problem its chain carries, opaquely when neither does.
     #[error("the call failed")]
     Failed(#[source] E),
-    /// The last attempt did not answer within the policy's timeout.
+    /// The last attempt did not answer within the policy's timeout, or the
+    /// unit's deadline came first.
     #[error("the call did not answer within its timeout")]
     #[non_exhaustive]
     TimedOut {
-        /// The timeout the attempt was given up at.
+        /// What the attempt was given up at: the policy's timeout, or what was
+        /// left of the unit's deadline when that was shorter — none, for a
+        /// call the unit had no time left to send.
         timeout: Duration,
         #[doc(hidden)]
         #[source]
@@ -107,11 +124,16 @@ impl<E> From<Refusal> for ResilienceError<E> {
     }
 }
 
-/// The problem the error's chain carries: a refusal's own, or the one the
-/// call's error holds.
-impl<E: Error + Send + Sync + 'static> ToProblem for ResilienceError<E> {
+impl<E: ToProblem> ToProblem for ResilienceError<E> {
     fn to_problem(&self) -> Option<Problem> {
-        nest_rs_core::__private::find_in_chain::<Problem>(self).cloned()
+        let carried = match self {
+            Self::Failed(error) => match error.to_problem() {
+                Some(said) => return Some(said),
+                None => nest_rs_core::__private::find_in_chain::<Problem>(error),
+            },
+            refused => nest_rs_core::__private::find_in_chain::<Problem>(refused),
+        };
+        carried.cloned()
     }
 }
 
@@ -125,9 +147,31 @@ mod tests {
     #[error("the upstream answered 502")]
     struct Upstream;
 
+    impl ToProblem for Upstream {
+        fn to_problem(&self) -> Option<Problem> {
+            None
+        }
+    }
+
     #[derive(Debug, thiserror::Error)]
     #[error("the upstream asked to slow down")]
     struct Passed(#[source] Problem);
+
+    impl ToProblem for Passed {
+        fn to_problem(&self) -> Option<Problem> {
+            None
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("no parcel by that number")]
+    struct NoParcel;
+
+    impl ToProblem for NoParcel {
+        fn to_problem(&self) -> Option<Problem> {
+            Some(Problem::new(404, code::NOT_FOUND))
+        }
+    }
 
     #[test]
     fn every_refusal_is_a_503_and_an_open_breaker_says_its_wait_rounded_up() {
@@ -168,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_call_answers_the_problem_its_own_chain_carries_and_nothing_else() {
+    fn a_failed_call_answers_the_problem_its_chain_carries_and_else_nothing() {
         let opaque = ResilienceError::Failed(Upstream);
         assert_eq!(opaque.to_problem(), None, "the edge answers it opaquely");
         assert_eq!(
@@ -179,5 +223,13 @@ mod tests {
         let asked = Problem::new(429, code::RATE_LIMITED).with_retry_after(7);
         let passed = ResilienceError::Failed(Passed(asked.clone()));
         assert_eq!(passed.to_problem(), Some(asked));
+    }
+
+    /// The call's error is read as itself before its chain: a domain error's
+    /// own problem is never lost under the policy.
+    #[test]
+    fn a_failed_call_answers_the_problem_its_error_says() {
+        let said = ResilienceError::Failed(NoParcel).to_problem();
+        assert_eq!(said, Some(Problem::new(404, code::NOT_FOUND)));
     }
 }

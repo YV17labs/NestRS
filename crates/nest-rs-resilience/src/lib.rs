@@ -9,8 +9,9 @@
 //! (`<PREFIX>_RESILIENCE__<INSTANCE>__*`, [`ResilienceConfig`]), and run each
 //! call through it: [`ResiliencePolicy::run`] once,
 //! [`ResiliencePolicy::run_idempotent`] again after a failure, up to its
-//! retries. Every attempt is bounded by the policy's timeout and counted in
-//! its circuit breaker, and the bulkhead bounds how many run at once. A
+//! retries. Every attempt is bounded by the policy's timeout and the unit's
+//! deadline, whichever ends first, and counted in its circuit breaker, and the
+//! bulkhead bounds how many run at once. A
 //! refusal — a timeout, an open breaker, a full bulkhead — is a
 //! [`ResilienceError`] every edge answers `503`, an open breaker's with the
 //! `Retry-After` it knows. Under the `reqwest` feature,

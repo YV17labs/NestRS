@@ -82,6 +82,10 @@ nextest prints each test's time: compare before and after.
   a driver of that port owes, against the driver's backend through the seam
   in `nest_rs_testing::<subject>`; named for the port (`queue_kit!`), never
   a backend.
+- **`HttpsPeer`** (`tls`) — the server an HTTP client under test calls: a
+  loopback HTTPS peer presenting a `TestAuthority` certificate, answering a
+  script and keeping each request's head; a suite reaches for it before
+  writing an accept loop of its own.
 - **`TestAuthority`** (`tls` feature, on under the umbrella's `testing`) —
   the certificates a TLS double presents and a client trusts, issued in
   process. A double in front of a service ends

@@ -14,6 +14,12 @@ use reqwest::{Request, Response};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Resent(pub u32);
 
+/// What [`ReqwestMiddleware`](crate::ReqwestMiddleware) leaves in a request's
+/// extensions for the middlewares after it: the request is already traced as
+/// one client operation, so one sending it again inside would number nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Traced;
+
 /// `request`, sent through `send` carrying the unit's trace, and recorded once
 /// it answered, ran out of time as `timed_out` reads its error, or failed — as
 /// the `resent`th sending again of a request that failed, `0` for a first one.

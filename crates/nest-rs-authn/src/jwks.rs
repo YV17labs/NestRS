@@ -29,7 +29,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use jsonwebtoken::DecodingKey;
-use reqwest::header::{ACCEPT, AGE, CACHE_CONTROL, HeaderMap, HeaderName, RETRY_AFTER};
+use reqwest::header::{
+    ACCEPT, AGE, CACHE_CONTROL, DATE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
+};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -114,7 +116,7 @@ struct Held {
 struct Failure {
     /// What failed and why, shared by every token it answers.
     cause: OpaqueCause,
-    /// The issuer's own `Retry-After`, when it gave one in delay-seconds.
+    /// The issuer's own `Retry-After`, in either form it gives one.
     retry_after: Option<Duration>,
 }
 
@@ -302,7 +304,7 @@ impl Inner {
         let status = response.status();
         if !status.is_success() {
             let retry_after = (status.as_u16() == 429 || status.is_server_error())
-                .then(|| delay_seconds(response.headers(), RETRY_AFTER))
+                .then(|| asked_wait(response.headers()))
                 .flatten();
             let redirect = if status.is_redirection() {
                 " — a redirect is not followed: set the URI it points to"
@@ -578,7 +580,18 @@ fn max_age(headers: &HeaderMap) -> Option<Duration> {
     stated
 }
 
-/// A `delay-seconds` header (`Retry-After`, `Age`).
+/// The wait a `Retry-After` asks, an HTTP-date one counted from the answer's own
+/// `Date`.
+fn asked_wait(headers: &HeaderMap) -> Option<Duration> {
+    headers.get(RETRY_AFTER).and_then(|asked| {
+        nest_rs_reqwest::__private::retry_after(
+            asked.as_bytes(),
+            headers.get(DATE).map(HeaderValue::as_bytes),
+        )
+    })
+}
+
+/// A `delay-seconds` header (`Age`).
 fn delay_seconds(headers: &HeaderMap, name: HeaderName) -> Option<Duration> {
     headers
         .get(name)
@@ -657,10 +670,15 @@ mod tests {
     }
 
     #[test]
-    fn a_retry_after_is_read_in_delay_seconds_only() {
-        let read = |value| delay_seconds(&headers(&[(RETRY_AFTER, value)]), RETRY_AFTER);
+    fn a_retry_after_is_read_in_either_form_a_date_against_the_answers_own() {
+        let read = |value| asked_wait(&headers(&[(RETRY_AFTER, value)]));
         assert_eq!(read("120"), Some(Duration::from_secs(120)));
-        assert_eq!(read("Wed, 21 Oct 2015 07:28:00 GMT"), None);
+        let dated = headers(&[
+            (RETRY_AFTER, "Wed, 21 Oct 2015 07:28:30 GMT"),
+            (DATE, "Wed, 21 Oct 2015 07:28:00 GMT"),
+        ]);
+        assert_eq!(asked_wait(&dated), Some(Duration::from_secs(30)));
+        assert_eq!(read("soon"), None);
     }
 
     #[test]

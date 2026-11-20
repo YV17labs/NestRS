@@ -114,7 +114,7 @@ to what NestRS already ships:
 | `@nestjs/authorization` | `nest-rs-authz`: abilities, row-level filtering, per-field masking, on every edge |
 | `@nestjs/outbox` | the queue's transactional push: a push inside a unit commits with it, and a relay files it (`transactional-outbox.md`) |
 | `@nestjs/http-client` | the app's own `reqwest` client with `nest_rs::reqwest::ReqwestMiddleware` (trace context and client spans), and `nest_rs::resilience::ResilienceMiddleware` for its timeouts and retries |
-| `@nestjs/resilience` | `nest-rs-resilience`, for 7.1 (`changelog/7.1.md`): a named policy per dependency — a timeout per attempt, retries when the caller declares the call idempotent, a count-window circuit breaker, a bulkhead — every refusal a `503` with the `Retry-After` it knows, its state per process (`.claude/decisions/resilience-policy.md`) |
+| `@nestjs/resilience` | `nest-rs-resilience`, for 7.1 (`changelog/7.1.md`): a named policy per dependency — a timeout per attempt within the unit's deadline, retries when the caller declares the call idempotent, a count-window circuit breaker, a bulkhead — every refusal a `503` with the `Retry-After` it knows, its state per process (`.claude/decisions/resilience-policy.md`) |
 
 ## 4. Not planned, and why
 

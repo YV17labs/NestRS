@@ -65,8 +65,10 @@ pub(crate) struct Breaker {
     /// own bound, an attempt's timeout.
     probe_wait: Duration,
     held: Mutex<Held>,
+    /// Made at the first transition, on the meter installed by then: a policy
+    /// built before `OpenTelemetry::init()` still counts.
     #[cfg(feature = "opentelemetry")]
-    transitions: opentelemetry::metrics::Counter<u64>,
+    transitions: std::sync::OnceLock<opentelemetry::metrics::Counter<u64>>,
 }
 
 /// One admitted attempt, settled once with its outcome. Dropped unsettled —
@@ -115,11 +117,7 @@ impl Breaker {
                 failed: 0,
             }),
             #[cfg(feature = "opentelemetry")]
-            transitions: opentelemetry::global::meter("nestrs")
-                .u64_counter(TRANSITIONS)
-                .with_unit("{transition}")
-                .with_description("The circuit breakers' transitions, by the state each entered.")
-                .build(),
+            transitions: std::sync::OnceLock::new(),
         }
     }
 
@@ -230,13 +228,23 @@ impl Breaker {
             "circuit breaker changed state",
         );
         #[cfg(feature = "opentelemetry")]
-        self.transitions.add(
-            1,
-            &[
-                opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, self.instance),
-                opentelemetry::KeyValue::new(STATE_ATTRIBUTE, phase.as_str()),
-            ],
-        );
+        self.transitions
+            .get_or_init(|| {
+                opentelemetry::global::meter("nestrs")
+                    .u64_counter(TRANSITIONS)
+                    .with_unit("{transition}")
+                    .with_description(
+                        "The circuit breakers' transitions, by the state each entered.",
+                    )
+                    .build()
+            })
+            .add(
+                1,
+                &[
+                    opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, self.instance),
+                    opentelemetry::KeyValue::new(STATE_ATTRIBUTE, phase.as_str()),
+                ],
+            );
     }
 }
 
@@ -373,7 +381,8 @@ mod tests {
     }
 
     /// Each transition adds one to the counter, by the instance and the state it
-    /// entered, on the meter `OpenTelemetry::init()` installs.
+    /// entered, on the meter `OpenTelemetry::init()` installs — after the
+    /// breaker was built, too.
     #[cfg(feature = "opentelemetry")]
     #[tokio::test(start_paused = true)]
     async fn each_transition_is_counted_by_its_instance_and_the_state_entered() {
@@ -382,13 +391,13 @@ mod tests {
             InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
         };
 
+        let breaker = breaker(1, 1);
         let exporter = InMemoryMetricExporter::default();
         let provider = SdkMeterProvider::builder()
             .with_reader(PeriodicReader::builder(exporter.clone()).build())
             .build();
         opentelemetry::global::set_meter_provider(provider.clone());
 
-        let breaker = breaker(1, 1);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
         let Ok(probe) = breaker.admit() else {

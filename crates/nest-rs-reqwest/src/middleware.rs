@@ -48,6 +48,7 @@ impl Middleware for ReqwestMiddleware {
             .get::<crate::traced::Resent>()
             .copied()
             .unwrap_or_default();
+        extensions.insert(crate::traced::Traced);
         crate::traced::traced(
             req,
             resent,

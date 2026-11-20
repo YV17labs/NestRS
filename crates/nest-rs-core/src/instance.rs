@@ -144,9 +144,42 @@ impl InstanceDeclaration {
 
 inventory::collect!(InstanceDeclaration);
 
+/// `module` as an app imports it for the instance `I`: its bare path for the
+/// default instance, typed with the marker for a named one —
+/// `nest_rs::redis::RedisModule::<Cache>` — the import a remedy names.
+pub fn typed_import<I: Instance>(module: &str) -> String {
+    match I::NAME {
+        "" => module.to_owned(),
+        _ => format!("{module}::<{}>", crate::type_name::short_type_name::<I>()),
+    }
+}
+
+/// The instance `I` as a remedy's sentence names it: the default one, or the
+/// one its marker's name reads.
+pub fn instance_phrase<I: Instance>() -> std::borrow::Cow<'static, str> {
+    match I::NAME {
+        "" => std::borrow::Cow::Borrowed("the default instance"),
+        name => std::borrow::Cow::Owned(format!("the `{name}` instance")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remedy_names_the_default_instance_s_import_bare_and_a_named_one_s_typed() {
+        assert_eq!(
+            typed_import::<Unnamed>("nest_rs::redis::RedisModule"),
+            "nest_rs::redis::RedisModule"
+        );
+        assert_eq!(instance_phrase::<Unnamed>(), "the default instance");
+        assert_eq!(
+            typed_import::<Cache>("nest_rs::redis::RedisModule"),
+            "nest_rs::redis::RedisModule::<Cache>"
+        );
+        assert_eq!(instance_phrase::<Cache>(), "the `cache` instance");
+    }
 
     struct Cache;
 

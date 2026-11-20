@@ -72,7 +72,7 @@ tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # The composition witnesses boot the documented wiring; the middleware's suite
 # sends real requests to a TLS double whose certificate a `TestAuthority`
 # issued. Path-only intra-workspace dev edges, per the manifest rule.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls", "ws"] }
 # Self dev-dependency: the suite runs with the middleware and the transitions'
 # counter on.
 nest-rs-resilience = { path = ".", features = ["reqwest", "opentelemetry"] }
@@ -81,6 +81,16 @@ nest-rs-resilience = { path = ".", features = ["reqwest", "opentelemetry"] }
 nest-rs-http = { path = "../nest-rs-http" }
 nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-pipes = { path = "../nest-rs-pipes" }
+# The refusal's `503` on every edge and the queue's honouring its wait: a
+# resolver, a gateway, an `#[mcp]` host and a processor, each answering it as an
+# app's does. A crate defining a `#[resolver]` names `async_graphql::` itself.
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+nest-rs-ws = { path = "../nest-rs-ws" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+nest-rs-queue = { path = "../nest-rs-queue" }
+async-graphql.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 nest-rs-reqwest = { path = "../nest-rs-reqwest" }
 http.workspace = true
 reqwest.workspace = true

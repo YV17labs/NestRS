@@ -13,6 +13,7 @@
 mod error;
 mod middleware;
 mod module;
+mod policy;
 
 use std::sync::Arc;
 

@@ -100,8 +100,8 @@ an OAuth answer is read to
 
 A provider that answers it cannot answer now — a `5xx`, or `429` — is
 unavailable the same way, on the exchange as on a read, and its own
-`Retry-After` reaches the caller when it gave one in seconds; an HTTP-date
-is not converted against this server's clock. A provider that answers and
+`Retry-After` reaches the caller, in seconds or as an HTTP-date counted from
+the answer's own `Date`, so no clock skew between the two servers enters it. A provider that answers and
 refuses — a §5.2 error on the exchange, any other status on a read — is
 the caller's failure, `AuthError::Failed`, a `401`.
 

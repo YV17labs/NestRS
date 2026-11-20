@@ -293,6 +293,7 @@ impl Inner {
             .map_err(|error| self.call_failed(error))?;
         let mut response = nest_rs_reqwest::__private::traced(
             request,
+            nest_rs_reqwest::__private::Resent::default(),
             |request| self.client.execute(request),
             reqwest::Error::is_timeout,
         )

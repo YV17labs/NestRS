@@ -125,6 +125,16 @@ unit's `BEGIN`, which waits for its connection, carries that wait in
 development in the conventions' 1.42 schema, the one the export declares. A
 Redis connection is one multiplexed socket, not a pool, and reports none.
 
+## Circuit breakers
+
+A [resilience policy](/fundamentals/resilience/)'s breaker adds one to
+`nestrs.resilience.breaker.transitions` (`{transition}`) each time it changes
+state, by `nestrs.resilience.instance` — the policy's instance, empty for the
+default one — and `nestrs.resilience.breaker.state`, the state it entered:
+`open`, `half_open` or `closed`. An alert on `open` is an alert on a dependency
+failing. No convention names a circuit breaker, so the name and its attributes
+are NestRS's own, and API: they change only in a major.
+
 ## A first counter
 
 Ask `Metrics` for the instrument by name, then record on it. The first call

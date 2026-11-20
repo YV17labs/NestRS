@@ -379,6 +379,7 @@ async fn sent(
 ) -> Result<reqwest::Response, reqwest::Error> {
     nest_rs_reqwest::__private::traced(
         request,
+        nest_rs_reqwest::__private::Resent::default(),
         |request| http.execute(request),
         reqwest::Error::is_timeout,
     )

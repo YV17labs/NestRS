@@ -10,7 +10,8 @@ use reqwest_middleware::{Error, Middleware, Next, Result};
 /// records each as the client operation the HTTP conventions name: a `client`
 /// span and a point in `http.client.request.duration`, by its method, its
 /// server, its status and the HTTP version it was answered over, never its path
-/// or its query, where a webhook's secret sits.
+/// or its query, where a webhook's secret sits. A request a resilience policy
+/// added before it sends again carries `http.request.resend_count` on its span.
 ///
 /// Added once, where the client is built:
 ///
@@ -43,8 +44,13 @@ impl Middleware for ReqwestMiddleware {
         extensions: &mut http::Extensions,
         next: Next<'_>,
     ) -> Result<Response> {
+        let resent = extensions
+            .get::<crate::traced::Resent>()
+            .copied()
+            .unwrap_or_default();
         crate::traced::traced(
             req,
+            resent,
             |req| next.run(req, extensions),
             |error| matches!(error, Error::Reqwest(error) if error.is_timeout()),
         )

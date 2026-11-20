@@ -20,5 +20,5 @@ pub use middleware::ReqwestMiddleware;
 /// Tier 2: what the framework's own reqwest clients send through. Not API.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::traced::traced;
+    pub use crate::traced::{Resent, traced};
 }

@@ -133,9 +133,9 @@ sqlx = { version = "0.9", default-features = false, features = ["tls-rustls-aws-
 # reqwest client the framework opens is private to the crate whose protocol
 # needs it.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }  # public
-# Public in `nest-rs-reqwest` alone: `ReqwestMiddleware` implements its
-# `Middleware`, the market's seam for a layer around a reqwest client, which
-# reqwest itself has none of.
+# Public in `nest-rs-reqwest` and `nest-rs-resilience`: `ReqwestMiddleware` and
+# `ResilienceMiddleware` implement its `Middleware`, the market's seam for a
+# layer around a reqwest client, which reqwest itself has none of.
 reqwest-middleware = { version = "0.5", default-features = false }  # public
 
 trybuild = "1.0"
@@ -238,6 +238,7 @@ nest-rs-oauth-resource = { version = "=7.0.0", path = "crates/nest-rs-oauth-reso
 nest-rs-social = { version = "=7.0.0", path = "crates/nest-rs-social" }
 nest-rs-opentelemetry = { version = "=7.0.0", path = "crates/nest-rs-opentelemetry" }
 nest-rs-reqwest = { version = "=7.0.0", path = "crates/nest-rs-reqwest", default-features = false }
+nest-rs-resilience = { version = "=7.0.0", path = "crates/nest-rs-resilience" }
 nest-rs-testing = { version = "=7.0.0", path = "crates/nest-rs-testing" }
 nest-rs-storage = { version = "=7.0.0", path = "crates/nest-rs-storage" }
 nest-rs-static-files = { version = "=7.0.0", path = "crates/nest-rs-static-files" }

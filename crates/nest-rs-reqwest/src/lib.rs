@@ -6,16 +6,22 @@
 //! The framework opens no outbound HTTP surface of its own for an app: the app
 //! builds and injects its reqwest client, in reqwest's own words. The
 //! `middleware` feature, on by default, brings [`ReqwestMiddleware`]; the
-//! framework's own reqwest clients take this crate without it.
+//! framework's own reqwest clients take this crate without it. The
+//! `resilience` feature brings `ResilienceMiddleware`, which sends each request
+//! through a `nest-rs-resilience` policy.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 #[cfg(feature = "middleware")]
 mod middleware;
+#[cfg(feature = "resilience")]
+mod resilience;
 mod traced;
 
 #[cfg(feature = "middleware")]
 pub use middleware::ReqwestMiddleware;
+#[cfg(feature = "resilience")]
+pub use resilience::ResilienceMiddleware;
 
 /// Tier 2: what the framework's own reqwest clients send through. Not API.
 #[doc(hidden)]

@@ -22,6 +22,9 @@ default = ["middleware"]
 # `ReqwestMiddleware`, for an app's own client; the framework's own reqwest
 # clients take the crate without it.
 middleware = ["dep:reqwest-middleware", "dep:async-trait", "dep:http"]
+# `ResilienceMiddleware`: an app's client sent through a resilience policy —
+# retried only where the request is idempotent.
+resilience = ["middleware", "dep:nest-rs-resilience"]
 
 [dependencies]
 # `HttpClientRequest`: the trace a request carries and the client operation it
@@ -36,6 +39,8 @@ reqwest-middleware = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 # The `Extensions` `Middleware::handle` takes.
 http = { workspace = true, optional = true }
+# The policy `ResilienceMiddleware` sends through.
+nest-rs-resilience = { workspace = true, optional = true }
 
 # The suite sends real requests to a TLS double whose certificate a
 # `TestAuthority` issued. Path-only intra-workspace dev edges, per the

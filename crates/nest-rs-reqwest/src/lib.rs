@@ -10,6 +10,7 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
+mod delay_seconds;
 #[cfg(feature = "middleware")]
 mod middleware;
 mod traced;
@@ -20,5 +21,6 @@ pub use middleware::ReqwestMiddleware;
 /// Tier 2: what the framework's own reqwest clients send through. Not API.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::delay_seconds::delay_seconds;
     pub use crate::traced::{Resent, traced};
 }

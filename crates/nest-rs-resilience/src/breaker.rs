@@ -8,48 +8,37 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use tokio::time::Instant;
 
-use crate::TARGET;
+use crate::{TARGET, millis};
 
 /// The counter each transition adds one to, by the state it entered.
 #[cfg(feature = "opentelemetry")]
 pub(crate) const TRANSITIONS: &str = "nestrs.resilience.breaker.transitions";
 
-/// The attribute naming the policy's instance on [`TRANSITIONS`].
 #[cfg(feature = "opentelemetry")]
 pub(crate) const INSTANCE_ATTRIBUTE: &str = "nestrs.resilience.instance";
 
-/// The attribute naming the state a transition entered on [`TRANSITIONS`].
 #[cfg(feature = "opentelemetry")]
 pub(crate) const STATE_ATTRIBUTE: &str = "nestrs.resilience.breaker.state";
 
-/// A breaker's state, as its lines and its counter say it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum State {
-    /// Every call passes, and its outcome counts in the window.
+enum Phase {
     Closed,
-    /// Every call is refused until the open time has passed.
-    Open,
+    Open {
+        until: Instant,
+    },
     /// One call probes the dependency; every other is refused until it answers.
     HalfOpen,
 }
 
-impl State {
+impl Phase {
     /// The word a line and the counter say.
-    pub(crate) const fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Closed => "closed",
-            Self::Open => "open",
+            Self::Open { .. } => "open",
             Self::HalfOpen => "half_open",
         }
     }
-}
-
-/// Where the breaker stands.
-#[derive(Clone, Copy, Debug)]
-enum Phase {
-    Closed,
-    Open { until: Instant },
-    Probing,
 }
 
 /// The phase and the window of latest outcomes, `true` for a failure.
@@ -67,7 +56,6 @@ impl Held {
     }
 }
 
-/// A count-window circuit breaker.
 pub(crate) struct Breaker {
     instance: &'static str,
     window: usize,
@@ -81,35 +69,24 @@ pub(crate) struct Breaker {
     transitions: opentelemetry::metrics::Counter<u64>,
 }
 
-/// Whether the breaker lets a call through.
-pub(crate) enum Admission<'b> {
-    /// The call may run; its outcome is settled through the pass.
-    Admitted(Pass<'b>),
-    /// The call is refused; the breaker lets one through again after
-    /// `retry_after` at the earliest.
-    Refused { retry_after: Duration },
-}
-
 /// One admitted attempt, settled once with its outcome. Dropped unsettled —
 /// the caller gave the call up — it counts for nothing, and a probe hands its
 /// turn to the next call.
 pub(crate) struct Pass<'b> {
     breaker: &'b Breaker,
     probe: bool,
-    settled: bool,
 }
 
 impl Pass<'_> {
-    /// The attempt succeeded, or `failed`.
     pub(crate) fn settle(mut self, failed: bool) {
-        self.settled = true;
-        self.breaker.record(self.probe, failed);
+        let probe = std::mem::take(&mut self.probe);
+        self.breaker.record(probe, failed);
     }
 }
 
 impl Drop for Pass<'_> {
     fn drop(&mut self) {
-        if !self.settled && self.probe {
+        if self.probe {
             self.breaker.abandon_probe();
         }
     }
@@ -146,57 +123,44 @@ impl Breaker {
         }
     }
 
-    /// Let a call through, or refuse it.
-    pub(crate) fn admit(&self) -> Admission<'_> {
+    /// Let a call through, or refuse it for the wait the breaker knows.
+    pub(crate) fn admit(&self) -> Result<Pass<'_>, Duration> {
         let mut held = self.held.lock();
-        match held.phase {
-            Phase::Closed => Admission::Admitted(self.pass(false)),
-            Phase::Probing => Admission::Refused {
-                retry_after: self.probe_wait,
-            },
-            Phase::Open { until } => {
-                let now = Instant::now();
-                if now < until {
-                    return Admission::Refused {
-                        retry_after: until - now,
-                    };
-                }
-                held.phase = Phase::Probing;
-                drop(held);
-                self.entered(State::HalfOpen, None);
-                Admission::Admitted(self.pass(true))
-            }
+        if let Some(wait) = self.refused_for(held.phase) {
+            return Err(wait);
         }
+        let probe = matches!(held.phase, Phase::Open { .. });
+        if probe {
+            held.phase = Phase::HalfOpen;
+            drop(held);
+            self.entered(Phase::HalfOpen, None);
+        }
+        Ok(Pass {
+            breaker: self,
+            probe,
+        })
     }
 
-    /// How long a call is refused for now, leaving the breaker as it stands:
-    /// `None` when the next call would pass, or probe.
+    /// How long a call is refused for now, leaving the breaker as it stands.
     pub(crate) fn refusing(&self) -> Option<Duration> {
-        match self.held.lock().phase {
+        self.refused_for(self.held.lock().phase)
+    }
+
+    /// The wait a call meeting `phase` is refused for: `None` when it would
+    /// pass, or probe.
+    fn refused_for(&self, phase: Phase) -> Option<Duration> {
+        match phase {
             Phase::Closed => None,
-            Phase::Probing => Some(self.probe_wait),
+            Phase::HalfOpen => Some(self.probe_wait),
             Phase::Open { until } => until
                 .checked_duration_since(Instant::now())
                 .filter(|left| !left.is_zero()),
         }
     }
 
-    /// Where the breaker stands now.
     #[cfg(test)]
-    pub(crate) fn state(&self) -> State {
-        match self.held.lock().phase {
-            Phase::Closed => State::Closed,
-            Phase::Open { .. } => State::Open,
-            Phase::Probing => State::HalfOpen,
-        }
-    }
-
-    fn pass(&self, probe: bool) -> Pass<'_> {
-        Pass {
-            breaker: self,
-            probe,
-            settled: false,
-        }
+    fn state(&self) -> &'static str {
+        self.held.lock().phase.as_str()
     }
 
     /// Count an attempt's outcome: a probe closes or reopens the breaker, any
@@ -207,44 +171,43 @@ impl Breaker {
         let entered = if probe {
             if failed {
                 held.phase = self.opened();
-                Some((State::Open, 1))
+                Some((held.phase, Some(1)))
             } else {
                 held.phase = Phase::Closed;
                 held.forget();
-                Some((State::Closed, 0))
+                Some((Phase::Closed, None))
             }
-        } else if matches!(held.phase, Phase::Closed) {
-            held.outcomes.push_back(failed);
-            held.failed += usize::from(failed);
-            if held.outcomes.len() > self.window && held.outcomes.pop_front() == Some(true) {
+        } else if held.phase == Phase::Closed {
+            if held.outcomes.len() == self.window && held.outcomes.pop_front() == Some(true) {
                 held.failed -= 1;
             }
-            if held.failed >= self.failures {
+            held.outcomes.push_back(failed);
+            held.failed += usize::from(failed);
+            (held.failed >= self.failures).then(|| {
                 let counted = held.failed;
                 held.phase = self.opened();
                 held.forget();
-                Some((State::Open, counted))
-            } else {
-                None
-            }
+                (held.phase, Some(counted))
+            })
         } else {
             None
         };
         drop(held);
-        if let Some((state, failed)) = entered {
-            self.entered(state, Some(failed));
+        if let Some((phase, failed)) = entered {
+            self.entered(phase, failed);
         }
     }
 
     /// A probe given up before it answered: the next call probes instead.
     fn abandon_probe(&self) {
         let mut held = self.held.lock();
-        if matches!(held.phase, Phase::Probing) {
-            held.phase = Phase::Open {
+        if held.phase == Phase::HalfOpen {
+            let reopened = Phase::Open {
                 until: Instant::now(),
             };
+            held.phase = reopened;
             drop(held);
-            self.entered(State::Open, None);
+            self.entered(reopened, None);
         }
     }
 
@@ -254,32 +217,24 @@ impl Breaker {
         }
     }
 
-    /// Say the transition into `state`, and count it; `failed` is how many
-    /// failures in the window decided it.
-    fn entered(&self, state: State, failed: Option<usize>) {
-        match (state, failed) {
-            (State::Open, Some(failed)) => tracing::warn!(
-                target: TARGET,
-                instance = self.instance,
-                state = state.as_str(),
-                failed,
-                window = self.window,
-                open_ms = u64::try_from(self.open_for.as_millis()).unwrap_or(u64::MAX),
-                "circuit breaker changed state",
-            ),
-            _ => tracing::warn!(
-                target: TARGET,
-                instance = self.instance,
-                state = state.as_str(),
-                "circuit breaker changed state",
-            ),
-        }
+    /// Say the transition into `phase`, and count it; `failed` is how many
+    /// failures in the window opened it, when failures did.
+    fn entered(&self, phase: Phase, failed: Option<usize>) {
+        tracing::warn!(
+            target: TARGET,
+            instance = self.instance,
+            state = phase.as_str(),
+            failed,
+            window = failed.map(|_| self.window),
+            open_ms = failed.map(|_| millis(self.open_for)),
+            "circuit breaker changed state",
+        );
         #[cfg(feature = "opentelemetry")]
         self.transitions.add(
             1,
             &[
                 opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, self.instance),
-                opentelemetry::KeyValue::new(STATE_ATTRIBUTE, state.as_str()),
+                opentelemetry::KeyValue::new(STATE_ATTRIBUTE, phase.as_str()),
             ],
         );
     }
@@ -297,16 +252,16 @@ mod tests {
     }
 
     fn attempt(breaker: &Breaker, failed: bool) {
-        match breaker.admit() {
-            Admission::Admitted(pass) => pass.settle(failed),
-            Admission::Refused { .. } => panic!("a closed breaker admits"),
-        }
+        breaker
+            .admit()
+            .expect("a closed breaker admits")
+            .settle(failed);
     }
 
     fn refused_for(breaker: &Breaker) -> Duration {
         match breaker.admit() {
-            Admission::Refused { retry_after } => retry_after,
-            Admission::Admitted(_) => panic!("the breaker refuses"),
+            Err(retry_after) => retry_after,
+            Ok(_) => panic!("the breaker refuses"),
         }
     }
 
@@ -315,9 +270,9 @@ mod tests {
         let breaker = breaker(4, 2);
         attempt(&breaker, true);
         attempt(&breaker, false);
-        assert_eq!(breaker.state(), State::Closed, "one failure of two");
+        assert_eq!(breaker.state(), "closed", "one failure of two");
         attempt(&breaker, true);
-        assert_eq!(breaker.state(), State::Open);
+        assert_eq!(breaker.state(), "open");
         assert_eq!(refused_for(&breaker), OPEN_FOR);
     }
 
@@ -330,11 +285,11 @@ mod tests {
         attempt(&breaker, true);
         assert_eq!(
             breaker.state(),
-            State::Closed,
+            "closed",
             "the first failure left the window before the second came",
         );
         attempt(&breaker, true);
-        assert_eq!(breaker.state(), State::Open);
+        assert_eq!(breaker.state(), "open");
     }
 
     #[tokio::test(start_paused = true)]
@@ -344,17 +299,17 @@ mod tests {
         tokio::time::advance(Duration::from_secs(10)).await;
         assert_eq!(refused_for(&breaker), Duration::from_secs(20));
         tokio::time::advance(Duration::from_secs(20)).await;
-        let Admission::Admitted(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit() else {
             panic!("the open time passed");
         };
-        assert_eq!(breaker.state(), State::HalfOpen);
+        assert_eq!(breaker.state(), "half_open");
         assert_eq!(
             refused_for(&breaker),
             PROBE_WAIT,
             "one probe at a time; another call waits for its answer",
         );
         probe.settle(false);
-        assert_eq!(breaker.state(), State::Closed);
+        assert_eq!(breaker.state(), "closed");
         attempt(&breaker, false);
     }
 
@@ -363,11 +318,11 @@ mod tests {
         let breaker = breaker(1, 1);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Admission::Admitted(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit() else {
             panic!("the open time passed");
         };
         probe.settle(true);
-        assert_eq!(breaker.state(), State::Open);
+        assert_eq!(breaker.state(), "open");
         assert_eq!(refused_for(&breaker), OPEN_FOR);
     }
 
@@ -376,31 +331,27 @@ mod tests {
         let breaker = breaker(1, 1);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Admission::Admitted(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit() else {
             panic!("the open time passed");
         };
         drop(probe);
-        assert_eq!(breaker.state(), State::Open);
-        let Admission::Admitted(next) = breaker.admit() else {
+        assert_eq!(breaker.state(), "open");
+        let Ok(next) = breaker.admit() else {
             panic!("the next call probes at once");
         };
         next.settle(false);
-        assert_eq!(breaker.state(), State::Closed);
+        assert_eq!(breaker.state(), "closed");
     }
 
     #[tokio::test(start_paused = true)]
     async fn an_answer_arriving_once_another_call_opened_the_breaker_counts_for_nothing() {
         let breaker = breaker(1, 1);
-        let Admission::Admitted(late) = breaker.admit() else {
+        let Ok(late) = breaker.admit() else {
             panic!("closed");
         };
         attempt(&breaker, true);
         late.settle(false);
-        assert_eq!(
-            breaker.state(),
-            State::Open,
-            "a late success closes nothing"
-        );
+        assert_eq!(breaker.state(), "open", "a late success closes nothing");
     }
 
     #[tokio::test(start_paused = true)]
@@ -409,14 +360,14 @@ mod tests {
         attempt(&breaker, true);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Admission::Admitted(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit() else {
             panic!("the open time passed");
         };
         probe.settle(false);
         attempt(&breaker, true);
         assert_eq!(
             breaker.state(),
-            State::Closed,
+            "closed",
             "the failures before it opened are forgotten",
         );
     }
@@ -440,7 +391,7 @@ mod tests {
         let breaker = breaker(1, 1);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Admission::Admitted(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit() else {
             panic!("the open time passed");
         };
         probe.settle(true);
@@ -487,7 +438,7 @@ mod tests {
         let breaker = breaker(1, 1);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Admission::Admitted(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit() else {
             panic!("the open time passed");
         };
         probe.settle(false);

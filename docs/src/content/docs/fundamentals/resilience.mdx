@@ -126,6 +126,14 @@ of them failed, it opens: every call is refused at once, unsent, for
 `BREAKER_OPEN_SECS`. Then one call probes the dependency while the others are
 still refused; its success closes the breaker, its failure opens it again.
 
+On the defaults, it reads like this. The upstream goes down, and the tenth
+failure among its latest twenty attempts opens the breaker. For the next thirty
+seconds, each call is refused without being sent, and its client is answered
+`503` at once, its `Retry-After` counting down from `30`, instead of waiting out
+a five-second timeout. Then one call probes the upstream: if it answers, the breaker closes
+and calls flow again; if it fails, the breaker opens for another thirty
+seconds.
+
 Each transition is a `warn` on `nest_rs::resilience`, naming the instance and the
 state it entered, and, once telemetry exports, one more on the counter
 `nestrs.resilience.breaker.transitions`, by `nestrs.resilience.instance` and
@@ -136,8 +144,8 @@ state it entered, and, once telemetry exports, one more on the counter
 
 `ResilienceMiddleware` runs every request your own reqwest client sends under a
 policy. It sends again only a request its method declares idempotent (`GET`,
-`HEAD`, `PUT`, `DELETE`, `OPTIONS`, `TRACE`) or one carrying an `Idempotency-Key`,
-and only when its body can be sent twice.
+`HEAD`, `PUT`, `DELETE`, `OPTIONS`, `TRACE`, `QUERY`) or one carrying an
+`Idempotency-Key`, and only when its body can be sent twice.
 
 ```rust title="crates/features/src/posts/client.rs"
 use std::sync::Arc;
@@ -198,7 +206,9 @@ window holds.
   dependency failing for one replica is refused by that one alone.
 - **The unit's deadline is not read.** A retry the policy starts may outlive
   the request around it; the edge then cuts it at its deadline and answers its
-  own `503`. Keep `TIMEOUT_MS` times the attempts inside the request timeout.
+  own `503`, and an attempt cut that way counts in no breaker. Keep
+  `TIMEOUT_MS` times the attempts, with their backoff, inside the request
+  timeout.
 - **A wait the call asks is the middleware's alone.** A call run through
   `run_idempotent` cannot ask its retry to wait longer; reqwest's `Retry-After`
   is read, in seconds and never as an HTTP date.

@@ -14,7 +14,8 @@ again, opens a breaker on repeated failures and caps the calls in flight.
   failures of every caller in the process.
 - **Replay is the caller's declaration**: `run` sends once, `run_idempotent`
   again after a failure or a timeout. The reqwest middleware reads it off the
-  request: RFC 9110 §9.2.2's idempotent methods, or an `Idempotency-Key`
+  request: an idempotent method — RFC 9110 §9.2.2's, and `QUERY`, as `http`'s
+  `Method::is_idempotent` reads them — or an `Idempotency-Key`
   (`draft-ietf-httpapi-idempotency-key-header`), with a body that can be sent
   twice.
 - **Every `Err` is the dependency failing**; an answer it gave — a declined
@@ -38,6 +39,10 @@ again, opens a breaker on repeated failures and caps the calls in flight.
   hour.
 - **A panic in the call counts as a failure and unwinds on**, for the unit to
   contain and file as it would without the policy.
+- **The middleware sits in the port's crate**, behind its `reqwest` feature, as
+  a guard implementing an edge's view sits behind that edge's feature: in
+  `nest-rs-reqwest` it would reach the run, its verdict and its refusals as
+  tier 2, a wider surface for one vendor.
 
 **Refused:**
 
@@ -60,7 +65,10 @@ again, opens a breaker on repeated failures and caps the calls in flight.
 - **An HTTP-date `Retry-After`.** Read as no ask, as the JWK Set fetcher reads
   it: the backoff waits instead.
 
-**Limit, named:** the policy reads no unit deadline. Only MCP makes it ambient
-(`nest_rs_core::Deadline`), so a retry may outlive an HTTP request, which its
-edge then cuts at its deadline and answers `503`. Reading it on every edge is
-an edge change of its own.
+**Limit, named:** the policy reads no unit deadline. Only MCP makes
+`nest_rs_core::Deadline` ambient, so a retry may outlive an HTTP request, which
+its edge then cuts at its deadline and answers `503`, the attempt counting in no
+breaker. Every edge already hands its deadline to `nest_rs_database::run_unit`
+(`UnitSpec::with_deadline`); closing the limit is `run_unit` making it ambient,
+one value per unit on every edge, then each attempt bounded by the deadline's
+remainder and no retry started past it.

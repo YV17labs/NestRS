@@ -4,13 +4,12 @@
 
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
 
 use http::Extensions;
 use nest_rs_core::{Instance, Unnamed};
-use nest_rs_reqwest::__private::Resent;
+use nest_rs_reqwest::__private::{Resent, delay_seconds};
 use reqwest::header::{HeaderName, RETRY_AFTER};
-use reqwest::{Method, Request, Response, StatusCode};
+use reqwest::{Request, Response, StatusCode};
 use reqwest_middleware::{Error, Middleware, Next, Result};
 
 use crate::error::{Refusal, ResilienceError};
@@ -25,9 +24,9 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// policy's timeout, counted in its breaker, inside its bulkhead.
 ///
 /// A request is sent again — after the policy's backoff, up to its retries —
-/// only when it is idempotent: its method is one RFC 9110 §9.2.2 defines so
-/// (`GET`, `HEAD`, `PUT`, `DELETE`, `OPTIONS`, `TRACE`), or it carries an
-/// `Idempotency-Key`, and its body can be sent twice (a streamed body cannot).
+/// only when it is idempotent — its method is RFC 9110 §9.2.2's `GET`, `HEAD`,
+/// `PUT`, `DELETE`, `OPTIONS` or `TRACE`, or `QUERY`, or it carries an
+/// `Idempotency-Key` — and its body can be sent twice (a streamed body cannot).
 /// What is sent again is a transport failure, a timeout, or a `408`, `429`,
 /// `500`, `502`, `503` or `504`, and each counts as a failure in the breaker;
 /// any other answer is the dependency's answer. A `Retry-After` in seconds on a
@@ -80,24 +79,25 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
         extensions: &mut Extensions,
         next: Next<'_>,
     ) -> Result<Response> {
-        let replayed = declares_idempotent(&req);
-        let mut run = self.policy.begin(replayed).await.map_err(refused)?;
+        let replayed = req.method().is_idempotent() || req.headers().contains_key(IDEMPOTENCY_KEY);
+        let mut run = self.policy.begin().await.map_err(refused)?;
         loop {
-            extensions.insert(Resent(run.resent()));
-            let copy = if replayed { req.try_clone() } else { None };
+            if run.resent > 0 {
+                extensions.insert(Resent(run.resent));
+            }
             let (sending, carried) = (next.clone(), &mut *extensions);
-            let attempted = match copy {
-                Some(copy) => {
-                    run.attempt(move |_| sending.run(copy, carried), judged)
-                        .await
-                }
-                None => {
-                    return answered(
-                        run.attempt(move |_| sending.run(req, carried), judged)
-                            .await,
-                    );
-                }
+            let Some(copy) = (replayed && run.may_resend())
+                .then(|| req.try_clone())
+                .flatten()
+            else {
+                return answered(
+                    run.attempt(move |_| sending.run(req, carried), judged)
+                        .await,
+                );
             };
+            let attempted = run
+                .attempt(move |_| sending.run(copy, carried), judged)
+                .await;
             if !run.again(&attempted).await {
                 return answered(attempted);
             }
@@ -105,24 +105,18 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
     }
 }
 
-/// Whether `request` may be sent twice: its method is idempotent, or it
-/// carries an idempotency key.
-fn declares_idempotent(request: &Request) -> bool {
-    matches!(
-        *request.method(),
-        Method::GET | Method::HEAD | Method::PUT | Method::DELETE | Method::OPTIONS | Method::TRACE
-    ) || request.headers().contains_key(IDEMPOTENCY_KEY)
-}
-
-/// How an answer counts: a transport failure and the statuses a retry may cure
-/// fail, any other answer succeeds.
+/// A transport failure and the statuses a retry may cure fail; any other answer
+/// is the dependency's.
 fn judged(answer: &Result<Response>) -> Verdict {
     let Ok(response) = answer else {
         return Verdict::Failed { asked: None };
     };
     match response.status() {
         StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => Verdict::Failed {
-            asked: asked_wait(response),
+            asked: response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|asked| delay_seconds(asked.as_bytes())),
         },
         StatusCode::REQUEST_TIMEOUT
         | StatusCode::INTERNAL_SERVER_ERROR
@@ -132,18 +126,6 @@ fn judged(answer: &Result<Response>) -> Verdict {
     }
 }
 
-/// The `Retry-After` `response` asks in seconds (RFC 9110 §10.2.3's
-/// `delay-seconds`), a value past what fits read as the largest; an HTTP-date
-/// asks nothing this reads.
-fn asked_wait(response: &Response) -> Option<Duration> {
-    let digits = response.headers().get(RETRY_AFTER)?.to_str().ok()?.trim();
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    Some(Duration::from_secs(digits.parse().unwrap_or(u64::MAX)))
-}
-
-/// The run's last attempt, as reqwest-middleware answers it.
 fn answered(attempted: Attempted<Result<Response>>) -> Result<Response> {
     match attempted {
         Ok((answer, _)) => answer,
@@ -151,7 +133,6 @@ fn answered(attempted: Attempted<Result<Response>>) -> Result<Response> {
     }
 }
 
-/// The policy's refusal, as reqwest-middleware's error.
 fn refused(refusal: Refusal) -> Error {
     Error::middleware(ResilienceError::<Infallible>::from(refusal))
 }

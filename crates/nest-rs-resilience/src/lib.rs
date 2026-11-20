@@ -42,6 +42,8 @@ pub use error::ResilienceError;
 pub use middleware::ResilienceMiddleware;
 pub use module::{ResilienceModule, ResilienceSetup};
 pub use policy::ResiliencePolicy;
+
+use nest_rs_core::__private::millis;
 /// What each attempt is handed: cancelled when the policy gives the attempt up,
 /// so work the call handed to another task stops with it.
 pub use tokio_util::sync::CancellationToken;

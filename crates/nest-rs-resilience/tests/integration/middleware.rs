@@ -267,6 +267,22 @@ async fn a_request_carrying_an_idempotency_key_is_sent_again_with_its_body() {
 }
 
 #[tokio::test]
+async fn a_query_is_idempotent_and_sent_again() {
+    let peer = Peer::answering(&[(502, &[])]).await;
+    let (_app, policy) = policy(retrying()).await;
+
+    let answered = client(policy)
+        .request(reqwest::Method::QUERY, peer.url())
+        .body("status:shipped")
+        .send()
+        .await
+        .expect("answered");
+
+    assert_eq!(answered.status(), StatusCode::OK);
+    assert_eq!(peer.read(), 2);
+}
+
+#[tokio::test]
 async fn a_wait_asked_past_the_backoffs_ceiling_ends_the_run_with_that_answer() {
     let peer = Peer::answering(&[(429, &[("retry-after", "3600")])]).await;
     let (_app, policy) = policy(retrying()).await;

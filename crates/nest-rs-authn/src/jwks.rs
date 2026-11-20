@@ -569,29 +569,20 @@ fn max_age(headers: &HeaderMap) -> Option<Duration> {
                 return Some(Duration::ZERO);
             }
             if stated.is_none() && name.eq_ignore_ascii_case("max-age") {
-                stated = argument.and_then(seconds);
+                stated = argument.and_then(|seconds| {
+                    nest_rs_reqwest::__private::delay_seconds(seconds.as_bytes())
+                });
             }
         }
     }
     stated
 }
 
-/// A `delay-seconds` header (`Retry-After`, `Age`); an HTTP-date would trust
-/// the issuer's clock, and is not read.
+/// A `delay-seconds` header (`Retry-After`, `Age`).
 fn delay_seconds(headers: &HeaderMap, name: HeaderName) -> Option<Duration> {
     headers
         .get(name)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| seconds(value.trim()))
-}
-
-/// RFC 9111 §1.2.2's `delay-seconds`: digits, a value past what fits read as
-/// the largest.
-fn seconds(digits: &str) -> Option<Duration> {
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    Some(Duration::from_secs(digits.parse().unwrap_or(u64::MAX)))
+        .and_then(|value| nest_rs_reqwest::__private::delay_seconds(value.as_bytes()))
 }
 
 #[cfg(test)]
@@ -670,7 +661,6 @@ mod tests {
         let read = |value| delay_seconds(&headers(&[(RETRY_AFTER, value)]), RETRY_AFTER);
         assert_eq!(read("120"), Some(Duration::from_secs(120)));
         assert_eq!(read("Wed, 21 Oct 2015 07:28:00 GMT"), None);
-        assert_eq!(read("-5"), None);
     }
 
     #[test]

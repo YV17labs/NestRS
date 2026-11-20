@@ -10,16 +10,16 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use nest_rs_config::{ConfigError, instance_namespace};
+use nest_rs_config::{ConfigError, Namespaced, instance_namespace};
 use nest_rs_core::{Backoff, Instance, Unanswered, Unnamed, process_seed, within};
 use tokio::sync::SemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
-use crate::TARGET;
-use crate::breaker::{Admission, Breaker};
+use crate::breaker::Breaker;
 use crate::bulkhead::Bulkhead;
 use crate::config::ResilienceConfig;
 use crate::error::{Refusal, ResilienceError};
+use crate::{TARGET, millis};
 
 /// The calls to one dependency — a payment provider, a carrier's API, a
 /// language model — run under one policy, by every caller in the process.
@@ -89,30 +89,31 @@ pub struct ResiliencePolicy<I = Unnamed> {
 /// How an attempt's answer counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Verdict {
-    /// The dependency answered.
     Succeeded,
     /// The dependency failed, asking the wait before a retry when it said one.
-    Failed { asked: Option<Duration> },
+    Failed {
+        asked: Option<Duration>,
+    },
 }
 
 /// One attempt's answer and how it counts, or the policy's refusal.
 pub(crate) type Attempted<T> = Result<(T, Verdict), Refusal>;
 
-/// One run of a call under its policy: the bulkhead's slot it holds, whether it
-/// may be attempted again, and how many times it was.
+/// One run of a call under its policy, holding its bulkhead slot.
 pub(crate) struct Run<'p, I> {
     policy: &'p ResiliencePolicy<I>,
     _slot: Option<SemaphorePermit<'p>>,
-    replayed: bool,
-    seed: u64,
-    resent: u32,
+    /// Drawn at the first retry, so a call answering at once draws none.
+    seed: Option<u64>,
+    /// How many times this run sent its call again so far.
+    pub(crate) resent: u32,
 }
 
 impl<I: Instance> ResiliencePolicy<I> {
     /// The policy `config` describes, refusing a combination of its settings
     /// that cannot work, named as the instance's variables.
     pub(crate) fn new(config: &ResilienceConfig) -> Result<Self, ConfigError> {
-        let namespace = instance_namespace::<I>("resilience");
+        let namespace = instance_namespace::<I>(ResilienceConfig::NAMESPACE);
         if config.backoff_first > config.backoff_ceiling {
             return Err(ConfigError::parse(
                 ResilienceConfig::BACKOFF_FIRST.var(&namespace),
@@ -169,7 +170,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        let mut run = self.begin(false).await?;
+        let mut run = self.begin().await?;
         settled(run.attempt(call, judged).await)
     }
 
@@ -186,7 +187,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         F: FnMut(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        let mut run = self.begin(true).await?;
+        let mut run = self.begin().await?;
         loop {
             let attempted = run.attempt(&mut call, judged).await;
             if !run.again(&attempted).await {
@@ -195,66 +196,39 @@ impl<I: Instance> ResiliencePolicy<I> {
         }
     }
 
-    /// Open one run: refused at once while the breaker is open, then by a full
-    /// bulkhead.
-    pub(crate) async fn begin(&self, replayed: bool) -> Result<Run<'_, I>, Refusal> {
-        if let Some(retry_after) = self.breaker.as_ref().and_then(Breaker::refusing) {
-            return Err(Refusal::Open(retry_after));
-        }
+    /// Open one run, taking a slot of the bulkhead — refused at once by an
+    /// open breaker rather than after waiting for one.
+    pub(crate) async fn begin(&self) -> Result<Run<'_, I>, Refusal> {
         let slot = match &self.bulkhead {
-            Some(bulkhead) => match bulkhead.enter().await {
-                Some(slot) => Some(slot),
-                None => {
+            Some(bulkhead) => {
+                if let Some(retry_after) = self.breaker.as_ref().and_then(Breaker::refusing) {
+                    return Err(Refusal::Open(retry_after));
+                }
+                Some(bulkhead.enter().await.ok_or_else(|| {
                     tracing::debug!(
                         target: TARGET,
                         instance = I::NAME,
                         "bulkhead full; the call is refused",
                     );
-                    return Err(Refusal::Full);
-                }
-            },
+                    Refusal::Full
+                })?)
+            }
             None => None,
         };
-        let run = self.runs.fetch_add(1, Ordering::Relaxed);
         Ok(Run {
             policy: self,
             _slot: slot,
-            replayed,
-            seed: process_seed() ^ Backoff::seed(&run.to_le_bytes()),
+            seed: None,
             resent: 0,
         })
-    }
-
-    /// How long to wait before attempt `resent + 2`, after one that failed
-    /// asking `asked`, or `None` when the run ends there.
-    fn retry_wait(&self, resent: u32, asked: Option<Duration>, seed: u64) -> Option<Duration> {
-        if resent >= self.retries {
-            return None;
-        }
-        let failed = NonZeroU32::new(resent.saturating_add(1)).unwrap_or(NonZeroU32::MIN);
-        let backoff = self.backoff.wait(failed, seed);
-        match asked {
-            Some(asked) if asked > self.backoff.ceiling() => {
-                tracing::debug!(
-                    target: TARGET,
-                    instance = I::NAME,
-                    asked_ms = millis(asked),
-                    ceiling_ms = millis(self.backoff.ceiling()),
-                    "the dependency asked a wait past the backoff's ceiling; not attempted again",
-                );
-                None
-            }
-            Some(asked) => Some(backoff.max(Backoff::honouring(asked, failed, seed))),
-            None => Some(backoff),
-        }
     }
 }
 
 impl<I: Instance> Run<'_, I> {
-    /// How many times this run sent its call again so far.
+    /// Whether the run may still send its call again.
     #[cfg(feature = "reqwest")]
-    pub(crate) const fn resent(&self) -> u32 {
-        self.resent
+    pub(crate) const fn may_resend(&self) -> bool {
+        self.resent < self.policy.retries
     }
 
     /// One attempt of `call`: admitted by the breaker, bounded by the timeout,
@@ -270,53 +244,44 @@ impl<I: Instance> Run<'_, I> {
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = T>,
     {
-        let pass = match self.policy.breaker.as_ref().map(Breaker::admit) {
-            Some(Admission::Refused { retry_after }) => return Err(Refusal::Open(retry_after)),
-            Some(Admission::Admitted(pass)) => Some(pass),
-            None => None,
-        };
+        let pass = self
+            .policy
+            .breaker
+            .as_ref()
+            .map(Breaker::admit)
+            .transpose()
+            .map_err(Refusal::Open)?;
         let cancel = CancellationToken::new();
         let given_up = cancel.clone().drop_guard();
-        let answered = within(self.policy.timeout, async move { call(cancel).await }).await;
-        match answered {
-            Ok(answer) => {
-                let _kept = given_up.disarm();
+        let answered = within(self.policy.timeout, async move { call(cancel).await })
+            .await
+            .map(|answer| {
                 let verdict = judge(&answer);
-                if let Some(pass) = pass {
-                    pass.settle(matches!(verdict, Verdict::Failed { .. }));
-                }
-                Ok((answer, verdict))
+                (answer, verdict)
+            });
+        if let Some(pass) = pass {
+            pass.settle(!matches!(answered, Ok((_, Verdict::Succeeded))));
+        }
+        match answered {
+            Ok(judged) => {
+                let _kept = given_up.disarm();
+                Ok(judged)
             }
-            Err(Unanswered::Panicked(payload)) => {
-                if let Some(pass) = pass {
-                    pass.settle(true);
-                }
-                drop(given_up);
-                std::panic::resume_unwind(payload)
-            }
-            Err(_elapsed) => {
-                if let Some(pass) = pass {
-                    pass.settle(true);
-                }
-                drop(given_up);
-                Err(Refusal::TimedOut(self.policy.timeout))
-            }
+            Err(Unanswered::Panicked(payload)) => std::panic::resume_unwind(payload),
+            Err(_elapsed) => Err(Refusal::TimedOut(self.policy.timeout)),
         }
     }
 
     /// Whether to attempt the call again after `attempted`, having waited the
-    /// backoff when so: only a run that may be replayed, after a failure or a
-    /// timeout, within the policy's retries.
+    /// backoff when so: after a failure or a timeout, within the policy's
+    /// retries, unless the dependency asked a wait past the backoff's ceiling.
     pub(crate) async fn again<T>(&mut self, attempted: &Attempted<T>) -> bool {
-        if !self.replayed {
-            return false;
-        }
         let asked = match attempted {
             Ok((_, Verdict::Failed { asked })) => *asked,
             Err(Refusal::TimedOut(_)) => None,
             Ok((_, Verdict::Succeeded)) | Err(Refusal::Open(_) | Refusal::Full) => return false,
         };
-        let Some(wait) = self.policy.retry_wait(self.resent, asked, self.seed) else {
+        let Some(wait) = self.retry_wait(asked) else {
             return false;
         };
         tracing::debug!(
@@ -330,6 +295,35 @@ impl<I: Instance> Run<'_, I> {
         self.resent = self.resent.saturating_add(1);
         true
     }
+
+    /// How long to wait before the next attempt, after one that failed asking
+    /// `asked`, or `None` when the run ends there.
+    fn retry_wait(&mut self, asked: Option<Duration>) -> Option<Duration> {
+        let policy = self.policy;
+        if self.resent >= policy.retries {
+            return None;
+        }
+        let ceiling = policy.backoff.ceiling();
+        if let Some(asked) = asked.filter(|asked| *asked > ceiling) {
+            tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                asked_ms = millis(asked),
+                ceiling_ms = millis(ceiling),
+                "the dependency asked a wait past the backoff's ceiling; not attempted again",
+            );
+            return None;
+        }
+        let seed = *self.seed.get_or_insert_with(|| {
+            let run = policy.runs.fetch_add(1, Ordering::Relaxed);
+            process_seed() ^ Backoff::seed(&run.to_le_bytes())
+        });
+        let failed = NonZeroU32::MIN.saturating_add(self.resent);
+        let backoff = policy.backoff.wait(failed, seed);
+        Some(asked.map_or(backoff, |asked| {
+            backoff.max(Backoff::honouring(asked, failed, seed))
+        }))
+    }
 }
 
 impl<I: Instance> nest_rs_core::CarriesRemedy for ResiliencePolicy<I> {
@@ -341,7 +335,8 @@ impl<I: Instance> nest_rs_core::CarriesRemedy for ResiliencePolicy<I> {
                 nest_rs_core::__private::short_type_name::<I>()
             )),
         };
-        let variables = nest_rs_config::var_name(&instance_namespace::<I>("resilience"), "*");
+        let variables =
+            nest_rs_config::var_name(&instance_namespace::<I>(ResilienceConfig::NAMESPACE), "*");
         format!("Import `{import}`, which builds the policy from {variables}.").into()
     }
 }
@@ -358,7 +353,6 @@ impl<I: Instance> fmt::Debug for ResiliencePolicy<I> {
     }
 }
 
-/// A call's answer counts as failed when it is an `Err`.
 fn judged<T, E>(answer: &Result<T, E>) -> Verdict {
     match answer {
         Ok(_) => Verdict::Succeeded,
@@ -366,18 +360,12 @@ fn judged<T, E>(answer: &Result<T, E>) -> Verdict {
     }
 }
 
-/// A run's last attempt, told in the caller's terms.
 fn settled<T, E>(attempted: Attempted<Result<T, E>>) -> Result<T, ResilienceError<E>> {
     match attempted {
         Ok((Ok(value), _)) => Ok(value),
         Ok((Err(error), _)) => Err(ResilienceError::Failed(error)),
         Err(refusal) => Err(refusal.into()),
     }
-}
-
-/// `wait` in whole milliseconds, as a line's `_ms` field says it.
-fn millis(wait: Duration) -> u64 {
-    u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -592,7 +580,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_asked_wait_is_honoured_up_to_the_ceiling_and_past_it_ends_the_run() {
         let policy = retrying(3);
-        let mut run = policy.begin(true).await.expect("a run");
+        let mut run = policy.begin().await.expect("a run");
         let asked = Duration::from_secs(1);
         let started = tokio::time::Instant::now();
         let failed: Attempted<()> = Ok(((), Verdict::Failed { asked: Some(asked) }));

@@ -276,10 +276,7 @@ fn provider_unavailable(
     (status == 429 || (500..600).contains(&status)).then(|| {
         AuthError::unavailable(
             format!("{endpoint} answered {status}"),
-            retry_after
-                .and_then(|value| std::str::from_utf8(value).ok())
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .map(Duration::from_secs),
+            retry_after.and_then(nest_rs_reqwest::__private::delay_seconds),
         )
     })
 }

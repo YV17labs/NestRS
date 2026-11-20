@@ -12,7 +12,6 @@ pub(crate) struct Bulkhead {
 }
 
 impl Bulkhead {
-    /// `slots` calls at once, each further call waiting `wait` for one to free.
     pub(crate) fn new(slots: usize, wait: Duration) -> Self {
         Self {
             slots: Semaphore::new(slots),
@@ -23,8 +22,11 @@ impl Bulkhead {
     /// A slot, held until the slot is dropped, or `None` once the wait for one
     /// ran out — at once for a wait of none.
     pub(crate) async fn enter(&self) -> Option<SemaphorePermit<'_>> {
+        if let Ok(free) = self.slots.try_acquire() {
+            return Some(free);
+        }
         if self.wait.is_zero() {
-            return self.slots.try_acquire().ok();
+            return None;
         }
         // The semaphore is never closed, so its one refusal is no slot in time.
         tokio::time::timeout(self.wait, self.slots.acquire())

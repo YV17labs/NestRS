@@ -7,8 +7,6 @@ use std::time::Duration;
 
 use nest_rs_core::{Problem, ToProblem, code};
 
-/// What every refusal of a policy answers: `503`, `UNAVAILABLE` — the server
-/// could not serve the unit because something it depends on did not answer.
 const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 
 /// Why a policy's call did not succeed.
@@ -83,11 +81,9 @@ pub enum ResilienceError<E> {
 /// A policy's refusal, before it is told in the caller's error type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
-    /// The attempt did not answer within this timeout.
     TimedOut(Duration),
-    /// The breaker refused, for this long at least.
+    /// For this long at least.
     Open(Duration),
-    /// The bulkhead had no free slot in time.
     Full,
 }
 
@@ -111,16 +107,11 @@ impl<E> From<Refusal> for ResilienceError<E> {
     }
 }
 
+/// The problem the error's chain carries: a refusal's own, or the one the
+/// call's error holds.
 impl<E: Error + Send + Sync + 'static> ToProblem for ResilienceError<E> {
     fn to_problem(&self) -> Option<Problem> {
-        match self {
-            Self::Failed(error) => {
-                nest_rs_core::__private::find_in_chain::<Problem>(error).cloned()
-            }
-            Self::TimedOut { __problem, .. }
-            | Self::Open { __problem, .. }
-            | Self::Full { __problem } => Some(__problem.clone()),
-        }
+        nest_rs_core::__private::find_in_chain::<Problem>(self).cloned()
     }
 }
 

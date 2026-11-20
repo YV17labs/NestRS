@@ -138,7 +138,7 @@ is in engineering hours, review and gates included. It is a guess calibrated on 
 
 | # | Item | Crate | Effort | Needs | Status |
 |---|---|---|---|---|---|
-| 1 | Resilience | `nest-rs-resilience` | 20–35 h | — | Proposed |
+| 1 | Resilience | `nest-rs-resilience` | 20–35 h | — | In progress, on `best-practice-overhaul` |
 | 2 | Distributed locks | `nest-rs-locks`, plus Valkey and SeaORM bindings | 25–40 h | — | Proposed |
 | 3 | Storage, completed | `nest-rs-storage` | 10–20 h | — | Proposed |
 | 4 | Mail | `nest-rs-mail` | 25–40 h | — | Proposed |

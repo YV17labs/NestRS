@@ -1,0 +1,4 @@
+# The formatter reads the style of the workspace's edition, here and in an
+# editor that runs rustfmt on a lone file without Cargo's `--edition`.
+edition = "2024"
+style_edition = "2024"

@@ -1,0 +1,30 @@
+# bacon (https://dystroy.org/bacon/): the Justfile's gates, re-run on save.
+# `bacon` runs `clippy`; press `t` for the tests, `d` for the docs.
+default_job = "clippy"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--all-targets", "--all-features"]
+need_stdout = false
+
+[jobs.clippy]
+command = [
+    "cargo", "clippy", "--workspace", "--all-targets", "--all-features",
+    "--", "-D", "warnings",
+]
+need_stdout = false
+
+[jobs.test]
+command = [
+    "cargo", "nextest", "run", "--workspace", "--no-fail-fast",
+    "-E", "not binary(e2e)",
+]
+need_stdout = true
+
+[jobs.doc]
+command = ["cargo", "doc", "--workspace", "--all-features", "--no-deps"]
+need_stdout = false
+env.RUSTDOCFLAGS = "-D warnings"
+
+[keybindings]
+t = "job:test"
+d = "job:doc"

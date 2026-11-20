@@ -1,0 +1,149 @@
+---
+title: Resilience
+description: "Named policies around an outbound call — a per-attempt timeout, jittered retries for idempotent calls, a shared circuit breaker, a bulkhead and a fallback."
+---
+
+A slow partner API holds every request that calls it, and a down one is
+hammered by every retry. A **resilience policy** is the protection around the
+calls to one dependency — a payment provider, a carrier API, a language model —
+named for it and shared by every caller, so they share one circuit breaker and
+one bulkhead.
+
+A policy composes, outermost first:
+
+| Part | What it does | Refusal |
+|---|---|---|
+| `Bulkhead` | At most N calls at once; a call past them queues at most `max_wait` | `BULKHEAD_FULL`, `503` |
+| `CircuitBreaker` | Opens when a share of the last N attempts failed; refuses every call while open; half-open, lets probes through | `CIRCUIT_OPEN`, `503` with `Retry-After` |
+| `Retry` | Attempts an **idempotent** call again on the framework's jittered exponential `Backoff` | — |
+| `timeout` | Bounds each attempt; cancels its `CancellationToken` and drops its future | `TIMEOUT`, `504` |
+| `deadline` | Bounds the whole call: the bulkhead's queue, every attempt and every wait | `TIMEOUT`, `504` |
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features resilience
+```
+
+## A policy
+
+```rust
+use std::time::Duration;
+use nest_rs::resilience::{CircuitBreaker, Policy, Retry};
+
+let payments = Policy::builder("payments")
+    .timeout(Duration::from_secs(2))
+    .deadline(Duration::from_secs(5))
+    .retry(Retry::DEFAULT)
+    .circuit_breaker(CircuitBreaker::DEFAULT)
+    .build()?;
+```
+
+`presets::outbound_http`, `presets::latency_critical` and `presets::background`
+answer a builder with sensible values for the common kinds of dependency, to
+adjust before `build`.
+
+## Running a call
+
+```rust
+// Made once: a charge is not safe to replay.
+let charge = payments.run(|cancel| provider.charge(order, cancel)).await?;
+
+// Retried on the policy's `Retry`: the caller declares it idempotent.
+let receipt = payments.run_idempotent(|cancel| provider.receipt(id, cancel)).await?;
+```
+
+**Retries apply only where the caller declares the call idempotent.** `run`
+makes the call once whatever the policy's `Retry` says; `run_idempotent`, or
+`call().idempotent()`, opts in.
+
+Each attempt receives a `CancellationToken`, cancelled when its time is up just
+before its future is dropped — pass it to work the attempt spawned elsewhere.
+
+### Which errors are failures
+
+By default every error counts as the dependency failing. A `404` or a refused
+validation is the dependency *answering*: declare it, and such an error ends
+the call at once, is not retried, and counts as a success for the breaker.
+
+```rust
+let product = catalog
+    .call()
+    .idempotent()
+    .failure_if(|error: &CatalogError| error.is_transient())
+    .run(|cancel| client.product(sku, cancel))
+    .await?;
+```
+
+### A fallback
+
+```rust
+let rates = carrier
+    .call()
+    .run_or_else(
+        |cancel| client.rates(parcel, cancel),
+        // `is_rejected()`: the breaker or the bulkhead refused, and no request left.
+        |error| async move { cache.rates(parcel).ok_or(error) },
+    )
+    .await?;
+```
+
+## Answering a client
+
+`ResilienceError<E>` implements `ToProblem` whenever `E` does, so `?` in a
+handler answers each refusal in the edge's standard form — `TIMEOUT` (`504`),
+`CIRCUIT_OPEN` (`503`, `Retry-After` set to when the breaker lets a probe
+through), `BULKHEAD_FULL` (`503`) — and the call's own error as that error says.
+
+## The app's reqwest client
+
+With both the `reqwest` and `resilience` features, `ResilienceMiddleware` sends
+every request of the client the app builds through a policy:
+
+```rust
+use nest_rs::reqwest::{ReqwestMiddleware, ResilienceMiddleware};
+use nest_rs::resilience::presets;
+
+let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+    .with(ReqwestMiddleware::new())
+    .with(ResilienceMiddleware::new(presets::outbound_http("carrier").build()?))
+    .build();
+```
+
+A request is retried only when RFC 9110 names its method idempotent (`GET`,
+`HEAD`, `OPTIONS`, `TRACE`, `PUT`, `DELETE`) or it carries an
+`Idempotency-Key` header, and its body can be cloned. A transport error, `408`,
+`429` and a `5xx` other than `501` are failures; the last attempt's response is
+answered as it is.
+
+## Configuration
+
+`PolicyConfig` reads a policy from configuration, every duration in whole
+milliseconds and every unknown key refused:
+
+```toml
+[payments]
+timeout_ms = 2000
+deadline_ms = 5000
+retry = { attempts = 3, first_ms = 200, ceiling_ms = 2000 }
+circuit_breaker = { window = 20, failure_rate_percent = 50, minimum_calls = 10, open_for_ms = 30000 }
+bulkhead = { max_concurrent = 32, max_wait_ms = 100 }
+```
+
+`Policies` holds an app's policies by name, refusing a second under a name
+already taken — two policies for one dependency would split its breaker.
+
+## Observability
+
+A breaker transition is a `warn` on the `nest_rs::resilience` target naming the
+policy, its old state and its new one; a retry is a `debug`. `Policy::stats()`
+answers the policy's counters — calls, successes, failures, timeouts, retries,
+short-circuited calls, bulkhead refusals and openings — for an exporter or a
+health page.
+
+## Limits
+
+**State lives per process.** Each replica keeps its own breaker and bulkhead:
+a dependency failing for every replica opens every replica's breaker within its
+own window. A `Retry-After` the dependency answers is not read: the policy's
+backoff paces its retries.

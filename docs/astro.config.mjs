@@ -344,6 +344,7 @@ export default defineConfig({
             { label: 'Rate limiting', slug: 'rate-limiting' },
             { label: 'Rate-limit buckets', slug: 'rate-limiting/buckets' },
             { label: 'Writing a rate-limit store', slug: 'rate-limiting/writing-a-store' },
+            { label: 'Resilience', slug: 'resilience' },
           ],
         },
         { label: 'Extending NestRS', items: [{ autogenerate: { directory: 'extending' } }] },

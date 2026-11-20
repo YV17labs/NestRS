@@ -2596,6 +2596,7 @@ dependencies = [
  "nest-rs-queue",
  "nest-rs-redis",
  "nest-rs-reqwest",
+ "nest-rs-resilience",
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
@@ -3233,10 +3234,25 @@ dependencies = [
  "async-trait",
  "http",
  "nest-rs-core",
+ "nest-rs-resilience",
  "nest-rs-testing",
  "reqwest",
  "reqwest-middleware",
  "tokio",
+]
+
+[[package]]
+name = "nest-rs-resilience"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-core",
+ "parking_lot 0.13.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

@@ -1,0 +1,38 @@
+[package]
+name = "nest-rs-resilience"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Resilience policies for NestRS outbound calls: per-attempt timeout, jittered retries for idempotent calls, a shared circuit breaker, a bulkhead and a fallback, answering TIMEOUT (504), CIRCUIT_OPEN and BULKHEAD_FULL (503)."
+keywords = ["framework", "nestrs", "resilience", "circuit-breaker", "retry"]
+categories = ["web-programming", "asynchronous"]
+
+[dependencies]
+# `Backoff` (the jittered curve every retry in the framework waits on),
+# `Problem`, `Code` and `ToProblem`, the one conversion every edge reads.
+nest-rs-core.workspace = true
+# Every wait is a tokio timer: the per-attempt timeout, the bulkhead's queue,
+# the retry's sleep — and `Instant`, so a paused clock drives the breaker.
+tokio.workspace = true
+# The cancellation an attempt receives, fired when its timeout elapses.
+tokio-util.workspace = true
+# A breaker transition is a `warn` on the `nest_rs::resilience` target.
+tracing.workspace = true
+# The breaker's window lock: short, never held across an await.
+parking_lot.workspace = true
+# `PolicyConfig`, the shape a policy is read in from configuration.
+serde.workspace = true
+# The registry's and the configuration's refusals.
+thiserror.workspace = true
+
+[dev-dependencies]
+# `test-util` pauses time, so a suite crosses a breaker's open window or a
+# retry's backoff without waiting it out.
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

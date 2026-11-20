@@ -8,6 +8,7 @@ use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::breaker::Breaker;
 use crate::bulkhead::Bulkhead;
 use crate::config::ResilienceConfig;
+use crate::counters::Counters;
 use crate::error::{Refusal, ResilienceError};
 use crate::{TARGET, millis};
 
@@ -86,6 +88,7 @@ pub struct ResiliencePolicy<I = Unnamed> {
     backoff: Backoff,
     breaker: Option<Breaker>,
     bulkhead: Option<Bulkhead>,
+    counters: Arc<Counters>,
     /// Sets each run's jitter apart from the others'.
     runs: AtomicU64,
     _instance: PhantomData<fn() -> I>,
@@ -146,6 +149,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         let retries = config
             .retries
             .map_or(0, |retries| u32::try_from(retries).unwrap_or(u32::MAX));
+        let counters = Arc::new(Counters::new(I::NAME));
         Ok(Self {
             timeout: config.timeout,
             retries,
@@ -157,11 +161,13 @@ impl<I: Instance> ResiliencePolicy<I> {
                     config.breaker_failures,
                     config.breaker_open,
                     config.timeout,
+                    Arc::clone(&counters),
                 )
             }),
             bulkhead: config
                 .concurrency
                 .map(|slots| Bulkhead::new(slots, config.concurrency_wait)),
+            counters,
             runs: AtomicU64::new(0),
             _instance: PhantomData,
         })
@@ -179,7 +185,8 @@ impl<I: Instance> ResiliencePolicy<I> {
         Fut: Future<Output = Result<T, E>>,
     {
         let mut run = self.begin().await?;
-        settled(run.attempt(call, judged).await)
+        let attempted = run.attempt(call, judged).await;
+        settled(run.finish(attempted))
     }
 
     /// Run the idempotent `call`, attempting it again after a failed or timed
@@ -202,37 +209,45 @@ impl<I: Instance> ResiliencePolicy<I> {
         loop {
             let attempted = run.attempt(&mut call, judged_asking).await;
             if !run.again(&attempted).await {
-                return settled(attempted);
+                return settled(run.finish(attempted));
             }
         }
     }
 
-    /// Open one run, taking a slot of the bulkhead — refused at once by an
-    /// open breaker rather than after waiting for one.
+    /// Open one run, taking a slot of the bulkhead within the unit's deadline —
+    /// refused at once by an open breaker rather than after waiting for one.
     pub(crate) async fn begin(&self) -> Result<Run<'_, I>, Refusal> {
+        let deadline = nest_rs_core::ambient::<Deadline>().map(|deadline| deadline.0);
         let slot = match &self.bulkhead {
             Some(bulkhead) => {
                 if let Some(retry_after) = self.breaker.as_ref().and_then(Breaker::refusing) {
-                    return Err(Refusal::Open(retry_after));
+                    return Err(self.refused(Refusal::Open(retry_after)));
                 }
-                Some(bulkhead.enter().await.ok_or_else(|| {
+                let Some(slot) = bulkhead.enter(deadline).await else {
                     tracing::debug!(
                         target: TARGET,
                         instance = I::NAME,
                         "bulkhead full; the call is refused",
                     );
-                    Refusal::Full
-                })?)
+                    return Err(self.refused(Refusal::Full));
+                };
+                Some(slot)
             }
             None => None,
         };
         Ok(Run {
             policy: self,
             _slot: slot,
-            deadline: nest_rs_core::ambient::<Deadline>().map(|deadline| deadline.0),
+            deadline,
             seed: None,
             resent: 0,
         })
+    }
+
+    /// `refusal`, counted.
+    fn refused(&self, refusal: Refusal) -> Refusal {
+        self.counters.refusal(refusal);
+        refusal
     }
 }
 
@@ -293,6 +308,11 @@ impl<I: Instance> Run<'_, I> {
         }
     }
 
+    /// The run's last attempt, its refusal counted when it ended on one.
+    pub(crate) fn finish<T>(&self, attempted: Attempted<T>) -> Attempted<T> {
+        attempted.map_err(|refusal| self.policy.refused(refusal))
+    }
+
     /// Whether to attempt the call again after `attempted`, having waited the
     /// backoff when so: after a failure or a timeout, within the policy's
     /// retries, unless the dependency asked a wait past the backoff's ceiling.
@@ -314,6 +334,7 @@ impl<I: Instance> Run<'_, I> {
         );
         tokio::time::sleep(wait).await;
         self.resent = self.resent.saturating_add(1);
+        self.policy.counters.retry();
         true
     }
 
@@ -769,6 +790,103 @@ mod tests {
             },
         ));
         assert!(!run.again(&too_long).await, "past the 2 s ceiling");
+    }
+
+    /// Each retry adds one to the retries' counter, and each run ending on the
+    /// policy's refusal one to the refusals', by that refusal.
+    #[cfg(feature = "opentelemetry")]
+    #[tokio::test(start_paused = true)]
+    async fn retries_and_the_refusals_runs_end_on_are_counted() {
+        use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+        };
+
+        use crate::counters::{INSTANCE_ATTRIBUTE, REFUSAL_ATTRIBUTE, REFUSALS, RETRIES};
+
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+
+        let failed = retrying(1)
+            .run_idempotent(|_| async { Err::<(), _>(Refused) })
+            .await;
+        assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
+
+        let timed_out = policy(ResilienceConfig {
+            timeout: Duration::from_millis(100),
+            retries: None,
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        })
+        .run(|_| std::future::pending::<Result<(), Refused>>())
+        .await;
+        assert!(matches!(timed_out, Err(ResilienceError::TimedOut { .. })));
+
+        let opening = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        });
+        let _first = opening.run(|_| async { Err::<(), _>(Refused) }).await;
+        let open = opening.run(|_| async { Ok::<_, Refused>(()) }).await;
+        assert!(matches!(open, Err(ResilienceError::Open { .. })));
+
+        let narrow = policy(ResilienceConfig {
+            concurrency: Some(1),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let held = narrow.begin().await.expect("the one slot");
+        let full = narrow.run(|_| async { Ok::<_, Refused>(()) }).await;
+        assert!(matches!(full, Err(ResilienceError::Full { .. })));
+        drop(held);
+
+        provider.force_flush().expect("the export");
+        let exported = exporter
+            .get_finished_metrics()
+            .expect("the exported metrics");
+        let points = |name: &str| -> Vec<(String, u64)> {
+            let mut points: Vec<(String, u64)> = exported
+                .iter()
+                .flat_map(|resource| resource.scope_metrics())
+                .flat_map(|scope| scope.metrics())
+                .filter(|metric| metric.name() == name)
+                .flat_map(|metric| {
+                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                        panic!("a counter: {metric:?}");
+                    };
+                    sum.data_points()
+                        .map(|point| {
+                            let attribute = |key: &str| {
+                                point
+                                    .attributes()
+                                    .find(|kv| kv.key.as_str() == key)
+                                    .map(|kv| kv.value.to_string())
+                                    .unwrap_or_default()
+                            };
+                            assert_eq!(attribute(INSTANCE_ATTRIBUTE), "upstream");
+                            (attribute(REFUSAL_ATTRIBUTE), point.value())
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            points.sort();
+            points
+        };
+        assert_eq!(points(RETRIES), [(String::new(), 1)], "one call sent again");
+        assert_eq!(
+            points(REFUSALS),
+            [
+                ("full".to_owned(), 1),
+                ("open".to_owned(), 1),
+                ("timed_out".to_owned(), 1),
+            ],
+            "a failed call is the call's answer, no refusal of the policy's"
+        );
     }
 
     #[test]

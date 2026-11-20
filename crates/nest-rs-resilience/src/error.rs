@@ -104,6 +104,18 @@ pub(crate) enum Refusal {
     Full,
 }
 
+impl Refusal {
+    /// The word the refusals' counter says.
+    #[cfg(feature = "opentelemetry")]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::TimedOut(_) => "timed_out",
+            Self::Open(_) => "open",
+            Self::Full => "full",
+        }
+    }
+}
+
 impl<E> From<Refusal> for ResilienceError<E> {
     fn from(refusal: Refusal) -> Self {
         use nest_rs_core::__private::retry_after_secs;

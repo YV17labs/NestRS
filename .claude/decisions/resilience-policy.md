@@ -113,3 +113,24 @@ decided and built.
   and OTLP suites keep doubles of their own: a client certificate asked, an
   answer changed mid-test, a body written in chunks, a protocol that is not
   HTTP/1 text.
+
+## 2026-11-21 — what #7 brought
+
+A second implementation of item 1, Just-Replicant's #7, was compared with this
+one against the rules. This one stands as the base; two of #7's choices were
+better and are carried over, credited on the commit that carries them:
+
+- **A slot of the bulkhead is waited for within the unit's deadline**, as #7
+  bounded its wait by the call's own, so no wait outlives the unit.
+- **Retries and refusals are counted**, as #7's `PolicyStats` counted them — here
+  as OpenTelemetry counters beside the transitions'
+  (`nestrs.resilience.retries`, `nestrs.resilience.refusals` by
+  `nestrs.resilience.refusal`), on one `Counters` per policy.
+
+**Refused from #7:** a policy built by a builder and found in a registry by its
+name (`named-instances.md`, `container.md`'s one seam); codes of its own,
+`TIMEOUT` (`504`), `CIRCUIT_OPEN` and `BULKHEAD_FULL`
+(`every-refusal-carries-its-class.md`); a policy with no timeout; a
+`Retry-After` left unread; and a breaker on a failure rate after a minimum of
+calls, which a count of failures in a window already is — twenty attempts
+opening at ten is half of them after ten at least — at no new variable.

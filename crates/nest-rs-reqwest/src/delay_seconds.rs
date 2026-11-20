@@ -1,11 +1,11 @@
-//! [`delay_seconds`] — the wait a `Retry-After` or an `Age` header says, read
-//! as every framework client reads it.
+//! [`delay_seconds`] — the seconds an `Age`, a `max-age` or a `Retry-After`
+//! header says, read as every framework client reads them.
 
 use std::time::Duration;
 
 /// RFC 9111 §1.2.2's `delay-seconds` in `value`: digits alone, a value past
-/// what fits read as the largest. An HTTP-date reads as nothing, since honouring
-/// one would trust the peer's clock.
+/// what fits read as the largest. An HTTP-date is no delay: a `Retry-After`
+/// holding one is read by [`retry_after`](crate::__private::retry_after).
 pub fn delay_seconds(value: &[u8]) -> Option<Duration> {
     let digits = std::str::from_utf8(value).ok()?.trim();
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {

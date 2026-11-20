@@ -31,6 +31,7 @@ pub const TARGET: &str = "nest_rs::resilience";
 mod breaker;
 mod bulkhead;
 mod config;
+mod counters;
 mod error;
 #[cfg(feature = "reqwest")]
 mod middleware;

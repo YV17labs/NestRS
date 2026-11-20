@@ -95,16 +95,16 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
                 .then(|| req.try_clone())
                 .flatten()
             else {
-                return answered(
-                    run.attempt(move |_| sending.run(req, carried), judged)
-                        .await,
-                );
+                let attempted = run
+                    .attempt(move |_| sending.run(req, carried), judged)
+                    .await;
+                return answered(run.finish(attempted));
             };
             let attempted = run
                 .attempt(move |_| sending.run(copy, carried), judged)
                 .await;
             if !run.again(&attempted).await {
-                return answered(attempted);
+                return answered(run.finish(attempted));
             }
         }
     }

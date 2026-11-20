@@ -3,22 +3,14 @@
 //! its open time has passed. Its state lives in the process.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
 use tokio::time::Instant;
 
+use crate::counters::Counters;
 use crate::{TARGET, millis};
-
-/// The counter each transition adds one to, by the state it entered.
-#[cfg(feature = "opentelemetry")]
-pub(crate) const TRANSITIONS: &str = "nestrs.resilience.breaker.transitions";
-
-#[cfg(feature = "opentelemetry")]
-pub(crate) const INSTANCE_ATTRIBUTE: &str = "nestrs.resilience.instance";
-
-#[cfg(feature = "opentelemetry")]
-pub(crate) const STATE_ATTRIBUTE: &str = "nestrs.resilience.breaker.state";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
@@ -65,10 +57,7 @@ pub(crate) struct Breaker {
     /// own bound, an attempt's timeout.
     probe_wait: Duration,
     held: Mutex<Held>,
-    /// Made at the first transition, on the meter installed by then: a policy
-    /// built before `OpenTelemetry::init()` still counts.
-    #[cfg(feature = "opentelemetry")]
-    transitions: std::sync::OnceLock<opentelemetry::metrics::Counter<u64>>,
+    counters: Arc<Counters>,
 }
 
 /// One admitted attempt, settled once with its outcome. Dropped unsettled —
@@ -97,13 +86,14 @@ impl Drop for Pass<'_> {
 impl Breaker {
     /// A closed breaker for `instance`, opening once `failures` of the latest
     /// `window` attempts failed, for `open_for`; a call refused during a probe
-    /// is told to wait `probe_wait`.
+    /// is told to wait `probe_wait`. Each transition counts on `counters`.
     pub(crate) fn new(
         instance: &'static str,
         window: usize,
         failures: usize,
         open_for: Duration,
         probe_wait: Duration,
+        counters: Arc<Counters>,
     ) -> Self {
         Self {
             instance,
@@ -116,8 +106,7 @@ impl Breaker {
                 outcomes: VecDeque::with_capacity(window),
                 failed: 0,
             }),
-            #[cfg(feature = "opentelemetry")]
-            transitions: std::sync::OnceLock::new(),
+            counters,
         }
     }
 
@@ -227,24 +216,7 @@ impl Breaker {
             open_ms = failed.map(|_| millis(self.open_for)),
             "circuit breaker changed state",
         );
-        #[cfg(feature = "opentelemetry")]
-        self.transitions
-            .get_or_init(|| {
-                opentelemetry::global::meter("nestrs")
-                    .u64_counter(TRANSITIONS)
-                    .with_unit("{transition}")
-                    .with_description(
-                        "The circuit breakers' transitions, by the state each entered.",
-                    )
-                    .build()
-            })
-            .add(
-                1,
-                &[
-                    opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, self.instance),
-                    opentelemetry::KeyValue::new(STATE_ATTRIBUTE, phase.as_str()),
-                ],
-            );
+        self.counters.transition(phase.as_str());
     }
 }
 
@@ -256,7 +228,14 @@ mod tests {
     const PROBE_WAIT: Duration = Duration::from_secs(5);
 
     fn breaker(window: usize, failures: usize) -> Breaker {
-        Breaker::new("upstream", window, failures, OPEN_FOR, PROBE_WAIT)
+        Breaker::new(
+            "upstream",
+            window,
+            failures,
+            OPEN_FOR,
+            PROBE_WAIT,
+            Arc::new(Counters::new("upstream")),
+        )
     }
 
     fn attempt(breaker: &Breaker, failed: bool) {
@@ -387,6 +366,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn each_transition_is_counted_by_its_instance_and_the_state_entered() {
         use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+
+        use crate::counters::{INSTANCE_ATTRIBUTE, STATE_ATTRIBUTE, TRANSITIONS};
         use opentelemetry_sdk::metrics::{
             InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
         };

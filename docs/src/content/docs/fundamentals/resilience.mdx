@@ -145,10 +145,14 @@ breaker closes and calls flow again; if it fails, the breaker opens for another
 thirty seconds.
 
 Each transition is a `warn` on `nest_rs::resilience`, naming the instance and the
-state it entered, and, once telemetry exports, one more on the counter
-`nestrs.resilience.breaker.transitions`, by `nestrs.resilience.instance` and
-`nestrs.resilience.breaker.state` (`open`, `half_open`, `closed`). A retry is a
-`debug` on the same target.
+state it entered. A retry is a `debug` on the same target. Once telemetry
+exports, every policy counts, by `nestrs.resilience.instance`:
+
+| Counter | One per |
+|---|---|
+| `nestrs.resilience.breaker.transitions` | transition, by `nestrs.resilience.breaker.state`: `open`, `half_open`, `closed` |
+| `nestrs.resilience.retries` | call sent again |
+| `nestrs.resilience.refusals` | run ending on the policy's refusal, by `nestrs.resilience.refusal`: `timed_out`, `open`, `full` |
 
 ## Your reqwest client
 
@@ -212,7 +216,7 @@ Each key is read under `<PREFIX>_RESILIENCE__` for the default instance and
 | `BREAKER_FAILURES` | how many failed attempts in the window open it — default `10`; from `1` to `BREAKER_WINDOW` |
 | `BREAKER_OPEN_SECS` | how long it refuses every call before one probes — default `30`; from `1` to `3600` |
 | `CONCURRENCY` | how many calls run inside the policy at once, the bulkhead — default none; from `1` to `65536`, `0` for none |
-| `CONCURRENCY_WAIT_MS` | how long a call waits for a free slot before it is refused — default `0`, refused at once; up to `60000` |
+| `CONCURRENCY_WAIT_MS` | how long a call waits for a free slot before it is refused, the unit's deadline permitting — default `0`, refused at once; up to `60000` |
 
 A value out of its range fails the boot naming the variable, and so do two that
 cannot work together: a first wait above the ceiling, or more failures than the

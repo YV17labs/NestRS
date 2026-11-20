@@ -184,6 +184,14 @@ pub mod throttler {
     pub use nest_rs_throttler::*;
 }
 
+/// Resilience for outbound calls: timeouts, retries, a circuit breaker and a
+/// bulkhead, named per dependency.
+#[cfg(feature = "resilience")]
+pub mod resilience {
+    #[doc(no_inline)]
+    pub use nest_rs_resilience::*;
+}
+
 /// The W3C Server-Timing response header.
 #[cfg(feature = "server-timing")]
 pub mod server_timing {

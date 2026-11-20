@@ -10,6 +10,8 @@
 )]
 
 mod middleware;
+#[cfg(feature = "resilience")]
+mod resilience;
 
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -87,6 +89,12 @@ impl Peer {
     /// `path` on the peer.
     fn url(&self, path: &str) -> String {
         format!("https://127.0.0.1:{}{path}", self.addr.port())
+    }
+
+    /// How many requests the peer has read.
+    #[cfg(feature = "resilience")]
+    fn requests(&self) -> usize {
+        self.heads.lock().expect("the heads").len()
     }
 
     fn port(&self) -> u16 {

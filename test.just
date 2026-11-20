@@ -47,6 +47,11 @@ seaorm_alone := kernel_alone + " --features seaorm"
 # without its `otlp` feature, the console alone, which the union turns on.
 console_alone := "cargo nextest run -p nest-rs-opentelemetry --no-default-features --no-fail-fast"
 
+# What an app's reqwest client sends through a resilience policy:
+# nest-rs-reqwest's `resilience` feature, which no member turns on for the
+# workspace's own build.
+reqwest_resilience := "cargo nextest run -p nest-rs-reqwest --features resilience --no-fail-fast"
+
 # Every test: unit, integration, e2e and the doc examples
 all: && doc
     #!/usr/bin/env bash
@@ -57,6 +62,7 @@ all: && doc
     {{seaorm_alone}}
     {{kernel_alone}}
     {{console_alone}} --lib --test integration
+    {{reqwest_resilience}}
     # A failover moves the primaries every other test runs on, and a node
     # requiring a client certificate refuses their connections: last, one at a time.
     if [ "{{topology}}" != standalone ]; then
@@ -67,6 +73,7 @@ all: && doc
 unit:
     {{nextest}} --lib --bins
     {{console_alone}} --lib
+    {{reqwest_resilience}} --lib
 
 # The in-process suites under each crate's `tests/`, no service needed
 integration:
@@ -75,6 +82,7 @@ integration:
     {{seaorm_alone}}
     {{kernel_alone}}
     {{console_alone}} --test integration
+    {{reqwest_resilience}} --test integration
 
 # The `tests/e2e` suites, against Postgres, Valkey and S3
 e2e:

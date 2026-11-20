@@ -31,6 +31,15 @@ saves you from building something that doesn't fit the project's direction, and
 lets a maintainer flag overlap or design constraints early. Drafts and questions
 are welcome — you don't need a finished idea to start the conversation.
 
+**To build an item of the [roadmap](ROADMAP.md), ask for it in its issue
+first**, and open that issue if it does not exist yet. Whoever builds an item,
+a maintainer included, is assigned its issue before writing any code, and the
+roadmap marks the item `In progress` with its branch. An assigned item is
+taken, so two people never build the same one in parallel. Agree on its outline
+in the issue — the crate, its modules, the open questions the roadmap lists —
+then open a draft pull request with your first commit, so the work can be seen
+while it grows.
+
 Read **[CLAUDE.md](CLAUDE.md)** before a non-trivial change: the layout, the
 commands and the conventions. Two rules matter most:
 

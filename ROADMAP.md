@@ -10,7 +10,7 @@ Last reviewed **2026-11-17**, against NestJS 12.1 and the npm registry on that d
 |---|---|
 | Proposed | Written down and sized, with no yes yet |
 | Accepted | The owner said yes; its open questions are answered below |
-| In progress | Being built, on the branch named here |
+| In progress | Being built by its issue's assignee, on the branch named here |
 | Shipped in 7.N | Released; its line lives in `changelog/7.N.md` |
 
 ---
@@ -319,8 +319,11 @@ is settled before it ships, not iterated in public.
 ## 6. How an item becomes a release
 
 1. The owner says yes to it by name, and this file says `Accepted`.
-2. It is built on its own branch, through `.claude/rules/manifests-ci.md`'s *Shipping a capability* checklist: umbrella
+2. Whoever builds it, the owner included, is assigned its GitHub issue before writing any code, and this file says
+   `In progress` with the branch. An assigned item is taken, so two people never build the same one in parallel
+   (`CONTRIBUTING.md`, *Before you start*).
+3. It is built on its own branch, through `.claude/rules/manifests-ci.md`'s *Shipping a capability* checklist: umbrella
    feature, docs page with `## Install`, expansion and composition witnesses, and both test suites over TLS.
-3. It ships in the next minor, with its line in `changelog/7.N.md`. Its row moves to § 3, and the page
+4. It ships in the next minor, with its line in `changelog/7.N.md`. Its row moves to § 3, and the page
    `docs/src/content/docs/coming-from-nestjs/` gains its mapping.
-4. A refusal met along the way, or a limit, goes into `.claude/decisions/` and is named here under the item.
+5. A refusal met along the way, or a limit, goes into `.claude/decisions/` and is named here under the item.

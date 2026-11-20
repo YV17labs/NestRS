@@ -88,7 +88,7 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Declares a module, with two keys, each taking a list, each written once:
 /// `imports` holds types (a static `Module`, e.g. `HttpModule` or
-/// `RedisModule::<Cache>`) or call expressions (a configured `DynamicModule`,
+/// `RedisModule<Cache>`) or call expressions (a configured `DynamicModule`,
 /// e.g. `HttpModule::for_root(cfg)`); `providers` holds
 /// `Foo` (a `Discoverable` type) or `Foo as dyn Trait` (a trait-object binding).
 ///

@@ -150,10 +150,10 @@ impl<I: Instance> Module for Drawers<I> {
     }
 }
 
-#[nest_rs_core::module(imports = [Drawers::<Lock>])]
+#[nest_rs_core::module(imports = [Drawers<Lock>])]
 struct LockDrawer;
 
-#[nest_rs_core::module(imports = [Drawers::<left::Twin>])]
+#[nest_rs_core::module(imports = [Drawers<left::Twin>])]
 struct TwinDrawer;
 
 /// The boot of `M` refused as a shared instance: its marker, its namespace and

@@ -191,7 +191,7 @@ A type whose key your app chooses — a resource opened [per instance](/fundamen
 you inject it, an `#[inject]` field or a `Scoped<T>` parameter alike:
 
 ```text frame="terminal"
-unmet dependency: `CacheService` (in module `CatalogModule`) depends on `RedisConnection<Cache>`, which no module this app imports provides. Import `nest_rs::redis::RedisModule::<Cache>`, which opens the Redis connection every binding of the `cache` instance shares.
+unmet dependency: `CacheService` (in module `CatalogModule`) depends on `RedisConnection<Cache>`, which no module this app imports provides. Import `nest_rs::redis::RedisModule<Cache>`, which opens the Redis connection every binding of the `cache` instance shares.
 ```
 
 A resource of your own that an app opens per instance implements

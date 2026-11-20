@@ -167,7 +167,7 @@ async fn a_binding_of_a_named_instance_reads_its_config_under_that_instance() {
     RedisModule::for_root(RedisConfig::default()),
     RedisModule::for_root((Cache, RedisConfig::default())),
     RedisQueueModule,
-    RedisQueueModule::<Cache>,
+    RedisQueueModule<Cache>,
 ])]
 struct QueueOnTwoInstancesModule;
 
@@ -220,7 +220,7 @@ struct NoQueueOnTheCacheModule;
 struct CacheProducerBesideTheDefaultQueueModule;
 
 /// The same provider once the queue is bound on the cache in its place.
-#[module(imports = [RedisQueueModule::<Cache>], providers = [PushesOnTheCache])]
+#[module(imports = [RedisQueueModule<Cache>], providers = [PushesOnTheCache])]
 struct CacheProducerOnTheCacheQueueModule;
 
 /// What the refusal says, last, of the default instance's producer.
@@ -230,7 +230,7 @@ const TOLD_THE_DEFAULT_BINDING: &str = "which no module this app imports provide
 
 /// What the refusal says, last, of the cache's producer.
 const TOLD_THE_CACHE_BINDING: &str = "which no module this app imports provides. Bind the \
-     queue port on the `cache` instance — `nest_rs::redis::RedisQueueModule::<Cache>`, in place \
+     queue port on the `cache` instance — `nest_rs::redis::RedisQueueModule<Cache>`, in place \
      of any other queue binding — or push jobs through the port's `Arc<nest_rs::queue::Jobs>`.";
 
 /// What `app`'s boot says of the producer no binding registers.

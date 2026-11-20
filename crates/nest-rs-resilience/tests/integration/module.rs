@@ -32,12 +32,12 @@ struct TrackingService {
     carrier: Arc<ResiliencePolicy<Carrier>>,
 }
 
-#[module(imports = [ResilienceModule::<Upstream>], providers = [PreviewService])]
+#[module(imports = [ResilienceModule<Upstream>], providers = [PreviewService])]
 struct PreviewsModule;
 
 #[module(
     imports = [
-        ResilienceModule::<Upstream>,
+        ResilienceModule<Upstream>,
         ResilienceModule::for_root((Carrier, ResilienceConfig {
             timeout: Duration::from_millis(100),
             ..quiet()
@@ -126,7 +126,7 @@ async fn a_policy_no_module_builds_is_refused_naming_its_import() {
         .unwrap_or_else(|| panic!("a named unmet dependency, got: {refused:#}"));
     assert!(
         missing.remedy.as_deref().is_some_and(|remedy| {
-            remedy.contains("`nest_rs::resilience::ResilienceModule::<Upstream>`")
+            remedy.contains("`nest_rs::resilience::ResilienceModule<Upstream>`")
         }),
         "{missing}"
     );

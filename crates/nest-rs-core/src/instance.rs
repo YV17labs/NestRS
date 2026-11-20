@@ -146,11 +146,11 @@ inventory::collect!(InstanceDeclaration);
 
 /// `module` as an app imports it for the instance `I`: its bare path for the
 /// default instance, typed with the marker for a named one —
-/// `nest_rs::redis::RedisModule::<Cache>` — the import a remedy names.
+/// `nest_rs::redis::RedisModule<Cache>` — the import a remedy names.
 pub fn typed_import<I: Instance>(module: &str) -> String {
     match I::NAME {
         "" => module.to_owned(),
-        _ => format!("{module}::<{}>", crate::type_name::short_type_name::<I>()),
+        _ => format!("{module}<{}>", crate::type_name::short_type_name::<I>()),
     }
 }
 
@@ -176,7 +176,7 @@ mod tests {
         assert_eq!(instance_phrase::<Unnamed>(), "the default instance");
         assert_eq!(
             typed_import::<Cache>("nest_rs::redis::RedisModule"),
-            "nest_rs::redis::RedisModule::<Cache>"
+            "nest_rs::redis::RedisModule<Cache>"
         );
         assert_eq!(instance_phrase::<Cache>(), "the `cache` instance");
     }

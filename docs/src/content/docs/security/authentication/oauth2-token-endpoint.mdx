@@ -22,7 +22,7 @@ authenticates the client, `AccessTokenRequest` reads the request, and
 `TokenError` is what the handler itself refuses. The clients it registers are
 `OAuthServerConfig<P>`'s, under `<PREFIX>_OAUTH__SERVER__CLIENTS` — a JSON
 array, or its `_FILE` — generic over the payload `P` each client carries,
-your own type: `OAuthServerModule::<P>` registers it, and the
+your own type: `OAuthServerModule<P>` registers it, and the
 boot refuses a registry that could serve no token or the wrong one (none, a
 client with no resource, a duplicate or empty id, an empty secret), naming
 each client by its id. The import also provides what authenticates a client
@@ -41,7 +41,7 @@ use crate::users::UsersModule;
 #[module(
     imports = [
         nest_rs::authn::AuthnModule,
-        OAuthServerModule::<ClientPayload>,
+        OAuthServerModule<ClientPayload>,
         UsersModule,
         SocialModule,
     ],

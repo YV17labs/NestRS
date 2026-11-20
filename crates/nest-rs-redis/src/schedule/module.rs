@@ -17,7 +17,7 @@ use crate::{RedisConnection, RedisModule};
 /// each app that runs such a job; its replicas then share one set of claims,
 /// and each occurrence fires on at most one of them. It claims on the default
 /// instance's connection, or on a named one's when imported as
-/// `RedisScheduleModule::<Locks>`, and imports the [`RedisModule`] opening it.
+/// `RedisScheduleModule<Locks>`, and imports the [`RedisModule`] opening it.
 pub struct RedisScheduleModule<I = Unnamed>(PhantomData<fn() -> I>);
 
 impl<I: Instance> Module for RedisScheduleModule<I> {

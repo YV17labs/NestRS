@@ -233,7 +233,7 @@ impl<S: Strategy> Guard for ClientAuthenticationGuard<S> {
 /// The guard of a token endpoint whose clients
 /// [`OAuthServerConfig<P>`](crate::OAuthServerConfig) registers: RFC 6749
 /// §2.3.1's HTTP Basic pair checked against the registry, provided by
-/// [`OAuthServerModule::<P>`](crate::OAuthServerModule) and bound with
+/// [`OAuthServerModule<P>`](crate::OAuthServerModule) and bound with
 /// `#[use_guards(ClientGuard<P>)]`.
 pub type ClientGuard<P> = ClientAuthenticationGuard<ClientSecretBasicStrategy<P>>;
 

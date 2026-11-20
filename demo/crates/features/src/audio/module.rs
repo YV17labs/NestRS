@@ -6,7 +6,7 @@ use super::service::AudioService;
 use super::transcodes::Transcodes;
 
 #[module(
-    imports = [StorageModule, RedisModule::<Transcodes>],
+    imports = [StorageModule, RedisModule<Transcodes>],
     providers = [AudioService],
 )]
 pub struct AudioModule;

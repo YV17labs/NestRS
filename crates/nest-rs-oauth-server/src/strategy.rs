@@ -18,7 +18,7 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 /// without the header is [`AuthError::MissingCredentials`]; a pair no client
 /// matches is refused without saying which half failed.
 ///
-/// [`OAuthServerModule::<P>`](crate::OAuthServerModule) provides it and its
+/// [`OAuthServerModule<P>`](crate::OAuthServerModule) provides it and its
 /// guard, so an app lists neither:
 ///
 /// ```
@@ -48,7 +48,7 @@ use crate::registry::{AuthenticatedClient, authenticate_against_registry};
 /// }
 ///
 /// #[module(
-///     imports = [OAuthServerModule::<()>],
+///     imports = [OAuthServerModule<()>],
 ///     providers = [TokenController],
 /// )]
 /// struct IssuerModule;

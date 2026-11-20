@@ -192,7 +192,7 @@ pub struct Cache;
 
 #[module(imports = [
     RedisQueueModule,
-    RedisModule::<Cache>,
+    RedisModule<Cache>,
 ])]
 pub struct ApiModule;
 ```
@@ -204,10 +204,10 @@ same keys with its name after the vendor — `<PREFIX>_REDIS__CACHE__URL`,
 on any topology its URL declares. A provider of yours injects it as
 `Arc<RedisConnection<Cache>>`, beside the default's `Arc<RedisConnection>`; in an
 app that opens no such instance, the boot refuses it naming the import,
-`RedisModule::<Cache>`.
+`RedisModule<Cache>`.
 
 A binding runs on the default instance unless its import names another, and
-opens the one it runs on: `RedisScheduleModule::<Locks>` claims on the `locks`
+opens the one it runs on: `RedisScheduleModule<Locks>` claims on the `locks`
 instance, reading `<PREFIX>_REDIS__LOCKS__*`, and a queue there
 reads its lease from `<PREFIX>_REDIS__LOCKS__QUEUE__LEASE_SECS`. A port still
 takes one binding, whichever instance it runs on, and the eviction table above

@@ -55,6 +55,10 @@ It also takes the rename of a name, or of a value, that an OpenTelemetry
 convention still in development makes, named in the changelog
 ([Telemetry names](#telemetry-names)).
 
+A minor may deprecate a spelling it replaces. The old one keeps compiling and
+warns you at its line, naming what to write instead, and the changelog lists it
+under **Deprecated**. 8.0 refuses it.
+
 **A patch fixes.** It corrects behaviour that disagrees with these docs, and
 may change anything in the `__private` tier. It never raises the minimum Rust
 version: a project held to its toolchain takes a patch without reading it.

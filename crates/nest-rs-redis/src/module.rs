@@ -3,8 +3,8 @@
 //! feature attaches its indicator; each binding (`RedisQueueModule`,
 //! `RedisThrottlerModule`, `RedisScheduleModule`) imports it, by the instance it
 //! runs on. An app opening a second Redis names it with an instance marker, as a
-//! typed import, `RedisModule::<Cache>`, and a binding over a named instance
-//! the same way, `RedisScheduleModule::<Locks>`.
+//! typed import, `RedisModule<Cache>`, and a binding over a named instance
+//! the same way, `RedisScheduleModule<Locks>`.
 
 use std::borrow::Borrow;
 use std::marker::PhantomData;
@@ -39,12 +39,12 @@ use crate::{RedisConfig, RedisConnection};
 ///
 /// #[module(imports = [
 ///     RedisQueueModule,
-///     RedisModule::<Cache>,
+///     RedisModule<Cache>,
 ///     RedisModule::for_root((Limits, RedisConfig {
 ///         connect_timeout: Duration::from_secs(2),
 ///         ..RedisConfig::default()
 ///     })),
-///     RedisThrottlerModule::<Limits>,
+///     RedisThrottlerModule<Limits>,
 /// ])]
 /// pub struct AppModule;
 /// ```
@@ -54,7 +54,7 @@ impl RedisModule {
     /// Pin the config of one instance, the base its variables overlay, per
     /// field: the default instance takes a [`RedisConfig`], a named one
     /// `(Marker, config)`. The bare import, `RedisModule` or
-    /// `RedisModule::<Marker>`, reads those variables over the defaults.
+    /// `RedisModule<Marker>`, reads those variables over the defaults.
     pub fn for_root<I: Instance>(config: impl Into<ForInstance<I, RedisConfig>>) -> RedisSetup<I> {
         ConfigModule::setup(config)
     }

@@ -20,7 +20,7 @@ use crate::{RedisConnection, RedisError, RedisModule};
 /// and an app running them imports a queue adapter beside it. A bare import
 /// reads `<PREFIX>_REDIS__QUEUE__*`; [`for_root`](RedisQueueModule::for_root)
 /// pins the base those variables overlay. It queues on the default instance's
-/// connection, or on a named one's — `RedisQueueModule::<Background>` reading
+/// connection, or on a named one's — `RedisQueueModule<Background>` reading
 /// `<PREFIX>_REDIS__BACKGROUND__QUEUE__*` — and imports the
 /// [`RedisModule`] opening it, which an app names only to pin it.
 pub struct RedisQueueModule<I = Unnamed>(PhantomData<fn() -> I>);

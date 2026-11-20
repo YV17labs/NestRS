@@ -261,3 +261,29 @@ instance's is told `RedisModule`: the resource's type carries the line
 (`nest_rs_core::CarriesRemedy`), read off each `#[inject]` field and handler parameter
 declaring it (`declared-need-refused-at-boot.md`, its entry of this date). A resource of
 a package opened per instance implements it the same way.
+
+**2026-11-20 — a bare import is written as its type.** The owner found
+`ResilienceModule::<Upstream>` hard to read beside `HttpModule`, and asked that
+it be refused. The turbofish was `#[module]`'s choice, not Rust's: `imports` was
+read as expressions, where a `<` is a comparison, while every import naming a
+module was already used as a type. `imports` now reads an entry as an
+expression first, for `for_root(..)`, then as a type, so `RedisModule<Cache>`
+is spelled as the field injecting its connection spells `RedisConnection<Cache>`.
+Decided on Elegance, at no cost to the others: the expansion is the same type.
+**The turbofish warns through 7.x and 8.0 refuses it.** Refusing it in 7.1 turns
+every 7.0 app that followed the docs into a compile error, the break
+`semver-7x.md` holds absolute for decorator grammar. The warning is the one a
+stable proc macro can raise, a `#[deprecated]` item the expansion uses at the
+developer's `::`, held by `nest-rs-macro-hygiene`'s snapshot, and `just lint`'s
+`-D warnings` keeps the framework's own tree on the type spelling. The parse
+takes the turbofish out of the type it keeps, so the expansion, a boot error
+naming the import and the warning all spell `RedisModule<Cache>`. The family's
+other members are left as they read: `providers` and the `#[use_*]` lists parse
+types already, where Rust takes both spellings and no page taught the
+turbofish; `bind` and a gateway's `namespace` read a path as an expression and
+take no generic yet, and their reader belongs in `nest_rs_codegen::Grammar` the
+day one does.
+**Refused:** a builder or a constructor naming the instance by value
+(`ResilienceModule::of(Upstream)`), a second seam beside `for_root`
+(`container.md`); a type alias per instance in the docs, a name that hides the
+marker it imports.

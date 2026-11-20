@@ -202,7 +202,7 @@ boot naming the field:
 
 The clients an authorization server registers (RFC 6749 §2), read by
 `OAuthServerConfig<P>` in `nest-rs-oauth-server` once
-`OAuthServerModule::<P>` is imported (or `OAuthServerModule::for_root(cfg)`
+`OAuthServerModule<P>` is imported (or `OAuthServerModule::for_root(cfg)`
 pins it), `P` the payload the app's own type carries:
 
 | Key | Meaning |

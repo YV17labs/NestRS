@@ -32,7 +32,7 @@ use crate::policy::ResiliencePolicy;
 /// pub struct Carrier;
 ///
 /// #[module(imports = [
-///     ResilienceModule::<Payments>,
+///     ResilienceModule<Payments>,
 ///     ResilienceModule::for_root((Carrier, ResilienceConfig {
 ///         timeout: Duration::from_secs(2),
 ///         ..ResilienceConfig::default()
@@ -46,7 +46,7 @@ impl ResilienceModule {
     /// Pin the config of one instance, the base its variables overlay, per
     /// field: the default instance takes a [`ResilienceConfig`], a named one
     /// `(Marker, config)`. The bare import, `ResilienceModule` or
-    /// `ResilienceModule::<Marker>`, reads those variables over the defaults.
+    /// `ResilienceModule<Marker>`, reads those variables over the defaults.
     pub fn for_root<I: Instance>(
         config: impl Into<ForInstance<I, ResilienceConfig>>,
     ) -> ResilienceSetup<I> {

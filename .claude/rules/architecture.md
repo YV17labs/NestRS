@@ -164,8 +164,9 @@ supersedes a bare import; two fail the boot
 `<PREFIX>_<VENDOR>__<INSTANCE>__<PORT>__*`, `<PREFIX>_REDIS__CACHE__URL` for
 `#[instance] struct Cache` — read off the marker's ident like a namespace off
 its path; the default instance, `Unnamed`, inserts nothing. A resource opened
-more than once names the instance as a type argument where it is imported bare
-(`RedisModule::<Cache>`, `<Vendor><Port>Module::<Cache>`), and in the value
+more than once names the instance as a type argument where it is imported bare,
+written as a type (`RedisModule<Cache>`, `<Vendor><Port>Module<Cache>`, which
+`#[module]` holds by warning of the turbofish), and in the value
 where its `for_root` pins it: `x` for the default, `(Cache, x)` for a named
 one. Each instance pins once; two instances never
 contest. A database is never opened twice: `Repo` holds one connection per

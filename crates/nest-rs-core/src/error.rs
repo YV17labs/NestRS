@@ -113,7 +113,7 @@ impl MissingAmbientError {
 /// When the dependency's type names the line to add — a
 /// [`DependencyRemedy`](crate::DependencyRemedy) its crate files,
 /// `RedisQueueModule` for the queue port's `Jobs`, or one it carries
-/// ([`CarriesRemedy`](crate::CarriesRemedy)), `RedisModule::<Cache>` for a named
+/// ([`CarriesRemedy`](crate::CarriesRemedy)), `RedisModule<Cache>` for a named
 /// instance's connection — the refusal says that line in place of the kernel's
 /// generic one:
 ///

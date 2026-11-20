@@ -1,7 +1,9 @@
-use nest_rs_codegen::__private::{path_label, residency_match, site, takes_value, type_label};
+use nest_rs_codegen::__private::{
+    path_label, residency_match, site, takes_value, type_label, ungrouped_expr,
+};
 use nest_rs_codegen::Refusals;
 use proc_macro::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -33,13 +35,12 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         let at = proc_macro2::Literal::usize_unsuffixed(i);
         let label = import_label(import);
         let call = match import {
-            Expr::Path(p) => {
-                let path = &p.path;
-                quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#path>(builder); }
+            Import::Type { ty, .. } => {
+                quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#ty>(builder); }
             }
             // The collect phase built the value and parked it at this site, so the
             // expression is evaluated once.
-            _ => quote! {
+            Import::Value(_) => quote! {
                 builder = ::nest_rs_core::__private::register_dynamic_import(
                     builder,
                     ::std::any::TypeId::of::<#name>(),
@@ -58,16 +59,15 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         let at = proc_macro2::Literal::usize_unsuffixed(i);
         let label = import_label(import);
         let call = match import {
-            Expr::Path(p) => {
-                let path = &p.path;
-                quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#path>(builder); }
+            Import::Type { ty, .. } => {
+                quote! { builder = ::nest_rs_core::ContainerBuilder::import::<#ty>(builder); }
             }
-            other => quote! {
+            Import::Value(value) => quote! {
                 builder = ::nest_rs_core::__private::collect_dynamic_import(
                     builder,
                     ::std::any::TypeId::of::<#name>(),
                     #at,
-                    #other,
+                    #value,
                 );
             },
         };
@@ -93,12 +93,12 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 
     // A dynamic import is named by its value's type, without evaluating it.
     let import_type_ids = args.imports.iter().map(|import| match import {
-        Expr::Path(p) => {
-            let path = &p.path;
-            quote! { || ::std::any::TypeId::of::<#path>() }
+        Import::Type { ty, .. } => quote! { || ::std::any::TypeId::of::<#ty>() },
+        Import::Value(value) => {
+            quote! { || ::nest_rs_core::__private::dynamic_import_module(|| #value) }
         }
-        other => quote! { || ::nest_rs_core::__private::dynamic_import_module(|| #other) },
     });
+    let turbofish_warnings = args.imports.iter().filter_map(turbofish_warning);
     let provider_descriptors = args.providers.iter().map(|binding| match binding {
         ProviderBinding::Concrete(p) => {
             let name_lit = path_label(p);
@@ -396,24 +396,51 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         #descriptor_submission
+
+        #(#turbofish_warnings)*
     }
     .into()
 }
 
 /// An import as a boot error names it — `HttpModule::for_root(..)`, the
 /// arguments left out, since a pinned config may hold a secret.
-fn import_label(import: &Expr) -> String {
+fn import_label(import: &Import) -> String {
     let spelled = |tokens: proc_macro2::TokenStream| {
         tokens.to_string().split_whitespace().collect::<String>()
     };
     match import {
-        Expr::Path(p) => spelled(quote!(#p)),
-        Expr::Call(call) => match &*call.func {
+        Import::Type { ty, .. } => spelled(quote!(#ty)),
+        Import::Value(Expr::Call(call)) => match &*call.func {
             Expr::Path(func) => format!("{}(..)", spelled(quote!(#func))),
             _ => "an import expression".to_owned(),
         },
-        _ => "an import expression".to_owned(),
+        Import::Value(_) => "an import expression".to_owned(),
     }
+}
+
+/// A stable proc macro warns only through a deprecated item its expansion uses,
+/// spanned here at the developer's `::`.
+fn turbofish_warning(import: &Import) -> Option<proc_macro2::TokenStream> {
+    let Import::Type {
+        turbofish: Some(at),
+        ..
+    } = import
+    else {
+        return None;
+    };
+    let note = format!(
+        "{}: write `{}`, a module as its type, without `::` before `<`; NestRS 8.0 refuses \
+         this spelling",
+        site("module", Some("imports")),
+        import_label(import),
+    );
+    Some(quote_spanned! {*at=>
+        const _: () = {
+            #[deprecated(note = #note)]
+            const IMPORT_WRITTEN_WITH_TURBOFISH: () = ();
+            IMPORT_WRITTEN_WITH_TURBOFISH
+        };
+    })
 }
 
 fn path_tail_of_type(ty: &Type) -> String {
@@ -431,12 +458,61 @@ fn path_tail_of_type(ty: &Type) -> String {
 
 #[derive(Default)]
 struct ModuleArgs {
-    imports: Vec<Expr>,
+    imports: Vec<Import>,
     providers: Vec<ProviderBinding>,
 }
 
 const IMPORTS_TAKE: &str = "a list of modules, e.g. `imports = [UsersModule, \
-                            RedisModule::<Cache>, HttpModule::for_root(cfg)]`";
+                            RedisModule<Cache>, HttpModule::for_root(cfg)]`";
+
+/// One entry of `imports`, as written.
+enum Import {
+    /// A module imported by its type, `UsersModule` or `RedisModule<Cache>`,
+    /// with where a turbofish stood when it was written `RedisModule::<Cache>`.
+    Type {
+        ty: syn::TypePath,
+        turbofish: Option<proc_macro2::Span>,
+    },
+    /// A configured value, evaluated once at collect: `HttpModule::for_root(cfg)`.
+    Value(Expr),
+}
+
+impl Import {
+    /// `ty` as the type it names, any turbofish taken out of it.
+    fn of_type(mut ty: syn::TypePath) -> Self {
+        let mut turbofish = None;
+        for segment in &mut ty.path.segments {
+            if let syn::PathArguments::AngleBracketed(arguments) = &mut segment.arguments
+                && let Some(colon2) = arguments.colon2_token.take()
+            {
+                turbofish.get_or_insert(colon2.spans[0]);
+            }
+        }
+        Self::Type { ty, turbofish }
+    }
+}
+
+impl Parse for Import {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        // An expression first, as `for_root(..)` is one: `RedisModule<Cache>` is no
+        // expression, since an expression reads its `<` as a comparison.
+        let expression = input.fork();
+        if expression.parse::<Expr>().is_ok()
+            && (expression.is_empty() || expression.peek(Token![,]))
+        {
+            let value: Expr = input.parse()?;
+            return Ok(match ungrouped_expr(&value) {
+                Expr::Path(path) => Self::of_type(syn::TypePath {
+                    attrs: path.attrs.clone(),
+                    qself: path.qself.clone(),
+                    path: path.path.clone(),
+                }),
+                _ => Self::Value(value),
+            });
+        }
+        input.parse().map(Self::of_type)
+    }
+}
 
 const PROVIDERS_TAKE: &str = "a list of provider types, e.g. `providers = [UsersService]`, or \
      `Store as dyn Cache` to register one under a trait object";
@@ -569,8 +645,11 @@ impl Parse for ModuleArgs {
             let content;
             bracketed!(content in input);
             if name == "imports" {
-                let exprs: Punctuated<Expr, Token![,]> = Punctuated::parse_terminated(&content)?;
-                args.imports.extend(exprs);
+                let imports: Punctuated<Import, Token![,]> = Punctuated::parse_terminated(&content)
+                    .map_err(|stopped| {
+                        syn::Error::new(stopped.span(), takes_value("module", Some(name), takes))
+                    })?;
+                args.imports.extend(imports);
             } else {
                 let bindings: Punctuated<ProviderBinding, Token![,]> =
                     Punctuated::parse_terminated(&content).map_err(|stopped| {
@@ -588,12 +667,13 @@ impl Parse for ModuleArgs {
 mod tests {
     use super::*;
 
+    fn parsed<T: Parse>(tokens: proc_macro2::TokenStream) -> syn::Result<Vec<T>> {
+        let parse = Punctuated::<T, Token![,]>::parse_terminated;
+        syn::parse::Parser::parse2(parse, tokens).map(|read| read.into_iter().collect())
+    }
+
     fn list(tokens: proc_macro2::TokenStream) -> Vec<ProviderBinding> {
-        let parse = Punctuated::<ProviderBinding, Token![,]>::parse_terminated;
-        syn::parse::Parser::parse2(parse, tokens)
-            .expect("a providers list")
-            .into_iter()
-            .collect()
+        parsed(tokens).expect("a providers list")
     }
 
     #[test]
@@ -635,6 +715,89 @@ mod tests {
                 .to_string();
             assert!(refused.starts_with("#[module] `providers`: "), "{refused}");
             assert!(refused.contains(says), "{refused}");
+        }
+    }
+
+    fn imports(tokens: proc_macro2::TokenStream) -> Vec<Import> {
+        parsed(tokens).expect("every entry is an import")
+    }
+
+    /// A path a `macro_rules!` forwards as an `$m:expr`, in its invisible group.
+    fn grouped(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let group = proc_macro2::Group::new(proc_macro2::Delimiter::None, tokens);
+        proc_macro2::TokenTree::Group(group).into()
+    }
+
+    #[test]
+    fn an_import_is_a_module_type_however_its_generics_are_written_or_a_value() {
+        let forwarded = grouped(quote! { RedisModule::<Cache> });
+        let read = imports(quote! {
+            UsersModule,
+            RedisModule<Cache>,
+            crate::cache::RedisModule<crate::Cache>,
+            RedisModule::<Cache>,
+            #forwarded,
+            HttpModule::for_root(cfg),
+            RedisModule::for_root((Cache, cfg)),
+        });
+        let kinds: Vec<String> = read
+            .iter()
+            .map(|import| {
+                let kind = match import {
+                    Import::Type { .. } => "type",
+                    Import::Value(_) => "value",
+                };
+                format!("{kind} {}", import_label(import))
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "type UsersModule",
+                "type RedisModule<Cache>",
+                "type crate::cache::RedisModule<crate::Cache>",
+                "type RedisModule<Cache>",
+                "type RedisModule<Cache>",
+                "value HttpModule::for_root(..)",
+                "value RedisModule::for_root(..)",
+            ]
+        );
+    }
+
+    #[test]
+    fn only_a_turbofish_warns_and_its_note_spells_the_module_as_its_type() {
+        let forwarded = grouped(quote! { RedisModule::<Cache> });
+        let warnings: Vec<Option<String>> = imports(quote! {
+            UsersModule, RedisModule<Cache>, RedisModule::<Cache>, #forwarded,
+            HttpModule::for_root(cfg)
+        })
+        .iter()
+        .map(|import| turbofish_warning(import).map(|warning| warning.to_string()))
+        .collect();
+        let warned: Vec<bool> = warnings.iter().map(Option::is_some).collect();
+        assert_eq!(warned, [false, false, true, true, false]);
+        let warning = warnings[2].as_deref().unwrap_or_default();
+        assert!(
+            warning.contains("#[module] `imports`: write `RedisModule<Cache>`"),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn an_entry_neither_a_module_type_nor_a_value_is_refused_naming_what_imports_take() {
+        for tokens in [
+            quote! { imports = [UsersModule UsersModule] },
+            quote! { imports = [RedisModule<Cache> extra] },
+        ] {
+            let refused = syn::parse2::<ModuleArgs>(tokens)
+                .err()
+                .expect("no import reads this way")
+                .to_string();
+            assert!(
+                refused.starts_with("#[module] `imports` takes "),
+                "{refused}"
+            );
+            assert!(refused.contains("RedisModule<Cache>"), "{refused}");
         }
     }
 }

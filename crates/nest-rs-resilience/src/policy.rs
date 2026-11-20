@@ -31,7 +31,7 @@ use crate::{TARGET, millis};
 /// language model — run under one policy, by every caller in the process.
 ///
 /// Injected as `Arc<ResiliencePolicy<I>>` once a module imports
-/// [`ResilienceModule::<I>`](crate::ResilienceModule), which builds it from
+/// [`ResilienceModule<I>`](crate::ResilienceModule), which builds it from
 /// `<PREFIX>_RESILIENCE__<INSTANCE>__*` ([`ResilienceConfig`]); the default
 /// instance, `ResiliencePolicy`, reads `<PREFIX>_RESILIENCE__*`.
 ///
@@ -71,7 +71,7 @@ use crate::{TARGET, millis};
 ///     }
 /// }
 ///
-/// #[module(imports = [ResilienceModule::<Upstream>], providers = [PreviewService])]
+/// #[module(imports = [ResilienceModule<Upstream>], providers = [PreviewService])]
 /// pub struct PostsModule;
 ///
 /// # #[nest_rs_core::main]
@@ -930,7 +930,7 @@ mod tests {
         assert_eq!(
             ResiliencePolicy::<Upstream>::remedy(),
             format!(
-                "Import `nest_rs::resilience::ResilienceModule::<Upstream>`, which builds the \
+                "Import `nest_rs::resilience::ResilienceModule<Upstream>`, which builds the \
                  policy from {}.",
                 nest_rs_config::var_name("resilience__upstream", "*")
             )

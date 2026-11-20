@@ -13,7 +13,7 @@ use crate::guard::ClientGuard;
 use crate::strategy::ClientSecretBasicStrategy;
 
 /// The authorization server's registry, for an app that issues tokens: the
-/// typed import `OAuthServerModule::<P>` reads [`OAuthServerConfig<P>`] from
+/// typed import `OAuthServerModule<P>` reads [`OAuthServerConfig<P>`] from
 /// `<PREFIX>_OAUTH__SERVER__*` and provides what authenticates a client
 /// against it — [`ClientSecretBasicStrategy<P>`] and its guard,
 /// [`ClientGuard<P>`], which a token endpoint binds with
@@ -29,7 +29,7 @@ where
     OAuthServerConfig<P>: Config,
 {
     /// Pin `config` as the base `<PREFIX>_OAUTH__SERVER__*` overlays, per
-    /// field; the bare import, `OAuthServerModule::<P>`, reads those variables
+    /// field; the bare import, `OAuthServerModule<P>`, reads those variables
     /// over [`OAuthServerConfig<P>`]'s defaults.
     pub fn for_root(config: OAuthServerConfig<P>) -> OAuthServerSetup<P> {
         ConfigModule::setup(config)

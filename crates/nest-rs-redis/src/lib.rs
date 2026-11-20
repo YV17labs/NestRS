@@ -29,9 +29,9 @@
 //!
 //! An app opening a second Valkey — the queue's refuses `allkeys-*` eviction, a
 //! cache's lives by it — names it with an instance marker:
-//! the typed import `RedisModule::<Cache>` reads `<PREFIX>_REDIS__CACHE__*` and
+//! the typed import `RedisModule<Cache>` reads `<PREFIX>_REDIS__CACHE__*` and
 //! provides `RedisConnection<Cache>`, and a binding over a named instance is a
-//! typed import too, `RedisScheduleModule::<Locks>`. Every refusal names the
+//! typed import too, `RedisScheduleModule<Locks>`. Every refusal names the
 //! failing instance's variables, and every line the connection files carries
 //! it as `instance`.
 //!

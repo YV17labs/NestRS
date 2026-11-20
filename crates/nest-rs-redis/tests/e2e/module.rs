@@ -33,7 +33,7 @@ pub(crate) struct Cache;
     RedisModule::for_root(at_default_budget(redis_config())),
     RedisQueueModule,
     RedisModule::for_root((Cache, at_default_budget(redis_config_on(DB_SELECT_RETRIED)))),
-    RedisThrottlerModule::<Cache>,
+    RedisThrottlerModule<Cache>,
 ])]
 struct QueueAndCache;
 

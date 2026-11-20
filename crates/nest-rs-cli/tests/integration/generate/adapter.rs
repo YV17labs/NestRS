@@ -940,14 +940,11 @@ fn generate_queue_writes_the_backend_binding_only_when_the_app_binds_none() {
 #[test]
 fn generate_queue_never_writes_the_connection_its_binding_imports() {
     for (root_lines, writes_the_binding) in [
-        ("RedisModule::<Cache>,", true),
+        ("RedisModule<Cache>,", true),
         ("RedisModule::for_root((Cache, cache())),", true),
         ("RedisModule::for_root(redis()),", true),
-        ("RedisQueueModule::<Jobs>,", false),
-        (
-            "RedisModule::<Jobs>,\n        RedisQueueModule::<Jobs>,",
-            false,
-        ),
+        ("RedisQueueModule<Jobs>,", false),
+        ("RedisModule<Jobs>,\n        RedisQueueModule<Jobs>,", false),
     ] {
         let dir = tempfile::tempdir().unwrap();
         write_fake_workspace(dir.path());

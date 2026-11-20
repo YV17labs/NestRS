@@ -159,7 +159,7 @@ HttpModule::for_root(HttpConfig {
 ```
 
 **Static** — a type, bare or with a type argument naming an instance
-(`RedisModule::<Cache>`, below). Feature adapters like `PostsHttpModule`
+(`RedisModule<Cache>`, below). Feature adapters like `PostsHttpModule`
 import this way, and so does every module reading its config from the
 environment alone (`SeaOrmModule`):
 
@@ -178,7 +178,7 @@ names its `module`: importing `StorageModule::for_root(cfg)` reaches what
 `StorageModule` provides, exactly as importing `StorageModule` does.
 
 A module an app can open once per [instance](/fundamentals/instances/)
-names it as a type argument in a bare import, `BucketModule::<Cache>` beside
+names it as a type argument in a bare import, `BucketModule<Cache>` beside
 the default's bare `BucketModule`, and in the value of a pin,
 `BucketModule::for_root((Cache, cfg))` beside the default's `for_root(cfg)`.
 

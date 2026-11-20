@@ -138,7 +138,7 @@ framework half.
 
 **A module is imported bare to read its environment, and `for_root` only
 pins.** Every module owning a `#[config]` implements `Module` by type, so its
-bare import (`HttpModule`, `RedisModule::<Cache>` for a named instance) queues
+bare import (`HttpModule`, `RedisModule<Cache>` for a named instance) queues
 the environment over `C::default()` and does its whole wiring; a module is
 configured in exactly one place, by exactly one value: `Module::for_root(x)`,
 where `x` carries everything the app pins about it. The `*Setup` it returns is
@@ -170,7 +170,7 @@ the bare import:
   may open more than once: the default instance takes `x`, a named one
   `(Marker, x)`. A value names the instance at `for_root` because Rust applies
   no default type parameter while inferring an expression; a bare import,
-  where it does, names it as a type argument (`RedisModule::<Cache>`).
+  where it does, names it as a type argument (`RedisModule<Cache>`).
 - **`impl ForRootValue<MSetup>`** (`nest_rs_core::__private`) — only when the
   module carries a declaration with **no environment twin** (MCP's identity and
   access, static files' embedded folder, the `Scope`s a resource server's rules
@@ -469,7 +469,7 @@ to go (`.claude/decisions/one-execution-pipeline.md`).
   one instance is the app's spelling unchanged; a binding is a hand-written
   `impl<I: Instance> Module`, since `#[module]` is not generic, importing its
   instance's resource from both phases;
-- the bare import is the typed one (`RedisModule::<Cache>`), whose `collect`
+- the bare import is the typed one (`RedisModule<Cache>`), whose `collect`
   calls `ConfigModule::provide_feature::<I, C>`, and `for_root` takes `impl
   Into<ForInstance<I, C>>`, which `ConfigModule::provide_root` pins; both read
   `C` under the instance's namespace and hold it as `I::Of<C>`, which a
@@ -479,7 +479,7 @@ to go (`.claude/decisions/one-execution-pipeline.md`).
 - every refusal and every line names its instance's variables, and the
   resource, and each provider a binding registers under the instance, carries
   the import a provider injecting it unopened is told (`CarriesRemedy`, naming
-  `RedisModule::<Cache>` for the `cache` instance), which the boot reads off
+  `RedisModule<Cache>` for the `cache` instance), which the boot reads off
   every `#[inject]` field and handler parameter declaring it — compile time
   and refusal only, nothing per request; the instance's config keeps the
   kernel's sentence.

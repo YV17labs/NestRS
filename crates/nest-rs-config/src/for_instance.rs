@@ -12,7 +12,7 @@ use crate::config::Config;
 ///
 /// The default instance takes `x`, a named one `(Marker, x)` — `x` a config
 /// the environment overlays, per field. Nothing pinned is the bare import,
-/// `BucketModule` or `BucketModule::<Media>`, never a value:
+/// `BucketModule` or `BucketModule<Media>`, never a value:
 ///
 /// ```
 /// # use std::marker::PhantomData;
@@ -56,7 +56,7 @@ use crate::config::Config;
 ///
 /// #[module(imports = [
 ///     BucketModule,
-///     BucketModule::<Media>,
+///     BucketModule<Media>,
 ///     BucketModule::for_root((Thumbnails, BucketConfig { name: "thumbs".into() })),
 /// ])]
 /// struct AppModule;

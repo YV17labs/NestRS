@@ -78,7 +78,7 @@ tests](/configuration/testing/).
 ## One seam per module
 
 Every module is imported bare to read its variables — `HttpModule`,
-`SeaOrmModule`, `RedisModule::<Cache>` for a named instance — and
+`SeaOrmModule`, `RedisModule<Cache>` for a named instance — and
 `Module::for_root(x)` is the **only** way to pin one, `x` **one** value
 carrying everything the app pins about it. There is no builder chain to
 continue on the result, no second constructor on the module type, and no
@@ -147,7 +147,7 @@ config for a named one. Each instance pins once, and reads its own variables
 
 ```rust title="apps/api/src/module.rs"
 BucketModule,                                  // the default instance
-BucketModule::<Cache>,                         // the `cache` instance
+BucketModule<Cache>,                           // the `cache` instance
 BucketModule::for_root((Archive, archive())),  // the `archive` instance, pinned
 ```
 

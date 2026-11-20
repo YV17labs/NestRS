@@ -314,7 +314,7 @@ imported_twice!(
 imported_twice!(
     resilience_instance,
     seeds = unseeded,
-    bare = [ResilienceModule::<Cache>],
+    bare = [ResilienceModule<Cache>],
     pinned = [ResilienceModule::for_root((
         Cache,
         ResilienceConfig::default()
@@ -345,7 +345,7 @@ imported_twice!(
 imported_twice!(
     oauth_server,
     seeds = |app| app.provide(pinned_oauth_server()),
-    bare = [OAuthServerModule::<()>],
+    bare = [OAuthServerModule<()>],
     pinned = [OAuthServerModule::for_root(pinned_oauth_server())],
 );
 
@@ -497,9 +497,9 @@ struct RedisInstanceTwicePinned;
 #[module(imports = [
     RedisModule,
     RedisModule::for_root(pinned_redis()),
-    RedisModule::<Cache>,
+    RedisModule<Cache>,
     RedisModule::for_root((Cache, pinned_redis())),
-    RedisModule::<Cache>,
+    RedisModule<Cache>,
 ])]
 struct RedisEachInstancePinnedOnce;
 

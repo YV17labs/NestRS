@@ -86,7 +86,7 @@ async fn two_instances_open_two_connections_each_to_its_own_server() {
 
 /// The cache's budget pinned at the rate limiter's net, on a server that
 /// answers: the boot holds the cache's budget, not the default's, under it.
-#[module(imports = [RedisThrottlerModule::<Cache>])]
+#[module(imports = [RedisThrottlerModule<Cache>])]
 struct PatientCache;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -125,7 +125,7 @@ async fn a_named_instance_s_budget_at_its_binding_s_net_is_refused_naming_its_va
 }
 
 /// The cache's budget pinned at the scheduler's net.
-#[module(imports = [RedisScheduleModule::<Cache>])]
+#[module(imports = [RedisScheduleModule<Cache>])]
 struct LockingCache;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -236,10 +236,10 @@ async fn each_binding_alone_opens_the_connection_it_runs_on() {
     assert!(opens_the_default_instance::<QueueBesideItsResource>(&server).await);
 }
 
-#[module(imports = [RedisThrottlerModule::<Cache>, RedisModule::for_root((Cache, cache_config()))])]
+#[module(imports = [RedisThrottlerModule<Cache>, RedisModule::for_root((Cache, cache_config()))])]
 struct BindingThenPin;
 
-#[module(imports = [RedisModule::for_root((Cache, cache_config())), RedisThrottlerModule::<Cache>])]
+#[module(imports = [RedisModule::for_root((Cache, cache_config())), RedisThrottlerModule<Cache>])]
 struct PinThenBinding;
 
 /// The budget `M`'s boot left the cache's connection pinned at.
@@ -277,7 +277,7 @@ struct RedisLockConfig {
     holders: u64,
 }
 
-#[module(imports = [RedisModule::<Lock>])]
+#[module(imports = [RedisModule<Lock>])]
 struct LockSharingItsNamespace;
 
 #[tokio::test]
@@ -338,7 +338,7 @@ async fn an_unreachable_named_instance_fails_the_boot_naming_its_url() {
     );
 }
 
-#[module(imports = [RedisModule, RedisModule::<Cache>])]
+#[module(imports = [RedisModule, RedisModule<Cache>])]
 struct BothFromTheEnvironment;
 
 /// The cache's variables are the cache's, though the default instance's keys
@@ -442,7 +442,7 @@ async fn told_to_open_the_cache<M: Module + 'static>(consumer: &str) {
     assert!(
         said.ends_with(
             "which no module this app imports provides. Import \
-             `nest_rs::redis::RedisModule::<Cache>`, which opens the Redis connection every \
+             `nest_rs::redis::RedisModule<Cache>`, which opens the Redis connection every \
              binding of the `cache` instance shares."
         ),
         "{said}"

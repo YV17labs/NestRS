@@ -114,7 +114,8 @@ pub(super) fn list_dir(dir: &Path) -> CliResult<Vec<PathBuf>> {
 }
 
 /// Whether `source` names `ident` outside its `use` lines: an import listed
-/// bare, pinned (`X::for_root(..)`) or of a named instance (`X::<I>`) alike.
+/// bare, pinned (`X::for_root(..)`) or of a named instance (`X<I>`, or 7.0's
+/// `X::<I>`) alike.
 fn names(source: &str, ident: &str) -> bool {
     source.lines().any(|line| {
         let line = line.trim_start();
@@ -211,6 +212,7 @@ mod tests {
         for source in [
             "#[module(imports = [SeaOrmModule])]",
             "    imports = [SeaOrmModule::for_root(cfg), Other],",
+            "        SeaOrmModule<Analytics>,",
             "        SeaOrmModule::<Analytics>,",
         ] {
             assert!(names(source, "SeaOrmModule"), "{source}");

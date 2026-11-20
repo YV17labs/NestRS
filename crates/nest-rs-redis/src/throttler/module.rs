@@ -18,7 +18,7 @@ use crate::{RedisConnection, RedisModule};
 /// across every replica of the app; the policy (`<PREFIX>_THROTTLER__*`) and the
 /// `ThrottlerGuard` stay the port's. It counts on the default instance's
 /// connection, or on a named one's when imported as
-/// `RedisThrottlerModule::<Cache>`, and imports the [`RedisModule`] opening it.
+/// `RedisThrottlerModule<Cache>`, and imports the [`RedisModule`] opening it.
 pub struct RedisThrottlerModule<I = Unnamed>(PhantomData<fn() -> I>);
 
 impl<I: Instance> Module for RedisThrottlerModule<I> {

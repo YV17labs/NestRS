@@ -45,7 +45,7 @@ cargo add nest-rs --features resilience
 ## Wire it in
 
 A policy is named by an instance marker, one per dependency, and the module
-whose provider injects it imports `ResilienceModule::<Upstream>` bare. Every
+whose provider injects it imports `ResilienceModule<Upstream>` bare. Every
 module importing one instance shares its one policy, so one breaker counts the
 failures of every caller.
 
@@ -63,7 +63,7 @@ use nest_rs::resilience::ResilienceModule;
 use crate::posts::service::PostsService;
 use crate::posts::upstream::Upstream;
 
-#[module(imports = [ResilienceModule::<Upstream>], providers = [PostsService])]
+#[module(imports = [ResilienceModule<Upstream>], providers = [PostsService])]
 pub struct PostsModule;
 ```
 

@@ -44,7 +44,7 @@ fn pinned(slots: u16) -> ShelfConfig {
     ShelfConfig { slots: Some(slots) }
 }
 
-#[module(imports = [ShelfModule, ShelfModule::<Cache>])]
+#[module(imports = [ShelfModule, ShelfModule<Cache>])]
 struct BothRead;
 
 #[module(imports = [ShelfModule::for_root(pinned(2)), ShelfModule::for_root((Cache, pinned(3)))])]
@@ -53,7 +53,7 @@ struct BothPinned;
 #[module(imports = [ShelfModule::for_root((Cache, pinned(3))), ShelfModule::for_root((Cache, pinned(4)))])]
 struct CachePinnedTwice;
 
-#[module(imports = [ShelfModule::<Cache>])]
+#[module(imports = [ShelfModule<Cache>])]
 struct CacheBare;
 
 /// Boot `M` inside a jail holding `vars`, answering the app or its refusal.
@@ -159,7 +159,7 @@ fn a_marker_declared_inside_a_function_reads_its_own_namespace() {
     #[instance]
     struct Local;
 
-    #[module(imports = [ShelfModule::<Local>])]
+    #[module(imports = [ShelfModule<Local>])]
     struct LocalRead;
 
     let app = boot::<LocalRead>(&[(var_name("shelf__local", "SLOTS"), "4")])

@@ -9,7 +9,7 @@ use crate::users::UsersModule;
 #[module(
     imports = [
         nest_rs::authn::AuthnModule,
-        OAuthServerModule::<ClientPayload>,
+        OAuthServerModule<ClientPayload>,
         UsersModule,
         SocialModule,
     ],

@@ -60,7 +60,7 @@ async fn each_instance_answers_the_readiness_and_startup_probes_under_its_own_na
 struct CachingFeature;
 
 /// A second feature opening the same instance, bare.
-#[module(imports = [RedisModule::<Cache>])]
+#[module(imports = [RedisModule<Cache>])]
 struct CacheReadingFeature;
 
 /// An app naming no Redis of its own: its features open the cache.

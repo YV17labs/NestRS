@@ -99,7 +99,7 @@ At boot:
    `<PREFIX>_REDIS__*` and registers the factory that opens the
    `RedisConnection`; the first config the boot loads registers the active
    environment.
-2. `RedisModule::<Cache>`, in an app opening a second Valkey, does the same
+2. `RedisModule<Cache>`, in an app opening a second Valkey, does the same
    under `<PREFIX>_REDIS__CACHE__*`.
 3. `RedisQueueModule` registers factories — declared to run after the
    connection's — that bind the port's `Jobs` over `RedisQueueProducer` and

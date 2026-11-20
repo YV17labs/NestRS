@@ -91,7 +91,8 @@ stable major, and no release candidate holds it.
    (`a-column-reads-in-one-type.md`).
 
 **When a forced major comes**, 8.0 stays mechanical: it moves the dependency, takes what that move requires, and ships an
-upgrade guide. No redesign rides along. `SECURITY.md` already bounds its pace: a major ships at most every six months,
+upgrade guide. No redesign rides along. It also refuses what a 7.x minor deprecated, each listed under its changelog's
+*Deprecated*. `SECURITY.md` already bounds its pace: a major ships at most every six months,
 announced four weeks ahead with its upgrading guide. A rare, small major is the healthy outcome. A long line that holds a vulnerable
 or outdated library is not.
 

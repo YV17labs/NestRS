@@ -98,7 +98,7 @@ import nothing beside it:
 |---|---|---|---|
 | The SeaORM pool | `SeaOrmModule` | `seaorm` | `DatabaseConnection::ping` |
 | A Redis instance | `RedisModule` | `redis` | `PING` on the instance's connection |
-| A named Redis instance | `RedisModule::<Cache>` | `redis:cache` | the same, on that instance |
+| A named Redis instance | `RedisModule<Cache>` | `redis:cache` | the same, on that instance |
 | The object store | `StorageModule` | `storage` | one page of the bucket's listing |
 
 The queue and the outbox are read through the Valkey and the pool they run on; the
@@ -144,7 +144,7 @@ sends — the Redis connection's
 **A key names the resource, never the probe.** A framework indicator is named
 for the crate owning the resource, plus `:` and the instance for a
 [named one](/queue/topologies/#a-second-valkey) — `redis:cache` for the
-instance `RedisModule::<Cache>` opens — so a readiness `503`
+instance `RedisModule<Cache>` opens — so a readiness `503`
 says which Valkey went away. Your own indicator keeps its method name: a method
 named `redis` in an app that opens Redis fails the boot naming both, and the
 fix is to drop yours.

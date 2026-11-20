@@ -159,7 +159,7 @@ impl ConfigModule {
     ///
     /// #[instance]
     /// pub struct Uploads;
-    /// # #[module(imports = [BucketModule::<Uploads>])]
+    /// # #[module(imports = [BucketModule<Uploads>])]
     /// # struct AppModule;
     /// # #[nest_rs_core::main]
     /// # async fn main() -> anyhow::Result<()> {

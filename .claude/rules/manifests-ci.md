@@ -212,6 +212,9 @@ readers, and the two move in one change.
   changelog. It also takes the rename of a name, or a listed value, its
   convention in development makes (above). **A patch fixes** behaviour and tier
   2, and never raises the MSRV.
+- **A minor may deprecate a spelling its own addition replaces**: the old one
+  keeps compiling and warns through rustc's `deprecated` lint, naming what to
+  write, under the changelog's `### Deprecated`, until 8.0 refuses it.
 - **A security fix refusing an insecure configuration that used to boot is a
   patch** (`decisions/semver-7x.md`, 2026-10-12): it ships under the
   changelog's `### Security`, with an upgrading line naming the refused

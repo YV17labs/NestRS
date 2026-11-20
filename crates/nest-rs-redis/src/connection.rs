@@ -66,7 +66,7 @@ const SCRIPT_LOADS: u32 = 3;
 /// on a Cluster, a script or a pipeline names keys of one hash slot.
 ///
 /// `I` is the instance it serves: [`Unnamed`], the default, unless the app
-/// opened another with `RedisModule::<Cache>` and injects
+/// opened another with `RedisModule<Cache>` and injects
 /// `Arc<RedisConnection<Cache>>`. Every line it files carries the instance as
 /// `instance`, and every refusal names that instance's variables.
 pub struct RedisConnection<I = Unnamed> {
@@ -172,7 +172,7 @@ impl RedisConnection {
     /// be reached. A `rediss://` URL pointed at a plaintext Redis runs out the
     /// budget as an unreachable one does.
     ///
-    /// A named instance's connection is opened by `RedisModule::<Cache>`, whose
+    /// A named instance's connection is opened by `RedisModule<Cache>`, whose
     /// refusals name `<PREFIX>_REDIS__CACHE__*`.
     pub async fn connect(config: &RedisConfig) -> Result<Self, RedisError> {
         Self::open(config).await

@@ -3,7 +3,7 @@
 //! language model — so a slow one holds no request past its timeout and a down
 //! one is not hammered by every retry.
 //!
-//! Import [`ResilienceModule::<I>`](ResilienceModule) in the module whose
+//! Import [`ResilienceModule<I>`](ResilienceModule) in the module whose
 //! provider injects `Arc<ResiliencePolicy<I>>`, for an instance marker
 //! `#[instance] struct I` naming the dependency
 //! (`<PREFIX>_RESILIENCE__<INSTANCE>__*`, [`ResilienceConfig`]), and run each

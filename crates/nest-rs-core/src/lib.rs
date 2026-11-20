@@ -252,7 +252,7 @@ pub mod __private {
         HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor, reachable_providers,
     };
     pub use crate::ambient::{
-        Pending, ReadsWithheld, attached, install_pending, with_ambient_from,
+        Pending, ReadsWithheld, attached, install_pending, with_ambient_from, with_deadline,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{
@@ -286,7 +286,7 @@ pub mod __private {
     };
     pub use crate::injected_factory::InjectedFactory;
     pub use crate::injects::Injects;
-    pub use crate::instance::{InstanceDeclaration, InstanceSeal};
+    pub use crate::instance::{InstanceDeclaration, InstanceSeal, instance_phrase, typed_import};
     pub use crate::interceptor::__private::{InterceptorRegistration, register_interceptor};
     pub use crate::interceptor::{InterceptorSpec, interceptor};
     pub use crate::layer_chain::__private::{
@@ -300,6 +300,7 @@ pub mod __private {
         ConsoleLayer, LibraryClamp, LogFilter, ProfileSource, TextFormat, filter_dispatch,
         install_global_subscriber, log_filter,
     };
+    pub use crate::millis::millis;
     pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
     pub use crate::opaque::__private::OpaqueCause;
     pub use crate::operation_log::__private::{

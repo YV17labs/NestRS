@@ -278,7 +278,10 @@ impl<E: Endpoint> EdgeEndpoint<E> {
         });
         // The deadline arms on the first `Pending`: a timeout only fires at an
         // await point anyway, so a synchronous response skips the timer wheel.
-        let inner = continuation.scope(self.inner.call(req));
+        let inner = continuation.scope(nest_rs_core::__private::with_deadline(
+            deadline.as_ref().map(RequestDeadline::at),
+            self.inner.call(req),
+        ));
         let result = match deadline {
             Some(deadline) => {
                 let mut inner = pin!(inner);

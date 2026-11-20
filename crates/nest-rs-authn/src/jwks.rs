@@ -29,7 +29,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use jsonwebtoken::DecodingKey;
-use reqwest::header::{ACCEPT, AGE, CACHE_CONTROL, HeaderMap, HeaderName, RETRY_AFTER};
+use reqwest::header::{
+    ACCEPT, AGE, CACHE_CONTROL, DATE, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER,
+};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -114,7 +116,7 @@ struct Held {
 struct Failure {
     /// What failed and why, shared by every token it answers.
     cause: OpaqueCause,
-    /// The issuer's own `Retry-After`, when it gave one in delay-seconds.
+    /// The issuer's own `Retry-After`, in either form it gives one.
     retry_after: Option<Duration>,
 }
 
@@ -293,6 +295,7 @@ impl Inner {
             .map_err(|error| self.call_failed(error))?;
         let mut response = nest_rs_reqwest::__private::traced(
             request,
+            nest_rs_reqwest::__private::Resent::default(),
             |request| self.client.execute(request),
             reqwest::Error::is_timeout,
         )
@@ -301,7 +304,7 @@ impl Inner {
         let status = response.status();
         if !status.is_success() {
             let retry_after = (status.as_u16() == 429 || status.is_server_error())
-                .then(|| delay_seconds(response.headers(), RETRY_AFTER))
+                .then(|| asked_wait(response.headers()))
                 .flatten();
             let redirect = if status.is_redirection() {
                 " — a redirect is not followed: set the URI it points to"
@@ -568,29 +571,31 @@ fn max_age(headers: &HeaderMap) -> Option<Duration> {
                 return Some(Duration::ZERO);
             }
             if stated.is_none() && name.eq_ignore_ascii_case("max-age") {
-                stated = argument.and_then(seconds);
+                stated = argument.and_then(|seconds| {
+                    nest_rs_reqwest::__private::delay_seconds(seconds.as_bytes())
+                });
             }
         }
     }
     stated
 }
 
-/// A `delay-seconds` header (`Retry-After`, `Age`); an HTTP-date would trust
-/// the issuer's clock, and is not read.
+/// The wait a `Retry-After` asks, an HTTP-date one counted from the answer's own
+/// `Date`.
+fn asked_wait(headers: &HeaderMap) -> Option<Duration> {
+    headers.get(RETRY_AFTER).and_then(|asked| {
+        nest_rs_reqwest::__private::retry_after(
+            asked.as_bytes(),
+            headers.get(DATE).map(HeaderValue::as_bytes),
+        )
+    })
+}
+
+/// A `delay-seconds` header (`Age`).
 fn delay_seconds(headers: &HeaderMap, name: HeaderName) -> Option<Duration> {
     headers
         .get(name)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| seconds(value.trim()))
-}
-
-/// RFC 9111 §1.2.2's `delay-seconds`: digits, a value past what fits read as
-/// the largest.
-fn seconds(digits: &str) -> Option<Duration> {
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    Some(Duration::from_secs(digits.parse().unwrap_or(u64::MAX)))
+        .and_then(|value| nest_rs_reqwest::__private::delay_seconds(value.as_bytes()))
 }
 
 #[cfg(test)]
@@ -665,11 +670,15 @@ mod tests {
     }
 
     #[test]
-    fn a_retry_after_is_read_in_delay_seconds_only() {
-        let read = |value| delay_seconds(&headers(&[(RETRY_AFTER, value)]), RETRY_AFTER);
+    fn a_retry_after_is_read_in_either_form_a_date_against_the_answers_own() {
+        let read = |value| asked_wait(&headers(&[(RETRY_AFTER, value)]));
         assert_eq!(read("120"), Some(Duration::from_secs(120)));
-        assert_eq!(read("Wed, 21 Oct 2015 07:28:00 GMT"), None);
-        assert_eq!(read("-5"), None);
+        let dated = headers(&[
+            (RETRY_AFTER, "Wed, 21 Oct 2015 07:28:30 GMT"),
+            (DATE, "Wed, 21 Oct 2015 07:28:00 GMT"),
+        ]);
+        assert_eq!(asked_wait(&dated), Some(Duration::from_secs(30)));
+        assert_eq!(read("soon"), None);
     }
 
     #[test]

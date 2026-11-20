@@ -1,0 +1,240 @@
+---
+title: Resilience
+description: "Wrap every call to a dependency you do not control in a named policy: a timeout per attempt, retries when idempotent, a circuit breaker, a bulkhead."
+sidebar:
+  order: 11.6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A slow upstream holds every request that calls it, and a down one is hammered by
+every retry. A resilience policy bounds each call to that dependency, attempts
+an idempotent one again, and stops calling it while it fails, so your client is
+answered `503` with a `Retry-After` instead of a hung request.
+
+```rust title="crates/features/src/posts/service.rs"
+use std::sync::Arc;
+
+use nest_rs::core::injectable;
+use nest_rs::resilience::{ResilienceError, ResiliencePolicy};
+
+use crate::posts::error::UpstreamError;
+use crate::posts::upstream::Upstream;
+
+#[injectable]
+pub struct PostsService {
+    #[inject]
+    upstream: Arc<ResiliencePolicy<Upstream>>,
+}
+
+impl PostsService {
+    pub async fn preview(&self, url: &str) -> Result<String, ResilienceError<UpstreamError>> {
+        self.upstream
+            .run_idempotent(|_cancel| async move { Ok(format!("a preview of {url}")) })
+            .await
+    }
+}
+```
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features resilience
+```
+
+## Wire it in
+
+A policy is named by an instance marker, one per dependency, and the module
+whose provider injects it imports `ResilienceModule::<Upstream>` bare. Every
+module importing one instance shares its one policy, so one breaker counts the
+failures of every caller.
+
+```rust title="crates/features/src/posts/upstream.rs"
+use nest_rs::core::instance;
+
+#[instance]
+pub struct Upstream;
+```
+
+```rust title="crates/features/src/posts/module.rs"
+use nest_rs::core::module;
+use nest_rs::resilience::ResilienceModule;
+
+use crate::posts::service::PostsService;
+use crate::posts::upstream::Upstream;
+
+#[module(imports = [ResilienceModule::<Upstream>], providers = [PostsService])]
+pub struct PostsModule;
+```
+
+The bare import reads `<PREFIX>_RESILIENCE__UPSTREAM__*`. A root pins a base those
+variables overlay with `ResilienceModule::for_root((Upstream, ResilienceConfig { .. }))`,
+and the default instance, `ResiliencePolicy`, reads `<PREFIX>_RESILIENCE__*`.
+
+## Run a call
+
+`run` attempts its call once, `run_idempotent` attempts it again after a failure
+or a timeout, up to the policy's retries, each retry waiting a jittered backoff
+first. The choice is yours to make, and nothing else makes it: replaying a call
+that is not idempotent would charge a card twice.
+
+**Every `Err` counts as the dependency failing**, for the retry and for the
+breaker. An answer the dependency gave — a declined card, a parcel it does not
+know — belongs in the call's `Ok`: return `Ok(Err(declined))`, and it is neither
+attempted again nor counted. An error whose chain carries a `Problem` with a
+`Retry-After` — an upstream's `429` passed on — holds its retry back that long.
+A fallback is the `Result` you get back: `.or_else(|_| cached())`.
+
+**No attempt outlives its unit.** Each attempt ends at the policy's timeout or at
+the deadline of the unit it runs in — the request timeout on HTTP, a message's on
+a socket, a job's on the queue — whichever comes first, and no retry starts whose
+wait would end past that deadline. An attempt the deadline ended counts as a
+timeout, in the breaker too.
+
+Each attempt is handed a `CancellationToken`, cancelled when the policy gives the
+attempt up. Rust cancels the attempt's future by dropping it; the token is for
+work the call handed to another task, which the drop does not reach.
+
+## What the client is told
+
+A refusal of the policy is a `ResilienceError` every edge answers `503`,
+`UNAVAILABLE`:
+
+| Variant | When | Retry-After |
+|---|---|---|
+| `TimedOut` | the last attempt ended at its timeout or at the unit's deadline | none |
+| `Open` | the breaker is open; the call was not sent | the time until it lets a call through, rounded up |
+| `Full` | every slot of the bulkhead stayed taken for as long as the call waits | none |
+| `Failed` | the call answered its own error on its last attempt | what that error's `ToProblem` says, else a `Problem` its chain carries; opaque `500` otherwise |
+
+The call's error says what its own failure tells a client, so it implements
+`ToProblem` — answering nothing, for a failure no client should read:
+
+```rust title="crates/features/src/posts/error.rs"
+use nest_rs::core::{Problem, ToProblem};
+
+#[derive(Debug, thiserror::Error)]
+#[error("the upstream failed")]
+pub struct UpstreamError(#[source] reqwest_middleware::Error);
+
+impl ToProblem for UpstreamError {
+    fn to_problem(&self) -> Option<Problem> {
+        None
+    }
+}
+```
+
+A route, a resolver, a gateway's message or a tool then returns
+`ResilienceError<UpstreamError>` as it is. A domain error of your own wrapping
+it hands its problem on with `self.0.to_problem()`, and a queue job failing on an
+open breaker waits at least its `Retry-After` before its next attempt.
+
+## The circuit breaker
+
+The breaker counts the latest `BREAKER_WINDOW` attempts. Once `BREAKER_FAILURES`
+of them failed, it opens: every call is refused at once, unsent, for
+`BREAKER_OPEN_SECS`. Then one call probes the dependency while the others are
+still refused; its success closes the breaker, its failure opens it again.
+
+On the defaults, it reads like this. The upstream goes down, and the tenth
+failure among its latest twenty attempts opens the breaker. For the next thirty
+seconds, each call is refused without being sent, and its client is answered
+`503` at once, its `Retry-After` counting down from `30`, instead of waiting out
+a five-second timeout. Then one call probes the upstream: if it answers, the
+breaker closes and calls flow again; if it fails, the breaker opens for another
+thirty seconds.
+
+Each transition is a `warn` on `nest_rs::resilience`, naming the instance and the
+state it entered. A retry is a `debug` on the same target. Once telemetry
+exports, every policy counts, by `nestrs.resilience.instance`:
+
+| Counter | One per |
+|---|---|
+| `nestrs.resilience.breaker.transitions` | transition, by `nestrs.resilience.breaker.state`: `open`, `half_open`, `closed` |
+| `nestrs.resilience.retries` | call sent again |
+| `nestrs.resilience.refusals` | run ending on the policy's refusal, by `nestrs.resilience.refusal`: `timed_out`, `open`, `full` |
+
+## Your reqwest client
+
+`ResilienceMiddleware` runs every request your own reqwest client sends under a
+policy. It sends again only a request its method declares idempotent (`GET`,
+`HEAD`, `PUT`, `DELETE`, `OPTIONS`, `TRACE`, `QUERY`) or one carrying an
+`Idempotency-Key`, and only when its body can be sent twice.
+
+```rust title="crates/features/src/posts/client.rs"
+use std::sync::Arc;
+
+use nest_rs::reqwest::ReqwestMiddleware;
+use nest_rs::resilience::{ResilienceMiddleware, ResiliencePolicy};
+
+use crate::posts::upstream::Upstream;
+
+pub fn upstream_client(
+    policy: Arc<ResiliencePolicy<Upstream>>,
+) -> reqwest_middleware::ClientWithMiddleware {
+    reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+        .with(ResilienceMiddleware::new(policy))
+        .with(ReqwestMiddleware::new())
+        .build()
+}
+```
+
+A transport failure, a timeout, and a `408`, `429`, `500`, `502`, `503` or `504`
+are attempted again and count in the breaker; any other answer is the
+dependency's. A `429`'s or a `503`'s `Retry-After` is waited whole — in seconds,
+or an HTTP-date counted from the answer's own `Date`, so no clock skew enters —
+and one past `BACKOFF_CEILING_MS` ends the run with that answer. The last answer
+comes back as it came; a refusal is a `reqwest_middleware::Error::Middleware`.
+
+<Aside type="caution">
+The resilience middleware goes before `ReqwestMiddleware`: each attempt is then
+a client span of its own, numbered by `http.request.resend_count`. Added after
+it, it refuses every request, unsent, with an error saying so.
+</Aside>
+
+## Test it
+
+`nest_rs::testing::HttpsPeer` stands in for the upstream: an HTTPS peer on
+loopback presenting a `TestAuthority` certificate, answering each request from a
+script — `PeerAnswer::status(503).header("retry-after", "1")`, then
+`PeerAnswer::status(200)` — and keeping every request's head, so a test asserts
+what was sent again and what each attempt carried.
+
+## Configuration
+
+Each key is read under `<PREFIX>_RESILIENCE__` for the default instance and
+`<PREFIX>_RESILIENCE__<INSTANCE>__` for a named one, or pinned through
+`ResilienceConfig`'s field of the same name.
+
+| Key | Meaning |
+|---|---|
+| `TIMEOUT_MS` | how long one attempt waits for its answer, the unit's deadline permitting — default `5000`; from `1` to `600000` (ten minutes) |
+| `RETRIES` | how many times an idempotent call is attempted again — default `2`; from `1` to `10`, `0` for none |
+| `BACKOFF_FIRST_MS` | about how long the first retry waits; each after it waits twice the last, jittered by ±20 % — default `200`; from `1` to `300000`, at most `BACKOFF_CEILING_MS` |
+| `BACKOFF_CEILING_MS` | the longest a retry waits, and the longest `Retry-After` honoured — default `2000`; from `1` to `300000` (five minutes) |
+| `BREAKER_WINDOW` | how many of the latest attempts the breaker counts — default `20`; from `1` to `10000`, `0` for no breaker |
+| `BREAKER_FAILURES` | how many failed attempts in the window open it — default `10`; from `1` to `BREAKER_WINDOW` |
+| `BREAKER_OPEN_SECS` | how long it refuses every call before one probes — default `30`; from `1` to `3600` |
+| `CONCURRENCY` | how many calls run inside the policy at once, the bulkhead — default none; from `1` to `65536`, `0` for none |
+| `CONCURRENCY_WAIT_MS` | how long a call waits for a free slot before it is refused, the unit's deadline permitting — default `0`, refused at once; up to `60000` |
+
+A value out of its range fails the boot naming the variable, and so do two that
+cannot work together: a first wait above the ceiling, or more failures than the
+window holds.
+
+## Limits
+
+- **The state lives in the process.** Each replica keeps its own breaker and
+  bulkhead: a breaker opens on the failures its own replica saw, and a
+  dependency failing for one replica is refused by that one alone.
+- **One probe at a time.** While it runs, every other call is refused, told to
+  wait one timeout.
+
+## Going further
+
+- [Calling another service](/fundamentals/calling-another-service/) — the trace
+  and the client span every request of your reqwest client carries.
+- [Problem details](/http/problem-details/) — the `503` document a refusal
+  answers on HTTP.
+- [Retries and failure](/queue/retries-and-failure/) — how a job waits the
+  `Retry-After` its failure carries.

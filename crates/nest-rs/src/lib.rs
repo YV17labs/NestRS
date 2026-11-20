@@ -177,6 +177,14 @@ pub mod health {
     pub use nest_rs_health::*;
 }
 
+/// Resilience: named policies around an outbound call — a timeout per attempt,
+/// retries for an idempotent call, a circuit breaker and a bulkhead.
+#[cfg(feature = "resilience")]
+pub mod resilience {
+    #[doc(no_inline)]
+    pub use nest_rs_resilience::*;
+}
+
 /// Rate limiting: `ThrottlerGuard` and the `ThrottlerStore` port.
 #[cfg(feature = "throttler")]
 pub mod throttler {

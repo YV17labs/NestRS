@@ -12,7 +12,7 @@ use nest_rs_core::client_operation::{
 };
 use nest_rs_core::{Correlation, TraceParent};
 
-use crate::{Behaviour, Peer, client};
+use crate::{answering, client, header, silent};
 
 /// Long enough for any answer the peer gives on loopback.
 const ANSWERED: Duration = Duration::from_secs(10);
@@ -56,7 +56,7 @@ fn parent_named(traceparent: Option<String>) -> Option<String> {
 
 #[tokio::test]
 async fn a_request_inside_a_unit_carries_a_span_of_its_own_in_the_units_trace() {
-    let peer = Peer::serving(Behaviour::Answer(200)).await;
+    let peer = answering(200).await;
     let unit = Correlation::minted(None);
 
     nest_rs_core::with_request_scope(None, unit.clone(), async {
@@ -68,8 +68,7 @@ async fn a_request_inside_a_unit_carries_a_span_of_its_own_in_the_units_trace() 
     })
     .await;
 
-    let traceparent = peer
-        .header(0, "traceparent")
+    let traceparent = header(&peer, 0, "traceparent")
         .as_deref()
         .and_then(TraceParent::parse)
         .expect("a traceparent");
@@ -79,12 +78,12 @@ async fn a_request_inside_a_unit_carries_a_span_of_its_own_in_the_units_trace() 
         unit.span_id(),
         "a span of the request's own, under the unit's"
     );
-    assert_eq!(peer.header(0, "baggage"), None);
+    assert_eq!(header(&peer, 0, "baggage"), None);
 }
 
 #[tokio::test]
 async fn a_request_outside_every_unit_carries_no_trace_context() {
-    let peer = Peer::serving(Behaviour::Answer(200)).await;
+    let peer = answering(200).await;
 
     client(ANSWERED)
         .get(peer.url("/"))
@@ -92,15 +91,15 @@ async fn a_request_outside_every_unit_carries_no_trace_context() {
         .await
         .expect("answered");
 
-    assert_eq!(peer.header(0, "traceparent"), None);
+    assert_eq!(header(&peer, 0, "traceparent"), None);
 }
 
 #[tokio::test]
 async fn a_request_is_recorded_by_its_method_server_and_status_never_its_path_or_query() {
     nest_rs_core::__private::set_client_recorder(capture, true);
-    let accepting = Peer::serving(Behaviour::Answer(200)).await;
-    let refusing = Peer::serving(Behaviour::Answer(503)).await;
-    let silent = Peer::serving(Behaviour::Silent).await;
+    let accepting = answering(200).await;
+    let refusing = answering(503).await;
+    let silent = silent().await;
     let unit = Correlation::minted(None);
 
     nest_rs_core::with_request_scope(None, unit, async {
@@ -143,7 +142,7 @@ async fn a_request_is_recorded_by_its_method_server_and_status_never_its_path_or
     assert_eq!(accepted.error_type, None);
     assert_eq!(
         accepted.span,
-        parent_named(accepting.header(0, "traceparent")),
+        parent_named(header(&accepting, 0, "traceparent")),
         "the span recorded is the one the peer was told is its parent",
     );
 
@@ -156,7 +155,7 @@ async fn a_request_is_recorded_by_its_method_server_and_status_never_its_path_or
 #[tokio::test]
 async fn a_request_its_caller_gives_up_on_is_still_the_span_its_peer_was_told_of() {
     nest_rs_core::__private::set_client_recorder(capture, true);
-    let silent = Peer::serving(Behaviour::Silent).await;
+    let silent = silent().await;
     let unit = Correlation::minted(None);
 
     nest_rs_core::with_request_scope(None, unit, async {
@@ -185,7 +184,7 @@ async fn a_request_its_caller_gives_up_on_is_still_the_span_its_peer_was_told_of
     );
     assert_eq!(
         given_up.span,
-        parent_named(silent.header(0, "traceparent")),
+        parent_named(header(&silent, 0, "traceparent")),
         "the peer's parent exists",
     );
 }

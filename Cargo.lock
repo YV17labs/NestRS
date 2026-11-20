@@ -2596,6 +2596,7 @@ dependencies = [
  "nest-rs-queue",
  "nest-rs-redis",
  "nest-rs-reqwest",
+ "nest-rs-resilience",
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",
@@ -3240,6 +3241,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "nest-rs-resilience"
+version = "7.0.0"
+dependencies = [
+ "anyhow",
+ "async-graphql",
+ "async-trait",
+ "http",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-graphql",
+ "nest-rs-guards",
+ "nest-rs-http",
+ "nest-rs-mcp",
+ "nest-rs-pipes",
+ "nest-rs-queue",
+ "nest-rs-reqwest",
+ "nest-rs-resilience",
+ "nest-rs-testing",
+ "nest-rs-ws",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "parking_lot 0.13.0",
+ "reqwest",
+ "reqwest-middleware",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "nest-rs-schedule"
 version = "7.0.0"
 dependencies = [
@@ -3442,6 +3476,7 @@ dependencies = [
  "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
+ "nest-rs-resilience",
  "nest-rs-schedule",
  "nest-rs-seaorm",
  "nest-rs-server-timing",

@@ -10,7 +10,7 @@ Last reviewed **2026-11-17**, against NestJS 12.1 and the npm registry on that d
 |---|---|
 | Proposed | Written down and sized, with no yes yet |
 | Accepted | The owner said yes; its open questions are answered below |
-| In progress | Being built, on the branch named here |
+| In progress | Being built by its issue's assignee, on the branch named here |
 | Shipped in 7.N | Released; its line lives in `changelog/7.N.md` |
 
 ---
@@ -33,8 +33,8 @@ checked in the code on 2026-11-17:
 |---|---|---|
 | A guard may read the request body and set it back | `crates/nest-rs-http/src/raw_body.rs` | verifying an inbound webhook's signature (item 6) |
 | An authn strategy receives the whole request, cookies included | `nest_rs::authn::Strategy::authenticate(&mut Request)` | sessions and API keys (item 8) |
-| One execution pipeline, with its layers, for HTTP, a GraphQL field, a WS message, an MCP operation, a job attempt, a tick and a listener | `.claude/decisions/one-execution-pipeline.md` | idempotency, resilience and locale negotiation on every edge (items 1, 5, 7) |
-| `Problem` has private fields and carries `Retry-After` | `crates/nest-rs-core/src/problem.rs` | `503` with `Retry-After`, new codes, translated problems (items 1, 5, 7) |
+| One execution pipeline, with its layers, for HTTP, a GraphQL field, a WS message, an MCP operation, a job attempt, a tick and a listener | `.claude/decisions/one-execution-pipeline.md` | idempotency and locale negotiation on every edge (items 5, 7) |
+| `Problem` has private fields and carries `Retry-After` | `crates/nest-rs-core/src/problem.rs` | new codes, translated problems (items 5, 7) |
 | A push inside a unit commits with its transaction | `.claude/decisions/transactional-outbox.md` | mail, outgoing webhooks and workflow starts bound to the commit (items 4, 6, 10) |
 | Named instances of a resource | `.claude/decisions/named-instances.md` | named storage stores (item 3) |
 | Ports with vendor bindings, refusing in-memory stores in production | `.claude/rules/architecture.md` | the locks and idempotency stores on Valkey and Postgres (items 2, 5) |
@@ -113,7 +113,8 @@ to what NestRS already ships:
 | `@nestjs/mcp` | `nest-rs-mcp`: Streamable HTTP, guards per tool, sessions bound to their principal. No stdio (see § 4) |
 | `@nestjs/authorization` | `nest-rs-authz`: abilities, row-level filtering, per-field masking, on every edge |
 | `@nestjs/outbox` | the queue's transactional push: a push inside a unit commits with it, and a relay files it (`transactional-outbox.md`) |
-| `@nestjs/http-client` | the app's own `reqwest` client with `nest_rs::reqwest::ReqwestMiddleware` (trace context and client spans); retries come with item 1 |
+| `@nestjs/http-client` | the app's own `reqwest` client with `nest_rs::reqwest::ReqwestMiddleware` (trace context and client spans), and `nest_rs::resilience::ResilienceMiddleware` for its timeouts and retries |
+| `@nestjs/resilience` | `nest-rs-resilience`, for 7.1 (`changelog/7.1.md`): a named policy per dependency — a timeout per attempt within the unit's deadline, retries when the caller declares the call idempotent, a count-window circuit breaker, a bulkhead — every refusal a `503` with the `Retry-After` it knows, its state per process (`.claude/decisions/resilience-policy.md`) |
 
 ## 4. Not planned, and why
 
@@ -138,7 +139,6 @@ is in engineering hours, review and gates included. It is a guess calibrated on 
 
 | # | Item | Crate | Effort | Needs | Status |
 |---|---|---|---|---|---|
-| 1 | Resilience | `nest-rs-resilience` | 20–35 h | — | Proposed |
 | 2 | Distributed locks | `nest-rs-locks`, plus Valkey and SeaORM bindings | 25–40 h | — | Proposed |
 | 3 | Storage, completed | `nest-rs-storage` | 10–20 h | — | Proposed |
 | 4 | Mail | `nest-rs-mail` | 25–40 h | — | Proposed |
@@ -146,7 +146,7 @@ is in engineering hours, review and gates included. It is a guess calibrated on 
 | 6 | Webhooks | `nest-rs-webhooks` | 40–60 h | item 5 helps | Proposed |
 | 7 | Internationalization | `nest-rs-i18n` | 30–50 h | — | Proposed |
 | 8 | Authentication flows | `nest-rs-authn`, plus new crates where a port is new | 70–110 h | item 4 | Proposed |
-| 9 | Language models | `nest-rs-ai` | 50–80 h | item 1 | Proposed |
+| 9 | Language models | `nest-rs-ai` | 50–80 h | — | Proposed |
 | 10 | Durable workflows | `nest-rs-workflows` | 100–180 h | item 2 helps | Proposed |
 
 Every crate name follows `.claude/rules/naming.md`. The shared word is read off the NestJS package name, the market's
@@ -154,26 +154,6 @@ word, as `storage-port-by-url.md` did for `nest-rs-storage`. A new crate's name 
 
 NestJS ships each of these at `0.0.x`, so their APIs will move. Ours is held to 7.x semver from its first minor: each design
 is settled before it ships, not iterated in public.
-
-### 1. Resilience — `nest-rs-resilience`
-
-- **NestJS**: `@nestjs/resilience` 0.0.3 ([docs](https://docs.nestjs.com/reliability/resilience)). It offers timeout per
-  attempt, retry with jittered backoff (idempotent calls only), a circuit breaker (count window, half-open probe), a
-  bulkhead and a fallback, named presets, and the codes `TIMEOUT` (504), `CIRCUIT_OPEN` and `BULKHEAD_FULL` (503).
-- **Today**:
-  - `nest_rs_core::Backoff`, `retry_on_conflict` for database conflicts, deadlines on each edge, the throttler for inbound
-    rate, and the queue's retries;
-  - nothing protects **an outbound call to a failing dependency**: a slow partner API holds every request that calls it,
-    and a down one is hammered by every retry.
-- **What it serves**:
-  - named policies an app wraps around any call (`policy.run(|cancel| …)`): a payment provider, a carrier API, an LLM;
-  - one breaker shared by every caller of a dependency;
-  - a client answered `503` with `Retry-After` instead of a hung request;
-  - the retry for the app's `reqwest` client that `@nestjs/http-client` builds in.
-- **Constraints**: every wait is bounded. State lives per process, and the docs say so. Retries apply only where the caller
-  declares the call idempotent. A transition is a `warn` and a metric.
-- **Open**: whether a method attribute is added beside the policy API. Only if it does not become a second way to do the
-  same thing.
 
 ### 2. Distributed locks — `nest-rs-locks`
 
@@ -339,8 +319,11 @@ is settled before it ships, not iterated in public.
 ## 6. How an item becomes a release
 
 1. The owner says yes to it by name, and this file says `Accepted`.
-2. It is built on its own branch, through `.claude/rules/manifests-ci.md`'s *Shipping a capability* checklist: umbrella
+2. Whoever builds it, the owner included, is assigned its GitHub issue before writing any code, and this file says
+   `In progress` with the branch. An assigned item is taken, so two people never build the same one in parallel
+   (`CONTRIBUTING.md`, *Before you start*).
+3. It is built on its own branch, through `.claude/rules/manifests-ci.md`'s *Shipping a capability* checklist: umbrella
    feature, docs page with `## Install`, expansion and composition witnesses, and both test suites over TLS.
-3. It ships in the next minor, with its line in `changelog/7.N.md`. Its row moves to § 3, and the page
+4. It ships in the next minor, with its line in `changelog/7.N.md`. Its row moves to § 3, and the page
    `docs/src/content/docs/coming-from-nestjs/` gains its mapping.
-4. A refusal met along the way, or a limit, goes into `.claude/decisions/` and is named here under the item.
+5. A refusal met along the way, or a limit, goes into `.claude/decisions/` and is named here under the item.

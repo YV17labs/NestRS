@@ -32,8 +32,8 @@ use super::error::UnexpectedReply;
 use super::layout::{GROUP, QueueKeys};
 use super::scripts::SCRIPTS;
 use crate::RedisConnection;
-use crate::instance::{instance_phrase, typed_import};
 use crate::millis::{LONGEST, millis};
+use nest_rs_core::__private::{instance_phrase, typed_import};
 
 /// The most queues whose keys a producer keeps spelled: a name pushed to past
 /// them — the raw push takes any — has its keys spelled at each call instead,

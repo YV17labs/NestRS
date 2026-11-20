@@ -125,6 +125,23 @@ unit's `BEGIN`, which waits for its connection, carries that wait in
 development in the conventions' 1.42 schema, the one the export declares. A
 Redis connection is one multiplexed socket, not a pool, and reports none.
 
+## Resilience policies
+
+A [resilience policy](/fundamentals/resilience/) counts on three counters, each
+by `nestrs.resilience.instance` — the policy's instance, empty for the default
+one:
+
+| Instrument | One per |
+|---|---|
+| `nestrs.resilience.breaker.transitions` (`{transition}`) | change of its breaker's state, by `nestrs.resilience.breaker.state`: `open`, `half_open`, `closed` |
+| `nestrs.resilience.retries` (`{retry}`) | call it sent again |
+| `nestrs.resilience.refusals` (`{refusal}`) | run it ended on its own refusal, by `nestrs.resilience.refusal`: `timed_out`, `open`, `full` |
+
+An alert on a transition to `open` is an alert on a dependency failing, and a
+climbing `refusals` is its clients being answered `503`. No convention names a
+circuit breaker or a retry policy, so the names and their attributes are
+NestRS's own, and API: they change only in a major.
+
 ## A first counter
 
 Ask `Metrics` for the instrument by name, then record on it. The first call

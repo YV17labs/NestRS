@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use nest_rs_core::operation_log::{Kind, Unit};
 use nest_rs_core::{
-    App, Collecting, ContainerBuilder, ContestedDeclarationError, Continuation, Module,
+    App, Collecting, ContainerBuilder, ContestedDeclarationError, Continuation, Deadline, Module,
     Registering, RequestContinuation, hooks, injectable, module,
 };
 use nest_rs_database::__private::with_job_executor;
@@ -143,6 +143,57 @@ async fn with_no_binding_the_body_runs_bare() {
     )
     .await;
     assert_eq!(ran, Ok(()));
+}
+
+/// The unit's deadline is ambient inside its body, bound or bare, so work
+/// there — a resilience policy's retry — can stop before the edge cuts it; a
+/// unit nested in another ends by the sooner of the two.
+#[tokio::test(start_paused = true)]
+async fn the_specs_deadline_is_ambient_in_the_body_bound_or_bare() {
+    let read = || async { nest_rs_core::ambient::<Deadline>().map(|deadline| deadline.0) };
+    let at = tokio::time::Instant::now() + Duration::from_secs(20);
+    let (binding, _) = Stub::answering(Settlement::Settled);
+    for unit in [None, Some(&binding)] {
+        let seen = run_unit(
+            unit,
+            spec(ExecutorScope::Request).with_deadline(at),
+            read(),
+            |_| true,
+            |_| None,
+        )
+        .await;
+        assert_eq!(seen, Some(at), "bound: {}", unit.is_some());
+        let none = run_unit(
+            unit,
+            spec(ExecutorScope::Request),
+            read(),
+            |_| true,
+            |_| None,
+        )
+        .await;
+        assert_eq!(none, None, "a unit no deadline cuts carries none");
+    }
+
+    let sooner = at - Duration::from_secs(5);
+    let nested = run_unit(
+        None,
+        spec(ExecutorScope::Request).with_deadline(sooner),
+        run_unit(
+            None,
+            spec(ExecutorScope::Job).with_deadline(at),
+            read(),
+            |_| true,
+            |_| None,
+        ),
+        |_| true,
+        |_| None,
+    )
+    .await;
+    assert_eq!(
+        nested,
+        Some(sooner),
+        "a nested unit ends by its parent's deadline"
+    );
 }
 
 #[tokio::test]

@@ -43,6 +43,55 @@ impl KitchenController {
 #[module(providers = [KitchenController])]
 struct KitchenModule;
 
+#[controller(path = "/deadline")]
+struct DeadlineController;
+
+#[routes]
+impl DeadlineController {
+    #[get("/")]
+    #[public]
+    async fn left(&self) -> String {
+        match nest_rs_core::ambient::<nest_rs_core::Deadline>() {
+            Some(deadline) => deadline
+                .0
+                .saturating_duration_since(tokio::time::Instant::now())
+                .as_secs()
+                .to_string(),
+            None => "none".to_owned(),
+        }
+    }
+}
+
+#[module(providers = [DeadlineController])]
+struct DeadlineModule;
+
+/// A handler with no layer, in an app binding no unit of work, reads the
+/// request's deadline — the request timeout past its arrival — as the
+/// running unit's, so work it waits on can stop before the edge cuts it.
+#[tokio::test(start_paused = true)]
+async fn a_request_carries_its_deadline_ambient_and_one_with_no_timeout_carries_none() {
+    let timed = crate::boot_on::<DeadlineModule>(HttpConfig {
+        request_timeout: Some(std::time::Duration::from_secs(7)),
+        ..HttpConfig::default()
+    })
+    .await;
+    let answered = timed.get("/deadline").send().await;
+    answered.assert_status_is_ok();
+    answered.assert_text("7").await;
+
+    let untimed = crate::boot_on::<DeadlineModule>(HttpConfig {
+        request_timeout: None,
+        ..HttpConfig::default()
+    })
+    .await;
+    untimed
+        .get("/deadline")
+        .send()
+        .await
+        .assert_text("none")
+        .await;
+}
+
 #[tokio::test]
 async fn a_collection_answers_with_and_without_the_trailing_slash() {
     let client = crate::boot::<KitchenModule>().await;

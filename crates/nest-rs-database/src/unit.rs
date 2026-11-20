@@ -302,8 +302,10 @@ impl Bound {
 /// driver could not honour turns a success into `unhonoured(why)`, and a
 /// failure stands unless the driver answers it [`Unhonoured::IN_DOUBT`].
 ///
-/// The edge cuts `body` at the spec's deadline itself, answering its timeout
-/// in its own terms; `run_unit` never cuts a commit. A failure is answered by
+/// The spec's deadline is ambient inside `body` (`nest_rs_core::Deadline`),
+/// bound or bare, so work there can stop waiting before the cut. The edge cuts
+/// `body` at that deadline itself, answering its timeout in its own terms;
+/// `run_unit` never cuts a commit. A failure is answered by
 /// the deadline at most, its rollback left to finish on the driver's task; a
 /// success waits for its settle, which the driver bounds
 /// ([`OpenUnit::settle`]).
@@ -343,6 +345,7 @@ where
 {
     // Not an `async fn`: its state would keep `body` beside the future built
     // from it, and `then` drops the body's future before the settle's is built.
+    let body = nest_rs_core::__private::with_deadline(spec.deadline, body);
     let Some(binding) = unit else {
         return Either::Left(Either::Left(body));
     };

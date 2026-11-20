@@ -266,20 +266,18 @@ fn call_failed(endpoint: &Endpoint<'_>, error: reqwest::Error) -> AuthError {
     AuthError::unavailable_because(detail, None, error.without_url())
 }
 
-/// A 5xx or `429` (RFC 6585 §4) answer as [`AuthError::Unavailable`], carrying a
-/// delay-seconds `Retry-After`; an HTTP-date one would trust the provider's clock.
+/// A 5xx or `429` (RFC 6585 §4) answer as [`AuthError::Unavailable`], carrying
+/// its `Retry-After`, an HTTP-date one counted from the answer's own `Date`.
 fn provider_unavailable(
     endpoint: &Endpoint<'_>,
     status: u16,
     retry_after: Option<&[u8]>,
+    date: Option<&[u8]>,
 ) -> Option<AuthError> {
     (status == 429 || (500..600).contains(&status)).then(|| {
         AuthError::unavailable(
             format!("{endpoint} answered {status}"),
-            retry_after
-                .and_then(|value| std::str::from_utf8(value).ok())
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .map(Duration::from_secs),
+            retry_after.and_then(|asked| nest_rs_reqwest::__private::retry_after(asked, date)),
         )
     })
 }
@@ -304,9 +302,12 @@ fn exchange_failed(
         if answered.oversized {
             return oversized(endpoint);
         }
-        if let Some(unavailable) =
-            provider_unavailable(endpoint, answered.status, answered.retry_after.as_deref())
-        {
+        if let Some(unavailable) = provider_unavailable(
+            endpoint,
+            answered.status,
+            answered.retry_after.as_deref(),
+            answered.date.as_deref(),
+        ) {
             return unavailable;
         }
     }
@@ -331,12 +332,13 @@ fn undecodable(endpoint: &Endpoint<'_>, error: &serde_json::Error) -> AuthError 
     )
 }
 
-/// The status and the `Retry-After` of the token endpoint's answer, read off the
-/// response before `oauth2` turns it into an error that keeps neither, and
-/// whether its body ran past [`OAuthClient::ANSWER_MAX_BYTES`].
+/// The status, the `Retry-After` and the `Date` of the token endpoint's answer,
+/// read off the response before `oauth2` turns it into an error that keeps
+/// none, and whether its body ran past [`OAuthClient::ANSWER_MAX_BYTES`].
 struct Answered {
     status: u16,
     retry_after: Option<Vec<u8>>,
+    date: Option<Vec<u8>>,
     oversized: bool,
 }
 
@@ -379,6 +381,7 @@ async fn sent(
 ) -> Result<reqwest::Response, reqwest::Error> {
     nest_rs_reqwest::__private::traced(
         request,
+        nest_rs_reqwest::__private::Resent::default(),
         |request| http.execute(request),
         reqwest::Error::is_timeout,
     )
@@ -405,10 +408,14 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
             let request = reqwest::Request::try_from(request).map_err(Box::new)?;
             let response = sent(self.http, request).await.map_err(Box::new)?;
             let status = response.status().as_u16();
-            let retry_after = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .map(|value| value.as_bytes().to_vec());
+            let kept = |name| {
+                response
+                    .headers()
+                    .get(name)
+                    .map(|value: &reqwest::header::HeaderValue| value.as_bytes().to_vec())
+            };
+            let retry_after = kept(reqwest::header::RETRY_AFTER);
+            let date = kept(reqwest::header::DATE);
             let mut answer = oauth2::http::Response::builder()
                 .status(response.status())
                 .version(response.version());
@@ -419,6 +426,7 @@ impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
             *self.answered.lock().unwrap_or_else(PoisonError::into_inner) = Some(Answered {
                 status,
                 retry_after,
+                date,
                 oversized: matches!(body, Err(Capped::Oversized)),
             });
             match body {
@@ -881,6 +889,10 @@ impl OAuthClient {
                 response
                     .headers()
                     .get(reqwest::header::RETRY_AFTER)
+                    .map(|value| value.as_bytes()),
+                response
+                    .headers()
+                    .get(reqwest::header::DATE)
                     .map(|value| value.as_bytes()),
             )
             .unwrap_or_else(|| AuthError::failed(format!("{endpoint} answered {status}"))));

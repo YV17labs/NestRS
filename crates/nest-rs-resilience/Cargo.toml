@@ -1,0 +1,104 @@
+[package]
+name = "nest-rs-resilience"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Resilience for NestRS: named policies an app wraps around an outbound call — a timeout per attempt, retries for an idempotent call, a circuit breaker and a bulkhead — answered 503 with Retry-After."
+keywords = ["framework", "nestrs", "resilience", "circuit-breaker", "retry"]
+categories = ["web-programming", "asynchronous"]
+
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+# `ResilienceMiddleware`, a policy on the reqwest client an app builds itself;
+# the umbrella's `reqwest` feature forwards it weakly.
+reqwest = [
+    "dep:reqwest",
+    "dep:reqwest-middleware",
+    "nest-rs-reqwest/middleware",
+    "dep:http",
+    "dep:async-trait",
+]
+# A breaker's transitions, counted on the meter `OpenTelemetry::init()`
+# installs; the umbrella's `opentelemetry` feature forwards it weakly.
+opentelemetry = ["dep:opentelemetry"]
+
+[dependencies]
+# `ResilienceModule` is a `Module` generic over its `Instance`; a policy waits
+# through `within` and `Backoff`, and its refusal is a `Problem`.
+nest-rs-core.workspace = true
+# `ResilienceModule` owns its `#[config]` (`ResilienceConfig`, namespace
+# `resilience`), read per instance from `<PREFIX>_RESILIENCE__*`.
+nest-rs-config.workspace = true
+# `ResilienceError`, the one error a policy answers.
+thiserror.workspace = true
+# The bulkhead's semaphore, and the clock a breaker and a timeout read.
+tokio.workspace = true
+# The `CancellationToken` each attempt is handed, cancelled when it is given up.
+tokio-util.workspace = true
+# A breaker's transition is a `warn`, a retry a `debug`, on `nest_rs::resilience`.
+tracing.workspace = true
+# The breaker's window — poison-free locking on every call it admits.
+parking_lot.workspace = true
+# The module's factory answers in the container's error channel, and the
+# middleware hands its refusal to reqwest-middleware's `Error::Middleware`.
+anyhow.workspace = true
+
+# Public: `ResilienceMiddleware` implements reqwest-middleware's `Middleware`
+# over reqwest's request and response, the words an app builds its client in.
+reqwest = { workspace = true, optional = true }
+reqwest-middleware = { workspace = true, optional = true }
+# The resend count each attempt hands the trace middleware beside it.
+nest-rs-reqwest = { workspace = true, optional = true }
+# The `Extensions` `Middleware::handle` takes.
+http = { workspace = true, optional = true }
+# `Middleware` is an `async_trait`.
+async-trait = { workspace = true, optional = true }
+# The API crate alone: a transition records on the global meter, which
+# `OpenTelemetry::init()` installs and nothing else reads here.
+opentelemetry = { workspace = true, optional = true }
+
+[dev-dependencies]
+# `test-util` (not part of tokio's `full`) pauses time, so a breaker's open
+# window and a backoff pass without the suite waiting them out.
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+# The composition witnesses boot the documented wiring; the middleware's suite
+# sends real requests to a TLS double whose certificate a `TestAuthority`
+# issued. Path-only intra-workspace dev edges, per the manifest rule.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls", "ws"] }
+# Self dev-dependency: the suite runs with the middleware and the transitions'
+# counter on.
+nest-rs-resilience = { path = ".", features = ["reqwest", "opentelemetry"] }
+# A route answering a policy's refusal: `#[controller]` and `#[routes]` expand
+# into the guard and pipe chains each route runs.
+nest-rs-http = { path = "../nest-rs-http" }
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-pipes = { path = "../nest-rs-pipes" }
+# The refusal's `503` on every edge and the queue's honouring its wait: a
+# resolver, a gateway, an `#[mcp]` host and a processor, each answering it as an
+# app's does. A crate defining a `#[resolver]` names `async_graphql::` itself.
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+nest-rs-ws = { path = "../nest-rs-ws" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+nest-rs-queue = { path = "../nest-rs-queue" }
+async-graphql.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+nest-rs-reqwest = { path = "../nest-rs-reqwest" }
+http.workspace = true
+reqwest.workspace = true
+reqwest-middleware.workspace = true
+# The transitions' counter is read off an in-memory exporter the test installs
+# as the global meter provider.
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

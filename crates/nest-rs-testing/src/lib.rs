@@ -30,6 +30,9 @@
 //! [`url_on`], [`url_as`] and [`url_at`] put the suite's own URL on a test's
 //! own database, as its own user or at a proxy's address, keeping everything
 //! else the deployment set.
+//!
+//! With the `tls` feature, `TestAuthority` issues the certificates a TLS double
+//! presents, and `HttpsPeer` is the server an HTTP client under test calls.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 #![expect(
@@ -68,7 +71,11 @@ mod urlencoded;
 mod wait;
 
 #[cfg(feature = "tls")]
+mod https_peer;
+#[cfg(feature = "tls")]
 mod tls;
+#[cfg(feature = "tls")]
+pub use https_peer::{HttpsPeer, PeerAnswer, RequestHead};
 #[cfg(feature = "tls")]
 pub use tls::{TestAuthority, TestCertificate, system_connector};
 

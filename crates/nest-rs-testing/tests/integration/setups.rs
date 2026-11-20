@@ -22,6 +22,7 @@ use nest_rs_oauth_server::{OAuthServerConfig, OAuthServerModule, RegisteredClien
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule};
 use nest_rs_queue::{OutboxConfig, OutboxModule, QueueConfig, QueueModule};
 use nest_rs_redis::{RedisConfig, RedisModule, RedisQueueConfig, RedisQueueModule};
+use nest_rs_resilience::{ResilienceConfig, ResilienceModule};
 use nest_rs_seaorm::{SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_server_timing::{ServerTimingConfig, ServerTimingModule};
 use nest_rs_static_files::{StaticFilesConfig, StaticFilesModule};
@@ -301,6 +302,23 @@ imported_twice!(
     seeds = |app| app.provide(pinned_storage()),
     bare = [StorageModule],
     pinned = [StorageModule::for_root(pinned_storage())],
+);
+
+imported_twice!(
+    resilience,
+    seeds = unseeded,
+    bare = [ResilienceModule],
+    pinned = [ResilienceModule::for_root(ResilienceConfig::default())],
+);
+
+imported_twice!(
+    resilience_instance,
+    seeds = unseeded,
+    bare = [ResilienceModule::<Cache>],
+    pinned = [ResilienceModule::for_root((
+        Cache,
+        ResilienceConfig::default()
+    ))],
 );
 
 imported_twice!(

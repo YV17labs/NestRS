@@ -126,11 +126,31 @@ pub fn with_ambient_from<T: AmbientValue, F: Future>(
 }
 
 /// When the running unit must end by, on tokio's clock, the clock
-/// [`UnitContext::deadline`](crate::UnitContext::deadline) reads. A
+/// [`UnitContext::deadline`](crate::UnitContext::deadline) reads: ambient for
+/// every unit its edge cuts at a deadline — an HTTP request, a WebSocket
+/// message, a GraphQL operation, an MCP operation, a job attempt, a tick, a
+/// listener call — so work inside it can stop waiting before the cut. A
 /// [`Batch`](Continuation::Batch), which the unit waits on, keeps it; every
 /// other continuation drops it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Deadline(pub Instant);
+
+/// Run `fut` with `at`, when there is one, as the running unit's [`Deadline`]
+/// — or the one it runs under, when that is sooner: a unit nested in another
+/// ends by its parent's deadline at the latest. With none, nothing is added.
+pub fn with_deadline<F: Future>(at: Option<Instant>, fut: F) -> impl Future<Output = F::Output> {
+    request_scope::install(
+        move || {
+            let mut added = Entries::default();
+            if let Some(at) = at {
+                let sooner = ambient::<Deadline>().map_or(at, |outer| outer.0.min(at));
+                added.set(Entry::of(Arc::new(Deadline(sooner))));
+            }
+            added
+        },
+        fut,
+    )
+}
 
 impl AmbientValue for Deadline {
     fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {

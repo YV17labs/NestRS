@@ -35,3 +35,16 @@ time until its next fetch, not the issuer's whole wait.
 - **A stretch wider than a fifth.** It is the jitter's own width, which the
   framework's reconnect loops already spread over; a wider one delays a job an
   upstream would already take.
+
+## 2026-11-20 — both forms of `Retry-After`, read by one function
+
+A `Retry-After` is RFC 9110 §10.2.3's `delay-seconds` or an HTTP-date. The
+framework's clients read the seconds alone, three times over with three
+behaviours: the JWK Set fetcher and the OAuth client, and the resilience
+middleware that came third. One function now reads both forms for every one of
+them (`nest_rs_reqwest::__private::retry_after`): an HTTP-date is counted from
+the same answer's `Date`, the peer's clock read against itself, so no skew
+between two hosts enters the wait, and from this host's clock only when the
+answer sent none; a date already past asks no wait. The three accepted forms are
+RFC 9110 §5.6.7's, a two-digit year read as that section says. The ceiling and
+the fifth's stretch above stand unchanged.

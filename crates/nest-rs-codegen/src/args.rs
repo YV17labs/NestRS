@@ -329,6 +329,34 @@ mod tests {
             );
         }
 
+        for (refusal, key) in [
+            (
+                err(crate::resilient::resilient_timeout(&parse_quote!(60)).map(drop)),
+                "timeout",
+            ),
+            (
+                err(crate::resilient::resilient_timeout(&parse_quote!("11m")).map(drop)),
+                "timeout",
+            ),
+            (
+                err(crate::resilient::resilient_retries(&parse_quote!("3")).map(drop)),
+                "retries",
+            ),
+            (
+                err(crate::resilient::resilient_retries(&parse_quote!(0)).map(drop)),
+                "retries",
+            ),
+            (
+                err(crate::resilient::resilient_retries(&parse_quote!(11)).map(drop)),
+                "retries",
+            ),
+        ] {
+            assert!(
+                refusal.starts_with(&format!("#[resilient] `{key}`")),
+                "{refusal}"
+            );
+        }
+
         let positional =
             err(crate::duration::duration_millis("probe", None, &parse_quote!(60)).map(drop));
         assert!(positional.starts_with("#[probe] takes "), "{positional}");

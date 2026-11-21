@@ -179,6 +179,12 @@ payload, a WS message and a tool's arguments all take them, from one path:
 | `#[readiness]` | method | Binds the method to the readiness probe | [Indicators](/health/indicators/) |
 | `#[startup]` | method | Binds the method to the startup probe | [Indicators](/health/indicators/) |
 
+## Resilience
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[resilient]` | method | Runs an `async fn`'s body under the policy a field holds: once, or `idempotent` again after a failure, with the method's own `timeout` and `retries` | [Resilience](/fundamentals/resilience/) |
+
 ## Config
 
 | Decorator | Goes on | Summary | Read more |

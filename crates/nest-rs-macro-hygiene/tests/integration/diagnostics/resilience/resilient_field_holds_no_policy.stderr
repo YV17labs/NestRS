@@ -1,0 +1,37 @@
+error[E0277]: `#[resilient]` runs the method under the policy its field holds, and this field holds `Arc<std::string::String>`
+  --> tests/integration/diagnostics/resilience/resilient_field_holds_no_policy.rs:30:17
+   |
+30 |     #[resilient(carrier)]
+   |                 ^^^^^^^ the field holding the policy
+   |
+   = help: the trait `nest_rs::resilience::__private::PolicyField` is not implemented for `Arc<std::string::String>`
+   = note: inject the policy as `Arc<ResiliencePolicy<I>>` under `#[inject]`, and name that field
+help: the trait `nest_rs::resilience::__private::PolicyField` is implemented for `Arc<ResiliencePolicy<I>>`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | impl<I: Instance> PolicyField for Arc<ResiliencePolicy<I>> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `nest_rs::resilience::__private::policy`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn policy<F: PolicyField>(field: &F) -> &ResiliencePolicy<F::Instance> {
+   |                  ^^^^^^^^^^^ required by this bound in `policy`
+
+error[E0277]: `#[resilient]` runs the method under the policy its field holds, and this field holds `ResiliencePolicy`
+  --> tests/integration/diagnostics/resilience/resilient_field_holds_no_policy.rs:41:17
+   |
+41 |     #[resilient(carrier, idempotent)]
+   |                 ^^^^^^^ the field holding the policy
+   |
+   = help: the trait `nest_rs::resilience::__private::PolicyField` is not implemented for `ResiliencePolicy`
+   = note: inject the policy as `Arc<ResiliencePolicy<I>>` under `#[inject]`, and name that field
+help: the trait `nest_rs::resilience::__private::PolicyField` is implemented for `Arc<ResiliencePolicy<I>>`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | impl<I: Instance> PolicyField for Arc<ResiliencePolicy<I>> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `nest_rs::resilience::__private::policy`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn policy<F: PolicyField>(field: &F) -> &ResiliencePolicy<F::Instance> {
+   |                  ^^^^^^^^^^^ required by this bound in `policy`

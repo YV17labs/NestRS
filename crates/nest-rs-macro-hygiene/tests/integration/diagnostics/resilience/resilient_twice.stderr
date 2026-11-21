@@ -1,0 +1,5 @@
+error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:30:5
+   |
+30 |     #[resilient(carrier, idempotent)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

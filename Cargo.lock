@@ -3248,6 +3248,7 @@ dependencies = [
  "async-graphql",
  "async-trait",
  "http",
+ "nest-rs-codegen",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-graphql",
@@ -3258,6 +3259,7 @@ dependencies = [
  "nest-rs-queue",
  "nest-rs-reqwest",
  "nest-rs-resilience",
+ "nest-rs-resilience-macros",
  "nest-rs-testing",
  "nest-rs-ws",
  "opentelemetry",
@@ -3267,10 +3269,21 @@ dependencies = [
  "reqwest-middleware",
  "serde",
  "serde_json",
+ "syn 3.0.10",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "nest-rs-resilience-macros"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
 ]
 
 [[package]]

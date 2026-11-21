@@ -1,0 +1,5 @@
+error: #[resilient] writes the method's return type into its expansion, where `impl Trait` names no type — name the type the method answers, or box it as a `Box<dyn …>`
+  --> tests/integration/diagnostics/resilience/resilient_answers_impl_trait.rs:30:37
+   |
+30 |     async fn label(&self) -> Result<impl std::fmt::Display, ResilienceError<CarrierDown>> {
+   |                                     ^^^^^^^^^^^^^^^^^^^^^^

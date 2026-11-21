@@ -20,6 +20,7 @@
     feature = "mcp",
     feature = "oauth-resource",
     feature = "queue",
+    feature = "resilience",
     feature = "schedule",
     feature = "seaorm",
     feature = "static-files",
@@ -43,6 +44,7 @@ fn every_decorator_refuses_in_the_words_pinned() {
     t.compile_fail("tests/integration/diagnostics/mcp/*.rs");
     t.compile_fail("tests/integration/diagnostics/oauth/resource/*.rs");
     t.compile_fail("tests/integration/diagnostics/queue/*.rs");
+    t.compile_fail("tests/integration/diagnostics/resilience/*.rs");
     t.compile_fail("tests/integration/diagnostics/schedule/*.rs");
     t.compile_fail("tests/integration/diagnostics/seaorm/*.rs");
     t.compile_fail("tests/integration/diagnostics/static_files/*.rs");
@@ -96,6 +98,7 @@ fn an_exposed_entity_names_the_feature_its_graphql_key_needs() {
     feature = "redis-queue",
     feature = "redis-schedule",
     feature = "redis-throttler",
+    feature = "resilience",
     feature = "schedule",
     feature = "seaorm",
     feature = "static-files",

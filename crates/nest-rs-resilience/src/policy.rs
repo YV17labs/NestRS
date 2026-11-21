@@ -25,6 +25,7 @@ use crate::bulkhead::Bulkhead;
 use crate::config::ResilienceConfig;
 use crate::counters::Counters;
 use crate::error::{Refusal, ResilienceError};
+use crate::resilient::ResilientMethod;
 use crate::{TARGET, millis};
 
 /// The calls to one dependency — a payment provider, a carrier's API, a
@@ -33,7 +34,11 @@ use crate::{TARGET, millis};
 /// Injected as `Arc<ResiliencePolicy<I>>` once a module imports
 /// [`ResilienceModule<I>`](crate::ResilienceModule), which builds it from
 /// `<PREFIX>_RESILIENCE__<INSTANCE>__*` ([`ResilienceConfig`]); the default
-/// instance, `ResiliencePolicy`, reads `<PREFIX>_RESILIENCE__*`.
+/// instance, `ResiliencePolicy`, reads `<PREFIX>_RESILIENCE__*`. A method runs
+/// its body under it through [`#[resilient]`](macro@crate::resilient), naming
+/// the field that holds it; [`run`](Self::run) and
+/// [`run_idempotent`](Self::run_idempotent) take a call that needs its
+/// attempt's [`CancellationToken`], or is part of a method.
 ///
 /// Each attempt is given up past the policy's timeout or the deadline of the
 /// unit it runs in (`nest_rs_core::Deadline`), whichever comes first, and its
@@ -114,6 +119,14 @@ pub(crate) struct Run<'p, I> {
     /// The deadline of the unit the run is in, which no attempt and no wait
     /// outlives.
     deadline: Option<Instant>,
+    /// How long each attempt waits: the policy's timeout, or the one its
+    /// method pinned.
+    timeout: Duration,
+    /// How many times the run may send its call again: the policy's retries,
+    /// or the ones its method pinned.
+    retries: u32,
+    /// The decorated method the run came from, which its lines name.
+    method: Option<ResilientMethod>,
     /// Drawn at the first retry, so a call answering at once draws none.
     seed: Option<u64>,
     /// How many times this run sent its call again so far.
@@ -184,9 +197,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        let mut run = self.begin().await?;
-        let attempted = run.attempt(call, judged).await;
-        settled(run.finish(attempted))
+        self.run_for(None, call).await
     }
 
     /// Run the idempotent `call`, attempting it again after a failed or timed
@@ -199,13 +210,43 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// a read, a `PUT`, a request carrying an idempotency key the dependency
     /// honours. `call` is handed each attempt's [`CancellationToken`],
     /// cancelled when that attempt is given up.
-    pub async fn run_idempotent<T, E, F, Fut>(&self, mut call: F) -> Result<T, ResilienceError<E>>
+    pub async fn run_idempotent<T, E, F, Fut>(&self, call: F) -> Result<T, ResilienceError<E>>
     where
         F: FnMut(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
     {
-        let mut run = self.begin().await?;
+        self.run_idempotent_for(None, call).await
+    }
+
+    /// [`run`](Self::run), for `method` when a decorated method runs it.
+    pub(crate) async fn run_for<T, E, F, Fut>(
+        &self,
+        method: Option<ResilientMethod>,
+        call: F,
+    ) -> Result<T, ResilienceError<E>>
+    where
+        F: FnOnce(CancellationToken) -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+    {
+        let mut run = self.begin(method).await?;
+        let attempted = run.attempt(call, judged).await;
+        settled(run.finish(attempted))
+    }
+
+    /// [`run_idempotent`](Self::run_idempotent), for `method` when a decorated
+    /// method runs it.
+    pub(crate) async fn run_idempotent_for<T, E, F, Fut>(
+        &self,
+        method: Option<ResilientMethod>,
+        mut call: F,
+    ) -> Result<T, ResilienceError<E>>
+    where
+        F: FnMut(CancellationToken) -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        E: Error + 'static,
+    {
+        let mut run = self.begin(method).await?;
         loop {
             let attempted = run.attempt(&mut call, judged_asking).await;
             if !run.again(&attempted).await {
@@ -214,9 +255,13 @@ impl<I: Instance> ResiliencePolicy<I> {
         }
     }
 
-    /// Open one run, taking a slot of the bulkhead within the unit's deadline —
-    /// refused at once by an open breaker rather than after waiting for one.
-    pub(crate) async fn begin(&self) -> Result<Run<'_, I>, Refusal> {
+    /// Open one run — of `method`, when a decorated method opens it — taking a
+    /// slot of the bulkhead within the unit's deadline, refused at once by an
+    /// open breaker rather than after waiting for one.
+    pub(crate) async fn begin(
+        &self,
+        method: Option<ResilientMethod>,
+    ) -> Result<Run<'_, I>, Refusal> {
         let deadline = nest_rs_core::ambient::<Deadline>().map(|deadline| deadline.0);
         let slot = match &self.bulkhead {
             Some(bulkhead) => {
@@ -227,6 +272,8 @@ impl<I: Instance> ResiliencePolicy<I> {
                     tracing::debug!(
                         target: TARGET,
                         instance = I::NAME,
+                        host = method.as_ref().map(ResilientMethod::host).as_deref(),
+                        method = method.as_ref().map(ResilientMethod::name),
                         "bulkhead full; the call is refused",
                     );
                     return Err(self.refused(Refusal::Full));
@@ -239,6 +286,13 @@ impl<I: Instance> ResiliencePolicy<I> {
             policy: self,
             _slot: slot,
             deadline,
+            timeout: method
+                .and_then(|method| method.timeout())
+                .unwrap_or(self.timeout),
+            retries: method
+                .and_then(|method| method.retries())
+                .unwrap_or(self.retries),
+            method,
             seed: None,
             resent: 0,
         })
@@ -255,14 +309,14 @@ impl<I: Instance> Run<'_, I> {
     /// Whether the run may still send its call again.
     #[cfg(feature = "reqwest")]
     pub(crate) const fn may_resend(&self) -> bool {
-        self.resent < self.policy.retries
+        self.resent < self.retries
     }
 
-    /// One attempt of `call`: admitted by the breaker, bounded by the timeout or
-    /// what is left of the unit's deadline, whichever ends first, its answer
-    /// counted as `judge` reads it. With nothing left of the deadline the call
-    /// is not sent. A panic in the call counts as a failure and unwinds on, for
-    /// the unit to contain as it would without the policy.
+    /// One attempt of `call`: admitted by the breaker, bounded by the run's
+    /// timeout or what is left of the unit's deadline, whichever ends first,
+    /// its answer counted as `judge` reads it. With nothing left of the
+    /// deadline the call is not sent. A panic in the call counts as a failure
+    /// and unwinds on, for the unit to contain as it would without the policy.
     pub(crate) async fn attempt<T, F, Fut>(
         &mut self,
         call: F,
@@ -272,9 +326,8 @@ impl<I: Instance> Run<'_, I> {
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = T>,
     {
-        let bound = self.deadline.map_or(self.policy.timeout, |deadline| {
-            self.policy
-                .timeout
+        let bound = self.deadline.map_or(self.timeout, |deadline| {
+            self.timeout
                 .min(deadline.saturating_duration_since(Instant::now()))
         });
         if bound.is_zero() {
@@ -314,7 +367,7 @@ impl<I: Instance> Run<'_, I> {
     }
 
     /// Whether to attempt the call again after `attempted`, having waited the
-    /// backoff when so: after a failure or a timeout, within the policy's
+    /// backoff when so: after a failure or a timeout, within the run's
     /// retries, unless the dependency asked a wait past the backoff's ceiling.
     pub(crate) async fn again<T>(&mut self, attempted: &Attempted<T>) -> bool {
         let asked = match attempted {
@@ -328,6 +381,8 @@ impl<I: Instance> Run<'_, I> {
         tracing::debug!(
             target: TARGET,
             instance = I::NAME,
+            host = self.host().as_deref(),
+            method = self.method_name(),
             attempt = self.resent.saturating_add(1),
             wait_ms = millis(wait),
             "attempt failed; retrying the call",
@@ -342,7 +397,7 @@ impl<I: Instance> Run<'_, I> {
     /// `asked`, or `None` when the run ends there.
     fn retry_wait(&mut self, asked: Option<Duration>) -> Option<Duration> {
         let policy = self.policy;
-        if self.resent >= policy.retries {
+        if self.resent >= self.retries {
             return None;
         }
         let ceiling = policy.backoff.ceiling();
@@ -350,6 +405,8 @@ impl<I: Instance> Run<'_, I> {
             tracing::debug!(
                 target: TARGET,
                 instance = I::NAME,
+                host = self.host().as_deref(),
+                method = self.method_name(),
                 asked_ms = millis(asked),
                 ceiling_ms = millis(ceiling),
                 "the dependency asked a wait past the backoff's ceiling; not attempted again",
@@ -371,12 +428,25 @@ impl<I: Instance> Run<'_, I> {
             tracing::debug!(
                 target: TARGET,
                 instance = I::NAME,
+                host = self.host().as_deref(),
+                method = self.method_name(),
                 wait_ms = millis(wait),
                 "no time left before the unit's deadline; not attempted again",
             );
             return None;
         }
         Some(wait)
+    }
+
+    /// The decorated method's host, named as its `mounted` line would name it,
+    /// read only when a line is filed.
+    fn host(&self) -> Option<String> {
+        self.method.as_ref().map(ResilientMethod::host)
+    }
+
+    /// The decorated method's name.
+    fn method_name(&self) -> Option<&'static str> {
+        self.method.as_ref().map(ResilientMethod::name)
     }
 }
 
@@ -747,7 +817,10 @@ mod tests {
             concurrency_wait: Duration::from_secs(60),
             ..ResilienceConfig::default()
         });
-        let held = policy.begin().await.expect("the one slot, while closed");
+        let held = policy
+            .begin(None)
+            .await
+            .expect("the one slot, while closed");
         policy
             .breaker
             .as_ref()
@@ -773,7 +846,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_asked_wait_is_honoured_up_to_the_ceiling_and_past_it_ends_the_run() {
         let policy = retrying(3);
-        let mut run = policy.begin().await.expect("a run");
+        let mut run = policy.begin(None).await.expect("a run");
         let asked = Duration::from_secs(1);
         let started = tokio::time::Instant::now();
         let failed: Attempted<()> = Ok(((), Verdict::Failed { asked: Some(asked) }));
@@ -840,7 +913,7 @@ mod tests {
             breaker_window: None,
             ..ResilienceConfig::default()
         });
-        let held = narrow.begin().await.expect("the one slot");
+        let held = narrow.begin(None).await.expect("the one slot");
         let full = narrow.run(|_| async { Ok::<_, Refused>(()) }).await;
         assert!(matches!(full, Err(ResilienceError::Full { .. })));
         drop(held);

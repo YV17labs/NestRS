@@ -59,6 +59,8 @@ pub mod redis_queue;
 pub mod redis_schedule;
 #[cfg(feature = "redis-throttler")]
 pub mod redis_throttler;
+#[cfg(feature = "resilience")]
+pub mod resilient;
 #[cfg(feature = "graphql")]
 pub mod resolver;
 #[cfg(feature = "authn")]

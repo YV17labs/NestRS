@@ -1048,7 +1048,14 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         }
 
         // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside `#[cfg_attr]`.
-        let mut deleg_attrs = delegated_attrs(&method.attrs);
+        let mut deleg_attrs = delegated_attrs(
+            &method
+                .attrs
+                .iter()
+                .filter(|attr| carried_by_the_field(attr))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
         let mut field = camel_case(&method.sig.ident.unraw().to_string());
         if !is_entity {
             match graphql_name(&method.attrs)? {
@@ -1521,9 +1528,14 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
         }
 
-        // The developer's method keeps its docs, lint levels and `#[cfg]`s.
+        // The developer's method keeps its docs, its lint levels, its `#[cfg]`s and
+        // every attribute the field does not carry: another decorator
+        // (`#[resilient]`) describes the method its body is, never the field.
         method.attrs.retain(|a| {
-            a.path().is_ident("doc") || a.path().is_ident("allow") || a.path().is_ident("expect")
+            a.path().is_ident("doc")
+                || a.path().is_ident("allow")
+                || a.path().is_ident("expect")
+                || !carried_by_the_field(a)
         });
         for condition in &cfgs {
             method.attrs.extend(syn::parse::Parser::parse2(
@@ -1911,6 +1923,25 @@ fn field_parent_label(sig: &Signature) -> String {
         }),
         _ => String::new(),
     }
+}
+
+/// Whether `attr` goes on the field async-graphql resolves: its description,
+/// its own `#[graphql(...)]`, its conditions, its lint levels and its
+/// deprecation. Any other attribute stays on the developer's method.
+fn carried_by_the_field(attr: &Attribute) -> bool {
+    const READ: [&str; 10] = [
+        "doc",
+        "graphql",
+        "cfg",
+        "cfg_attr",
+        "allow",
+        "expect",
+        "warn",
+        "deny",
+        "forbid",
+        "deprecated",
+    ];
+    READ.iter().any(|name| attr.path().is_ident(name))
 }
 
 fn graphql_name(attrs: &[Attribute]) -> syn::Result<Option<String>> {

@@ -64,9 +64,10 @@ pub enum ResilienceError<E> {
     #[error("the call did not answer within its timeout")]
     #[non_exhaustive]
     TimedOut {
-        /// What the attempt was given up at: the policy's timeout, or what was
-        /// left of the unit's deadline when that was shorter — none, for a
-        /// call the unit had no time left to send.
+        /// What the attempt was given up at: the policy's timeout — the one a
+        /// `#[resilient]` method pins, for its own runs — or what was left of
+        /// the unit's deadline when that was shorter: none, for a call the unit
+        /// had no time left to send.
         timeout: Duration,
         #[doc(hidden)]
         #[source]

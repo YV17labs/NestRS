@@ -1,6 +1,6 @@
 ---
 title: Resilience
-description: "Wrap every call to a dependency you do not control in a named policy: a timeout per attempt, retries when idempotent, a circuit breaker, a bulkhead."
+description: "Run each call to a dependency you do not control under a named policy: a timeout per attempt, retries when idempotent, a circuit breaker, a bulkhead."
 sidebar:
   order: 11.6
 ---
@@ -8,15 +8,16 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A slow upstream holds every request that calls it, and a down one is hammered by
-every retry. A resilience policy bounds each call to that dependency, attempts
-an idempotent one again, and stops calling it while it fails, so your client is
-answered `503` with a `Retry-After` instead of a hung request.
+every retry. Decorate the method making the call: its body runs under a
+resilience policy that bounds each attempt, sends an idempotent call again, and
+stops calling the dependency while it fails, so your client is answered `503`
+with a `Retry-After` instead of a hung request.
 
 ```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 
 use nest_rs::core::injectable;
-use nest_rs::resilience::{ResilienceError, ResiliencePolicy};
+use nest_rs::resilience::{ResilienceError, ResiliencePolicy, resilient};
 
 use crate::posts::error::UpstreamError;
 use crate::posts::upstream::Upstream;
@@ -28,10 +29,10 @@ pub struct PostsService {
 }
 
 impl PostsService {
+    #[resilient(upstream, idempotent)]
     pub async fn preview(&self, url: &str) -> Result<String, ResilienceError<UpstreamError>> {
-        self.upstream
-            .run_idempotent(|_cancel| async move { Ok(format!("a preview of {url}")) })
-            .await
+        let page = reqwest::get(url).await.map_err(UpstreamError)?;
+        page.text().await.map_err(UpstreamError)
     }
 }
 ```
@@ -71,12 +72,30 @@ The bare import reads `<PREFIX>_RESILIENCE__UPSTREAM__*`. A root pins a base tho
 variables overlay with `ResilienceModule::for_root((Upstream, ResilienceConfig { .. }))`,
 and the default instance, `ResiliencePolicy`, reads `<PREFIX>_RESILIENCE__*`.
 
-## Run a call
+## Decorate the call
 
-`run` attempts its call once, `run_idempotent` attempts it again after a failure
-or a timeout, up to the policy's retries, each retry waiting a jittered backoff
-first. The choice is yours to make, and nothing else makes it: replaying a call
-that is not idempotent would charge a card twice.
+`#[resilient(upstream)]` runs the method's body once. `#[resilient(upstream,
+idempotent)]` runs it again after a failure or a timeout, up to the policy's
+retries, each retry waiting a jittered backoff first. The choice is yours to
+make, and nothing else makes it: replaying a call that is not idempotent would
+charge a card twice.
+
+The field is the method's own `#[inject]`, so a boot whose modules do not import
+`ResilienceModule<Upstream>` is refused, naming the import. The method answers
+`Result<T, ResilienceError<E>>`, an alias included, and its body is written as if
+it answered `Result<T, E>`: a `?` on your error, `Ok(..)`, `Err(e)` and an early
+`return` end one attempt. Everything else on the method stays as written, on any
+host: a provider, a struct you build, a trait impl, a route, a field, a message, a
+tool, a queue job, a listener or a hook.
+
+A method pins its own `timeout`, and an idempotent one its own `retries`, in
+place of the policy's — `#[resilient(upstream, idempotent, timeout = "2s",
+retries = 3)]` — and the unit's deadline still ends every attempt. The breaker
+and the bulkhead take no pin: their state is the dependency's, shared by every
+method calling it. An idempotent body reads its arguments again at every
+attempt, so it binds none `mut` and takes no `&mut`, both refused at compile
+time, and clones what an attempt consumes: a consumed argument is rustc's
+`E0507`, whose help writes the clone.
 
 **Every `Err` counts as the dependency failing**, for the retry and for the
 breaker. An answer the dependency gave — a declined card, a parcel it does not
@@ -85,15 +104,17 @@ attempted again nor counted. An error whose chain carries a `Problem` with a
 `Retry-After` — an upstream's `429` passed on — holds its retry back that long.
 A fallback is the `Result` you get back: `.or_else(|_| cached())`.
 
-**No attempt outlives its unit.** Each attempt ends at the policy's timeout or at
-the deadline of the unit it runs in — the request timeout on HTTP, a message's on
-a socket, a job's on the queue — whichever comes first, and no retry starts whose
+**No attempt outlives its unit.** Each attempt ends at its timeout or at the
+deadline of the unit it runs in — the request timeout on HTTP, a message's on a
+socket, a job's on the queue — whichever comes first, and no retry starts whose
 wait would end past that deadline. An attempt the deadline ended counts as a
 timeout, in the breaker too.
 
-Each attempt is handed a `CancellationToken`, cancelled when the policy gives the
-attempt up. Rust cancels the attempt's future by dropping it; the token is for
-work the call handed to another task, which the drop does not reach.
+A call that is part of a method, or that needs its attempt's
+`CancellationToken`, takes the policy's own `run` or `run_idempotent`:
+`self.upstream.run_idempotent(|cancel| async move { … }).await`. The token is
+cancelled when the policy gives the attempt up, and reaches work the call handed
+to another task, which dropping the attempt's future does not.
 
 ## What the client is told
 
@@ -115,7 +136,7 @@ use nest_rs::core::{Problem, ToProblem};
 
 #[derive(Debug, thiserror::Error)]
 #[error("the upstream failed")]
-pub struct UpstreamError(#[source] reqwest_middleware::Error);
+pub struct UpstreamError(#[source] reqwest::Error);
 
 impl ToProblem for UpstreamError {
     fn to_problem(&self) -> Option<Problem> {
@@ -136,17 +157,16 @@ of them failed, it opens: every call is refused at once, unsent, for
 `BREAKER_OPEN_SECS`. Then one call probes the dependency while the others are
 still refused; its success closes the breaker, its failure opens it again.
 
-On the defaults, it reads like this. The upstream goes down, and the tenth
-failure among its latest twenty attempts opens the breaker. For the next thirty
-seconds, each call is refused without being sent, and its client is answered
-`503` at once, its `Retry-After` counting down from `30`, instead of waiting out
-a five-second timeout. Then one call probes the upstream: if it answers, the
-breaker closes and calls flow again; if it fails, the breaker opens for another
-thirty seconds.
+On the defaults, the tenth failure among the latest twenty attempts opens it. For
+thirty seconds each call is refused unsent, its client answered `503` at once,
+its `Retry-After` counting down from `30`, instead of after a five-second
+timeout; then one call probes, and the breaker closes or opens for thirty more.
 
 Each transition is a `warn` on `nest_rs::resilience`, naming the instance and the
-state it entered. A retry is a `debug` on the same target. Once telemetry
-exports, every policy counts, by `nestrs.resilience.instance`:
+state it entered. A retry is a `debug` on the same target, and so is a call a
+full bulkhead refused; from a decorated method, each names its `host` and its
+`method`. Once telemetry exports, every policy counts, by
+`nestrs.resilience.instance`:
 
 | Counter | One per |
 |---|---|
@@ -157,7 +177,8 @@ exports, every policy counts, by `nestrs.resilience.instance`:
 ## Your reqwest client
 
 `ResilienceMiddleware` runs every request your own reqwest client sends under a
-policy. It sends again only a request its method declares idempotent (`GET`,
+policy, so a method calling through that client takes no `#[resilient]` of its
+own. It sends again only a request its method declares idempotent (`GET`,
 `HEAD`, `PUT`, `DELETE`, `OPTIONS`, `TRACE`, `QUERY`) or one carrying an
 `Idempotency-Key`, and only when its body can be sent twice.
 
@@ -200,6 +221,39 @@ script — `PeerAnswer::status(503).header("retry-after", "1")`, then
 `PeerAnswer::status(200)` — and keeping every request's head, so a test asserts
 what was sent again and what each attempt carried.
 
+What your client is told while the dependency is down takes one failure, not ten:
+the test's root pins the policy to open on the first, and the next call is
+refused unsent.
+
+```rust title="crates/features/tests/integration/posts/service.rs"
+use features::posts::{PostsModule, PostsService, Upstream};
+use nest_rs::core::module;
+use nest_rs::resilience::{ResilienceConfig, ResilienceError, ResilienceModule};
+use nest_rs::testing::HeadlessApp;
+
+#[module(imports = [
+    ResilienceModule::for_root((Upstream, ResilienceConfig {
+        retries: None,
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..ResilienceConfig::default()
+    })),
+    PostsModule,
+])]
+struct OpeningOnOneFailure;
+
+#[tokio::test]
+async fn an_open_breaker_refuses_the_call_unsent() -> anyhow::Result<()> {
+    let app = HeadlessApp::builder().module::<OpeningOnOneFailure>().build_headless().await?;
+    let posts = app.container().get::<PostsService>().expect("provided");
+    let nowhere = "https://127.0.0.1:1/";
+
+    assert!(matches!(posts.preview(nowhere).await, Err(ResilienceError::Failed(_))));
+    assert!(matches!(posts.preview(nowhere).await, Err(ResilienceError::Open { .. })));
+    Ok(())
+}
+```
+
 ## Configuration
 
 Each key is read under `<PREFIX>_RESILIENCE__` for the default instance and
@@ -229,6 +283,16 @@ window holds.
   dependency failing for one replica is refused by that one alone.
 - **One probe at a time.** While it runs, every other call is refused, told to
   wait one timeout.
+- **A decorated method answers the policy's error.** One answering an error of
+  its own — `Result<T, PostsError>` — calls a decorated method and maps its
+  error.
+- **An `async fn` under `#[async_trait]` is a `fn` by the time `#[resilient]`
+  reads it**, and is refused: write the trait's method as a native `async fn`.
+- **A scheduled tick answers `anyhow::Result<()>`**, so it calls a decorated
+  method, its `?` converting the error, rather than being one.
+- **A GraphQL field writes its `Result` out.** `#[operations]` reads a field's
+  `Result` by its spelling, so a decorated field answers
+  `Result<T, ResilienceError<E>>`, not an alias of it.
 
 ## Going further
 

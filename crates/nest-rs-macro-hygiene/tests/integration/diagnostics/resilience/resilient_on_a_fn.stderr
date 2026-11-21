@@ -1,0 +1,5 @@
+error: #[resilient] decorates an `async fn`: the policy's run is awaited, and this method is a `fn` — write `async fn`. Under `#[async_trait]`, which turns each `async fn` of the impl into a `fn` returning a boxed future before this attribute reads it, write the trait's method as a native `async fn` instead
+  --> tests/integration/diagnostics/resilience/resilient_on_a_fn.rs:30:5
+   |
+30 |     fn ship(&self) -> Answer {
+   |     ^^

@@ -134,3 +134,82 @@ name (`named-instances.md`, `container.md`'s one seam); codes of its own,
 `Retry-After` left unread; and a breaker on a failure rate after a minimum of
 calls, which a count of failures in a window already is — twenty attempts
 opening at ten is half of them after ten at least — at no new variable.
+
+## 2026-11-21 — `#[resilient]`, the policy's decorator
+
+A resilient call was hand-managed: inject the policy, wrap the call in a
+closure, pick `run` or `run_idempotent` — the cross-cutting concern `CLAUDE.md`'s
+*Identity* calls a framework defect. With the owner's decision of 2026-11-21,
+**the first entry's refusal of "a method attribute beside the policy API" is
+reversed**: the attribute says idempotency at the call site, where it was
+refused for not being able to, since `idempotent` is the developer's own key;
+and it is no second way to do one thing, the closure staying the form for what
+no method is — a call needing its `CancellationToken`, or part of a method.
+
+- **`#[resilient(field, idempotent, timeout = "…", retries = N)]`**, in
+  `nest-rs-resilience-macros`, re-exported by `nest-rs-resilience` and
+  `nest_rs::prelude`. The field is required and stays the method's explicit
+  `#[inject]`, so the access graph refuses a missing `ResilienceModule<I>` at
+  boot. `idempotent` runs the body through `run_idempotent`, else `run`, once; the
+  macro never infers it. `timeout` and `retries` pin this method's own, in the
+  ranges `ResilienceConfig` holds its fields to, `retries` beside `idempotent`
+  alone; the breaker and the bulkhead take none.
+- **The method answers `Result<T, ResilienceError<E>>`, read by its type**; its
+  body is written as answering `Result<T, E>`. The body's tokens and spans are
+  emitted untouched inside the attempt's closure: `move` and `async move` for a
+  call run once, so it behaves as undecorated; neither when idempotent, so each
+  attempt borrows the arguments again.
+- **One misuse, one error.** Every helper the expansion calls is bounded on the
+  answer at the return type's span, which rustc reports once per span: the
+  answer probe (`ResilientAnswer`) sits on `run` and `run_idempotent` themselves
+  and `ChainedError`
+  words an idempotent method's `E: Error` in the framework's sentence. The field
+  probe (`PolicyField`) is spanned at the field's name, the replayed closure at
+  `idempotent`, so `E0507` points at the declaration of the replay. A refused
+  method is kept in the nearest form its body compiles in — run once, or typed
+  against a stand-in (`refused`) that nothing runs where the receiver or the
+  field is what was refused — so its body adds no error of its own.
+- **A run carries its own timeout and retries**: the policy's, or the method's
+  pins, through one tier-2 `ResilientMethod` a `const fn` builds. The `debug`
+  lines of a decorated run name its `host` (the type's short name, read off
+  `type_name::<Self>()` only when a line is filed) and its `method`; the counters
+  stay by instance, a method label multiplying their series.
+- **An impl half keeps another decorator on the developer's method.** `#[routes]`,
+  `#[messages]`, `#[tools]` and `#[processor]` already did; `#[operations]`
+  moved every attribute async-graphql does not read onto its generated field
+  wrapper and is fixed with this change.
+
+**Refused:**
+
+- **`#[retry]`, `#[timeout]`, `#[circuit_breaker]` as decorators of their own**:
+  one decorator per concern (`CLAUDE.md`, hard "no").
+- **A pin for the breaker or the bulkhead**: their state is shared by every
+  caller of the dependency, so one method cannot hold its own.
+- **`fallback = …`**: the `Result` the method answers is the fallback, and a
+  fallback would need arguments a once-run body may have consumed.
+- **Naming the instance type, `#[resilient(Carrier)]`**: it needs `#[injectable]`
+  to emit `Injects<S>` per field, and a host injecting one type twice under two
+  spellings would stop compiling, a break inside a major.
+- **No field at all**, an ambient or global lookup: the boot could no longer
+  refuse a missing import, and a `static` would share one breaker across two
+  apps in one process.
+- **Replaying a whole unit**, a replayable `Next` (`one-execution-pipeline.md`).
+- **Handing the body its `CancellationToken` or attempt number**: `run` and
+  `run_idempotent` stay for that.
+- **A return type wrapping the error, `Result<T, MyError>`**: such a method
+  calls a decorated one and maps its error.
+- **Any change to the breaker, the bulkhead or `ResilienceConfig`, and an
+  outbound rate limit**: out of this change; the rate limit is a piece of work
+  of its own.
+
+**Limits, named:** the idempotent refusal of a `mut` binding or a `&mut`
+parameter reads spelling, so a `&mut` behind a type alias reaches rustc's
+`FnMut` sentence instead, as the rustdoc says. A method under `#[async_trait]` is
+a `fn` by the time the attribute reads it, and is refused naming the native
+`async fn`. A `#[scheduled]` tick answers `anyhow::Result<()>`, so it calls a decorated
+method rather than being one; closing that is `#[scheduled]` converting the
+error with `Into::into` as `#[hooks]` and `#[indicators]` do, a widening of its
+documented answer for the owner to agree. A GraphQL field writes its `Result`
+out, since `#[operations]` reads a field's answer by its spelling — `#[operations]`' own limit, stated so far for
+subscriptions alone. No `demo/` use site: the demo calls no dependency it does
+not control, and one is not invented for the decorator.

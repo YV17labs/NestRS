@@ -135,6 +135,30 @@ pub mod queue {
     }
 }
 
+/// `#[resilient]`, the one name of its capability the glob brings.
+#[cfg(feature = "resilience")]
+pub mod resilience {
+    use std::sync::Arc;
+
+    use nest_rs::prelude::*;
+    use nest_rs::resilience::{ResilienceError, ResiliencePolicy};
+
+    use crate::never::Never;
+
+    #[injectable]
+    pub struct PreludeShipments {
+        #[inject]
+        carrier: Arc<ResiliencePolicy>,
+    }
+
+    impl PreludeShipments {
+        #[resilient(carrier)]
+        pub async fn ship(&self) -> Result<(), ResilienceError<Never>> {
+            Ok(())
+        }
+    }
+}
+
 #[cfg(feature = "schedule")]
 pub mod schedule {
     use nest_rs::prelude::*;

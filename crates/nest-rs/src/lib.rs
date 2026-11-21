@@ -363,6 +363,9 @@ pub mod prelude {
     #[cfg(feature = "queue")]
     pub use nest_rs_queue::{processor, queue};
 
+    #[cfg(feature = "resilience")]
+    pub use nest_rs_resilience::resilient;
+
     #[cfg(feature = "seaorm")]
     pub use nest_rs_seaorm::expose;
 

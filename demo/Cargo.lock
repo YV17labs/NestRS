@@ -3029,12 +3029,23 @@ dependencies = [
  "anyhow",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-resilience-macros",
  "opentelemetry",
  "parking_lot 0.13.0",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "nest-rs-resilience-macros"
+version = "7.0.0"
+dependencies = [
+ "nest-rs-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+error: #[resilient] `idempotent` attempts the body again with the arguments the method was called with, so none is bound `mut`: one attempt's change to `order` would reach the next — bind it without `mut`, and change a copy inside the body
+  --> tests/integration/diagnostics/resilience/resilient_idempotent_changes_an_argument.rs:32:27
+   |
+32 |     async fn label(&self, mut order: String) -> Answer<String> {
+   |                           ^^^
+
+error: #[resilient] `idempotent` attempts the body again with the arguments the method was called with, so none is a `&mut`: one attempt's change through `order` would reach the next — take it by shared reference or by value, and change a copy inside the body
+  --> tests/integration/diagnostics/resilience/resilient_idempotent_changes_an_argument.rs:38:34
+   |
+38 |     async fn stamp(&self, order: &mut String) -> Answer {
+   |                                  ^^^^^^^^^^^

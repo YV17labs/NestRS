@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Resilience for NestRS: named policies an app wraps around an outbound call — a timeout per attempt, retries for an idempotent call, a circuit breaker and a bulkhead — answered 503 with Retry-After."
+description = "Resilience for NestRS: #[resilient] runs a method calling a dependency under a named policy — a timeout per attempt, retries when it is idempotent, a circuit breaker and a bulkhead — answered 503 with Retry-After."
 keywords = ["framework", "nestrs", "resilience", "circuit-breaker", "retry"]
 categories = ["web-programming", "asynchronous"]
 
@@ -31,6 +31,9 @@ reqwest = [
 opentelemetry = ["dep:opentelemetry"]
 
 [dependencies]
+# `#[resilient]`, re-exported here: a method's body run under the policy a field
+# of `self` holds.
+nest-rs-resilience-macros.workspace = true
 # `ResilienceModule` is a `Module` generic over its `Instance`; a policy waits
 # through `within` and `Backoff`, and its refusal is a `Problem`.
 nest-rs-core.workspace = true
@@ -95,6 +98,11 @@ nest-rs-reqwest = { path = "../nest-rs-reqwest" }
 http.workspace = true
 reqwest.workspace = true
 reqwest-middleware.workspace = true
+# Pins `#[resilient]`'s compile-time copy of the `timeout` and `retries` ranges
+# against `ResilienceConfig`'s (tests/integration/config.rs), over the literal a
+# method writes.
+nest-rs-codegen = { path = "../nest-rs-codegen" }
+syn.workspace = true
 # The transitions' counter is read off an in-memory exporter the test installs
 # as the global meter provider.
 opentelemetry = { workspace = true }

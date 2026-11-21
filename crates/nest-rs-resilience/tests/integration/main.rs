@@ -1,7 +1,8 @@
 //! `nest-rs-resilience` in process: the documented wiring booted — one policy
-//! per instance, imported bare or pinned — a refusal answered by the HTTP edge,
-//! and the middleware on a reqwest client sending real requests to a TLS peer
-//! double whose certificate a `TestAuthority` issued.
+//! per instance, imported bare or pinned — a refusal answered by every edge,
+//! `#[resilient]`'s expansion run on each host it takes, and the middleware on
+//! a reqwest client sending real requests to a TLS peer double whose
+//! certificate a `TestAuthority` issued.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -10,10 +11,12 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
+mod config;
 mod error;
 mod middleware;
 mod module;
 mod policy;
+mod resilient;
 
 use std::sync::Arc;
 

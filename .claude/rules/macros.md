@@ -155,6 +155,13 @@ with a trybuild snapshot per decorator:
   method compiled out is compiled out of its wrapper, its registration and its
   inventory entry.
 
+**A method decorator outside a pair** (`#[resilient]`) takes the members'
+receiver rule, `self: &Arc<Self>` lent as a provider's, and their reading by
+type; it dispatches nothing, so a generic method is its own. It goes on any
+host's method, a handler included, so **an impl half keeps on the developer's
+method every attribute its edge's library does not read**, never moving one to a
+wrapper of its own.
+
 **What a method answers is read by its type, never by its spelling.** A
 decorator resolves no name, so a renamed `Result` or a type alias must behave
 as the literal does. Behaviour is decided through a type probe —
@@ -312,5 +319,6 @@ It ships with rustdoc whose example, on its surface crate's re-export, runs
 and proves what the expansion provides, a test in the home crate's suite
 (or `nest-rs-testing` for cross-crate wiring), a use site in `demo/`, and its
 `nest-rs-macro-hygiene` witness; `#[listeners]` has no use site in `demo/`, for
-the reason `edges.md` argues. **Compile cost above 0.5 s per use site is a
-defect — measure it.**
+the reason `edges.md` argues, and `#[resilient]` none, since the demo calls no
+dependency it does not control and none is invented for a decorator. **Compile
+cost above 0.5 s per use site is a defect — measure it.**

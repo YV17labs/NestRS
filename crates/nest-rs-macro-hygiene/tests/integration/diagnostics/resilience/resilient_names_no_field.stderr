@@ -1,0 +1,15 @@
+error: #[resilient] names the field of `self` holding the policy — write `#[resilient(carrier)]` to run the method under `self.carrier`, an `Arc<ResiliencePolicy<I>>` injected with `#[inject]`
+  --> tests/integration/diagnostics/resilience/resilient_names_no_field.rs:29:5
+   |
+29 |     #[resilient]
+   |     ^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: #[resilient] names the field of `self` holding the policy — write `#[resilient(carrier)]` to run the method under `self.carrier`, an `Arc<ResiliencePolicy<I>>` injected with `#[inject]`
+  --> tests/integration/diagnostics/resilience/resilient_names_no_field.rs:34:5
+   |
+34 |     #[resilient()]
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)

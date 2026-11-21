@@ -1,0 +1,25 @@
+error[E0507]: cannot move out of `order`, a captured variable in an `FnMut` closure
+  --> tests/integration/diagnostics/resilience/resilient_idempotent_consumes_an_argument.rs:35:26
+   |
+35 |     #[resilient(carrier, idempotent)]
+   |                          ^^^^^^^^^^
+   |                          |
+   |                          captured by this `FnMut` closure
+   |                          `order` is moved here
+36 |     async fn ship(&self, order: String) -> Answer {
+   |                          -----
+   |                          |
+   |                          captured outer variable
+   |                          move occurs because `order` has type `std::string::String`, which does not implement the `Copy` trait
+37 |         send(order).await?;
+   |              ----- variable moved due to use in coroutine
+   |
+help: `Fn` and `FnMut` closures require captured values to be able to be consumed multiple times, but `FnOnce` closures may consume them only once
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   |     C: FnMut(CancellationToken) -> F,
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider cloning the value if the performance cost is acceptable
+   |
+37 |         send(order.clone()).await?;
+   |                   ++++++++

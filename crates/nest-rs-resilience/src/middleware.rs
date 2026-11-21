@@ -85,7 +85,7 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
             return Err(Error::middleware(TracedOutside));
         }
         let replayed = req.method().is_idempotent() || req.headers().contains_key(IDEMPOTENCY_KEY);
-        let mut run = self.policy.begin().await.map_err(refused)?;
+        let mut run = self.policy.begin(None).await.map_err(refused)?;
         loop {
             if run.resent > 0 {
                 extensions.insert(Resent(run.resent));

@@ -1,0 +1,10 @@
+error[E0609]: no field `carier` on type `&ShipmentsService`
+  --> tests/integration/diagnostics/resilience/resilient_names_a_missing_field.rs:30:17
+   |
+30 |     #[resilient(carier)]
+   |                 ^^^^^^ unknown field
+   |
+help: a field with a similar name exists
+   |
+30 |     #[resilient(carrier)]
+   |                    +

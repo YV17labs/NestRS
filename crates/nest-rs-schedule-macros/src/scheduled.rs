@@ -9,17 +9,17 @@ use std::str::FromStr;
 
 use nest_rs_codegen::__private::{
     HandlerSite, HostBorrow, HostMeta, HostMount, JobDecorator, JobKey, ProviderSite, Replicas,
-    SitePosture, VersionedEdge, await_if_async, cfg_attrs, concrete_signature, handler_const,
-    host_layers_entry, host_runtime_entry, impl_self_ident, invalid_time_zone, job_key, job_keys,
-    job_returns_a_result, job_timeout, job_transaction, key_as_written, key_value,
-    key_without_replicas_one, one_role_per_method, replicas_value, require_str_lit, returns_unit,
-    shared_receiver, site, site_const, site_ref, takes_value, timeout_value, transactional_value,
-    ungrouped_expr, unread_job_key,
+    SitePosture, VersionedEdge, answer_span, await_if_async, cfg_attrs, concrete_signature,
+    handler_const, host_layers_entry, host_runtime_entry, impl_self_ident, invalid_time_zone,
+    job_key, job_keys, job_returns_a_result, job_timeout, job_transaction, key_as_written,
+    key_value, key_without_replicas_one, one_role_per_method, replicas_value, require_str_lit,
+    returns_unit, shared_receiver, site, site_const, site_ref, takes_value, timeout_value,
+    transactional_value, ungrouped_expr, unread_job_key,
 };
 use nest_rs_codegen::{Refusals, duration_millis};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::parse::Parser;
 use syn::spanned::Spanned;
@@ -80,8 +80,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         if let Err(err) = concrete_signature(method, &written) {
             return err.to_compile_error().into();
         }
-        // The expansion hands the method's answer to the scheduler, which reads
-        // `Ok` and `Err`; a `()` would surface as a type mismatch inside it.
+        // A `()` written out is refused naming the `Result` the scheduler reads;
+        // any other answer is read by its type, at the probe below.
         if returns_unit(&method.sig.output) {
             return syn::Error::new_spanned(&method.sig, job_returns_a_result(member))
                 .to_compile_error()
@@ -152,6 +152,22 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             None => quote! { ::std::option::Option::None },
         };
         let call = await_if_async(&method.sig, quote!(<#self_ty>::#method_ident(&__provider)));
+        let future = quote! {
+            async move {
+                let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
+                    .expect(::std::concat!(
+                        "scheduled provider `", #host_name,
+                        "` is not registered — add it to a reachable module's \
+                         `providers = [...]`",
+                    ));
+                #call
+            }
+        };
+        // The probe awaits the call and boxes the run, refused at the return type: a bound
+        // `!` trips lints a crate may forbid, and an awaited probe says its refusal twice.
+        let run = quote_spanned! {answer_span(&method.sig)=>
+            ::nest_rs_schedule::__private::answered(#future)
+        };
 
         submissions.push(quote! {
             #(#cfgs)*
@@ -168,15 +184,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     replicas: #replicas_tokens,
                     key: #key_tokens,
                     site: #site_ref,
-                    run: |__container| ::std::boxed::Box::pin(async move {
-                        let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
-                            .expect(::std::concat!(
-                                "scheduled provider `", #host_name,
-                                "` is not registered — add it to a reachable module's \
-                                 `providers = [...]`",
-                            ));
-                        #call
-                    }),
+                    run: |__container| #run,
                     },
                 )
             }

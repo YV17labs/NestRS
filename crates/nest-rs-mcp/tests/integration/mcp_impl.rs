@@ -2,12 +2,12 @@
 //! host's private fields and exposes the router `pub(crate)` to the boot checks.
 
 use nest_rs_core::module;
-use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Role};
+use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
 // No `rmcp`, `tool`, `prompt` or `ServerHandler` import: `#[tools]` re-emits
 // them inside its generated module.
 use nest_rs_core::input;
 use nest_rs_mcp::__private::hosts_on;
-use nest_rs_mcp::rmcp::serde_json::json;
+use nest_rs_mcp::rmcp::serde_json::{Value, json};
 use nest_rs_mcp::{McpError, Parameters, mcp, tools};
 use nest_rs_pipes::{Pipe, PipeError, Piped};
 use nest_rs_testing::TestApp;
@@ -445,5 +445,223 @@ fn a_capability_whose_every_method_is_compiled_out_is_not_advertised() {
     assert!(
         capabilities.prompts.is_some(),
         "…while the `#[prompt]` that does survive still advertises its own",
+    );
+}
+
+// An operation may borrow its host through the lifetime its receiver names. A
+// prompt's answer may not, held `'static` by rmcp, nor a resource's, read outside
+// the method for its template.
+
+const BORROWING: &str = "/mcp/impl-witness/borrowing";
+
+/// Where the stock sits, which the operations below read borrowed.
+#[derive(Clone)]
+struct Shelf(String);
+
+impl Default for Shelf {
+    fn default() -> Self {
+        Self("the top shelf".to_owned())
+    }
+}
+
+#[mcp(path = "/mcp/impl-witness/borrowing")]
+#[derive(Clone, Default)]
+struct BorrowingTools {
+    shelf: Shelf,
+}
+
+#[tools]
+impl BorrowingTools {
+    /// Say where the stock sits.
+    #[tool]
+    #[public]
+    async fn locate<'a>(&'a self) -> Result<String, McpError> {
+        let shelf: &'a str = &self.shelf.0;
+        Ok(format!("on {shelf}"))
+    }
+
+    /// Draft a note on where the stock sits.
+    #[prompt]
+    #[public]
+    async fn note<'a>(&'a self) -> Result<GetPromptResult, McpError> {
+        let shelf: &'a str = &self.shelf.0;
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            shelf,
+        )]))
+    }
+
+    #[resources]
+    #[public]
+    async fn shelves<'a>(&'a self) -> Result<Vec<Resource>, McpError> {
+        let shelf: &'a str = &self.shelf.0;
+        Ok(vec![Resource::new("shelf://top", shelf)])
+    }
+
+    /// One shelf, read off its name.
+    #[resource(template = "shelf://{name}")]
+    #[public]
+    async fn shelf<'a>(&'a self, name: String) -> Result<Option<String>, McpError> {
+        let shelf: &'a str = &self.shelf.0;
+        Ok((name == "top").then(|| shelf.to_owned()))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [BorrowingTools])]
+struct BorrowingModule;
+
+#[tokio::test]
+async fn an_operation_borrowing_through_the_lifetime_its_receiver_names_is_served() {
+    let app = TestApp::for_module::<BorrowingModule>()
+        .await
+        .expect("a host whose operations name their receiver's lifetime boots");
+
+    let located = call_tool_with(app.http(), BORROWING, "locate", None, json!({})).await;
+    assert!(located.contains("on the top shelf"), "{located}");
+
+    let session = open_session(app.http(), BORROWING, None).await;
+    let ask = |method: &'static str, params: Value| {
+        let (app, session) = (&app, &session);
+        async move {
+            let body = call_method(app.http(), BORROWING, session, None, method, params).await;
+            (result(&body), body)
+        }
+    };
+    let (noted, body) = ask("prompts/get", json!({ "name": "note", "arguments": {} })).await;
+    assert_eq!(
+        noted["result"]["messages"][0]["content"]["text"], "the top shelf",
+        "{body}"
+    );
+    let (listed, body) = ask("resources/list", json!({})).await;
+    assert_eq!(
+        listed["result"]["resources"][0]["name"], "the top shelf",
+        "{body}"
+    );
+    let (read, body) = ask("resources/read", json!({ "uri": "shelf://top" })).await;
+    assert_eq!(
+        read["result"]["contents"][0]["text"], "the top shelf",
+        "{body}"
+    );
+}
+
+const FRAGMENTS: &str = "/mcp/impl-witness/fragments";
+
+#[mcp(path = "/mcp/impl-witness/fragments")]
+#[derive(Clone, Default)]
+struct FragmentTools {
+    shelf: Shelf,
+}
+
+// The methods come through `tt` fragments, keeping the caller's spans, and
+// `#[tools]` the macro's: what the expansion binds resolves in the methods'.
+macro_rules! declare_fragment_tools {
+    ($($operations:tt)*) => {
+        #[tools]
+        impl FragmentTools {
+            $($operations)*
+        }
+    };
+}
+
+declare_fragment_tools! {
+    /// Greet someone by name.
+    #[tool]
+    #[public]
+    async fn greet(&self, Parameters(args): Parameters<GreetArgs>) -> Result<String, McpError> {
+        Ok(format!("hello {}", args.name))
+    }
+
+    /// Draft a greeting.
+    #[prompt]
+    #[public]
+    async fn draft(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "drafted",
+        )]))
+    }
+
+    #[resources]
+    #[public]
+    async fn fragments(&self) -> Result<Vec<Resource>, McpError> {
+        Ok(vec![Resource::new("fragment://1", "first")])
+    }
+
+    /// One fragment, read off its number.
+    #[resource(template = "fragment://{id}")]
+    #[public]
+    async fn fragment(&self, id: u32) -> Result<String, McpError> {
+        Ok(format!("fragment {id}"))
+    }
+
+    /// Say where the stock sits.
+    #[tool]
+    #[public]
+    async fn locate<'a>(&'a self) -> Result<String, McpError> {
+        let shelf: &'a str = &self.shelf.0;
+        Ok(format!("on {shelf}"))
+    }
+
+    /// Draft a note on where the stock sits.
+    #[prompt]
+    #[public]
+    async fn note<'a>(&'a self) -> Result<GetPromptResult, McpError> {
+        let shelf: &'a str = &self.shelf.0;
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            shelf,
+        )]))
+    }
+}
+
+#[module(imports = [crate::open_mcp()], providers = [FragmentTools])]
+struct FragmentModule;
+
+#[tokio::test]
+async fn an_operation_a_macro_fragment_writes_is_served_as_the_one_written_out() {
+    let app = TestApp::for_module::<FragmentModule>()
+        .await
+        .expect("a host whose operations a macro writes boots");
+
+    let greeted = call_tool_with(
+        app.http(),
+        FRAGMENTS,
+        "greet",
+        None,
+        json!({ "name": "ada" }),
+    )
+    .await;
+    assert!(greeted.contains("hello ada"), "{greeted}");
+
+    let session = open_session(app.http(), FRAGMENTS, None).await;
+    let ask = |method: &'static str, params: Value| {
+        let (app, session) = (&app, &session);
+        async move {
+            let body = call_method(app.http(), FRAGMENTS, session, None, method, params).await;
+            (result(&body), body)
+        }
+    };
+    let (drafted, body) = ask("prompts/get", json!({ "name": "draft", "arguments": {} })).await;
+    assert_eq!(
+        drafted["result"]["messages"][0]["content"]["text"], "drafted",
+        "{body}"
+    );
+    let (listed, body) = ask("resources/list", json!({})).await;
+    assert_eq!(
+        listed["result"]["resources"][0]["uri"], "fragment://1",
+        "{body}"
+    );
+    let (read, body) = ask("resources/read", json!({ "uri": "fragment://7" })).await;
+    assert_eq!(
+        read["result"]["contents"][0]["text"], "fragment 7",
+        "{body}"
+    );
+
+    let located = call_tool_with(app.http(), FRAGMENTS, "locate", None, json!({})).await;
+    assert!(located.contains("on the top shelf"), "{located}");
+    let (noted, body) = ask("prompts/get", json!({ "name": "note", "arguments": {} })).await;
+    assert_eq!(
+        noted["result"]["messages"][0]["content"]["text"], "the top shelf",
+        "{body}"
     );
 }

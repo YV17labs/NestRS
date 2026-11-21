@@ -1904,6 +1904,145 @@ async fn a_hook_compiled_in_survives_a_compiled_out_one_declared_after_it() {
     );
 }
 
+static FRAGMENT_HOOKS_RAN: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+#[gateway(path = "/fragment-hooks")]
+pub(crate) struct FragmentHookGateway;
+
+// The hooks come through `tt` fragments, keeping the caller's spans, and
+// `#[messages]` the macro's: what the expansion binds resolves in the hooks'.
+macro_rules! declare_fragment_hooks {
+    ($($hooks:tt)*) => {
+        #[messages]
+        impl FragmentHookGateway {
+            $($hooks)*
+        }
+    };
+}
+
+declare_fragment_hooks! {
+    #[on_connect]
+    async fn connected(&self, client: &WsClient) {
+        let _ = client;
+        FRAGMENT_HOOKS_RAN.lock().expect("unpoisoned").push("connected");
+    }
+
+    #[on_disconnect]
+    fn disconnected(&self) {
+        FRAGMENT_HOOKS_RAN.lock().expect("unpoisoned").push("disconnected");
+    }
+}
+
+#[tokio::test]
+async fn a_hook_a_macro_fragment_writes_runs_as_the_one_written_out() {
+    let client = WsClient::for_test();
+    FragmentHookGateway.on_connect(&client).await;
+    FragmentHookGateway.on_disconnect(&client).await;
+    assert_eq!(
+        *FRAGMENT_HOOKS_RAN.lock().expect("unpoisoned"),
+        ["connected", "disconnected"],
+        "each hook ran, the one taking the client and the one leaving it out",
+    );
+}
+
+// A hook may borrow its gateway through the lifetime its receiver names, written
+// out and through `tt` fragments.
+
+static BORROWING_HOOKS_RAN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The lobby a gateway's hooks greet a client in, which they read borrowed.
+#[derive(Default)]
+struct Lobby(String);
+
+#[gateway(path = "/borrowing-hooks")]
+#[derive(Default)]
+pub(crate) struct BorrowingHookGateway {
+    lobby: Lobby,
+}
+
+#[messages]
+impl BorrowingHookGateway {
+    #[on_connect]
+    async fn connected<'a>(&'a self, client: &'a WsClient) {
+        let _ = client;
+        let lobby: &'a str = &self.lobby.0;
+        BORROWING_HOOKS_RAN
+            .lock()
+            .expect("unpoisoned")
+            .push(format!("{lobby} connected"));
+    }
+
+    #[on_disconnect]
+    fn disconnected<'a>(&'a self) {
+        let lobby: &'a str = &self.lobby.0;
+        BORROWING_HOOKS_RAN
+            .lock()
+            .expect("unpoisoned")
+            .push(format!("{lobby} disconnected"));
+    }
+}
+
+#[gateway(path = "/fragment-borrowing-hooks")]
+#[derive(Default)]
+pub(crate) struct FragmentBorrowingHookGateway {
+    lobby: Lobby,
+}
+
+macro_rules! declare_fragment_borrowing_hooks {
+    ($($hooks:tt)*) => {
+        #[messages]
+        impl FragmentBorrowingHookGateway {
+            $($hooks)*
+        }
+    };
+}
+
+declare_fragment_borrowing_hooks! {
+    #[on_connect]
+    async fn connected<'a>(&'a self, client: &'a WsClient) {
+        let _ = client;
+        let lobby: &'a str = &self.lobby.0;
+        BORROWING_HOOKS_RAN
+            .lock()
+            .expect("unpoisoned")
+            .push(format!("{lobby} connected"));
+    }
+
+    #[on_disconnect]
+    fn disconnected<'a>(&'a self) {
+        let lobby: &'a str = &self.lobby.0;
+        BORROWING_HOOKS_RAN
+            .lock()
+            .expect("unpoisoned")
+            .push(format!("{lobby} disconnected"));
+    }
+}
+
+#[tokio::test]
+async fn a_hook_borrowing_through_the_lifetime_its_receiver_names_runs() {
+    let client = WsClient::for_test();
+    let written = BorrowingHookGateway {
+        lobby: Lobby("the written lobby".to_owned()),
+    };
+    written.on_connect(&client).await;
+    written.on_disconnect(&client).await;
+    let fragment = FragmentBorrowingHookGateway {
+        lobby: Lobby("the fragment's lobby".to_owned()),
+    };
+    fragment.on_connect(&client).await;
+    fragment.on_disconnect(&client).await;
+    assert_eq!(
+        *BORROWING_HOOKS_RAN.lock().expect("unpoisoned"),
+        [
+            "the written lobby connected",
+            "the written lobby disconnected",
+            "the fragment's lobby connected",
+            "the fragment's lobby disconnected",
+        ],
+        "each hook ran on the gateway it borrowed, written out and through a fragment",
+    );
+}
+
 /// Every tier a handler's error takes: `anyhow::Result` with `?`, serde's error
 /// itself, an error that is not `Send`, and a `Display`-only one.
 #[tokio::test]

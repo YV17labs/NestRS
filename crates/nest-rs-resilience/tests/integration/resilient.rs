@@ -1,9 +1,11 @@
 //! Covers `src/resilient.rs`, what `#[resilient]` expands to: a method's body
-//! sent once or again as its attribute declares, its arguments read again at
-//! each attempt, `?` and `return` answering one attempt, the `timeout` and
-//! `retries` a method pins, the lines naming it, each receiver and host it
-//! takes, and a refusal answered `503` by every edge serving a decorated
-//! handler.
+//! sent once or again as its attribute declares, written out or by a macro,
+//! its answer borrowed through the lifetime its receiver names, its arguments
+//! read again at each attempt, `?` and `return` answering one attempt, the
+//! `timeout` and `retries` a method pins, the lines naming it, each receiver
+//! and host it takes, a refusal answered `503` by every edge serving a
+//! decorated handler, and a method of every impl half that takes one, called
+//! through the framework's own path, attempted again within that one call.
 
 use std::cell::Cell;
 use std::future::Future;
@@ -47,6 +49,15 @@ fn depot(parcel: &str) -> Result<&'static str, NoParcel> {
 
 type Answer<T> = Result<T, ResilienceError<CarrierDown>>;
 
+/// Where a parcel leaves from, which a decorated method answers borrowed.
+struct Hub(String);
+
+impl Default for Hub {
+    fn default() -> Self {
+        Self("the Lyon hub".to_owned())
+    }
+}
+
 /// Whether `answer` is the call's own failure, as its last attempt answered it.
 fn failed<T>(answer: &Answer<T>) -> bool {
     matches!(answer, Err(ResilienceError::Failed(CarrierDown)))
@@ -58,6 +69,7 @@ struct ParcelsService {
     courier: Arc<ResiliencePolicy<Courier>>,
     attempts: AtomicU32,
     seen: Mutex<Vec<String>>,
+    hub: Hub,
 }
 
 impl ParcelsService {
@@ -161,6 +173,20 @@ impl ParcelsService {
         let feed: Feed = Box::new(["P1", "P2"].into_iter());
         Ok(feed)
     }
+
+    #[resilient(courier)]
+    async fn origin<'a>(&'a self) -> Answer<&'a str> {
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        Ok(self.hub.0.as_str())
+    }
+
+    #[resilient(courier, idempotent)]
+    async fn sorted<'a>(&'a self) -> Answer<&'a str> {
+        if self.fails(1) {
+            return Err(CarrierDown);
+        }
+        Ok(self.hub.0.as_str())
+    }
 }
 
 /// What an `#[sse]` route's or a `#[subscription]`'s answer holds: a stream
@@ -195,7 +221,7 @@ fn retrying_once() -> ResilienceConfig {
         retries: Some(2),
         ..retrying_once()
     }))],
-    providers = [ParcelsService],
+    providers = [ParcelsService, FragmentService],
 )]
 struct RetryingModule;
 
@@ -216,6 +242,148 @@ async fn a_method_is_sent_once_unless_it_declares_itself_idempotent() {
         parcels.attempted(),
         3,
         "one call and the policy's two retries"
+    );
+}
+
+/// A host whose decorated methods macros write, the attribute naming the field
+/// and the method borrowing the host each from a context of its own.
+#[injectable]
+struct FragmentService {
+    #[inject]
+    courier: Arc<ResiliencePolicy<Courier>>,
+    attempts: AtomicU32,
+    hub: Hub,
+}
+
+impl FragmentService {
+    fn attempted(&self) -> u32 {
+        self.attempts.swap(0, Ordering::Relaxed)
+    }
+}
+
+// The methods come through `tt` fragments, keeping the caller's spans, and their
+// `#[resilient]` the macro's — or the attribute the caller's and the method the
+// macro's: either way the field and the receiver are written in two contexts.
+macro_rules! declare_fragment_methods {
+    (once: { $($once:tt)* } idempotent: { $($idempotent:tt)* }) => {
+        impl FragmentService {
+            #[resilient(courier)]
+            $($once)*
+
+            #[resilient(courier, idempotent)]
+            $($idempotent)*
+        }
+    };
+    ($(#[$($decorator:tt)*] $name:ident)*) => {
+        impl FragmentService {
+            $(
+                #[$($decorator)*]
+                async fn $name(&self) -> Answer<()> {
+                    self.attempts.fetch_add(1, Ordering::Relaxed);
+                    Err(CarrierDown)
+                }
+            )*
+        }
+    };
+}
+
+declare_fragment_methods! {
+    once: {
+        async fn ship(&self) -> Answer<()> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            Err(CarrierDown)
+        }
+    }
+    idempotent: {
+        async fn track(&self) -> Answer<()> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            Err(CarrierDown)
+        }
+    }
+}
+
+declare_fragment_methods! {
+    #[resilient(courier)] deliver
+    #[resilient(courier, idempotent)] trace
+}
+
+declare_fragment_methods! {
+    once: {
+        async fn origin<'a>(&'a self) -> Answer<&'a str> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            Ok(self.hub.0.as_str())
+        }
+    }
+    idempotent: {
+        async fn sorted<'a>(&'a self) -> Answer<&'a str> {
+            if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                return Err(CarrierDown);
+            }
+            Ok(self.hub.0.as_str())
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_method_a_macro_fragment_writes_runs_under_its_policy_as_the_one_written_out() {
+    let app = boot::<RetryingModule>().await;
+    let fragments = app
+        .container()
+        .get::<FragmentService>()
+        .expect("the module provides it");
+
+    assert!(failed(&fragments.ship().await));
+    assert_eq!(
+        fragments.attempted(),
+        1,
+        "sent once, as `ParcelsService::ship`"
+    );
+    assert!(failed(&fragments.track().await));
+    assert_eq!(
+        fragments.attempted(),
+        3,
+        "and again, as `ParcelsService::track`"
+    );
+
+    assert!(failed(&fragments.deliver().await));
+    assert_eq!(
+        fragments.attempted(),
+        1,
+        "the caller's attribute, sent once"
+    );
+    assert!(failed(&fragments.trace().await));
+    assert_eq!(
+        fragments.attempted(),
+        3,
+        "the caller's attribute, and again"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_method_borrowing_through_the_lifetime_its_receiver_names_runs_under_its_policy() {
+    let app = boot::<RetryingModule>().await;
+    let parcels = parcels(&app);
+    let fragments = app
+        .container()
+        .get::<FragmentService>()
+        .expect("the module provides it");
+
+    assert!(matches!(parcels.origin().await, Ok("the Lyon hub")));
+    assert_eq!(parcels.attempted(), 1, "sent once");
+    assert!(matches!(parcels.sorted().await, Ok("the Lyon hub")));
+    assert_eq!(
+        parcels.attempted(),
+        2,
+        "its first attempt failed, its retry answered"
+    );
+
+    assert!(matches!(fragments.origin().await, Ok("the Lyon hub")));
+    assert_eq!(fragments.attempted(), 1, "through a fragment, sent once");
+    assert!(matches!(fragments.sorted().await, Ok("the Lyon hub")));
+    assert_eq!(
+        fragments.attempted(),
+        2,
+        "through a fragment, answered on its retry"
     );
 }
 
@@ -752,22 +920,45 @@ impl nest_rs_core::ToProblem for UpstreamDown {
     }
 }
 
-/// A decorated handler of a `#[routes]` block, failing, then refused.
+/// How many times the decorated methods below ran, each failing its first
+/// attempt and answering its retry.
+#[injectable]
+#[derive(Default)]
+struct Attempts {
+    made: AtomicU32,
+}
+
+impl Attempts {
+    /// Whether the attempt about to run is the first, which fails.
+    fn first(&self) -> bool {
+        self.made.fetch_add(1, Ordering::Relaxed) == 0
+    }
+
+    fn made(&self) -> u32 {
+        self.made.load(Ordering::Relaxed)
+    }
+}
+
+/// A decorated handler and `#[sse]` route of a `#[routes]` block, failing, then
+/// refused.
 mod routes {
     use std::sync::Arc;
 
     use http::StatusCode;
     use nest_rs_core::{code, module};
-    use nest_rs_http::{controller, routes};
+    use nest_rs_http::futures_util::stream;
+    use nest_rs_http::{SseEvent, SseStream, controller, routes};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
     use nest_rs_testing::TestApp;
 
-    use super::{UpstreamDown, opening_on_the_first_failure};
+    use super::{Attempts, UpstreamDown, opening_on_the_first_failure};
 
     #[controller(path = "/decorated")]
     struct DecoratedController {
         #[inject]
         upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
     }
 
     #[routes]
@@ -778,11 +969,22 @@ mod routes {
         async fn preview(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             Err(UpstreamDown)
         }
+
+        /// A stream whose opening calls the upstream.
+        #[sse("/feed")]
+        #[public]
+        #[resilient(upstream)]
+        async fn feed(&self) -> Result<SseStream, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(SseStream::new(stream::iter([SseEvent::message("moved")])))
+        }
     }
 
     #[module(
         imports = [ResilienceModule::for_root(opening_on_the_first_failure())],
-        providers = [DecoratedController],
+        providers = [DecoratedController, Attempts],
     )]
     struct DecoratedHttpModule;
 
@@ -806,23 +1008,56 @@ mod routes {
             .get("code")
             .assert_string(code::UNAVAILABLE.as_str());
     }
+
+    #[tokio::test]
+    async fn an_sse_route_answers_its_refusal_503_with_the_breakers_wait() {
+        let app = TestApp::for_module::<DecoratedHttpModule>()
+            .await
+            .expect("a decorated stream boots");
+
+        let failed = app.http().get("/decorated/feed").send().await;
+        failed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+        let refused = app.http().get("/decorated/feed").send().await;
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        refused.assert_header("retry-after", "30");
+        refused
+            .json()
+            .await
+            .value()
+            .object()
+            .get("code")
+            .assert_string(code::UNAVAILABLE.as_str());
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(
+            attempts.made(),
+            1,
+            "sent once, and the opening the breaker refused never"
+        );
+    }
 }
 
-/// A decorated root field of an `#[operations]` block.
+/// A decorated root field and subscription of an `#[operations]` block, and its
+/// mutation, field resolver and entity attempted again.
 mod operations {
     use std::sync::Arc;
 
+    use async_graphql::futures_util::StreamExt as _;
+    use async_graphql::futures_util::stream::{self, BoxStream};
     use nest_rs_core::module;
-    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
     use nest_rs_testing::TestApp;
+    use serde_json::{Value, json};
 
-    use super::{UpstreamDown, opening_on_the_first_failure};
+    use super::{Attempts, UpstreamDown, opening_on_the_first_failure, retrying_once};
 
     #[resolver]
     struct DecoratedResolver {
         #[inject]
         upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
     }
 
     #[operations]
@@ -833,11 +1068,23 @@ mod operations {
         async fn decorated(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             Err(UpstreamDown)
         }
+
+        #[subscription]
+        #[public]
+        #[resilient(upstream)]
+        async fn movements(
+            &self,
+        ) -> Result<BoxStream<'static, i32>, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(stream::iter([1]).boxed())
+        }
     }
 
     #[module(
         imports = [GraphqlModule, ResilienceModule::for_root(opening_on_the_first_failure())],
-        providers = [DecoratedResolver],
+        providers = [DecoratedResolver, Attempts],
     )]
     struct DecoratedGraphqlModule;
 
@@ -867,6 +1114,165 @@ mod operations {
         let extensions = &refused["errors"][0]["extensions"];
         assert_eq!(extensions["code"], "UNAVAILABLE", "{refused}");
         assert_eq!(extensions["retryAfterSeconds"], 30, "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_subscription_answers_its_refusal_unavailable_with_the_breakers_wait() {
+        let app = TestApp::for_module::<DecoratedGraphqlModule>()
+            .await
+            .expect("a decorated subscription boots");
+        let mut socket = app.graphql_socket().open();
+        socket.connect().await;
+
+        socket.subscribe("failed", "subscription { movements }");
+        let failed = socket
+            .next_item("failed")
+            .await
+            .expect("the opening answers");
+        assert_eq!(
+            failed["errors"][0]["extensions"]["code"], "INTERNAL",
+            "{failed}"
+        );
+
+        socket.subscribe("refused", "subscription { movements }");
+        let refused = socket
+            .next_item("refused")
+            .await
+            .expect("the opening answers");
+        let extensions = &refused["errors"][0]["extensions"];
+        assert_eq!(extensions["code"], "UNAVAILABLE", "{refused}");
+        assert_eq!(extensions["retryAfterSeconds"], 30, "{refused}");
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(
+            attempts.made(),
+            1,
+            "sent once, and the opening the breaker refused never"
+        );
+    }
+
+    /// A parcel, which a field resolver extends and an entity resolves by its
+    /// number.
+    #[derive(async_graphql::SimpleObject)]
+    #[graphql(complex)]
+    struct Parcel {
+        number: String,
+    }
+
+    #[resolver]
+    struct RetriedResolver {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    /// `#[operations]` reads a field's `Result` by its spelling, so each
+    /// decorated role writes it out.
+    #[operations]
+    impl RetriedResolver {
+        #[query]
+        #[public]
+        async fn parcel(&self) -> Parcel {
+            Parcel {
+                number: "P1".to_owned(),
+            }
+        }
+
+        #[mutation]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn reroute(&self) -> Result<String, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok("rerouted".to_owned())
+        }
+
+        #[field_resolver]
+        #[resilient(upstream, idempotent)]
+        async fn depot(&self, parent: &Parcel) -> Result<String, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(format!("{} waits in Lyon", parent.number))
+        }
+
+        #[entity]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn find_parcel_by_number(
+            &self,
+            number: String,
+        ) -> Result<Parcel, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(Parcel {
+                number: number.clone(),
+            })
+        }
+    }
+
+    #[module(
+        imports = [
+            GraphqlModule::for_root(GraphqlConfig {
+                federation: true,
+                federation_sdl: nest_rs_config::Surface::Open,
+                ..GraphqlConfig::default()
+            }),
+            ResilienceModule::for_root(retrying_once()),
+        ],
+        providers = [RetriedResolver, Attempts],
+    )]
+    struct RetriedGraphqlModule;
+
+    /// What the schema answers `body` with, and how many attempts the one
+    /// decorated method it reached made.
+    async fn retried(body: Value) -> (Value, u32) {
+        let app = TestApp::for_module::<RetriedGraphqlModule>()
+            .await
+            .expect("a resolver decorating every role boots");
+        let answer = app
+            .http()
+            .post("/graphql")
+            .body_json(&body)
+            .send()
+            .await
+            .json()
+            .await
+            .value()
+            .deserialize::<Value>();
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        (answer, attempts.made())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_mutation_failing_once_answers_on_its_retry() {
+        let (answer, attempts) = retried(json!({ "query": "mutation { reroute }" })).await;
+        assert_eq!(answer["data"]["reroute"], "rerouted", "{answer}");
+        assert_eq!(attempts, 2, "the failed attempt and its retry");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_field_resolver_failing_once_answers_on_its_retry() {
+        let (answer, attempts) = retried(json!({ "query": "{ parcel { depot } }" })).await;
+        assert_eq!(
+            answer["data"]["parcel"]["depot"], "P1 waits in Lyon",
+            "{answer}"
+        );
+        assert_eq!(attempts, 2, "the failed attempt and its retry");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_entity_failing_once_answers_its_reference_on_its_retry() {
+        let (answer, attempts) = retried(json!({
+            "query": "query($reps: [_Any!]!) { \
+                      _entities(representations: $reps) { ... on Parcel { number } } }",
+            "variables": { "reps": [{ "__typename": "Parcel", "number": "P7" }] },
+        }))
+        .await;
+        assert_eq!(answer["data"]["_entities"][0]["number"], "P7", "{answer}");
+        assert_eq!(attempts, 2, "the failed attempt and its retry");
     }
 }
 
@@ -925,17 +1331,20 @@ mod messages {
     }
 }
 
-/// A decorated tool of a `#[tools]` block.
+/// A decorated tool and resource listing of a `#[tools]` block, and its prompt,
+/// resource and listing attempted again.
 mod tools {
     use std::sync::Arc;
 
     use nest_rs_core::module;
-    use nest_rs_mcp::{McpAccess, McpModule, mcp, tools};
+    use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
+    use nest_rs_mcp::{McpAccess, McpError, McpModule, mcp, tools};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
     use nest_rs_testing::TestApp;
-    use nest_rs_testing::mcp::call_tool;
+    use nest_rs_testing::mcp::{call_method, call_tool, open_session, result};
+    use serde_json::{Value, json};
 
-    use super::{UpstreamDown, opening_on_the_first_failure};
+    use super::{Attempts, UpstreamDown, opening_on_the_first_failure, retrying_once};
 
     const PATH: &str = "/mcp/decorated";
 
@@ -944,6 +1353,8 @@ mod tools {
     struct DecoratedTools {
         #[inject]
         upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
     }
 
     #[tools]
@@ -955,6 +1366,23 @@ mod tools {
         async fn decorated(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             Err(UpstreamDown)
         }
+
+        #[resources]
+        #[public]
+        #[resilient(upstream)]
+        async fn parcels(&self) -> Result<Vec<Resource>, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(vec![Resource::new("parcel://7", "parcel 7")])
+        }
+
+        /// Where a parcel the listing lists stands.
+        #[resource(template = "parcel://{id}")]
+        #[public]
+        async fn parcel(&self, id: u32) -> Result<String, McpError> {
+            Ok(format!("parcel {id} waits in Lyon"))
+        }
     }
 
     #[module(
@@ -962,7 +1390,7 @@ mod tools {
             McpModule::for_root(McpAccess::Public),
             ResilienceModule::for_root(opening_on_the_first_failure()),
         ],
-        providers = [DecoratedTools],
+        providers = [DecoratedTools, Attempts],
     )]
     struct DecoratedMcpModule;
 
@@ -978,6 +1406,144 @@ mod tools {
         let refused = call_tool(app.http(), PATH, "decorated", None).await;
         assert!(refused.contains("\"code\":\"UNAVAILABLE\""), "{refused}");
         assert!(refused.contains("\"retryAfterSeconds\":30"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_resource_listing_answers_its_refusal_unavailable_with_the_breakers_wait() {
+        let app = TestApp::for_module::<DecoratedMcpModule>()
+            .await
+            .expect("a decorated listing boots");
+        let session = open_session(app.http(), PATH, None).await;
+
+        let failed = call_method(
+            app.http(),
+            PATH,
+            &session,
+            None,
+            "resources/list",
+            json!({}),
+        )
+        .await;
+        assert!(failed.contains("\"code\":\"INTERNAL\""), "{failed}");
+
+        let refused = call_method(
+            app.http(),
+            PATH,
+            &session,
+            None,
+            "resources/list",
+            json!({}),
+        )
+        .await;
+        assert!(refused.contains("\"code\":\"UNAVAILABLE\""), "{refused}");
+        assert!(refused.contains("\"retryAfterSeconds\":30"), "{refused}");
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(
+            attempts.made(),
+            1,
+            "sent once, and the listing the breaker refused never"
+        );
+    }
+
+    const RETRIED: &str = "/mcp/retried";
+
+    #[mcp(path = "/mcp/retried")]
+    #[derive(Clone)]
+    struct RetriedTools {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    #[tools]
+    impl RetriedTools {
+        /// Draft a note to the carrier, under its policy.
+        #[prompt]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn draft(&self) -> Result<GetPromptResult, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+                Role::User,
+                "drafted",
+            )]))
+        }
+
+        /// Where a parcel stands, read from the carrier under its policy.
+        #[resource(template = "parcel://{id}")]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn parcel(&self, id: u32) -> Result<String, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(format!("parcel {id} waits in Lyon"))
+        }
+
+        #[resources]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn parcels(&self) -> Result<Vec<Resource>, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(vec![Resource::new("parcel://7", "parcel 7")])
+        }
+    }
+
+    #[module(
+        imports = [
+            McpModule::for_root(McpAccess::Public),
+            ResilienceModule::for_root(retrying_once()),
+        ],
+        providers = [RetriedTools, Attempts],
+    )]
+    struct RetriedMcpModule;
+
+    /// What the host answers `method` with on a session of its own, and how
+    /// many attempts the one decorated method it reached made.
+    async fn retried(method: &str, params: Value) -> (Value, u32) {
+        let app = TestApp::for_module::<RetriedMcpModule>()
+            .await
+            .expect("a host decorating its prompt, its resource and its listing boots");
+        let session = open_session(app.http(), RETRIED, None).await;
+        let body = call_method(app.http(), RETRIED, &session, None, method, params).await;
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        (result(&body), attempts.made())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_prompt_failing_once_answers_on_its_retry() {
+        let (answer, attempts) =
+            retried("prompts/get", json!({ "name": "draft", "arguments": {} })).await;
+        assert_eq!(
+            answer["result"]["messages"][0]["content"]["text"], "drafted",
+            "{answer}"
+        );
+        assert_eq!(attempts, 2, "the failed attempt and its retry");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_resource_failing_once_answers_on_its_retry() {
+        let (answer, attempts) = retried("resources/read", json!({ "uri": "parcel://7" })).await;
+        assert_eq!(
+            answer["result"]["contents"][0]["text"], "parcel 7 waits in Lyon",
+            "{answer}"
+        );
+        assert_eq!(attempts, 2, "the failed attempt and its retry");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_resource_listing_failing_once_answers_on_its_retry() {
+        let (answer, attempts) = retried("resources/list", json!({})).await;
+        assert_eq!(
+            answer["result"]["resources"][0]["uri"], "parcel://7",
+            "{answer}"
+        );
+        assert_eq!(attempts, 2, "the failed attempt and its retry");
     }
 }
 
@@ -1057,5 +1623,241 @@ mod processor {
             after >= asked && after <= asked.mul_f64(1.2),
             "the breaker's wait, stretched by a fifth at most: {after:?}"
         );
+    }
+}
+
+/// A decorated tick of a `#[scheduled]` block, attempted again within the one
+/// run its trigger fires.
+mod scheduled {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
+    use nest_rs_core::{injectable, module};
+    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
+    use nest_rs_schedule::{Scheduler, scheduled};
+    use nest_rs_testing::{HeadlessApp, LogCapture};
+
+    use super::{Attempts, UpstreamDown, retrying_once};
+
+    #[injectable]
+    struct RefreshTasks {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    #[scheduled]
+    impl RefreshTasks {
+        #[after("1s")]
+        #[resilient(upstream, idempotent)]
+        async fn refresh(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(())
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root(retrying_once())],
+        providers = [RefreshTasks, Attempts],
+    )]
+    struct DecoratedScheduleModule;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_tick_failing_once_answers_on_its_retry_within_its_one_run() {
+        let logs = LogCapture::install();
+        let app = HeadlessApp::builder()
+            .module::<DecoratedScheduleModule>()
+            .build_headless()
+            .await
+            .expect("a decorated tick boots");
+        let scheduler = app
+            .spawn_transport(Scheduler::new())
+            .await
+            .expect("the scheduler configures against the app");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        scheduler.shutdown().await.expect("the scheduler stops");
+
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+        let ran = logs.expect_one(OPERATIONS, nest_rs_schedule::unit::TICK.name());
+        assert_eq!(ran.field("outcome").as_deref(), Some(OK));
+        logs.expect_none(nest_rs_schedule::TARGET, "scheduled job failed");
+    }
+}
+
+/// A decorated listener of a `#[listeners]` block, attempted again within the
+/// one call an emit makes.
+mod listeners {
+    use std::sync::Arc;
+
+    use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
+    use nest_rs_core::{injectable, module};
+    use nest_rs_events::{EventBus, EventsModule, listeners};
+    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
+    use nest_rs_testing::{HeadlessApp, LogCapture};
+
+    use super::{Attempts, UpstreamDown, retrying_once};
+
+    /// A parcel left the depot, which the listener tells the carrier.
+    #[derive(Clone)]
+    struct Shipped;
+
+    #[injectable]
+    struct ShippedListener {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    #[listeners]
+    impl ShippedListener {
+        #[on_event]
+        #[resilient(upstream, idempotent)]
+        async fn on_shipped(&self, _event: Shipped) -> Result<(), ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(())
+        }
+    }
+
+    #[module(
+        imports = [EventsModule, ResilienceModule::for_root(retrying_once())],
+        providers = [ShippedListener, Attempts],
+    )]
+    struct DecoratedEventsModule;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_listener_failing_once_answers_on_its_retry_within_one_emit() {
+        let logs = LogCapture::install();
+        let app = HeadlessApp::builder()
+            .module::<DecoratedEventsModule>()
+            .build_headless()
+            .await
+            .expect("a decorated listener boots");
+        let bus = app
+            .container()
+            .get::<EventBus>()
+            .expect("the bus is provided");
+        bus.emit(Shipped).await;
+
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+        let ran = logs.expect_one(OPERATIONS, nest_rs_events::unit::DISPATCH.name());
+        assert_eq!(ran.field("outcome").as_deref(), Some(OK));
+    }
+}
+
+/// A decorated indicator of an `#[indicators]` block, attempted again within
+/// the one run its probe makes.
+mod indicators {
+    use std::sync::Arc;
+
+    use nest_rs_core::{injectable, module};
+    use nest_rs_health::{HealthModule, HealthService, IndicatorStatus, ProbeKind, indicators};
+    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
+    use nest_rs_testing::HeadlessApp;
+
+    use super::{Attempts, UpstreamDown, retrying_once};
+
+    #[injectable]
+    struct UpstreamIndicator {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    #[indicators]
+    impl UpstreamIndicator {
+        #[readiness]
+        #[resilient(upstream, idempotent)]
+        async fn upstream_reachable(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(())
+        }
+    }
+
+    #[module(
+        imports = [HealthModule, ResilienceModule::for_root(retrying_once())],
+        providers = [UpstreamIndicator, Attempts],
+    )]
+    struct DecoratedHealthModule;
+
+    #[tokio::test(start_paused = true)]
+    async fn an_indicator_failing_once_answers_up_on_its_retry() {
+        let app = HeadlessApp::builder()
+            .module::<DecoratedHealthModule>()
+            .build_headless()
+            .await
+            .expect("a decorated indicator boots");
+        let health = app
+            .container()
+            .get::<HealthService>()
+            .expect("HealthModule provides it");
+        let ready = health.probe(ProbeKind::Readiness).await;
+
+        assert_eq!(ready.status, IndicatorStatus::Up, "{:?}", ready.details);
+        assert!(ready.details.contains_key("upstream_reachable"));
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+    }
+}
+
+/// A decorated hook of a `#[hooks]` block, attempted again within the one run
+/// the app's init makes.
+mod hooks {
+    use std::sync::Arc;
+
+    use nest_rs_core::{hooks, injectable, module};
+    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
+    use nest_rs_testing::HeadlessApp;
+
+    use super::{Attempts, UpstreamDown, retrying_once};
+
+    #[injectable]
+    struct CacheWarmer {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    #[hooks]
+    impl CacheWarmer {
+        #[on_module_init]
+        #[resilient(upstream, idempotent)]
+        async fn warm(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(())
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root(retrying_once())],
+        providers = [CacheWarmer, Attempts],
+    )]
+    struct DecoratedHooksModule;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hook_failing_once_answers_on_its_retry_and_the_init_completes() {
+        let app = HeadlessApp::builder()
+            .module::<DecoratedHooksModule>()
+            .build_headless()
+            .await
+            .expect("a decorated hook boots");
+        app.init().await.expect("the hook answered on its retry");
+
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
     }
 }

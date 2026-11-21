@@ -1,0 +1,76 @@
+error[E0277]: a `#[cron]`, `#[every]` or `#[after]` method returns `Result<(), E>` whose `E` converts into `anyhow::Error`, and this one returns `Result<(), Declined>`
+  --> tests/integration/diagnostics/schedule/scheduled_returns_a_result_whose_error_converts.rs:37:30
+   |
+37 |     async fn sweep(&self) -> Result<(), Declined> {
+   |                              ^^^^^^ not a `Result<(), E>` whose `E` converts into `anyhow::Error`
+   |
+   = help: the trait `nest_rs::schedule::__private::TickAnswer` is not implemented for `Result<(), Declined>`
+   = note: an `Err` fails the occurrence, which the scheduler logs before the next one: `E` is `anyhow::Error`, or a `std::error::Error + Send + Sync + 'static` such as a `thiserror` type; a box, `Send + Sync` or not, is neither — make it a `Box<dyn Error + Send + Sync>` and map it with `anyhow::Error::from_boxed`
+note: required by a bound in `nest_rs::schedule::__private::answered`
+  --> $WORKSPACE/crates/nest-rs-schedule/src/answer.rs
+   |
+   | pub fn answered<'a, F, A>(
+...
+   |     A: TickAnswer,
+   |        ^^^^^^^^^^ required by this bound in `answered`
+
+error[E0277]: a `#[cron]`, `#[every]` or `#[after]` method returns `Result<(), E>` whose `E` converts into `anyhow::Error`, and this one returns `Result<(), Box<dyn StdError>>`
+  --> tests/integration/diagnostics/schedule/scheduled_returns_a_result_whose_error_converts.rs:42:31
+   |
+42 |     async fn report(&self) -> Result<(), Box<dyn std::error::Error>> {
+   |                               ^^^^^^ not a `Result<(), E>` whose `E` converts into `anyhow::Error`
+   |
+   = help: the trait `nest_rs::schedule::__private::TickAnswer` is not implemented for `Result<(), Box<dyn StdError>>`
+   = note: an `Err` fails the occurrence, which the scheduler logs before the next one: `E` is `anyhow::Error`, or a `std::error::Error + Send + Sync + 'static` such as a `thiserror` type; a box, `Send + Sync` or not, is neither — make it a `Box<dyn Error + Send + Sync>` and map it with `anyhow::Error::from_boxed`
+note: required by a bound in `nest_rs::schedule::__private::answered`
+  --> $WORKSPACE/crates/nest-rs-schedule/src/answer.rs
+   |
+   | pub fn answered<'a, F, A>(
+...
+   |     A: TickAnswer,
+   |        ^^^^^^^^^^ required by this bound in `answered`
+
+error[E0277]: a `#[cron]`, `#[every]` or `#[after]` method returns `Result<(), E>` whose `E` converts into `anyhow::Error`, and this one returns `Result<(), Box<dyn StdError + std::marker::Send + Sync>>`
+  --> tests/integration/diagnostics/schedule/scheduled_returns_a_result_whose_error_converts.rs:47:30
+   |
+47 |     async fn audit(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+   |                              ^^^^^^ not a `Result<(), E>` whose `E` converts into `anyhow::Error`
+   |
+   = help: the trait `nest_rs::schedule::__private::TickAnswer` is not implemented for `Result<(), Box<dyn StdError + std::marker::Send + Sync>>`
+   = note: an `Err` fails the occurrence, which the scheduler logs before the next one: `E` is `anyhow::Error`, or a `std::error::Error + Send + Sync + 'static` such as a `thiserror` type; a box, `Send + Sync` or not, is neither — make it a `Box<dyn Error + Send + Sync>` and map it with `anyhow::Error::from_boxed`
+note: required by a bound in `nest_rs::schedule::__private::answered`
+  --> $WORKSPACE/crates/nest-rs-schedule/src/answer.rs
+   |
+   | pub fn answered<'a, F, A>(
+...
+   |     A: TickAnswer,
+   |        ^^^^^^^^^^ required by this bound in `answered`
+
+error[E0277]: a `#[cron]`, `#[every]` or `#[after]` method returns `Result<(), E>` whose `E` converts into `anyhow::Error`, and this one returns `Result<u32, anyhow::Error>`
+  --> tests/integration/diagnostics/schedule/scheduled_returns_a_result_whose_error_converts.rs:52:30
+   |
+52 |     async fn count(&self) -> Result<u32, anyhow::Error> {
+   |                              ^^^^^^ not a `Result<(), E>` whose `E` converts into `anyhow::Error`
+   |
+   = help: the trait `nest_rs::schedule::__private::TickAnswer` is not implemented for `Result<u32, anyhow::Error>`
+   = note: an `Err` fails the occurrence, which the scheduler logs before the next one: `E` is `anyhow::Error`, or a `std::error::Error + Send + Sync + 'static` such as a `thiserror` type; a box, `Send + Sync` or not, is neither — make it a `Box<dyn Error + Send + Sync>` and map it with `anyhow::Error::from_boxed`
+note: required by a bound in `nest_rs::schedule::__private::answered`
+  --> $WORKSPACE/crates/nest-rs-schedule/src/answer.rs
+   |
+   | pub fn answered<'a, F, A>(
+...
+   |     A: TickAnswer,
+   |        ^^^^^^^^^^ required by this bound in `answered`
+
+error[E0716]: temporary value dropped while borrowed
+  --> tests/integration/diagnostics/schedule/scheduled_returns_a_result_whose_error_converts.rs:34:1
+   |
+34 | #[scheduled]
+   | ^^^^^^^^^^^-
+   | |          |
+   | |          temporary value is freed at the end of this statement
+   | |          return type of async block is Result<(), Refused<'1>>
+   | creates a temporary value which is freed while still in use
+   | argument requires that borrow lasts for `'1`
+   |
+   = note: this error originates in the attribute macro `scheduled` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -4,8 +4,7 @@
 //! Each key a method takes and each host it decorates is a use site: a
 //! provider, a struct built by hand through a trait's native `async fn`, and a
 //! method of every impl half whose feature the build enables — the hooks',
-//! the kernel's, under none — but `#[scheduled]`'s, whose tick answers
-//! `anyhow::Result<()>` and so calls a decorated method rather than being one.
+//! the kernel's, under none.
 
 use std::sync::Arc;
 
@@ -112,12 +111,12 @@ impl HygieneTracking for HygieneHandBuilt {
     }
 }
 
-/// A route of a `#[routes]` block.
+/// A route and an `#[sse]` route of a `#[routes]` block.
 #[cfg(feature = "http")]
 pub mod routes {
     use std::sync::Arc;
 
-    use nest_rs::http::{controller, routes};
+    use nest_rs::http::{SseStream, controller, routes};
     use nest_rs::resilience::{ResiliencePolicy, resilient};
 
     use super::{HygieneAnswer, HygieneCarrierDown};
@@ -136,14 +135,22 @@ pub mod routes {
         async fn preview(&self) -> HygieneAnswer<String> {
             Err(HygieneCarrierDown)
         }
+
+        #[sse("/feed")]
+        #[public]
+        #[resilient(upstream)]
+        async fn feed(&self) -> HygieneAnswer<SseStream> {
+            Err(HygieneCarrierDown)
+        }
     }
 }
 
-/// A root field of an `#[operations]` block.
+/// A root field and a subscription of an `#[operations]` block.
 #[cfg(feature = "graphql")]
 pub mod operations {
     use std::sync::Arc;
 
+    use nest_rs::graphql::async_graphql::futures_util::stream::BoxStream;
     use nest_rs::graphql::{operations, resolver};
     use nest_rs::resilience::{ResilienceError, ResiliencePolicy, resilient};
 
@@ -163,6 +170,15 @@ pub mod operations {
         #[public]
         #[resilient(upstream, idempotent)]
         async fn hygiene_preview(&self) -> Result<String, ResilienceError<HygieneCarrierDown>> {
+            Err(HygieneCarrierDown)
+        }
+
+        #[subscription]
+        #[public]
+        #[resilient(upstream)]
+        async fn hygiene_feed(
+            &self,
+        ) -> Result<BoxStream<'static, i32>, ResilienceError<HygieneCarrierDown>> {
             Err(HygieneCarrierDown)
         }
     }
@@ -195,11 +211,12 @@ pub mod messages {
     }
 }
 
-/// A tool of a `#[tools]` block.
+/// A tool, a resource and its listing of a `#[tools]` block.
 #[cfg(feature = "mcp")]
 pub mod tools {
     use std::sync::Arc;
 
+    use nest_rs::mcp::model::Resource;
     use nest_rs::mcp::{mcp, tools};
     use nest_rs::resilience::{ResiliencePolicy, resilient};
 
@@ -219,6 +236,21 @@ pub mod tools {
         #[public]
         #[resilient(upstream, idempotent)]
         async fn preview(&self) -> HygieneAnswer<String> {
+            Err(HygieneCarrierDown)
+        }
+
+        /// A parcel, read under the upstream's policy.
+        #[resource(template = "hygiene-parcel://{id}")]
+        #[public]
+        #[resilient(upstream)]
+        async fn parcel(&self, id: u32) -> HygieneAnswer<String> {
+            Ok(format!("parcel {id}"))
+        }
+
+        #[resources]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn parcels(&self) -> HygieneAnswer<Vec<Resource>> {
             Err(HygieneCarrierDown)
         }
     }
@@ -255,6 +287,34 @@ pub mod processor {
     }
 }
 
+/// A tick of a `#[scheduled]` block, answering the policy's error through an
+/// alias.
+#[cfg(feature = "schedule")]
+pub mod scheduled {
+    use std::sync::Arc;
+
+    use nest_rs::core::injectable;
+    use nest_rs::resilience::{ResiliencePolicy, resilient};
+    use nest_rs::schedule::scheduled;
+
+    use super::HygieneAnswer;
+
+    #[injectable]
+    pub struct HygieneResilientTasks {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+    }
+
+    #[scheduled]
+    impl HygieneResilientTasks {
+        #[every("1m")]
+        #[resilient(upstream, idempotent)]
+        async fn refresh(&self) -> HygieneAnswer<()> {
+            Ok(())
+        }
+    }
+}
+
 /// A listener of a `#[listeners]` block.
 #[cfg(feature = "events")]
 pub mod listeners {
@@ -287,7 +347,7 @@ pub mod listeners {
     }
 }
 
-/// A probe of an `#[indicators]` block.
+/// An indicator of an `#[indicators]` block.
 #[cfg(feature = "health")]
 pub mod indicators {
     use std::sync::Arc;

@@ -394,13 +394,16 @@ pub(crate) fn read_arm(
         // `__nestrs_var_` would join into a name the developer's build warns on.
         .map(|arg| format_ident!("__nestrs_var_{}", arg.index))
         .collect();
+    // A read takes its variable's type's span, which refuses a type no `FromStr`
+    // reads; the match keeps the closure's, or it does not resolve where `tt` wrote it.
+    let matched = quote!(__nestrs_read);
     let parsed = decl.variables.iter().map(|VariableArg { ty, index, .. }| {
-        quote_spanned! {ty.span()=> __nestrs_read.variable::<#ty>(#index)?}
+        quote_spanned! {ty.span()=> #matched.variable::<#ty>(#index)?}
     });
     quote! {
         #(#cfgs)*
         let () = if let ::core::option::Option::Some((#(#idents,)*)) =
-            #read.and_then(|__nestrs_read| ::core::option::Option::Some((#(#parsed,)*)))
+            #read.and_then(|#matched| ::core::option::Option::Some((#(#parsed,)*)))
         {
             return self
                 .#wrapper(__nestrs_uri, #(#idents),*)

@@ -651,21 +651,25 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
             let (ident, ty) = (&arg.ident, &arg.ty);
             quote!(#ident: #ty)
         });
-    // At the return type, so a value that is no resource's answer is refused there.
+    // Read at the return type, which refuses a value no resource answers, and bound
+    // there: bound at the call site, it does not resolve where `tt` fragments wrote it.
+    let answer_at = answer_span(sig);
+    let value = quote_spanned!(answer_at=> __nestrs_value);
     let into = role.wire_answer();
     let (params, output, answered) = if *role == Role::Resource {
         let at = handler_ref(self_ty, op.name());
         let template = &op.wire_name;
-        let read = quote_spanned! {answer_span(sig)=>
-            #into::into_read(__nestrs_value, __nestrs_uri, (#at, #template))
+        let uri = quote_spanned!(answer_at=> __nestrs_uri);
+        let read = quote_spanned! {answer_at=>
+            #into::into_read(#value, #uri, (#at, #template))
         };
         (
-            quote!(__nestrs_uri: ::std::string::String, #(#variables),*),
+            quote!(#uri: ::std::string::String, #(#variables),*),
             quote!(::nest_rs_mcp::model::ReadResourceResult),
             quote!(#read),
         )
     } else {
-        let listed = quote_spanned! {answer_span(sig)=> #into::into_listing(__nestrs_value)};
+        let listed = quote_spanned! {answer_at=> #into::into_listing(#value)};
         (
             quote!(),
             quote!(::nest_rs_mcp::model::ListResourcesResult),
@@ -680,7 +684,7 @@ fn resource_wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2>
             let ident = &arg.ident;
             validate_statement(&quote!(&#ident))
         });
-    let body = dispatch(self_ty, op, quote!(#(#validate_prelude)*), answered)?;
+    let body = dispatch(self_ty, op, quote!(#(#validate_prelude)*), &value, answered)?;
     Ok(quote! {
         #(#cfgs)*
         async fn #wrapper(&self, #params)
@@ -714,7 +718,8 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
 
     // Each pipe carrier is replaced by the value it wraps, so rmcp derives the
     // tool's JSON Schema from `T`; a `Scoped<T>` or an `Ambient<T>` is the tail's,
-    // never rmcp's.
+    // never rmcp's. The receiver stays the method's, its lifetime included, its
+    // `self` resolved where the body reads it, which `tt` fragments move.
     let mut wire_sig = sig.clone();
     wire_sig.ident = wrapper.clone();
     wire_sig.asyncness = Some(syn::token::Async(name.span()));
@@ -722,6 +727,12 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         .inputs
         .iter()
         .filter_map(|input| {
+            if let FnArg::Receiver(receiver) = input {
+                let mut receiver = receiver.clone();
+                receiver.self_token.span =
+                    proc_macro2::Span::call_site().located_at(receiver.self_token.span);
+                return Some(FnArg::Receiver(receiver));
+            }
             let mut input = input.clone();
             if let FnArg::Typed(pat_type) = &mut input
                 && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
@@ -762,16 +773,18 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         .map(|ident| validate_statement(&quote!(&#ident.0)));
     let at = handler_ref(self_ty, op.name());
     let name = &op.wire_name;
+    let value = quote!(__nestrs_value);
     let answered = match role {
-        Role::Tool => quote!(::nest_rs_mcp::__private::answered_tool(__nestrs_value, (#at, #name))),
+        Role::Tool => quote!(::nest_rs_mcp::__private::answered_tool(#value, (#at, #name))),
         Role::Prompt | Role::Resource | Role::Resources => {
-            quote!(::core::result::Result::Ok(__nestrs_value))
+            quote!(::core::result::Result::Ok(#value))
         }
     };
     let body = dispatch(
         self_ty,
         op,
         quote!(#(#validate_prelude)* #(#pipe_prelude)*),
+        &value,
         answered,
     )?;
     Ok(quote! {
@@ -784,11 +797,13 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
 
 /// Every wrapper's body: the operation dispatched through its site, its tail
 /// running `prelude`, the `Scoped<T>` and `Ambient<T>` parameters and the authored method,
-/// whose value `answered` turns into what the wrapper returns.
+/// whose value, bound to `value` at the span `answered` reads it at, `answered`
+/// turns into what the wrapper returns.
 fn dispatch(
     self_ty: &Type,
     op: &Operation,
     prelude: TokenStream2,
+    value: &TokenStream2,
     answered: TokenStream2,
 ) -> syn::Result<TokenStream2> {
     let Operation {
@@ -847,7 +862,7 @@ fn dispatch(
                 #(#tail_prelude)*
                 let #returned_by = #call;
                 match #answer {
-                    ::core::result::Result::Ok(__nestrs_value) => #answered,
+                    ::core::result::Result::Ok(#value) => #answered,
                     ::core::result::Result::Err(__nestrs_error) => {
                         #[allow(unused_imports)]
                         use ::nest_rs_mcp::__private::ErrorReportChain as _;

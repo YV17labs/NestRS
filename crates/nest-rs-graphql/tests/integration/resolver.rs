@@ -1,6 +1,9 @@
 //! Module-gating: a resolver in a reachable module appears in the schema; a
 //! resolver in no reachable module is silently skipped, unless a served parent
-//! carries its `#[field_resolver]`, which refuses the boot.
+//! carries its `#[field_resolver]`, which refuses the boot. Beside it, the
+//! developer's method an operation calls — by its path, keeping every
+//! attribute async-graphql does not read — and the name each field is served
+//! under.
 
 use nest_rs_config::Surface;
 use nest_rs_core::module;
@@ -232,6 +235,220 @@ async fn an_operation_calls_its_method_and_not_a_trait_method_of_the_same_name()
         body["data"]["shipment"]["weight"], "the field resolver 1",
         "{body}"
     );
+}
+
+// An answer may borrow through the lifetime its method's receiver names, which
+// a root field's wrapper names too; a field resolver's resolver is built per
+// call, so it borrows that one inside its body.
+
+/// The aisle a shelf stands in, which its fields answer borrowed.
+struct Aisle(String);
+
+impl Default for Aisle {
+    fn default() -> Self {
+        Self("aisle 4".to_owned())
+    }
+}
+
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+#[graphql(complex)]
+struct Bin {
+    number: i32,
+}
+
+#[resolver]
+#[derive(Default)]
+struct BorrowingResolver {
+    aisle: Aisle,
+}
+
+#[operations]
+impl BorrowingResolver {
+    #[query]
+    #[public]
+    async fn aisle<'a>(&'a self) -> &'a str {
+        let aisle: &'a Aisle = &self.aisle;
+        &aisle.0
+    }
+
+    #[mutation]
+    #[public]
+    fn restock<'a>(&'a self) -> nest_rs_graphql::async_graphql::Result<&'a str> {
+        let aisle: &'a Aisle = &self.aisle;
+        Ok(&aisle.0)
+    }
+
+    #[query]
+    #[public]
+    async fn bin(&self) -> Bin {
+        Bin { number: 3 }
+    }
+
+    #[field_resolver]
+    async fn shelved<'a>(&'a self, parent: &'a Bin) -> String {
+        let aisle: &'a str = &self.aisle.0;
+        format!("bin {} in {aisle}", parent.number)
+    }
+}
+
+#[module(imports = [GraphqlModule], providers = [BorrowingResolver])]
+struct BorrowingModule;
+
+#[tokio::test]
+async fn an_operation_borrowing_through_the_lifetime_its_receiver_names_resolves() {
+    let app = TestApp::for_module::<BorrowingModule>()
+        .await
+        .expect("the schema boots");
+
+    let read = crate::graphql_answer(&app, "{ aisle bin { shelved } }").await;
+    assert_eq!(read["data"]["aisle"], "aisle 4", "{read}");
+    assert_eq!(read["data"]["bin"]["shelved"], "bin 3 in aisle 4", "{read}");
+    let written = crate::graphql_answer(&app, "mutation { restock }").await;
+    assert_eq!(written["data"]["restock"], "aisle 4", "{written}");
+}
+
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+#[graphql(complex)]
+struct Pallet {
+    number: i32,
+}
+
+#[resolver]
+#[derive(Default)]
+struct FragmentResolver {
+    aisle: Aisle,
+}
+
+// The methods come through `tt` fragments, keeping the caller's spans, and
+// `#[operations]` the macro's: what the expansion binds resolves in the methods'.
+macro_rules! declare_fragment_operations {
+    ($($operations:tt)*) => {
+        #[operations]
+        impl FragmentResolver {
+            $($operations)*
+        }
+    };
+}
+
+declare_fragment_operations! {
+    #[query]
+    #[public]
+    async fn pallet(&self, number: i32) -> Pallet {
+        Pallet { number }
+    }
+
+    #[query]
+    #[public]
+    async fn pallet_aisle<'a>(&'a self) -> &'a str {
+        let aisle: &'a Aisle = &self.aisle;
+        &aisle.0
+    }
+
+    #[mutation]
+    #[public]
+    fn restack(&self, number: i32) -> nest_rs_graphql::async_graphql::Result<Pallet> {
+        Ok(Pallet { number: number + 1 })
+    }
+
+    #[field_resolver]
+    async fn bay(&self, parent: &Pallet) -> String {
+        format!("bay {}", parent.number)
+    }
+
+    #[field_resolver]
+    async fn stacked<'a>(&'a self, parent: &'a Pallet) -> String {
+        let aisle: &'a str = &self.aisle.0;
+        format!("pallet {} in {aisle}", parent.number)
+    }
+}
+
+#[module(imports = [GraphqlModule], providers = [FragmentResolver])]
+struct FragmentModule;
+
+#[tokio::test]
+async fn a_field_a_macro_fragment_writes_resolves_as_the_one_written_out() {
+    let app = TestApp::for_module::<FragmentModule>()
+        .await
+        .expect("the schema boots");
+
+    let read =
+        crate::graphql_answer(&app, "{ pallet(number: 7) { bay stacked } palletAisle }").await;
+    assert_eq!(read["data"]["pallet"]["bay"], "bay 7", "{read}");
+    assert_eq!(
+        read["data"]["pallet"]["stacked"], "pallet 7 in aisle 4",
+        "{read}"
+    );
+    assert_eq!(read["data"]["palletAisle"], "aisle 4", "{read}");
+    let written = crate::graphql_answer(&app, "mutation { restack(number: 7) { number } }").await;
+    assert_eq!(written["data"]["restack"]["number"], 8, "{written}");
+}
+
+// Another decorator describes the developer's method, never the field wrapper
+// the expansion writes on another type: each span below names a field of the
+// resolver, which neither the root object nor the parent holds, so on the
+// wrapper it would not compile.
+
+/// Where the resolver ships from, which its spans record.
+struct Depot(&'static str);
+
+impl Default for Depot {
+    fn default() -> Self {
+        Self("Lyon")
+    }
+}
+
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+#[graphql(complex)]
+struct Consignment {
+    number: i32,
+}
+
+#[resolver]
+#[derive(Default)]
+struct InstrumentedResolver {
+    depot: Depot,
+}
+
+#[operations]
+impl InstrumentedResolver {
+    #[query]
+    #[public]
+    #[tracing::instrument(skip_all, fields(depot = self.depot.0))]
+    async fn consignment(&self) -> Consignment {
+        Consignment { number: 7 }
+    }
+
+    #[field_resolver]
+    #[tracing::instrument(skip_all, fields(depot = self.depot.0))]
+    async fn route(&self, parent: &Consignment) -> String {
+        format!("{} leaves {}", parent.number, self.depot.0)
+    }
+}
+
+#[module(imports = [GraphqlModule], providers = [InstrumentedResolver])]
+struct InstrumentedModule;
+
+#[tokio::test]
+async fn another_decorator_on_an_operation_stays_on_the_developers_method() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<InstrumentedModule>()
+        .await
+        .expect("the schema boots");
+
+    let body = crate::graphql_answer(&app, "{ consignment { route } }").await;
+    assert_eq!(
+        body["data"]["consignment"]["route"], "7 leaves Lyon",
+        "{body}"
+    );
+    for method in ["consignment", "route"] {
+        let span = logs.expect_span(module_path!(), method);
+        assert_eq!(
+            span.field("depot").as_deref(),
+            Some("Lyon"),
+            "{method}: {:?}",
+            span.fields
+        );
+    }
 }
 
 // async-graphql's camel case reads `a1_b` and `a_1b` as one field; the compile-time

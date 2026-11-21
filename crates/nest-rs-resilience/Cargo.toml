@@ -74,8 +74,9 @@ opentelemetry = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # The composition witnesses boot the documented wiring; the middleware's suite
 # sends real requests to a TLS double whose certificate a `TestAuthority`
-# issued. Path-only intra-workspace dev edges, per the manifest rule.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls", "ws"] }
+# issued; a decorated subscription streams over the graphql-ws driver.
+# Path-only intra-workspace dev edges, per the manifest rule.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "http", "tls", "ws"] }
 # Self dev-dependency: the suite runs with the middleware and the transitions'
 # counter on.
 nest-rs-resilience = { path = ".", features = ["reqwest", "opentelemetry"] }
@@ -91,6 +92,12 @@ nest-rs-graphql = { path = "../nest-rs-graphql" }
 nest-rs-ws = { path = "../nest-rs-ws" }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
 nest-rs-queue = { path = "../nest-rs-queue" }
+# A decorated tick of a `#[scheduled]` block, run by the scheduler as an app's is.
+nest-rs-schedule = { path = "../nest-rs-schedule" }
+# A decorated listener of a `#[listeners]` block, called by the bus's emit.
+nest-rs-events = { path = "../nest-rs-events" }
+# A decorated indicator of an `#[indicators]` block, run by `HealthService::probe`.
+nest-rs-health = { path = "../nest-rs-health" }
 async-graphql.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -86,7 +86,8 @@ The field is the method's own `#[inject]`, so a boot whose modules do not import
 it answered `Result<T, E>`: a `?` on your error, `Ok(..)`, `Err(e)` and an early
 `return` end one attempt. Everything else on the method stays as written, on any
 host: a provider, a struct you build, a trait impl, a route, a field, a message, a
-tool, a queue job, a listener or a hook.
+tool, a queue job, a scheduled tick, a listener, a health indicator or a
+lifecycle hook.
 
 A method pins its own `timeout`, and an idempotent one its own `retries`, in
 place of the policy's — `#[resilient(upstream, idempotent, timeout = "2s",
@@ -288,8 +289,9 @@ window holds.
   error.
 - **An `async fn` under `#[async_trait]` is a `fn` by the time `#[resilient]`
   reads it**, and is refused: write the trait's method as a native `async fn`.
-- **A scheduled tick answers `anyhow::Result<()>`**, so it calls a decorated
-  method, its `?` converting the error, rather than being one.
+- **A WebSocket connection hook answers `()`**, so it carries no
+  `#[resilient]`: it calls a decorated method — the gateway's own, or a
+  service's — and handles its `ResilienceError` itself.
 - **A GraphQL field writes its `Result` out.** `#[operations]` reads a field's
   `Result` by its spelling, so a decorated field answers
   `Result<T, ResilienceError<E>>`, not an alias of it.

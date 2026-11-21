@@ -3061,6 +3061,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-database",
  "nest-rs-schedule-macros",
+ "pin-project-lite",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",

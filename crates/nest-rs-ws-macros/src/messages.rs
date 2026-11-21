@@ -841,8 +841,11 @@ fn hook_override(hook: &str, method: &ImplItemFn, at: Span) -> syn::Result<Token
             #call;
         }
     };
+    // The receiver and the client take the call site's span, where the body reads
+    // them: at `at` they do not resolve when `tt` fragments wrote the hook.
+    let inputs = quote!(&self, __client: &::nest_rs_ws::WsClient);
     Ok(quote_spanned! {at=>
-        async fn #hook_ident(&self, __client: &::nest_rs_ws::WsClient) {
+        async fn #hook_ident(#inputs) {
             #body
         }
     })

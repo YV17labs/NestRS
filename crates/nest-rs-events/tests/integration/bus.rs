@@ -497,6 +497,81 @@ async fn a_compiled_out_listener_is_skipped_and_the_spelled_out_shapes_are_serve
     );
 }
 
+// A listener may borrow its host through the lifetime its receiver names,
+// written out and through `tt` fragments, which keep the caller's spans while
+// `#[listeners]` takes the macro's.
+
+#[derive(Clone)]
+struct Restocked;
+
+#[injectable]
+#[derive(Default)]
+struct BorrowingListeners {
+    heard: std::sync::Mutex<Vec<&'static str>>,
+}
+
+#[listeners]
+impl BorrowingListeners {
+    #[on_event]
+    async fn on_restocked<'a>(&'a self, _event: Restocked) {
+        let heard: &'a std::sync::Mutex<Vec<&'static str>> = &self.heard;
+        heard.lock().expect("unpoisoned").push("written out");
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct FragmentBorrowingListeners {
+    heard: std::sync::Mutex<Vec<&'static str>>,
+}
+
+macro_rules! declare_fragment_borrowing_listeners {
+    ($($listeners:tt)*) => {
+        #[listeners]
+        impl FragmentBorrowingListeners {
+            $($listeners)*
+        }
+    };
+}
+
+declare_fragment_borrowing_listeners! {
+    #[on_event]
+    async fn on_restocked<'a>(&'a self, _event: Restocked) {
+        let heard: &'a std::sync::Mutex<Vec<&'static str>> = &self.heard;
+        heard.lock().expect("unpoisoned").push("through a fragment");
+    }
+}
+
+#[module(
+    imports = [EventsModule],
+    providers = [BorrowingListeners, FragmentBorrowingListeners],
+)]
+struct BorrowingModule;
+
+#[tokio::test]
+async fn a_listener_borrowing_through_the_lifetime_its_receiver_names_runs() {
+    let app = App::builder()
+        .module::<BorrowingModule>()
+        .build()
+        .await
+        .expect("boots");
+    let container = app.container();
+    let bus = container.get::<EventBus>().expect("EventBus is provided");
+    bus.emit(Restocked).await;
+
+    let written = container
+        .get::<BorrowingListeners>()
+        .expect("the module provides it");
+    let fragment = container
+        .get::<FragmentBorrowingListeners>()
+        .expect("the module provides it");
+    assert_eq!(*written.heard.lock().expect("unpoisoned"), ["written out"]);
+    assert_eq!(
+        *fragment.heard.lock().expect("unpoisoned"),
+        ["through a fragment"]
+    );
+}
+
 /// A package's value, carried by the emitter.
 #[derive(Debug)]
 struct Tenant(&'static str);

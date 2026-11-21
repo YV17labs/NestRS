@@ -774,14 +774,17 @@ fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenS
         };
     }
     if root == RootKind::Subscription {
+        // Bound where the probe reads it: bound at the call site, it does not
+        // resolve where `tt` fragments wrote the answer.
+        let answer = quote_spanned!(answer_span(sig)=> __answer);
         let probe = quote_spanned! {answer_span(sig)=>
-            ::nest_rs_graphql::__private::answers_a_stream(::nest_rs_core::__private::Answer(&__answer).kind());
+            ::nest_rs_graphql::__private::answers_a_stream(::nest_rs_core::__private::Answer(&#answer).kind());
         };
         return quote! {{
             use ::nest_rs_core::__private::AnswerFallback as _;
-            let __answer = #call;
+            let #answer = #call;
             #probe
-            ::core::result::Result::<_, ::nest_rs_graphql::__private::FieldFailure>::Ok(__answer)
+            ::core::result::Result::<_, ::nest_rs_graphql::__private::FieldFailure>::Ok(#answer)
         }};
     }
     quote! {{
@@ -1295,9 +1298,20 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // at all.
             let wrapper_sig = {
                 let mut s = sig.clone();
+                // The receiver stays the method's, the lifetime an answer borrows through
+                // included, its `self` resolved where the body reads it, which `tt`
+                // fragments move.
                 s.inputs = s
                     .inputs
                     .into_iter()
+                    .map(|input| match input {
+                        FnArg::Receiver(mut receiver) => {
+                            receiver.self_token.span =
+                                proc_macro2::Span::call_site().located_at(receiver.self_token.span);
+                            FnArg::Receiver(receiver)
+                        }
+                        typed => typed,
+                    })
                     .filter(|input| {
                         !matches!(
                             input,

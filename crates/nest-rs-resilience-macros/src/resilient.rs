@@ -45,8 +45,9 @@ enum Run<'a> {
 /// What a method is, as far as an expansion of it is concerned.
 struct Shape {
     asynchronous: bool,
-    /// Its receiver lends the shared borrow the policy's field is read through.
-    shared: bool,
+    /// Its receiver's `self`, when it lends the shared borrow the policy's
+    /// field is read through.
+    receiver: Option<Token![self]>,
     /// Its return type holds an `impl Trait`, which no expansion can name.
     opaque: bool,
 }
@@ -101,28 +102,29 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
         }
         refusals.handle(resilient_retries(value))
     });
-    match (refusals.finish(), args) {
-        (Ok(()), Some(args)) => {
+    match (refusals.finish(), args, shape.receiver) {
+        (Ok(()), Some(args), Some(receiver)) => {
             let run = match &args.idempotent {
                 Some(key) => Run::Idempotent(key),
                 None => Run::Once,
             };
             Ok(expand(
                 method,
+                receiver,
                 &args.field,
                 &run,
                 args.timeout_millis,
                 retries,
             ))
         }
-        (Err(refusal), args) => {
+        (Err(refusal), args, _) => {
             method.attrs.retain(|attr| !is_resilient(attr));
             Err(Refused {
                 kept: kept(method, args.as_ref(), &shape),
                 refusal,
             })
         }
-        (Ok(()), None) => Err(refused(item, Refusals::default())),
+        (Ok(()), _, _) => Err(refused(item, Refusals::default())),
     }
 }
 
@@ -151,8 +153,10 @@ fn kept(method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStream {
     if !shape.asynchronous || shape.opaque {
         return method.into_token_stream();
     }
-    match args {
-        Some(args) if shape.shared => expand(method, &args.field, &Run::Once, None, None),
+    match (args, shape.receiver) {
+        (Some(args), Some(receiver)) => {
+            expand(method, receiver, &args.field, &Run::Once, None, None)
+        }
         _ => stand_in(method),
     }
 }
@@ -287,14 +291,15 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
              the trait's method as a native `async fn` instead",
         ));
     }
-    let shared = refusals
+    let receiver = refusals
         .handle(shared_receiver(
             method,
             "#[resilient]",
             &Ident::new("Self", Span::call_site()),
             HostBorrow::Arc,
         ))
-        .is_some();
+        .and_then(|()| method.sig.receiver())
+        .map(|receiver| receiver.self_token);
     let opaque = match &method.sig.output {
         ReturnType::Type(_, answered) => impl_trait(answered),
         ReturnType::Default => None,
@@ -339,7 +344,7 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
     }
     Shape {
         asynchronous,
-        shared,
+        receiver,
         opaque: opaque.is_some(),
     }
 }
@@ -467,17 +472,23 @@ fn body(method: &mut ImplItemFn) -> syn::Block {
     }
 }
 
-/// `method` with its body run under the policy `field` holds, as `run` says.
+/// `method` with its body run under the policy `field` holds, as `run` says,
+/// the field read through `receiver`, the method's own `self`.
 fn expand(
     mut method: ImplItemFn,
+    receiver: Token![self],
     field: &Ident,
     run: &Run<'_>,
     timeout_millis: Option<u64>,
     retries: Option<u32>,
 ) -> TokenStream {
     let (answer, at) = answer(&method);
-    let policy =
-        quote_spanned!(field.span()=> ::nest_rs_resilience::__private::policy(&self.#field));
+    // `self` resolves as the receiver does, which a `macro_rules!` may write apart
+    // from the attribute, and sits at the field, where the field's refusal points.
+    let receiver = Token![self](receiver.span.located_at(field.span()));
+    let policy = quote_spanned!(field.span()=>
+        ::nest_rs_resilience::__private::policy(&#receiver.#field)
+    );
     let name = method.sig.ident.unraw().to_string();
     let timeout = optional(timeout_millis);
     let retries = optional(retries);

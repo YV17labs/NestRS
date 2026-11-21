@@ -24,6 +24,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 # `join_all`: an overrun asks its lock about every skipped occurrence at once.
 futures-util.workspace = true
+# `Answered`: a tick's run pins its call's future where it is boxed, held once.
+pin-project-lite.workspace = true
 tracing.workspace = true
 # `OccurrenceLockError`, the opaque failure a lock backend reports.
 thiserror.workspace = true

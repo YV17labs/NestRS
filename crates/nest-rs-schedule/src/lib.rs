@@ -18,9 +18,14 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
+// The run's unit tests write `#[scheduled]`, which names `::nest_rs_schedule`.
+#[cfg(test)]
+extern crate self as nest_rs_schedule;
+
 /// This crate's span target — Cron and interval registration, and a tick that failed.
 pub const TARGET: &str = "nest_rs::schedule";
 
+mod answer;
 mod error;
 mod inventory;
 mod module;
@@ -45,6 +50,7 @@ pub mod __private {
     //! Called by this framework's macro expansions and sibling crates. Not API:
     //! may change in any release.
 
+    pub use crate::answer::{TickAnswer, answered};
     pub use crate::inventory::{ScheduledMethodParts, scheduled_method};
     pub use crate::module::RUNTIME;
     pub use nest_rs_database;
@@ -84,5 +90,36 @@ pub mod __private {
 /// assert!(jobs.iter().any(|job| job.method() == "refresh"
 ///     && job.replicas() == Replicas::One
 ///     && matches!(job.trigger(), Trigger::Interval(every) if every == Duration::from_secs(30))));
+/// ```
+///
+/// A method answers `anyhow::Result<()>`, or a `Result<(), E>` whose error of
+/// its own converts into `anyhow::Error`, which fails the occurrence as `?`
+/// would convert it:
+///
+/// ```
+/// # use std::time::Duration;
+/// use nest_rs_core::injectable;
+/// use nest_rs_schedule::{ScheduledMethod, Trigger, scheduled};
+///
+/// #[derive(Debug, thiserror::Error)]
+/// #[error("the report store refused the connection")]
+/// pub struct StoreRefused;
+///
+/// #[injectable]
+/// #[derive(Default)]
+/// pub struct ReportTasks;
+///
+/// #[scheduled]
+/// impl ReportTasks {
+///     #[after("10s")]
+///     async fn warm(&self) -> Result<(), StoreRefused> {
+///         Ok(())
+///     }
+/// }
+///
+/// let warm = nest_rs_core::inventory::iter::<ScheduledMethod>()
+///     .find(|job| job.host() == "ReportTasks" && job.method() == "warm")
+///     .expect("the tick is registered");
+/// assert!(matches!(warm.trigger(), Trigger::Timeout(after) if after == Duration::from_secs(10)));
 /// ```
 pub use nest_rs_schedule_macros::scheduled;

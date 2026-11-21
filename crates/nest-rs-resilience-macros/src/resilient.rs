@@ -2,8 +2,8 @@
 //! method's body run under the policy a field of `self` holds.
 
 use nest_rs_codegen::__private::{
-    HostBorrow, RESILIENT, RETRIES, TIMEOUT, answer_span, needs_a_value, resilient_retries,
-    resilient_timeout, shared_receiver, site,
+    HostBorrow, RESILIENT, RETRIES, TIMEOUT, answer_span, needs_a_value, resilient_policy_setting,
+    resilient_retries, resilient_timeout, shared_receiver, site,
 };
 use nest_rs_codegen::{Grammar, Refusals};
 use proc_macro2::{Group, Span, TokenStream, TokenTree};
@@ -20,7 +20,9 @@ const IDEMPOTENT: &str = "idempotent";
 
 const KEYS: [&str; 3] = [IDEMPOTENT, TIMEOUT, RETRIES];
 
-const GRAMMAR: Grammar = Grammar::new(RESILIENT, &KEYS).bare(bare);
+const GRAMMAR: Grammar = Grammar::new(RESILIENT, &KEYS)
+    .bare(bare)
+    .elsewhere(resilient_policy_setting);
 
 /// What `#[resilient(…)]` was given.
 struct Args {
@@ -642,6 +644,40 @@ mod tests {
         );
         assert_eq!(refused.len(), 1, "{refused:#?}");
         assert!(refused[0].starts_with("#[resilient] `retries` needs `idempotent`"));
+    }
+
+    /// A setting the policy holds for every caller is told whose it is and
+    /// where it is set, one mechanism's key each, rather than as misspelled.
+    #[test]
+    fn a_setting_of_the_policys_is_refused_naming_where_it_is_set() {
+        for (key, set) in [
+            ("backoff_ceiling", "`BACKOFF_CEILING_MS`"),
+            ("breaker_open", "`BREAKER_OPEN_SECS`"),
+            ("concurrency", "`CONCURRENCY`"),
+            ("rate_limit", "`RATE_LIMIT`"),
+        ] {
+            let args: TokenStream = format!("carrier, idempotent, {key} = 1")
+                .parse()
+                .expect("arguments");
+            let refused = refusals(
+                args,
+                quote!(
+                    async fn track(&self) -> Answer {
+                        send().await
+                    }
+                ),
+            );
+            assert_eq!(refused.len(), 1, "{refused:#?}");
+            let said = &refused[0];
+            assert!(
+                said.starts_with(&format!("#[resilient] takes no `{key}`: ")),
+                "{said}"
+            );
+            assert!(
+                said.ends_with(&format!("{set}, or `ResilienceConfig::{key}` in code")),
+                "{said}"
+            );
+        }
     }
 
     #[test]

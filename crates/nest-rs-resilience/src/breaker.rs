@@ -1,6 +1,6 @@
 //! The circuit breaker a policy keeps: a count window over its latest
-//! attempts, opened by enough failures in it, and half-open for one probe once
-//! its open time has passed. Its state lives in the process.
+//! attempts, opened by enough failures in it, and half-open while one probe's
+//! call is out once its open time has passed. Its state lives in the process.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -12,14 +12,28 @@ use tokio::time::Instant;
 use crate::counters::Counters;
 use crate::{TARGET, millis};
 
+/// What a call refused beside a probe past its bound is told: one tick of the
+/// timer, the probe being given up at any moment.
+const OVERDUE: Duration = Duration::from_millis(1);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Closed,
     Open {
         until: Instant,
     },
-    /// One call probes the dependency; every other is refused until it answers.
-    HalfOpen,
+    /// The open time passed and one call holds the probe's turn, its call not
+    /// sent yet: every other call is refused until the probe has answered, by
+    /// `until` at the latest, and the breaker reads as open, the dependency
+    /// not called.
+    ProbePending {
+        until: Instant,
+    },
+    /// One call probes the dependency; every other is refused until it
+    /// answers, by `until` at the latest.
+    HalfOpen {
+        until: Instant,
+    },
 }
 
 impl Phase {
@@ -27,8 +41,22 @@ impl Phase {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Closed => "closed",
-            Self::Open { .. } => "open",
-            Self::HalfOpen => "half_open",
+            Self::Open { .. } | Self::ProbePending { .. } => "open",
+            Self::HalfOpen { .. } => "half_open",
+        }
+    }
+
+    /// The wait a call meeting the breaker in this phase is refused for:
+    /// `None` when it would pass, or probe.
+    fn refused_for(self) -> Option<Duration> {
+        match self {
+            Self::Closed => None,
+            Self::Open { until } => until
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero()),
+            Self::ProbePending { until } | Self::HalfOpen { until } => {
+                Some(until.saturating_duration_since(Instant::now()).max(OVERDUE))
+            }
         }
     }
 }
@@ -53,29 +81,72 @@ pub(crate) struct Breaker {
     window: usize,
     failures: usize,
     open_for: Duration,
-    /// What a call refused while the probe runs is told to wait: the probe's
-    /// own bound, an attempt's timeout.
-    probe_wait: Duration,
     held: Mutex<Held>,
     counters: Arc<Counters>,
 }
 
-/// One admitted attempt, settled once with its outcome. Dropped unsettled —
-/// the caller gave the call up — it counts for nothing, and a probe hands its
-/// turn to the next call.
+/// One attempt the breaker admitted, its call not sent yet. Dropped so — the
+/// rate refused it, the unit ran out of time, its caller gave it up — it
+/// counts for nothing, and a probe hands its turn to the next call with no
+/// transition, the dependency never called.
 pub(crate) struct Pass<'b> {
     breaker: &'b Breaker,
     probe: bool,
 }
 
-impl Pass<'_> {
+impl<'b> Pass<'b> {
+    /// Whether the attempt holds the probe's turn.
+    pub(crate) const fn probes(&self) -> bool {
+        self.probe
+    }
+
+    /// The attempt's call postponed to `to`, then sent under `bound`: a probe
+    /// has answered by their sum at the latest, which every call the breaker
+    /// refuses meanwhile is told.
+    pub(crate) fn postpone(&self, to: Instant, bound: Duration) {
+        if self.probe {
+            self.breaker.probe_postponed(to + bound);
+        }
+    }
+
+    /// The attempt's call sent under `bound`: a probe's makes the breaker
+    /// half-open until it answers, within `bound`.
+    pub(crate) fn send(mut self, bound: Duration) -> Sent<'b> {
+        let probe = std::mem::take(&mut self.probe);
+        if probe {
+            self.breaker.probe_sent(bound);
+        }
+        Sent {
+            breaker: self.breaker,
+            probe,
+        }
+    }
+}
+
+impl Drop for Pass<'_> {
+    fn drop(&mut self) {
+        if self.probe {
+            self.breaker.withdraw_probe();
+        }
+    }
+}
+
+/// One admitted attempt whose call was sent, settled once with its outcome.
+/// Dropped unsettled — the caller gave the call up — it counts for nothing,
+/// and a probe opens the breaker again for the next call to probe.
+pub(crate) struct Sent<'b> {
+    breaker: &'b Breaker,
+    probe: bool,
+}
+
+impl Sent<'_> {
     pub(crate) fn settle(mut self, failed: bool) {
         let probe = std::mem::take(&mut self.probe);
         self.breaker.record(probe, failed);
     }
 }
 
-impl Drop for Pass<'_> {
+impl Drop for Sent<'_> {
     fn drop(&mut self) {
         if self.probe {
             self.breaker.abandon_probe();
@@ -85,14 +156,13 @@ impl Drop for Pass<'_> {
 
 impl Breaker {
     /// A closed breaker for `instance`, opening once `failures` of the latest
-    /// `window` attempts failed, for `open_for`; a call refused during a probe
-    /// is told to wait `probe_wait`. Each transition counts on `counters`.
+    /// `window` attempts failed, for `open_for`. Each transition counts on
+    /// `counters`.
     pub(crate) fn new(
         instance: &'static str,
         window: usize,
         failures: usize,
         open_for: Duration,
-        probe_wait: Duration,
         counters: Arc<Counters>,
     ) -> Self {
         Self {
@@ -100,7 +170,6 @@ impl Breaker {
             window,
             failures,
             open_for,
-            probe_wait,
             held: Mutex::new(Held {
                 phase: Phase::Closed,
                 outcomes: VecDeque::with_capacity(window),
@@ -110,17 +179,20 @@ impl Breaker {
         }
     }
 
-    /// Let a call through, or refuse it for the wait the breaker knows.
-    pub(crate) fn admit(&self) -> Result<Pass<'_>, Duration> {
+    /// Let a call through — taking the probe's turn once the open time has
+    /// passed, its call sent now under `bound` unless it postpones it — or
+    /// refuse it for the wait the breaker knows: what is left of the open
+    /// time, or of the probe's own bound while another call holds its turn.
+    pub(crate) fn admit(&self, bound: Duration) -> Result<Pass<'_>, Duration> {
         let mut held = self.held.lock();
-        if let Some(wait) = self.refused_for(held.phase) {
+        if let Some(wait) = held.phase.refused_for() {
             return Err(wait);
         }
         let probe = matches!(held.phase, Phase::Open { .. });
         if probe {
-            held.phase = Phase::HalfOpen;
-            drop(held);
-            self.entered(Phase::HalfOpen, None);
+            held.phase = Phase::ProbePending {
+                until: Instant::now() + bound,
+            };
         }
         Ok(Pass {
             breaker: self,
@@ -130,19 +202,7 @@ impl Breaker {
 
     /// How long a call is refused for now, leaving the breaker as it stands.
     pub(crate) fn refusing(&self) -> Option<Duration> {
-        self.refused_for(self.held.lock().phase)
-    }
-
-    /// The wait a call meeting `phase` is refused for: `None` when it would
-    /// pass, or probe.
-    fn refused_for(&self, phase: Phase) -> Option<Duration> {
-        match phase {
-            Phase::Closed => None,
-            Phase::HalfOpen => Some(self.probe_wait),
-            Phase::Open { until } => until
-                .checked_duration_since(Instant::now())
-                .filter(|left| !left.is_zero()),
-        }
+        self.held.lock().phase.refused_for()
     }
 
     #[cfg(test)]
@@ -185,10 +245,43 @@ impl Breaker {
         }
     }
 
-    /// A probe given up before it answered: the next call probes instead.
+    /// The probe's call postponed: it has answered by `until` at the latest.
+    fn probe_postponed(&self, until: Instant) {
+        if let Phase::ProbePending { until: latest } = &mut self.held.lock().phase {
+            *latest = until;
+        }
+    }
+
+    /// The probe's call sent under `bound`: the breaker is half-open until it
+    /// answers.
+    fn probe_sent(&self, bound: Duration) {
+        let mut held = self.held.lock();
+        if matches!(held.phase, Phase::ProbePending { .. }) {
+            let half_open = Phase::HalfOpen {
+                until: Instant::now() + bound,
+            };
+            held.phase = half_open;
+            drop(held);
+            self.entered(half_open, None);
+        }
+    }
+
+    /// A probe given up before its call was sent: the next call probes
+    /// instead, and the breaker, open all along, files no transition.
+    fn withdraw_probe(&self) {
+        let mut held = self.held.lock();
+        if matches!(held.phase, Phase::ProbePending { .. }) {
+            held.phase = Phase::Open {
+                until: Instant::now(),
+            };
+        }
+    }
+
+    /// A probe given up after its call was sent, before it answered: the next
+    /// call probes instead.
     fn abandon_probe(&self) {
         let mut held = self.held.lock();
-        if held.phase == Phase::HalfOpen {
+        if matches!(held.phase, Phase::HalfOpen { .. }) {
             let reopened = Phase::Open {
                 until: Instant::now(),
             };
@@ -225,7 +318,8 @@ mod tests {
     use super::*;
 
     const OPEN_FOR: Duration = Duration::from_secs(30);
-    const PROBE_WAIT: Duration = Duration::from_secs(5);
+    /// What each call is sent under, but where a test sets its own.
+    const BOUND: Duration = Duration::from_secs(5);
 
     fn breaker(window: usize, failures: usize) -> Breaker {
         Breaker::new(
@@ -233,20 +327,28 @@ mod tests {
             window,
             failures,
             OPEN_FOR,
-            PROBE_WAIT,
             Arc::new(Counters::new("upstream")),
         )
     }
 
     fn attempt(breaker: &Breaker, failed: bool) {
         breaker
-            .admit()
+            .admit(BOUND)
             .expect("a closed breaker admits")
+            .send(BOUND)
             .settle(failed);
     }
 
+    fn states(lines: &nest_rs_testing::LogCapture) -> Vec<String> {
+        lines
+            .find(TARGET, "circuit breaker changed state")
+            .iter()
+            .map(|event| event.field("state").unwrap_or_default())
+            .collect()
+    }
+
     fn refused_for(breaker: &Breaker) -> Duration {
-        match breaker.admit() {
+        match breaker.admit(BOUND) {
             Err(retry_after) => retry_after,
             Ok(_) => panic!("the breaker refuses"),
         }
@@ -286,13 +388,19 @@ mod tests {
         tokio::time::advance(Duration::from_secs(10)).await;
         assert_eq!(refused_for(&breaker), Duration::from_secs(20));
         tokio::time::advance(Duration::from_secs(20)).await;
-        let Ok(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
+        assert_eq!(
+            (breaker.state(), refused_for(&breaker)),
+            ("open", BOUND),
+            "the probe's turn is taken, its call not sent yet",
+        );
+        let probe = probe.send(BOUND);
         assert_eq!(breaker.state(), "half_open");
         assert_eq!(
             refused_for(&breaker),
-            PROBE_WAIT,
+            BOUND,
             "one probe at a time; another call waits for its answer",
         );
         probe.settle(false);
@@ -300,42 +408,80 @@ mod tests {
         attempt(&breaker, false);
     }
 
+    /// A call refused while another holds the probe's turn is told what is
+    /// left of the bound that probe handed the breaker — when it took its
+    /// turn, when it postponed its call, and when it sent it — and, past it,
+    /// a tick: the probe is being given up, and still holds its turn.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_refused_beside_the_probe_is_told_what_is_left_of_the_probes_own_bound() {
+        let breaker = breaker(1, 1);
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+        let second = Duration::from_secs(1);
+        let probe = breaker.admit(2 * second).expect("the open time passed");
+        assert_eq!(refused_for(&breaker), 2 * second, "sent now, under 2 s");
+        probe.postpone(Instant::now() + 10 * second, 2 * second);
+        assert_eq!(
+            refused_for(&breaker),
+            12 * second,
+            "sent in 10 s, under 2 s"
+        );
+        tokio::time::advance(10 * second).await;
+        let probe = probe.send(3 * second);
+        assert_eq!(refused_for(&breaker), 3 * second, "sent, under 3 s");
+        tokio::time::advance(second).await;
+        assert_eq!(refused_for(&breaker), 2 * second);
+        tokio::time::advance(5 * second).await;
+        assert_eq!(refused_for(&breaker), OVERDUE);
+        probe.settle(false);
+        assert_eq!(breaker.state(), "closed");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_failed_probe_opens_the_breaker_again_for_its_whole_open_time() {
         let breaker = breaker(1, 1);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Ok(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
-        probe.settle(true);
+        probe.send(BOUND).settle(true);
         assert_eq!(breaker.state(), "open");
         assert_eq!(refused_for(&breaker), OPEN_FOR);
     }
 
+    /// A probe given up before its call is sent hands its turn on as though it
+    /// never took it, filing nothing; one given up after it, the breaker open
+    /// again for the next call to probe, files that transition.
     #[tokio::test(start_paused = true)]
     async fn a_probe_given_up_hands_its_turn_to_the_next_call() {
+        let lines = nest_rs_testing::LogCapture::install();
         let breaker = breaker(1, 1);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Ok(probe) = breaker.admit() else {
-            panic!("the open time passed");
-        };
-        drop(probe);
+        drop(breaker.admit(BOUND).expect("the open time passed"));
         assert_eq!(breaker.state(), "open");
-        let Ok(next) = breaker.admit() else {
-            panic!("the next call probes at once");
-        };
-        next.settle(false);
-        assert_eq!(breaker.state(), "closed");
+        let sent = breaker
+            .admit(BOUND)
+            .expect("the next call probes at once")
+            .send(BOUND);
+        drop(sent);
+        assert_eq!(breaker.state(), "open");
+        attempt(&breaker, false);
+        assert_eq!(breaker.state(), "closed", "the next call probed again");
+        assert_eq!(
+            states(&lines),
+            ["open", "half_open", "open", "half_open", "closed"]
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn an_answer_arriving_once_another_call_opened_the_breaker_counts_for_nothing() {
         let breaker = breaker(1, 1);
-        let Ok(late) = breaker.admit() else {
+        let Ok(late) = breaker.admit(BOUND) else {
             panic!("closed");
         };
+        let late = late.send(BOUND);
         attempt(&breaker, true);
         late.settle(false);
         assert_eq!(breaker.state(), "open", "a late success closes nothing");
@@ -347,10 +493,10 @@ mod tests {
         attempt(&breaker, true);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Ok(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
-        probe.settle(false);
+        probe.send(BOUND).settle(false);
         attempt(&breaker, true);
         assert_eq!(
             breaker.state(),
@@ -381,10 +527,15 @@ mod tests {
 
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Ok(probe) = breaker.admit() else {
+        drop(
+            breaker
+                .admit(BOUND)
+                .expect("a probe given up before its call is sent"),
+        );
+        let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
-        probe.settle(true);
+        probe.send(BOUND).settle(true);
         provider.force_flush().expect("the export");
 
         let exported = exporter
@@ -428,10 +579,10 @@ mod tests {
         let breaker = breaker(1, 1);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let Ok(probe) = breaker.admit() else {
+        let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
-        probe.settle(false);
+        probe.send(BOUND).settle(false);
         let said: Vec<(String, String)> = lines
             .find(TARGET, "circuit breaker changed state")
             .iter()

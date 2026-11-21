@@ -2,7 +2,8 @@
 //! again what the HTTP method or an `Idempotency-Key` declares idempotent, each
 //! attempt a client operation numbered by its resend count, never sends again
 //! what it does not, and is refused at once — never sent — while the breaker
-//! is open.
+//! is open or once its requests reach the rate limit, which counts a redirect
+//! the client follows inside the attempt that met it.
 
 use std::convert::Infallible;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -44,10 +45,19 @@ fn header(peer: &HttpsPeer, nth: usize, name: &str) -> Option<String> {
 
 /// A client trusting the peer's authority, under `policy`, each attempt traced.
 fn client(policy: Arc<ResiliencePolicy>) -> ClientWithMiddleware {
+    client_following(policy, reqwest::redirect::Policy::default())
+}
+
+/// [`client`], following the redirects `redirects` lets it follow.
+fn client_following(
+    policy: Arc<ResiliencePolicy>,
+    redirects: reqwest::redirect::Policy,
+) -> ClientWithMiddleware {
     let authority =
         reqwest::Certificate::from_pem(AUTHORITY.pem().as_bytes()).expect("the authority");
     let client = reqwest::Client::builder()
         .tls_certs_only([authority])
+        .redirect(redirects)
         .build()
         .expect("a client");
     reqwest_middleware::ClientBuilder::new(client)
@@ -262,6 +272,116 @@ async fn an_open_breaker_refuses_the_request_unsent_with_the_503_every_edge_answ
         (503, code::UNAVAILABLE, Some(30))
     );
     assert_eq!(peer.requests().len(), 1, "a refused request is never sent");
+}
+
+#[tokio::test]
+async fn every_request_sent_counts_against_the_rate_limit_a_resend_included() {
+    let peer = answering([PeerAnswer::status(503)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        rate_limit: Some(2),
+        ..retrying()
+    })
+    .await;
+    let client = client(policy);
+
+    let answered = client.get(peer.url(PARCEL)).send().await.expect("answered");
+    assert_eq!(answered.status(), StatusCode::OK, "the resend answered");
+
+    let refused = client
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect_err("the resend took the window's last request");
+    assert!(
+        matches!(refusal(&refused), ResilienceError::Limited { .. }),
+        "{refused:?}"
+    );
+    let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
+        .expect("the problem rides the chain");
+    assert_eq!((problem.status(), problem.code()), (503, code::UNAVAILABLE));
+    assert!(
+        problem
+            .retry_after()
+            .is_some_and(|seconds| (1..=60).contains(&seconds)),
+        "the time left of the minute's window the first request opened: {problem:?}"
+    );
+    assert_eq!(
+        peer.requests().len(),
+        2,
+        "a request the rate refuses is never sent"
+    );
+}
+
+/// Where the peer's redirect sends a request.
+const MOVED: &str = "/parcels/43";
+
+/// The rate counts attempts: a redirect the client follows goes out inside the
+/// attempt that met it, so the dependency is sent two requests for the one
+/// attempt counted.
+#[tokio::test]
+async fn a_redirect_the_client_follows_is_sent_inside_the_attempt_and_counted_with_it() {
+    let peer = answering([PeerAnswer::status(307).header("location", MOVED)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        rate_limit: Some(1),
+        ..quiet()
+    })
+    .await;
+    let client = client(policy);
+
+    let answered = client.get(peer.url(PARCEL)).send().await.expect("answered");
+    assert_eq!(answered.status(), StatusCode::OK, "the redirect, followed");
+    let sent: Vec<String> = peer.requests().into_iter().map(|head| head.line).collect();
+    assert_eq!(
+        sent,
+        [
+            format!("GET {PARCEL} HTTP/1.1"),
+            format!("GET {MOVED} HTTP/1.1")
+        ],
+        "the request and its redirect, in one attempt"
+    );
+
+    let refused = client
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect_err("the window's one attempt was taken");
+    assert!(
+        matches!(refusal(&refused), ResilienceError::Limited { .. }),
+        "{refused:?}"
+    );
+    assert_eq!(peer.requests().len(), 2);
+}
+
+/// A client following no redirect hands it back as the dependency's answer, so
+/// each request the dependency is sent is an attempt the rate counts.
+#[tokio::test]
+async fn a_client_following_no_redirect_sends_each_request_as_an_attempt_of_its_own() {
+    let peer = answering([PeerAnswer::status(307).header("location", MOVED)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        rate_limit: Some(1),
+        ..quiet()
+    })
+    .await;
+    let client = client_following(policy, reqwest::redirect::Policy::none());
+
+    let moved = client.get(peer.url(PARCEL)).send().await.expect("answered");
+    assert_eq!(moved.status(), StatusCode::TEMPORARY_REDIRECT, "the answer");
+    assert_eq!(peer.requests().len(), 1);
+
+    let refused = client
+        .get(peer.url(MOVED))
+        .send()
+        .await
+        .expect_err("the window's one attempt was taken");
+    assert!(
+        matches!(refusal(&refused), ResilienceError::Limited { .. }),
+        "{refused:?}"
+    );
+    assert_eq!(
+        peer.requests().len(),
+        1,
+        "the request the redirect asks for, refused unsent"
+    );
 }
 
 #[tokio::test]

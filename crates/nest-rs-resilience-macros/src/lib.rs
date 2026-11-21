@@ -31,8 +31,10 @@ mod resilient;
 /// - `retries = 3` — this method's retries, in place of the policy's, from 1
 ///   to 10, beside `idempotent` alone: a call run once is never sent again.
 ///
-/// The breaker and the bulkhead take no pin: their state is the dependency's,
-/// shared by every caller of the policy.
+/// Every other setting is the policy's, shared by every caller of the
+/// dependency — the backoff's, the circuit breaker's, the bulkhead's and the
+/// rate limit's — so a method pins none: a key naming one is refused with the
+/// variable and the `ResilienceConfig` field that set it.
 ///
 /// Everything else on the method stays as written: its visibility, generics,
 /// lifetimes, docs, `#[cfg]`s and other attributes, and its body's tokens and
@@ -43,8 +45,8 @@ mod resilient;
 /// `#[async_trait]` is a `fn` by the time this attribute reads it, and is
 /// refused saying so.
 ///
-/// A run of a decorated method names it: the `debug` lines a retry or a full
-/// bulkhead files carry its `host` and `method`.
+/// A run of a decorated method names it: the `debug` lines a retry, a full
+/// bulkhead or a reached rate limit files carry its `host` and `method`.
 #[proc_macro_attribute]
 pub fn resilient(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(resilient::resilient(args.into(), item.into())).into()

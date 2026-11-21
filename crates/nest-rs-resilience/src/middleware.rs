@@ -21,7 +21,16 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 
 /// Runs every request an app's own reqwest client sends under the
 /// [`ResiliencePolicy<I>`] it was built with: each attempt given up past the
-/// policy's timeout, counted in its breaker, inside its bulkhead.
+/// policy's timeout, counted in its breaker and its rate limit, inside its
+/// bulkhead.
+///
+/// Each request it hands on is one attempt, and a redirect the client follows
+/// goes out inside it: under its timeout, judged by the answer it ends on, and
+/// counted once in the rate limit. Where the dependency's own limit counts
+/// every request it is sent, the client is built with
+/// [`redirect::Policy::none()`](reqwest::redirect::Policy::none): a redirect is
+/// then the answer, as it came, and the request the app sends after it an
+/// attempt of its own.
 ///
 /// A request is sent again — after the policy's backoff, up to its retries —
 /// only when it is idempotent — its method is RFC 9110 §9.2.2's `GET`, `HEAD`,

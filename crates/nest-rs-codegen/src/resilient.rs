@@ -1,6 +1,7 @@
 //! `#[resilient]`'s pins, read at compile time: a copy of the ranges
 //! `nest_rs_resilience::ResilienceConfig` holds its `timeout` and `retries` to,
-//! pinned against them by a test in `nest-rs-resilience`.
+//! and of every other field of it, the settings its policy holds for every
+//! caller, each pinned against the config by a test in `nest-rs-resilience`.
 
 use syn::{Expr, ExprLit, Lit};
 
@@ -13,6 +14,111 @@ pub const RESILIENT: &str = "resilient";
 
 /// The key a method pins its retries with.
 pub const RETRIES: &str = "retries";
+
+/// A mechanism the policy runs for every caller of its dependency.
+#[derive(Clone, Copy)]
+enum Mechanism {
+    Backoff,
+    Breaker,
+    Bulkhead,
+    Rate,
+}
+
+impl Mechanism {
+    /// What it does for every caller: why no method holds one of its own.
+    const fn shared(self) -> &'static str {
+        match self {
+            Self::Backoff => "the backoff spaces the retries of every caller of the policy",
+            Self::Breaker => {
+                "the circuit breaker counts the failures of every caller of the policy"
+            }
+            Self::Bulkhead => {
+                "the bulkhead bounds the calls every caller of the policy runs at once"
+            }
+            Self::Rate => "the rate limit counts the attempts every caller of the policy sends",
+        }
+    }
+}
+
+/// A setting of `ResilienceConfig` the policy holds for every caller, which a
+/// method pins none of.
+struct PolicySetting {
+    /// The field, and the key a method would write.
+    field: &'static str,
+    /// The key its variable is read under, a duration's unit after it.
+    var: &'static str,
+    mechanism: Mechanism,
+}
+
+/// Every field of `ResilienceConfig` but the two a method pins, `timeout` and
+/// `retries`, in the config's order.
+const POLICY_SETTINGS: [PolicySetting; 10] = [
+    PolicySetting {
+        field: "backoff_first",
+        var: "BACKOFF_FIRST_MS",
+        mechanism: Mechanism::Backoff,
+    },
+    PolicySetting {
+        field: "backoff_ceiling",
+        var: "BACKOFF_CEILING_MS",
+        mechanism: Mechanism::Backoff,
+    },
+    PolicySetting {
+        field: "breaker_window",
+        var: "BREAKER_WINDOW",
+        mechanism: Mechanism::Breaker,
+    },
+    PolicySetting {
+        field: "breaker_failures",
+        var: "BREAKER_FAILURES",
+        mechanism: Mechanism::Breaker,
+    },
+    PolicySetting {
+        field: "breaker_open",
+        var: "BREAKER_OPEN_SECS",
+        mechanism: Mechanism::Breaker,
+    },
+    PolicySetting {
+        field: "concurrency",
+        var: "CONCURRENCY",
+        mechanism: Mechanism::Bulkhead,
+    },
+    PolicySetting {
+        field: "concurrency_wait",
+        var: "CONCURRENCY_WAIT_MS",
+        mechanism: Mechanism::Bulkhead,
+    },
+    PolicySetting {
+        field: "rate_limit",
+        var: "RATE_LIMIT",
+        mechanism: Mechanism::Rate,
+    },
+    PolicySetting {
+        field: "rate_window",
+        var: "RATE_WINDOW_SECS",
+        mechanism: Mechanism::Rate,
+    },
+    PolicySetting {
+        field: "rate_wait",
+        var: "RATE_WAIT_MS",
+        mechanism: Mechanism::Rate,
+    },
+];
+
+/// The refusal of `key` when it names a setting the policy holds for every
+/// caller — a key `#[resilient]` does not take, and no misspelling: it says
+/// which mechanism shares it, and the variable and the field that set it.
+pub fn resilient_policy_setting(key: &str) -> Option<String> {
+    let setting = POLICY_SETTINGS
+        .iter()
+        .find(|setting| setting.field == key)?;
+    Some(format!(
+        "#[{RESILIENT}] takes no `{key}`: {} — set it on the policy: `{}`, or \
+         `ResilienceConfig::{key}` in code",
+        setting.mechanism.shared(),
+        setting.var,
+    ))
+}
 
 /// One end of a range and why nothing past it works — the runtime's reason,
 /// word for word.
@@ -170,6 +276,56 @@ mod tests {
     #[test]
     fn zero_retries_say_to_drop_idempotent() {
         assert!(refused(resilient_retries(&parse_quote!(0))).contains("drop `idempotent`"));
+    }
+
+    #[test]
+    fn a_setting_of_the_policys_is_refused_naming_its_mechanism_its_variable_and_its_field() {
+        assert_eq!(
+            resilient_policy_setting("rate_window").as_deref(),
+            Some(
+                "#[resilient] takes no `rate_window`: the rate limit counts the attempts every \
+                 caller of the policy sends — set it on the policy: `RATE_WINDOW_SECS`, or \
+                 `ResilienceConfig::rate_window` in code"
+            )
+        );
+        for setting in &POLICY_SETTINGS {
+            let refused = resilient_policy_setting(setting.field).expect("a policy's setting");
+            assert!(
+                refused.contains(setting.mechanism.shared())
+                    && refused.contains(&format!("`{}`", setting.var))
+                    && refused.contains(&format!("`ResilienceConfig::{}`", setting.field)),
+                "{refused}"
+            );
+        }
+    }
+
+    /// A pin the decorator takes and a misspelling are no setting of the
+    /// policy's: the grammar answers them.
+    #[test]
+    fn a_pin_and_a_misspelling_name_no_setting_of_the_policys() {
+        for key in [TIMEOUT, RETRIES, "idempotent", "rate", "rate_limits"] {
+            assert_eq!(resilient_policy_setting(key), None, "{key}");
+        }
+    }
+
+    /// A mechanism's settings share its word first, so a row filed under
+    /// another mechanism would tell a method that mechanism's reason.
+    #[test]
+    fn each_setting_is_the_mechanism_its_field_names_first() {
+        for setting in &POLICY_SETTINGS {
+            let word = match setting.mechanism {
+                Mechanism::Backoff => "backoff",
+                Mechanism::Breaker => "breaker",
+                Mechanism::Bulkhead => "concurrency",
+                Mechanism::Rate => "rate",
+            };
+            assert_eq!(
+                setting.field.split('_').next(),
+                Some(word),
+                "`{}`",
+                setting.field
+            );
+        }
     }
 
     #[test]

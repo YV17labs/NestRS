@@ -178,7 +178,8 @@ pub mod health {
 }
 
 /// Resilience: named policies around an outbound call — a timeout per attempt,
-/// retries for an idempotent call, a circuit breaker and a bulkhead.
+/// retries for an idempotent call, a circuit breaker, a bulkhead and an
+/// outbound rate limit.
 #[cfg(feature = "resilience")]
 pub mod resilience {
     #[doc(no_inline)]

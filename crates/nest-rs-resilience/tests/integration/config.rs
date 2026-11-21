@@ -2,10 +2,27 @@
 //! `#[resilient]` checks a method's pins with, since the macro crate cannot
 //! depend on this one: both accept and refuse alike, over the ends the config
 //! declares, and the decorator's refusal is the config's with the site in
-//! front.
+//! front. Every other field is the policy's, and the decorator's copy of them
+//! refuses each naming the variable the config reads it from.
 
+use nest_rs_codegen::__private::resilient_policy_setting;
 use nest_rs_config::{Config, ConfigService, Floor};
 use nest_rs_resilience::ResilienceConfig;
+
+/// Every field of `ResilienceConfig`, with the key its variable is read under
+/// and the path code pins it through, read off the binding listed beside it.
+/// A field added to the config fails to compile here until listed: list it,
+/// never write `..`.
+macro_rules! every_setting {
+    ($($field:ident: $binding:ident),+ $(,)?) => {{
+        let ResilienceConfig { $($field: _),+ } = ResilienceConfig::default();
+        [$((
+            stringify!($field),
+            ResilienceConfig::$binding.key(),
+            ResilienceConfig::$binding.field().path(),
+        )),+]
+    }};
+}
 
 /// The config read with the one variable `key` set to `value`, or what its
 /// refusal says of the value, after the variable it names.
@@ -101,4 +118,54 @@ fn a_retries_pin_is_held_to_the_range_of_the_configs_retries() {
         .expect_err("a method attempted once declares no `idempotent`")
         .to_string();
     assert!(refused.contains("`0` turns retries off"), "{refused}");
+}
+
+/// A method pins its `timeout` and its `retries`; every other setting is the
+/// policy's, for every caller, and `#[resilient]` refuses a key naming one with
+/// where it is set: the variable and the field the config reads it through.
+#[test]
+fn every_other_setting_is_refused_at_a_method_naming_the_variable_that_sets_it() {
+    let pins = [
+        nest_rs_codegen::__private::TIMEOUT,
+        nest_rs_codegen::__private::RETRIES,
+    ];
+    for (field, key, path) in every_setting!(
+        timeout: TIMEOUT,
+        retries: RETRIES,
+        backoff_first: BACKOFF_FIRST,
+        backoff_ceiling: BACKOFF_CEILING,
+        breaker_window: BREAKER_WINDOW,
+        breaker_failures: BREAKER_FAILURES,
+        breaker_open: BREAKER_OPEN,
+        concurrency: CONCURRENCY,
+        concurrency_wait: CONCURRENCY_WAIT,
+        rate_limit: RATE_LIMIT,
+        rate_window: RATE_WINDOW,
+        rate_wait: RATE_WAIT,
+    ) {
+        assert_eq!(
+            path,
+            format!("ResilienceConfig::{field}"),
+            "the binding listed beside `{field}` is its own"
+        );
+        let refused = resilient_policy_setting(field);
+        if pins.contains(&field) {
+            assert_eq!(refused, None, "`{field}` is a pin the decorator takes");
+            continue;
+        }
+        let refused = refused.unwrap_or_else(|| {
+            panic!(
+                "`{path}` has no answer at `#[resilient]` — give it a row in nest_rs_codegen's \
+                 policy settings, or make it a pin the decorator takes"
+            )
+        });
+        assert!(
+            refused.starts_with(&format!("#[resilient] takes no `{field}`: ")),
+            "{refused}"
+        );
+        assert!(
+            refused.ends_with(&format!("`{key}`, or `{path}` in code")),
+            "{refused}"
+        );
+    }
 }

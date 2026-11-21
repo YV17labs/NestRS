@@ -167,7 +167,9 @@ pub mod __private {
     pub use crate::provider_site::{ProviderSite, host_layers_entry, site_const};
     pub use crate::queue_name::{invalid_queue_name, is_valid_queue_name};
     pub use crate::replicas::{REPLICAS, Replicas, replicas_value};
-    pub use crate::resilient::{RESILIENT, RETRIES, resilient_retries, resilient_timeout};
+    pub use crate::resilient::{
+        RESILIENT, RETRIES, resilient_policy_setting, resilient_retries, resilient_timeout,
+    };
     pub use crate::root::{CHECKED_BY_CRUD, refused_without, reroot_as, reroot_impl_half};
     pub use crate::route_path::RoutePath;
     pub use crate::row_probe::no_row_answered;

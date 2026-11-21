@@ -16,6 +16,7 @@ mod error;
 mod middleware;
 mod module;
 mod policy;
+mod rate;
 mod resilient;
 
 use std::sync::Arc;

@@ -13,16 +13,19 @@
 //! not a whole method, runs through [`ResiliencePolicy::run`] or
 //! [`ResiliencePolicy::run_idempotent`]. Every attempt is bounded by the
 //! policy's timeout and the unit's deadline, whichever ends first, and counted
-//! in its circuit breaker, and the bulkhead bounds how many run at once. A
-//! refusal — a timeout, an open breaker, a full bulkhead — is a
-//! [`ResilienceError`] every edge answers `503`, an open breaker's with the
-//! `Retry-After` it knows. Under the `reqwest` feature,
-//! [`ResilienceMiddleware`] runs the app's own reqwest client under a policy.
+//! in its circuit breaker; the bulkhead bounds how many run at once, and the
+//! rate limit how many attempts are sent per window. A refusal — a timeout, an
+//! open breaker, a full bulkhead, a reached rate limit — is a
+//! [`ResilienceError`] every edge answers `503`, an open breaker's and a
+//! reached rate limit's with the `Retry-After` each knows. Under the `reqwest`
+//! feature, [`ResilienceMiddleware`] runs the app's own reqwest client under a
+//! policy.
 //!
 //! **A policy's state lives in its process.** Each replica keeps its own
-//! breaker and bulkhead, so a dependency failing for one replica is refused by
-//! that one alone, and a breaker opens on the failures its own replica saw.
-//! The state is not swappable: no store shares it across replicas.
+//! breaker, bulkhead and rate, so a dependency failing for one replica is
+//! refused by that one alone, a breaker opens on the failures its own replica
+//! saw, and a rate limit counts the attempts its own replica sent. The state is
+//! not swappable: no store shares it across replicas.
 
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
@@ -39,6 +42,7 @@ mod error;
 mod middleware;
 mod module;
 mod policy;
+mod rate;
 mod resilient;
 
 pub use config::ResilienceConfig;

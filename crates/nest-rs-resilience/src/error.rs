@@ -12,11 +12,11 @@ const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 ///
 /// [`Failed`](Self::Failed) carries the call's own error, from its last
 /// attempt. Every other variant is the policy's refusal, answered on every edge
-/// as a `503`, `UNAVAILABLE`, an open breaker's with the `Retry-After` it
-/// knows. The problem also rides the error's chain: a domain error wrapping
-/// this one answers it by handing its [`to_problem`](ToProblem::to_problem)
-/// on, and a queue job failing with it waits at least that long before its
-/// retry.
+/// as a `503`, `UNAVAILABLE`, an open breaker's and a reached rate limit's with
+/// the `Retry-After` each knows. The problem also rides the error's chain: a
+/// domain error wrapping this one answers it by handing its
+/// [`to_problem`](ToProblem::to_problem) on, and a queue job failing with it
+/// waits at least that long before its retry.
 ///
 /// It answers an edge when the call's error does, through [`ToProblem`], so the
 /// call's error says what a client of its failure is told — nothing, for a
@@ -78,8 +78,9 @@ pub enum ResilienceError<E> {
     #[non_exhaustive]
     Open {
         /// How long until the breaker lets a call through again, at the
-        /// earliest: the `Retry-After` every edge answers, in whole seconds
-        /// rounded up.
+        /// earliest — or, while another call probes the dependency, until that
+        /// probe has answered at the latest: the `Retry-After` every edge
+        /// answers, in whole seconds rounded up.
         retry_after: Duration,
         #[doc(hidden)]
         #[source]
@@ -94,6 +95,21 @@ pub enum ResilienceError<E> {
         #[source]
         __problem: Problem,
     },
+    /// The policy sent its dependency as many attempts as its rate limit allows
+    /// in the window, and the window's reset came past what the attempt could
+    /// wait: the call was refused without being sent, and is not attempted
+    /// again.
+    #[error("the rate limit is reached")]
+    #[non_exhaustive]
+    Limited {
+        /// How long until the window resets and the policy sends an attempt
+        /// again: the `Retry-After` every edge answers, in whole seconds
+        /// rounded up.
+        retry_after: Duration,
+        #[doc(hidden)]
+        #[source]
+        __problem: Problem,
+    },
 }
 
 /// A policy's refusal, before it is told in the caller's error type.
@@ -103,6 +119,8 @@ pub(crate) enum Refusal {
     /// For this long at least.
     Open(Duration),
     Full,
+    /// Until the rate's window resets.
+    Limited(Duration),
 }
 
 impl Refusal {
@@ -113,6 +131,7 @@ impl Refusal {
             Self::TimedOut(_) => "timed_out",
             Self::Open(_) => "open",
             Self::Full => "full",
+            Self::Limited(_) => "limited",
         }
     }
 }
@@ -132,6 +151,10 @@ impl<E> From<Refusal> for ResilienceError<E> {
             },
             Refusal::Full => Self::Full {
                 __problem: UNAVAILABLE,
+            },
+            Refusal::Limited(retry_after) => Self::Limited {
+                retry_after,
+                __problem: UNAVAILABLE.with_retry_after(retry_after_secs(retry_after)),
             },
         }
     }
@@ -187,11 +210,12 @@ mod tests {
     }
 
     #[test]
-    fn every_refusal_is_a_503_and_an_open_breaker_says_its_wait_rounded_up() {
-        let refusals: [ResilienceError<Upstream>; 3] = [
+    fn every_refusal_is_a_503_and_an_open_breaker_and_a_reached_rate_say_their_wait_rounded_up() {
+        let refusals: [ResilienceError<Upstream>; 4] = [
             Refusal::TimedOut(Duration::from_secs(5)).into(),
             Refusal::Open(Duration::from_millis(2_500)).into(),
             Refusal::Full.into(),
+            Refusal::Limited(Duration::from_millis(40_200)).into(),
         ];
         let answered: Vec<_> = refusals
             .iter()
@@ -206,6 +230,7 @@ mod tests {
                 (503, code::UNAVAILABLE, None),
                 (503, code::UNAVAILABLE, Some(3)),
                 (503, code::UNAVAILABLE, None),
+                (503, code::UNAVAILABLE, Some(41)),
             ]
         );
     }
@@ -221,6 +246,18 @@ mod tests {
         assert_eq!(
             error_message(&refused),
             "the circuit breaker is open: 503 UNAVAILABLE"
+        );
+
+        let limited: ResilienceError<Upstream> = Refusal::Limited(Duration::from_secs(12)).into();
+        let found = nest_rs_core::__private::find_in_chain::<Problem>(&limited)
+            .expect("the problem is in the chain");
+        assert_eq!(
+            (found.status(), found.code(), found.retry_after()),
+            (503, code::UNAVAILABLE, Some(12))
+        );
+        assert_eq!(
+            error_message(&limited),
+            "the rate limit is reached: 503 UNAVAILABLE"
         );
     }
 

@@ -93,6 +93,42 @@ const CONCURRENCY_WAIT: DurationBounds = DurationBounds::millis(
     ),
 );
 
+const RATE_LIMIT: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a limit of no call refuses every call; `0` turns the rate limit off",
+    ),
+    Bound::new(
+        1_000_000_000,
+        "past a billion calls in a window, over eleven thousand a second for the longest window \
+         there is, no dependency publishes a rate, so a number that large is a slip that turns \
+         the limit off in all but name",
+    ),
+);
+
+const RATE_WINDOW: DurationBounds = DurationBounds::secs(
+    Floor::Units(Bound::new(
+        1,
+        "a zero window resets on every call, so the count never passes one and every call is \
+         sent at any limit",
+    )),
+    Bound::new(
+        24 * 60 * 60,
+        "a window past a day is a quota rather than a rate, and a count each replica keeps in \
+         memory, forgotten at its restart, holds no quota",
+    ),
+);
+
+const RATE_WAIT: DurationBounds = DurationBounds::millis(
+    Floor::Units(Bound::new(0, "a wait of none refuses at once")),
+    Bound::new(
+        60 * 1000,
+        "a call waiting past a minute for the window's reset outwaits a request's default \
+         deadline three times over, holding its slot of the bulkhead all along; one that must \
+         wait longer is refused with the `Retry-After` its client or its queue's retry waits",
+    ),
+);
+
 /// One policy's settings, read by
 /// [`ResilienceModule`](crate::ResilienceModule) from `<PREFIX>_RESILIENCE__*`
 /// for the default instance and `<PREFIX>_RESILIENCE__<INSTANCE>__*` for a
@@ -101,7 +137,8 @@ const CONCURRENCY_WAIT: DurationBounds = DurationBounds::millis(
 ///
 /// Every wait is bounded: an attempt by [`timeout`](Self::timeout), the wait
 /// before a retry by [`backoff_ceiling`](Self::backoff_ceiling), a slot by
-/// [`concurrency_wait`](Self::concurrency_wait), and the number of attempts by
+/// [`concurrency_wait`](Self::concurrency_wait), the window's reset by
+/// [`rate_wait`](Self::rate_wait), and the number of attempts by
 /// [`retries`](Self::retries).
 #[config(namespace = "resilience")]
 #[derive(Clone, Debug)]
@@ -151,6 +188,35 @@ pub struct ResilienceConfig {
     /// bulkhead refusing at once.
     #[config(bounds = CONCURRENCY_WAIT)]
     pub concurrency_wait: Duration,
+    /// How many attempts the policy sends its dependency per
+    /// [`rate_window`](Self::rate_window), a retry included, `RATE_LIMIT`,
+    /// from 1 to a billion, `0` for none; defaults to none. An attempt past it
+    /// is not sent: the run ends refused, told the time to the window's reset,
+    /// unless [`rate_wait`](Self::rate_wait) reaches it. Each replica counts
+    /// its own attempts, so a limit the dependency sets for the whole app is
+    /// divided by the replicas sharing it.
+    ///
+    /// It counts attempts, not the requests one makes: a redirect the call's
+    /// client follows, or a second request in one body, goes out inside the
+    /// attempt that sent it. Where the dependency's own limit counts every
+    /// request it is sent, each attempt sends one — a reqwest client built
+    /// with `redirect::Policy::none()` answers a redirect as it came.
+    #[config(bounds = RATE_LIMIT)]
+    pub rate_limit: Option<usize>,
+    /// The window the rate limit counts over, `RATE_WINDOW_SECS`, from 1
+    /// second to a day; defaults to a minute. It is fixed: the first attempt
+    /// counted opens it, and the count starts again once it has passed.
+    #[config(bounds = RATE_WINDOW)]
+    pub rate_window: Duration,
+    /// How long one attempt waits in all for the window's reset before it is
+    /// refused, `RATE_WAIT_MS`, from none to a minute; defaults to none, an
+    /// attempt past the limit refused at once. A reset this wait or the unit's
+    /// deadline cannot reach is not waited for, and the wait is not the
+    /// attempt's: its [`timeout`](Self::timeout) starts when its call is sent.
+    /// When the wait ends the circuit breaker is asked again, so one that
+    /// opened meanwhile refuses the attempt unsent.
+    #[config(bounds = RATE_WAIT)]
+    pub rate_wait: Duration,
 }
 
 impl Default for ResilienceConfig {
@@ -165,6 +231,9 @@ impl Default for ResilienceConfig {
             breaker_open: Duration::from_secs(30),
             concurrency: None,
             concurrency_wait: Duration::ZERO,
+            rate_limit: None,
+            rate_window: Duration::from_secs(60),
+            rate_wait: Duration::ZERO,
         }
     }
 }
@@ -195,6 +264,9 @@ mod tests {
                 ResilienceConfig::BREAKER_OPEN.key(),
                 ResilienceConfig::CONCURRENCY.key(),
                 ResilienceConfig::CONCURRENCY_WAIT.key(),
+                ResilienceConfig::RATE_LIMIT.key(),
+                ResilienceConfig::RATE_WINDOW.key(),
+                ResilienceConfig::RATE_WAIT.key(),
             ],
             [
                 "TIMEOUT_MS",
@@ -206,6 +278,9 @@ mod tests {
                 "BREAKER_OPEN_SECS",
                 "CONCURRENCY",
                 "CONCURRENCY_WAIT_MS",
+                "RATE_LIMIT",
+                "RATE_WINDOW_SECS",
+                "RATE_WAIT_MS",
             ]
         );
     }
@@ -222,6 +297,9 @@ mod tests {
             ("BREAKER_OPEN_SECS", "5"),
             ("CONCURRENCY", "8"),
             ("CONCURRENCY_WAIT_MS", "0"),
+            ("RATE_LIMIT", "100"),
+            ("RATE_WINDOW_SECS", "1"),
+            ("RATE_WAIT_MS", "250"),
         ])
         .expect("every value is in range");
         assert_eq!(read.timeout, Duration::from_millis(750));
@@ -235,6 +313,21 @@ mod tests {
         assert_eq!(read.breaker_open, Duration::from_secs(5));
         assert_eq!(read.concurrency, Some(8));
         assert_eq!(read.concurrency_wait, Duration::ZERO);
+        assert_eq!(read.rate_limit, Some(100));
+        assert_eq!(
+            (read.rate_window, read.rate_wait),
+            (Duration::from_secs(1), Duration::from_millis(250))
+        );
+
+        let off = ResilienceConfig::from_env(
+            &ConfigService::with_vars("resilience", [("RATE_LIMIT", "0")]),
+            ResilienceConfig {
+                rate_limit: Some(10),
+                ..ResilienceConfig::default()
+            },
+        )
+        .expect("`0` is the rate limit's off");
+        assert_eq!(off.rate_limit, None, "`0` turns the rate limit off");
     }
 
     #[test]
@@ -254,6 +347,11 @@ mod tests {
                 default.breaker_window,
                 default.concurrency
             )
+        );
+        assert_eq!(
+            (read.rate_limit, read.rate_window, read.rate_wait),
+            (None, Duration::from_secs(60), Duration::ZERO),
+            "no rate limit, over a minute's window, refusing at once once set"
         );
     }
 
@@ -279,6 +377,14 @@ mod tests {
                 "60001",
                 "must be at most 60000 milliseconds",
             ),
+            ("RATE_LIMIT", "1000000001", "must be at most 1000000000"),
+            ("RATE_WINDOW_SECS", "0", "must be at least 1 second"),
+            ("RATE_WINDOW_SECS", "86401", "must be at most 86400 seconds"),
+            (
+                "RATE_WAIT_MS",
+                "60001",
+                "must be at most 60000 milliseconds",
+            ),
         ] {
             let refused = read(&[(key, raw)])
                 .expect_err("outside the range")
@@ -294,18 +400,58 @@ mod tests {
 
     #[test]
     fn a_pinned_zero_where_zero_is_off_is_refused() {
-        let refused = ResilienceConfig::from_env(
-            &ConfigService::with_vars("resilience", []),
-            ResilienceConfig {
-                retries: Some(0),
-                ..ResilienceConfig::default()
-            },
-        )
-        .expect_err("off in code is `None`")
-        .to_string();
-        assert!(
-            refused.contains("`ResilienceConfig::retries` set in code"),
-            "{refused}"
-        );
+        for (pinned, field) in [
+            (
+                ResilienceConfig {
+                    retries: Some(0),
+                    ..ResilienceConfig::default()
+                },
+                "`ResilienceConfig::retries` set in code",
+            ),
+            (
+                ResilienceConfig {
+                    rate_limit: Some(0),
+                    ..ResilienceConfig::default()
+                },
+                "`ResilienceConfig::rate_limit` set in code",
+            ),
+        ] {
+            let refused =
+                ResilienceConfig::from_env(&ConfigService::with_vars("resilience", []), pinned)
+                    .expect_err("off in code is `None`")
+                    .to_string();
+            assert!(refused.contains(field), "{refused}");
+        }
+    }
+
+    /// A window or a wait pinned past its range is refused as its variable
+    /// would be, a window shorter than a second included.
+    #[test]
+    fn a_rate_window_or_wait_pinned_outside_its_range_is_refused() {
+        for (pinned, var) in [
+            (
+                ResilienceConfig {
+                    rate_window: Duration::from_millis(500),
+                    ..ResilienceConfig::default()
+                },
+                "RATE_WINDOW_SECS",
+            ),
+            (
+                ResilienceConfig {
+                    rate_wait: Duration::from_secs(61),
+                    ..ResilienceConfig::default()
+                },
+                "RATE_WAIT_MS",
+            ),
+        ] {
+            let refused =
+                ResilienceConfig::from_env(&ConfigService::with_vars("resilience", []), pinned)
+                    .expect_err("a pin outside the range")
+                    .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("resilience", var)),
+                "{refused}"
+            );
+        }
     }
 }

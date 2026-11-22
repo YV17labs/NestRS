@@ -242,9 +242,10 @@ pub struct ResilienceConfig {
     /// defaults to 200 ms.
     #[config(bounds = BACKOFF)]
     pub backoff_first: Duration,
-    /// The longest a retry waits, `BACKOFF_CEILING_MS`, from 1 ms to five
-    /// minutes; defaults to 2 seconds. A dependency asking a longer wait — a
-    /// `Retry-After` the reqwest middleware reads — is not attempted again.
+    /// The longest a retry's wait grows to, before its jitter,
+    /// `BACKOFF_CEILING_MS`, from 1 ms to five minutes; defaults to 2 seconds.
+    /// A dependency asking a longer wait — a `Retry-After` the reqwest
+    /// middleware reads — is not attempted again.
     #[config(bounds = BACKOFF)]
     pub backoff_ceiling: Duration,
     /// How many of the latest attempts the circuit breaker counts,
@@ -312,7 +313,10 @@ pub struct ResilienceConfig {
     /// is not sent: the run ends refused, told the time to the window's reset,
     /// unless [`rate_wait`](Self::rate_wait) reaches it. Each replica counts
     /// its own attempts, so a limit the dependency sets for the whole app is
-    /// divided by the replicas sharing it.
+    /// divided by the replicas sharing it. The window is fixed, so up to twice
+    /// the limit goes out within one window's length around its reset: a
+    /// dependency counting over a sliding window is given half the limit it
+    /// allows.
     ///
     /// It counts attempts, not the requests one makes: a redirect the call's
     /// client follows, or a second request in one body, goes out inside the
@@ -327,13 +331,14 @@ pub struct ResilienceConfig {
     /// and the count starts again once it has passed.
     #[config(bounds = RATE_WINDOW)]
     pub rate_window: Duration,
-    /// How long one attempt waits in all for the window's reset before it is
-    /// refused, `RATE_WAIT_MS`, from 1 ms to a minute, `0` for no wait;
-    /// defaults to none, an attempt past the limit refused at once. A reset
-    /// this wait or the unit's deadline cannot reach is not waited for, and
-    /// the wait is not the attempt's: its [`timeout`](Self::timeout) starts
-    /// when its call is sent. When the wait ends the circuit breaker is asked
-    /// again, so one that opened meanwhile refuses the attempt unsent.
+    /// The longest one attempt waits in all for the window's reset,
+    /// `RATE_WAIT_MS`, from 1 ms to a minute, `0` for no wait; defaults to
+    /// none, an attempt past the limit refused at once. A reset this wait or
+    /// the unit's deadline cannot reach is not waited for, the attempt refused
+    /// at once, and the wait is not the attempt's: its
+    /// [`timeout`](Self::timeout) starts when its call is sent. When the wait
+    /// ends the circuit breaker is asked again, so one that opened meanwhile
+    /// refuses the attempt unsent.
     #[config(bounds = RATE_WAIT)]
     pub rate_wait: Option<Duration>,
 }

@@ -1,0 +1,145 @@
+---
+title: Bulkhead and rate limit
+description: "Bound how many calls a resilience policy runs at once and how many attempts it sends per window, on each replica, and what a call past either meets."
+sidebar:
+  order: 11.8
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A [resilience policy](/fundamentals/resilience/) bounds the load it puts on a
+dependency two ways. Its bulkhead caps the calls running inside it at once, and
+its rate limit the attempts it sends per window, a retry included. Both are off
+by default, and each replica keeps its own.
+
+```bash title=".env"
+NESTRS_RESILIENCE__UPSTREAM__CONCURRENCY=16
+NESTRS_RESILIENCE__UPSTREAM__CONCURRENCY_WAIT_MS=500
+NESTRS_RESILIENCE__UPSTREAM__CONCURRENCY_WAITERS=64
+NESTRS_RESILIENCE__UPSTREAM__RATE_LIMIT=100
+NESTRS_RESILIENCE__UPSTREAM__RATE_WINDOW_SECS=60
+NESTRS_RESILIENCE__UPSTREAM__RATE_WAIT_MS=2000
+```
+
+Sixteen calls run at once, and a call finding every slot taken waits up to half a
+second for one, sixty-four calls waiting at most. The policy sends a hundred
+attempts a minute. An attempt past them waits for the window's reset when that
+comes within two seconds and before the unit's deadline, and is refused at once
+otherwise.
+
+## The bulkhead
+
+A call takes one of the `CONCURRENCY` slots for its whole run — its retries and
+every wait included — and gives it back as the run ends. A call finding every
+slot taken waits up to `CONCURRENCY_WAIT_MS` for one, or what is left of the
+unit's deadline when that is sooner. It is refused `Full`, unsent, when none is
+freed in time. With no wait, the default, it is refused at once.
+
+`CONCURRENCY_WAITERS` bounds how many calls wait at once: a call finding every
+slot taken and as many calls waiting is refused `Full` at once. A waiter gives
+its place up as it takes a slot, runs out of its wait, or is dropped by its
+caller. The bound means nothing without `CONCURRENCY`, nor beside a wait of
+none, where no call waits.
+
+Before it takes a slot, a run asks the unit's deadline, then the breaker. A unit
+out of time is refused `TimedOut` and a call meeting an open breaker `Open`, at
+once, never after a wait for a slot. A run finding no free slot reads the rate
+too. Once the window is spent and its reset lies past `RATE_WAIT_MS`, or at the
+unit's deadline or after it, the call is refused `Limited` at once rather than
+after its wait. That read counts nothing and is advisory. A window others spend
+after it still costs the call its wait for a slot, and its attempt then meets
+the rate as any does.
+
+A call the bulkhead refuses files `bulkhead full; the call is refused` at
+`debug` on `nest_rs::resilience`, its `host` and `method` from a decorated
+method. When every place to wait was taken, its `waiters` is the bound it met.
+
+## The rate limit
+
+`RATE_LIMIT` counts every attempt the policy sends, a retry included, whatever
+runs it: a `#[resilient]` method, `run`, `run_idempotent` or
+`ResilienceMiddleware`. An attempt asks, in order, what is left of the unit's
+deadline, the breaker, then the rate, and only then is its call sent. So a call
+an open breaker refuses counts nothing. An attempt past the limit is not sent
+and settles nothing in the breaker, a probe handing its turn to the next call.
+
+The window is fixed, as the throttler's stores count one: the first attempt
+counted opens it, and the count starts again once it has passed. Past the limit
+an attempt is refused `Limited`, its `Retry-After` the time to the window's
+reset. When `RATE_WAIT_MS` reaches that reset before the unit's deadline, the
+attempt waits for it instead, then asks the deadline, the breaker and the rate
+again. The waits of one attempt never add up past `RATE_WAIT_MS`, and a reset it
+cannot reach is not waited for. Its slot of the bulkhead stays held while it
+waits. The wait is not the attempt's: its timeout starts when its call is sent,
+and the unit's deadline bounds the wait and the attempt together.
+
+**`Limited` ends the run.** A retry the rate refuses is not attempted again, so
+a limit leaving a run's retries no room in one window loses them, unless
+`RATE_WAIT_MS` reaches the reset.
+
+<Aside type="caution">
+Each replica counts its own attempts. A limit your dependency sets for the whole
+app is its quota divided by the replicas sharing it: a hundred calls a minute
+across four replicas is `RATE_LIMIT=25`.
+</Aside>
+
+**A fixed window lets up to twice the limit through around a reset**: one
+window's last attempts and the next window's first fall within one window's
+length. A dependency counting over a sliding window is given half its quota: its
+share per replica, halved.
+
+A call the rate refuses files `rate limit reached; the call is refused` at
+`debug`, its `retry_after_ms` the time to the reset. One waiting for the reset
+files `rate limit reached; waiting for the window to reset`, a `debug` too, its
+`wait_ms` that time. Each names its `host` and `method` from a decorated method,
+every duration in whole milliseconds rounded up. A policy with no `RATE_LIMIT`
+builds no rate: an attempt takes no lock, allocates nothing and arms no timer
+for it.
+
+### What an attempt is
+
+The rate counts attempts, not the requests an attempt makes. A redirect your
+reqwest client follows goes out inside the attempt that met it: under its
+timeout, judged by the answer it ends on, and counted once. So does a second
+request in one decorated body or `run` closure. Where your dependency counts
+every request it is sent, make each attempt send one. Build its client with
+`reqwest::redirect::Policy::none()`: the redirect is then the attempt's answer,
+and the request after it an attempt of its own. Send each request from a
+decorated method or a `run` closure of its own.
+
+## Configuration
+
+Each key reads as [Resilience](/fundamentals/resilience/#configuration) says,
+under the policy's instance.
+
+| Key | Meaning |
+|---|---|
+| `CONCURRENCY` | how many calls run inside the policy at once, the bulkhead — default none; from `1` to `65536`, `0` for none |
+| `CONCURRENCY_WAIT_MS` | how long a call waits for a free slot before it is refused, the unit's deadline permitting — default `0`, no wait: refused at once; else from `1` to `60000` (a minute) |
+| `CONCURRENCY_WAITERS` | how many calls wait for a slot at once — default none; from `1` to `65536`, `0` for none |
+| `RATE_LIMIT` | how many attempts the policy sends per window, a retry included — default none; from `1` to `1000000000`, `0` for none |
+| `RATE_WINDOW_SECS` | the fixed window the limit counts over — default `60`; from `1` to `86400` (a day), and in code anything above zero up to a day |
+| `RATE_WAIT_MS` | the longest one attempt waits in all for the window's reset; a reset further off, or at the unit's deadline or after it, is not waited for, the attempt refused at once — default `0`, no wait: refused at once; else from `1` to `60000` (a minute) |
+
+The wait and the waiters mean nothing without `CONCURRENCY`, and the window and
+its wait nothing without `RATE_LIMIT`: each builds nothing on its own.
+
+## Limits
+
+- **The bounds are each replica's.** A replica's bulkhead bounds the calls it
+  runs and the callers it holds waiting, and its rate counts the attempts it
+  sent.
+- **A wait for the window's reset holds its slot of the bulkhead**, so a call
+  waiting on the rate keeps another out of the bulkhead for as long.
+- **A redirect or a second request in one body is no attempt of its own**, so a
+  dependency counting every request can be sent more than `RATE_LIMIT` in a
+  window ([what an attempt is](#what-an-attempt-is)).
+
+## Going further
+
+- [Resilience](/fundamentals/resilience/) — the policy, the decorator, and what
+  the client is told.
+- [Circuit breaker](/fundamentals/circuit-breaker/) — the breaker an attempt
+  asks before the rate.
+- [Rate limiting](/rate-limiting/) — the inbound limit on what your own
+  clients send you.

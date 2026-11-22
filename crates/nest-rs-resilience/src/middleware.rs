@@ -26,8 +26,9 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 ///
 /// Each request it hands on is one attempt, and a redirect the client follows
 /// goes out inside it: under its timeout, judged by the answer it ends on, and
-/// counted once in the rate limit. Where the dependency's own limit counts
-/// every request it is sent, the client is built with
+/// counted once in the [rate limit](crate::ResilienceConfig::rate_limit). Where
+/// the dependency's own limit counts every request it is sent, the client is
+/// built with
 /// [`redirect::Policy::none()`](reqwest::redirect::Policy::none): a redirect is
 /// then the answer, as it came, and the request the app sends after it an
 /// attempt of its own.

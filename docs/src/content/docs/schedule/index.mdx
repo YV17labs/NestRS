@@ -84,6 +84,12 @@ impl AudioTasks {
   [Firing once across replicas](/schedule/once/). A failure
   returns `Err`; it is logged and the schedule continues — one failed run
   never stops the job.
+- **The `Err` may be an error of your own**: a tick's `Result<(), E>` takes any
+  `E` that converts into `anyhow::Error`, so it can carry
+  [`#[resilient]`](/fundamentals/resilience/). That error borrows nothing of the
+  host, since an `anyhow::Error` owns its error. One borrowing it through
+  `&'a self` is refused at `#[scheduled]` in rustc's words, not the framework's:
+  `E0716` for an `async` method, `E0515` for one that is not.
 - **The cron method is thin.** Its only job is to decide *when* and
   *what payload* (here a synthetic file id). The plumbing — the object
   store, the `Jobs` handle, the queue — lives inside

@@ -13,8 +13,9 @@
 //! not a whole method, runs through [`ResiliencePolicy::run`] or
 //! [`ResiliencePolicy::run_idempotent`]. Every attempt is bounded by the
 //! policy's timeout and the unit's deadline, whichever ends first, and counted
-//! in its circuit breaker; the bulkhead bounds how many run at once, and the
-//! rate limit how many attempts are sent per window. A refusal — a timeout, an
+//! in its circuit breaker; the bulkhead bounds how many run at once and how
+//! many wait for a slot, and the rate limit how many attempts are sent per
+//! window, a retry included. A refusal — a timeout, an
 //! open breaker, a full bulkhead, a reached rate limit — is a
 //! [`ResilienceError`] every edge answers `503`, an open breaker's and a
 //! reached rate limit's with the `Retry-After` each knows. A breaker's state is

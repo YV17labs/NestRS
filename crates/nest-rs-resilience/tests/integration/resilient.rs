@@ -3,23 +3,26 @@
 //! its answer borrowed through the lifetime its receiver names, its arguments
 //! read again at each attempt, `?` and `return` answering one attempt, each
 //! answer coerced as the undecorated method's is, the `timeout` and `retries`
-//! a method pins, the lines naming it, each receiver and host it takes, a
-//! refusal answered `503` by every edge serving a decorated handler, and a
-//! method of every impl half that takes one, called through the framework's
-//! own path, attempted again within that one call.
+//! a method pins, the lines naming it, the docs' recipes as they run (an answer
+//! that is no failure, a fallback, a breaker opened by hand), each receiver and
+//! host it takes, a refusal answered `503` by every edge serving a decorated
+//! handler, and a method of every impl half that takes one, called through the
+//! framework's own path, attempted again within that one call.
 
 use std::cell::Cell;
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use nest_rs_core::{Module, injectable, instance, module};
 use nest_rs_resilience::{
     BreakerState, ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
 };
-use nest_rs_testing::{HeadlessApp, LogCapture};
+use nest_rs_testing::{
+    HeadlessApp, HttpsPeer, LogCapture, PeerAnswer, TestAuthority, TestCertificate,
+};
 
 use crate::{held, quiet};
 
@@ -705,6 +708,8 @@ async fn a_policy_pinned_to_open_on_one_failure_refuses_the_next_call_unsent() {
     );
 }
 
+/// The circuit breaker page's `Test it` recipe for a switch, as it runs: opened
+/// by hand, the breaker refuses a call unsent; closed by hand, it sends the next.
 #[tokio::test(start_paused = true)]
 async fn a_method_is_refused_unsent_while_its_breaker_is_opened_by_hand_and_sent_once_closed() {
     let app = boot::<OpeningModule>().await;
@@ -729,6 +734,147 @@ async fn a_method_is_refused_unsent_while_its_breaker_is_opened_by_hand_and_sent
     assert_eq!(courier.breaker_state(), Some(BreakerState::Closed));
     assert!(matches!(parcels.quote().await, Ok(42)));
     assert_eq!(parcels.attempted(), 1, "sent again");
+}
+
+/// The authority the previewer's peer chains to, and the client trusts.
+static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
+
+static CERTIFICATE: LazyLock<TestCertificate> = LazyLock::new(|| AUTHORITY.server(&["127.0.0.1"]));
+
+/// The dependency the docs' failure recipes call, its namespace theirs alone.
+#[instance]
+struct Previewer;
+
+/// What a call to the previewer fails with.
+#[derive(Debug, thiserror::Error)]
+#[error("the previewer failed")]
+struct PreviewFailed(#[source] reqwest::Error);
+
+/// A host the test builds itself: the previewer's policy, and a client trusting
+/// the peer's authority.
+struct Previews {
+    previewer: Arc<ResiliencePolicy<Previewer>>,
+    http: reqwest::Client,
+}
+
+impl Previews {
+    fn of(app: &HeadlessApp) -> Self {
+        let authority =
+            reqwest::Certificate::from_pem(AUTHORITY.pem().as_bytes()).expect("the authority");
+        Self {
+            previewer: held::<Previewer>(app),
+            http: reqwest::Client::builder()
+                .tls_certs_only([authority])
+                .build()
+                .expect("a client"),
+        }
+    }
+
+    /// The docs' answer that is no failure: a page the previewer does not have
+    /// is its answer, `None`, and any other failing status an `Err`.
+    #[resilient(previewer, idempotent)]
+    async fn preview(&self, url: &str) -> Result<Option<String>, ResilienceError<PreviewFailed>> {
+        let page = self.http.get(url).send().await.map_err(PreviewFailed)?;
+        if page.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let page = page.error_for_status().map_err(PreviewFailed)?;
+        page.text().await.map(Some).map_err(PreviewFailed)
+    }
+
+    /// The docs' fallback: the bare link while the policy refuses the call, and
+    /// the previewer's own failure kept as the caller's error.
+    async fn link_card(&self, url: &str) -> Result<Option<String>, PreviewFailed> {
+        self.preview(url).await.or_else(|error| match error {
+            ResilienceError::Failed(failed) => Err(failed),
+            _refused => Ok(Some(url.to_owned())),
+        })
+    }
+}
+
+/// One retry, waiting a millisecond or two, and a breaker opening on two
+/// failures among the latest two attempts.
+#[module(imports = [ResilienceModule::for_root((Previewer, ResilienceConfig {
+    retries: Some(1),
+    backoff_first: Duration::from_millis(1),
+    backoff_ceiling: Duration::from_millis(2),
+    breaker_window: Some(2),
+    breaker_failures: 2,
+    ..ResilienceConfig::default()
+}))])]
+struct AnsweringModule;
+
+/// The `What counts as a failure` recipe, as it runs: a `404` is the
+/// previewer's answer, `Ok(None)`, sent once and counted as no failure, so two
+/// in a row leave closed a breaker two failures open; a `503` is an `Err`,
+/// attempted again and counted, its two failures opening the breaker.
+#[tokio::test]
+async fn an_answer_the_dependency_gave_is_the_calls_ok_never_attempted_again_nor_a_failure() {
+    let app = boot::<AnsweringModule>().await;
+    let previews = Previews::of(&app);
+    let peer = HttpsPeer::answering(
+        &CERTIFICATE,
+        [
+            PeerAnswer::status(404),
+            PeerAnswer::status(404),
+            PeerAnswer::status(503),
+        ],
+    )
+    .await;
+
+    for sent in 1..=2 {
+        let missing = previews.preview(&peer.url("/missing")).await;
+        assert!(matches!(missing, Ok(None)), "{missing:?}");
+        assert_eq!(
+            peer.requests().len(),
+            sent,
+            "an answer is never attempted again"
+        );
+    }
+    assert_eq!(
+        previews.previewer.breaker_state(),
+        Some(BreakerState::Closed),
+        "nor counted as a failure: two would have opened the breaker"
+    );
+
+    let down = previews.preview(&peer.url("/down")).await;
+    assert!(matches!(down, Err(ResilienceError::Failed(_))), "{down:?}");
+    assert_eq!(
+        peer.requests().len(),
+        4,
+        "a failing status is attempted again"
+    );
+    assert!(
+        matches!(
+            previews.previewer.breaker_state(),
+            Some(BreakerState::Open { .. })
+        ),
+        "its two failures opened the breaker"
+    );
+}
+
+#[module(imports = [ResilienceModule::for_root((Previewer, opening_on_the_first_failure()))])]
+struct FallbackModule;
+
+/// The fallback recipe, as it runs: the previewer's own failure is the caller's
+/// error, and the call the breaker it opened refuses answers the bare link,
+/// unsent.
+#[tokio::test]
+async fn the_methods_result_is_its_fallback_a_refusal_answered_and_a_failure_kept() {
+    let app = boot::<FallbackModule>().await;
+    let previews = Previews::of(&app);
+    let peer = HttpsPeer::answering(&CERTIFICATE, [PeerAnswer::status(503)]).await;
+    let link = peer.url("/down");
+
+    let failed = previews.link_card(&link).await;
+    assert!(matches!(failed, Err(PreviewFailed(_))), "{failed:?}");
+    let refused = previews.link_card(&link).await;
+    assert_eq!(
+        refused.ok().flatten().as_deref(),
+        Some(link.as_str()),
+        "the bare link while the breaker refuses the call"
+    );
+    assert_eq!(peer.requests().len(), 1, "the refused call is never sent");
 }
 
 #[tokio::test(start_paused = true)]

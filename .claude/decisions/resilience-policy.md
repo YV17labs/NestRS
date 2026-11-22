@@ -217,3 +217,194 @@ documented answer for the owner to agree. A GraphQL field writes its `Result`
 out, since `#[operations]` reads a field's answer by its spelling — `#[operations]`' own limit, stated so far for
 subscriptions alone. No `demo/` use site: the demo calls no dependency it does
 not control, and one is not invented for the decorator.
+
+## 2026-11-22 — the rate, the breaker's age, probes, read and switch, the waiters' bound, and a decorated tick
+
+The owner's decision of 2026-11-21, each point of it built:
+
+1. **The policy gains** an outbound rate limit (`RATE_LIMIT`, `RATE_WINDOW_SECS`,
+   `RATE_WAIT_MS`), an age bound and a probe count on its breaker
+   (`BREAKER_AGE_SECS`, `BREAKER_PROBES`), a bound on its bulkhead's waiters
+   (`CONCURRENCY_WAITERS`), a read of the breaker's state (`breaker_state()`)
+   and a manual open and close (`open_breaker`, `close_breaker`).
+2. **All of a policy's state stays in its process**: no store, no port, no Redis
+   or Valkey binding, no new crate, no new dependency, and nothing that makes an
+   app run a service it does not already run.
+3. **A scheduled tick may answer any error that converts into `anyhow::Error`**:
+   the widening the 2026-11-21 entry's limits left for the owner, agreed and
+   built.
+4. **The public names are the ones the decision names**: the six settings,
+   `breaker_state()`, `open_breaker`, `close_breaker` and
+   `ResilienceError::Limited`. It names none for the read's enum or the
+   switch's error, so `BreakerState` and `BreakerError`, its `Off` and
+   `OutOfRange` included, are the build's, not the owner's: the breaker's word,
+   then what the type is, as `ResilienceConfig` and `ResilienceError` take the
+   crate's. `BreakerState`'s variants spell the three states the decision
+   names — closed, open with the time left, half open — `Open`'s time named
+   `retry_after`, as `ResilienceError::Open` names it.
+5. **The refused list below stays refused.**
+6. **No use site in `demo/`**: the demo calls no dependency it does not control.
+
+How each holds:
+
+- **The rate counts the attempts sent, over a fixed window** the first one
+  counted opens, as the throttler's stores count, in their words (`limit`,
+  `window`): every attempt, a retry included, through `run`, `run_idempotent`,
+  `#[resilient]` and the middleware. An attempt meets the unit's deadline, the
+  breaker, then the rate, so an open breaker counts nothing, and an attempt the
+  rate refuses is never sent, settles nothing in the breaker and hands a probe's
+  turn on. Past the limit it waits for the reset within `rate_wait` and the
+  unit's deadline — its waits never adding up past `rate_wait`, its slot of the
+  bulkhead held, its timeout started at its send — or ends the run `Limited`,
+  the `503` with the time to the reset, never attempted again. No limit builds
+  no rate.
+- **The breaker forgets an outcome past its age**, counted from its answer,
+  each time the window counts one; unset, it stores no instant. **Its probes are
+  a series**, one at a time: a failed probe opens it again for its whole open
+  time and the series starts over, a probe cut at its timeout has failed, and
+  one never sent, or dropped by its caller, counts as neither. A
+  `BREAKER_FAILURES` above what a rate lets answer within the age of one
+  another, each attempt counted at the timeout's ceiling
+  (`Rate::most_sent_within`), is refused at boot.
+- **The read and the switch.** `breaker_state()` answers what a call arriving
+  now meets, `None` for a policy with no breaker, said by type. `open_breaker(d)`
+  replaces any open time with `d` from the call, and `close_breaker()` closes;
+  each forgets the window and starts an epoch, so an attempt admitted before it
+  changes nothing, files the transition's `warn` marked `manual` — the owner's
+  word, since `asked` is the dependency's on this target — and counts it marked
+  `nestrs.resilience.breaker.manual`. `BreakerError::Off` and
+  `OutOfRange { most }` answer what a switch cannot do, never clamped and never
+  a silent no-op. Every transition files its line under the breaker's lock, so
+  no switch comes between a transition and its line.
+- **A call refused beside a probe is told what is left of that probe's own
+  bound** — its run's timeout, a method's pin included, under its unit's
+  deadline, after its wait for the reset — and a millisecond past it, where the
+  one bound the breaker was built with told the wrong wait.
+- **A place to wait is taken in one step**, `Semaphore::try_acquire`, and given
+  back by its permit's `Drop`; with every place taken a call is `Full` at once,
+  its line carrying the `waiters` it met. A call finding no free slot reads the
+  rate before it waits, a read that counts nothing.
+- **An idempotent run is `Send` for an answer that is not `Sync`**: `again`
+  decides before its wait and holds nothing of the answer across it, so an
+  `#[sse]` route and a `#[subscription]` run under `idempotent` too.
+- **The tick (decision 3).** `TickAnswer`, a type probe in
+  `nest_rs_schedule::__private`, takes `Result<(), E>` for every
+  `E: Into<anyhow::Error>` and `!`, each impl `do_not_recommend`, every answer
+  read by its type, `!` included. The expansion hands the call's own future to
+  `answered`, which boxes `Answered` over it, the future pinned in place and held
+  once, at the size 7.0 boxed the run at; it binds no answer and writes no lint
+  attribute, so no lint level a crate sets refuses a tick 7.0 compiled. The
+  family keeps two bounds: `#[hooks]`, `#[indicators]` and a tick take
+  `E: Into<anyhow::Error>`; `#[on_event]` and `#[process]` take
+  `E: Into<Box<dyn Error + Send + Sync>>`, and `#[process]` alone has a
+  `ToProblem` tier beside it. The class between them is a difference stated, not
+  closed by a tier for a hypothetical user: a boxed error, a `String` and a
+  `&'static str`, which `#[on_event]` and `#[process]` take and a tick refuses,
+  and a type that is no `std::error::Error` but converts into `anyhow::Error`
+  through a `From` of its own, which a tick takes and they refuse.
+- **A decorated body is checked against its attempt's type**: it opens, after
+  its leading items, on a `return` of that type never taken
+  (`__private::attempt`), so it makes every coercion the undecorated method
+  makes, run once and idempotent alike. rustc refused the other candidates: a
+  `let` ascribed with the type misses an early `return`, and an async closure
+  declaring it coerces nothing (`.claude/upstream/rustc.md`). A policy setting
+  written before the field is refused as one after it, told where it is set.
+- **`#[operations]`' wrapper carries an `#[expect]` as an `#[allow]`** of the
+  same lints and reason, so the expectation is checked on the developer's method
+  alone; 7.0.0 handed it to the wrapper too, where it went unfulfilled.
+- **A bound's reason holds for every value its siblings take**: it says what its
+  own mechanism does to a call or lets happen, true for every value it refuses,
+  every value its siblings take, every traffic and every client a policy wraps,
+  never an end another mechanism or the traffic decides, and reads each number it
+  states off a constant. Two lines judge every floor: no timer is told less than
+  it can honour, and no line says `0` for a duration that is not zero. So the
+  open time and the age, read off the clock and told to no timer, take any value
+  above zero in code, as a manual opening does, and so does the rate's window,
+  read off the clock and told to a timer only as the time left to its reset: a
+  wait computed, not set, which tokio's timer waits at least, as it waits a
+  backoff jittered below its floor. The five `_MS` settings, each a timer's wait
+  or its bound, take a millisecond at least in code as from the variable; the
+  two waits are an `Option<Duration>`, `None` for none; and a line rounds every
+  duration up to whole milliseconds.
+- **A queue job refused by an open breaker or a spent rate** waits at least
+  the refusal's `Retry-After` before its retry, up to the queue's hour.
+
+**Refused:**
+
+- **A store, a port or a vendor binding for any of the state**: decision 2.
+- **`fallback = …` in the decorator.** A body run once has consumed the
+  arguments a fallback needs; the `Result` is the fallback.
+- **A key classifying errors** (`record_if`, `retry_if`). An answer is `Ok`, a
+  failure is `Err`.
+- **`#[retry]`, `#[timeout]`, `#[circuit_breaker]`, and a pin for the breaker,
+  the bulkhead or the rate**: one decorator per concern, and a mechanism's state
+  is every caller's. Every setting but `timeout` and `retries` is refused at a
+  method naming the variable and the field that set it.
+- **A code of its own, a `504` or a `429`.** One class; a reply names no
+  internal mechanism.
+- **An in-code stream of events.** A transition is a `warn` and a counter.
+- **A second way to count a rate** (token bucket, sliding window): the window
+  is the throttler's, one way to count, and a dependency counting a sliding
+  window is given half its quota instead.
+- **Inbound idempotency.** It is ROADMAP item 5, another capability, waiting on
+  an owner's decision.
+
+**Limits, named:**
+
+- **Each replica's own**: its breaker and a switch of it, its bulkhead and its
+  waiters, its rate's count. A limit set for the whole app is divided by the
+  replicas. Closing any of it is a store, refused by decision 2.
+- **A fixed window lets up to twice the limit through** within one window's
+  length around a reset. Closing it is a second way to count, refused above.
+- **The rate counts attempts, not requests**: a redirect the app's reqwest
+  client follows goes out inside the attempt that met it, ten at most on
+  reqwest's default policy, and a second request in a decorated body or a `run`
+  closure inside that body's one attempt, so a dependency counting every request
+  can be sent more than `RATE_LIMIT` in a window. A client built with
+  `redirect::Policy::none()` answers a redirect as it came; closing it for a
+  redirect is the middleware following redirects itself on a client following
+  none, overriding the policy the app chose. A body sends each request from a
+  decorated method or a `run` closure of its own; nothing else closes it, the
+  policy seeing none of the requests a body sends.
+- **A wait for the window's reset holds its slot of the bulkhead**, as the
+  owner's decision of 2026-11-21 asks. Closing it is the owner's: a wait giving
+  its slot up and queuing again after the reset.
+- **The rate read before a slot's wait is advisory**: a window others spend
+  after it still costs the call its wait. Closing it is counting the attempt
+  before the wait, which counts attempts never sent.
+- **An age costs memory**: a slot holds its outcome's instant beside its byte,
+  24 bytes on 64-bit Linux, about 240 KB at the window's ceiling. Closing it is
+  a narrower instant per slot, which no measurement has asked for.
+- **The boot's check of an age under a rate** counts each attempt at the
+  timeout's ceiling and each timeout as firing on time: a policy whose attempts
+  all end sooner can still be built with a breaker that never opens, and a
+  runtime stalled past a timeout can let more failures answer within the age
+  than it counts. Closing the first needs the policy to know at boot what its
+  methods pin; the second, a margin that refuses configurations that work.
+- **A transition's line is filed under the breaker's lock**: a subscriber or a
+  meter reading or switching that breaker from inside the line waits for good;
+  none of the framework's does. Closing it is filing lines after the lock in an
+  order the epoch keeps.
+- **The middleware's resend is held `Send` by its trait**, reqwest-middleware's
+  boxed `Send` future, and its answer, reqwest's `Response`, is `Sync`: no test
+  can give it one that is not. Closing it waits on a middleware answering
+  another type.
+- **The family's two bounds differ** by the class above. Closing it is a tier in
+  `nest-rs-events` and `nest-rs-queue`, refused for a hypothetical user.
+- **A tick's error borrowing its host is refused in rustc's words** at
+  `#[scheduled]`: `E0716` for an `async` tick, naming the return type of the
+  run's async block, and `E0515` for one that is not, naming no type. No
+  `#[diagnostic]` reaches a lifetime error on stable. Closing it waits on rustc.
+- **A subscription's stream item, a resource's answer and an entity's answer
+  cannot name the method's lifetime**, as before this change: async-graphql's
+  derive reads a stream's item outside the method, the mime probe a resource's
+  answer, and an entity's claim its answer's `type_name`. Closing it is upstream
+  for the first, and the probe and the claim moved inside the method's generics
+  for the other two.
+- **A stream's items run outside the policy**: on an `#[sse]` route or a
+  `#[subscription]`, it runs the call opening the stream. A stream calling the
+  dependency per item calls a decorated method for each; nothing else closes it,
+  an item being no call.
+- **A WebSocket connection hook answers `()`** and carries no `#[resilient]`:
+  it calls a decorated method and handles its error. Closing it is a hook
+  answering a `Result`, which `#[messages]` does not take.

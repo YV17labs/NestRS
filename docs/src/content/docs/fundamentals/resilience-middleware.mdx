@@ -1,0 +1,80 @@
+---
+title: Resilience middleware
+description: "Run every request your own reqwest client sends under a resilience policy: sent again when idempotent, counted in its breaker and its rate limit."
+sidebar:
+  order: 11.9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`ResilienceMiddleware` runs every request your own reqwest client sends under a
+[resilience policy](/fundamentals/resilience/). That client is the one you build
+for [calling another service](/fundamentals/calling-another-service/), and a
+method calling through it takes no `#[resilient]` of its own.
+
+```rust title="crates/features/src/posts/client.rs"
+use std::sync::Arc;
+
+use nest_rs::reqwest::ReqwestMiddleware;
+use nest_rs::resilience::{ResilienceMiddleware, ResiliencePolicy};
+
+use crate::posts::upstream::Upstream;
+
+pub fn upstream_client(
+    policy: Arc<ResiliencePolicy<Upstream>>,
+) -> reqwest_middleware::ClientWithMiddleware {
+    reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+        .with(ResilienceMiddleware::new(policy))
+        .with(ReqwestMiddleware::new())
+        .build()
+}
+```
+
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features resilience,reqwest
+cargo add reqwest@0.13 reqwest-middleware@0.5
+```
+
+The second line is there because the client is yours, as [calling another
+service](/fundamentals/calling-another-service/#install) says.
+
+## What it sends again
+
+It sends again only a request its method declares idempotent (`GET`, `HEAD`,
+`PUT`, `DELETE`, `OPTIONS`, `TRACE`, `QUERY`) or one carrying an
+`Idempotency-Key`, and only when its body can be sent twice.
+
+A transport failure, a timeout, and a `408`, `429`, `500`, `502`, `503` or `504`
+are attempted again and count in the breaker. Any other answer is the
+dependency's. A `429`'s or a `503`'s `Retry-After` is waited whole, whether in
+seconds or an HTTP-date counted from the answer's own `Date`, so no clock skew
+enters. One past `BACKOFF_CEILING_MS` ends the run with that answer. The last
+answer comes back as it came; a refusal is a
+`reqwest_middleware::Error::Middleware`.
+
+Each request it hands on is one attempt of the policy, and the rate limit counts
+it once. A redirect the client follows is sent inside it ([what an attempt
+is](/fundamentals/bulkhead-and-rate-limit/#what-an-attempt-is)).
+
+<Aside type="caution">
+The resilience middleware goes before `ReqwestMiddleware`: each attempt is then
+a client span of its own, numbered by `http.request.resend_count`. Added after
+it, it refuses every request, unsent, with an error saying so.
+</Aside>
+
+## Test it
+
+`nest_rs::testing::HttpsPeer` stands in for the upstream: an HTTPS peer on
+loopback presenting a `TestAuthority` certificate. It answers each request from
+a script, `PeerAnswer::status(503).header("retry-after", "1")` then
+`PeerAnswer::status(200)`, and keeps every request's head. A test then asserts
+what was sent again and what each attempt carried.
+
+## Going further
+
+- [Resilience](/fundamentals/resilience/) — the policy and the settings the
+  middleware runs every request under.
+- [Calling another service](/fundamentals/calling-another-service/) — the trace
+  and the client span every request of your client carries.

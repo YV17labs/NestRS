@@ -15,7 +15,9 @@ mod resilient;
 /// `ResilienceModule<I>`. The method answers `Result<T, ResilienceError<E>>` —
 /// read by its type, so an alias reads as the literal does — and its body is
 /// written as if it answered `Result<T, E>`: `?`, `Ok(..)`, `Err(e)` and an
-/// early `return` answer one attempt.
+/// early `return` answer one attempt, each answer coerced as the undecorated
+/// method's would be — a `&String` into the `&str` it returns, a box into its
+/// `Box<dyn …>` — and each `?` converting its error into `E`.
 ///
 /// - `idempotent` — the call is sent again after a failure or a timeout, up to
 ///   its retries. Only the developer declares it: sending again a call that is
@@ -33,17 +35,21 @@ mod resilient;
 ///
 /// Every other setting is the policy's, shared by every caller of the
 /// dependency — the backoff's, the circuit breaker's, the bulkhead's and the
-/// rate limit's — so a method pins none: a key naming one is refused with the
-/// variable and the `ResilienceConfig` field that set it.
+/// rate limit's — so a method pins none: a key naming one, before the field
+/// or after it, is refused with the variable and the `ResilienceConfig` field
+/// that set it.
 ///
 /// Everything else on the method stays as written: its visibility, generics,
 /// lifetimes, docs, `#[cfg]`s and other attributes, and its body's tokens and
 /// spans. It takes `&self` or `self: &Arc<Self>`, on any host — a provider, a
 /// struct built by hand, a native `async fn` in a trait impl, a handler of
-/// every impl half but `#[scheduled]`'s, whose tick answers
-/// `anyhow::Result<()>` and so calls a decorated method. A method under
-/// `#[async_trait]` is a `fn` by the time this attribute reads it, and is
-/// refused saying so.
+/// every impl half, a scheduled tick included. On an `#[sse]` route or a
+/// `#[subscription]`, the policy runs the call opening the stream, never the
+/// items it yields later. A WebSocket connection hook answers `()`, so it
+/// carries none and calls a decorated method instead; a GraphQL field writes
+/// its `Result<T, ResilienceError<E>>` out, since `#[operations]` reads a
+/// field's `Result` by its spelling. A method under `#[async_trait]` is a `fn`
+/// by the time this attribute reads it, and is refused saying so.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry, a full
 /// bulkhead or a reached rate limit files carry its `host` and `method`.

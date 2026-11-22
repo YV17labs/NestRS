@@ -1,17 +1,15 @@
 ---
 title: Resilience
-description: "Run each call to a dependency you do not control under a named policy: a timeout per attempt, retries when idempotent, a circuit breaker, a bulkhead."
+description: "Run each call to a dependency you do not control under a named policy: a timeout per attempt, retries when idempotent, a breaker, a bulkhead, a rate limit."
 sidebar:
   order: 11.6
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 A slow upstream holds every request that calls it, and a down one is hammered by
 every retry. Decorate the method making the call: its body runs under a
 resilience policy that bounds each attempt, sends an idempotent call again, and
-stops calling the dependency while it fails, so your client is answered `503`
-with a `Retry-After` instead of a hung request.
+stops calling the dependency while it fails or past the rate it allows. Your
+client is then answered `503` with a `Retry-After` instead of a hung request.
 
 ```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
@@ -82,33 +80,36 @@ charge a card twice.
 
 The field is the method's own `#[inject]`, so a boot whose modules do not import
 `ResilienceModule<Upstream>` is refused, naming the import. The method answers
-`Result<T, ResilienceError<E>>`, an alias included, and its body is written as if
-it answered `Result<T, E>`: a `?` on your error, `Ok(..)`, `Err(e)` and an early
-`return` end one attempt. Everything else on the method stays as written, on any
-host: a provider, a struct you build, a trait impl, a route, a field, a message, a
-tool, a queue job, a scheduled tick, a listener, a health indicator or a
-lifecycle hook.
+`Result<T, ResilienceError<E>>`, an alias included. Its body is written as the
+undecorated method's, as if it answered `Result<T, E>`. A `?` converting your
+error, `Ok(..)`, `Err(e)` and an early `return` each end one attempt, run once
+or again alike. Each answer is coerced as that method would coerce it — a
+`&String` into the `&str` it returns, a box into its `Box<dyn …>`.
+
+It goes on a provider, a struct you build, a trait impl, a route, a socket
+message, a queue job, a scheduled tick, a listener, a health indicator or a
+lifecycle hook. It also goes on a GraphQL query, mutation, field resolver or
+entity, and on an MCP tool, prompt, resource or listing. Everything else on the
+method stays as written. On an `#[sse]` route or a `#[subscription]`, it runs
+the call that opens the stream, never the items the stream yields later. A
+stream calling the dependency for each item calls a decorated method for it.
 
 A method pins its own `timeout`, and an idempotent one its own `retries`, in
-place of the policy's — `#[resilient(upstream, idempotent, timeout = "2s",
-retries = 3)]` — and the unit's deadline still ends every attempt. The breaker
-and the bulkhead take no pin: their state is the dependency's, shared by every
-method calling it. An idempotent body reads its arguments again at every
-attempt, so it binds none `mut` and takes no `&mut`, both refused at compile
-time, and clones what an attempt consumes: a consumed argument is rustc's
-`E0507`, whose help writes the clone.
-
-**Every `Err` counts as the dependency failing**, for the retry and for the
-breaker. An answer the dependency gave — a declined card, a parcel it does not
-know — belongs in the call's `Ok`: return `Ok(Err(declined))`, and it is neither
-attempted again nor counted. An error whose chain carries a `Problem` with a
-`Retry-After` — an upstream's `429` passed on — holds its retry back that long.
-A fallback is the `Result` you get back: `.or_else(|_| cached())`.
+place of the policy's:
+`#[resilient(upstream, idempotent, timeout = "2s", retries = 3)]`. The unit's
+deadline still ends every attempt. Every other setting is the policy's — the
+backoff's, the breaker's, the bulkhead's, the rate limit's — shared by every
+method calling the dependency. A key naming one, before the field or after it,
+is refused with the variable and the `ResilienceConfig` field that set it. An
+idempotent body reads its arguments again at every attempt, so it binds none
+`mut` and takes no `&mut`, both refused at compile time. It clones what an
+attempt consumes: a consumed argument is rustc's `E0507`, whose help writes the
+clone.
 
 **No attempt outlives its unit.** Each attempt ends at its timeout or at the
-deadline of the unit it runs in — the request timeout on HTTP, a message's on a
-socket, a job's on the queue — whichever comes first, and no retry starts whose
-wait would end past that deadline. An attempt the deadline ended counts as a
+deadline of the unit it runs in, whichever comes first. That deadline is the
+request timeout on HTTP, a message's on a socket, a job's on the queue. No retry
+starts whose wait would end past it. An attempt the deadline ended counts as a
 timeout, in the breaker too.
 
 A call that is part of a method, or that needs its attempt's
@@ -116,6 +117,47 @@ A call that is part of a method, or that needs its attempt's
 `self.upstream.run_idempotent(|cancel| async move { … }).await`. The token is
 cancelled when the policy gives the attempt up, and reaches work the call handed
 to another task, which dropping the attempt's future does not.
+
+## What counts as a failure
+
+**Every `Err` counts as the dependency failing**, for the retry and for the
+breaker. An answer the dependency gave is the call's `Ok` — `Ok(None)` for a
+page it does not have, `Ok(Err(declined))` for a card it declined — neither
+attempted again nor counted as a failure. Written so, `preview` answers `None`
+for a page the upstream does not have:
+
+```rust title="crates/features/src/posts/service.rs"
+#[resilient(upstream, idempotent)]
+pub async fn preview(&self, url: &str) -> Result<Option<String>, ResilienceError<UpstreamError>> {
+    let page = reqwest::get(url).await.map_err(UpstreamError)?;
+    if page.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let page = page.error_for_status().map_err(UpstreamError)?;
+    page.text().await.map(Some).map_err(UpstreamError)
+}
+```
+
+A `404` is the upstream's answer; a `503` is `error_for_status`'s `Err`,
+attempted again and counted as a failure. An error whose chain carries a
+`Problem` with a `Retry-After` — an upstream's `429` passed on — holds its retry
+back at least that long. One asking past `BACKOFF_CEILING_MS` ends the run.
+
+**The `Result` is the fallback.** The decorator takes no `fallback` key: a body
+run once has consumed the arguments a fallback would need. The code calling the
+method chooses what stands in for what. `link_card` answers what `preview` does,
+but the bare link while the policy refuses the call: its breaker open, its rate
+spent, its bulkhead full, its attempt out of time. It answers the upstream's own
+failure as the service's error:
+
+```rust title="crates/features/src/posts/service.rs"
+pub async fn link_card(&self, url: &str) -> Result<Option<String>, UpstreamError> {
+    self.preview(url).await.or_else(|error| match error {
+        ResilienceError::Failed(failed) => Err(failed),
+        _refused => Ok(Some(url.to_owned())),
+    })
+}
+```
 
 ## What the client is told
 
@@ -126,7 +168,8 @@ A refusal of the policy is a `ResilienceError` every edge answers `503`,
 |---|---|---|
 | `TimedOut` | the last attempt ended at its timeout or at the unit's deadline | none |
 | `Open` | the breaker is open; the call was not sent | the time until it lets a call through, rounded up |
-| `Full` | every slot of the bulkhead stayed taken for as long as the call waits | none |
+| `Full` | every slot of the bulkhead stayed taken for as long as the call waits, or as many calls as may wait were waiting; the call was not sent | none |
+| `Limited` | the rate limit's window is spent, and its reset lies past what the attempt may wait; the call was not sent | the time to the window's reset, rounded up |
 | `Failed` | the call answered its own error on its last attempt | what that error's `ToProblem` says, else a `Problem` its chain carries; opaque `500` otherwise |
 
 The call's error says what its own failure tells a client, so it implements
@@ -148,145 +191,91 @@ impl ToProblem for UpstreamError {
 
 A route, a resolver, a gateway's message or a tool then returns
 `ResilienceError<UpstreamError>` as it is. A domain error of your own wrapping
-it hands its problem on with `self.0.to_problem()`, and a queue job failing on an
-open breaker waits at least its `Retry-After` before its next attempt.
+it hands its problem on with `self.0.to_problem()`. A queue job refused by an
+open breaker or a spent rate waits at least the refusal's `Retry-After` before
+its next attempt, up to an hour.
 
 ## The circuit breaker
 
-The breaker counts the latest `BREAKER_WINDOW` attempts. Once `BREAKER_FAILURES`
-of them failed, it opens: every call is refused at once, unsent, for
-`BREAKER_OPEN_SECS`. Then one call probes the dependency while the others are
-still refused; its success closes the breaker, its failure opens it again.
+The breaker opens once `BREAKER_FAILURES` of the latest `BREAKER_WINDOW`
+attempts failed, ten of twenty by default. While it is open every call is
+refused unsent, its client answered `503` at once rather than after a timeout,
+until its probes close it. [Circuit breaker](/fundamentals/circuit-breaker/) has
+the rest: an age past which a failure no longer counts, a series of probes, the
+state read and the switch by hand.
 
-On the defaults, the tenth failure among the latest twenty attempts opens it. For
-thirty seconds each call is refused unsent, its client answered `503` at once,
-its `Retry-After` counting down from `30`, instead of after a five-second
-timeout; then one call probes, and the breaker closes or opens for thirty more.
+## The bulkhead and the rate limit
 
-Each transition is a `warn` on `nest_rs::resilience`, naming the instance and the
-state it entered. A retry is a `debug` on the same target, and so is a call a
-full bulkhead refused; from a decorated method, each names its `host` and its
-`method`. Once telemetry exports, every policy counts, by
-`nestrs.resilience.instance`:
+`CONCURRENCY` bounds how many calls run inside the policy at once, and
+`RATE_LIMIT` how many attempts it sends the dependency per window, a retry
+included. Both are off by default. A call finding no free slot waits for one up
+to `CONCURRENCY_WAIT_MS`, an attempt past the limit for the window's reset when
+`RATE_WAIT_MS` and the unit's deadline reach it. Otherwise each is refused
+`Full` or `Limited`, unsent. [Bulkhead and rate
+limit](/fundamentals/bulkhead-and-rate-limit/) has their settings, the bound on
+the calls waiting for a slot, and why a limit is your dependency's quota divided
+by your replicas.
 
-| Counter | One per |
-|---|---|
-| `nestrs.resilience.breaker.transitions` | transition, by `nestrs.resilience.breaker.state`: `open`, `half_open`, `closed` |
-| `nestrs.resilience.retries` | call sent again |
-| `nestrs.resilience.refusals` | run ending on the policy's refusal, by `nestrs.resilience.refusal`: `timed_out`, `open`, `full` |
+## Logs and counters
+
+Every line is on `nest_rs::resilience` and names the policy's `instance`. A
+retry is a `debug`, `attempt failed; retrying the call`, with its `attempt` and
+its `wait_ms`. A retry left but not made is a `debug` too:
+`no time left before the unit's deadline; not attempted again` with its
+`wait_ms`, or
+`the dependency asked a wait past the backoff's ceiling; not attempted again`
+with its `asked_ms` and `ceiling_ms`. Each names its `host` and `method` when a
+decorated method ran it, every duration in whole milliseconds rounded up. Each
+mechanism's own lines are on its page. Once telemetry exports, every policy
+counts its breaker's transitions, its retries and the refusals its runs end on:
+[the counters](/opentelemetry/metrics/#resilience-policies).
 
 ## Your reqwest client
 
 `ResilienceMiddleware` runs every request your own reqwest client sends under a
 policy, so a method calling through that client takes no `#[resilient]` of its
-own. It sends again only a request its method declares idempotent (`GET`,
-`HEAD`, `PUT`, `DELETE`, `OPTIONS`, `TRACE`, `QUERY`) or one carrying an
-`Idempotency-Key`, and only when its body can be sent twice.
-
-```rust title="crates/features/src/posts/client.rs"
-use std::sync::Arc;
-
-use nest_rs::reqwest::ReqwestMiddleware;
-use nest_rs::resilience::{ResilienceMiddleware, ResiliencePolicy};
-
-use crate::posts::upstream::Upstream;
-
-pub fn upstream_client(
-    policy: Arc<ResiliencePolicy<Upstream>>,
-) -> reqwest_middleware::ClientWithMiddleware {
-    reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
-        .with(ResilienceMiddleware::new(policy))
-        .with(ReqwestMiddleware::new())
-        .build()
-}
-```
-
-A transport failure, a timeout, and a `408`, `429`, `500`, `502`, `503` or `504`
-are attempted again and count in the breaker; any other answer is the
-dependency's. A `429`'s or a `503`'s `Retry-After` is waited whole — in seconds,
-or an HTTP-date counted from the answer's own `Date`, so no clock skew enters —
-and one past `BACKOFF_CEILING_MS` ends the run with that answer. The last answer
-comes back as it came; a refusal is a `reqwest_middleware::Error::Middleware`.
-
-<Aside type="caution">
-The resilience middleware goes before `ReqwestMiddleware`: each attempt is then
-a client span of its own, numbered by `http.request.resend_count`. Added after
-it, it refuses every request, unsent, with an error saying so.
-</Aside>
+own: [Resilience middleware](/fundamentals/resilience-middleware/).
 
 ## Test it
 
-`nest_rs::testing::HttpsPeer` stands in for the upstream: an HTTPS peer on
-loopback presenting a `TestAuthority` certificate, answering each request from a
-script — `PeerAnswer::status(503).header("retry-after", "1")`, then
-`PeerAnswer::status(200)` — and keeping every request's head, so a test asserts
-what was sent again and what each attempt carried.
-
-What your client is told while the dependency is down takes one failure, not ten:
-the test's root pins the policy to open on the first, and the next call is
-refused unsent.
-
-```rust title="crates/features/tests/integration/posts/service.rs"
-use features::posts::{PostsModule, PostsService, Upstream};
-use nest_rs::core::module;
-use nest_rs::resilience::{ResilienceConfig, ResilienceError, ResilienceModule};
-use nest_rs::testing::HeadlessApp;
-
-#[module(imports = [
-    ResilienceModule::for_root((Upstream, ResilienceConfig {
-        retries: None,
-        breaker_window: Some(1),
-        breaker_failures: 1,
-        ..ResilienceConfig::default()
-    })),
-    PostsModule,
-])]
-struct OpeningOnOneFailure;
-
-#[tokio::test]
-async fn an_open_breaker_refuses_the_call_unsent() -> anyhow::Result<()> {
-    let app = HeadlessApp::builder().module::<OpeningOnOneFailure>().build_headless().await?;
-    let posts = app.container().get::<PostsService>().expect("provided");
-    let nowhere = "https://127.0.0.1:1/";
-
-    assert!(matches!(posts.preview(nowhere).await, Err(ResilienceError::Failed(_))));
-    assert!(matches!(posts.preview(nowhere).await, Err(ResilienceError::Open { .. })));
-    Ok(())
-}
-```
+What your client is told while the dependency is down takes one failure, or
+none: [a test's root pins the policy to open on the first, or the test opens the
+breaker by hand](/fundamentals/circuit-breaker/#test-it). A scripted HTTPS peer
+[stands in for the upstream](/fundamentals/resilience-middleware/#test-it).
 
 ## Configuration
 
 Each key is read under `<PREFIX>_RESILIENCE__` for the default instance and
-`<PREFIX>_RESILIENCE__<INSTANCE>__` for a named one, or pinned through
-`ResilienceConfig`'s field of the same name.
+`<PREFIX>_RESILIENCE__<INSTANCE>__` for a named one. It is pinned through the
+`ResilienceConfig` field it names, its unit left off: `timeout` for
+`TIMEOUT_MS`. These four bound an attempt and its retries. The breaker's five
+keys are on [Circuit breaker](/fundamentals/circuit-breaker/#configuration), the
+bulkhead's and the rate limit's six on [Bulkhead and rate
+limit](/fundamentals/bulkhead-and-rate-limit/#configuration).
 
 | Key | Meaning |
 |---|---|
 | `TIMEOUT_MS` | how long one attempt waits for its answer, the unit's deadline permitting — default `5000`; from `1` to `600000` (ten minutes) |
 | `RETRIES` | how many times an idempotent call is attempted again — default `2`; from `1` to `10`, `0` for none |
 | `BACKOFF_FIRST_MS` | about how long the first retry waits; each after it waits twice the last, jittered by ±20 % — default `200`; from `1` to `300000`, at most `BACKOFF_CEILING_MS` |
-| `BACKOFF_CEILING_MS` | the longest a retry waits, and the longest `Retry-After` honoured — default `2000`; from `1` to `300000` (five minutes) |
-| `BREAKER_WINDOW` | how many of the latest attempts the breaker counts — default `20`; from `1` to `10000`, `0` for no breaker |
-| `BREAKER_FAILURES` | how many failed attempts in the window open it — default `10`; from `1` to `BREAKER_WINDOW` |
-| `BREAKER_OPEN_SECS` | how long it refuses every call before one probes — default `30`; from `1` to `3600` |
-| `CONCURRENCY` | how many calls run inside the policy at once, the bulkhead — default none; from `1` to `65536`, `0` for none |
-| `CONCURRENCY_WAIT_MS` | how long a call waits for a free slot before it is refused, the unit's deadline permitting — default `0`, refused at once; up to `60000` |
+| `BACKOFF_CEILING_MS` | the longest a retry's wait grows to, before its jitter, and the longest `Retry-After` honoured — default `2000`; from `1` to `300000` (five minutes) |
 
-A value out of its range fails the boot naming the variable, and so do two that
-cannot work together: a first wait above the ceiling, or more failures than the
-window holds.
+A value out of its range fails the boot naming the variable, and so does a first
+wait above the ceiling. A duration set in code is held to its key's ceiling. It
+takes at least a millisecond for a `_MS` key, as from the variable, and anything
+above zero for a `_SECS` key, under a second included. Where a key's `0` turns
+something off, its field's off is `None`.
 
 ## Limits
 
-- **The state lives in the process.** Each replica keeps its own breaker and
-  bulkhead: a breaker opens on the failures its own replica saw, and a
-  dependency failing for one replica is refused by that one alone.
-- **One probe at a time.** While it runs, every other call is refused, told to
-  wait one timeout.
+- **The state lives in the process.** Each replica keeps its own breaker,
+  bulkhead and rate. A breaker opens on the failures its own replica saw, so a
+  dependency failing for one replica is refused by that one alone. A switch by
+  hand moves one replica's breaker, and a rate limit counts what its own replica
+  sent.
 - **A decorated method answers the policy's error.** One answering an error of
   its own — `Result<T, PostsError>` — calls a decorated method and maps its
-  error.
+  error, as `link_card` does.
 - **An `async fn` under `#[async_trait]` is a `fn` by the time `#[resilient]`
   reads it**, and is refused: write the trait's method as a native `async fn`.
 - **A WebSocket connection hook answers `()`**, so it carries no
@@ -294,13 +283,17 @@ window holds.
   service's — and handles its `ResilienceError` itself.
 - **A GraphQL field writes its `Result` out.** `#[operations]` reads a field's
   `Result` by its spelling, so a decorated field answers
-  `Result<T, ResilienceError<E>>`, not an alias of it.
+  `Result<T, ResilienceError<E>>`. Under an alias, the whole answer is read as
+  the field's GraphQL type, which a `ResilienceError` cannot be, and it does not
+  compile.
 
 ## Going further
 
-- [Calling another service](/fundamentals/calling-another-service/) — the trace
-  and the client span every request of your reqwest client carries.
+- [Circuit breaker](/fundamentals/circuit-breaker/) — its age and probes, its
+  state read and the switch by hand.
+- [Bulkhead and rate limit](/fundamentals/bulkhead-and-rate-limit/) — the calls
+  run at once, and the attempts sent per window.
 - [Problem details](/http/problem-details/) — the `503` document a refusal
   answers on HTTP.
-- [Retries and failure](/queue/retries-and-failure/) — how a job waits the
+- [Retries and failure](/queue/retries-and-failure/) — how a job honours the
   `Retry-After` its failure carries.

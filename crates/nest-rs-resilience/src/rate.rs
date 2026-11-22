@@ -11,7 +11,7 @@ use tokio::time::Instant;
 pub(crate) struct Rate {
     limit: usize,
     window: Duration,
-    /// How long one attempt waits in all for the window's reset, `None` for
+    /// The longest one attempt waits in all for the window's reset, `None` for
     /// no wait.
     wait: Option<Duration>,
     /// The window counting, once an attempt opened one.
@@ -25,9 +25,9 @@ struct Window {
 }
 
 impl Rate {
-    /// A rate sending `limit` attempts per `window`, each attempt past it
-    /// waiting up to `wait` in all for the window's reset, or refused at once
-    /// with no wait.
+    /// A rate sending `limit` attempts per `window`, an attempt past it waiting
+    /// for the window's reset only when that comes within `wait` of its first
+    /// refusal, refused at once otherwise or with no `wait`.
     pub(crate) fn new(limit: usize, window: Duration, wait: Option<Duration>) -> Self {
         Self {
             limit,

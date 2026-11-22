@@ -68,7 +68,7 @@ what doesn't:
 | Edge cases in parsers and validators | Property-based testing with [`proptest`](https://crates.io/crates/proptest) |
 | API contract drift (OpenAPI, GraphQL SDL) | Snapshot tests on `/api-json` and `schema.graphql` |
 | A framework crate's public API | [Integration tests](/testing/integration/) in the crate's `tests/` |
-| A call to a service you depend on (your own reqwest client, a policy around it) | `HttpsPeer` — an HTTPS peer on loopback answering a script, presenting a `TestAuthority` certificate — and a policy pinned to open on one failure ([Resilience](/fundamentals/resilience/#test-it)) |
+| A call to a service you depend on (your own reqwest client, a policy around it) | `HttpsPeer` — an HTTPS peer on loopback answering a script, presenting a `TestAuthority` certificate ([Resilience middleware](/fundamentals/resilience-middleware/#test-it)) — and a policy pinned to open on one failure, or its breaker opened by hand ([Circuit breaker](/fundamentals/circuit-breaker/#test-it)) |
 
 A small CRUD feature with no calculation and no custom policy can ship
 with zero unit tests, zero integration tests, and full coverage through

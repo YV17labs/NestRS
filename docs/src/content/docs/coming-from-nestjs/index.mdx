@@ -68,7 +68,7 @@ resolver — carries across intact.
 | `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
 | `XModule.forRootAsync({ useFactory })` | none, by design: a config comes from `for_root`, the environment or a `_FILE`; a resource computed from another provider is a factory [reading `ConfigModule::resolved`](/extending/package/#a-resource-it-opens) |
 | `ServeStaticModule.forRoot({ rootPath })` | `StaticFilesModule::for_root(StaticFilesConfig { root, .. })` — or `for_root(Embedded::of::<WebAssets>())` for a folder embedded in the binary |
-| `@nestjs/resilience` | `#[resilient(field)]` on the method making the call, `idempotent` where it may be sent again, under a [resilience policy](/fundamentals/resilience/) per dependency (`ResiliencePolicy<I>`, which `ResilienceModule<I>` builds); `ResilienceMiddleware` on your reqwest client |
+| `@nestjs/resilience` | `#[resilient(field)]` on the method making the call, `idempotent` where it may be sent again, under a [resilience policy](/fundamentals/resilience/) per dependency (`ResiliencePolicy<I>`, which `ResilienceModule<I>` builds): a timeout per attempt, retries, a circuit breaker read and switched by hand, a bulkhead and an outbound rate limit; [`ResilienceMiddleware`](/fundamentals/resilience-middleware/) on your reqwest client |
 | `Test.createTestingModule(...)` | `TestApp` booting the real `ApiModule` |
 | `NestFactory.createApplicationContext(...)`, then `app.close()` | `App::builder()…build()`, `init()`, then `close()` ([running without serving](/fundamentals/app-state/#running-without-serving)) |
 | `nest g resource users` | `nestrs g resource users` |

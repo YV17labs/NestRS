@@ -253,6 +253,15 @@ processors, MCP tools) are transport-specific and live in their own categories:
   work runs under, readable anywhere.
 - [Calling another service](/fundamentals/calling-another-service/) — the
   trace carried onto your own reqwest client, each request a client span.
+- [Resilience](/fundamentals/resilience/) — a named policy around each call to
+  a dependency: a timeout per attempt, retries when idempotent, a `503` when it
+  refuses.
+- [Circuit breaker](/fundamentals/circuit-breaker/) — when a policy stops
+  calling a failing dependency, its probes, and the switch by hand.
+- [Bulkhead and rate limit](/fundamentals/bulkhead-and-rate-limit/) — the calls
+  a policy runs at once, and the attempts it sends per window.
+- [Resilience middleware](/fundamentals/resilience-middleware/) — a policy on
+  every request your own reqwest client sends.
 
 ## Going further
 

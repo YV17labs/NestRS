@@ -133,13 +133,16 @@ one:
 
 | Instrument | One per |
 |---|---|
-| `nestrs.resilience.breaker.transitions` (`{transition}`) | change of its breaker's state, by `nestrs.resilience.breaker.state`: `open`, `half_open`, `closed` |
+| `nestrs.resilience.breaker.transitions` (`{transition}`) | transition of its breaker, by `nestrs.resilience.breaker.state`, the state entered: `open`, `half_open`, `closed`; a switch by hand, counted even into the state it found, also carries `nestrs.resilience.breaker.manual`, `true` |
 | `nestrs.resilience.retries` (`{retry}`) | call it sent again |
-| `nestrs.resilience.refusals` (`{refusal}`) | run it ended on its own refusal, by `nestrs.resilience.refusal`: `timed_out`, `open`, `full` |
+| `nestrs.resilience.refusals` (`{refusal}`) | run it ended on its own refusal, by `nestrs.resilience.refusal`: `timed_out`, `open`, `full`, `limited` |
 
-An alert on a transition to `open` is an alert on a dependency failing, and a
-climbing `refusals` is its clients being answered `503`. No convention names a
-circuit breaker or a retry policy, so the names and their attributes are
+A transition to `open` marked `nestrs.resilience.breaker.manual` is an
+operator's switch. Unmarked, it is failures opening the breaker, a probe failing,
+or a series' first probe its caller dropped once sent, before it answered, the
+next call then probing. A climbing `refusals` is its clients being answered
+`503`, and its `limited` the rate a dependency allows reached. No convention
+names a circuit breaker or a retry policy, so the names and their attributes are
 NestRS's own, and API: they change only in a major.
 
 ## A first counter

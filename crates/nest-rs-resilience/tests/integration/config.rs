@@ -49,7 +49,7 @@ fn literal(written: &str) -> syn::Expr {
 fn a_timeout_pin_is_held_to_the_range_of_the_configs_timeout() {
     let bounds = ResilienceConfig::TIMEOUT.bounds();
     let Floor::Units(floor) = bounds.least() else {
-        panic!("the timeout's floor is a count of milliseconds");
+        panic!("the timeout's floor is a count of milliseconds, in code as from its variable");
     };
     let ceiling = bounds.most().count;
     for millis in [

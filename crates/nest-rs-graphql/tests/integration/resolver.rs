@@ -451,6 +451,89 @@ async fn another_decorator_on_an_operation_stays_on_the_developers_method() {
     }
 }
 
+/// A lint level written on an operation describes the developer's method, where
+/// an expectation is checked: the field wrapper beside it trips neither lint
+/// below, so an expectation carried there would go unfulfilled — rustc's under
+/// this level, clippy's under the workspace's `-D warnings`.
+#[deny(unfulfilled_lint_expectations)]
+mod expected {
+    use nest_rs_core::module;
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_testing::TestApp;
+
+    /// The dock the crates are unloaded at.
+    struct Dock(String);
+
+    impl Default for Dock {
+        fn default() -> Self {
+            Self("dock 4".to_owned())
+        }
+    }
+
+    #[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+    #[graphql(complex)]
+    struct Crate {
+        number: i32,
+    }
+
+    #[resolver]
+    #[derive(Default)]
+    struct ExpectedResolver {
+        dock: Dock,
+    }
+
+    #[operations]
+    impl ExpectedResolver {
+        #[query]
+        #[public]
+        #[expect(unused_variables, reason = "the depot narrows the count next release")]
+        async fn crate_count(&self, depot: String) -> i32 {
+            3
+        }
+
+        #[query]
+        #[public]
+        #[expect(
+            clippy::needless_lifetimes,
+            reason = "the dock is named as it is borrowed"
+        )]
+        async fn dock<'a>(&'a self) -> &'a str {
+            &self.dock.0
+        }
+
+        #[query]
+        #[public]
+        async fn unloaded(&self) -> Crate {
+            Crate { number: 7 }
+        }
+
+        #[field_resolver]
+        #[expect(unused_variables, reason = "the unit converts the weight next release")]
+        async fn weight(&self, parent: &Crate, unit: String) -> i32 {
+            parent.number * 2
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [ExpectedResolver])]
+    struct ExpectedModule;
+
+    #[tokio::test]
+    async fn an_expectation_on_an_operation_is_checked_on_the_developers_method() {
+        let app = TestApp::for_module::<ExpectedModule>()
+            .await
+            .expect("the schema boots");
+
+        let body = crate::graphql_answer(
+            &app,
+            r#"{ crateCount(depot: "Lyon") dock unloaded { weight(unit: "kg") } }"#,
+        )
+        .await;
+        assert_eq!(body["data"]["crateCount"], 3, "{body}");
+        assert_eq!(body["data"]["dock"], "dock 4", "{body}");
+        assert_eq!(body["data"]["unloaded"]["weight"], 14, "{body}");
+    }
+}
+
 // async-graphql's camel case reads `a1_b` and `a_1b` as one field; the compile-time
 // refusal is `nest-rs-macro-hygiene`'s `operations_two_methods_one_served_name`.
 

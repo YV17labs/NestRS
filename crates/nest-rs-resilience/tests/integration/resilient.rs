@@ -1,11 +1,12 @@
 //! Covers `src/resilient.rs`, what `#[resilient]` expands to: a method's body
 //! sent once or again as its attribute declares, written out or by a macro,
 //! its answer borrowed through the lifetime its receiver names, its arguments
-//! read again at each attempt, `?` and `return` answering one attempt, the
-//! `timeout` and `retries` a method pins, the lines naming it, each receiver
-//! and host it takes, a refusal answered `503` by every edge serving a
-//! decorated handler, and a method of every impl half that takes one, called
-//! through the framework's own path, attempted again within that one call.
+//! read again at each attempt, `?` and `return` answering one attempt, each
+//! answer coerced as the undecorated method's is, the `timeout` and `retries`
+//! a method pins, the lines naming it, each receiver and host it takes, a
+//! refusal answered `503` by every edge serving a decorated handler, and a
+//! method of every impl half that takes one, called through the framework's
+//! own path, attempted again within that one call.
 
 use std::cell::Cell;
 use std::future::Future;
@@ -186,6 +187,48 @@ impl ParcelsService {
             return Err(CarrierDown);
         }
         Ok(self.hub.0.as_str())
+    }
+
+    /// The hub a parcel leaves from, its `String` answered as the `&str` the
+    /// method says.
+    #[resilient(courier)]
+    async fn departure<'a>(&'a self) -> Answer<&'a str> {
+        Ok(&self.hub.0)
+    }
+
+    /// The hub a parcel comes back to, answered as `departure` is, after a
+    /// first attempt failing.
+    #[resilient(courier, idempotent)]
+    async fn arrival<'a>(&'a self) -> Answer<&'a str> {
+        if self.fails(1) {
+            return Err(CarrierDown);
+        }
+        Ok(&self.hub.0)
+    }
+
+    /// The parcels leaving with `parcel`, each box the method answers made at
+    /// an early `return` or at the tail, a lookup's error converted by `?`.
+    #[resilient(courier)]
+    async fn manifest(&self, parcel: &str) -> Answer<Feed> {
+        if parcel.is_empty() {
+            return Ok(Box::new(std::iter::empty()));
+        }
+        let depot = depot(parcel)?;
+        Ok(Box::new([depot, "Paris"].into_iter()))
+    }
+
+    /// The parcels coming back with `parcel`, answered as `manifest` is, after
+    /// a first attempt failing.
+    #[resilient(courier, idempotent)]
+    async fn returns(&self, parcel: &str) -> Answer<Feed> {
+        if self.fails(1) {
+            return Err(CarrierDown);
+        }
+        if parcel.is_empty() {
+            return Ok(Box::new(std::iter::empty()));
+        }
+        let depot = depot(parcel)?;
+        Ok(Box::new([depot].into_iter()))
     }
 }
 
@@ -429,6 +472,38 @@ async fn a_question_mark_and_an_early_return_answer_the_attempt_as_written() {
     );
 }
 
+/// The body is checked against the answer the method's own return type names,
+/// so `Ok(&self.hub.0)` is a `&str` and `Ok(Box::new(…))` a `Box<dyn …>`, at
+/// the tail and at an early `return`, run once and again, and `?` converts as
+/// before.
+#[tokio::test(start_paused = true)]
+async fn an_attempt_makes_every_coercion_the_undecorated_method_makes() {
+    let app = boot::<RetryingOnceModule>().await;
+    let parcels = parcels(&app);
+    let listed = |fed: Answer<Feed>| fed.map(Iterator::collect::<Vec<_>>);
+
+    assert!(matches!(parcels.departure().await, Ok("the Lyon hub")));
+    assert!(matches!(parcels.arrival().await, Ok("the Lyon hub")));
+    assert_eq!(parcels.attempted(), 2, "a failed attempt and its retry");
+
+    assert_eq!(listed(parcels.manifest("").await).ok(), Some(vec![]));
+    assert_eq!(
+        listed(parcels.manifest("P1").await).ok(),
+        Some(vec!["Lyon", "Paris"])
+    );
+    assert!(
+        matches!(
+            parcels.manifest("P9").await,
+            Err(ResilienceError::Failed(CarrierDown))
+        ),
+        "`?` converted the lookup's error into the call's"
+    );
+
+    assert_eq!(listed(parcels.returns("").await).ok(), Some(vec![]));
+    assert_eq!(parcels.attempted(), 2, "a failed attempt and its retry");
+    assert_eq!(listed(parcels.returns("P1").await).ok(), Some(vec!["Lyon"]));
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_pinned_timeout_ends_an_attempt_the_policys_would_not() {
     let app = boot::<QuietModule>().await;
@@ -670,7 +745,7 @@ async fn a_decorated_call_runs_on_a_task_of_its_own() {
 #[module(
     imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
         concurrency: Some(1),
-        concurrency_wait: Duration::from_secs(10),
+        concurrency_wait: Some(Duration::from_secs(10)),
         concurrency_waiters: Some(4),
         rate_limit: Some(100),
         ..retrying_once()
@@ -940,7 +1015,7 @@ impl Attempts {
 }
 
 /// A decorated handler and `#[sse]` route of a `#[routes]` block, failing, then
-/// refused.
+/// refused, and an `#[sse]` route attempted again.
 mod routes {
     use std::sync::Arc;
 
@@ -951,7 +1026,7 @@ mod routes {
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
     use nest_rs_testing::TestApp;
 
-    use super::{Attempts, UpstreamDown, opening_on_the_first_failure};
+    use super::{Attempts, UpstreamDown, opening_on_the_first_failure, retrying_once};
 
     #[controller(path = "/decorated")]
     struct DecoratedController {
@@ -1035,10 +1110,57 @@ mod routes {
             "sent once, and the opening the breaker refused never"
         );
     }
+
+    #[controller(path = "/retried")]
+    struct RetriedController {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    #[routes]
+    impl RetriedController {
+        /// A stream whose opening calls the upstream, again after a failure.
+        #[sse("/feed")]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn feed(&self) -> Result<SseStream, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(SseStream::new(stream::iter([SseEvent::message("moved")])))
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root(retrying_once())],
+        providers = [RetriedController, Attempts],
+    )]
+    struct RetriedHttpModule;
+
+    #[tokio::test(start_paused = true)]
+    async fn an_sse_route_failing_once_answers_on_its_retry() {
+        let app = TestApp::for_module::<RetriedHttpModule>()
+            .await
+            .expect("a retried stream boots");
+
+        let answered = app.http().get("/retried/feed").send().await;
+        answered.assert_status_is_ok();
+        let body = answered
+            .0
+            .into_body()
+            .into_string()
+            .await
+            .expect("the stream is text");
+        assert!(body.contains("data: moved"), "the stream opens: {body:?}");
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+    }
 }
 
 /// A decorated root field and subscription of an `#[operations]` block, and its
-/// mutation, field resolver and entity attempted again.
+/// mutation, field resolver, entity and subscription attempted again.
 mod operations {
     use std::sync::Arc;
 
@@ -1211,6 +1333,17 @@ mod operations {
                 number: number.clone(),
             })
         }
+
+        /// The parcels arriving, the box unsized where the method answers it.
+        #[subscription]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn arrivals(&self) -> Result<BoxStream<'static, i32>, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok(Box::pin(stream::iter([7])))
+        }
     }
 
     #[module(
@@ -1273,6 +1406,24 @@ mod operations {
         .await;
         assert_eq!(answer["data"]["_entities"][0]["number"], "P7", "{answer}");
         assert_eq!(attempts, 2, "the failed attempt and its retry");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_subscription_failing_once_answers_on_its_retry() {
+        let app = TestApp::for_module::<RetriedGraphqlModule>()
+            .await
+            .expect("a resolver decorating every role boots");
+        let mut socket = app.graphql_socket().open();
+        socket.connect().await;
+
+        socket.subscribe("retried", "subscription { arrivals }");
+        let item = socket
+            .next_item("retried")
+            .await
+            .expect("the opening answers");
+        assert_eq!(item["data"]["arrivals"], 7, "{item}");
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
     }
 }
 

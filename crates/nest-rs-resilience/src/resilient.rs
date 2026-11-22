@@ -1,6 +1,7 @@
 //! What `#[resilient]` expands to: the decorated method a run comes from, the
-//! probes reading the field it names and what it answers, the two runs its body
-//! goes through, and the stand-in a refused method's body is checked against.
+//! probes reading the field it names and what it answers, the type its body is
+//! checked as, the two runs that body goes through, and the stand-in a refused
+//! method's body is checked against.
 
 use std::error::Error;
 use std::future::Future;
@@ -142,6 +143,13 @@ pub trait ChainedError: Error + 'static {}
 
 #[diagnostic::do_not_recommend]
 impl<E: Error + 'static> ChainedError for E {}
+
+/// What a `#[resilient]` method's body answers, as a value nothing builds: the
+/// body returns it first, under `if false`, so its own answers are checked
+/// against that type.
+pub fn attempt<R: ResilientAnswer>() -> R::Attempt {
+    unreachable!("a `#[resilient]` body returns its attempt's type under `if false` alone")
+}
 
 /// `call` run once under `policy`, as `method`'s body.
 pub async fn run<R, I, C, F>(policy: &ResiliencePolicy<I>, method: ResilientMethod, call: C) -> R

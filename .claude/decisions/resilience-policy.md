@@ -161,11 +161,15 @@ no method is — a call needing its `CancellationToken`, or part of a method.
   attempt borrows the arguments again.
 - **One misuse, one error.** Every helper the expansion calls is bounded on the
   answer at the return type's span, which rustc reports once per span: the
-  answer probe (`ResilientAnswer`) sits on `run` and `run_idempotent` themselves
-  and `ChainedError`
-  words an idempotent method's `E: Error` in the framework's sentence. The field
-  probe (`PolicyField`) is spanned at the field's name, the replayed closure at
-  `idempotent`, so `E0507` points at the declaration of the replay. A refused
+  answer probe (`ResilientAnswer`) sits on `run` and `run_idempotent`
+  themselves; their bound types the async block's output only once its body is
+  typed, which lets `?` and `return` infer but makes no coercion, so the body
+  first returns the attempt's type under `if false` (`attempt`), never taken,
+  and each answer it writes is checked against that type, coerced as the
+  undecorated method's is; and `ChainedError` words an idempotent method's
+  `E: Error` in the framework's sentence. The field probe (`PolicyField`) is
+  spanned at the field's name, the replayed closure at `idempotent`, so
+  `E0507` points at the declaration of the replay. A refused
   method is kept in the nearest form its body compiles in — run once, or typed
   against a stand-in (`refused`) that nothing runs where the receiver or the
   field is what was refused — so its body adds no error of its own.

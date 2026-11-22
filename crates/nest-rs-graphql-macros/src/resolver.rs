@@ -1542,9 +1542,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
         }
 
-        // The developer's method keeps its docs, its lint levels, its `#[cfg]`s and
-        // every attribute the field does not carry: another decorator
-        // (`#[resilient]`) describes the method its body is, never the field.
+        // The developer's method keeps its docs, its `allow`s and `expect`s, its
+        // `#[cfg]`s and every attribute the field does not carry: another
+        // decorator (`#[resilient]`) describes the method its body is, never the
+        // field.
         method.attrs.retain(|a| {
             a.path().is_ident("doc")
                 || a.path().is_ident("allow")

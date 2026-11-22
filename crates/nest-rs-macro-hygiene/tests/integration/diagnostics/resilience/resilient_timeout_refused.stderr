@@ -4,7 +4,7 @@ error: #[resilient] `timeout` takes a duration literal: a whole number above zer
 29 |     #[resilient(carrier, timeout = 2000)]
    |                                    ^^^^
 
-error: #[resilient] `timeout`: must be at most 600000 milliseconds — one attempt past ten minutes outwaits every edge's deadline many times over, and a value that long is a unit slip more often than a choice (`600` meant as seconds)
+error: #[resilient] `timeout`: must be at most 600000 milliseconds — one attempt past ten minutes outlasts a worker job's default deadline, the longest the framework gives a unit; a call that long is a job's work, started and then polled, rather than one attempt
   --> tests/integration/diagnostics/resilience/resilient_timeout_refused.rs:34:36
    |
 34 |     #[resilient(carrier, timeout = "11m")]

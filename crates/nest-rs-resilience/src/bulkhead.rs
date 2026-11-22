@@ -10,7 +10,8 @@ use tokio::time::Instant;
 /// A bound on the calls running inside one policy at once.
 pub(crate) struct Bulkhead {
     slots: Semaphore,
-    wait: Duration,
+    /// How long a call finding no free slot waits for one, `None` for no wait.
+    wait: Option<Duration>,
     /// The places a call finding no free slot waits in, when their number is
     /// bounded and a call waits at all.
     waiters: Option<Waiters>,
@@ -46,12 +47,12 @@ impl Full {
 impl Bulkhead {
     /// A bulkhead of `slots`, a call finding none free waiting up to `wait`
     /// for one, and at most `waiters` calls waiting at once when they are
-    /// bounded. With a wait of none no call waits, so the bound builds nothing.
-    pub(crate) fn new(slots: usize, wait: Duration, waiters: Option<usize>) -> Self {
+    /// bounded. With no wait no call waits, so the bound builds nothing.
+    pub(crate) fn new(slots: usize, wait: Option<Duration>, waiters: Option<usize>) -> Self {
         Self {
             slots: Semaphore::new(slots),
             wait,
-            waiters: waiters.filter(|_| !wait.is_zero()).map(|most| Waiters {
+            waiters: waiters.filter(|_| wait.is_some()).map(|most| Waiters {
                 places: Semaphore::new(most),
                 most,
             }),
@@ -67,7 +68,7 @@ impl Bulkhead {
     /// A slot, held until the slot is dropped, or why none was taken: every
     /// place to wait for one taken, at once, or no slot freed within the wait
     /// — the bulkhead's own, or what is left before `deadline` when that is
-    /// sooner; at once for a wait of none.
+    /// sooner; at once with no wait, or none left before `deadline`.
     pub(crate) async fn enter(
         &self,
         deadline: Option<Instant>,
@@ -75,9 +76,11 @@ impl Bulkhead {
         if let Some(free) = self.try_enter() {
             return Ok(free);
         }
-        let wait = deadline.map_or(self.wait, |deadline| {
-            self.wait
-                .min(deadline.saturating_duration_since(Instant::now()))
+        let Some(wait) = self.wait else {
+            return Err(Full::Slots);
+        };
+        let wait = deadline.map_or(wait, |deadline| {
+            wait.min(deadline.saturating_duration_since(Instant::now()))
         });
         if wait.is_zero() {
             return Err(Full::Slots);
@@ -120,7 +123,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_full_bulkhead_with_no_wait_refuses_at_once() {
-        let bulkhead = Bulkhead::new(1, Duration::ZERO, None);
+        let bulkhead = Bulkhead::new(1, None, None);
         let held = bulkhead.enter(None).await.expect("a free slot");
         assert_eq!(bulkhead.enter(None).await.err(), Some(Full::Slots));
         drop(held);
@@ -130,7 +133,7 @@ mod tests {
     /// The wait for a slot never outlasts the unit the call runs in.
     #[tokio::test(start_paused = true)]
     async fn the_wait_for_a_slot_ends_at_the_units_deadline_when_that_is_sooner() {
-        let bulkhead = Bulkhead::new(1, Duration::from_secs(60), None);
+        let bulkhead = Bulkhead::new(1, Some(Duration::from_secs(60)), None);
         let held = bulkhead.enter(None).await.expect("a free slot");
         let started = Instant::now();
         let deadline = started + Duration::from_millis(200);
@@ -150,7 +153,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_call_waits_for_a_slot_up_to_its_wait() {
-        let bulkhead = Bulkhead::new(1, Duration::from_millis(500), None);
+        let bulkhead = Bulkhead::new(1, Some(Duration::from_millis(500)), None);
         let held = bulkhead.enter(None).await.expect("a free slot");
         let started = tokio::time::Instant::now();
         assert_eq!(
@@ -170,11 +173,11 @@ mod tests {
     }
 
     /// A bound on the waiters means nothing where no call waits, as a wait
-    /// means nothing without slots: with a wait of none it builds no place.
+    /// means nothing without slots: with no wait it builds no place.
     #[test]
     fn a_bound_on_the_waiters_builds_its_places_only_beside_a_wait() {
-        let wait = Duration::from_secs(1);
-        assert!(Bulkhead::new(1, Duration::ZERO, Some(4)).waiters.is_none());
+        let wait = Some(Duration::from_secs(1));
+        assert!(Bulkhead::new(1, None, Some(4)).waiters.is_none());
         assert!(Bulkhead::new(1, wait, None).waiters.is_none());
         let bounded = Bulkhead::new(1, wait, Some(4));
         assert_eq!(
@@ -187,7 +190,7 @@ mod tests {
     /// the slot taken waits in it, rather than being refused at once.
     #[tokio::test(start_paused = true)]
     async fn a_waiter_dropped_mid_wait_frees_its_place() {
-        let bulkhead = Bulkhead::new(1, Duration::from_secs(60), Some(1));
+        let bulkhead = Bulkhead::new(1, Some(Duration::from_secs(60)), Some(1));
         let held = bulkhead.enter(None).await.expect("a free slot");
         let mut dropped = Box::pin(bulkhead.enter(None));
         assert!(waits(dropped.as_mut()).await, "it took the one place");
@@ -208,7 +211,7 @@ mod tests {
     /// whole wait too, rather than being refused at once.
     #[tokio::test(start_paused = true)]
     async fn a_waiter_whose_wait_ran_out_frees_its_place() {
-        let bulkhead = Bulkhead::new(1, Duration::from_millis(500), Some(1));
+        let bulkhead = Bulkhead::new(1, Some(Duration::from_millis(500)), Some(1));
         let _held = bulkhead.enter(None).await.expect("a free slot");
         let started = Instant::now();
         for waited in [Duration::from_millis(500), Duration::from_secs(1)] {
@@ -221,7 +224,7 @@ mod tests {
     /// the slot it holds, rather than being refused at once.
     #[tokio::test(start_paused = true)]
     async fn a_waiter_that_gets_its_slot_frees_its_place() {
-        let bulkhead = Bulkhead::new(1, Duration::from_secs(60), Some(1));
+        let bulkhead = Bulkhead::new(1, Some(Duration::from_secs(60)), Some(1));
         let held = bulkhead.enter(None).await.expect("a free slot");
         let (entered, ()) = tokio::join!(bulkhead.enter(None), async {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -242,7 +245,11 @@ mod tests {
     async fn callers_racing_on_many_threads_leave_exactly_the_bound_waiting() {
         const WAITERS: usize = 4;
         const CALLERS: usize = 64;
-        let bulkhead = Arc::new(Bulkhead::new(1, Duration::from_secs(60), Some(WAITERS)));
+        let bulkhead = Arc::new(Bulkhead::new(
+            1,
+            Some(Duration::from_secs(60)),
+            Some(WAITERS),
+        ));
         let held = bulkhead.enter(None).await.expect("a free slot");
         let start = Arc::new(tokio::sync::Barrier::new(CALLERS));
         let callers: Vec<_> = (0..CALLERS)

@@ -42,6 +42,7 @@ mod counters;
 mod error;
 #[cfg(feature = "reqwest")]
 mod middleware;
+mod millis;
 mod module;
 mod policy;
 mod rate;
@@ -117,12 +118,11 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::resilient::{
-        ChainedError, PolicyField, ResilientAnswer, ResilientMethod, policy, refused,
+        ChainedError, PolicyField, ResilientAnswer, ResilientMethod, attempt, policy, refused,
         resilient_method, run, run_idempotent,
     };
 }
 
-use nest_rs_core::__private::millis;
 /// What each attempt is handed: cancelled when the policy gives the attempt up,
 /// so work the call handed to another task stops with it.
 pub use tokio_util::sync::CancellationToken;

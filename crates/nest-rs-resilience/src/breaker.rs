@@ -11,8 +11,9 @@ use std::time::Duration;
 use parking_lot::{Mutex, MutexGuard};
 use tokio::time::Instant;
 
+use crate::TARGET;
 use crate::counters::Counters;
-use crate::{TARGET, millis};
+use crate::millis::millis;
 
 /// What a call refused beside a probe past its bound is told: one tick of the
 /// timer, the probe being given up at any moment.
@@ -877,6 +878,47 @@ mod tests {
             .collect()
     }
 
+    /// An open time under a millisecond, which `breaker_open` and a manual
+    /// opening take in code above zero, is filed in whole milliseconds rounded
+    /// up, `1`, never the `0` of no open time, whether failures or a hand
+    /// opened the breaker for it.
+    #[tokio::test(start_paused = true)]
+    async fn an_open_time_under_a_millisecond_is_filed_as_one_never_as_zero() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let under = Duration::from_micros(500);
+        let breaker = Breaker::new(
+            "upstream",
+            1,
+            1,
+            under,
+            None,
+            1,
+            Arc::new(Counters::new("upstream")),
+        );
+        attempt(&breaker, true);
+        breaker.open_manually(under);
+        assert_eq!(
+            said(&lines),
+            ["open open_ms=1 failed=1 window=1", "open manual open_ms=1"]
+        );
+    }
+
+    /// An open time under a millisecond is read off the clock, never a timer:
+    /// every call before its end is refused, told what is left of it, and the
+    /// first at its end probes.
+    #[tokio::test(start_paused = true)]
+    async fn an_open_time_under_a_millisecond_refuses_until_its_end_and_probes_at_it() {
+        let breaker = breaker(1, 1);
+        let under = Duration::from_micros(500);
+        breaker.open_manually(under);
+        let tick = Duration::from_micros(1);
+        tokio::time::advance(under - tick).await;
+        assert_eq!(refused_for(&breaker), tick, "a microsecond before its end");
+        tokio::time::advance(tick).await;
+        probe(&breaker).send(BOUND).settle(false);
+        assert_eq!(breaker.read(), BreakerState::Closed);
+    }
+
     /// A breaker one failure short of opening, idle past the age, does not
     /// open on the next failure: the window forgets its old outcomes as it
     /// counts the new one, with no call arriving in between.
@@ -957,6 +999,47 @@ mod tests {
             "open",
             "the first failure is as old as the age"
         );
+    }
+
+    /// An age of no time, which the config refuses, forgets an outcome once the
+    /// clock has moved past its answer: the window counts only the outcomes
+    /// answered at one instant, as the age's floor says.
+    #[tokio::test(start_paused = true)]
+    async fn an_age_of_no_time_counts_only_the_outcomes_answered_at_one_instant() {
+        let breaker = aged(4, 2, Duration::ZERO);
+        attempt(&breaker, true);
+        tokio::time::advance(Duration::from_millis(1)).await;
+        attempt(&breaker, true);
+        assert_eq!(
+            breaker.state(),
+            "closed",
+            "the first failure was answered before the clock moved"
+        );
+        attempt(&breaker, true);
+        assert_eq!(
+            breaker.state(),
+            "open",
+            "two failures answered at one instant"
+        );
+    }
+
+    /// A breaker open for no time, which the config refuses, lets the next call
+    /// through at once as its probe, every call beside it refused, as the open
+    /// time's floor says.
+    #[tokio::test(start_paused = true)]
+    async fn a_breaker_open_for_no_time_lets_the_next_call_through_at_once_as_its_probe() {
+        let breaker = Breaker::new(
+            "upstream",
+            1,
+            1,
+            Duration::ZERO,
+            None,
+            1,
+            Arc::new(Counters::new("upstream")),
+        );
+        attempt(&breaker, true);
+        let _probe = probe(&breaker);
+        assert_eq!(refused_for(&breaker), BOUND, "beside the probe");
     }
 
     /// Outcomes with an age still leave the window by its length.

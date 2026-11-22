@@ -32,16 +32,26 @@ pub fn cfg_attrs(attrs: &[Attribute]) -> Vec<TokenStream> {
         .collect()
 }
 
-/// A decorated method's attributes as another attribute macro can read them —
-/// every `#[cfg]` inside a `#[cfg_attr]` unfolded into a plain `#[cfg]`, and
+/// A decorated method's attributes as the delegate an expansion writes beside it
+/// carries them, for another attribute macro to read — every `#[cfg]` inside a
+/// `#[cfg_attr]` unfolded into a plain `#[cfg]`, every `#[expect]`, plain or
+/// inside a `#[cfg_attr]`, an `#[allow]` of the same lints and reason, and
 /// everything else as written.
 ///
 /// async-graphql's `#[Object]` and `#[ComplexObject]` read a plain `#[cfg]`
 /// alone. `#[cfg_attr(p, cfg(x))]` unfolds to `cfg(any(not(p), x))`, not
-/// `cfg(all(p, x))`.
+/// `cfg(all(p, x))`. The delegate trips some of the lints the method expects and
+/// not others, so an `#[expect]` is checked on the method alone.
 pub fn delegated_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
     let mut delegated = Vec::with_capacity(attrs.len());
     for attr in attrs {
+        if attr.path().is_ident("expect")
+            && let syn::Meta::List(list) = &attr.meta
+        {
+            let lints = &list.tokens;
+            delegated.push(syn::parse_quote!(#[allow(#lints)]));
+            continue;
+        }
         let unfolded = attr
             .path()
             .is_ident("cfg_attr")
@@ -103,6 +113,12 @@ fn unfold_cfg_attr(
                 if !unfold_cfg_attr(&predicates, group.stream(), into) {
                     return false;
                 }
+            }
+            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), None)
+                if name == "expect" && group.delimiter() == Delimiter::Parenthesis =>
+            {
+                let lints = group.stream();
+                into.push(quote!(#[cfg_attr(#conjunction, allow(#lints))]));
             }
             _ => into.push(quote!(#[cfg_attr(#conjunction, #entry)])),
         }
@@ -390,6 +406,36 @@ mod tests {
                 quote!(#[cfg(any(not(all(test)), unix))]).to_string(),
                 quote!(#[cfg_attr(all(test), must_use)]).to_string(),
                 quote!(#[cfg(any(not(all(a, b)), c))]).to_string(),
+            ]
+        );
+    }
+
+    /// An expectation is checked on the developer's method alone: its delegate
+    /// allows the same lints for the same reason, plain or under a condition,
+    /// and keeps every other lint level as written.
+    #[test]
+    fn an_expectation_reaches_a_delegate_as_an_allowance() {
+        let method: syn::ImplItemFn = parse_quote! {
+            #[expect(unused_variables, reason = "read next release")]
+            #[cfg_attr(test, expect(clippy::too_many_arguments))]
+            #[cfg_attr(a, cfg_attr(b, expect(dead_code), cfg(c)))]
+            #[allow(unused_mut)]
+            #[deny(unused_must_use)]
+            fn run(&self, unread: u32) {}
+        };
+        let delegated: Vec<String> = delegated_attrs(&method.attrs)
+            .iter()
+            .map(|attr| quote!(#attr).to_string())
+            .collect();
+        assert_eq!(
+            delegated,
+            [
+                quote!(#[allow(unused_variables, reason = "read next release")]).to_string(),
+                quote!(#[cfg_attr(all(test), allow(clippy::too_many_arguments))]).to_string(),
+                quote!(#[cfg_attr(all(a, b), allow(dead_code))]).to_string(),
+                quote!(#[cfg(any(not(all(a, b)), c))]).to_string(),
+                quote!(#[allow(unused_mut)]).to_string(),
+                quote!(#[deny(unused_must_use)]).to_string(),
             ]
         );
     }

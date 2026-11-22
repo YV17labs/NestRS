@@ -1,7 +1,6 @@
 //! [`ResilienceConfig`] — a policy's settings, read per instance from
 //! `<PREFIX>_RESILIENCE__*`.
 
-use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use nest_rs_config::{Bound, CountBounds, DurationBounds, Floor, config};
@@ -9,12 +8,15 @@ use nest_rs_config::{Bound, CountBounds, DurationBounds, Floor, config};
 const TIMEOUT: DurationBounds = DurationBounds::millis(
     Floor::Units(Bound::new(
         1,
-        "a zero timeout gives every attempt up before its call is sent",
+        "a zero timeout gives every attempt up before its call is sent, and one above zero but \
+         under a millisecond ends at the next tick of tokio's timer, which counts whole \
+         milliseconds and cannot honour less",
     )),
     Bound::new(
         10 * 60 * 1000,
-        "one attempt past ten minutes outwaits every edge's deadline many times over, and a \
-         value that long is a unit slip more often than a choice (`600` meant as seconds)",
+        "one attempt past ten minutes outlasts a worker job's default deadline, the longest the \
+         framework gives a unit; a call that long is a job's work, started and then polled, \
+         rather than one attempt",
     ),
 );
 
@@ -25,20 +27,24 @@ const RETRIES: CountBounds = CountBounds::new(
     ),
     Bound::new(
         10,
-        "past ten, one caller sends a failing dependency eleven calls, the hammering a \
-         breaker exists to stop",
+        "past ten, the retries let one call send its failing dependency twelve attempts or more, \
+         the hammering a breaker exists to stop",
     ),
 );
 
 const BACKOFF: DurationBounds = DurationBounds::millis(
     Floor::Units(Bound::new(
         1,
-        "a zero wait sends the retry at once, into the failure the last attempt met",
+        "a zero wait lets a retry follow its failed attempt at once, into the failure that \
+         attempt met, and one above zero but under a millisecond ends at the next tick of tokio's \
+         timer, which counts whole milliseconds and cannot honour less",
     )),
     Bound::new(
         5 * 60 * 1000,
-        "a retry waiting past five minutes outwaits every caller of one call; work that must \
-         wait longer is a queue job, whose own retries wait as long",
+        "a retry waiting past five minutes outwaits a request's default deadline fifteen times \
+         over, holding its run's slot of the bulkhead, where there is one, all along; work that \
+         must wait longer is a queue job, whose retry honours the wait its failure asks, up to an \
+         hour",
     ),
 );
 
@@ -49,14 +55,18 @@ const BREAKER_WINDOW: CountBounds = CountBounds::new(
     ),
     Bound::new(
         10_000,
-        "past ten thousand calls the window still counts failures from long before the \
-         outage, and holds a byte per call on every replica, and the instant it answered once \
-         outcomes have an age",
+        "past ten thousand calls the window holds a byte per call on every replica, and the \
+         instant each answered once outcomes have an age; for a dependency called seldom, it \
+         lets failures from long before the outage count, unless an age forgets them",
     ),
 );
 
 const BREAKER_FAILURES: CountBounds = CountBounds::new(
-    Bound::new(1, "a breaker opening on no failure refuses every call"),
+    Bound::new(
+        1,
+        "a breaker opening on no failure opens on any answer its window counts, a success \
+         included",
+    ),
     Bound::new(
         10_000,
         "a breaker never opens on more failures than its window holds, and the window holds \
@@ -64,40 +74,42 @@ const BREAKER_FAILURES: CountBounds = CountBounds::new(
     ),
 );
 
-const BREAKER_OPEN_FLOOR: Bound = Bound::new(
-    1,
-    "a breaker open for no time lets every call through to the failing dependency",
-);
-
 const BREAKER_OPEN: DurationBounds = DurationBounds::secs(
-    Floor::Units(BREAKER_OPEN_FLOOR),
+    Floor::AboveZero(
+        "a breaker open for no time lets the next call through at once, as its probe, never \
+         resting the failing dependency",
+    ),
     Bound::new(
         60 * 60,
         "a breaker open past an hour still refuses a dependency long since back",
     ),
 );
 
-/// The open times [`ResilienceConfig::breaker_open`] takes, which a manual
-/// opening is held to.
-pub(crate) const BREAKER_OPEN_TIMES: RangeInclusive<Duration> = RangeInclusive::new(
-    BREAKER_OPEN.unit().duration(BREAKER_OPEN_FLOOR.count),
-    BREAKER_OPEN.unit().duration(BREAKER_OPEN.most().count),
-);
+/// The longest a breaker stays open: the ceiling of
+/// [`ResilienceConfig::breaker_open`], which a manual opening is held to as
+/// well.
+pub(crate) const LONGEST_OPEN: Duration = BREAKER_OPEN.unit().duration(BREAKER_OPEN.most().count);
+
+/// Whether a manual opening takes `duration`: an open time
+/// [`ResilienceConfig::breaker_open`] takes in code, above none and up to
+/// [`LONGEST_OPEN`].
+pub(crate) fn is_open_time(duration: Duration) -> bool {
+    !duration.is_zero() && duration <= LONGEST_OPEN
+}
 
 /// The longest an attempt runs: the ceiling of [`ResilienceConfig::timeout`],
 /// which a `#[resilient]` method's own timeout is held to as well.
 pub(crate) const LONGEST_ATTEMPT: Duration = TIMEOUT.unit().duration(TIMEOUT.most().count);
 
 const BREAKER_AGE: DurationBounds = DurationBounds::secs(
-    Floor::Units(Bound::new(
-        1,
-        "an age of no time forgets each outcome before the next is counted, so the window never \
-         holds two; `0` turns the age off",
-    )),
+    Floor::AboveZero(
+        "an age of no time forgets an outcome once the clock has moved past its answer, so the \
+         window counts only the outcomes answered at one instant; `0` turns the age off",
+    ),
     Bound::new(
         24 * 60 * 60,
-        "past a day the window still counts failures from long before the outage, which the age \
-         is there to forget",
+        "past a day the age lets the window count failures from long before the outage, which \
+         the age is there to forget",
     ),
 );
 
@@ -108,8 +120,8 @@ const BREAKER_PROBES: CountBounds = CountBounds::new(
     ),
     Bound::new(
         100,
-        "past a hundred, a dependency back is still refused to every caller but one for a hundred \
-         answers in a row",
+        "past a hundred, a dependency back is sent one probe at a time, every call beside it \
+         refused, for over a hundred answers in a row",
     ),
 );
 
@@ -120,16 +132,26 @@ const CONCURRENCY: CountBounds = CountBounds::new(
     ),
     Bound::new(
         65_536,
-        "past 65536 calls at once a replica runs out of sockets before the bulkhead refuses \
-         one",
+        "past 65536 calls at once, a client opening a TCP connection per call between one address \
+         of the replica and one of the dependency runs out of source ports, TCP's being sixteen \
+         bits, before the bulkhead refuses one; for any other client, such as one spreading its \
+         calls over several addresses or multiplexing them over one connection, a bulkhead that \
+         wide is a slip more often than a choice",
     ),
 );
 
 const CONCURRENCY_WAIT: DurationBounds = DurationBounds::millis(
-    Floor::Units(Bound::new(0, "a wait of none refuses at once")),
+    Floor::Units(Bound::new(
+        1,
+        "a wait of none refuses at once, and one above none but under a millisecond ends at the \
+         next tick of tokio's timer, which counts whole milliseconds and cannot honour less; `0` \
+         turns the wait off",
+    )),
     Bound::new(
         60 * 1000,
-        "a call waiting past a minute for a slot outwaits the attempt it waits to make",
+        "a call waiting past a minute for a slot outwaits a request's default deadline three \
+         times over; a backlog waiting longer is a queue's, whose jobs wait in its backend rather \
+         than in a replica's memory",
     ),
 );
 
@@ -161,11 +183,10 @@ const RATE_LIMIT: CountBounds = CountBounds::new(
 );
 
 const RATE_WINDOW: DurationBounds = DurationBounds::secs(
-    Floor::Units(Bound::new(
-        1,
-        "a zero window resets on every call, so the count never passes one and every call is \
-         sent at any limit",
-    )),
+    Floor::AboveZero(
+        "a zero window resets on every call, so the count never passes one and no limit refuses \
+         a call",
+    ),
     Bound::new(
         24 * 60 * 60,
         "a window past a day is a quota rather than a rate, and a count each replica keeps in \
@@ -174,12 +195,17 @@ const RATE_WINDOW: DurationBounds = DurationBounds::secs(
 );
 
 const RATE_WAIT: DurationBounds = DurationBounds::millis(
-    Floor::Units(Bound::new(0, "a wait of none refuses at once")),
+    Floor::Units(Bound::new(
+        1,
+        "a wait of none refuses at once, and one above none but under a millisecond ends at the \
+         next tick of tokio's timer, which counts whole milliseconds and cannot honour less; `0` \
+         turns the wait off",
+    )),
     Bound::new(
         60 * 1000,
         "a call waiting past a minute for the window's reset outwaits a request's default \
-         deadline three times over, holding its slot of the bulkhead all along; one that must \
-         wait longer is refused with the `Retry-After` its client or its queue's retry waits",
+         deadline three times over, holding its slot of the bulkhead, where there is one, all \
+         along; one that must wait longer is refused with a `Retry-After` naming the reset",
     ),
 );
 
@@ -235,12 +261,13 @@ pub struct ResilienceConfig {
     #[config(bounds = BREAKER_FAILURES)]
     pub breaker_failures: usize,
     /// How long an open breaker refuses every call before one attempt probes
-    /// the dependency, `BREAKER_OPEN_SECS`, from 1 second to an hour; defaults
-    /// to 30 seconds.
+    /// the dependency, `BREAKER_OPEN_SECS`, whole seconds from 1 to an hour,
+    /// and in code anything above zero up to an hour; defaults to 30 seconds.
     #[config(bounds = BREAKER_OPEN)]
     pub breaker_open: Duration,
     /// How old an attempt's outcome grows before it no longer counts in the
-    /// window, `BREAKER_AGE_SECS`, from 1 second to a day, `0` for no age;
+    /// window, `BREAKER_AGE_SECS`, whole seconds from 1 to a day, `0` for no
+    /// age, and in code anything above zero up to a day, `None` for no age;
     /// defaults to none, the window counting its latest attempts however old.
     /// An outcome's age runs from its call's answer, and the window forgets
     /// what is past it each time it counts one, so failures one short of
@@ -265,10 +292,10 @@ pub struct ResilienceConfig {
     #[config(bounds = CONCURRENCY)]
     pub concurrency: Option<usize>,
     /// How long a call waits for a slot of the bulkhead before it is refused,
-    /// `CONCURRENCY_WAIT_MS`, from none to a minute; defaults to none, a full
-    /// bulkhead refusing at once.
+    /// `CONCURRENCY_WAIT_MS`, from 1 ms to a minute, `0` for no wait; defaults
+    /// to none, a full bulkhead refusing at once.
     #[config(bounds = CONCURRENCY_WAIT)]
-    pub concurrency_wait: Duration,
+    pub concurrency_wait: Option<Duration>,
     /// How many calls wait for a slot of the bulkhead at once,
     /// `CONCURRENCY_WAITERS`, from 1 to 65536, `0` for no bound; defaults to
     /// none. A call finding every slot taken while as many calls wait is
@@ -294,20 +321,21 @@ pub struct ResilienceConfig {
     /// with `redirect::Policy::none()` answers a redirect as it came.
     #[config(bounds = RATE_LIMIT)]
     pub rate_limit: Option<usize>,
-    /// The window the rate limit counts over, `RATE_WINDOW_SECS`, from 1
-    /// second to a day; defaults to a minute. It is fixed: the first attempt
-    /// counted opens it, and the count starts again once it has passed.
+    /// The window the rate limit counts over, `RATE_WINDOW_SECS`, whole
+    /// seconds from 1 to a day, and in code anything above zero up to a day;
+    /// defaults to a minute. It is fixed: the first attempt counted opens it,
+    /// and the count starts again once it has passed.
     #[config(bounds = RATE_WINDOW)]
     pub rate_window: Duration,
     /// How long one attempt waits in all for the window's reset before it is
-    /// refused, `RATE_WAIT_MS`, from none to a minute; defaults to none, an
-    /// attempt past the limit refused at once. A reset this wait or the unit's
-    /// deadline cannot reach is not waited for, and the wait is not the
-    /// attempt's: its [`timeout`](Self::timeout) starts when its call is sent.
-    /// When the wait ends the circuit breaker is asked again, so one that
-    /// opened meanwhile refuses the attempt unsent.
+    /// refused, `RATE_WAIT_MS`, from 1 ms to a minute, `0` for no wait;
+    /// defaults to none, an attempt past the limit refused at once. A reset
+    /// this wait or the unit's deadline cannot reach is not waited for, and
+    /// the wait is not the attempt's: its [`timeout`](Self::timeout) starts
+    /// when its call is sent. When the wait ends the circuit breaker is asked
+    /// again, so one that opened meanwhile refuses the attempt unsent.
     #[config(bounds = RATE_WAIT)]
-    pub rate_wait: Duration,
+    pub rate_wait: Option<Duration>,
 }
 
 impl Default for ResilienceConfig {
@@ -323,11 +351,11 @@ impl Default for ResilienceConfig {
             breaker_age: None,
             breaker_probes: 1,
             concurrency: None,
-            concurrency_wait: Duration::ZERO,
+            concurrency_wait: None,
             concurrency_waiters: None,
             rate_limit: None,
             rate_window: Duration::from_secs(60),
-            rate_wait: Duration::ZERO,
+            rate_wait: None,
         }
     }
 }
@@ -343,6 +371,11 @@ mod tests {
             &ConfigService::with_vars("resilience", vars.iter().copied()),
             ResilienceConfig::default(),
         )
+    }
+
+    /// `pinned`, set in code with no variable over it, as the module reads it.
+    fn read_pinned(pinned: ResilienceConfig) -> nest_rs_config::Result<ResilienceConfig> {
+        ResilienceConfig::from_env(&ConfigService::with_vars("resilience", []), pinned)
     }
 
     #[test]
@@ -417,23 +450,34 @@ mod tests {
         assert_eq!(read.breaker_age, Some(Duration::from_secs(120)));
         assert_eq!(read.breaker_probes, 3);
         assert_eq!(read.concurrency, Some(8));
-        assert_eq!(read.concurrency_wait, Duration::ZERO);
+        assert_eq!(read.concurrency_wait, None, "`0` turns the wait off");
         assert_eq!(read.concurrency_waiters, Some(16));
         assert_eq!(read.rate_limit, Some(100));
         assert_eq!(
             (read.rate_window, read.rate_wait),
-            (Duration::from_secs(1), Duration::from_millis(250))
+            (Duration::from_secs(1), Some(Duration::from_millis(250)))
         );
 
         let off = ResilienceConfig::from_env(
-            &ConfigService::with_vars("resilience", [("RATE_LIMIT", "0")]),
+            &ConfigService::with_vars(
+                "resilience",
+                [
+                    ("CONCURRENCY", "0"),
+                    ("RATE_LIMIT", "0"),
+                    ("RATE_WAIT_MS", "0"),
+                ],
+            ),
             ResilienceConfig {
+                concurrency: Some(8),
                 rate_limit: Some(10),
+                rate_wait: Some(Duration::from_millis(250)),
                 ..ResilienceConfig::default()
             },
         )
-        .expect("`0` is the rate limit's off");
+        .expect("`0` is the bulkhead's off, the rate limit's and its wait's");
+        assert_eq!(off.concurrency, None, "`0` turns the bulkhead off");
         assert_eq!(off.rate_limit, None, "`0` turns the rate limit off");
+        assert_eq!(off.rate_wait, None, "`0` turns the wait off");
 
         let ageless = ResilienceConfig::from_env(
             &ConfigService::with_vars("resilience", [("BREAKER_AGE_SECS", "0")]),
@@ -479,8 +523,12 @@ mod tests {
         );
         assert_eq!(
             (read.rate_limit, read.rate_window, read.rate_wait),
-            (None, Duration::from_secs(60), Duration::ZERO),
+            (None, Duration::from_secs(60), None),
             "no rate limit, over a minute's window, refusing at once once set"
+        );
+        assert_eq!(
+            read.concurrency_wait, None,
+            "a full bulkhead refusing at once"
         );
         assert_eq!(
             (read.breaker_age, read.breaker_probes),
@@ -548,6 +596,8 @@ mod tests {
         }
     }
 
+    /// Every setting whose zero is its off, in the config's order: off in code
+    /// is `None`, so its zero pinned there is refused naming its field.
     #[test]
     fn a_pinned_zero_where_zero_is_off_is_refused() {
         for (pinned, field) in [
@@ -560,10 +610,10 @@ mod tests {
             ),
             (
                 ResilienceConfig {
-                    rate_limit: Some(0),
+                    breaker_window: Some(0),
                     ..ResilienceConfig::default()
                 },
-                "`ResilienceConfig::rate_limit` set in code",
+                "`ResilienceConfig::breaker_window` set in code",
             ),
             (
                 ResilienceConfig {
@@ -574,10 +624,38 @@ mod tests {
             ),
             (
                 ResilienceConfig {
+                    concurrency: Some(0),
+                    ..ResilienceConfig::default()
+                },
+                "`ResilienceConfig::concurrency` set in code",
+            ),
+            (
+                ResilienceConfig {
+                    concurrency_wait: Some(Duration::ZERO),
+                    ..ResilienceConfig::default()
+                },
+                "`ResilienceConfig::concurrency_wait` set in code",
+            ),
+            (
+                ResilienceConfig {
                     concurrency_waiters: Some(0),
                     ..ResilienceConfig::default()
                 },
                 "`ResilienceConfig::concurrency_waiters` set in code",
+            ),
+            (
+                ResilienceConfig {
+                    rate_limit: Some(0),
+                    ..ResilienceConfig::default()
+                },
+                "`ResilienceConfig::rate_limit` set in code",
+            ),
+            (
+                ResilienceConfig {
+                    rate_wait: Some(Duration::ZERO),
+                    ..ResilienceConfig::default()
+                },
+                "`ResilienceConfig::rate_wait` set in code",
             ),
         ] {
             let refused =
@@ -589,20 +667,28 @@ mod tests {
     }
 
     /// A window or a wait pinned past its range is refused as its variable
-    /// would be, a window shorter than a second included.
+    /// would be, a window of no time included; a window under a second, which
+    /// its variable cannot say, is inside it.
     #[test]
     fn a_rate_window_or_wait_pinned_outside_its_range_is_refused() {
+        let sub_second = Duration::from_millis(500);
+        let taken = read_pinned(ResilienceConfig {
+            rate_window: sub_second,
+            ..ResilienceConfig::default()
+        })
+        .expect("a window under a second, set in code");
+        assert_eq!(taken.rate_window, sub_second);
         for (pinned, var) in [
             (
                 ResilienceConfig {
-                    rate_window: Duration::from_millis(500),
+                    rate_window: Duration::ZERO,
                     ..ResilienceConfig::default()
                 },
                 "RATE_WINDOW_SECS",
             ),
             (
                 ResilienceConfig {
-                    rate_wait: Duration::from_secs(61),
+                    rate_wait: Some(Duration::from_secs(61)),
                     ..ResilienceConfig::default()
                 },
                 "RATE_WAIT_MS",
@@ -620,13 +706,21 @@ mod tests {
     }
 
     /// An age or a count of probes pinned past its range is refused as its
-    /// variable would be, an age shorter than a second included.
+    /// variable would be, an age of no time included; an age under a second,
+    /// which its variable cannot say, is inside it.
     #[test]
     fn a_breaker_age_or_probes_pinned_outside_its_range_is_refused() {
+        let sub_second = Some(Duration::from_millis(500));
+        let taken = read_pinned(ResilienceConfig {
+            breaker_age: sub_second,
+            ..ResilienceConfig::default()
+        })
+        .expect("an age under a second, set in code");
+        assert_eq!(taken.breaker_age, sub_second);
         for (pinned, var) in [
             (
                 ResilienceConfig {
-                    breaker_age: Some(Duration::from_millis(500)),
+                    breaker_age: Some(Duration::ZERO),
                     ..ResilienceConfig::default()
                 },
                 "BREAKER_AGE_SECS",
@@ -721,29 +815,539 @@ mod tests {
         assert!(none.contains(&var) && none.contains(floor.why), "{none}");
     }
 
-    /// A manual opening is held to the open times `breaker_open` takes,
-    /// both ends included, as a value pinned in code is: the range is the
-    /// config's own, read off its bounds, never a second literal.
+    /// A value past each ceiling is refused naming its variable, with a reason
+    /// that holds whatever the policy's other settings take and whichever
+    /// client the policy wraps, written out whole here; the waiters' is the
+    /// test's above. Every number a reason states is held to the constant it
+    /// reads, its own ceiling or another's, where this test reaches it: the
+    /// hour a queue's retry honours is held by that retry, in the suite's
+    /// `error::queue`.
     #[test]
-    fn the_open_times_a_manual_opening_takes_are_breaker_opens() {
-        let (least, most) = (*BREAKER_OPEN_TIMES.start(), *BREAKER_OPEN_TIMES.end());
-        let tick = Duration::from_millis(1);
-        for duration in [
-            Duration::ZERO,
-            least - tick,
-            least,
-            least + tick,
-            most,
-            most + tick,
+    fn each_ceiling_says_why_in_words_its_siblings_leave_true() {
+        let past = |most: u64| (most + 1).to_string();
+        let backoff = "a retry waiting past five minutes outwaits a request's default deadline \
+                       fifteen times over, holding its run's slot of the bulkhead, where there is \
+                       one, all along; work that must wait longer is a queue job, whose retry \
+                       honours the wait its failure asks, up to an hour";
+        for (key, raw, why) in [
+            (
+                "TIMEOUT_MS",
+                past(TIMEOUT.most().count),
+                "one attempt past ten minutes outlasts a worker job's default deadline, the \
+                 longest the framework gives a unit; a call that long is a job's work, started \
+                 and then polled, rather than one attempt",
+            ),
+            (
+                "RETRIES",
+                past(RETRIES.most().count),
+                "past ten, the retries let one call send its failing dependency twelve attempts \
+                 or more, the hammering a breaker exists to stop",
+            ),
+            ("BACKOFF_FIRST_MS", past(BACKOFF.most().count), backoff),
+            ("BACKOFF_CEILING_MS", past(BACKOFF.most().count), backoff),
+            (
+                "BREAKER_WINDOW",
+                past(BREAKER_WINDOW.most().count),
+                "past ten thousand calls the window holds a byte per call on every replica, and \
+                 the instant each answered once outcomes have an age; for a dependency called \
+                 seldom, it lets failures from long before the outage count, unless an age \
+                 forgets them",
+            ),
+            (
+                "BREAKER_FAILURES",
+                past(BREAKER_FAILURES.most().count),
+                "a breaker never opens on more failures than its window holds, and the window \
+                 holds ten thousand at most",
+            ),
+            (
+                "BREAKER_OPEN_SECS",
+                past(BREAKER_OPEN.most().count),
+                "a breaker open past an hour still refuses a dependency long since back",
+            ),
+            (
+                "BREAKER_AGE_SECS",
+                past(BREAKER_AGE.most().count),
+                "past a day the age lets the window count failures from long before the outage, \
+                 which the age is there to forget",
+            ),
+            (
+                "BREAKER_PROBES",
+                past(BREAKER_PROBES.most().count),
+                "past a hundred, a dependency back is sent one probe at a time, every call beside \
+                 it refused, for over a hundred answers in a row",
+            ),
+            (
+                "CONCURRENCY",
+                past(CONCURRENCY.most().count),
+                "past 65536 calls at once, a client opening a TCP connection per call between one \
+                 address of the replica and one of the dependency runs out of source ports, \
+                 TCP's being sixteen bits, before the bulkhead refuses one; for any other client, \
+                 such as one spreading its calls over several addresses or multiplexing them over \
+                 one connection, a bulkhead that wide is a slip more often than a choice",
+            ),
+            (
+                "CONCURRENCY_WAIT_MS",
+                past(CONCURRENCY_WAIT.most().count),
+                "a call waiting past a minute for a slot outwaits a request's default deadline \
+                 three times over; a backlog waiting longer is a queue's, whose jobs wait in its \
+                 backend rather than in a replica's memory",
+            ),
+            (
+                "RATE_LIMIT",
+                past(RATE_LIMIT.most().count),
+                "past a billion calls in a window, over eleven thousand a second for the longest \
+                 window there is, no dependency publishes a rate, so a number that large is a \
+                 slip that turns the limit off in all but name",
+            ),
+            (
+                "RATE_WINDOW_SECS",
+                past(RATE_WINDOW.most().count),
+                "a window past a day is a quota rather than a rate, and a count each replica \
+                 keeps in memory, forgotten at its restart, holds no quota",
+            ),
+            (
+                "RATE_WAIT_MS",
+                past(RATE_WAIT.most().count),
+                "a call waiting past a minute for the window's reset outwaits a request's default \
+                 deadline three times over, holding its slot of the bulkhead, where there is one, \
+                 all along; one that must wait longer is refused with a `Retry-After` naming the \
+                 reset",
+            ),
+        ] {
+            let refused = read(&[(key, raw.as_str())])
+                .expect_err("past the ceiling")
+                .to_string();
+            let var = nest_rs_config::var_name("resilience", key);
+            assert!(refused.contains(&var) && refused.contains(why), "{refused}");
+        }
+
+        let duration = |bounds: DurationBounds| bounds.unit().duration(bounds.most().count);
+        let (minute, day) = (Duration::from_secs(60), Duration::from_secs(24 * 60 * 60));
+        for (bounds, said) in [
+            (TIMEOUT, minute * 10),
+            (BACKOFF, minute * 5),
+            (BREAKER_OPEN, minute * 60),
+            (BREAKER_AGE, day),
+            (CONCURRENCY_WAIT, minute),
+            (RATE_WINDOW, day),
+            (RATE_WAIT, minute),
         ] {
             assert_eq!(
-                BREAKER_OPEN_TIMES.contains(&duration),
+                duration(bounds),
+                said,
+                "the ceiling its reason says: {bounds:?}"
+            );
+        }
+        for (bounds, said) in [
+            (RETRIES, 10),
+            (BREAKER_WINDOW, 10_000),
+            (BREAKER_FAILURES, 10_000),
+            (BREAKER_PROBES, 100),
+            (CONCURRENCY, 65_536),
+            (RATE_LIMIT, 1_000_000_000),
+        ] {
+            assert_eq!(
+                bounds.most().count,
+                said,
+                "the ceiling its reason says: {bounds:?}"
+            );
+        }
+
+        let request = nest_rs_http::DEFAULT_UNIT_TIMEOUT;
+        assert_eq!(
+            duration(TIMEOUT),
+            nest_rs_core::JOB_TIMEOUT,
+            "a worker job's default deadline"
+        );
+        assert!(
+            nest_rs_core::JOB_TIMEOUT > request
+                && nest_rs_core::JOB_TIMEOUT > nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT,
+            "the longest deadline the framework gives a unit, an init hook given none"
+        );
+        assert_eq!(
+            RETRIES.most().count + 2,
+            12,
+            "a call and one retry past ten"
+        );
+        assert_eq!(duration(BACKOFF), request * 15, "fifteen times over");
+        assert_eq!(
+            (duration(CONCURRENCY_WAIT), duration(RATE_WAIT)),
+            (request * 3, request * 3),
+            "three times over"
+        );
+        assert_eq!(
+            CONCURRENCY.most().count,
+            u64::from(u16::MAX) + 1,
+            "TCP's sixteen-bit ports"
+        );
+        assert_eq!(
+            BREAKER_FAILURES.most().count,
+            BREAKER_WINDOW.most().count,
+            "the window holds ten thousand at most"
+        );
+        let per_second = RATE_LIMIT.most().count / duration(RATE_WINDOW).as_secs();
+        assert!(
+            (11_000..12_000).contains(&per_second),
+            "over eleven thousand a second for the longest window there is: {per_second}"
+        );
+    }
+
+    /// A value below each floor is refused naming its variable, with a reason
+    /// that holds whatever the policy's other settings take, written out whole
+    /// here: `0` read from a variable that has no off, and pinned in code where
+    /// `0` is the variable's off. A duration whose one failure is none is
+    /// refused none in code too, in words saying so, since anything above it
+    /// is taken there; a duration the policy waits out on tokio's timer is
+    /// held to a millisecond in code as from its variable, and refused none
+    /// there in the floor's words, a wait's with its `None`, which is no wait.
+    #[test]
+    fn each_floor_says_why_in_words_its_siblings_leave_true() {
+        let timeout = "a zero timeout gives every attempt up before its call is sent, and one \
+                       above zero but under a millisecond ends at the next tick of tokio's timer, \
+                       which counts whole milliseconds and cannot honour less";
+        let backoff = "a zero wait lets a retry follow its failed attempt at once, into the \
+                       failure that attempt met, and one above zero but under a millisecond ends \
+                       at the next tick of tokio's timer, which counts whole milliseconds and \
+                       cannot honour less";
+        let open = "a breaker open for no time lets the next call through at once, as its probe, \
+                    never resting the failing dependency";
+        let age = "an age of no time forgets an outcome once the clock has moved past its answer, \
+                   so the window counts only the outcomes answered at one instant; `0` turns the \
+                   age off";
+        let window = "a zero window resets on every call, so the count never passes one and no \
+                      limit refuses a call";
+        for (key, why) in [
+            ("TIMEOUT_MS", timeout),
+            ("BACKOFF_FIRST_MS", backoff),
+            ("BACKOFF_CEILING_MS", backoff),
+            (
+                "BREAKER_FAILURES",
+                "a breaker opening on no failure opens on any answer its window counts, a \
+                 success included",
+            ),
+            ("BREAKER_OPEN_SECS", open),
+            (
+                "BREAKER_PROBES",
+                "a breaker closing on no probe lets every call through to a dependency it never \
+                 tried",
+            ),
+            ("RATE_WINDOW_SECS", window),
+        ] {
+            let refused = read(&[(key, "0")])
+                .expect_err("below the floor")
+                .to_string();
+            let var = nest_rs_config::var_name("resilience", key);
+            assert!(refused.contains(&var) && refused.contains(why), "{refused}");
+        }
+
+        let default = ResilienceConfig::default;
+        for (key, pinned, why) in [
+            (
+                "TIMEOUT_MS",
+                ResilienceConfig {
+                    timeout: Duration::ZERO,
+                    ..default()
+                },
+                timeout,
+            ),
+            (
+                "BACKOFF_FIRST_MS",
+                ResilienceConfig {
+                    backoff_first: Duration::ZERO,
+                    ..default()
+                },
+                backoff,
+            ),
+            (
+                "BACKOFF_CEILING_MS",
+                ResilienceConfig {
+                    backoff_ceiling: Duration::ZERO,
+                    ..default()
+                },
+                backoff,
+            ),
+        ] {
+            let refused = read_pinned(pinned).expect_err("none, in code").to_string();
+            let var = nest_rs_config::var_name("resilience", key);
+            let said = format!("set in code is 0ns, below the 1ms it must be at least — {why}");
+            assert!(
+                refused.contains(&var) && refused.contains(&said),
+                "{refused}"
+            );
+        }
+
+        for (key, pinned, why) in [
+            (
+                "BREAKER_OPEN_SECS",
+                ResilienceConfig {
+                    breaker_open: Duration::ZERO,
+                    ..default()
+                },
+                open,
+            ),
+            (
+                "BREAKER_AGE_SECS",
+                ResilienceConfig {
+                    breaker_age: Some(Duration::ZERO),
+                    ..default()
+                },
+                age,
+            ),
+            (
+                "RATE_WINDOW_SECS",
+                ResilienceConfig {
+                    rate_window: Duration::ZERO,
+                    ..default()
+                },
+                window,
+            ),
+        ] {
+            let refused = read_pinned(pinned).expect_err("none, in code").to_string();
+            let var = nest_rs_config::var_name("resilience", key);
+            let said = format!("set in code is 0ns, and it must be above zero — {why}");
+            assert!(
+                refused.contains(&var) && refused.contains(&said),
+                "{refused}"
+            );
+        }
+
+        for (key, pinned, why) in [
+            (
+                "RETRIES",
+                ResilienceConfig {
+                    retries: Some(0),
+                    ..default()
+                },
+                "no retry is `0`, which turns retries off rather than counting one",
+            ),
+            (
+                "BREAKER_WINDOW",
+                ResilienceConfig {
+                    breaker_window: Some(0),
+                    ..default()
+                },
+                "a window of no call never sees a failure; `0` turns the breaker off",
+            ),
+            (
+                "CONCURRENCY",
+                ResilienceConfig {
+                    concurrency: Some(0),
+                    ..default()
+                },
+                "a bulkhead of no slot refuses every call; `0` turns it off",
+            ),
+            (
+                "CONCURRENCY_WAITERS",
+                ResilienceConfig {
+                    concurrency_waiters: Some(0),
+                    ..default()
+                },
+                "a bound of no waiter refuses every call finding no free slot, as a wait of none \
+                 does; `0` turns the bound off",
+            ),
+            (
+                "RATE_LIMIT",
+                ResilienceConfig {
+                    rate_limit: Some(0),
+                    ..default()
+                },
+                "a limit of no call refuses every call; `0` turns the rate limit off",
+            ),
+        ] {
+            let refused = read_pinned(pinned)
+                .expect_err("below the floor, in code")
+                .to_string();
+            let var = nest_rs_config::var_name("resilience", key);
+            assert!(refused.contains(&var) && refused.contains(why), "{refused}");
+        }
+
+        let wait = "a wait of none refuses at once, and one above none but under a millisecond \
+                    ends at the next tick of tokio's timer, which counts whole milliseconds and \
+                    cannot honour less; `0` turns the wait off";
+        for (key, pinned) in [
+            (
+                "CONCURRENCY_WAIT_MS",
+                ResilienceConfig {
+                    concurrency_wait: Some(Duration::ZERO),
+                    ..default()
+                },
+            ),
+            (
+                "RATE_WAIT_MS",
+                ResilienceConfig {
+                    rate_wait: Some(Duration::ZERO),
+                    ..default()
+                },
+            ),
+        ] {
+            let refused = read_pinned(pinned).expect_err("none, in code").to_string();
+            let var = nest_rs_config::var_name("resilience", key);
+            let said = format!(
+                "set in code is 0ns, below the 1ms it must be at least — {wait}; `None` turns it off"
+            );
+            assert!(
+                refused.contains(&var) && refused.contains(&said),
+                "{refused}"
+            );
+        }
+    }
+
+    /// A manual opening is held to the open times `breaker_open` takes in
+    /// code: anything above none, a time under a second included, up to its
+    /// ceiling. The range is the config's own, read off its check and its
+    /// bounds, never a second literal.
+    #[test]
+    fn the_open_times_a_manual_opening_takes_are_breaker_opens() {
+        let most = BREAKER_OPEN.unit().duration(BREAKER_OPEN.most().count);
+        let tick = Duration::from_nanos(1);
+        let sub_second = Duration::from_millis(500);
+        for duration in [
+            Duration::ZERO,
+            tick,
+            sub_second,
+            Duration::from_secs(1),
+            most - tick,
+            most,
+            most + tick,
+            Duration::MAX,
+        ] {
+            assert_eq!(
+                is_open_time(duration),
                 ResilienceConfig::BREAKER_OPEN
                     .check("resilience", duration)
                     .is_ok(),
                 "{duration:?}"
             );
         }
+        assert!(!is_open_time(Duration::ZERO), "an open time of none");
+        assert!(is_open_time(sub_second), "an open time under a second");
+        assert_eq!(LONGEST_OPEN, most, "the ceiling of `breaker_open`");
+    }
+
+    /// A timeout and a backoff pinned under a millisecond are refused as their
+    /// variables refuse `0`, in words true of both: the timer they arm counts
+    /// whole milliseconds. A millisecond is taken.
+    #[test]
+    fn a_timeout_or_backoff_pinned_under_a_millisecond_is_refused() {
+        let timeout = "a zero timeout gives every attempt up before its call is sent, and one \
+                       above zero but under a millisecond ends at the next tick of tokio's timer, \
+                       which counts whole milliseconds and cannot honour less";
+        let backoff = "a zero wait lets a retry follow its failed attempt at once, into the \
+                       failure that attempt met, and one above zero but under a millisecond ends \
+                       at the next tick of tokio's timer, which counts whole milliseconds and \
+                       cannot honour less";
+        let sub_milli = Duration::from_micros(500);
+        let default = ResilienceConfig::default;
+        for (pinned, field, why) in [
+            (
+                ResilienceConfig {
+                    timeout: sub_milli,
+                    ..default()
+                },
+                ResilienceConfig::TIMEOUT,
+                timeout,
+            ),
+            (
+                ResilienceConfig {
+                    backoff_first: sub_milli,
+                    ..default()
+                },
+                ResilienceConfig::BACKOFF_FIRST,
+                backoff,
+            ),
+            (
+                ResilienceConfig {
+                    backoff_ceiling: sub_milli,
+                    ..default()
+                },
+                ResilienceConfig::BACKOFF_CEILING,
+                backoff,
+            ),
+        ] {
+            let refused = read_pinned(pinned)
+                .expect_err("under a millisecond, in code")
+                .to_string();
+            assert_eq!(
+                refused,
+                format!(
+                    "invalid value for {}: is not set, and `{}` set in code is 500µs, below the \
+                     1ms it must be at least — {why}",
+                    field.var("resilience"),
+                    field.field().path(),
+                )
+            );
+        }
+        let milli = Duration::from_millis(1);
+        let taken = read_pinned(ResilienceConfig {
+            timeout: milli,
+            backoff_first: milli,
+            backoff_ceiling: milli,
+            ..default()
+        })
+        .expect("a millisecond, set in code");
+        assert_eq!(
+            (taken.timeout, taken.backoff_first, taken.backoff_ceiling),
+            (milli, milli, milli)
+        );
+    }
+
+    /// A wait for a slot or for the rate's reset pinned under a millisecond is
+    /// refused in words true of it, the timer its wait arms counting whole
+    /// milliseconds; a millisecond is taken, and no wait is `None`, `0` from
+    /// either variable, over a pin too.
+    #[test]
+    fn a_wait_pinned_under_a_millisecond_is_refused_and_no_wait_is_none() {
+        let why = "a wait of none refuses at once, and one above none but under a millisecond \
+                   ends at the next tick of tokio's timer, which counts whole milliseconds and \
+                   cannot honour less; `0` turns the wait off";
+        let under = Some(Duration::from_micros(500));
+        let default = ResilienceConfig::default;
+        for (pinned, field) in [
+            (
+                ResilienceConfig {
+                    concurrency_wait: under,
+                    ..default()
+                },
+                ResilienceConfig::CONCURRENCY_WAIT,
+            ),
+            (
+                ResilienceConfig {
+                    rate_wait: under,
+                    ..default()
+                },
+                ResilienceConfig::RATE_WAIT,
+            ),
+        ] {
+            let refused = read_pinned(pinned)
+                .expect_err("under a millisecond, in code")
+                .to_string();
+            assert_eq!(
+                refused,
+                format!(
+                    "invalid value for {}: is not set, and `{}` set in code is 500µs, below the \
+                     1ms it must be at least — {why}; `None` turns it off",
+                    field.var("resilience"),
+                    field.field().path(),
+                )
+            );
+        }
+        let milli = Some(Duration::from_millis(1));
+        let waiting = ResilienceConfig {
+            concurrency_wait: milli,
+            rate_wait: milli,
+            ..default()
+        };
+        let taken = read_pinned(waiting.clone()).expect("a millisecond, set in code");
+        assert_eq!((taken.concurrency_wait, taken.rate_wait), (milli, milli));
+        let off = ResilienceConfig::from_env(
+            &ConfigService::with_vars(
+                "resilience",
+                [("CONCURRENCY_WAIT_MS", "0"), ("RATE_WAIT_MS", "0")],
+            ),
+            waiting,
+        )
+        .expect("`0` is no wait");
+        assert_eq!((off.concurrency_wait, off.rate_wait), (None, None));
     }
 
     /// The longest attempt the policy's checks count on is the timeout's

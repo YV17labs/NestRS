@@ -105,9 +105,10 @@ nest-rs-reqwest = { path = "../nest-rs-reqwest" }
 http.workspace = true
 reqwest.workspace = true
 reqwest-middleware.workspace = true
-# Pins `#[resilient]`'s compile-time copy of the `timeout` and `retries` ranges
-# against `ResilienceConfig`'s (tests/integration/config.rs), over the literal a
-# method writes.
+# Pins `#[resilient]`'s compile-time copies against `ResilienceConfig`
+# (tests/integration/config.rs): the `timeout` and `retries` ranges, over the
+# literal a method writes, and the table of the settings no method pins, each
+# refused naming the variable and the field that set it.
 nest-rs-codegen = { path = "../nest-rs-codegen" }
 syn.workspace = true
 # The transitions' counter is read off an in-memory exporter the test installs

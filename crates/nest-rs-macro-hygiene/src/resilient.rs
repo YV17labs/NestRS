@@ -111,12 +111,13 @@ impl HygieneTracking for HygieneHandBuilt {
     }
 }
 
-/// A route and an `#[sse]` route of a `#[routes]` block.
+/// A route and two `#[sse]` routes of a `#[routes]` block, sent once and again.
 #[cfg(feature = "http")]
 pub mod routes {
     use std::sync::Arc;
 
-    use nest_rs::http::{SseStream, controller, routes};
+    use nest_rs::http::futures_util::stream;
+    use nest_rs::http::{SseEvent, SseStream, controller, routes};
     use nest_rs::resilience::{ResiliencePolicy, resilient};
 
     use super::{HygieneAnswer, HygieneCarrierDown};
@@ -142,15 +143,23 @@ pub mod routes {
         async fn feed(&self) -> HygieneAnswer<SseStream> {
             Err(HygieneCarrierDown)
         }
+
+        #[sse("/arrivals")]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn arrivals(&self) -> HygieneAnswer<SseStream> {
+            Ok(SseStream::new(stream::iter([SseEvent::message("arrived")])))
+        }
     }
 }
 
-/// A root field and a subscription of an `#[operations]` block.
+/// A root field and two subscriptions of an `#[operations]` block, sent once
+/// and again.
 #[cfg(feature = "graphql")]
 pub mod operations {
     use std::sync::Arc;
 
-    use nest_rs::graphql::async_graphql::futures_util::stream::BoxStream;
+    use nest_rs::graphql::async_graphql::futures_util::stream::{self, BoxStream};
     use nest_rs::graphql::{operations, resolver};
     use nest_rs::resilience::{ResilienceError, ResiliencePolicy, resilient};
 
@@ -180,6 +189,15 @@ pub mod operations {
             &self,
         ) -> Result<BoxStream<'static, i32>, ResilienceError<HygieneCarrierDown>> {
             Err(HygieneCarrierDown)
+        }
+
+        #[subscription]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn hygiene_arrivals(
+            &self,
+        ) -> Result<BoxStream<'static, i32>, ResilienceError<HygieneCarrierDown>> {
+            Ok(Box::pin(stream::iter([1])))
         }
     }
 }

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use nest_rs_core::{Problem, ToProblem, code};
 
-use crate::config::{BREAKER_OPEN_TIMES, ResilienceConfig};
+use crate::config::{LONGEST_OPEN, ResilienceConfig};
 
 const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 
@@ -19,7 +19,7 @@ const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 /// the `Retry-After` each knows. The problem also rides the error's chain: a
 /// domain error wrapping this one answers it by handing its
 /// [`to_problem`](ToProblem::to_problem) on, and a queue job failing with it
-/// waits at least that long before its retry.
+/// waits at least that long before its retry, up to an hour.
 ///
 /// It answers an edge when the call's error does, through [`ToProblem`], so the
 /// call's error says what a client of its failure is told — nothing, for a
@@ -127,28 +127,25 @@ pub enum BreakerError {
     #[error("the policy has no circuit breaker to switch")]
     Off,
     /// The duration is outside the open times
-    /// [`breaker_open`](ResilienceConfig::breaker_open) takes, the range a
-    /// manual opening is held to.
+    /// [`breaker_open`](ResilienceConfig::breaker_open) takes in code, the
+    /// range a manual opening is held to: none, or past its ceiling.
     #[error(
-        "a breaker opened by hand stays open {least:?} to {most:?}, the open times `{}` takes",
-        ResilienceConfig::BREAKER_OPEN.key()
+        "a breaker opened by hand stays open for a time above zero, up to {most:?}, the open \
+         times `{}` takes in code",
+        ResilienceConfig::BREAKER_OPEN.field().path()
     )]
     #[non_exhaustive]
     OutOfRange {
-        /// The shortest open time a manual opening takes.
-        least: Duration,
-        /// The longest open time a manual opening takes.
+        /// The longest open time a manual opening takes, the ceiling of
+        /// [`breaker_open`](ResilienceConfig::breaker_open).
         most: Duration,
     },
 }
 
 impl BreakerError {
-    /// A duration outside the open times `breaker_open` takes.
+    /// A duration outside the open times `breaker_open` takes in code.
     pub(crate) const fn out_of_range() -> Self {
-        Self::OutOfRange {
-            least: *BREAKER_OPEN_TIMES.start(),
-            most: *BREAKER_OPEN_TIMES.end(),
-        }
+        Self::OutOfRange { most: LONGEST_OPEN }
     }
 }
 

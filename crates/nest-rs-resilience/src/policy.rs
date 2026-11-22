@@ -21,14 +21,15 @@ use tokio::sync::SemaphorePermit;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+use crate::TARGET;
 use crate::breaker::{Breaker, BreakerState, Pass};
 use crate::bulkhead::Bulkhead;
-use crate::config::{BREAKER_OPEN_TIMES, LONGEST_ATTEMPT, ResilienceConfig};
+use crate::config::{LONGEST_ATTEMPT, ResilienceConfig, is_open_time};
 use crate::counters::Counters;
 use crate::error::{BreakerError, Refusal, ResilienceError};
+use crate::millis::millis;
 use crate::rate::Rate;
 use crate::resilient::ResilientMethod;
-use crate::{TARGET, millis};
 
 /// The calls to one dependency — a payment provider, a carrier's API, a
 /// language model — run under one policy, by every caller in the process.
@@ -343,7 +344,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         if let Some(rate) = &self.rate {
             let now = Instant::now();
             if let Some(reset) = rate.refusing(now)
-                && !waits_for_reset(now + reset, now + rate.wait(), deadline)
+                && !waits_for_reset(now + reset, rate.waits_until(now), deadline)
             {
                 refused_by_the_rate(I::NAME, method.as_ref(), reset);
                 return Err(self.refused(Refusal::Limited(reset)));
@@ -382,9 +383,10 @@ impl<I: Instance> ResiliencePolicy<I> {
     }
 
     /// Open the circuit breaker by hand for `duration`, an open time
-    /// [`breaker_open`](ResilienceConfig::breaker_open) takes: every call is
-    /// refused unsent, as by an open breaker, told what is left of it, then
-    /// the breaker probes the dependency as after any opening.
+    /// [`breaker_open`](ResilienceConfig::breaker_open) takes in code, above
+    /// zero and up to an hour: every call is refused unsent, as by an open
+    /// breaker, told what is left of it, then the breaker probes the
+    /// dependency as after any opening.
     ///
     /// Whatever the breaker was in, `duration` counts from now and replaces
     /// any open time it had, shorter or longer, and its window is forgotten:
@@ -405,10 +407,11 @@ impl<I: Instance> ResiliencePolicy<I> {
     ///
     /// [`BreakerError::Off`] for a policy with no breaker, and
     /// [`BreakerError::OutOfRange`] for a `duration` `breaker_open` would not
-    /// take; either leaves the breaker as it was.
+    /// take in code, none or one past an hour; either leaves the breaker as it
+    /// was.
     pub fn open_breaker(&self, duration: Duration) -> Result<(), BreakerError> {
         let breaker = self.breaker.as_ref().ok_or(BreakerError::Off)?;
-        if !BREAKER_OPEN_TIMES.contains(&duration) {
+        if !is_open_time(duration) {
             return Err(BreakerError::out_of_range());
         }
         breaker.open_manually(duration);
@@ -544,7 +547,7 @@ impl<'p, I: Instance> Run<'p, I> {
             let Err(reset) = rate.count(now) else {
                 return Ok((pass, bound));
             };
-            let until = *waits_until.get_or_insert_with(|| now + rate.wait());
+            let until = *waits_until.get_or_insert_with(|| rate.waits_until(now));
             let at = now + reset;
             if !waits_for_reset(at, until, self.deadline) {
                 refused_by_the_rate(I::NAME, self.method.as_ref(), reset);
@@ -739,6 +742,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicU32;
 
+    use nest_rs_config::{Config, ConfigService};
     use nest_rs_core::{CarriesRemedy, instance};
 
     use super::*;
@@ -757,6 +761,14 @@ mod tests {
 
     fn policy(config: ResilienceConfig) -> ResiliencePolicy<Upstream> {
         ResiliencePolicy::new(&config).expect("a valid policy")
+    }
+
+    /// The policy `config` describes once it is read as the module reads a
+    /// base set in code, held to the ranges a deployment's value is.
+    fn pinned(config: ResilienceConfig) -> ResiliencePolicy<Upstream> {
+        let read = ResilienceConfig::from_env(&ConfigService::with_vars("resilience", []), config)
+            .expect("a pin the config takes");
+        policy(read)
     }
 
     /// Retries on, no breaker, no bulkhead: the subject is the retry.
@@ -1101,7 +1113,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             concurrency: Some(1),
-            concurrency_wait: Duration::from_secs(60),
+            concurrency_wait: Some(Duration::from_secs(60)),
             ..ResilienceConfig::default()
         });
         let held = policy
@@ -1175,7 +1187,7 @@ mod tests {
             retries: None,
             breaker_window: None,
             concurrency: Some(1),
-            concurrency_wait: Duration::from_secs(10),
+            concurrency_wait: Some(Duration::from_secs(10)),
             ..ResilienceConfig::default()
         });
         let held = policy.begin(None).await.expect("the one slot");
@@ -1216,7 +1228,7 @@ mod tests {
             retries: None,
             breaker_window: None,
             concurrency: Some(2),
-            concurrency_wait: Duration::from_secs(10),
+            concurrency_wait: Some(Duration::from_secs(10)),
             concurrency_waiters: Some(3),
             ..ResilienceConfig::default()
         }));
@@ -1267,7 +1279,7 @@ mod tests {
             retries: None,
             breaker_window: None,
             concurrency: Some(1),
-            concurrency_wait: Duration::from_secs(1),
+            concurrency_wait: Some(Duration::from_secs(1)),
             concurrency_waiters: Some(1),
             ..ResilienceConfig::default()
         });
@@ -1320,7 +1332,7 @@ mod tests {
             retries: None,
             breaker_window: None,
             concurrency: None,
-            concurrency_wait: Duration::from_secs(60),
+            concurrency_wait: Some(Duration::from_secs(60)),
             concurrency_waiters: Some(1),
             ..ResilienceConfig::default()
         }));
@@ -1372,9 +1384,85 @@ mod tests {
         assert!(!run.again(&too_long).await, "past the 2 s ceiling");
     }
 
+    /// A backoff at its floor of a millisecond waits from 0.8 ms to 1.2 ms, its
+    /// jitter's, and each wait a retry's lines file is in whole milliseconds
+    /// rounded up: one drawn under a millisecond is `1`, never the `0` of no
+    /// wait, as the retry's wait and as the wait no time is left for, and a
+    /// ceiling of a millisecond and a half is `2` beside a wait asked past it.
+    /// The retry's wait ends no sooner than drawn.
+    #[tokio::test(start_paused = true)]
+    async fn a_backoff_drawn_under_a_millisecond_is_filed_as_one_and_each_retry_wait_rounds_up() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let floor = Duration::from_millis(1);
+        let policy = pinned(ResilienceConfig {
+            retries: Some(1),
+            backoff_first: floor,
+            backoff_ceiling: Duration::from_micros(1_500),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let seed = (0..)
+            .find(|seed| policy.backoff.wait(NonZeroU32::MIN, *seed) < floor)
+            .expect("a seed drawing the jitter's lower half");
+        let drawn = policy.backoff.wait(NonZeroU32::MIN, seed);
+        let run = || async {
+            let mut run = policy.begin(None).await.expect("a run");
+            run.seed = Some(seed);
+            run
+        };
+        let failed: Attempted<()> = Ok(((), Verdict::Failed { asked: None }));
+
+        let mut retrying = run().await;
+        let started = tokio::time::Instant::now();
+        assert!(retrying.again(&failed).await, "attempted again");
+        assert!(
+            started.elapsed() >= drawn,
+            "{:?}, drawn {drawn:?}",
+            started.elapsed()
+        );
+
+        let ended = nest_rs_core::__private::with_deadline(
+            Some(tokio::time::Instant::now() + drawn / 2),
+            async {
+                let mut run = run().await;
+                run.again(&failed).await
+            },
+        )
+        .await;
+        assert!(!ended, "the unit's deadline comes before the wait ends");
+
+        let asked: Attempted<()> = Ok((
+            (),
+            Verdict::Failed {
+                asked: Some(Duration::from_secs(3)),
+            },
+        ));
+        let mut asking = run().await;
+        assert!(!asking.again(&asked).await, "past the ceiling");
+
+        let retried = lines.expect_one(TARGET, "attempt failed; retrying the call");
+        let out_of_time = lines.expect_one(
+            TARGET,
+            "no time left before the unit's deadline; not attempted again",
+        );
+        for line in [&retried, &out_of_time] {
+            assert_eq!(line.field("wait_ms").as_deref(), Some("1"), "{line:?}");
+        }
+        let past = lines.expect_one(
+            TARGET,
+            "the dependency asked a wait past the backoff's ceiling; not attempted again",
+        );
+        assert_eq!(
+            (past.field("asked_ms"), past.field("ceiling_ms")),
+            (Some("3000".to_owned()), Some("2".to_owned())),
+            "{past:?}"
+        );
+    }
+
     /// No retry and no breaker, `limit` attempts per `window`, each attempt past
-    /// it waiting up to `wait` for the reset: the subject is the rate.
-    fn rated(limit: usize, window: Duration, wait: Duration) -> ResilienceConfig {
+    /// it waiting up to `wait` for the reset, or refused at once with none: the
+    /// subject is the rate.
+    fn rated(limit: usize, window: Duration, wait: Option<Duration>) -> ResilienceConfig {
         ResilienceConfig {
             retries: None,
             breaker_window: None,
@@ -1410,7 +1498,7 @@ mod tests {
     async fn every_attempt_sent_counts_against_the_rate_a_retry_included() {
         let policy = policy(ResilienceConfig {
             retries: Some(1),
-            ..rated(3, Duration::from_secs(60), Duration::ZERO)
+            ..rated(3, Duration::from_secs(60), None)
         });
         let calls = AtomicU32::new(0);
         let sent = || async {
@@ -1446,7 +1534,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn past_the_limit_a_call_is_refused_unsent_told_the_time_to_the_windows_reset() {
-        let policy = policy(rated(2, Duration::from_secs(60), Duration::ZERO));
+        let policy = policy(rated(2, Duration::from_secs(60), None));
         let calls = AtomicU32::new(0);
         let sent = || async {
             calls.fetch_add(1, Ordering::Relaxed);
@@ -1482,7 +1570,7 @@ mod tests {
     /// out of time while the rate is reached too.
     #[tokio::test(start_paused = true)]
     async fn nothing_left_of_the_units_deadline_refuses_before_the_rate_counts() {
-        let policy = policy(rated(1, Duration::from_secs(60), Duration::ZERO));
+        let policy = policy(rated(1, Duration::from_secs(60), None));
         let spent = || {
             nest_rs_core::__private::with_deadline(
                 Some(tokio::time::Instant::now()),
@@ -1511,7 +1599,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(10),
-            ..rated(2, Duration::from_secs(60), Duration::ZERO)
+            ..rated(2, Duration::from_secs(60), None)
         });
         let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
@@ -1538,7 +1626,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(3600),
-            ..rated(1, Duration::from_secs(60), Duration::ZERO)
+            ..rated(1, Duration::from_secs(60), None)
         });
         assert!(policy.run(|_| answering()).await.is_ok());
         let limited = policy.run(|_| answering()).await;
@@ -1562,7 +1650,7 @@ mod tests {
             breaker_window: Some(2),
             breaker_failures: 2,
             breaker_open: Duration::from_secs(30),
-            ..rated(2, Duration::from_secs(60), Duration::ZERO)
+            ..rated(2, Duration::from_secs(60), None)
         });
         for _ in 0..2 {
             let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
@@ -1592,7 +1680,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn an_attempt_past_the_limit_waits_for_the_reset_its_wait_reaches_then_is_sent() {
-        let policy = policy(rated(1, Duration::from_secs(10), Duration::from_secs(10)));
+        let policy = policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(10)),
+        ));
         let calls = AtomicU32::new(0);
         let sent = || async {
             calls.fetch_add(1, Ordering::Relaxed);
@@ -1613,7 +1705,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_reset_past_the_wait_or_at_the_units_deadline_is_not_waited() {
-        let policy = policy(rated(1, Duration::from_secs(10), Duration::from_secs(5)));
+        let policy = policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(5)),
+        ));
         assert!(policy.run(|_| answering()).await.is_ok());
         tokio::time::advance(Duration::from_secs(4)).await;
         let started = tokio::time::Instant::now();
@@ -1652,7 +1748,11 @@ mod tests {
     /// has 5 s of its 15 s left, which do not reach the reset after.
     #[tokio::test(start_paused = true)]
     async fn the_waits_of_one_attempt_never_add_up_past_its_wait() {
-        let policy = policy(rated(1, Duration::from_secs(10), Duration::from_secs(15)));
+        let policy = policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(15)),
+        ));
         assert!(policy.run(|_| answering()).await.is_ok());
         let started = tokio::time::Instant::now();
         let (first, second) = tokio::join!(
@@ -1680,7 +1780,11 @@ mod tests {
     /// 22 s, though the two waits it was told add up to 20 s.
     #[tokio::test(start_paused = true)]
     async fn a_wait_whose_timer_fires_late_counts_whole_against_the_attempts_wait() {
-        let policy = policy(rated(1, Duration::from_secs(10), Duration::from_secs(21)));
+        let policy = policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(21)),
+        ));
         assert!(policy.run(|_| answering()).await.is_ok());
         let mut waiting = Box::pin(policy.run(|_| answering()));
         park(&mut waiting).await;
@@ -1701,7 +1805,7 @@ mod tests {
     async fn the_bulkhead_slot_stays_held_while_an_attempt_waits_for_the_reset() {
         let policy = policy(ResilienceConfig {
             concurrency: Some(1),
-            ..rated(1, Duration::from_secs(10), Duration::from_secs(10))
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
         assert!(policy.run(|_| answering()).await.is_ok());
         let (waited, refused) = tokio::join!(policy.run(|_| answering()), async {
@@ -1736,8 +1840,8 @@ mod tests {
         ] {
             let policy = policy(ResilienceConfig {
                 concurrency: Some(1),
-                concurrency_wait: Duration::from_secs(60),
-                ..rated(2, Duration::from_secs(60), rate_wait)
+                concurrency_wait: Some(Duration::from_secs(60)),
+                ..rated(2, Duration::from_secs(60), Some(rate_wait))
             });
             let started = tokio::time::Instant::now();
             let (holding, waited) = tokio::join!(
@@ -1809,7 +1913,7 @@ mod tests {
         let policy = policy(ResilienceConfig {
             retries: None,
             concurrency: Some(1),
-            concurrency_wait: Duration::from_secs(10),
+            concurrency_wait: Some(Duration::from_secs(10)),
             rate_limit: Some(1),
             ..ResilienceConfig::default()
         });
@@ -1864,7 +1968,7 @@ mod tests {
     async fn the_wait_for_the_reset_is_none_of_the_attempts_and_the_units_deadline_bounds_both() {
         let policy = policy(ResilienceConfig {
             timeout: Duration::from_secs(1),
-            ..rated(1, Duration::from_secs(5), Duration::from_secs(10))
+            ..rated(1, Duration::from_secs(5), Some(Duration::from_secs(10)))
         });
         let slow = || async {
             tokio::time::sleep(Duration::from_millis(800)).await;
@@ -1900,7 +2004,11 @@ mod tests {
     /// a call sent with no time left.
     #[tokio::test(start_paused = true)]
     async fn an_attempt_whose_wait_for_the_reset_ends_past_the_units_deadline_is_refused_unsent() {
-        let policy = policy(rated(1, Duration::from_secs(10), Duration::from_secs(10)));
+        let policy = policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(10)),
+        ));
         assert!(policy.run(|_| answering()).await.is_ok());
         let sent = AtomicU32::new(0);
         let mut waiting = Box::pin(nest_rs_core::__private::with_deadline(
@@ -1935,7 +2043,7 @@ mod tests {
     async fn a_run_the_rate_refuses_ends_and_is_never_attempted_again() {
         let policy = policy(ResilienceConfig {
             retries: Some(3),
-            ..rated(1, Duration::from_secs(60), Duration::ZERO)
+            ..rated(1, Duration::from_secs(60), None)
         });
         let calls = AtomicU32::new(0);
         let started = tokio::time::Instant::now();
@@ -1968,7 +2076,7 @@ mod tests {
     async fn a_policy_with_no_rate_limit_builds_no_rate_whatever_its_window_and_wait() {
         let policy = policy(ResilienceConfig {
             rate_limit: None,
-            ..rated(1, Duration::from_secs(1), Duration::from_secs(60))
+            ..rated(1, Duration::from_secs(1), Some(Duration::from_secs(60)))
         });
         assert!(policy.rate.is_none());
         assert!(format!("{policy:?}").contains("rate: false"), "{policy:?}");
@@ -1997,7 +2105,7 @@ mod tests {
             breaker_window: Some(2),
             breaker_failures: 2,
             breaker_open: Duration::from_secs(30),
-            ..rated(2, Duration::from_secs(60), Duration::from_secs(60))
+            ..rated(2, Duration::from_secs(60), Some(Duration::from_secs(60)))
         });
         let calls = AtomicU32::new(0);
         let failing = || async {
@@ -2048,7 +2156,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(30),
-            ..rated(1, Duration::from_secs(60), Duration::from_secs(40))
+            ..rated(1, Duration::from_secs(60), Some(Duration::from_secs(40)))
         });
         let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
@@ -2094,7 +2202,7 @@ mod tests {
         let policy = policy(ResilienceConfig {
             rate_limit: Some(10),
             rate_window: Duration::from_secs(60),
-            rate_wait: Duration::from_secs(60),
+            rate_wait: Some(Duration::from_secs(60)),
             ..probing(Duration::from_secs(5))
         });
         probe_due(&policy).await;
@@ -2196,7 +2304,7 @@ mod tests {
             let policy = policy(ResilienceConfig {
                 rate_limit: Some(1),
                 rate_window: Duration::from_secs(10),
-                rate_wait: Duration::from_secs(10),
+                rate_wait: Some(Duration::from_secs(10)),
                 ..probing(Duration::from_secs(5))
             });
             probe_due(&policy).await;
@@ -2270,7 +2378,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(30),
-            ..rated(1, Duration::from_secs(10), Duration::from_secs(10))
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
         let sent = AtomicU32::new(0);
         let started = tokio::time::Instant::now();
@@ -2320,7 +2428,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(2),
-            ..rated(2, Duration::from_secs(10), Duration::from_secs(10))
+            ..rated(2, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
         let sent = std::sync::Mutex::new(Vec::new());
         let call = |name: &'static str, answer: Result<(), Refused>, takes: Duration| {
@@ -2367,7 +2475,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(2),
-            ..rated(1, Duration::from_secs(10), Duration::from_secs(10))
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
         let (failed, probed) = tokio::join!(
             policy.run(|_| async {
@@ -2406,7 +2514,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(1),
-            ..rated(1, Duration::from_secs(60), Duration::from_secs(30))
+            ..rated(1, Duration::from_secs(60), Some(Duration::from_secs(30)))
         });
         let states = || -> Vec<String> {
             lines
@@ -2459,7 +2567,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(1),
-            ..rated(1, Duration::from_secs(10), Duration::from_secs(10))
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
         let states = || -> Vec<String> {
             lines
@@ -2501,7 +2609,11 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_refusal_by_the_rate_and_a_wait_for_its_reset_are_debug_lines_naming_the_instance() {
         let lines = nest_rs_testing::LogCapture::install();
-        let policy = policy(rated(1, Duration::from_secs(10), Duration::from_secs(5)));
+        let policy = policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(5)),
+        ));
         assert!(policy.run(|_| answering()).await.is_ok());
         tokio::time::advance(Duration::from_secs(4)).await;
         let refused = policy.run(|_| answering()).await;
@@ -2529,6 +2641,51 @@ mod tests {
                 (None, None),
                 "a call run through the policy is no method"
             );
+        }
+    }
+
+    /// A reset under a millisecond away is filed in whole milliseconds rounded
+    /// up, `1`, never the `0` of no wait: told an attempt the rate refuses, and
+    /// waited for by one whose wait reaches it, which is sent once the reset
+    /// has passed, never before.
+    #[tokio::test(start_paused = true)]
+    async fn a_reset_under_a_millisecond_away_is_filed_as_one_never_as_zero() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let window = Duration::from_secs(1);
+        let refusing = policy(rated(1, window, None));
+        let waiting = policy(rated(1, window, Some(Duration::from_millis(1))));
+        for policy in [&refusing, &waiting] {
+            assert!(policy.run(|_| answering()).await.is_ok(), "opens a window");
+        }
+        let near = Duration::from_micros(500);
+        tokio::time::advance(window - near).await;
+        let refused = refusing.run(|_| answering()).await;
+        assert!(
+            matches!(refused, Err(ResilienceError::Limited { retry_after, .. }) if retry_after == near),
+            "{refused:?}"
+        );
+        let reset = tokio::time::Instant::now() + near;
+        let sent = std::cell::Cell::new(None);
+        let answered = waiting
+            .run(|_| async {
+                sent.set(Some(tokio::time::Instant::now()));
+                Ok::<_, Refused>(())
+            })
+            .await;
+        assert!(answered.is_ok(), "{answered:?}");
+        assert!(
+            sent.get().is_some_and(|sent| sent >= reset),
+            "sent once the reset has passed: {:?}",
+            sent.get()
+        );
+
+        let refusal = lines.expect_one(TARGET, "rate limit reached; the call is refused");
+        let wait = lines.expect_one(
+            TARGET,
+            "rate limit reached; waiting for the window to reset",
+        );
+        for (line, field) in [(&refusal, "retry_after_ms"), (&wait, "wait_ms")] {
+            assert_eq!(line.field(field).as_deref(), Some("1"), "{line:?}");
         }
     }
 
@@ -2592,7 +2749,7 @@ mod tests {
 
         let waiting = policy(ResilienceConfig {
             concurrency: Some(1),
-            concurrency_wait: Duration::from_secs(60),
+            concurrency_wait: Some(Duration::from_secs(60)),
             concurrency_waiters: Some(1),
             breaker_window: None,
             ..ResilienceConfig::default()
@@ -3022,33 +3179,34 @@ mod tests {
         );
     }
 
-    /// A manual opening for a duration `breaker_open` would not take is
-    /// refused, never clamped: the breaker stays as it was and files nothing,
-    /// and the refusal names the open times it takes and their variable's key,
-    /// never the duration given. Both ends are taken.
+    /// A manual opening for a duration `breaker_open` would not take in code
+    /// — none, or past its ceiling — is refused, never clamped: the breaker
+    /// stays as it was and files nothing, and the refusal names the open times
+    /// it takes and the field taking them, never the duration given. Anything
+    /// above none up to the ceiling is taken, a time under a second included.
     #[tokio::test(start_paused = true)]
     async fn a_manual_opening_outside_the_open_times_breaker_open_takes_is_refused_unclamped() {
         let lines = nest_rs_testing::LogCapture::install();
         let policy = policy(ResilienceConfig::default());
         let bounds = ResilienceConfig::BREAKER_OPEN.bounds();
-        let nest_rs_config::Floor::Units(floor) = bounds.least() else {
-            panic!("the open time's floor is a count of seconds");
-        };
-        let least = bounds.unit().duration(floor.count);
+        assert!(
+            matches!(bounds.least(), nest_rs_config::Floor::AboveZero(_)),
+            "an open time is anything above none"
+        );
         let most = bounds.unit().duration(bounds.most().count);
-        let tick = Duration::from_millis(1);
-        for outside in [Duration::ZERO, least - tick, most + tick, Duration::MAX] {
+        let tick = Duration::from_nanos(1);
+        for outside in [Duration::ZERO, most + tick, Duration::MAX] {
             let refused = policy
                 .open_breaker(outside)
                 .expect_err("outside the open times");
-            assert_eq!(refused, BreakerError::OutOfRange { least, most });
+            assert_eq!(refused, BreakerError::OutOfRange { most });
             let said = refused.to_string();
             assert_eq!(
                 said,
                 format!(
-                    "a breaker opened by hand stays open {least:?} to {most:?}, the open times \
-                     `{}` takes",
-                    ResilienceConfig::BREAKER_OPEN.key()
+                    "a breaker opened by hand stays open for a time above zero, up to {most:?}, \
+                     the open times `{}` takes in code",
+                    ResilienceConfig::BREAKER_OPEN.field().path()
                 )
             );
             assert!(!said.contains(&format!("{outside:?}")), "{said}");
@@ -3059,13 +3217,134 @@ mod tests {
                 .find(TARGET, "circuit breaker changed state")
                 .is_empty()
         );
-        for end in [least, most] {
-            assert_eq!(policy.open_breaker(end), Ok(()));
+        for taken in [tick, Duration::from_millis(500), most] {
+            assert_eq!(policy.open_breaker(taken), Ok(()), "{taken:?}");
             assert_eq!(
                 policy.breaker_state(),
-                Some(BreakerState::Open { retry_after: end })
+                Some(BreakerState::Open { retry_after: taken })
             );
         }
+    }
+
+    /// An open time under a second, set in code, refuses every call for that
+    /// long, told what is left of it in a `Retry-After` of a second, rounded
+    /// up, then lets the next call probe; a manual opening for one does the
+    /// same.
+    #[tokio::test(start_paused = true)]
+    async fn a_breaker_open_under_a_second_refuses_for_that_long_then_probes() {
+        let open = Duration::from_millis(500);
+        let policy = pinned(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: open,
+            ..ResilienceConfig::default()
+        });
+        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
+        let into = Duration::from_millis(200);
+        tokio::time::advance(into).await;
+        let Err(refused) = policy.run(|_| answering()).await else {
+            panic!("open for 500 ms");
+        };
+        let ResilienceError::Open { retry_after, .. } = &refused else {
+            panic!("refused by the breaker: {refused:?}");
+        };
+        assert_eq!(*retry_after, open - into);
+        let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
+            .expect("the problem rides the chain");
+        assert_eq!(problem.retry_after(), Some(1), "a second, rounded up");
+        tokio::time::advance(open - into).await;
+        assert!(policy.run(|_| answering()).await.is_ok(), "the probe");
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+
+        policy
+            .open_breaker(open)
+            .expect("an open time `breaker_open` takes");
+        tokio::time::advance(open - Duration::from_millis(1)).await;
+        assert!(
+            matches!(
+                policy.run(|_| answering()).await,
+                Err(ResilienceError::Open { .. })
+            ),
+            "a millisecond short of the opening's end"
+        );
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(policy.run(|_| answering()).await.is_ok(), "the probe");
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+    }
+
+    /// An age under a second, set in code, forgets a failure older than it: a
+    /// breaker one failure short of opening stays closed on a failure past the
+    /// age of the one before, and opens on one within it.
+    #[tokio::test(start_paused = true)]
+    async fn a_breaker_age_under_a_second_forgets_a_failure_older_than_it() {
+        let age = Duration::from_millis(500);
+        let policy = pinned(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(4),
+            breaker_failures: 2,
+            breaker_age: Some(age),
+            ..ResilienceConfig::default()
+        });
+        let failing = || async { Err::<(), _>(Refused) };
+        assert!(policy.run(|_| failing()).await.is_err());
+        tokio::time::advance(age + Duration::from_millis(1)).await;
+        assert!(policy.run(|_| failing()).await.is_err());
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::Closed),
+            "the first failure is past the age"
+        );
+        tokio::time::advance(age).await;
+        assert!(policy.run(|_| failing()).await.is_err());
+        assert!(
+            matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+            "two failures within the age of one another"
+        );
+    }
+
+    /// A window under a second, set in code, sends its limit within it and
+    /// refuses the next attempt unsent, told the time to its reset in a
+    /// `Retry-After` of a second, rounded up; past the reset, it sends again.
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_window_under_a_second_resets_that_often() {
+        let window = Duration::from_millis(500);
+        let policy = pinned(rated(2, window, None));
+        let calls = AtomicU32::new(0);
+        let sent = || async {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, Refused>(())
+        };
+        assert!(policy.run(|_| sent()).await.is_ok());
+        let into = Duration::from_millis(100);
+        tokio::time::advance(into).await;
+        assert!(policy.run(|_| sent()).await.is_ok());
+        let Err(refused) = policy.run(|_| sent()).await else {
+            panic!("past the limit");
+        };
+        let ResilienceError::Limited { retry_after, .. } = &refused else {
+            panic!("refused by the rate: {refused:?}");
+        };
+        assert_eq!(
+            *retry_after,
+            window - into,
+            "the window the first call opened resets at 500 ms"
+        );
+        let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
+            .expect("the problem rides the chain");
+        assert_eq!(problem.retry_after(), Some(1), "a second, rounded up");
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            2,
+            "a refused call is never sent"
+        );
+        tokio::time::advance(window - into).await;
+        assert!(
+            policy.run(|_| sent()).await.is_ok(),
+            "the next window opens"
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 
     /// A manual opening refuses every call unsent, a retry included, told what
@@ -3107,7 +3386,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(1),
-            ..rated(1, Duration::from_secs(10), Duration::from_secs(10))
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
         let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
@@ -3158,7 +3437,7 @@ mod tests {
             breaker_window: Some(1),
             breaker_failures: 1,
             breaker_open: Duration::from_secs(1),
-            ..rated(1, Duration::from_secs(10), Duration::from_secs(10))
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
         let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));

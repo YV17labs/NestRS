@@ -286,7 +286,8 @@ mod mcp {
 }
 
 /// A job failing on an open breaker waits at least the breaker's `Retry-After`
-/// before its next attempt, through the problem its error's chain carries.
+/// before its next attempt, through the problem its error's chain carries, and
+/// one refused by a spent rate the rate's, up to an hour.
 mod queue {
     use std::sync::Arc;
     use std::time::Duration;
@@ -296,7 +297,7 @@ mod queue {
     use nest_rs_queue::{
         Capabilities, ProcessMethod, QueueBackend, QueueName, WIRE_FORMAT_VERSION, processor, queue,
     };
-    use nest_rs_resilience::{ResilienceError, ResiliencePolicy};
+    use nest_rs_resilience::{ResilienceConfig, ResilienceError, ResiliencePolicy};
     use serde::{Deserialize, Serialize};
 
     use super::{UpstreamDown, opening_on_the_first_failure};
@@ -359,6 +360,36 @@ mod queue {
         assert!(
             after >= asked && after <= asked.mul_f64(1.2),
             "the breaker's wait, stretched by a fifth at most: {after:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_job_refused_by_a_spent_rate_waits_its_retry_after_up_to_an_hour() {
+        let window = Duration::from_secs(6 * 60 * 60);
+        let (_app, upstream) = crate::policy(ResilienceConfig {
+            rate_limit: Some(1),
+            rate_window: window,
+            ..crate::quiet()
+        })
+        .await;
+        let container = Container::builder()
+            .provide(PreviewProcessor { upstream })
+            .build()
+            .expect("the container builds");
+
+        let sent = attempted(&container).await;
+        assert!(
+            matches!(sent, AttemptOutcome::Retry { .. }),
+            "the window's one attempt, failed: {sent:?}"
+        );
+
+        let AttemptOutcome::Retry { after } = attempted(&container).await else {
+            panic!("a 503 another attempt may clear retries");
+        };
+        let hour = Duration::from_secs(60 * 60);
+        assert!(
+            after >= hour && after <= hour.mul_f64(1.2),
+            "an hour of the {window:?} the rate told, stretched by a fifth at most: {after:?}"
         );
     }
 }

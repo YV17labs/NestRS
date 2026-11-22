@@ -10,7 +10,7 @@ error: #[resilient] `retries`: `0` turns retries off, which leaves `idempotent` 
 35 |     #[resilient(carrier, idempotent, retries = 0)]
    |                                                ^
 
-error: #[resilient] `retries`: must be at most 10 — past ten, one caller sends a failing dependency eleven calls, the hammering a breaker exists to stop
+error: #[resilient] `retries`: must be at most 10 — past ten, the retries let one call send its failing dependency twelve attempts or more, the hammering a breaker exists to stop
   --> tests/integration/diagnostics/resilience/resilient_retries_refused.rs:40:48
    |
 40 |     #[resilient(carrier, idempotent, retries = 11)]

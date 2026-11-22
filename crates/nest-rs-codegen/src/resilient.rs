@@ -144,19 +144,22 @@ struct End {
 
 const TIMEOUT_FLOOR_MILLIS: End = End {
     count: 1,
-    why: "a zero timeout gives every attempt up before its call is sent",
+    why: "a zero timeout gives every attempt up before its call is sent, and one above zero but \
+          under a millisecond ends at the next tick of tokio's timer, which counts whole \
+          milliseconds and cannot honour less",
 };
 
 const TIMEOUT_CEILING_MILLIS: End = End {
     count: 10 * 60 * 1000,
-    why: "one attempt past ten minutes outwaits every edge's deadline many times over, and a \
-          value that long is a unit slip more often than a choice (`600` meant as seconds)",
+    why: "one attempt past ten minutes outlasts a worker job's default deadline, the longest the \
+          framework gives a unit; a call that long is a job's work, started and then polled, \
+          rather than one attempt",
 };
 
 const RETRIES_CEILING: End = End {
     count: 10,
-    why: "past ten, one caller sends a failing dependency eleven calls, the hammering a breaker \
-          exists to stop",
+    why: "past ten, the retries let one call send its failing dependency twelve attempts or more, \
+          the hammering a breaker exists to stop",
 };
 
 /// Read a `timeout = "…"` a `#[resilient]` method pins, in milliseconds: a

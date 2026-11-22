@@ -233,18 +233,24 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
 }
 
 /// The field, named first and alone — refused when what leads the list is a
-/// key, or anything but a field's name.
+/// key, the decorator's own or a setting of the policy's, told where that one
+/// is set as it is after the field, or anything but a field's name.
 fn field(input: ParseStream<'_>) -> syn::Result<Ident> {
-    if let Ok(leading) = input.fork().call(Ident::parse_any)
-        && KEYS.contains(&leading.unraw().to_string().as_str())
-    {
-        return Err(syn::Error::new(
-            leading.span(),
-            format!(
-                "#[resilient] reads the field holding the policy first, and `{leading}` is one of \
-                 its keys — write the field before it: `#[resilient(carrier, {leading})]`",
-            ),
-        ));
+    if let Ok(leading) = input.fork().call(Ident::parse_any) {
+        let key = leading.unraw().to_string();
+        if KEYS.contains(&key.as_str()) {
+            return Err(syn::Error::new(
+                leading.span(),
+                format!(
+                    "#[resilient] reads the field holding the policy first, and `{leading}` is \
+                     one of its keys — write the field before it: `#[resilient(carrier, \
+                     {leading})]`",
+                ),
+            ));
+        }
+        if let Some(elsewhere) = resilient_policy_setting(&key) {
+            return Err(syn::Error::new(leading.span(), elsewhere));
+        }
     }
     let fork = input.fork();
     match fork.parse::<Ident>() {
@@ -464,11 +470,29 @@ fn answer(method: &ImplItemFn) -> (TokenStream, Span) {
     (answer, at)
 }
 
-/// `method`'s body, taken out of it and braced as it was written.
-fn body(method: &mut ImplItemFn) -> syn::Block {
+/// `method`'s body, taken out of it and braced as it was written, opening after
+/// its items on a `return` of the attempt's type never taken: rustc types an
+/// async block's output from its body, so without it no answer is coerced.
+fn body(method: &mut ImplItemFn, answer: &TokenStream, at: Span) -> syn::Block {
+    let mut stmts = std::mem::take(&mut method.block.stmts);
+    let items = stmts
+        .iter()
+        .take_while(|stmt| matches!(stmt, syn::Stmt::Item(_)))
+        .count();
+    stmts.insert(
+        items,
+        syn::Stmt::Expr(
+            Expr::Verbatim(quote_spanned! {at=>
+                if false {
+                    return ::nest_rs_resilience::__private::attempt::<#answer>();
+                }
+            }),
+            None,
+        ),
+    );
     syn::Block {
         brace_token: method.block.brace_token,
-        stmts: std::mem::take(&mut method.block.stmts),
+        stmts,
     }
 }
 
@@ -500,7 +524,7 @@ fn expand(
             #retries,
         )
     };
-    let block = body(&mut method);
+    let block = body(&mut method, &answer, at);
     let call = match run {
         Run::Idempotent(key) => {
             let replayed = quote_spanned!(key.span()=> |_| async #block);
@@ -527,7 +551,7 @@ fn expand(
 /// reads no field and never runs.
 fn stand_in(mut method: ImplItemFn) -> TokenStream {
     let (answer, at) = answer(&method);
-    let block = body(&mut method);
+    let block = body(&mut method, &answer, at);
     let checked = quote_spanned! {at=>
         ::nest_rs_resilience::__private::refused::<#answer, _, _>(move |_| async move #block)
     };
@@ -598,7 +622,8 @@ mod tests {
             "policy (& self . carrier)",
             "resilient_method (:: core :: any :: type_name :: < Self > , \"rates\" , :: core \
              :: option :: Option :: Some (2000u64) , :: core :: option :: Option :: Some (3u32) ,)",
-            "| _ | async { quote (zone) . await }",
+            "| _ | async { if false { return :: nest_rs_resilience :: __private :: attempt :: < \
+             Result < u32 , ResilienceError < E > > > () ; } quote (zone) . await }",
         ] {
             assert!(expanded.contains(written), "{written} in {expanded}");
         }
@@ -620,7 +645,37 @@ mod tests {
             "{expanded}"
         );
         assert!(
-            expanded.contains("move | _ | async move { send (order) . await }"),
+            expanded.contains(
+                "move | _ | async move { if false { return :: nest_rs_resilience :: __private :: \
+                 attempt :: < Result < () , ResilienceError < E > > > () ; } send (order) . await }"
+            ),
+            "{expanded}"
+        );
+    }
+
+    /// The attempt's type is the body's first answer, after the items it
+    /// declares first and before every statement, so rustc checks each answer
+    /// the body writes against it and no item follows a statement.
+    #[test]
+    fn the_body_answers_the_attempts_type_first_after_its_leading_items() {
+        let expanded = resilient(
+            quote!(carrier),
+            quote! {
+                async fn ship(&self, order: Order) -> Answer {
+                    use std::fmt::Write as _;
+                    const LABEL: &str = "parcel";
+                    let label = LABEL;
+                    send(order, label).await
+                }
+            },
+        )
+        .to_string();
+        assert!(
+            expanded.contains(
+                "async move { use std :: fmt :: Write as _ ; const LABEL : & str = \"parcel\" ; \
+                 if false { return :: nest_rs_resilience :: __private :: attempt :: < Answer > () \
+                 ; } let label = LABEL ;"
+            ),
             "{expanded}"
         );
     }
@@ -691,6 +746,41 @@ mod tests {
         }
     }
 
+    /// A setting of the policy's written where the field belongs — with a
+    /// value, before the field, or alone — is refused in the words the same
+    /// key earns after the field, rather than as a field the list names wrong.
+    #[test]
+    fn a_setting_of_the_policys_written_first_is_refused_as_it_is_after_the_field() {
+        let item = quote!(
+            async fn track(&self) -> Answer {
+                send().await
+            }
+        );
+        for key in [
+            "backoff_first",
+            "breaker_open",
+            "concurrency_waiters",
+            "rate_limit",
+        ] {
+            let after = refusals(
+                format!("carrier, {key} = 5").parse().expect("arguments"),
+                item.clone(),
+            );
+            for first in [
+                format!("{key} = 5"),
+                format!("{key} = 5, carrier"),
+                key.to_owned(),
+            ] {
+                let refused = refusals(first.parse().expect("arguments"), item.clone());
+                assert_eq!(refused, after, "#[resilient({first})]");
+            }
+            assert!(
+                after[0].starts_with(&format!("#[resilient] takes no `{key}`: ")),
+                "{after:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_field_leads_the_list() {
         let item = quote!(
@@ -728,6 +818,13 @@ mod tests {
         assert!(
             stood_in.contains("refused :: < Answer"),
             "no field to read: {stood_in}"
+        );
+        assert!(
+            stood_in.contains(
+                "move | _ | async move { if false { return :: nest_rs_resilience :: __private :: \
+                 attempt :: < Answer > () ; } send (order) . await }"
+            ),
+            "the stand-in checks the body against the attempt's type: {stood_in}"
         );
         let as_written = kept(
             quote!(carrier),

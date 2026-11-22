@@ -11,8 +11,9 @@ use tokio::time::Instant;
 pub(crate) struct Rate {
     limit: usize,
     window: Duration,
-    /// How long one attempt waits in all for the window's reset.
-    wait: Duration,
+    /// How long one attempt waits in all for the window's reset, `None` for
+    /// no wait.
+    wait: Option<Duration>,
     /// The window counting, once an attempt opened one.
     held: Mutex<Option<Window>>,
 }
@@ -25,8 +26,9 @@ struct Window {
 
 impl Rate {
     /// A rate sending `limit` attempts per `window`, each attempt past it
-    /// waiting up to `wait` in all for the window's reset.
-    pub(crate) fn new(limit: usize, window: Duration, wait: Duration) -> Self {
+    /// waiting up to `wait` in all for the window's reset, or refused at once
+    /// with no wait.
+    pub(crate) fn new(limit: usize, window: Duration, wait: Option<Duration>) -> Self {
         Self {
             limit,
             window,
@@ -73,9 +75,11 @@ impl Rate {
             .filter(|left| !left.is_zero())
     }
 
-    /// How long one attempt waits in all for the window's reset.
-    pub(crate) const fn wait(&self) -> Duration {
-        self.wait
+    /// The latest instant an attempt the window first refused at `refused`
+    /// waits for its reset until: `refused` itself with no wait, so no reset,
+    /// always some time away, is waited for.
+    pub(crate) fn waits_until(&self, refused: Instant) -> Instant {
+        self.wait.map_or(refused, |wait| refused + wait)
     }
 
     /// The most attempts the rate sends within any span `span` long, both
@@ -116,7 +120,7 @@ mod tests {
     /// every attempt until it has passed, and the next attempt opens the next.
     #[tokio::test(start_paused = true)]
     async fn the_first_attempt_counted_opens_a_fixed_window_the_rest_count_in() {
-        let rate = Rate::new(2, WINDOW, Duration::ZERO);
+        let rate = Rate::new(2, WINDOW, None);
         tokio::time::advance(Duration::from_secs(3)).await;
         assert_eq!(counted(&rate), Ok(()), "opens the window, at 3 s");
         tokio::time::advance(Duration::from_secs(2)).await;
@@ -138,11 +142,23 @@ mod tests {
         assert_eq!(counted(&rate), Err(Duration::from_secs(9)));
     }
 
+    /// A window of no time, which the config refuses, opens afresh at every
+    /// attempt, so its count never passes one and no limit refuses one, as the
+    /// window's floor says.
+    #[tokio::test(start_paused = true)]
+    async fn a_window_of_no_time_resets_at_every_attempt_and_refuses_none() {
+        let rate = Rate::new(1, Duration::ZERO, None);
+        for _ in 0..3 {
+            assert_eq!(counted(&rate), Ok(()));
+        }
+        assert_eq!(rate.refusing(Instant::now()), None);
+    }
+
     /// However many attempts a window refused, the next one opens with every
     /// attempt its limit allows: a refusal carries no debt over.
     #[tokio::test(start_paused = true)]
     async fn the_attempts_a_window_refused_take_nothing_of_the_next() {
-        let rate = Rate::new(2, WINDOW, Duration::ZERO);
+        let rate = Rate::new(2, WINDOW, None);
         assert_eq!(counted(&rate), Ok(()));
         assert_eq!(counted(&rate), Ok(()));
         for _ in 0..5 {
@@ -182,7 +198,7 @@ mod tests {
     #[test]
     fn the_most_attempts_a_span_holds_are_the_most_the_rate_sends_in_it_from_any_start() {
         let tick = Duration::from_nanos(1);
-        let rate = |limit| Rate::new(limit, WINDOW, Duration::ZERO);
+        let rate = |limit| Rate::new(limit, WINDOW, None);
         let most_sent = |limit, span| {
             [None, Some(tick), Some(WINDOW / 2), Some(WINDOW - tick)]
                 .map(|before| sent_within(&rate(limit), span, before))
@@ -215,7 +231,7 @@ mod tests {
     /// attempts through as before.
     #[tokio::test(start_paused = true)]
     async fn a_read_of_the_rate_answers_what_counting_would_refuse_and_counts_nothing() {
-        let rate = Rate::new(2, WINDOW, Duration::ZERO);
+        let rate = Rate::new(2, WINDOW, None);
         let read = || rate.refusing(Instant::now());
         assert_eq!(read(), None, "no window yet");
         for _ in 0..2 {
@@ -241,7 +257,7 @@ mod tests {
     /// its earlier clock read as no time elapsed.
     #[tokio::test(start_paused = true)]
     async fn an_attempt_read_before_the_window_opened_counts_in_it() {
-        let rate = Rate::new(1, WINDOW, Duration::ZERO);
+        let rate = Rate::new(1, WINDOW, None);
         let earlier = Instant::now();
         tokio::time::advance(Duration::from_secs(1)).await;
         assert_eq!(counted(&rate), Ok(()));

@@ -115,7 +115,7 @@ async fn every_attempt_a_decorated_method_sends_counts_its_retry_included() {
         retries: Some(3),
         rate_limit: Some(1),
         rate_window: Duration::from_secs(10),
-        rate_wait: Duration::from_secs(5),
+        rate_wait: Some(Duration::from_secs(5)),
         ..quiet()
     }))],
     providers = [ShipmentsService],

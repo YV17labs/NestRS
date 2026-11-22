@@ -208,9 +208,9 @@ impl<I: Instance> ResiliencePolicy<I> {
                     Arc::clone(&counters),
                 )
             }),
-            bulkhead: config
-                .concurrency
-                .map(|slots| Bulkhead::new(slots, config.concurrency_wait)),
+            bulkhead: config.concurrency.map(|slots| {
+                Bulkhead::new(slots, config.concurrency_wait, config.concurrency_waiters)
+            }),
             rate,
             counters,
             runs: AtomicU64::new(0),
@@ -290,8 +290,10 @@ impl<I: Instance> ResiliencePolicy<I> {
 
     /// Open one run — of `method`, when a decorated method opens it — taking a
     /// slot of the bulkhead within the unit's deadline, refused at once, in an
-    /// attempt's order, by a unit out of time and then by an open breaker,
-    /// rather than after waiting for one.
+    /// attempt's order, by a unit out of time and then by an open breaker, and
+    /// — finding no free slot — by a spent rate whose reset it could not wait
+    /// for, rather than after waiting for one; at once too while as many calls
+    /// wait for one as may.
     pub(crate) async fn begin(
         &self,
         method: Option<ResilientMethod>,
@@ -305,17 +307,10 @@ impl<I: Instance> ResiliencePolicy<I> {
                 if let Some(retry_after) = self.breaker.as_ref().and_then(Breaker::refusing) {
                     return Err(self.refused(Refusal::Open(retry_after)));
                 }
-                let Some(slot) = bulkhead.enter(deadline).await else {
-                    tracing::debug!(
-                        target: TARGET,
-                        instance = I::NAME,
-                        host = method.as_ref().map(ResilientMethod::host).as_deref(),
-                        method = method.as_ref().map(ResilientMethod::name),
-                        "bulkhead full; the call is refused",
-                    );
-                    return Err(self.refused(Refusal::Full));
-                };
-                Some(slot)
+                match bulkhead.try_enter() {
+                    Some(free) => Some(free),
+                    None => Some(self.wait_for_slot(bulkhead, deadline, method).await?),
+                }
             }
             None => None,
         };
@@ -332,6 +327,38 @@ impl<I: Instance> ResiliencePolicy<I> {
             method,
             seed: None,
             resent: 0,
+        })
+    }
+
+    /// A slot of `bulkhead` for a run finding none free, waited for within the
+    /// unit's `deadline`: refused at once by a spent rate whose reset it could
+    /// not wait for, read first and counting nothing, and refused `Full` once
+    /// no slot is freed for it in time or as many calls wait for one as may.
+    async fn wait_for_slot<'p>(
+        &'p self,
+        bulkhead: &'p Bulkhead,
+        deadline: Option<Instant>,
+        method: Option<ResilientMethod>,
+    ) -> Result<SemaphorePermit<'p>, Refusal> {
+        if let Some(rate) = &self.rate {
+            let now = Instant::now();
+            if let Some(reset) = rate.refusing(now)
+                && !waits_for_reset(now + reset, now + rate.wait(), deadline)
+            {
+                refused_by_the_rate(I::NAME, method.as_ref(), reset);
+                return Err(self.refused(Refusal::Limited(reset)));
+            }
+        }
+        bulkhead.enter(deadline).await.map_err(|full| {
+            tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                host = method.as_ref().map(ResilientMethod::host).as_deref(),
+                method = method.as_ref().map(ResilientMethod::name),
+                waiters = full.waiters(),
+                "bulkhead full; the call is refused",
+            );
+            self.refused(Refusal::Full)
         })
     }
 
@@ -519,15 +546,8 @@ impl<'p, I: Instance> Run<'p, I> {
             };
             let until = *waits_until.get_or_insert_with(|| now + rate.wait());
             let at = now + reset;
-            if at > until || self.deadline.is_some_and(|deadline| at >= deadline) {
-                tracing::debug!(
-                    target: TARGET,
-                    instance = I::NAME,
-                    host = self.host().as_deref(),
-                    method = self.method_name(),
-                    retry_after_ms = millis(reset),
-                    "rate limit reached; the call is refused",
-                );
+            if !waits_for_reset(at, until, self.deadline) {
+                refused_by_the_rate(I::NAME, self.method.as_ref(), reset);
                 return Err(Refusal::Limited(reset));
             }
             if let Some(pass) = &pass {
@@ -665,6 +685,26 @@ impl<I: Instance> fmt::Debug for ResiliencePolicy<I> {
             .field("rate", &self.rate.is_some())
             .finish_non_exhaustive()
     }
+}
+
+/// Whether an attempt waits for the window's reset at `at`: within its wait,
+/// which ends at `until`, and before the unit's `deadline`, at which a call
+/// sent has no time to answer.
+fn waits_for_reset(at: Instant, until: Instant, deadline: Option<Instant>) -> bool {
+    at <= until && deadline.is_none_or(|deadline| at < deadline)
+}
+
+/// The line a call the rate refuses files, naming `method` when a decorated
+/// method ran it.
+fn refused_by_the_rate(instance: &'static str, method: Option<&ResilientMethod>, reset: Duration) {
+    tracing::debug!(
+        target: TARGET,
+        instance,
+        host = method.map(ResilientMethod::host).as_deref(),
+        method = method.map(ResilientMethod::name),
+        retry_after_ms = millis(reset),
+        "rate limit reached; the call is refused",
+    );
 }
 
 fn judged<T, E>(answer: &Result<T, E>) -> Verdict {
@@ -1166,6 +1206,150 @@ mod tests {
         );
     }
 
+    /// More callers at once than slots and waiters: the slots' holders are
+    /// sent, exactly `concurrency_waiters` wait for a slot and are sent in
+    /// turn, and every other caller is refused `Full` at the same instant,
+    /// unsent.
+    #[tokio::test(start_paused = true)]
+    async fn more_callers_than_slots_and_waiters_leave_exactly_the_waiters_waiting() {
+        let policy = Arc::new(policy(ResilienceConfig {
+            retries: None,
+            breaker_window: None,
+            concurrency: Some(2),
+            concurrency_wait: Duration::from_secs(10),
+            concurrency_waiters: Some(3),
+            ..ResilienceConfig::default()
+        }));
+        let started = tokio::time::Instant::now();
+        let callers: Vec<_> = (0..12)
+            .map(|_| {
+                let policy = Arc::clone(&policy);
+                tokio::spawn(async move {
+                    let answered = policy
+                        .run(|_| async {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            Ok::<_, Refused>(())
+                        })
+                        .await;
+                    (started.elapsed(), answered)
+                })
+            })
+            .collect();
+        let (mut sent, mut refused) = (Vec::new(), Vec::new());
+        for caller in callers {
+            match caller.await.expect("the caller's task") {
+                (at, Ok(())) => sent.push(at.as_secs()),
+                (at, Err(ResilienceError::Full { .. })) => refused.push(at),
+                (_, other) => panic!("sent, or refused for a full bulkhead: {other:?}"),
+            }
+        }
+        sent.sort_unstable();
+        assert_eq!(
+            sent,
+            [1, 1, 2, 2, 3],
+            "the two holding the slots answer at 1 s, then the three waiting, in turn"
+        );
+        assert_eq!(
+            refused,
+            [Duration::ZERO; 7],
+            "every other caller is refused at once"
+        );
+    }
+
+    /// A call finding every slot taken and as many calls waiting as may is
+    /// refused at once, filing the full bulkhead's line with the waiters'
+    /// bound it met; a call whose wait ran out files the line without it.
+    /// From a decorated method, each names its host and its method.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_the_waiters_bound_refuses_files_the_full_bulkheads_line_naming_the_bound() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: None,
+            concurrency: Some(1),
+            concurrency_wait: Duration::from_secs(1),
+            concurrency_waiters: Some(1),
+            ..ResilienceConfig::default()
+        });
+        let tracking =
+            crate::resilient::resilient_method(|| "ShipmentsService", "track", None, None);
+        let held = policy.begin(None).await.expect("the one slot");
+        let started = tokio::time::Instant::now();
+        let (waited, crowded) =
+            tokio::join!(policy.run_for(Some(tracking), |_| answering()), async {
+                tokio::task::yield_now().await;
+                let crowded = policy.run_for(Some(tracking), |_| answering()).await;
+                (started.elapsed(), crowded)
+            },);
+        drop(held);
+        assert!(
+            matches!(waited, Err(ResilienceError::Full { .. })),
+            "its wait ran out: {waited:?}"
+        );
+        assert!(
+            matches!(crowded, (at, Err(ResilienceError::Full { .. })) if at.is_zero()),
+            "refused at once, the one place taken: {crowded:?}"
+        );
+
+        let full = lines.find(TARGET, "bulkhead full; the call is refused");
+        assert_eq!(full.len(), 2, "{full:#?}");
+        for line in &full {
+            assert_eq!(line.level, "debug", "{line:?}");
+            assert_eq!(line.field("instance").as_deref(), Some("upstream"));
+            assert_eq!(line.field("host").as_deref(), Some("ShipmentsService"));
+            assert_eq!(line.field("method").as_deref(), Some("track"));
+        }
+        assert_eq!(
+            full[0].field("waiters").as_deref(),
+            Some("1"),
+            "the call refused at once"
+        );
+        assert_eq!(
+            full[1].field("waiters"),
+            None,
+            "the call whose wait ran out"
+        );
+    }
+
+    /// A wait and a bound on the waiters mean nothing without slots, as a
+    /// window and a wait mean nothing without a rate limit: the policy builds
+    /// no bulkhead, and sends every call at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_policy_with_no_slots_builds_no_bulkhead_whatever_its_wait_and_waiters() {
+        let policy = Arc::new(policy(ResilienceConfig {
+            retries: None,
+            breaker_window: None,
+            concurrency: None,
+            concurrency_wait: Duration::from_secs(60),
+            concurrency_waiters: Some(1),
+            ..ResilienceConfig::default()
+        }));
+        assert!(policy.bulkhead.is_none());
+        assert!(
+            format!("{policy:?}").contains("bulkhead: false"),
+            "{policy:?}"
+        );
+        let started = tokio::time::Instant::now();
+        let calls: Vec<_> = (0..10)
+            .map(|_| {
+                let policy = Arc::clone(&policy);
+                tokio::spawn(async move {
+                    policy
+                        .run(|_| async {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            Ok::<_, Refused>(())
+                        })
+                        .await
+                })
+            })
+            .collect();
+        for call in calls {
+            let answered = call.await.expect("the call's task");
+            assert!(answered.is_ok(), "{answered:?}");
+        }
+        assert_eq!(started.elapsed(), Duration::from_secs(1), "all at once");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn an_asked_wait_is_honoured_up_to_the_ceiling_and_past_it_ends_the_run() {
         let policy = retrying(3);
@@ -1529,6 +1713,149 @@ mod tests {
             matches!(refused, Err(ResilienceError::Full { .. })),
             "the call waiting for the reset holds the one slot: {refused:?}"
         );
+    }
+
+    /// A call finding no free slot reads the rate before it waits for one, as
+    /// `begin` reads the breaker: a window spent whose reset lies past the
+    /// rate's wait, or at the unit's deadline, refuses it at once, told that
+    /// reset, rather than once its wait for a slot ends. The read counts
+    /// nothing: a call waiting for its slot beside a window with room is sent
+    /// once the slot frees, as the window's second attempt.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_finding_no_free_slot_is_refused_by_a_spent_rate_before_it_waits() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let tracking =
+            crate::resilient::resilient_method(|| "ShipmentsService", "track", None, None);
+        for (rate_wait, left, past) in [
+            (Duration::from_secs(5), None, "the rate's 5 s wait"),
+            (
+                Duration::from_secs(60),
+                Some(Duration::from_secs(30)),
+                "the unit's deadline 30 s away",
+            ),
+        ] {
+            let policy = policy(ResilienceConfig {
+                concurrency: Some(1),
+                concurrency_wait: Duration::from_secs(60),
+                ..rated(2, Duration::from_secs(60), rate_wait)
+            });
+            let started = tokio::time::Instant::now();
+            let (holding, waited) = tokio::join!(
+                policy.run(|_| async {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    Ok::<_, Refused>(())
+                }),
+                async {
+                    tokio::task::yield_now().await;
+                    let waited = policy.run(|_| answering()).await;
+                    (started.elapsed(), waited)
+                },
+            );
+            assert!(
+                holding.is_ok(),
+                "the window's first attempt, holding the slot 3 s: {holding:?}"
+            );
+            assert!(
+                matches!(waited, (at, Ok(())) if at == Duration::from_secs(3)),
+                "the window's second attempt, sent once the slot freed: {waited:?}"
+            );
+
+            let held = policy.begin(None).await.expect("the slot, free again");
+            let refused_at = tokio::time::Instant::now();
+            let refused = nest_rs_core::__private::with_deadline(
+                left.map(|left| refused_at + left),
+                policy.run_for(Some(tracking), |_| answering()),
+            )
+            .await;
+            assert!(
+                matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
+                    if retry_after == Duration::from_secs(57)),
+                "the reset 57 s away, past {past}: {refused:?}"
+            );
+            assert_eq!(
+                refused_at.elapsed(),
+                Duration::ZERO,
+                "refused at once, rather than after its wait for the slot held"
+            );
+            drop(held);
+        }
+
+        let limited = lines.find(TARGET, "rate limit reached; the call is refused");
+        assert_eq!(limited.len(), 2, "{limited:#?}");
+        for line in &limited {
+            assert_eq!(line.level, "debug", "{line:?}");
+            assert_eq!(line.field("instance").as_deref(), Some("upstream"));
+            assert_eq!(line.field("host").as_deref(), Some("ShipmentsService"));
+            assert_eq!(line.field("method").as_deref(), Some("track"));
+            assert_eq!(line.field("retry_after_ms").as_deref(), Some("57000"));
+        }
+        assert!(
+            lines
+                .find(TARGET, "bulkhead full; the call is refused")
+                .is_empty(),
+            "no call met the full bulkhead"
+        );
+    }
+
+    /// The rate a call finding no free slot reads comes after the unit's
+    /// deadline and the breaker, in an attempt's order: beside the slot held
+    /// and the window spent, a unit out of time is told so, and a call meeting
+    /// an open breaker is told what is left of its opening, neither filing the
+    /// rate's line; once neither refuses, the rate does, at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_finding_no_free_slot_meets_the_units_deadline_and_the_breaker_before_the_rate()
+    {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = policy(ResilienceConfig {
+            retries: None,
+            concurrency: Some(1),
+            concurrency_wait: Duration::from_secs(10),
+            rate_limit: Some(1),
+            ..ResilienceConfig::default()
+        });
+        assert!(
+            policy.run(|_| answering()).await.is_ok(),
+            "the window's one attempt"
+        );
+        let held = policy.begin(None).await.expect("the one slot");
+        let started = tokio::time::Instant::now();
+
+        let spent =
+            nest_rs_core::__private::with_deadline(Some(started), policy.run(|_| answering()))
+                .await;
+        assert!(
+            matches!(spent, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            "out of time, before the spent rate: {spent:?}"
+        );
+        policy
+            .open_breaker(Duration::from_secs(30))
+            .expect("an open time `breaker_open` takes");
+        let open = policy.run(|_| answering()).await;
+        assert!(
+            matches!(open, Err(ResilienceError::Open { retry_after, .. })
+                if retry_after == Duration::from_secs(30)),
+            "the breaker opened by hand, before the spent rate: {open:?}"
+        );
+        assert!(
+            lines
+                .find(TARGET, "rate limit reached; the call is refused")
+                .is_empty(),
+            "the rate refused neither"
+        );
+
+        policy.close_breaker().expect("a breaker");
+        let limited = policy.run(|_| answering()).await;
+        assert!(
+            matches!(limited, Err(ResilienceError::Limited { retry_after, .. })
+                if retry_after == Duration::from_secs(60)),
+            "the spent rate, once neither refuses: {limited:?}"
+        );
+        assert_eq!(
+            started.elapsed(),
+            Duration::ZERO,
+            "each refused at once, never after a wait for the slot held"
+        );
+        drop(held);
     }
 
     /// The attempt's timeout starts when its call is sent, after the wait for
@@ -2263,6 +2590,39 @@ mod tests {
         assert!(matches!(full, Err(ResilienceError::Full { .. })));
         drop(held);
 
+        let waiting = policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Duration::from_secs(60),
+            concurrency_waiters: Some(1),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let held = waiting.begin(None).await.expect("the one slot");
+        let mut queued = Box::pin(waiting.run(|_| async { Ok::<_, Refused>(()) }));
+        park(&mut queued).await;
+        let crowded = waiting.run(|_| async { Ok::<_, Refused>(()) }).await;
+        assert!(
+            matches!(crowded, Err(ResilienceError::Full { .. })),
+            "the one place to wait in taken: {crowded:?}"
+        );
+        drop(held);
+        assert!(queued.await.is_ok(), "the waiter took the slot");
+
+        let spent = policy(ResilienceConfig {
+            concurrency: Some(1),
+            rate_limit: Some(1),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        assert!(spent.run(|_| async { Ok::<_, Refused>(()) }).await.is_ok());
+        let held = spent.begin(None).await.expect("the one slot");
+        let read = spent.run(|_| async { Ok::<_, Refused>(()) }).await;
+        assert!(
+            matches!(read, Err(ResilienceError::Limited { .. })),
+            "finding no free slot, refused by the rate it reads first: {read:?}"
+        );
+        drop(held);
+
         let rated = policy(ResilienceConfig {
             retries: Some(1),
             rate_limit: Some(1),
@@ -2317,12 +2677,14 @@ mod tests {
         assert_eq!(
             points(REFUSALS),
             [
-                ("full".to_owned(), 1),
-                ("limited".to_owned(), 1),
+                ("full".to_owned(), 2),
+                ("limited".to_owned(), 2),
                 ("open".to_owned(), 1),
                 ("timed_out".to_owned(), 1),
             ],
-            "a failed call is the call's answer, no refusal of the policy's"
+            "a failed call is the call's answer, no refusal of the policy's; a full bulkhead and \
+             a full place to wait in are one refusal, as a rate read before the slot and one \
+             counted are"
         );
     }
 

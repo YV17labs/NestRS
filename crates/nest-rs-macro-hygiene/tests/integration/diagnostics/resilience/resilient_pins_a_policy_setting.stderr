@@ -52,20 +52,26 @@ error: #[resilient] takes no `concurrency_wait`: the bulkhead bounds the calls e
 71 |     #[resilient(carrier, concurrency_wait = "1s")]
    |                          ^^^^^^^^^^^^^^^^
 
-error: #[resilient] takes no `rate_limit`: the rate limit counts the attempts every caller of the policy sends — set it on the policy: `RATE_LIMIT`, or `ResilienceConfig::rate_limit` in code
+error: #[resilient] takes no `concurrency_waiters`: the bulkhead bounds the calls every caller of the policy runs at once — set it on the policy: `CONCURRENCY_WAITERS`, or `ResilienceConfig::concurrency_waiters` in code
   --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:76:26
    |
-76 |     #[resilient(carrier, rate_limit = 5)]
+76 |     #[resilient(carrier, concurrency_waiters = 8)]
+   |                          ^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] takes no `rate_limit`: the rate limit counts the attempts every caller of the policy sends — set it on the policy: `RATE_LIMIT`, or `ResilienceConfig::rate_limit` in code
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:81:26
+   |
+81 |     #[resilient(carrier, rate_limit = 5)]
    |                          ^^^^^^^^^^
 
 error: #[resilient] takes no `rate_window`: the rate limit counts the attempts every caller of the policy sends — set it on the policy: `RATE_WINDOW_SECS`, or `ResilienceConfig::rate_window` in code
-  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:81:38
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:86:38
    |
-81 |     #[resilient(carrier, idempotent, rate_window = "1s")]
+86 |     #[resilient(carrier, idempotent, rate_window = "1s")]
    |                                      ^^^^^^^^^^^
 
 error: #[resilient] takes no `rate_wait`: the rate limit counts the attempts every caller of the policy sends — set it on the policy: `RATE_WAIT_MS`, or `ResilienceConfig::rate_wait` in code
-  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:86:26
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:91:26
    |
-86 |     #[resilient(carrier, rate_wait = "100ms")]
+91 |     #[resilient(carrier, rate_wait = "100ms")]
    |                          ^^^^^^^^^

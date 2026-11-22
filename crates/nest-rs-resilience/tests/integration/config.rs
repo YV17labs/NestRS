@@ -141,6 +141,7 @@ fn every_other_setting_is_refused_at_a_method_naming_the_variable_that_sets_it()
         breaker_probes: BREAKER_PROBES,
         concurrency: CONCURRENCY,
         concurrency_wait: CONCURRENCY_WAIT,
+        concurrency_waiters: CONCURRENCY_WAITERS,
         rate_limit: RATE_LIMIT,
         rate_window: RATE_WINDOW,
         rate_wait: RATE_WAIT,

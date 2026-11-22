@@ -73,6 +73,11 @@ impl ShipmentsService {
         Err(CarrierDown)
     }
 
+    #[resilient(carrier, concurrency_waiters = 8)]
+    async fn crowded(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
     #[resilient(carrier, rate_limit = 5)]
     async fn limited(&self) -> Answer {
         Err(CarrierDown)

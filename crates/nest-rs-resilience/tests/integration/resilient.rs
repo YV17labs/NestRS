@@ -497,10 +497,25 @@ async fn a_decorated_call_runs_on_a_task_of_its_own() {
     assert!(matches!(spawned.await.expect("the task ends"), Ok(42)));
 }
 
+/// One slot, which at most four calls wait for at once, 10 s each at most,
+/// under a rate limit each run reads before it waits.
+#[module(
+    imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+        concurrency: Some(1),
+        concurrency_wait: Duration::from_secs(10),
+        concurrency_waiters: Some(4),
+        rate_limit: Some(100),
+        ..retrying_once()
+    }))],
+    providers = [ParcelsService],
+)]
+struct WaitingModule;
+
 /// A run whose answer is `Send` and not `Sync` — a `Cell`, a boxed stream — is
 /// `Send` itself, run once or again, decorated or not, its wait before a retry
-/// included: each compiles on a task of its own, as an `#[sse]` route's or a
-/// `#[subscription]`'s answer must.
+/// included, and its wait for a slot among a bounded number of waiters, the
+/// rate read before it: each compiles on a task of its own, as an `#[sse]`
+/// route's or a `#[subscription]`'s answer must.
 #[tokio::test(start_paused = true)]
 async fn a_run_answering_a_value_that_is_not_sync_runs_on_a_task_of_its_own() {
     let app = boot::<RetryingOnceModule>().await;
@@ -573,6 +588,83 @@ async fn a_run_answering_a_value_that_is_not_sync_runs_on_a_task_of_its_own() {
         Some(vec!["P1", "P2"])
     );
     assert_eq!(parcels.attempted(), 2, "a failed attempt and its retry");
+
+    let app = boot::<WaitingModule>().await;
+    let parcels = app
+        .container()
+        .get::<ParcelsService>()
+        .expect("the module provides it");
+    let courier = held::<Courier>(&app);
+    let holding = tokio::spawn({
+        let parcels = Arc::clone(&parcels);
+        async move { parcels.slow().await }
+    });
+    tokio::task::yield_now().await;
+    let once = tokio::spawn({
+        let courier = Arc::clone(&courier);
+        async move {
+            courier
+                .run(|_| async { Ok::<_, CarrierDown>(Cell::new(7)) })
+                .await
+        }
+    });
+    let calls = Arc::new(AtomicU32::new(0));
+    let again = tokio::spawn({
+        let calls = Arc::clone(&calls);
+        async move {
+            courier
+                .run_idempotent(|_| {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                            return Err(CarrierDown);
+                        }
+                        Ok::<Feed, _>(Box::new(["P3"].into_iter()))
+                    }
+                })
+                .await
+        }
+    });
+    let fed = tokio::spawn({
+        let parcels = Arc::clone(&parcels);
+        async move { parcels.feed().await }
+    });
+    let tallied = tokio::spawn({
+        let parcels = Arc::clone(&parcels);
+        async move { parcels.tally().await }
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        !once.is_finished() && !again.is_finished() && !fed.is_finished() && !tallied.is_finished(),
+        "each waits for the slot the slow call holds"
+    );
+    assert!(matches!(
+        holding.await.expect("the task ends"),
+        Ok("answered")
+    ));
+    assert_eq!(
+        once.await
+            .expect("the task ends")
+            .ok()
+            .map(Cell::into_inner),
+        Some(7)
+    );
+    let streamed = again.await.expect("the task ends");
+    assert_eq!(
+        streamed.ok().map(Iterator::collect::<Vec<_>>),
+        Some(vec!["P3"])
+    );
+    let fed = fed.await.expect("the task ends");
+    assert_eq!(
+        fed.ok().map(Iterator::collect::<Vec<_>>),
+        Some(vec!["P1", "P2"])
+    );
+    assert!(tallied.await.expect("the task ends").is_ok());
+    assert_eq!(
+        parcels.attempted(),
+        3,
+        "the feed's failed attempt and its retry, then the tally"
+    );
 }
 
 /// The default instance, a receiver lent through its `Arc` and a generic

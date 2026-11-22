@@ -40,21 +40,37 @@ impl Rate {
     /// nothing: a refused attempt is never sent.
     pub(crate) fn count(&self, now: Instant) -> Result<(), Duration> {
         let mut held = self.held.lock();
-        if let Some(window) = held.as_mut() {
-            let elapsed = now.saturating_duration_since(window.opened);
-            if elapsed < self.window {
-                if window.counted >= self.limit {
-                    return Err(self.window - elapsed);
-                }
-                window.counted += 1;
-                return Ok(());
+        if let Some(window) = held.as_mut()
+            && let Some(left) = self.left(window, now)
+        {
+            if window.counted >= self.limit {
+                return Err(left);
             }
+            window.counted += 1;
+            return Ok(());
         }
         *held = Some(Window {
             opened: now,
             counted: 1,
         });
         Ok(())
+    }
+
+    /// How long an attempt sent at `now` is refused for — the time left to the
+    /// window's reset once the window is spent — leaving the count as it
+    /// stands.
+    pub(crate) fn refusing(&self, now: Instant) -> Option<Duration> {
+        let held = self.held.lock();
+        let window = held.as_ref()?;
+        let left = self.left(window, now)?;
+        (window.counted >= self.limit).then_some(left)
+    }
+
+    /// What is left of `window` at `now`, `None` once it has passed.
+    fn left(&self, window: &Window, now: Instant) -> Option<Duration> {
+        self.window
+            .checked_sub(now.saturating_duration_since(window.opened))
+            .filter(|left| !left.is_zero())
     }
 
     /// How long one attempt waits in all for the window's reset.
@@ -192,6 +208,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A read says what counting would refuse, at every point of the window,
+    /// and counts nothing: however often the window is read, it lets as many
+    /// attempts through as before.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_of_the_rate_answers_what_counting_would_refuse_and_counts_nothing() {
+        let rate = Rate::new(2, WINDOW, Duration::ZERO);
+        let read = || rate.refusing(Instant::now());
+        assert_eq!(read(), None, "no window yet");
+        for _ in 0..2 {
+            for _ in 0..5 {
+                assert_eq!(read(), None, "a window with room");
+            }
+            assert_eq!(counted(&rate), Ok(()));
+        }
+        assert_eq!(read(), Some(WINDOW), "spent, at its first instant");
+        tokio::time::advance(Duration::from_secs(3)).await;
+        assert_eq!(read(), Some(Duration::from_secs(7)));
+        assert_eq!(
+            counted(&rate),
+            Err(Duration::from_secs(7)),
+            "as counting says"
+        );
+        tokio::time::advance(Duration::from_secs(7)).await;
+        assert_eq!(read(), None, "the window has passed");
+        assert_eq!(counted(&rate), Ok(()), "and the next one opens");
     }
 
     /// An attempt read before another opened the window counts in that one,

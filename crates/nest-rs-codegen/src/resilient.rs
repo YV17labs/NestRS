@@ -52,7 +52,7 @@ struct PolicySetting {
 
 /// Every field of `ResilienceConfig` but the two a method pins, `timeout` and
 /// `retries`, in the config's order.
-const POLICY_SETTINGS: [PolicySetting; 12] = [
+const POLICY_SETTINGS: [PolicySetting; 13] = [
     PolicySetting {
         field: "backoff_first",
         var: "BACKOFF_FIRST_MS",
@@ -96,6 +96,11 @@ const POLICY_SETTINGS: [PolicySetting; 12] = [
     PolicySetting {
         field: "concurrency_wait",
         var: "CONCURRENCY_WAIT_MS",
+        mechanism: Mechanism::Bulkhead,
+    },
+    PolicySetting {
+        field: "concurrency_waiters",
+        var: "CONCURRENCY_WAITERS",
         mechanism: Mechanism::Bulkhead,
     },
     PolicySetting {

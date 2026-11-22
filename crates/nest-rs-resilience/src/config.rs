@@ -133,6 +133,20 @@ const CONCURRENCY_WAIT: DurationBounds = DurationBounds::millis(
     ),
 );
 
+const CONCURRENCY_WAITERS: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a bound of no waiter refuses every call finding no free slot, as a wait of none does; \
+         `0` turns the bound off",
+    ),
+    Bound::new(
+        65_536,
+        "past 65536 calls waiting at once, a replica holds more callers in memory, each for up to \
+         a minute, than the most calls a bulkhead runs at once; a backlog that long is a queue's, \
+         whose jobs wait in its backend rather than in memory",
+    ),
+);
+
 const RATE_LIMIT: CountBounds = CountBounds::new(
     Bound::new(
         1,
@@ -179,7 +193,8 @@ const RATE_WAIT: DurationBounds = DurationBounds::millis(
 /// before a retry by [`backoff_ceiling`](Self::backoff_ceiling), a slot by
 /// [`concurrency_wait`](Self::concurrency_wait), the window's reset by
 /// [`rate_wait`](Self::rate_wait), and the number of attempts by
-/// [`retries`](Self::retries).
+/// [`retries`](Self::retries); the calls waiting for a slot at once, by
+/// [`concurrency_waiters`](Self::concurrency_waiters).
 #[config(namespace = "resilience")]
 #[derive(Clone, Debug)]
 pub struct ResilienceConfig {
@@ -254,6 +269,16 @@ pub struct ResilienceConfig {
     /// bulkhead refusing at once.
     #[config(bounds = CONCURRENCY_WAIT)]
     pub concurrency_wait: Duration,
+    /// How many calls wait for a slot of the bulkhead at once,
+    /// `CONCURRENCY_WAITERS`, from 1 to 65536, `0` for no bound; defaults to
+    /// none. A call finding every slot taken while as many calls wait is
+    /// refused at once, and a waiting call gives its place up as it takes a
+    /// slot, runs out of its wait or is dropped. It bounds nothing without
+    /// [`concurrency`](Self::concurrency), or beside a
+    /// [`concurrency_wait`](Self::concurrency_wait) of none, where no call
+    /// waits.
+    #[config(bounds = CONCURRENCY_WAITERS)]
+    pub concurrency_waiters: Option<usize>,
     /// How many attempts the policy sends its dependency per
     /// [`rate_window`](Self::rate_window), a retry included, `RATE_LIMIT`,
     /// from 1 to a billion, `0` for none; defaults to none. An attempt past it
@@ -299,6 +324,7 @@ impl Default for ResilienceConfig {
             breaker_probes: 1,
             concurrency: None,
             concurrency_wait: Duration::ZERO,
+            concurrency_waiters: None,
             rate_limit: None,
             rate_window: Duration::from_secs(60),
             rate_wait: Duration::ZERO,
@@ -334,6 +360,7 @@ mod tests {
                 ResilienceConfig::BREAKER_PROBES.key(),
                 ResilienceConfig::CONCURRENCY.key(),
                 ResilienceConfig::CONCURRENCY_WAIT.key(),
+                ResilienceConfig::CONCURRENCY_WAITERS.key(),
                 ResilienceConfig::RATE_LIMIT.key(),
                 ResilienceConfig::RATE_WINDOW.key(),
                 ResilienceConfig::RATE_WAIT.key(),
@@ -350,6 +377,7 @@ mod tests {
                 "BREAKER_PROBES",
                 "CONCURRENCY",
                 "CONCURRENCY_WAIT_MS",
+                "CONCURRENCY_WAITERS",
                 "RATE_LIMIT",
                 "RATE_WINDOW_SECS",
                 "RATE_WAIT_MS",
@@ -371,6 +399,7 @@ mod tests {
             ("BREAKER_PROBES", "3"),
             ("CONCURRENCY", "8"),
             ("CONCURRENCY_WAIT_MS", "0"),
+            ("CONCURRENCY_WAITERS", "16"),
             ("RATE_LIMIT", "100"),
             ("RATE_WINDOW_SECS", "1"),
             ("RATE_WAIT_MS", "250"),
@@ -389,6 +418,7 @@ mod tests {
         assert_eq!(read.breaker_probes, 3);
         assert_eq!(read.concurrency, Some(8));
         assert_eq!(read.concurrency_wait, Duration::ZERO);
+        assert_eq!(read.concurrency_waiters, Some(16));
         assert_eq!(read.rate_limit, Some(100));
         assert_eq!(
             (read.rate_window, read.rate_wait),
@@ -414,6 +444,19 @@ mod tests {
         )
         .expect("`0` is the age's off");
         assert_eq!(ageless.breaker_age, None, "`0` turns the age off");
+
+        let unbounded = ResilienceConfig::from_env(
+            &ConfigService::with_vars("resilience", [("CONCURRENCY_WAITERS", "0")]),
+            ResilienceConfig {
+                concurrency_waiters: Some(4),
+                ..ResilienceConfig::default()
+            },
+        )
+        .expect("`0` is the waiters' off");
+        assert_eq!(
+            unbounded.concurrency_waiters, None,
+            "`0` turns the bound on the waiters off"
+        );
     }
 
     #[test]
@@ -443,6 +486,10 @@ mod tests {
             (read.breaker_age, read.breaker_probes),
             (None, 1),
             "no age, and one probe closing the breaker, as before either existed"
+        );
+        assert_eq!(
+            read.concurrency_waiters, None,
+            "no bound on the calls waiting for a slot, as before it existed"
         );
     }
 
@@ -474,6 +521,11 @@ mod tests {
                 "CONCURRENCY_WAIT_MS",
                 "60001",
                 "must be at most 60000 milliseconds",
+            ),
+            (
+                "CONCURRENCY_WAITERS",
+                "65537",
+                "must be at most 65536, or 0 to turn it off",
             ),
             ("RATE_LIMIT", "1000000001", "must be at most 1000000000"),
             ("RATE_WINDOW_SECS", "0", "must be at least 1 second"),
@@ -519,6 +571,13 @@ mod tests {
                     ..ResilienceConfig::default()
                 },
                 "`ResilienceConfig::breaker_age` set in code",
+            ),
+            (
+                ResilienceConfig {
+                    concurrency_waiters: Some(0),
+                    ..ResilienceConfig::default()
+                },
+                "`ResilienceConfig::concurrency_waiters` set in code",
             ),
         ] {
             let refused =
@@ -603,6 +662,63 @@ mod tests {
                 "{refused}"
             );
         }
+    }
+
+    /// The bound on the waiters takes one to its ceiling, read or pinned, and
+    /// a value past either end is refused with that end's reason, naming the
+    /// variable. The ceiling's reason is what a waiter holds, its caller in
+    /// memory for up to the wait's ceiling, more of them than the slots'
+    /// ceiling runs at once; a waiter has sent nothing, so holds no socket.
+    #[test]
+    fn the_waiters_bound_takes_one_to_its_ceiling_and_says_why_past_either_end() {
+        let (floor, ceiling) = (CONCURRENCY_WAITERS.least(), CONCURRENCY_WAITERS.most());
+        let pinned = |count: u64| {
+            ResilienceConfig::from_env(
+                &ConfigService::with_vars("resilience", []),
+                ResilienceConfig {
+                    concurrency_waiters: Some(usize::try_from(count).expect("a count")),
+                    ..ResilienceConfig::default()
+                },
+            )
+        };
+        for end in [floor.count, ceiling.count] {
+            let raw = end.to_string();
+            let read = read(&[("CONCURRENCY_WAITERS", raw.as_str())]).expect("an end is taken");
+            assert_eq!(read.concurrency_waiters, usize::try_from(end).ok());
+            assert!(pinned(end).is_ok(), "{end} pinned in code");
+        }
+        assert_eq!(
+            read(&[("CONCURRENCY_WAITERS", "1")])
+                .expect("one waiter is a bound")
+                .concurrency_waiters,
+            Some(1),
+            "the least bound that lets a call wait"
+        );
+
+        let var = nest_rs_config::var_name("resilience", "CONCURRENCY_WAITERS");
+        let past = (ceiling.count + 1).to_string();
+        let why = "past 65536 calls waiting at once, a replica holds more callers in memory, each \
+                   for up to a minute, than the most calls a bulkhead runs at once; a backlog that \
+                   long is a queue's, whose jobs wait in its backend rather than in memory";
+        for refused in [
+            read(&[("CONCURRENCY_WAITERS", past.as_str())]),
+            pinned(ceiling.count + 1),
+        ] {
+            let refused = refused.expect_err("past the ceiling").to_string();
+            assert!(refused.contains(&var) && refused.contains(why), "{refused}");
+        }
+        assert_eq!(
+            (
+                ceiling.count,
+                CONCURRENCY_WAIT
+                    .unit()
+                    .duration(CONCURRENCY_WAIT.most().count)
+            ),
+            (CONCURRENCY.most().count, Duration::from_secs(60)),
+            "the most calls a bulkhead runs at once, and the longest a waiter waits"
+        );
+        let none = pinned(0).expect_err("off in code is `None`").to_string();
+        assert!(none.contains(&var) && none.contains(floor.why), "{none}");
     }
 
     /// A manual opening is held to the open times `breaker_open` takes,

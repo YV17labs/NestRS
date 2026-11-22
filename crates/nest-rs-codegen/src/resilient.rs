@@ -52,7 +52,7 @@ struct PolicySetting {
 
 /// Every field of `ResilienceConfig` but the two a method pins, `timeout` and
 /// `retries`, in the config's order.
-const POLICY_SETTINGS: [PolicySetting; 10] = [
+const POLICY_SETTINGS: [PolicySetting; 12] = [
     PolicySetting {
         field: "backoff_first",
         var: "BACKOFF_FIRST_MS",
@@ -76,6 +76,16 @@ const POLICY_SETTINGS: [PolicySetting; 10] = [
     PolicySetting {
         field: "breaker_open",
         var: "BREAKER_OPEN_SECS",
+        mechanism: Mechanism::Breaker,
+    },
+    PolicySetting {
+        field: "breaker_age",
+        var: "BREAKER_AGE_SECS",
+        mechanism: Mechanism::Breaker,
+    },
+    PolicySetting {
+        field: "breaker_probes",
+        var: "BREAKER_PROBES",
         mechanism: Mechanism::Breaker,
     },
     PolicySetting {

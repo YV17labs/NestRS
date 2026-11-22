@@ -1,6 +1,7 @@
 //! [`ResilienceConfig`] — a policy's settings, read per instance from
 //! `<PREFIX>_RESILIENCE__*`.
 
+use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use nest_rs_config::{Bound, CountBounds, DurationBounds, Floor, config};
@@ -49,7 +50,8 @@ const BREAKER_WINDOW: CountBounds = CountBounds::new(
     Bound::new(
         10_000,
         "past ten thousand calls the window still counts failures from long before the \
-         outage, and holds a byte per call on every replica",
+         outage, and holds a byte per call on every replica, and the instant it answered once \
+         outcomes have an age",
     ),
 );
 
@@ -62,14 +64,52 @@ const BREAKER_FAILURES: CountBounds = CountBounds::new(
     ),
 );
 
+const BREAKER_OPEN_FLOOR: Bound = Bound::new(
+    1,
+    "a breaker open for no time lets every call through to the failing dependency",
+);
+
 const BREAKER_OPEN: DurationBounds = DurationBounds::secs(
-    Floor::Units(Bound::new(
-        1,
-        "a breaker open for no time lets every call through to the failing dependency",
-    )),
+    Floor::Units(BREAKER_OPEN_FLOOR),
     Bound::new(
         60 * 60,
         "a breaker open past an hour still refuses a dependency long since back",
+    ),
+);
+
+/// The open times [`ResilienceConfig::breaker_open`] takes, which a manual
+/// opening is held to.
+pub(crate) const BREAKER_OPEN_TIMES: RangeInclusive<Duration> = RangeInclusive::new(
+    BREAKER_OPEN.unit().duration(BREAKER_OPEN_FLOOR.count),
+    BREAKER_OPEN.unit().duration(BREAKER_OPEN.most().count),
+);
+
+/// The longest an attempt runs: the ceiling of [`ResilienceConfig::timeout`],
+/// which a `#[resilient]` method's own timeout is held to as well.
+pub(crate) const LONGEST_ATTEMPT: Duration = TIMEOUT.unit().duration(TIMEOUT.most().count);
+
+const BREAKER_AGE: DurationBounds = DurationBounds::secs(
+    Floor::Units(Bound::new(
+        1,
+        "an age of no time forgets each outcome before the next is counted, so the window never \
+         holds two; `0` turns the age off",
+    )),
+    Bound::new(
+        24 * 60 * 60,
+        "past a day the window still counts failures from long before the outage, which the age \
+         is there to forget",
+    ),
+);
+
+const BREAKER_PROBES: CountBounds = CountBounds::new(
+    Bound::new(
+        1,
+        "a breaker closing on no probe lets every call through to a dependency it never tried",
+    ),
+    Bound::new(
+        100,
+        "past a hundred, a dependency back is still refused to every caller but one for a hundred \
+         answers in a row",
     ),
 );
 
@@ -171,7 +211,12 @@ pub struct ResilienceConfig {
     #[config(bounds = BREAKER_WINDOW)]
     pub breaker_window: Option<usize>,
     /// How many failed attempts in the window open the breaker,
-    /// `BREAKER_FAILURES`, from 1 to the window; defaults to 10.
+    /// `BREAKER_FAILURES`, from 1 to the window; defaults to 10. With a
+    /// [`breaker_age`](Self::breaker_age) under a
+    /// [`rate_limit`](Self::rate_limit), it is at most the failures that rate
+    /// lets answer within the age of one another, an attempt running ten
+    /// minutes at most: a breaker opening on more never opens, and is refused
+    /// at boot.
     #[config(bounds = BREAKER_FAILURES)]
     pub breaker_failures: usize,
     /// How long an open breaker refuses every call before one attempt probes
@@ -179,6 +224,27 @@ pub struct ResilienceConfig {
     /// to 30 seconds.
     #[config(bounds = BREAKER_OPEN)]
     pub breaker_open: Duration,
+    /// How old an attempt's outcome grows before it no longer counts in the
+    /// window, `BREAKER_AGE_SECS`, from 1 second to a day, `0` for no age;
+    /// defaults to none, the window counting its latest attempts however old.
+    /// An outcome's age runs from its call's answer, and the window forgets
+    /// what is past it each time it counts one, so failures one short of
+    /// opening the breaker, aged past it by a quiet spell, do not open it with
+    /// the next. Under a rate limit it leaves room for
+    /// [`breaker_failures`](Self::breaker_failures) failures to answer within
+    /// it, or the boot is refused.
+    #[config(bounds = BREAKER_AGE)]
+    pub breaker_age: Option<Duration>,
+    /// How many probes in a row must succeed before an open breaker closes,
+    /// `BREAKER_PROBES`, from 1 to 100; defaults to 1. One probe runs at a
+    /// time, and a failed one opens the breaker again for its whole open time,
+    /// the series starting over: a probe whose call is cut at its timeout or
+    /// its unit's deadline has failed. A probe whose call is never sent —
+    /// refused by the rate, or its unit out of time before it — or whose
+    /// caller drops it before it answers counts as neither a success nor a
+    /// failure, and the series keeps its count.
+    #[config(bounds = BREAKER_PROBES)]
+    pub breaker_probes: usize,
     /// How many calls run inside the policy at once, the bulkhead,
     /// `CONCURRENCY`, from 1 to 65536, `0` for no bound; defaults to none.
     #[config(bounds = CONCURRENCY)]
@@ -229,6 +295,8 @@ impl Default for ResilienceConfig {
             breaker_window: Some(20),
             breaker_failures: 10,
             breaker_open: Duration::from_secs(30),
+            breaker_age: None,
+            breaker_probes: 1,
             concurrency: None,
             concurrency_wait: Duration::ZERO,
             rate_limit: None,
@@ -262,6 +330,8 @@ mod tests {
                 ResilienceConfig::BREAKER_WINDOW.key(),
                 ResilienceConfig::BREAKER_FAILURES.key(),
                 ResilienceConfig::BREAKER_OPEN.key(),
+                ResilienceConfig::BREAKER_AGE.key(),
+                ResilienceConfig::BREAKER_PROBES.key(),
                 ResilienceConfig::CONCURRENCY.key(),
                 ResilienceConfig::CONCURRENCY_WAIT.key(),
                 ResilienceConfig::RATE_LIMIT.key(),
@@ -276,6 +346,8 @@ mod tests {
                 "BREAKER_WINDOW",
                 "BREAKER_FAILURES",
                 "BREAKER_OPEN_SECS",
+                "BREAKER_AGE_SECS",
+                "BREAKER_PROBES",
                 "CONCURRENCY",
                 "CONCURRENCY_WAIT_MS",
                 "RATE_LIMIT",
@@ -295,6 +367,8 @@ mod tests {
             ("BREAKER_WINDOW", "0"),
             ("BREAKER_FAILURES", "3"),
             ("BREAKER_OPEN_SECS", "5"),
+            ("BREAKER_AGE_SECS", "120"),
+            ("BREAKER_PROBES", "3"),
             ("CONCURRENCY", "8"),
             ("CONCURRENCY_WAIT_MS", "0"),
             ("RATE_LIMIT", "100"),
@@ -311,6 +385,8 @@ mod tests {
         assert_eq!(read.breaker_window, None, "`0` turns the breaker off");
         assert_eq!(read.breaker_failures, 3);
         assert_eq!(read.breaker_open, Duration::from_secs(5));
+        assert_eq!(read.breaker_age, Some(Duration::from_secs(120)));
+        assert_eq!(read.breaker_probes, 3);
         assert_eq!(read.concurrency, Some(8));
         assert_eq!(read.concurrency_wait, Duration::ZERO);
         assert_eq!(read.rate_limit, Some(100));
@@ -328,6 +404,16 @@ mod tests {
         )
         .expect("`0` is the rate limit's off");
         assert_eq!(off.rate_limit, None, "`0` turns the rate limit off");
+
+        let ageless = ResilienceConfig::from_env(
+            &ConfigService::with_vars("resilience", [("BREAKER_AGE_SECS", "0")]),
+            ResilienceConfig {
+                breaker_age: Some(Duration::from_secs(60)),
+                ..ResilienceConfig::default()
+            },
+        )
+        .expect("`0` is the age's off");
+        assert_eq!(ageless.breaker_age, None, "`0` turns the age off");
     }
 
     #[test]
@@ -353,6 +439,11 @@ mod tests {
             (None, Duration::from_secs(60), Duration::ZERO),
             "no rate limit, over a minute's window, refusing at once once set"
         );
+        assert_eq!(
+            (read.breaker_age, read.breaker_probes),
+            (None, 1),
+            "no age, and one probe closing the breaker, as before either existed"
+        );
     }
 
     /// Each refusal names its variable and its range, never the value it was
@@ -371,6 +462,13 @@ mod tests {
             ("BREAKER_WINDOW", "10001", "must be at most 10000"),
             ("BREAKER_FAILURES", "0", "must be at least 1"),
             ("BREAKER_OPEN_SECS", "3601", "must be at most 3600 seconds"),
+            (
+                "BREAKER_AGE_SECS",
+                "86401",
+                "must be at most 86400 seconds, or 0 to turn it off",
+            ),
+            ("BREAKER_PROBES", "0", "must be at least 1"),
+            ("BREAKER_PROBES", "101", "must be at most 100"),
             ("CONCURRENCY", "65537", "must be at most 65536"),
             (
                 "CONCURRENCY_WAIT_MS",
@@ -415,6 +513,13 @@ mod tests {
                 },
                 "`ResilienceConfig::rate_limit` set in code",
             ),
+            (
+                ResilienceConfig {
+                    breaker_age: Some(Duration::ZERO),
+                    ..ResilienceConfig::default()
+                },
+                "`ResilienceConfig::breaker_age` set in code",
+            ),
         ] {
             let refused =
                 ResilienceConfig::from_env(&ConfigService::with_vars("resilience", []), pinned)
@@ -453,5 +558,92 @@ mod tests {
                 "{refused}"
             );
         }
+    }
+
+    /// An age or a count of probes pinned past its range is refused as its
+    /// variable would be, an age shorter than a second included.
+    #[test]
+    fn a_breaker_age_or_probes_pinned_outside_its_range_is_refused() {
+        for (pinned, var) in [
+            (
+                ResilienceConfig {
+                    breaker_age: Some(Duration::from_millis(500)),
+                    ..ResilienceConfig::default()
+                },
+                "BREAKER_AGE_SECS",
+            ),
+            (
+                ResilienceConfig {
+                    breaker_age: Some(Duration::from_secs(24 * 60 * 60 + 1)),
+                    ..ResilienceConfig::default()
+                },
+                "BREAKER_AGE_SECS",
+            ),
+            (
+                ResilienceConfig {
+                    breaker_probes: 0,
+                    ..ResilienceConfig::default()
+                },
+                "BREAKER_PROBES",
+            ),
+            (
+                ResilienceConfig {
+                    breaker_probes: 101,
+                    ..ResilienceConfig::default()
+                },
+                "BREAKER_PROBES",
+            ),
+        ] {
+            let refused =
+                ResilienceConfig::from_env(&ConfigService::with_vars("resilience", []), pinned)
+                    .expect_err("a pin outside the range")
+                    .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("resilience", var)),
+                "{refused}"
+            );
+        }
+    }
+
+    /// A manual opening is held to the open times `breaker_open` takes,
+    /// both ends included, as a value pinned in code is: the range is the
+    /// config's own, read off its bounds, never a second literal.
+    #[test]
+    fn the_open_times_a_manual_opening_takes_are_breaker_opens() {
+        let (least, most) = (*BREAKER_OPEN_TIMES.start(), *BREAKER_OPEN_TIMES.end());
+        let tick = Duration::from_millis(1);
+        for duration in [
+            Duration::ZERO,
+            least - tick,
+            least,
+            least + tick,
+            most,
+            most + tick,
+        ] {
+            assert_eq!(
+                BREAKER_OPEN_TIMES.contains(&duration),
+                ResilienceConfig::BREAKER_OPEN
+                    .check("resilience", duration)
+                    .is_ok(),
+                "{duration:?}"
+            );
+        }
+    }
+
+    /// The longest attempt the policy's checks count on is the timeout's
+    /// ceiling, the longest a policy's or a method's timeout takes.
+    #[test]
+    fn the_longest_attempt_is_the_timeouts_ceiling() {
+        let tick = Duration::from_millis(1);
+        assert!(
+            ResilienceConfig::TIMEOUT
+                .check("resilience", LONGEST_ATTEMPT)
+                .is_ok()
+        );
+        assert!(
+            ResilienceConfig::TIMEOUT
+                .check("resilience", LONGEST_ATTEMPT + tick)
+                .is_err()
+        );
     }
 }

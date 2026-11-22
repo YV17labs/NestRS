@@ -17,9 +17,11 @@
 //! rate limit how many attempts are sent per window. A refusal — a timeout, an
 //! open breaker, a full bulkhead, a reached rate limit — is a
 //! [`ResilienceError`] every edge answers `503`, an open breaker's and a
-//! reached rate limit's with the `Retry-After` each knows. Under the `reqwest`
-//! feature, [`ResilienceMiddleware`] runs the app's own reqwest client under a
-//! policy.
+//! reached rate limit's with the `Retry-After` each knows. A breaker's state is
+//! read through [`ResiliencePolicy::breaker_state`], and switched by hand
+//! through [`ResiliencePolicy::open_breaker`] and
+//! [`ResiliencePolicy::close_breaker`]. Under the `reqwest` feature,
+//! [`ResilienceMiddleware`] runs the app's own reqwest client under a policy.
 //!
 //! **A policy's state lives in its process.** Each replica keeps its own
 //! breaker, bulkhead and rate, so a dependency failing for one replica is
@@ -45,8 +47,9 @@ mod policy;
 mod rate;
 mod resilient;
 
+pub use breaker::BreakerState;
 pub use config::ResilienceConfig;
-pub use error::ResilienceError;
+pub use error::{BreakerError, ResilienceError};
 #[cfg(feature = "reqwest")]
 pub use middleware::ResilienceMiddleware;
 pub use module::{ResilienceModule, ResilienceSetup};

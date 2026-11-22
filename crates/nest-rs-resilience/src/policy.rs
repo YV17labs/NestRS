@@ -21,11 +21,11 @@ use tokio::sync::SemaphorePermit;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::breaker::{Breaker, Pass};
+use crate::breaker::{Breaker, BreakerState, Pass};
 use crate::bulkhead::Bulkhead;
-use crate::config::ResilienceConfig;
+use crate::config::{BREAKER_OPEN_TIMES, LONGEST_ATTEMPT, ResilienceConfig};
 use crate::counters::Counters;
-use crate::error::{Refusal, ResilienceError};
+use crate::error::{BreakerError, Refusal, ResilienceError};
 use crate::rate::Rate;
 use crate::resilient::ResilientMethod;
 use crate::{TARGET, millis};
@@ -55,6 +55,11 @@ use crate::{TARGET, millis};
 /// Every `Err` the call answers counts as the dependency failing. An answer
 /// the dependency gave — a declined card, a parcel not found — belongs in the
 /// call's `Ok`, so it is neither retried nor counted.
+///
+/// The breaker's state is read through [`breaker_state`](Self::breaker_state),
+/// and switched by hand — an operator taking a dependency out for its
+/// maintenance window — through [`open_breaker`](Self::open_breaker) and
+/// [`close_breaker`](Self::close_breaker).
 ///
 /// ```
 /// use std::sync::Arc;
@@ -164,6 +169,26 @@ impl<I: Instance> ResiliencePolicy<I> {
                 ),
             ));
         }
+        let rate = config
+            .rate_limit
+            .map(|limit| Rate::new(limit, config.rate_window, config.rate_wait));
+        // An outcome's age runs from its answer, which comes up to the longest
+        // attempt after the rate counted its call.
+        if let (Some(_), Some(age), Some(rate)) = (config.breaker_window, config.breaker_age, &rate)
+            && config.breaker_failures > rate.most_sent_within(age + LONGEST_ATTEMPT)
+        {
+            return Err(ConfigError::parse(
+                ResilienceConfig::BREAKER_FAILURES.var(&namespace),
+                format!(
+                    "must be at most the failures that can answer within the age of one another \
+                     under the rate limit, set by {}; {}; and {}: a breaker opening on more never \
+                     opens",
+                    ResilienceConfig::BREAKER_AGE.var_or_field(&namespace),
+                    ResilienceConfig::RATE_LIMIT.var_or_field(&namespace),
+                    ResilienceConfig::RATE_WINDOW.var_or_field(&namespace),
+                ),
+            ));
+        }
         let retries = config
             .retries
             .map_or(0, |retries| u32::try_from(retries).unwrap_or(u32::MAX));
@@ -178,15 +203,15 @@ impl<I: Instance> ResiliencePolicy<I> {
                     window,
                     config.breaker_failures,
                     config.breaker_open,
+                    config.breaker_age,
+                    config.breaker_probes,
                     Arc::clone(&counters),
                 )
             }),
             bulkhead: config
                 .concurrency
                 .map(|slots| Bulkhead::new(slots, config.concurrency_wait)),
-            rate: config
-                .rate_limit
-                .map(|limit| Rate::new(limit, config.rate_window, config.rate_wait)),
+            rate,
             counters,
             runs: AtomicU64::new(0),
             _instance: PhantomData,
@@ -310,6 +335,81 @@ impl<I: Instance> ResiliencePolicy<I> {
         })
     }
 
+    /// The circuit breaker's state, as a call arriving now meets it, or `None`
+    /// for a policy with no breaker (`BREAKER_WINDOW` set to `0`).
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use nest_rs_resilience::{BreakerState, ResiliencePolicy};
+    ///
+    /// fn retry_after(policy: &ResiliencePolicy) -> Option<Duration> {
+    ///     match policy.breaker_state()? {
+    ///         BreakerState::Open { retry_after, .. } => Some(retry_after),
+    ///         _ => None,
+    ///     }
+    /// }
+    /// ```
+    pub fn breaker_state(&self) -> Option<BreakerState> {
+        self.breaker.as_ref().map(Breaker::read)
+    }
+
+    /// Open the circuit breaker by hand for `duration`, an open time
+    /// [`breaker_open`](ResilienceConfig::breaker_open) takes: every call is
+    /// refused unsent, as by an open breaker, told what is left of it, then
+    /// the breaker probes the dependency as after any opening.
+    ///
+    /// Whatever the breaker was in, `duration` counts from now and replaces
+    /// any open time it had, shorter or longer, and its window is forgotten:
+    /// a call let through before it changes nothing once it answers — a probe
+    /// answering a success closes nothing — and a probe waiting for the rate's
+    /// reset loses its turn. When its wait ends it meets the breaker as a call
+    /// arriving then does: refused while the opening lasts, and taking the
+    /// next probe's turn once it has passed. Each call files the transition's
+    /// `warn`, marked `manual` and carrying the open time it was given, and
+    /// counts on the transitions' counter marked manual, whether or not the
+    /// breaker was open already.
+    ///
+    /// The switch is this process's, as the breaker is: each replica keeps its
+    /// own, so a dependency taken out for the whole app is switched on every
+    /// replica.
+    ///
+    /// # Errors
+    ///
+    /// [`BreakerError::Off`] for a policy with no breaker, and
+    /// [`BreakerError::OutOfRange`] for a `duration` `breaker_open` would not
+    /// take; either leaves the breaker as it was.
+    pub fn open_breaker(&self, duration: Duration) -> Result<(), BreakerError> {
+        let breaker = self.breaker.as_ref().ok_or(BreakerError::Off)?;
+        if !BREAKER_OPEN_TIMES.contains(&duration) {
+            return Err(BreakerError::out_of_range());
+        }
+        breaker.open_manually(duration);
+        Ok(())
+    }
+
+    /// Close the circuit breaker by hand, forgetting its window: every call
+    /// is sent again, and counted afresh.
+    ///
+    /// Whatever the breaker was in, a call let through before it changes
+    /// nothing once it answers — a probe answering a failure opens nothing,
+    /// and no answer counts in the window forgotten. Each call files the
+    /// transition's `warn`, marked `manual`, and counts on the transitions'
+    /// counter marked manual, whether or not the breaker was closed already.
+    /// Like [`open_breaker`](Self::open_breaker), it switches this replica's
+    /// breaker alone.
+    ///
+    /// # Errors
+    ///
+    /// [`BreakerError::Off`] for a policy with no breaker.
+    pub fn close_breaker(&self) -> Result<(), BreakerError> {
+        self.breaker
+            .as_ref()
+            .ok_or(BreakerError::Off)?
+            .close_manually();
+        Ok(())
+    }
+
     /// `refusal`, counted.
     fn refused(&self, refusal: Refusal) -> Refusal {
         self.counters.refusal(refusal);
@@ -400,7 +500,8 @@ impl<'p, I: Instance> Run<'p, I> {
                 return Err(Refusal::TimedOut(bound));
             }
             // Another call may have opened the breaker, or taken the probe's
-            // turn, while this one waited for the reset.
+            // turn, while this one waited for the reset, and a manual switch
+            // meanwhile voids the turn this one held.
             if !pass.as_ref().is_some_and(Pass::probes) {
                 pass = policy
                     .breaker
@@ -452,28 +553,38 @@ impl<'p, I: Instance> Run<'p, I> {
     /// Whether to attempt the call again after `attempted`, having waited the
     /// backoff when so: after a failure or a timeout, within the run's
     /// retries, unless the dependency asked a wait past the backoff's ceiling.
-    pub(crate) async fn again<T>(&mut self, attempted: &Attempted<T>) -> bool {
-        let asked = match attempted {
-            Ok((_, Verdict::Failed { asked })) => *asked,
-            Err(Refusal::TimedOut(_)) => None,
+    ///
+    /// It is decided before the wait, which holds nothing of the answer, so a
+    /// run is `Send` for an answer that is `Send` and not `Sync`, a stream's.
+    pub(crate) fn again<'r, T>(
+        &'r mut self,
+        attempted: &Attempted<T>,
+    ) -> impl Future<Output = bool> + use<'r, 'p, I, T> {
+        let wait = match attempted {
+            Ok((_, Verdict::Failed { asked })) => self.retry_wait(*asked),
+            Err(Refusal::TimedOut(_)) => self.retry_wait(None),
             Ok((_, Verdict::Succeeded))
-            | Err(Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => return false,
+            | Err(Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => None,
         };
-        let Some(wait) = self.retry_wait(asked) else {
-            return false;
-        };
-        tracing::debug!(
-            target: TARGET,
-            instance = I::NAME,
-            host = self.host().as_deref(),
-            method = self.method_name(),
-            attempt = self.resent.saturating_add(1),
-            wait_ms = millis(wait),
-            "attempt failed; retrying the call",
-        );
-        tokio::time::sleep(wait).await;
-        self.resent = self.resent.saturating_add(1);
-        true
+        if let Some(wait) = wait {
+            tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                host = self.host().as_deref(),
+                method = self.method_name(),
+                attempt = self.resent.saturating_add(1),
+                wait_ms = millis(wait),
+                "attempt failed; retrying the call",
+            );
+        }
+        async move {
+            let Some(wait) = wait else {
+                return false;
+            };
+            tokio::time::sleep(wait).await;
+            self.resent = self.resent.saturating_add(1);
+            true
+        }
     }
 
     /// How long to wait before the next attempt, after one that failed asking
@@ -1734,6 +1845,94 @@ mod tests {
         );
     }
 
+    /// A probe holding its turn while it waits for the rate's reset is waited
+    /// for until that reset, then for its own bound: the timeout its method
+    /// pinned, or what its unit's deadline leaves of the policy's.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_waiting_for_the_reset_is_waited_for_until_it_then_for_its_own_bound() {
+        let tracking =
+            crate::resilient::resilient_method(|| "ShipmentsService", "track", Some(30_000), None);
+        for (method, left, told, bound) in [
+            (
+                Some(tracking),
+                None,
+                38,
+                "the method's 30 s, past the policy's 5 s",
+            ),
+            (
+                None,
+                Some(Duration::from_secs(11)),
+                10,
+                "the 2 s its unit's deadline at 12 s leaves of the policy's 5 s",
+            ),
+        ] {
+            let policy = policy(ResilienceConfig {
+                rate_limit: Some(1),
+                rate_window: Duration::from_secs(10),
+                rate_wait: Duration::from_secs(10),
+                ..probing(Duration::from_secs(5))
+            });
+            probe_due(&policy).await;
+            let deadline = left.map(|left| tokio::time::Instant::now() + left);
+            let (probed, refused) = tokio::join!(
+                nest_rs_core::__private::with_deadline(
+                    deadline,
+                    policy.run_for(method, |_| answering())
+                ),
+                async {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    policy.run(|_| answering()).await
+                },
+            );
+            assert!(matches!(probed, Ok(())), "sent at the reset: {probed:?}");
+            assert!(
+                matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+                    if retry_after == Duration::from_secs(told)),
+                "at 2 s, the probe sent at the reset at 10 s, under {bound}: {refused:?}"
+            );
+        }
+    }
+
+    /// A probe whose call is cut at its timeout has failed, wherever it stands
+    /// in its series: the breaker opens again for its whole open time, and the
+    /// series starts over.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_cut_at_its_timeout_has_failed_and_the_series_starts_over() {
+        let policy = policy(ResilienceConfig {
+            breaker_probes: 2,
+            ..probing(Duration::from_secs(5))
+        });
+        probe_due(&policy).await;
+        assert!(
+            policy.run(|_| answering()).await.is_ok(),
+            "one probe of two"
+        );
+        let cut = policy
+            .run(|_| std::future::pending::<Result<(), Refused>>())
+            .await;
+        assert!(
+            matches!(cut, Err(ResilienceError::TimedOut { timeout, .. })
+                if timeout == Duration::from_secs(5)),
+            "{cut:?}"
+        );
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::Open {
+                retry_after: Duration::from_secs(1)
+            }),
+            "opened again for its whole open time"
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(policy.run(|_| answering()).await.is_ok());
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::HalfOpen),
+            "one probe of two since it opened again"
+        );
+        assert!(policy.run(|_| answering()).await.is_ok());
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+    }
+
     /// An attempt the closed breaker let through asks it again once its wait
     /// for the reset ends: a breaker another call opened meanwhile refuses it
     /// unsent, as it refuses a call made at that instant.
@@ -2163,6 +2362,249 @@ mod tests {
         );
     }
 
+    /// Under a rate limit, a breaker opening on more failures than can answer
+    /// within its age of one another never opens, and is refused naming the
+    /// settings that decide it, quoting none of their values. Three attempts
+    /// an hour let five answer within a minute at most — the two after a
+    /// window's first, sent as it ends, and three as the next one opens — and
+    /// a breaker opening on five is built, and opens on them.
+    #[tokio::test(start_paused = true)]
+    async fn more_failures_than_the_rate_lets_answer_within_the_age_is_refused() {
+        let config = |failures| ResilienceConfig {
+            retries: None,
+            breaker_window: Some(20),
+            breaker_failures: failures,
+            breaker_age: Some(Duration::from_secs(60)),
+            rate_limit: Some(3),
+            rate_window: Duration::from_secs(3600),
+            ..ResilienceConfig::default()
+        };
+        let refused = ResiliencePolicy::<Upstream>::new(&config(6))
+            .expect_err("a breaker that never opens")
+            .to_string();
+        let mut unnamed = refused.clone();
+        for key in [
+            "BREAKER_FAILURES",
+            "BREAKER_AGE_SECS",
+            "RATE_LIMIT",
+            "RATE_WINDOW_SECS",
+        ] {
+            let var = nest_rs_config::var_name("resilience__upstream", key);
+            assert!(unnamed.contains(&var), "{refused}");
+            unnamed = unnamed.replace(&var, "");
+        }
+        assert!(
+            !unnamed.contains(|c: char| c.is_ascii_digit()),
+            "no value is quoted: {refused}"
+        );
+
+        let policy = policy(config(5));
+        let failed = || async {
+            let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+            assert!(
+                matches!(failed, Err(ResilienceError::Failed(Refused))),
+                "{failed:?}"
+            );
+        };
+        assert!(policy.run(|_| answering()).await.is_ok(), "the first");
+        tokio::time::advance(Duration::from_secs(3599)).await;
+        for _ in 0..2 {
+            failed().await;
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        for _ in 0..3 {
+            failed().await;
+        }
+        assert!(
+            matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+            "five failures within a second of one another"
+        );
+    }
+
+    /// Where the age and the longest attempt make a whole number of the rate's
+    /// windows, a window open as that span starts leaves no room for one
+    /// opening at its end, so the most failures that answer within the age
+    /// are a full window's at each opening. Three attempts every ten minutes,
+    /// with a ten minutes' age, let nine: three cut at the ten minutes an
+    /// attempt takes at most, three sent as they are cut, as the next window
+    /// opens, and three as the one after opens, the age later. A breaker
+    /// opening on nine is built and opens on them; one opening on ten is
+    /// refused.
+    #[tokio::test(start_paused = true)]
+    async fn more_failures_than_the_windows_opening_in_a_span_of_whole_windows_send_is_refused() {
+        let window = Duration::from_secs(600);
+        let config = |failures| ResilienceConfig {
+            timeout: LONGEST_ATTEMPT,
+            retries: None,
+            breaker_window: Some(20),
+            breaker_failures: failures,
+            breaker_age: Some(window),
+            rate_limit: Some(3),
+            rate_window: window,
+            ..ResilienceConfig::default()
+        };
+        assert!(
+            ResiliencePolicy::<Upstream>::new(&config(10)).is_err(),
+            "a breaker that never opens"
+        );
+
+        let policy = Arc::new(policy(config(9)));
+        let cut: Vec<_> = (0..3)
+            .map(|_| {
+                let policy = Arc::clone(&policy);
+                tokio::spawn(async move {
+                    policy
+                        .run(|_| std::future::pending::<Result<(), Refused>>())
+                        .await
+                })
+            })
+            .collect();
+        for cut in cut {
+            let cut = cut.await.expect("the call's task");
+            assert!(
+                matches!(cut, Err(ResilienceError::TimedOut { .. })),
+                "{cut:?}"
+            );
+        }
+        let failed = || async {
+            let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+            assert!(
+                matches!(failed, Err(ResilienceError::Failed(Refused))),
+                "{failed:?}"
+            );
+        };
+        for _ in 0..3 {
+            failed().await;
+        }
+        tokio::time::advance(window).await;
+        for _ in 0..3 {
+            failed().await;
+        }
+        assert!(
+            matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+            "nine failures, the first and the last the age apart"
+        );
+    }
+
+    /// The failures counted together may come from attempts sent long before
+    /// they answer: one attempt a minute, each running up to the ten minutes
+    /// an attempt takes at most, lets twelve answer within a minute of one
+    /// another. A breaker opening on twelve is built, one on thirteen refused,
+    /// and eleven sent a minute apart open it as they answer.
+    #[tokio::test(start_paused = true)]
+    async fn a_breaker_its_rate_paces_opens_on_failures_sent_far_apart_that_answer_together() {
+        let config = |failures| ResilienceConfig {
+            timeout: LONGEST_ATTEMPT,
+            retries: None,
+            breaker_window: Some(20),
+            breaker_failures: failures,
+            breaker_age: Some(Duration::from_secs(60)),
+            rate_limit: Some(1),
+            rate_window: Duration::from_secs(60),
+            ..ResilienceConfig::default()
+        };
+        assert!(ResiliencePolicy::<Upstream>::new(&config(13)).is_err());
+        assert!(ResiliencePolicy::<Upstream>::new(&config(12)).is_ok());
+
+        let policy = Arc::new(policy(config(11)));
+        let answers = tokio::time::Instant::now() + Duration::from_secs(600);
+        let sent: Vec<_> = (1..=11)
+            .map(|nth| {
+                let policy = Arc::clone(&policy);
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(60) * nth).await;
+                    policy
+                        .run(|_| async move {
+                            tokio::time::sleep_until(answers).await;
+                            Err::<(), _>(Refused)
+                        })
+                        .await
+                })
+            })
+            .collect();
+        for sent in sent {
+            let failed = sent.await.expect("the call's task");
+            assert!(
+                matches!(failed, Err(ResilienceError::Failed(Refused))),
+                "{failed:?}"
+            );
+        }
+        assert!(
+            matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+            "ten failures at 600 s and the last at 660 s, within the minute"
+        );
+    }
+
+    /// Each combination the policy refuses names every setting beside the one
+    /// refused both ways it is set, its variable and its field in code, so a
+    /// policy pinned through `ResilienceModule::for_root` is told what it set.
+    #[test]
+    fn a_refused_combination_names_each_setting_beside_it_by_its_variable_and_its_field() {
+        let namespace = instance_namespace::<Upstream>(ResilienceConfig::NAMESPACE);
+        let refused = |config: ResilienceConfig| {
+            ResiliencePolicy::<Upstream>::new(&config)
+                .expect_err("a combination that cannot work")
+                .to_string()
+        };
+        for (said, beside) in [
+            (
+                refused(ResilienceConfig {
+                    backoff_first: Duration::from_secs(3),
+                    ..ResilienceConfig::default()
+                }),
+                vec![ResilienceConfig::BACKOFF_CEILING.var_or_field(&namespace)],
+            ),
+            (
+                refused(ResilienceConfig {
+                    breaker_window: Some(5),
+                    breaker_failures: 6,
+                    ..ResilienceConfig::default()
+                }),
+                vec![ResilienceConfig::BREAKER_WINDOW.var_or_field(&namespace)],
+            ),
+            (
+                refused(ResilienceConfig {
+                    breaker_age: Some(Duration::from_secs(60)),
+                    rate_limit: Some(3),
+                    rate_window: Duration::from_secs(3600),
+                    ..ResilienceConfig::default()
+                }),
+                vec![
+                    ResilienceConfig::BREAKER_AGE.var_or_field(&namespace),
+                    ResilienceConfig::RATE_LIMIT.var_or_field(&namespace),
+                    ResilienceConfig::RATE_WINDOW.var_or_field(&namespace),
+                ],
+            ),
+        ] {
+            for setting in beside {
+                assert!(said.contains(&setting), "{setting} in: {said}");
+            }
+        }
+    }
+
+    /// An age and a rate that leave a breaker no room to open mean nothing
+    /// without a breaker, as a slot's wait means nothing without slots: the
+    /// settings refused beside the default breaker build a policy with none.
+    #[test]
+    fn an_age_a_rate_leaves_no_room_for_refuses_nothing_without_a_breaker() {
+        let config = ResilienceConfig {
+            breaker_age: Some(Duration::from_secs(60)),
+            rate_limit: Some(3),
+            rate_window: Duration::from_secs(3600),
+            ..ResilienceConfig::default()
+        };
+        assert!(
+            ResiliencePolicy::<Upstream>::new(&config).is_err(),
+            "ten failures under three attempts an hour, with the default breaker"
+        );
+        let policy = ResiliencePolicy::<Upstream>::new(&ResilienceConfig {
+            breaker_window: None,
+            ..config
+        })
+        .expect("no breaker for the age to leave no room in");
+        assert!(policy.breaker.is_none() && policy.rate.is_some());
+    }
+
     #[test]
     fn an_unmet_policy_names_its_instances_import() {
         assert_eq!(
@@ -2180,5 +2622,248 @@ mod tests {
                 nest_rs_config::var_name("resilience", "*")
             )
         );
+    }
+
+    /// A policy with no breaker says so by type, never as a breaker closed,
+    /// and refuses either switch; an age and probes mean nothing without a
+    /// breaker, as a slot's wait means nothing without slots, and build none.
+    #[tokio::test(start_paused = true)]
+    async fn a_policy_with_no_breaker_says_so_by_type_and_refuses_either_switch() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = policy(ResilienceConfig {
+            breaker_window: None,
+            breaker_age: Some(Duration::from_secs(60)),
+            breaker_probes: 3,
+            ..ResilienceConfig::default()
+        });
+        assert!(policy.breaker.is_none());
+        assert_eq!(policy.breaker_state(), None);
+        assert_eq!(
+            policy.open_breaker(Duration::from_secs(10)),
+            Err(BreakerError::Off)
+        );
+        assert_eq!(
+            policy.open_breaker(Duration::ZERO),
+            Err(BreakerError::Off),
+            "no breaker before a duration it would not take"
+        );
+        assert_eq!(policy.close_breaker(), Err(BreakerError::Off));
+        assert_eq!(
+            BreakerError::Off.to_string(),
+            "the policy has no circuit breaker to switch"
+        );
+        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(
+            lines
+                .find(TARGET, "circuit breaker changed state")
+                .is_empty()
+        );
+    }
+
+    /// A manual opening for a duration `breaker_open` would not take is
+    /// refused, never clamped: the breaker stays as it was and files nothing,
+    /// and the refusal names the open times it takes and their variable's key,
+    /// never the duration given. Both ends are taken.
+    #[tokio::test(start_paused = true)]
+    async fn a_manual_opening_outside_the_open_times_breaker_open_takes_is_refused_unclamped() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = policy(ResilienceConfig::default());
+        let bounds = ResilienceConfig::BREAKER_OPEN.bounds();
+        let nest_rs_config::Floor::Units(floor) = bounds.least() else {
+            panic!("the open time's floor is a count of seconds");
+        };
+        let least = bounds.unit().duration(floor.count);
+        let most = bounds.unit().duration(bounds.most().count);
+        let tick = Duration::from_millis(1);
+        for outside in [Duration::ZERO, least - tick, most + tick, Duration::MAX] {
+            let refused = policy
+                .open_breaker(outside)
+                .expect_err("outside the open times");
+            assert_eq!(refused, BreakerError::OutOfRange { least, most });
+            let said = refused.to_string();
+            assert_eq!(
+                said,
+                format!(
+                    "a breaker opened by hand stays open {least:?} to {most:?}, the open times \
+                     `{}` takes",
+                    ResilienceConfig::BREAKER_OPEN.key()
+                )
+            );
+            assert!(!said.contains(&format!("{outside:?}")), "{said}");
+        }
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+        assert!(
+            lines
+                .find(TARGET, "circuit breaker changed state")
+                .is_empty()
+        );
+        for end in [least, most] {
+            assert_eq!(policy.open_breaker(end), Ok(()));
+            assert_eq!(
+                policy.breaker_state(),
+                Some(BreakerState::Open { retry_after: end })
+            );
+        }
+    }
+
+    /// A manual opening refuses every call unsent, a retry included, told what
+    /// is left of its time, as an open breaker does; a manual closing sends
+    /// them again.
+    #[tokio::test(start_paused = true)]
+    async fn a_breaker_opened_by_hand_refuses_every_call_unsent_until_it_is_closed_by_hand() {
+        let policy = policy(ResilienceConfig::default());
+        let calls = AtomicU32::new(0);
+        let sent = || async {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, Refused>(())
+        };
+        policy
+            .open_breaker(Duration::from_secs(20))
+            .expect("an open time `breaker_open` takes");
+        tokio::time::advance(Duration::from_secs(5)).await;
+        let refused = policy.run_idempotent(|_| sent()).await;
+        assert!(
+            matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+                if retry_after == Duration::from_secs(15)),
+            "{refused:?}"
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 0, "refused unsent");
+        policy.close_breaker().expect("a breaker");
+        assert!(policy.run(|_| sent()).await.is_ok());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    /// A probe holding its turn while it waits for the rate's reset reads
+    /// half-open, carrying no time, while a call beside it is told when the
+    /// probe has answered at the latest. Opened by hand meanwhile, the breaker
+    /// refuses the probe when its wait ends, unsent, as it refuses any call
+    /// meeting it open, before the rate counts it.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_waiting_for_the_reset_when_a_manual_opening_comes_is_refused_unsent() {
+        let policy = policy(ResilienceConfig {
+            timeout: Duration::from_secs(5),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(1),
+            ..rated(1, Duration::from_secs(10), Duration::from_secs(10))
+        });
+        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let sent = AtomicU32::new(0);
+        let mut probing = Box::pin(policy.run(|_| async {
+            sent.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, Refused>(())
+        }));
+        park(&mut probing).await;
+        assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
+        let beside = policy.run(|_| answering()).await;
+        assert!(
+            matches!(beside, Err(ResilienceError::Open { retry_after, .. })
+                if retry_after == Duration::from_secs(14)),
+            "at 1 s, the probe sent at the reset at 10 s, within its 5 s timeout: {beside:?}"
+        );
+
+        policy
+            .open_breaker(Duration::from_secs(30))
+            .expect("an open time `breaker_open` takes");
+        let refused = probing.await;
+        assert!(
+            matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+                if retry_after == Duration::from_secs(21)),
+            "at 10 s, what is left of the 30 s it was opened for at 1 s: {refused:?}"
+        );
+        assert_eq!(sent.load(Ordering::Relaxed), 0, "the probe is never sent");
+        policy.close_breaker().expect("a breaker");
+        let resumed = tokio::time::Instant::now();
+        assert!(policy.run(|_| answering()).await.is_ok());
+        assert_eq!(
+            resumed.elapsed(),
+            Duration::ZERO,
+            "the refused probe took nothing of the window after its wait"
+        );
+    }
+
+    /// A probe waiting for the rate's reset loses its turn to a manual
+    /// opening, which may pass before the wait ends: the call then meets the
+    /// breaker as a call arriving then does, takes the probe's turn of the
+    /// opening by hand, is sent, and its answer closes the breaker.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_waiting_for_the_reset_past_a_shorter_manual_opening_probes_after_it() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = policy(ResilienceConfig {
+            timeout: Duration::from_secs(5),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(1),
+            ..rated(1, Duration::from_secs(10), Duration::from_secs(10))
+        });
+        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let sent = AtomicU32::new(0);
+        let mut probing = Box::pin(policy.run(|_| async {
+            sent.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, Refused>(())
+        }));
+        park(&mut probing).await;
+        policy
+            .open_breaker(Duration::from_secs(1))
+            .expect("an open time `breaker_open` takes");
+        let probed = probing.await;
+        assert!(
+            matches!(probed, Ok(())),
+            "at 10 s, past the opening by hand at 1 s for 1 s: {probed:?}"
+        );
+        assert_eq!(sent.load(Ordering::Relaxed), 1, "sent at the reset");
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+        let states: Vec<String> = lines
+            .find(TARGET, "circuit breaker changed state")
+            .iter()
+            .map(|line| line.field("state").unwrap_or_default())
+            .collect();
+        assert_eq!(
+            states,
+            ["open", "open", "half_open", "closed"],
+            "opened by a failure, then by hand, then probed at the reset"
+        );
+    }
+
+    /// The policy's breaker forgets an outcome past `breaker_age`, and closes on
+    /// `breaker_probes` probes in a row.
+    #[tokio::test(start_paused = true)]
+    async fn a_policy_builds_its_breaker_with_the_age_and_the_probes_it_reads() {
+        let policy = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(4),
+            breaker_failures: 2,
+            breaker_open: Duration::from_secs(10),
+            breaker_age: Some(Duration::from_secs(60)),
+            breaker_probes: 2,
+            ..ResilienceConfig::default()
+        });
+        let failing = || async { Err::<(), _>(Refused) };
+        assert!(policy.run(|_| failing()).await.is_err());
+        tokio::time::advance(Duration::from_secs(61)).await;
+        assert!(policy.run(|_| failing()).await.is_err());
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::Closed),
+            "the first failure is past the age"
+        );
+        assert!(policy.run(|_| failing()).await.is_err());
+        assert!(matches!(
+            policy.breaker_state(),
+            Some(BreakerState::Open { .. })
+        ));
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(policy.run(|_| answering()).await.is_ok());
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::HalfOpen),
+            "one probe of two"
+        );
+        assert!(policy.run(|_| answering()).await.is_ok());
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
     }
 }

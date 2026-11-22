@@ -137,6 +137,8 @@ fn every_other_setting_is_refused_at_a_method_naming_the_variable_that_sets_it()
         breaker_window: BREAKER_WINDOW,
         breaker_failures: BREAKER_FAILURES,
         breaker_open: BREAKER_OPEN,
+        breaker_age: BREAKER_AGE,
+        breaker_probes: BREAKER_PROBES,
         concurrency: CONCURRENCY,
         concurrency_wait: CONCURRENCY_WAIT,
         rate_limit: RATE_LIMIT,

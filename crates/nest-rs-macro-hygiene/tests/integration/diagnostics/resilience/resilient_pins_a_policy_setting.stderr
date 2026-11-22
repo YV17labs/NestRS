@@ -28,32 +28,44 @@ error: #[resilient] takes no `breaker_open`: the circuit breaker counts the fail
 51 |     #[resilient(carrier, breaker_open = "30s")]
    |                          ^^^^^^^^^^^^
 
-error: #[resilient] takes no `concurrency`: the bulkhead bounds the calls every caller of the policy runs at once — set it on the policy: `CONCURRENCY`, or `ResilienceConfig::concurrency` in code
+error: #[resilient] takes no `breaker_age`: the circuit breaker counts the failures of every caller of the policy — set it on the policy: `BREAKER_AGE_SECS`, or `ResilienceConfig::breaker_age` in code
   --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:56:26
    |
-56 |     #[resilient(carrier, concurrency = 4)]
+56 |     #[resilient(carrier, breaker_age = "60s")]
+   |                          ^^^^^^^^^^^
+
+error: #[resilient] takes no `breaker_probes`: the circuit breaker counts the failures of every caller of the policy — set it on the policy: `BREAKER_PROBES`, or `ResilienceConfig::breaker_probes` in code
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:61:38
+   |
+61 |     #[resilient(carrier, idempotent, breaker_probes = 3)]
+   |                                      ^^^^^^^^^^^^^^
+
+error: #[resilient] takes no `concurrency`: the bulkhead bounds the calls every caller of the policy runs at once — set it on the policy: `CONCURRENCY`, or `ResilienceConfig::concurrency` in code
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:66:26
+   |
+66 |     #[resilient(carrier, concurrency = 4)]
    |                          ^^^^^^^^^^^
 
 error: #[resilient] takes no `concurrency_wait`: the bulkhead bounds the calls every caller of the policy runs at once — set it on the policy: `CONCURRENCY_WAIT_MS`, or `ResilienceConfig::concurrency_wait` in code
-  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:61:26
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:71:26
    |
-61 |     #[resilient(carrier, concurrency_wait = "1s")]
+71 |     #[resilient(carrier, concurrency_wait = "1s")]
    |                          ^^^^^^^^^^^^^^^^
 
 error: #[resilient] takes no `rate_limit`: the rate limit counts the attempts every caller of the policy sends — set it on the policy: `RATE_LIMIT`, or `ResilienceConfig::rate_limit` in code
-  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:66:26
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:76:26
    |
-66 |     #[resilient(carrier, rate_limit = 5)]
+76 |     #[resilient(carrier, rate_limit = 5)]
    |                          ^^^^^^^^^^
 
 error: #[resilient] takes no `rate_window`: the rate limit counts the attempts every caller of the policy sends — set it on the policy: `RATE_WINDOW_SECS`, or `ResilienceConfig::rate_window` in code
-  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:71:38
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:81:38
    |
-71 |     #[resilient(carrier, idempotent, rate_window = "1s")]
+81 |     #[resilient(carrier, idempotent, rate_window = "1s")]
    |                                      ^^^^^^^^^^^
 
 error: #[resilient] takes no `rate_wait`: the rate limit counts the attempts every caller of the policy sends — set it on the policy: `RATE_WAIT_MS`, or `ResilienceConfig::rate_wait` in code
-  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:76:26
+  --> tests/integration/diagnostics/resilience/resilient_pins_a_policy_setting.rs:86:26
    |
-76 |     #[resilient(carrier, rate_wait = "100ms")]
+86 |     #[resilient(carrier, rate_wait = "100ms")]
    |                          ^^^^^^^^^

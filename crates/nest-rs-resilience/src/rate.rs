@@ -61,6 +61,29 @@ impl Rate {
     pub(crate) const fn wait(&self) -> Duration {
         self.wait
     }
+
+    /// The most attempts the rate sends within any span `span` long, both
+    /// ends included: each window opening inside it sends its limit, and one
+    /// open as it starts all but its first attempt, sent before it. That one
+    /// pushes every later opening past the span's start, so a span a whole
+    /// number of windows long holds the most with none open, a window opening
+    /// at each of its ends.
+    pub(crate) fn most_sent_within(&self, span: Duration) -> usize {
+        let (span, window) = (span.as_nanos(), self.window.as_nanos());
+        let Some(whole) = span
+            .checked_div(window)
+            .and_then(|whole| usize::try_from(whole).ok())
+        else {
+            return usize::MAX;
+        };
+        if span.is_multiple_of(window) {
+            self.limit.saturating_mul(whole.saturating_add(1))
+        } else {
+            self.limit
+                .saturating_mul(whole.saturating_add(2))
+                .saturating_sub(1)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -112,6 +135,63 @@ mod tests {
         tokio::time::advance(WINDOW).await;
         assert_eq!((counted(&rate), counted(&rate)), (Ok(()), Ok(())));
         assert_eq!(counted(&rate), Err(WINDOW));
+    }
+
+    /// How many attempts `rate` sends within `span`, both ends included, each
+    /// sent as soon as the rate lets it through, from a start with no window
+    /// open, or with one its first attempt opened `before` it.
+    fn sent_within(rate: &Rate, span: Duration, before: Option<Duration>) -> usize {
+        let starts = Instant::now() + WINDOW;
+        if let Some(before) = before {
+            assert_eq!(rate.count(starts - before), Ok(()), "opens a window");
+        }
+        let ends = starts + span;
+        let (mut now, mut sent) = (starts, 0);
+        loop {
+            match rate.count(now) {
+                Ok(()) => sent += 1,
+                Err(reset) if now + reset <= ends => now += reset,
+                Err(_) => return sent,
+            }
+        }
+    }
+
+    /// The most attempts a span holds are the most the rate sends in it from
+    /// any start: all but the first of a window open as it starts, and a full
+    /// window as each later one opens inside it. That window pushes every
+    /// later opening past the span's start, so a span a whole number of
+    /// windows long holds the most with none open, a window opening at each of
+    /// its ends: two per 10 s send three within 5 s, six within 20 s, and
+    /// seven within 25 s.
+    #[test]
+    fn the_most_attempts_a_span_holds_are_the_most_the_rate_sends_in_it_from_any_start() {
+        let tick = Duration::from_nanos(1);
+        let rate = |limit| Rate::new(limit, WINDOW, Duration::ZERO);
+        let most_sent = |limit, span| {
+            [None, Some(tick), Some(WINDOW / 2), Some(WINDOW - tick)]
+                .map(|before| sent_within(&rate(limit), span, before))
+                .into_iter()
+                .max()
+        };
+        assert_eq!(most_sent(2, Duration::from_secs(5)), Some(3));
+        assert_eq!(most_sent(2, Duration::from_secs(20)), Some(6));
+        assert_eq!(most_sent(2, Duration::from_secs(25)), Some(7));
+        for limit in 1..=3 {
+            for whole in 0..=3 {
+                for span in [
+                    WINDOW * whole,
+                    WINDOW * whole + tick,
+                    WINDOW * whole + WINDOW / 2,
+                    WINDOW * (whole + 1) - tick,
+                ] {
+                    assert_eq!(
+                        most_sent(limit, span),
+                        Some(rate(limit).most_sent_within(span)),
+                        "{limit} per {WINDOW:?} within {span:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// An attempt read before another opened the window counts in that one,

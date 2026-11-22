@@ -53,6 +53,16 @@ impl ShipmentsService {
         Err(CarrierDown)
     }
 
+    #[resilient(carrier, breaker_age = "60s")]
+    async fn aged(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, idempotent, breaker_probes = 3)]
+    async fn probed(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
     #[resilient(carrier, concurrency = 4)]
     async fn bounded(&self) -> Answer {
         Err(CarrierDown)

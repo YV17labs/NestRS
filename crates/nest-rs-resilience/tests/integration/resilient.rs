@@ -5,6 +5,7 @@
 //! takes, and a refusal answered `503` by every edge serving a decorated
 //! handler.
 
+use std::cell::Cell;
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -13,7 +14,7 @@ use std::time::Duration;
 
 use nest_rs_core::{Module, injectable, instance, module};
 use nest_rs_resilience::{
-    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+    BreakerState, ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
 };
 use nest_rs_testing::{HeadlessApp, LogCapture};
 
@@ -143,7 +144,28 @@ impl ParcelsService {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         Ok(42)
     }
+
+    /// A tally the task awaiting it holds alone: `Send`, and not `Sync`.
+    #[resilient(courier)]
+    async fn tally(&self) -> Answer<Cell<u32>> {
+        Ok(Cell::new(self.attempts.fetch_add(1, Ordering::Relaxed) + 1))
+    }
+
+    /// The parcels on their way, answered as a stream is — boxed, `Send` and
+    /// not `Sync` — after a first attempt failing.
+    #[resilient(courier, idempotent)]
+    async fn feed(&self) -> Answer<Feed> {
+        if self.fails(1) {
+            return Err(CarrierDown);
+        }
+        let feed: Feed = Box::new(["P1", "P2"].into_iter());
+        Ok(feed)
+    }
 }
+
+/// What an `#[sse]` route's or a `#[subscription]`'s answer holds: a stream
+/// sent to the task that polls it, and shared with no other.
+type Feed = Box<dyn Iterator<Item = &'static str> + Send>;
 
 async fn boot<M: Module + 'static>() -> HeadlessApp {
     HeadlessApp::builder()
@@ -441,12 +463,116 @@ async fn a_policy_pinned_to_open_on_one_failure_refuses_the_next_call_unsent() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_method_is_refused_unsent_while_its_breaker_is_opened_by_hand_and_sent_once_closed() {
+    let app = boot::<OpeningModule>().await;
+    let parcels = parcels(&app);
+    let courier = app
+        .container()
+        .get::<ResiliencePolicy<Courier>>()
+        .expect("the module built the policy");
+
+    courier
+        .open_breaker(Duration::from_secs(60))
+        .expect("an open time the breaker takes");
+    let refused = parcels.quote().await;
+    assert!(
+        matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+            if retry_after == Duration::from_secs(60)),
+        "{refused:?}"
+    );
+    assert_eq!(parcels.attempted(), 0, "refused unsent");
+
+    courier.close_breaker().expect("the policy has a breaker");
+    assert_eq!(courier.breaker_state(), Some(BreakerState::Closed));
+    assert!(matches!(parcels.quote().await, Ok(42)));
+    assert_eq!(parcels.attempted(), 1, "sent again");
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_decorated_call_runs_on_a_task_of_its_own() {
     let app = boot::<QuietModule>().await;
     let parcels = parcels(&app);
 
     let spawned = tokio::spawn(async move { parcels.quote().await });
     assert!(matches!(spawned.await.expect("the task ends"), Ok(42)));
+}
+
+/// A run whose answer is `Send` and not `Sync` — a `Cell`, a boxed stream — is
+/// `Send` itself, run once or again, decorated or not, its wait before a retry
+/// included: each compiles on a task of its own, as an `#[sse]` route's or a
+/// `#[subscription]`'s answer must.
+#[tokio::test(start_paused = true)]
+async fn a_run_answering_a_value_that_is_not_sync_runs_on_a_task_of_its_own() {
+    let app = boot::<RetryingOnceModule>().await;
+    let parcels = parcels(&app);
+    let courier = held::<Courier>(&app);
+
+    let once = tokio::spawn({
+        let courier = Arc::clone(&courier);
+        async move {
+            courier
+                .run(|_| async { Ok::<_, CarrierDown>(Cell::new(7)) })
+                .await
+        }
+    });
+    let calls = Arc::new(AtomicU32::new(0));
+    let again = tokio::spawn({
+        let calls = Arc::clone(&calls);
+        async move {
+            courier
+                .run_idempotent(|_| {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                            return Err(CarrierDown);
+                        }
+                        Ok::<Feed, _>(Box::new(["P3"].into_iter()))
+                    }
+                })
+                .await
+        }
+    });
+    assert_eq!(
+        once.await
+            .expect("the task ends")
+            .ok()
+            .map(Cell::into_inner),
+        Some(7)
+    );
+    let streamed = again.await.expect("the task ends");
+    assert_eq!(
+        streamed.ok().map(Iterator::collect::<Vec<_>>),
+        Some(vec!["P3"])
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        2,
+        "a failed attempt and its retry"
+    );
+
+    let tallied = tokio::spawn({
+        let parcels = Arc::clone(&parcels);
+        async move { parcels.tally().await }
+    });
+    assert_eq!(
+        tallied
+            .await
+            .expect("the task ends")
+            .ok()
+            .map(Cell::into_inner),
+        Some(1)
+    );
+    parcels.attempted();
+    let fed = tokio::spawn({
+        let parcels = Arc::clone(&parcels);
+        async move { parcels.feed().await }
+    });
+    let fed = fed.await.expect("the task ends");
+    assert_eq!(
+        fed.ok().map(Iterator::collect::<Vec<_>>),
+        Some(vec!["P1", "P2"])
+    );
+    assert_eq!(parcels.attempted(), 2, "a failed attempt and its retry");
 }
 
 /// The default instance, a receiver lent through its `Arc` and a generic

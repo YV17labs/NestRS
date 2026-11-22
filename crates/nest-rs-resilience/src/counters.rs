@@ -23,6 +23,10 @@ pub(crate) const INSTANCE_ATTRIBUTE: &str = "nestrs.resilience.instance";
 #[cfg(feature = "opentelemetry")]
 pub(crate) const STATE_ATTRIBUTE: &str = "nestrs.resilience.breaker.state";
 
+/// `true` on a manual transition, and absent from every other.
+#[cfg(feature = "opentelemetry")]
+pub(crate) const MANUAL_ATTRIBUTE: &str = "nestrs.resilience.breaker.manual";
+
 #[cfg(feature = "opentelemetry")]
 pub(crate) const REFUSAL_ATTRIBUTE: &str = "nestrs.resilience.refusal";
 
@@ -54,65 +58,86 @@ impl Counters {
         }
     }
 
-    pub(crate) fn transition(&self, state: &'static str) {
+    /// A transition into `state`, `manual` or not.
+    pub(crate) fn transition(&self, state: &'static str, manual: bool) {
         #[cfg(feature = "opentelemetry")]
-        self.add(
-            &self.transitions,
-            TRANSITIONS,
-            "{transition}",
-            "The circuit breakers' transitions, by the state each entered.",
-            Some((STATE_ATTRIBUTE, state)),
-        );
+        {
+            use opentelemetry::KeyValue;
+
+            let state = KeyValue::new(STATE_ATTRIBUTE, state);
+            let counter = made(
+                &self.transitions,
+                TRANSITIONS,
+                "{transition}",
+                "The circuit breakers' transitions, by the state each entered, and whether it \
+                 was manual.",
+            );
+            if manual {
+                counter.add(
+                    1,
+                    &[
+                        self.instance(),
+                        state,
+                        KeyValue::new(MANUAL_ATTRIBUTE, true),
+                    ],
+                );
+            } else {
+                counter.add(1, &[self.instance(), state]);
+            }
+        }
         #[cfg(not(feature = "opentelemetry"))]
-        let _ = state;
+        let _ = (state, manual);
     }
 
     pub(crate) fn retry(&self) {
         #[cfg(feature = "opentelemetry")]
-        self.add(
+        made(
             &self.retries,
             RETRIES,
             "{retry}",
             "The calls the policies sent again.",
-            None,
-        );
+        )
+        .add(1, &[self.instance()]);
     }
 
     pub(crate) fn refusal(&self, refusal: Refusal) {
         #[cfg(feature = "opentelemetry")]
-        self.add(
+        made(
             &self.refusals,
             REFUSALS,
             "{refusal}",
             "The runs the policies ended on their own refusal, by the refusal.",
-            Some((REFUSAL_ATTRIBUTE, refusal.as_str())),
+        )
+        .add(
+            1,
+            &[
+                self.instance(),
+                opentelemetry::KeyValue::new(REFUSAL_ATTRIBUTE, refusal.as_str()),
+            ],
         );
         #[cfg(not(feature = "opentelemetry"))]
         let _ = refusal;
     }
 
     #[cfg(feature = "opentelemetry")]
-    fn add(
-        &self,
-        counter: &Lazy,
-        name: &'static str,
-        unit: &'static str,
-        description: &'static str,
-        attribute: Option<(&'static str, &'static str)>,
-    ) {
-        let instance = opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, self.instance);
-        let counter = counter.get_or_init(|| {
-            opentelemetry::global::meter("nestrs")
-                .u64_counter(name)
-                .with_unit(unit)
-                .with_description(description)
-                .build()
-        });
-        match attribute {
-            Some((key, value)) => {
-                counter.add(1, &[instance, opentelemetry::KeyValue::new(key, value)])
-            }
-            None => counter.add(1, &[instance]),
-        }
+    fn instance(&self) -> opentelemetry::KeyValue {
+        opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, self.instance)
     }
+}
+
+/// The counter `lazy` holds, made on the global meter at its first use.
+#[cfg(feature = "opentelemetry")]
+fn made<'c>(
+    lazy: &'c Lazy,
+    name: &'static str,
+    unit: &'static str,
+    description: &'static str,
+) -> &'c opentelemetry::metrics::Counter<u64> {
+    lazy.get_or_init(|| {
+        opentelemetry::global::meter("nestrs")
+            .u64_counter(name)
+            .with_unit(unit)
+            .with_description(description)
+            .build()
+    })
 }

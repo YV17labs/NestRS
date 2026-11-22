@@ -1,10 +1,13 @@
 //! [`ResilienceError`] — what a policy answers when its call does not succeed:
 //! the call's own error, or the policy's refusal, which every edge answers
-//! `503` with the wait it knows.
+//! `503` with the wait it knows — and [`BreakerError`], what a manual switch
+//! of its breaker answers when it changes nothing.
 
 use std::time::Duration;
 
 use nest_rs_core::{Problem, ToProblem, code};
+
+use crate::config::{BREAKER_OPEN_TIMES, ResilienceConfig};
 
 const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 
@@ -110,6 +113,42 @@ pub enum ResilienceError<E> {
         #[source]
         __problem: Problem,
     },
+}
+
+/// Why [`ResiliencePolicy::open_breaker`](crate::ResiliencePolicy::open_breaker)
+/// or [`close_breaker`](crate::ResiliencePolicy::close_breaker) left the breaker
+/// as it was: a manual switch is never a silent no-op, nor clamped to what it
+/// can do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum BreakerError {
+    /// The policy has no circuit breaker, its window set to none.
+    #[error("the policy has no circuit breaker to switch")]
+    Off,
+    /// The duration is outside the open times
+    /// [`breaker_open`](ResilienceConfig::breaker_open) takes, the range a
+    /// manual opening is held to.
+    #[error(
+        "a breaker opened by hand stays open {least:?} to {most:?}, the open times `{}` takes",
+        ResilienceConfig::BREAKER_OPEN.key()
+    )]
+    #[non_exhaustive]
+    OutOfRange {
+        /// The shortest open time a manual opening takes.
+        least: Duration,
+        /// The longest open time a manual opening takes.
+        most: Duration,
+    },
+}
+
+impl BreakerError {
+    /// A duration outside the open times `breaker_open` takes.
+    pub(crate) const fn out_of_range() -> Self {
+        Self::OutOfRange {
+            least: *BREAKER_OPEN_TIMES.start(),
+            most: *BREAKER_OPEN_TIMES.end(),
+        }
+    }
 }
 
 /// A policy's refusal, before it is told in the caller's error type.

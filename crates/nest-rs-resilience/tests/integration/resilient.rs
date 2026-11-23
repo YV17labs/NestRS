@@ -730,6 +730,12 @@ async fn every_method_on_one_field_counts_in_one_breaker() {
 #[error("the upstream failed")]
 struct UpstreamFailed(#[source] reqwest::Error);
 
+impl From<reqwest::Error> for UpstreamFailed {
+    fn from(error: reqwest::Error) -> Self {
+        Self(error.without_url())
+    }
+}
+
 #[injectable]
 struct LinksService {
     #[inject]
@@ -739,8 +745,8 @@ struct LinksService {
 impl LinksService {
     #[resilient(courier, idempotent)]
     async fn preview(&self, url: &str) -> Result<String, ResilienceError<UpstreamFailed>> {
-        let page = reqwest::get(url).await.map_err(UpstreamFailed)?;
-        page.text().await.map_err(UpstreamFailed)
+        let page = reqwest::get(url).await?;
+        Ok(page.text().await?)
     }
 }
 
@@ -815,10 +821,23 @@ struct Previewer;
 /// The target the docs' feature files its lines on.
 const POSTS: &str = "features::posts";
 
-/// What a call to the previewer fails with.
+/// What a call to the previewer fails with: reqwest's error without the URL it
+/// quotes, as the docs' error keeps it.
 #[derive(Debug, thiserror::Error)]
 #[error("the previewer failed")]
 struct PreviewFailed(#[source] reqwest::Error);
+
+impl From<reqwest::Error> for PreviewFailed {
+    fn from(error: reqwest::Error) -> Self {
+        Self(error.without_url())
+    }
+}
+
+impl nest_rs_core::ToProblem for PreviewFailed {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        None
+    }
+}
 
 /// A host the test builds itself: the previewer's policy, and a client trusting
 /// the peer's authority.
@@ -844,12 +863,12 @@ impl Previews {
     /// is its answer, `None`, and any other failing status an `Err`.
     #[resilient(previewer, idempotent)]
     async fn preview(&self, url: &str) -> Result<Option<String>, ResilienceError<PreviewFailed>> {
-        let page = self.http.get(url).send().await.map_err(PreviewFailed)?;
+        let page = self.http.get(url).send().await?;
         if page.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        let page = page.error_for_status().map_err(PreviewFailed)?;
-        page.text().await.map(Some).map_err(PreviewFailed)
+        let page = page.error_for_status()?;
+        Ok(Some(page.text().await?))
     }
 
     /// The docs' fallback: the bare link while the policy refuses the call, the
@@ -966,6 +985,86 @@ async fn the_methods_result_is_its_fallback_a_refusal_answered_and_a_failure_kep
         said.field("error"),
         Some(error_message(&open)),
         "the refusal's whole chain"
+    );
+}
+
+/// A credential the previewed URL's query carries, which no line may quote.
+const CREDENTIAL: &str = "zzqx-preview-token";
+
+/// The URL the route below previews, set by the test serving it: the peer's,
+/// its query carrying a credential.
+static PREVIEWED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The previewer behind a route, as an app serves it: its failure answers an
+/// opaque `500`, which the edge files at `error` with the failure's chain.
+#[nest_rs_http::controller(path = "/cards")]
+struct CardsController {
+    #[inject]
+    previewer: Arc<ResiliencePolicy<Previewer>>,
+}
+
+#[nest_rs_http::routes]
+impl CardsController {
+    #[get("/")]
+    #[public]
+    #[resilient(previewer)]
+    async fn card(&self) -> Result<String, ResilienceError<PreviewFailed>> {
+        let authority =
+            reqwest::Certificate::from_pem(AUTHORITY.pem().as_bytes()).expect("the authority");
+        let http = reqwest::Client::builder()
+            .tls_certs_only([authority])
+            .build()
+            .expect("a client");
+        let page = http
+            .get(PREVIEWED.get().expect("the test set the URL"))
+            .send()
+            .await?;
+        Ok(page.error_for_status()?.text().await?)
+    }
+}
+
+#[module(
+    imports = [ResilienceModule::for_root((Previewer, quiet()))],
+    providers = [CardsController],
+)]
+struct CardsModule;
+
+/// The docs' error keeps reqwest's error without its URL, so the edge filing a
+/// failed preview — the line and the span's status — quotes no credential its
+/// query carries.
+#[tokio::test]
+async fn a_failed_preview_is_filed_without_the_url_it_requested() {
+    let peer = HttpsPeer::answering(&CERTIFICATE, [PeerAnswer::status(503)]).await;
+    PREVIEWED
+        .set(peer.url(&format!("/down?api_key={CREDENTIAL}")))
+        .expect("set once");
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::for_module::<CardsModule>()
+        .await
+        .expect("the route boots");
+
+    let failed = app.http().get("/cards").send().await;
+    failed.assert_status(http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(peer.requests().len(), 1, "the preview was sent");
+    let filed = logs.expect_one(nest_rs_http::target::HTTP, "request failed");
+    assert!(
+        filed
+            .field("error")
+            .is_some_and(|error| error.contains("the previewer failed")),
+        "the failure's chain is filed: {filed:?}"
+    );
+    assert!(
+        !logs.quotes(CREDENTIAL),
+        "no line quotes the URL: {:?}",
+        logs.events()
+    );
+    assert!(
+        logs.spans().iter().all(|span| span
+            .fields
+            .values()
+            .all(|value| !value.contains(CREDENTIAL))),
+        "no span records the URL: {:?}",
+        logs.spans()
     );
 }
 
@@ -2248,5 +2347,158 @@ mod hooks {
 
         let attempts = app.container().get::<Attempts>().expect("provided");
         assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+    }
+}
+
+/// What a decorated method's future holds, and the stack it is polled on: its
+/// body's future and each argument once, beside what its run holds whatever its
+/// body, so a method holding a large buffer runs where its undecorated twin
+/// runs.
+mod footprint {
+    use std::sync::Arc;
+
+    use nest_rs_core::{injectable, module};
+    use nest_rs_resilience::{ResilienceModule, ResiliencePolicy, resilient};
+
+    use super::{Answer, Courier, boot};
+    use crate::quiet;
+
+    /// What a body below holds across its `.await`, or takes by value: past
+    /// anything a run holds, so a second copy of it shows.
+    const HELD: usize = 16 * 1024;
+
+    /// What a run holds whatever its body: its slot, its attempt's pass and
+    /// bounds, the timers it waits on.
+    const RUN: usize = 1024;
+
+    #[injectable]
+    struct BuffersService {
+        #[inject]
+        courier: Arc<ResiliencePolicy<Courier>>,
+    }
+
+    impl BuffersService {
+        async fn holding<const N: usize>(&self) -> Answer<usize> {
+            let buffer = [7_u8; N];
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
+        #[resilient(courier)]
+        async fn holding_once<const N: usize>(&self) -> Answer<usize> {
+            let buffer = [7_u8; N];
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
+        #[resilient(courier, idempotent)]
+        async fn holding_again<const N: usize>(&self) -> Answer<usize> {
+            let buffer = [7_u8; N];
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
+        async fn taking<const N: usize>(&self, buffer: [u8; N]) -> Answer<usize> {
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
+        #[resilient(courier)]
+        async fn taking_once<const N: usize>(&self, buffer: [u8; N]) -> Answer<usize> {
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
+        #[resilient(courier, idempotent)]
+        async fn taking_again<const N: usize>(&self, buffer: [u8; N]) -> Answer<usize> {
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, quiet()))],
+        providers = [BuffersService],
+    )]
+    struct BuffersModule;
+
+    #[tokio::test]
+    async fn a_decorated_methods_future_holds_its_body_and_each_argument_once() {
+        let app = boot::<BuffersModule>().await;
+        let buffers = app.container().get::<BuffersService>().expect("provided");
+        let profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        };
+        let holding = size_of_val(&buffers.holding::<HELD>());
+        let taking = size_of_val(&buffers.taking::<HELD>([7; HELD]));
+        for (shape, decorated, twin) in [
+            (
+                "holding a buffer across an `.await`, run once",
+                size_of_val(&buffers.holding_once::<HELD>()),
+                holding,
+            ),
+            (
+                "holding a buffer across an `.await`, run again",
+                size_of_val(&buffers.holding_again::<HELD>()),
+                holding,
+            ),
+            (
+                "taking a buffer by value, run once",
+                size_of_val(&buffers.taking_once::<HELD>([7; HELD])),
+                taking,
+            ),
+            (
+                "taking a buffer by value, run again",
+                size_of_val(&buffers.taking_again::<HELD>([7; HELD])),
+                taking,
+            ),
+        ] {
+            assert!(
+                decorated <= twin + RUN,
+                "in a {profile} build, a method {shape} is a future of {decorated} B decorated, \
+                 of {twin} B undecorated"
+            );
+        }
+    }
+
+    /// tokio's default worker stack, which `#[nest_rs::main]`'s runtime keeps.
+    const WORKER_STACK: usize = 2 * 1024 * 1024;
+
+    /// What the methods below hold across their `.await` on that stack: a
+    /// third of it, which the undecorated method holds there too.
+    const HELD_ON_A_WORKER: usize = WORKER_STACK / 3;
+
+    /// A stack overflow aborts the process: nextest, which runs each test in a
+    /// process of its own, reports this one failed on `SIGABRT` and runs the
+    /// rest.
+    #[test]
+    fn a_decorated_method_holding_a_large_buffer_across_an_await_runs_on_a_worker_its_twin_runs_on()
+    {
+        // A runtime of the test's own, for its worker's stack.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(WORKER_STACK)
+            .enable_all()
+            .build()
+            .expect("the runtime builds");
+        runtime.block_on(async {
+            let app = boot::<BuffersModule>().await;
+            let buffers = app.container().get::<BuffersService>().expect("provided");
+            let twin = tokio::spawn({
+                let buffers = Arc::clone(&buffers);
+                async move { buffers.holding::<HELD_ON_A_WORKER>().await }
+            });
+            assert!(matches!(twin.await, Ok(Ok(HELD_ON_A_WORKER))));
+            let once = tokio::spawn({
+                let buffers = Arc::clone(&buffers);
+                async move { buffers.holding_once::<HELD_ON_A_WORKER>().await }
+            });
+            assert!(matches!(once.await, Ok(Ok(HELD_ON_A_WORKER))));
+            let again =
+                tokio::spawn(async move { buffers.holding_again::<HELD_ON_A_WORKER>().await });
+            assert!(matches!(again.await, Ok(Ok(HELD_ON_A_WORKER))));
+        });
     }
 }

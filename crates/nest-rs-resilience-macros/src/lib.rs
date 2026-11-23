@@ -53,7 +53,10 @@ mod resilient;
 /// its `Result<T, ResilienceError<E>>` out: `#[operations]` reads a field's
 /// `Result` by its spelling, and refuses any other answer of a decorated one. It
 /// keeps this attribute, read by its name, on the method, and hands the
-/// method's other attributes to the field it generates. A method under
+/// method's other attributes to the field it generates — in a build with
+/// `graphql` and `resilience` both, the umbrella's `resilience` enabling
+/// `nest-rs-graphql`'s; without `resilience`, it hands an attribute of this name
+/// to the field too, as 7.0.0 did an app's own. A method under
 /// `#[async_trait]` is a `fn` by the time this attribute reads it, and is
 /// refused saying so.
 ///

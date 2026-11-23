@@ -1,12 +1,13 @@
 # Upstream
 
-What a third-party library gets wrong, or leaves out, that nestrs works around
-or documents as a limit: kept so it is reported upstream and retired the day
-upstream fixes it, never patched or forked here (`rules/manifests-ci.md`).
-Never loaded into a session — read a library's file when its version moves.
-One file per library, named by its crate; an entry is appended to, never
-rewritten, and closed by a line saying which version fixed it and which commit
-retired our side.
+What a third-party library or the toolchain gets wrong, or leaves out, that
+nestrs works around or documents as a limit: kept so it is reported upstream and
+retired the day upstream fixes it, never patched or forked here
+(`rules/manifests-ci.md`). Never loaded into a session — read a library's file
+when its version moves, the toolchain's when `rust-toolchain.toml`'s pin does.
+One file per library, named by its crate, and one per toolchain component, named
+by it (`rustc.md`); an entry is appended to, never rewritten, and closed by a
+line saying which version fixed it and which commit retired our side.
 
 An entry holds, in this order:
 

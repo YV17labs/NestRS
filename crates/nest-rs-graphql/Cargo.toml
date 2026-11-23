@@ -10,6 +10,16 @@ description = "GraphQL resolver discovery + schema composition for NestRS apps, 
 keywords = ["framework", "nestrs", "graphql", "async-graphql", "web"]
 categories = ["web-programming", "asynchronous"]
 
+# docs.rs builds default features only, so a feature-gated item, and every
+# link naming it, would be missing from the published page. The CI rustdoc
+# gate builds the same set: `cargo doc --workspace --all-features`.
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+# `#[operations]` keeps a `#[resilient]` on the developer's method, whose body it
+# runs under its policy; the umbrella's `resilience` feature forwards it weakly.
+resilience = ["nest-rs-graphql-macros/resilience"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -83,6 +93,9 @@ libc.workspace = true
 # `#[resilient]` on an operation, the one attribute kept on the developer's
 # method, every other going on the field.
 nest-rs-resilience = { path = "../nest-rs-resilience" }
+# Self dev-dependency: the suite runs a `#[resilient]` operation, which the
+# `resilience` feature keeps on the developer's method.
+nest-rs-graphql = { path = ".", features = ["resilience"] }
 # The spans a field's guard and pipe run in, read off the registry
 # `LogCapture` installs.
 tracing-subscriber.workspace = true

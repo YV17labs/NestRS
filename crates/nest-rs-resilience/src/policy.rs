@@ -9,8 +9,11 @@ use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
+use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use nest_rs_config::{ConfigError, Namespaced, instance_namespace};
@@ -18,11 +21,11 @@ use nest_rs_core::{
     Backoff, Deadline, Instance, Problem, Unanswered, Unnamed, process_seed, within,
 };
 use tokio::sync::SemaphorePermit;
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
+use tokio::time::{Instant, Sleep};
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::TARGET;
-use crate::breaker::{Breaker, BreakerState, Pass};
+use crate::breaker::{Breaker, BreakerState, Pass, Sent};
 use crate::bulkhead::Bulkhead;
 use crate::config::{LONGEST_ATTEMPT, ResilienceConfig, is_open_time};
 use crate::counters::Counters;
@@ -124,25 +127,40 @@ pub(crate) type Attempted<T> = Result<(T, Verdict), Refusal>;
 
 /// One run of a call under its policy, holding its bulkhead slot.
 pub(crate) struct Run<'p, I> {
-    policy: &'p ResiliencePolicy<I>,
+    /// What each of its attempts is sent under.
+    terms: Terms<'p, I>,
     _slot: Option<SemaphorePermit<'p>>,
-    /// The deadline of the unit the run is in, which no attempt and no wait
-    /// outlives.
-    deadline: Option<Instant>,
-    /// How long each attempt waits: the policy's timeout, or the one its
-    /// method pinned.
-    timeout: Duration,
     /// How many times the run may send its call again: the policy's retries,
     /// or the ones its method pinned.
     retries: u32,
-    /// The decorated method the run came from, which its lines name.
-    method: Option<ResilientMethod>,
     /// Drawn at the first retry, so a call answering at once draws none.
     seed: Option<u64>,
     /// How many times this run attempted its call again so far, a retry the
     /// policy refused unsent included.
     pub(crate) resent: u32,
 }
+
+/// What every attempt of one run is sent under, copied into each attempt, so
+/// that no attempt's future borrows its run.
+pub(crate) struct Terms<'p, I> {
+    policy: &'p ResiliencePolicy<I>,
+    /// The deadline of the unit the run is in, which no attempt and no wait
+    /// outlives.
+    deadline: Option<Instant>,
+    /// How long each attempt waits: the policy's timeout, or the one its
+    /// method pinned.
+    timeout: Duration,
+    /// The decorated method the run came from, which its lines name.
+    method: Option<ResilientMethod>,
+}
+
+impl<I> Clone for Terms<'_, I> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<I> Copy for Terms<'_, I> {}
 
 impl<I: Instance> ResiliencePolicy<I> {
     /// The policy `config` describes, refusing a combination of its settings
@@ -225,12 +243,12 @@ impl<I: Instance> ResiliencePolicy<I> {
     ///
     /// `call` is handed the attempt's [`CancellationToken`], cancelled when the
     /// attempt is given up.
-    pub async fn run<T, E, F, Fut>(&self, call: F) -> Result<T, ResilienceError<E>>
+    pub fn run<T, E, F, Fut>(&self, call: F) -> impl Future<Output = Result<T, ResilienceError<E>>>
     where
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        self.run_for(None, call).await
+        self.run_for(None, |cancel| Box::pin(call(cancel)))
     }
 
     /// Run the idempotent `call`, attempting it again after a failed or timed
@@ -244,49 +262,49 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// a read, a `PUT`, a request carrying an idempotency key the dependency
     /// honours. `call` is handed each attempt's [`CancellationToken`],
     /// cancelled when that attempt is given up.
-    pub async fn run_idempotent<T, E, F, Fut>(&self, call: F) -> Result<T, ResilienceError<E>>
+    pub fn run_idempotent<T, E, F, Fut>(
+        &self,
+        mut call: F,
+    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
     where
         F: FnMut(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
     {
-        self.run_idempotent_for(None, call).await
+        self.run_idempotent_for(None, move |cancel| Box::pin(call(cancel)))
     }
 
     /// [`run`](Self::run), for `method` when a decorated method runs it.
-    pub(crate) async fn run_for<T, E, F, Fut>(
+    ///
+    /// Each attempt's future is held in place, so a caller whose call's future
+    /// may be large hands it boxed: a future held in place is copied onto the
+    /// stack at the steps that move it, which a large one overflows.
+    pub(crate) fn run_for<T, E, F, Fut>(
         &self,
         method: Option<ResilientMethod>,
         call: F,
-    ) -> Result<T, ResilienceError<E>>
+    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
     where
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        let mut run = self.begin(method).await?;
-        let attempted = run.attempt(call, judged).await;
-        settled(run.finish(attempted))
+        RunOnce::new(self.begin(method), call, judged, within)
     }
 
     /// [`run_idempotent`](Self::run_idempotent), for `method` when a decorated
-    /// method runs it.
-    pub(crate) async fn run_idempotent_for<T, E, F, Fut>(
+    /// method runs it, each attempt's future held in place as
+    /// [`run_for`](Self::run_for) holds it.
+    pub(crate) fn run_idempotent_for<T, E, F, Fut>(
         &self,
         method: Option<ResilientMethod>,
-        mut call: F,
-    ) -> Result<T, ResilienceError<E>>
+        call: F,
+    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
     where
         F: FnMut(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
     {
-        let mut run = self.begin(method).await?;
-        loop {
-            let attempted = run.attempt(&mut call, judged_asking).await;
-            if !run.again(&attempted).await {
-                return settled(run.finish(attempted));
-            }
-        }
+        RunAgain::new(self.begin(method), call, judged_asking, within)
     }
 
     /// Open one run — of `method`, when a decorated method opens it — taking a
@@ -316,16 +334,18 @@ impl<I: Instance> ResiliencePolicy<I> {
             None => None,
         };
         Ok(Run {
-            policy: self,
+            terms: Terms {
+                policy: self,
+                deadline,
+                timeout: method
+                    .and_then(|method| method.timeout())
+                    .unwrap_or(self.timeout),
+                method,
+            },
             _slot: slot,
-            deadline,
-            timeout: method
-                .and_then(|method| method.timeout())
-                .unwrap_or(self.timeout),
             retries: method
                 .and_then(|method| method.retries())
                 .unwrap_or(self.retries),
-            method,
             seed: None,
             resent: 0,
         })
@@ -456,45 +476,138 @@ impl<'p, I: Instance> Run<'p, I> {
 
     /// One attempt of `call`, let through by the unit's deadline, the breaker
     /// and the rate, then bounded by the run's timeout or what is left of the
-    /// unit's deadline, whichever ends first, its answer counted as `judge`
-    /// reads it. A retry counts on the retries' counter when it is let
-    /// through, its call sent. A panic in the call counts as a failure and
+    /// unit's deadline, whichever ends first, through `bounded` — `within`,
+    /// handed as a function since its future has no name — its answer counted
+    /// as `judge` reads it. A retry counts on the retries' counter when it is
+    /// let through, its call sent. A panic in the call counts as a failure and
     /// unwinds on, for the unit to contain as it would without the policy.
-    pub(crate) async fn attempt<T, F, Fut>(
-        &mut self,
-        call: F,
-        judge: impl FnOnce(&T) -> Verdict,
-    ) -> Attempted<T>
+    pub(crate) fn attempt<C, J, W>(
+        &self,
+        call: C,
+        judge: J,
+        bounded: fn(Duration, C::Made) -> W,
+    ) -> Attempt<'p, I, C, C::Kept, C::Made, J, W>
     where
-        F: FnOnce(CancellationToken) -> Fut,
-        Fut: Future<Output = T>,
+        C: Call,
+        J: Fn(&Answer<C>) -> Verdict,
     {
-        let (pass, bound) = self.admitted().await?;
-        if self.resent > 0 {
-            self.policy.counters.retry();
-        }
-        let sent = pass.map(|pass| pass.send(bound));
-        let cancel = CancellationToken::new();
-        let given_up = cancel.clone().drop_guard();
-        let answered = within(bound, async move { call(cancel).await })
-            .await
-            .map(|answer| {
-                let verdict = judge(&answer);
-                (answer, verdict)
-            });
-        if let Some(sent) = sent {
-            sent.settle(!matches!(answered, Ok((_, Verdict::Succeeded))));
-        }
-        match answered {
-            Ok(judged) => {
-                let _kept = given_up.disarm();
-                Ok(judged)
-            }
-            Err(Unanswered::Panicked(payload)) => std::panic::resume_unwind(payload),
-            Err(_elapsed) => Err(Refusal::TimedOut(bound)),
+        Attempt {
+            terms: self.terms,
+            retry: self.resent > 0,
+            judge,
+            bounded,
+            stage: AttemptStage::Admitting {
+                admitted: Admitted {
+                    terms: self.terms,
+                    pass: None,
+                    waits_until: None,
+                    reset: None,
+                },
+                call,
+            },
         }
     }
 
+    /// The run's last attempt, its refusal counted when it ended on one.
+    pub(crate) fn finish<T>(&self, attempted: Attempted<T>) -> Attempted<T> {
+        attempted.map_err(|refusal| self.terms.policy.refused(refusal))
+    }
+
+    /// Whether to attempt the call again after `attempted`, having waited the
+    /// backoff when so — see [`next_wait`](Self::next_wait).
+    #[cfg(any(feature = "reqwest", test))]
+    pub(crate) fn again<'r, T>(
+        &'r mut self,
+        attempted: &Attempted<T>,
+    ) -> impl Future<Output = bool> + use<'r, 'p, I, T> {
+        let wait = self.next_wait(attempted);
+        async move {
+            let Some(wait) = wait else {
+                return false;
+            };
+            tokio::time::sleep(wait).await;
+            self.resent = self.resent.saturating_add(1);
+            true
+        }
+    }
+
+    /// How long to wait before attempting the call again after `attempted`, its
+    /// line filed, or `None` when the run ends there: after a failure or a
+    /// timeout, within the run's retries, unless the dependency asked a wait
+    /// past the backoff's ceiling.
+    ///
+    /// It reads nothing of the answer past it, so no wait holds the answer,
+    /// and a run is `Send` for an answer that is `Send` and not `Sync`, a
+    /// stream's.
+    fn next_wait<T>(&mut self, attempted: &Attempted<T>) -> Option<Duration> {
+        let wait = match attempted {
+            Ok((_, Verdict::Failed { asked })) => self.retry_wait(*asked),
+            Err(Refusal::TimedOut(_)) => self.retry_wait(None),
+            Ok((_, Verdict::Succeeded))
+            | Err(Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => None,
+        };
+        if let Some(wait) = wait {
+            tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                host = self.terms.host().as_deref(),
+                method = self.terms.method_name(),
+                attempt = self.resent.saturating_add(1),
+                wait_ms = millis(wait),
+                "attempt failed; retrying the call",
+            );
+        }
+        wait
+    }
+
+    /// How long to wait before the next attempt, after one that failed asking
+    /// `asked`, or `None` when the run ends there.
+    fn retry_wait(&mut self, asked: Option<Duration>) -> Option<Duration> {
+        let terms = self.terms;
+        let policy = terms.policy;
+        if self.resent >= self.retries {
+            return None;
+        }
+        let ceiling = policy.backoff.ceiling();
+        if let Some(asked) = asked.filter(|asked| *asked > ceiling) {
+            tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                host = terms.host().as_deref(),
+                method = terms.method_name(),
+                asked_ms = millis(asked),
+                ceiling_ms = millis(ceiling),
+                "the dependency asked a wait past the backoff's ceiling; not attempted again",
+            );
+            return None;
+        }
+        let seed = *self.seed.get_or_insert_with(|| {
+            let run = policy.runs.fetch_add(1, Ordering::Relaxed);
+            process_seed() ^ Backoff::seed(&run.to_le_bytes())
+        });
+        let failed = NonZeroU32::MIN.saturating_add(self.resent);
+        let backoff = policy.backoff.wait(failed, seed);
+        let wait = asked.map_or(backoff, |asked| {
+            backoff.max(Backoff::honouring(asked, failed, seed))
+        });
+        if let Some(deadline) = terms.deadline
+            && Instant::now() + wait >= deadline
+        {
+            tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                host = terms.host().as_deref(),
+                method = terms.method_name(),
+                wait_ms = millis(wait),
+                "no time left before the unit's deadline; not attempted again",
+            );
+            return None;
+        }
+        Some(wait)
+    }
+}
+
+impl<I> Terms<'_, I> {
     /// How long an attempt sent now may run: the run's timeout, or what is left
     /// of the unit's deadline when that is shorter.
     fn bound(&self) -> Duration {
@@ -511,150 +624,6 @@ impl<'p, I: Instance> Run<'p, I> {
         })
     }
 
-    /// The attempt let through, in order, by what is left of the unit's
-    /// deadline, the breaker and the rate, with the bound its call is sent
-    /// under; with nothing left of the deadline it is not sent, nor counted.
-    /// Past the rate's limit it waits for the window's reset when what is left
-    /// of the rate's wait reaches it before the unit's deadline — a wait that
-    /// is no part of the attempt — then goes through all three again, a probe
-    /// keeping its turn and telling the breaker when it has answered at the
-    /// latest; otherwise it is refused, counted for nothing, told the time to
-    /// that reset.
-    async fn admitted(&self) -> Result<(Option<Pass<'p>>, Duration), Refusal> {
-        let policy = self.policy;
-        let mut pass: Option<Pass<'p>> = None;
-        let mut waits_until = None;
-        loop {
-            let bound = self.bound();
-            if bound.is_zero() {
-                return Err(Refusal::TimedOut(bound));
-            }
-            // Another call may have opened the breaker, or taken the probe's
-            // turn, while this one waited for the reset, and a manual switch
-            // meanwhile voids the turn this one held.
-            if !pass.as_ref().is_some_and(Pass::probes) {
-                pass = policy
-                    .breaker
-                    .as_ref()
-                    .map(|breaker| breaker.admit(bound))
-                    .transpose()
-                    .map_err(Refusal::Open)?;
-            }
-            let Some(rate) = &policy.rate else {
-                return Ok((pass, bound));
-            };
-            let now = Instant::now();
-            let Err(reset) = rate.count(now) else {
-                return Ok((pass, bound));
-            };
-            let until = *waits_until.get_or_insert_with(|| rate.waits_until(now));
-            let at = now + reset;
-            if !waits_for_reset(at, until, self.deadline) {
-                refused_by_the_rate(I::NAME, self.method.as_ref(), reset);
-                return Err(Refusal::Limited(reset));
-            }
-            if let Some(pass) = &pass {
-                pass.postpone(at, self.bound_at(at));
-            }
-            tracing::debug!(
-                target: TARGET,
-                instance = I::NAME,
-                host = self.host().as_deref(),
-                method = self.method_name(),
-                wait_ms = millis(reset),
-                "rate limit reached; waiting for the window to reset",
-            );
-            tokio::time::sleep_until(at).await;
-        }
-    }
-
-    /// The run's last attempt, its refusal counted when it ended on one.
-    pub(crate) fn finish<T>(&self, attempted: Attempted<T>) -> Attempted<T> {
-        attempted.map_err(|refusal| self.policy.refused(refusal))
-    }
-
-    /// Whether to attempt the call again after `attempted`, having waited the
-    /// backoff when so: after a failure or a timeout, within the run's
-    /// retries, unless the dependency asked a wait past the backoff's ceiling.
-    ///
-    /// It is decided before the wait, which holds nothing of the answer, so a
-    /// run is `Send` for an answer that is `Send` and not `Sync`, a stream's.
-    pub(crate) fn again<'r, T>(
-        &'r mut self,
-        attempted: &Attempted<T>,
-    ) -> impl Future<Output = bool> + use<'r, 'p, I, T> {
-        let wait = match attempted {
-            Ok((_, Verdict::Failed { asked })) => self.retry_wait(*asked),
-            Err(Refusal::TimedOut(_)) => self.retry_wait(None),
-            Ok((_, Verdict::Succeeded))
-            | Err(Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => None,
-        };
-        if let Some(wait) = wait {
-            tracing::debug!(
-                target: TARGET,
-                instance = I::NAME,
-                host = self.host().as_deref(),
-                method = self.method_name(),
-                attempt = self.resent.saturating_add(1),
-                wait_ms = millis(wait),
-                "attempt failed; retrying the call",
-            );
-        }
-        async move {
-            let Some(wait) = wait else {
-                return false;
-            };
-            tokio::time::sleep(wait).await;
-            self.resent = self.resent.saturating_add(1);
-            true
-        }
-    }
-
-    /// How long to wait before the next attempt, after one that failed asking
-    /// `asked`, or `None` when the run ends there.
-    fn retry_wait(&mut self, asked: Option<Duration>) -> Option<Duration> {
-        let policy = self.policy;
-        if self.resent >= self.retries {
-            return None;
-        }
-        let ceiling = policy.backoff.ceiling();
-        if let Some(asked) = asked.filter(|asked| *asked > ceiling) {
-            tracing::debug!(
-                target: TARGET,
-                instance = I::NAME,
-                host = self.host().as_deref(),
-                method = self.method_name(),
-                asked_ms = millis(asked),
-                ceiling_ms = millis(ceiling),
-                "the dependency asked a wait past the backoff's ceiling; not attempted again",
-            );
-            return None;
-        }
-        let seed = *self.seed.get_or_insert_with(|| {
-            let run = policy.runs.fetch_add(1, Ordering::Relaxed);
-            process_seed() ^ Backoff::seed(&run.to_le_bytes())
-        });
-        let failed = NonZeroU32::MIN.saturating_add(self.resent);
-        let backoff = policy.backoff.wait(failed, seed);
-        let wait = asked.map_or(backoff, |asked| {
-            backoff.max(Backoff::honouring(asked, failed, seed))
-        });
-        if let Some(deadline) = self.deadline
-            && Instant::now() + wait >= deadline
-        {
-            tracing::debug!(
-                target: TARGET,
-                instance = I::NAME,
-                host = self.host().as_deref(),
-                method = self.method_name(),
-                wait_ms = millis(wait),
-                "no time left before the unit's deadline; not attempted again",
-            );
-            return None;
-        }
-        Some(wait)
-    }
-
     /// The decorated method's host, named as its `mounted` line would name it,
     /// read only when a line is filed.
     fn host(&self) -> Option<String> {
@@ -664,6 +633,539 @@ impl<'p, I: Instance> Run<'p, I> {
     /// The decorated method's name.
     fn method_name(&self) -> Option<&'static str> {
         self.method.as_ref().map(ResilientMethod::name)
+    }
+}
+
+/// What one attempt of `C` answers when its call is sent.
+pub(crate) type Answer<C> = <<C as Call>::Made as Future>::Output;
+
+/// A run's call, made into the future one attempt sends: once by the run's one
+/// attempt, or again by each.
+pub(crate) trait Call {
+    /// The future an attempt sends.
+    type Made: Future;
+    /// What an attempt gives back of its call once it ends: nothing of a call
+    /// made once, the closure of one made again.
+    type Kept;
+
+    /// The future of one attempt, handed its token, and what is kept of the
+    /// call.
+    fn make(self, cancel: CancellationToken) -> (Self::Made, Self::Kept);
+
+    /// What is kept of a call its attempt never made.
+    fn unmade(self) -> Self::Kept;
+}
+
+/// A call its run's one attempt makes, consuming the closure.
+pub(crate) struct Once<F>(pub(crate) F);
+
+impl<F, Fut> Call for Once<F>
+where
+    F: FnOnce(CancellationToken) -> Fut,
+    Fut: Future,
+{
+    type Made = Fut;
+    type Kept = ();
+
+    fn make(self, cancel: CancellationToken) -> (Fut, ()) {
+        ((self.0)(cancel), ())
+    }
+
+    fn unmade(self) {}
+}
+
+/// A call each attempt of its run makes, the closure given back for the next.
+struct Again<F>(F);
+
+impl<F, Fut> Call for Again<F>
+where
+    F: FnMut(CancellationToken) -> Fut,
+    Fut: Future,
+{
+    type Made = Fut;
+    type Kept = F;
+
+    fn make(mut self, cancel: CancellationToken) -> (Fut, F) {
+        ((self.0)(cancel), self.0)
+    }
+
+    fn unmade(self) -> F {
+        self.0
+    }
+}
+
+// The run's futures are polled in place, each holding the call once — the
+// closure, then the future it made — where an `async` fn or block awaiting a
+// future it was handed keeps it twice (rust-lang/rust#62958). No bound sits on
+// their definitions: with bounds there, rustc refused the `Send` of a future
+// holding them whose answer borrows ("one type is more general than the
+// other").
+pin_project_lite::pin_project! {
+    /// An attempt waiting to be let through, in order, by what is left of the
+    /// unit's deadline, the breaker and the rate, answered with the bound its
+    /// call is sent under; with nothing left of the deadline it is not sent,
+    /// nor counted. Past the rate's limit it waits for the window's reset when
+    /// what is left of the rate's wait reaches it before the unit's deadline —
+    /// a wait that is no part of the attempt — then goes through all three
+    /// again, a probe keeping its turn and telling the breaker when it has
+    /// answered at the latest; otherwise it is refused, counted for nothing,
+    /// told the time to that reset.
+    struct Admitted<'p, I> {
+        terms: Terms<'p, I>,
+        pass: Option<Pass<'p>>,
+        // Where what is left of the rate's wait ends, read at its first reset.
+        waits_until: Option<Instant>,
+        #[pin]
+        reset: Option<Sleep>,
+    }
+}
+
+impl<'p, I: Instance> Future for Admitted<'p, I> {
+    type Output = Result<(Option<Pass<'p>>, Duration), Refusal>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+        loop {
+            if let Some(reset) = this.reset.as_mut().as_pin_mut() {
+                ready!(reset.poll(cx));
+                this.reset.set(None);
+            }
+            let terms = *this.terms;
+            let bound = terms.bound();
+            if bound.is_zero() {
+                return Poll::Ready(Err(Refusal::TimedOut(bound)));
+            }
+            // Another call may have opened the breaker, or taken the probe's
+            // turn, while this one waited for the reset, and a manual switch
+            // meanwhile voids the turn this one held.
+            if !this.pass.as_ref().is_some_and(Pass::probes) {
+                match terms
+                    .policy
+                    .breaker
+                    .as_ref()
+                    .map(|breaker| breaker.admit(bound))
+                    .transpose()
+                {
+                    Ok(pass) => *this.pass = pass,
+                    Err(retry_after) => return Poll::Ready(Err(Refusal::Open(retry_after))),
+                }
+            }
+            let Some(rate) = &terms.policy.rate else {
+                return Poll::Ready(Ok((this.pass.take(), bound)));
+            };
+            let now = Instant::now();
+            let Err(reset) = rate.count(now) else {
+                return Poll::Ready(Ok((this.pass.take(), bound)));
+            };
+            let until = *this
+                .waits_until
+                .get_or_insert_with(|| rate.waits_until(now));
+            let at = now + reset;
+            if !waits_for_reset(at, until, terms.deadline) {
+                refused_by_the_rate(I::NAME, terms.method.as_ref(), reset);
+                return Poll::Ready(Err(Refusal::Limited(reset)));
+            }
+            if let Some(pass) = this.pass.as_ref() {
+                pass.postpone(at, terms.bound_at(at));
+            }
+            tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                host = terms.host().as_deref(),
+                method = terms.method_name(),
+                wait_ms = millis(reset),
+                "rate limit reached; waiting for the window to reset",
+            );
+            this.reset.set(Some(tokio::time::sleep_until(at)));
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// One attempt of a run's call — what [`Run::attempt`] answers, with what
+    /// is kept of the call: the closure until the attempt is let through, then
+    /// the future it made, bounded.
+    pub(crate) struct Attempt<'p, I, C, K, M, J, W> {
+        terms: Terms<'p, I>,
+        // Whether the attempt is a retry, counted once it is let through.
+        retry: bool,
+        judge: J,
+        bounded: fn(Duration, M) -> W,
+        #[pin]
+        stage: AttemptStage<'p, I, C, K, W>,
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[project = AttemptStageProj]
+    #[project_replace = AttemptStageOwned]
+    enum AttemptStage<'p, I, C, K, W> {
+        /// Waiting to be let through, the call held.
+        Admitting {
+            #[pin]
+            admitted: Admitted<'p, I>,
+            call: C,
+        },
+        /// The call sent under `bound`, counted in the breaker once it answers,
+        /// its token cancelled when it is given up.
+        Sending {
+            #[pin]
+            answer: W,
+            sent: Option<Sent<'p>>,
+            given_up: DropGuard,
+            bound: Duration,
+            kept: K,
+        },
+        Answered,
+    }
+}
+
+impl<'p, I, C, K, M, J, W> Future for Attempt<'p, I, C, K, M, J, W>
+where
+    I: Instance,
+    C: Call<Made = M, Kept = K>,
+    M: Future,
+    J: Fn(&M::Output) -> Verdict,
+    W: Future<Output = Result<M::Output, Unanswered>>,
+{
+    type Output = (Attempted<M::Output>, K);
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let AttemptStageProj::Admitting { admitted, .. } =
+            self.as_mut().project().stage.project()
+        {
+            let admitted = ready!(admitted.poll(cx));
+            if let Some(refused) = self.as_mut().send(admitted) {
+                return Poll::Ready(refused);
+            }
+        }
+        let AttemptStageProj::Sending { answer, .. } = self.as_mut().project().stage.project()
+        else {
+            unreachable!("an attempt is polled after it answered");
+        };
+        let answered = ready!(answer.poll(cx));
+        Poll::Ready(self.settle(answered))
+    }
+}
+
+impl<'p, I, C, K, M, J, W> Attempt<'p, I, C, K, M, J, W>
+where
+    I: Instance,
+    C: Call<Made = M, Kept = K>,
+    M: Future,
+    J: Fn(&M::Output) -> Verdict,
+{
+    /// The attempt `admitted` let through, its call made and sent under its
+    /// bound — or what it answers refused unsent.
+    fn send(
+        self: Pin<&mut Self>,
+        admitted: Result<(Option<Pass<'p>>, Duration), Refusal>,
+    ) -> Option<(Attempted<M::Output>, K)> {
+        let mut this = self.project();
+        let AttemptStageOwned::Admitting { call, .. } =
+            this.stage.as_mut().project_replace(AttemptStage::Answered)
+        else {
+            unreachable!("an attempt is sent once, after it is let through");
+        };
+        let (pass, bound) = match admitted {
+            Ok(admitted) => admitted,
+            Err(refusal) => return Some((Err(refusal), call.unmade())),
+        };
+        if *this.retry {
+            this.terms.policy.counters.retry();
+        }
+        let sent = pass.map(|pass| pass.send(bound));
+        let cancel = CancellationToken::new();
+        let given_up = cancel.clone().drop_guard();
+        // The call is made inside the attempt, so one panicking before it hands
+        // back its future fails the attempt as a panic while it runs does.
+        let (made, kept) = match std::panic::catch_unwind(AssertUnwindSafe(|| call.make(cancel))) {
+            Ok(made) => made,
+            Err(payload) => {
+                if let Some(sent) = sent {
+                    sent.settle(true);
+                }
+                std::panic::resume_unwind(payload)
+            }
+        };
+        this.stage.set(AttemptStage::Sending {
+            answer: (this.bounded)(bound, made),
+            sent,
+            given_up,
+            bound,
+            kept,
+        });
+        None
+    }
+
+    /// What the attempt answers, `answered` judged and counted in the breaker.
+    fn settle(
+        self: Pin<&mut Self>,
+        answered: Result<M::Output, Unanswered>,
+    ) -> (Attempted<M::Output>, K) {
+        let this = self.project();
+        let AttemptStageOwned::Sending {
+            sent,
+            given_up,
+            bound,
+            kept,
+            ..
+        } = this.stage.project_replace(AttemptStage::Answered)
+        else {
+            unreachable!("an attempt settles the call it sent");
+        };
+        let answered = answered.map(|answer| {
+            let verdict = (this.judge)(&answer);
+            (answer, verdict)
+        });
+        if let Some(sent) = sent {
+            sent.settle(!matches!(answered, Ok((_, Verdict::Succeeded))));
+        }
+        let attempted = match answered {
+            Ok(judged) => {
+                let _token = given_up.disarm();
+                Ok(judged)
+            }
+            Err(Unanswered::Panicked(payload)) => std::panic::resume_unwind(payload),
+            Err(_elapsed) => Err(Refusal::TimedOut(bound)),
+        };
+        (attempted, kept)
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// What [`ResiliencePolicy::run_for`] answers: a slot of the bulkhead
+    /// taken, then the run's one attempt.
+    struct RunOnce<'p, I, B, F, Fut, J, W> {
+        judge: J,
+        bounded: fn(Duration, Fut) -> W,
+        #[pin]
+        stage: OnceStage<'p, I, B, F, Fut, J, W>,
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[project = OnceStageProj]
+    #[project_replace = OnceStageOwned]
+    enum OnceStage<'p, I, B, F, Fut, J, W> {
+        /// Taking a slot of the bulkhead, the call held.
+        Entering {
+            #[pin]
+            begin: B,
+            call: F,
+        },
+        Attempting {
+            run: Run<'p, I>,
+            #[pin]
+            attempt: Attempt<'p, I, Once<F>, (), Fut, J, W>,
+        },
+        Answered,
+    }
+}
+
+impl<'p, I, B, F, Fut, J, W, T, E> RunOnce<'p, I, B, F, Fut, J, W>
+where
+    I: Instance,
+    B: Future<Output = Result<Run<'p, I>, Refusal>>,
+    F: FnOnce(CancellationToken) -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+    J: Fn(&Result<T, E>) -> Verdict + Copy,
+{
+    /// The run `begin` opens, `call` sent by its one attempt through
+    /// `bounded`, its answer read by `judge`.
+    fn new(begin: B, call: F, judge: J, bounded: fn(Duration, Fut) -> W) -> Self {
+        Self {
+            judge,
+            bounded,
+            stage: OnceStage::Entering { begin, call },
+        }
+    }
+
+    /// The run `begun` opened, its one attempt started, or its refusal.
+    fn begun(self: Pin<&mut Self>, begun: Result<Run<'p, I>, Refusal>) -> Result<(), Refusal> {
+        let mut this = self.project();
+        let OnceStageOwned::Entering { call, .. } =
+            this.stage.as_mut().project_replace(OnceStage::Answered)
+        else {
+            unreachable!("a run begins once");
+        };
+        let run = begun?;
+        let attempt = run.attempt(Once(call), *this.judge, *this.bounded);
+        this.stage.set(OnceStage::Attempting { run, attempt });
+        Ok(())
+    }
+}
+
+impl<'p, I, B, F, Fut, J, W, T, E> Future for RunOnce<'p, I, B, F, Fut, J, W>
+where
+    I: Instance,
+    B: Future<Output = Result<Run<'p, I>, Refusal>>,
+    F: FnOnce(CancellationToken) -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+    J: Fn(&Result<T, E>) -> Verdict + Copy,
+    W: Future<Output = Result<Result<T, E>, Unanswered>>,
+{
+    type Output = Result<T, ResilienceError<E>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let OnceStageProj::Entering { begin, .. } = self.as_mut().project().stage.project() {
+            let begun = ready!(begin.poll(cx));
+            if let Err(refusal) = self.as_mut().begun(begun) {
+                return Poll::Ready(Err(refusal.into()));
+            }
+        }
+        let mut this = self.project();
+        let OnceStageProj::Attempting { run, attempt } = this.stage.as_mut().project() else {
+            unreachable!("a run is polled after it answered");
+        };
+        let (attempted, ()) = ready!(attempt.poll(cx));
+        let ran = settled(run.finish(attempted));
+        this.stage.set(OnceStage::Answered);
+        Poll::Ready(ran)
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// What [`ResiliencePolicy::run_idempotent_for`] answers: a slot of the
+    /// bulkhead taken, then each attempt of the run, each retry after its
+    /// backoff.
+    struct RunAgain<'p, I, B, F, Fut, J, W> {
+        judge: J,
+        bounded: fn(Duration, Fut) -> W,
+        #[pin]
+        stage: AgainStage<'p, I, B, F, Fut, J, W>,
+    }
+}
+
+pin_project_lite::pin_project! {
+    #[project = AgainStageProj]
+    #[project_replace = AgainStageOwned]
+    enum AgainStage<'p, I, B, F, Fut, J, W> {
+        /// Taking a slot of the bulkhead, the call held.
+        Entering {
+            #[pin]
+            begin: B,
+            call: F,
+        },
+        Attempting {
+            run: Run<'p, I>,
+            #[pin]
+            attempt: Attempt<'p, I, Again<F>, F, Fut, J, W>,
+        },
+        /// Waiting the backoff before the next attempt, the call held.
+        Backing {
+            run: Run<'p, I>,
+            #[pin]
+            backoff: Sleep,
+            call: F,
+        },
+        Answered,
+    }
+}
+
+impl<'p, I, B, F, Fut, J, W, T, E> RunAgain<'p, I, B, F, Fut, J, W>
+where
+    I: Instance,
+    B: Future<Output = Result<Run<'p, I>, Refusal>>,
+    F: FnMut(CancellationToken) -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+    J: Fn(&Result<T, E>) -> Verdict + Copy,
+{
+    /// The run `begin` opens, `call` sent by each attempt through `bounded`,
+    /// each answer read by `judge`.
+    fn new(begin: B, call: F, judge: J, bounded: fn(Duration, Fut) -> W) -> Self {
+        Self {
+            judge,
+            bounded,
+            stage: AgainStage::Entering { begin, call },
+        }
+    }
+
+    /// The run `begun` opened, its first attempt started, or its refusal.
+    fn begun(self: Pin<&mut Self>, begun: Result<Run<'p, I>, Refusal>) -> Result<(), Refusal> {
+        let mut this = self.project();
+        let AgainStageOwned::Entering { call, .. } =
+            this.stage.as_mut().project_replace(AgainStage::Answered)
+        else {
+            unreachable!("a run begins once");
+        };
+        let run = begun?;
+        let attempt = run.attempt(Again(call), *this.judge, *this.bounded);
+        this.stage.set(AgainStage::Attempting { run, attempt });
+        Ok(())
+    }
+
+    /// The run after `attempted`: its answer, or its backoff before the next
+    /// attempt, the answer dropped before it.
+    fn attempted(
+        self: Pin<&mut Self>,
+        (attempted, call): (Attempted<Result<T, E>>, F),
+    ) -> Option<Result<T, ResilienceError<E>>> {
+        let mut this = self.project();
+        let AgainStageOwned::Attempting { mut run, .. } =
+            this.stage.as_mut().project_replace(AgainStage::Answered)
+        else {
+            unreachable!("a run settles the attempt it made");
+        };
+        let Some(wait) = run.next_wait(&attempted) else {
+            return Some(settled(run.finish(attempted)));
+        };
+        drop(attempted);
+        this.stage.set(AgainStage::Backing {
+            run,
+            backoff: tokio::time::sleep(wait),
+            call,
+        });
+        None
+    }
+
+    /// The run's next attempt, started once its backoff is waited.
+    fn resend(self: Pin<&mut Self>) {
+        let mut this = self.project();
+        let AgainStageOwned::Backing { mut run, call, .. } =
+            this.stage.as_mut().project_replace(AgainStage::Answered)
+        else {
+            unreachable!("a run sends again after its backoff");
+        };
+        run.resent = run.resent.saturating_add(1);
+        let attempt = run.attempt(Again(call), *this.judge, *this.bounded);
+        this.stage.set(AgainStage::Attempting { run, attempt });
+    }
+}
+
+impl<'p, I, B, F, Fut, J, W, T, E> Future for RunAgain<'p, I, B, F, Fut, J, W>
+where
+    I: Instance,
+    B: Future<Output = Result<Run<'p, I>, Refusal>>,
+    F: FnMut(CancellationToken) -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+    J: Fn(&Result<T, E>) -> Verdict + Copy,
+    W: Future<Output = Result<Result<T, E>, Unanswered>>,
+{
+    type Output = Result<T, ResilienceError<E>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            match self.as_mut().project().stage.project() {
+                AgainStageProj::Entering { begin, .. } => {
+                    let begun = ready!(begin.poll(cx));
+                    if let Err(refusal) = self.as_mut().begun(begun) {
+                        return Poll::Ready(Err(refusal.into()));
+                    }
+                }
+                AgainStageProj::Attempting { attempt, .. } => {
+                    let attempted = ready!(attempt.poll(cx));
+                    if let Some(ran) = self.as_mut().attempted(attempted) {
+                        return Poll::Ready(ran);
+                    }
+                }
+                AgainStageProj::Backing { backoff, .. } => {
+                    ready!(backoff.poll(cx));
+                    self.as_mut().resend();
+                }
+                AgainStageProj::Answered => unreachable!("a run is polled after it answered"),
+            }
+        }
     }
 }
 
@@ -867,6 +1369,45 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), cancelled.cancelled())
             .await
             .expect("work the call spawned is told the attempt was given up");
+    }
+
+    /// A panic in the call counts as the dependency failing and unwinds on, for
+    /// the unit to contain: one raised while the call's future runs, and one its
+    /// closure raises before handing the future back, run once or again.
+    #[tokio::test(start_paused = true)]
+    async fn a_panicking_call_counts_as_a_failure_and_unwinds_on() {
+        let opening = || {
+            policy(ResilienceConfig {
+                retries: Some(1),
+                breaker_window: Some(1),
+                breaker_failures: 1,
+                ..ResilienceConfig::default()
+            })
+        };
+        let running = opening();
+        let unwound = nest_rs_core::panic::contain(running.run(|_| async {
+            if true {
+                panic!("the upstream's client panicked");
+            }
+            Ok::<_, Refused>(())
+        }))
+        .await;
+        assert!(unwound.is_err(), "the panic unwinds out of the run");
+        let making = opening();
+        let unwound = nest_rs_core::panic::contain(making.run_idempotent(
+            |_| -> std::future::Ready<Result<(), Refused>> {
+                panic!("the upstream's client panicked before its future")
+            },
+        ))
+        .await;
+        assert!(unwound.is_err(), "the panic unwinds out of the run");
+        for policy in [running, making] {
+            assert!(
+                matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+                "the panic counted as a failure: {:?}",
+                policy.breaker_state()
+            );
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -2691,7 +3232,8 @@ mod tests {
 
     /// Each retry sent adds one to the retries' counter, and each run ending on
     /// the policy's refusal one to the refusals', by that refusal: a retry the
-    /// breaker or the rate refuses, never sent, adds to the refusals' alone.
+    /// breaker or the rate refuses, never sent, adds to the refusals' alone, and
+    /// so does a run a policy with a bulkhead refuses before taking a slot.
     #[cfg(feature = "opentelemetry")]
     #[tokio::test(start_paused = true)]
     async fn retries_and_the_refusals_runs_end_on_are_counted() {
@@ -2794,6 +3336,30 @@ mod tests {
             "its retry, refused unsent by the window its first attempt filled: {limited:?}"
         );
 
+        let gated = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            concurrency: Some(1),
+            ..ResilienceConfig::default()
+        });
+        let spent = nest_rs_core::__private::with_deadline(
+            Some(tokio::time::Instant::now()),
+            gated.run(|_| async { Ok::<_, Refused>(()) }),
+        )
+        .await;
+        assert!(
+            matches!(spent, Err(ResilienceError::TimedOut { .. })),
+            "a unit out of time, refused before the bulkhead: {spent:?}"
+        );
+        let failed = gated.run(|_| async { Err::<(), _>(Refused) }).await;
+        assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
+        let open = gated.run(|_| async { Ok::<_, Refused>(()) }).await;
+        assert!(
+            matches!(open, Err(ResilienceError::Open { .. })),
+            "the breaker its failure opened, refusing before the bulkhead: {open:?}"
+        );
+
         provider.force_flush().expect("the export");
         let exported = exporter
             .get_finished_metrics()
@@ -2836,12 +3402,13 @@ mod tests {
             [
                 ("full".to_owned(), 2),
                 ("limited".to_owned(), 2),
-                ("open".to_owned(), 1),
-                ("timed_out".to_owned(), 1),
+                ("open".to_owned(), 2),
+                ("timed_out".to_owned(), 2),
             ],
             "a failed call is the call's answer, no refusal of the policy's; a full bulkhead and \
              a full place to wait in are one refusal, as a rate read before the slot and one \
-             counted are"
+             counted are, and as a unit out of time and an open breaker are before a bulkhead \
+             and at an attempt"
         );
     }
 

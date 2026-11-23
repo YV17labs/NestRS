@@ -285,9 +285,10 @@ How each holds:
   back by its permit's `Drop`; with every place taken a call is `Full` at once,
   its line carrying the `waiters` it met. A call finding no free slot reads the
   rate before it waits, a read that counts nothing.
-- **An idempotent run is `Send` for an answer that is not `Sync`**: `again`
-  decides before its wait and holds nothing of the answer across it, so an
-  `#[sse]` route and a `#[subscription]` run under `idempotent` too.
+- **An idempotent run is `Send` for an answer that is not `Sync`**: it decides
+  whether to send again before its backoff and holds nothing of the answer
+  across it, so an `#[sse]` route and a `#[subscription]` run under `idempotent`
+  too.
 - **The tick (decision 3).** `TickAnswer`, a type probe in
   `nest_rs_schedule::__private`, takes `Result<(), E>` for every
   `E: Into<anyhow::Error>` and `!`, each impl `do_not_recommend`, every answer
@@ -310,11 +311,18 @@ How each holds:
   `let` ascribed with the type misses an early `return`, and an async closure
   declaring it coerces nothing (`.claude/upstream/rustc.md`). A policy setting
   written before the field is refused as one after it, told where it is set.
-- **`#[operations]`' wrapper carries an `#[expect]` as an `#[allow]`** of the
-  same lints and reason, so the expectation is checked on the developer's method
-  alone; 7.0.0 handed it to the wrapper too, where it went unfulfilled. Every
-  other attribute of an operation goes on the wrapper, as in 7.0, and
-  `#[resilient]` alone stays on the developer's method.
+- **`#[operations]` places an operation's attributes as 7.0.0 did**, on the
+  wrapper it generates, but for what the developer's method keeps: its docs, its
+  `allow`s, its `expect`s and its `#[cfg]`s, as 7.0.0 kept them, and
+  `#[resilient]`. The wrapper carries each `#[expect]` as an `#[allow]` of the
+  same lints and reason, so the expectation is checked on the method alone;
+  7.0.0 handed it to the wrapper too, where it went unfulfilled. `#[resilient]` is
+  read by its name in a build enabling the capability alone —
+  `nest-rs-graphql-macros`' `resilience` feature, which `nest-rs-graphql`'s
+  enables and the umbrella's `resilience` forwards weakly, so no app writes a
+  manifest line: a build without it places an attribute of that name on the
+  wrapper like any other, as 7.0.0 placed an app's own, and refuses nothing
+  7.0.0 compiled.
 - **A bound's reason holds for every value its siblings take**: it says what its
   own mechanism does to a call or lets happen, true for every value it refuses,
   every value its siblings take, every traffic and every client a policy wraps,
@@ -331,6 +339,20 @@ How each holds:
   duration up to whole milliseconds.
 - **A queue job refused by an open breaker or a spent rate** waits at least
   the refusal's `Retry-After` before its retry, up to the queue's hour.
+- **A run holds its call once.** The runs of `run`, `run_idempotent`, a
+  decorated method and the middleware are futures polled in place, holding the
+  closure until an attempt is let through and then the future it made, where an
+  `async` fn or block awaiting a future it was handed holds it twice
+  (rust-lang/rust#62958); the one `async fn` left, a decorated idempotent run's,
+  holds its closure of borrows twice, so rustc's error for a future that is not
+  `Send` still points at `idempotent`. `run`, `run_idempotent` and the decorator
+  box each attempt's future, the middleware's being boxed by reqwest-middleware
+  already: held in place, a future holding a third of a 2 MiB worker's stack —
+  which its undecorated twin holds there — overflowed that worker, in a debug
+  build at every layout of the run's futures tried and in a release build too,
+  each step of the run that moves it copying it onto the stack. A decorated
+  method's future is then its arguments and a run's few hundred bytes, where it
+  held its body twice and an argument taken by value seven times.
 
 **Refused:**
 
@@ -355,7 +377,12 @@ How each holds:
   refuses 7.0 programs whose attribute names a parameter the field leaves out —
   `#[tracing::instrument(skip(self, ctx))]` beside a `Scoped<T>`, which is no
   `Debug` — a break inside a major. `#[resilient]`, new in 7.1, is the one kept
-  there.
+  there, in a build enabling its capability, which no 7.0 program does.
+- **`#[resilient]` read by its full path**: the docs import it under its short
+  name, as every decorator is.
+- **Each attempt's future held in place, unboxed**: no layout of the run's
+  futures tried kept a large one from overflowing a worker's stack (*How each
+  holds*, above).
 
 **Limits, named:**
 
@@ -393,6 +420,23 @@ How each holds:
   meter reading or switching that breaker from inside the line waits for good;
   none of the framework's does. Closing it is filing lines after the lock in an
   order the epoch keeps.
+- **Each attempt's future is boxed**: one allocation an attempt. On a call
+  answering at once, in release on one machine, the median run took 88 ns
+  through `run` before and 110 after, 97 and 134 through `run_idempotent`, 93
+  and 114 through a decorated method, 107 and 139 through an idempotent one.
+  Closing it is holding the future in place with no step moving it through the
+  stack, which no layout tried reached.
+- **A decorated method run once that takes a large argument by value** still
+  needs more of a debug build's stack than its undecorated twin: the closure
+  owning the argument moves through the run's stages, each move copying it onto
+  the stack, so on a 2 MiB worker it overflows from 96 KiB where its twin runs
+  256 KiB. Idempotent, borrowing its arguments, or built for release, it runs
+  where its twin does. Closing it is a run holding the closure outside its
+  stages, handed to the attempt that makes the call.
+- **An app's own attribute named `resilient` on an operation**, in a build
+  enabling the resilience capability, is read as the framework's and kept on the
+  developer's method. Closing it is reading the decorator by its path, which
+  its short-name import defeats.
 - **An attribute of an operation reading the method's own `self`** —
   `#[tracing::instrument(fields(depot = self.depot.0))]` — does not compile, as
   in 7.0: it goes on the field `#[operations]` generates, whose `self` is

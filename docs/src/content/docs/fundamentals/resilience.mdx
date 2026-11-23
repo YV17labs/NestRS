@@ -29,8 +29,8 @@ pub struct PostsService {
 impl PostsService {
     #[resilient(upstream, idempotent)]
     pub async fn preview(&self, url: &str) -> Result<String, ResilienceError<UpstreamError>> {
-        let page = reqwest::get(url).await.map_err(UpstreamError)?;
-        page.text().await.map_err(UpstreamError)
+        let page = reqwest::get(url).await?;
+        Ok(page.text().await?)
     }
 }
 ```
@@ -87,26 +87,26 @@ or again alike. Each answer is coerced as that method would coerce it — a
 `&String` into the `&str` it returns, a box into its `Box<dyn …>`.
 
 It goes on a provider, a struct you build, a trait impl, a route, a socket
-message, a queue job, a scheduled tick, a listener, a health indicator or a
-lifecycle hook. It also goes on an MCP tool, prompt, resource or listing, and on
-a GraphQL query, mutation, field resolver or entity, whose other attributes go
-on the field `#[operations]` generates. On an `#[sse]` route or a
-`#[subscription]`, it runs the call that opens the stream, never the items the
-stream yields later. A stream calling the dependency for each item calls a
-decorated method for it.
+message, a queue job, a scheduled tick, a listener, a health indicator, a
+lifecycle hook, an MCP tool, prompt, resource or listing, and a GraphQL query,
+mutation, field resolver or entity. `#[operations]` puts an operation's other
+attributes on the field it generates; with `resilience` beside `graphql`, it
+reads one named `resilient` as this decorator and keeps it on your method, and
+without `resilience` puts that one on the field too. On an `#[sse]` route or a
+`#[subscription]`, it runs the call opening the stream, never the items it
+yields: a stream calling the dependency per item calls a decorated method each.
 
 A method pins its own `timeout`, and an idempotent one its own `retries`, in
-place of the policy's:
-`#[resilient(upstream, idempotent, timeout = "2s", retries = 3)]`. The unit's
-deadline still ends every attempt. Every other setting is the policy's — the
-backoff's, the breaker's, the bulkhead's, the rate limit's — shared by every
-method calling the dependency. A key naming one, before the field or after it,
-is refused with the variable and the `ResilienceConfig` field that set it. An
-idempotent body reads its arguments again at every attempt, so it binds none
-`mut` and takes no `&mut`, both refused at compile time. It clones what an
-attempt consumes: a consumed argument is rustc's `E0507`, whose help writes the
-clone. Every attempt borrows them, so its future is `Send` only where each
-argument it takes by value is `Sync`.
+place of the policy's: `#[resilient(upstream, idempotent, timeout = "2s",
+retries = 3)]`. The unit's deadline still ends every attempt. Every other
+setting — the backoff's, the breaker's, the bulkhead's, the rate limit's — is
+the policy's, shared by every method calling the dependency: a key naming one,
+before the field or after it, is refused with the variable and the
+`ResilienceConfig` field that set it. An idempotent body reads its arguments
+again at every attempt, so it binds none `mut` and takes no `&mut`, both refused
+at compile time, and clones what an attempt consumes: a consumed argument is
+rustc's `E0507`, whose help writes the clone. Every attempt borrows them, so its
+future is `Send` only where each argument it takes by value is `Sync`.
 
 **No attempt outlives its unit.** Each attempt ends at its timeout or at the
 deadline of the unit it runs in, whichever comes first. That deadline is the
@@ -133,12 +133,12 @@ for a page the upstream does not have:
 ```rust title="crates/features/src/posts/service.rs"
 #[resilient(upstream, idempotent)]
 pub async fn preview(&self, url: &str) -> Result<Option<String>, ResilienceError<UpstreamError>> {
-    let page = reqwest::get(url).await.map_err(UpstreamError)?;
+    let page = reqwest::get(url).await?;
     if page.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
-    let page = page.error_for_status().map_err(UpstreamError)?;
-    page.text().await.map(Some).map_err(UpstreamError)
+    let page = page.error_for_status()?;
+    Ok(Some(page.text().await?))
 }
 ```
 
@@ -161,7 +161,7 @@ pub async fn link_card(&self, url: &str) -> Result<Option<String>, UpstreamError
         ResilienceError::Failed(failed) => Err(failed),
         refused => {
             let error = nest_rs::core::error_message(&refused);
-            tracing::warn!(target: TARGET, %error, "link preview refused; answering the bare link");
+            tracing::warn!(target: crate::posts::TARGET, %error, "link preview refused; answering the bare link");
             Ok(Some(url.to_owned()))
         }
     })
@@ -182,7 +182,8 @@ A refusal of the policy is a `ResilienceError` every edge answers `503`,
 | `Failed` | the call answered its own error on its last attempt | what that error's `ToProblem` says, else a `Problem` its chain carries; opaque `500` otherwise |
 
 The call's error says what its own failure tells a client, so it implements
-`ToProblem` — answering nothing, for a failure no client should read:
+`ToProblem` — answering nothing, for a failure no client should read — and
+keeps reqwest's error without the URL that error quotes:
 
 ```rust title="crates/features/src/posts/error.rs"
 use nest_rs::core::{Problem, ToProblem};
@@ -190,6 +191,13 @@ use nest_rs::core::{Problem, ToProblem};
 #[derive(Debug, thiserror::Error)]
 #[error("the upstream failed")]
 pub struct UpstreamError(#[source] reqwest::Error);
+
+impl From<reqwest::Error> for UpstreamError {
+    fn from(error: reqwest::Error) -> Self {
+        // A URL can carry a token, and no payload value reaches a line.
+        Self(error.without_url())
+    }
+}
 
 impl ToProblem for UpstreamError {
     fn to_problem(&self) -> Option<Problem> {
@@ -204,40 +212,34 @@ it hands its problem on with `self.0.to_problem()`. A queue job refused by an
 open breaker or a spent rate waits at least the refusal's `Retry-After` before
 its next attempt, up to an hour.
 
-## The circuit breaker
+## The breaker, the bulkhead and the rate limit
 
 The breaker opens once `BREAKER_FAILURES` of the latest `BREAKER_WINDOW`
 attempts failed, ten of twenty by default. While it is open every call is
 refused unsent, its client answered `503` at once rather than after a timeout,
-until its probes close it. [Circuit breaker](/fundamentals/circuit-breaker/) has
-the rest: an age past which a failure no longer counts, a series of probes, the
-state read and the switch by hand.
-
-## The bulkhead and the rate limit
-
-`CONCURRENCY` bounds how many calls run inside the policy at once, and
-`RATE_LIMIT` how many attempts it sends the dependency per window, a retry
-included. Both are off by default. A call finding no free slot waits for one up
+until its probes close it. `CONCURRENCY` bounds how many calls run inside the
+policy at once, and `RATE_LIMIT` how many attempts it sends per window, a retry
+included; both are off by default. A call finding no free slot waits for one up
 to `CONCURRENCY_WAIT_MS`, an attempt past the limit for the window's reset when
-`RATE_WAIT_MS` and the unit's deadline reach it. Otherwise each is refused
-`Full` or `Limited`, unsent. [Bulkhead and rate
-limit](/fundamentals/bulkhead-and-rate-limit/) has their settings, the bound on
-the calls waiting for a slot, and why a limit is your dependency's quota divided
-by your replicas.
+`RATE_WAIT_MS` and the unit's deadline reach it; otherwise each is refused
+`Full` or `Limited`, unsent. [Circuit breaker](/fundamentals/circuit-breaker/)
+has the breaker's age, probes, state read and switch by hand; [Bulkhead and rate
+limit](/fundamentals/bulkhead-and-rate-limit/) the bound on the calls waiting
+for a slot, and why a limit is your dependency's quota divided by your replicas.
 
 ## Logs and counters
 
-Every line is on `nest_rs::resilience` and names the policy's `instance`. A
-retry is a `debug`, `attempt failed; retrying the call`, with its `attempt` and
-its `wait_ms`. A retry left but not made is a `debug` too:
+Every line is on `nest_rs::resilience`, names the policy's `instance`, and its
+`host` and `method` when a decorated method ran it, every duration in whole
+milliseconds rounded up. A retry files `attempt failed; retrying the call` at
+`debug`, with its `attempt` and `wait_ms`. So does a retry left but not made:
 `no time left before the unit's deadline; not attempted again` with its
 `wait_ms`, or
 `the dependency asked a wait past the backoff's ceiling; not attempted again`
-with its `asked_ms` and `ceiling_ms`. Each names its `host` and `method` when a
-decorated method ran it, every duration in whole milliseconds rounded up. Each
-mechanism's own lines are on its page. Once telemetry exports, every policy
-counts its breaker's transitions, its retries and the refusals its runs end on:
-[the counters](/opentelemetry/metrics/#resilience-policies).
+with its `asked_ms` and `ceiling_ms`. Each mechanism's own lines are on its
+page. Once telemetry exports, every policy counts its breaker's transitions, its
+retries and the refusals its runs end on: [the
+counters](/opentelemetry/metrics/#resilience-policies).
 
 ## Test it
 
@@ -290,10 +292,8 @@ something off, its field's off is `None`.
 
 ## Going further
 
-- [Circuit breaker](/fundamentals/circuit-breaker/) — its age and probes, its
-  state read and the switch by hand.
-- [Bulkhead and rate limit](/fundamentals/bulkhead-and-rate-limit/) — the calls
-  run at once, and the attempts sent per window.
+- [Circuit breaker](/fundamentals/circuit-breaker/) and [Bulkhead and rate
+  limit](/fundamentals/bulkhead-and-rate-limit/) — each mechanism's settings.
 - [Problem details](/http/problem-details/) — the `503` document a refusal
   answers on HTTP.
 - [Retries and failure](/queue/retries-and-failure/) — how a job honours the

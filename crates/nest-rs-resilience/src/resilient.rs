@@ -5,7 +5,10 @@
 
 use std::error::Error;
 use std::future::Future;
+use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use nest_rs_core::Instance;
@@ -151,25 +154,29 @@ pub fn attempt<R: ResilientAnswer>() -> R::Attempt {
     unreachable!("a `#[resilient]` body returns its attempt's type under `if false` alone")
 }
 
-/// `call` run once under `policy`, as `method`'s body.
-pub async fn run<R, I, C, F>(policy: &ResiliencePolicy<I>, method: ResilientMethod, call: C) -> R
+/// `call` run once under `policy`, as `method`'s body, its future boxed: a run
+/// holds each attempt's in place.
+pub fn run<R, I, C, F>(
+    policy: &ResiliencePolicy<I>,
+    method: ResilientMethod,
+    call: C,
+) -> impl Future<Output = R>
 where
     R: ResilientAnswer,
     I: Instance,
     C: FnOnce(CancellationToken) -> F,
     F: Future<Output = R::Attempt>,
 {
-    let ran = policy
-        .run_for(Some(method), |cancel| {
-            let attempt = call(cancel);
-            async move { R::split(attempt.await) }
-        })
-        .await;
-    R::answered(ran)
+    Answered::<R, _>::new(policy.run_for(Some(method), |cancel| {
+        Split::<R, _>::new(Box::pin(call(cancel)))
+    }))
 }
 
 /// `call` run under `policy` as `method`'s idempotent body, attempted again
 /// after a failure or a timeout.
+// An `async fn`, which keeps `call` twice (rust-lang/rust#62958) — a closure of
+// borrows here — so rustc's error for a future that is not `Send` follows it to
+// the `idempotent` the closure is spanned at.
 pub async fn run_idempotent<R, I, C, F>(
     policy: &ResiliencePolicy<I>,
     method: ResilientMethod,
@@ -182,13 +189,72 @@ where
     C: FnMut(CancellationToken) -> F,
     F: Future<Output = R::Attempt>,
 {
-    let ran = policy
-        .run_idempotent_for(Some(method), |cancel| {
-            let attempt = call(cancel);
-            async move { R::split(attempt.await) }
-        })
-        .await;
-    R::answered(ran)
+    Answered::<R, _>::new(policy.run_idempotent_for(Some(method), |cancel| {
+        Split::<R, _>::new(Box::pin(call(cancel)))
+    }))
+    .await
+}
+
+// Polled in place, each holding the future it reads once, where an `async`
+// block awaiting it would keep it twice (rust-lang/rust#62958).
+pin_project_lite::pin_project! {
+    /// A body's attempt, its answer read as the policy reads it.
+    struct Split<R, F> {
+        #[pin]
+        attempt: F,
+        answer: PhantomData<fn() -> R>,
+    }
+}
+
+impl<R, F> Split<R, F> {
+    const fn new(attempt: F) -> Self {
+        Self {
+            attempt,
+            answer: PhantomData,
+        }
+    }
+}
+
+impl<R, F> Future for Split<R, F>
+where
+    R: ResilientAnswer,
+    F: Future<Output = R::Attempt>,
+{
+    type Output = Result<R::Ok, R::Err>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.project().attempt.poll(cx).map(R::split)
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// A body's run, its answer read as the method answers it.
+    struct Answered<R, F> {
+        #[pin]
+        ran: F,
+        answer: PhantomData<fn() -> R>,
+    }
+}
+
+impl<R, F> Answered<R, F> {
+    const fn new(ran: F) -> Self {
+        Self {
+            ran,
+            answer: PhantomData,
+        }
+    }
+}
+
+impl<R, F> Future for Answered<R, F>
+where
+    R: ResilientAnswer,
+    F: Future<Output = Result<R::Ok, ResilienceError<R::Err>>>,
+{
+    type Output = R;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<R> {
+        self.project().ran.poll(cx).map(R::answered)
+    }
 }
 
 /// What the body of a method `#[resilient]` refused is checked as: one attempt

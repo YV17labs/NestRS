@@ -162,7 +162,10 @@ handler of every impl half but a socket's connection hook, which answers `()`,
 so **an impl half keeps it on the developer's method**, read by its name, and
 moves no other attribute from where a released version placed it: `#[operations]`
 hands an operation's others to the field it generates, so one naming the
-method's own `self` does not compile until a major moves them.
+method's own `self` does not compile until a major moves them, and reads the
+name only in a build enabling its capability (`nest-rs-graphql-macros`'
+`resilience` feature), since a released version placed an app's attribute of
+that name on the field too.
 
 **What a method answers is read by its type, never by its spelling.** A
 decorator resolves no name, so a renamed `Result` or a type alias must behave

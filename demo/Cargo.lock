@@ -3032,6 +3032,7 @@ dependencies = [
  "nest-rs-resilience-macros",
  "opentelemetry",
  "parking_lot 0.13.0",
+ "pin-project-lite",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",

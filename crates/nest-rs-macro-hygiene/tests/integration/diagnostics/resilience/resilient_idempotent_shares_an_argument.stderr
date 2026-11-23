@@ -18,11 +18,10 @@ note: required because it's used within this `async` fn body
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
    | / {
-   | |     let ran = policy
-   | |         .run_idempotent_for(Some(method), |cancel| {
-   | |             let attempt = call(cancel);
-...  |
-   | |     R::answered(ran)
+   | |     Answered::<R, _>::new(policy.run_idempotent_for(Some(method), |cancel| {
+   | |         Split::<R, _>::new(Box::pin(call(cancel)))
+   | |     }))
+   | |     .await
    | | }
    | |_^
 note: required because it's used within this `async` fn body

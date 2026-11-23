@@ -183,7 +183,7 @@ payload, a WS message and a tool's arguments all take them, from one path:
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
-| `#[resilient]` | method | Runs an `async fn`'s body under the policy a field holds: once, or `idempotent` again after a failure, with the method's own `timeout` and `retries` | [Resilience](/fundamentals/resilience/) |
+| `#[resilient]` | method | Runs an `async fn`'s body under the policy a field holds: once, or `idempotent` again after a failure, optional `timeout` and, beside `idempotent`, `retries` in place of the policy's | [Resilience](/fundamentals/resilience/) |
 
 ## Config
 

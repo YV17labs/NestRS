@@ -242,10 +242,12 @@ scheduler is a `Transport` attached with `ContainerBuilder::provide_transport`.
 - **A tick is a unit of the pipeline**, read through `ScheduleView`; a
   failure a layer answered with `skip` or a client's problem (a `4xx`) is said
   at `warn`, any other at `error`, and none is acted on.
-- **A tick has no retry** — its retry is the next occurrence — and **a replica
-  runs one occurrence of a job at a time**; an occurrence falling inside a run is
-  skipped and counted, so `#[every]` and `#[cron]` refuse `concurrency`. Work that
-  must not be lost is a queue job the tick pushes.
+- **The scheduler gives a tick no retry** — its retry is the next occurrence,
+  though a `#[resilient(_, idempotent)]` tick's policy attempts its call again
+  within the one run — and **a replica runs one occurrence of a job at a time**;
+  an occurrence falling inside a run is skipped and counted, so `#[every]` and
+  `#[cron]` refuse `concurrency`. Work that must not be lost is a queue job the
+  tick pushes.
 - **Where a recurring job fires is declared, never inferred.** `replicas = "each"`
   (the default) fires on every replica; `"one"` fires **once per occurrence**, on
   the replica whose claim succeeds; `#[after]` refuses the key. The claim holds

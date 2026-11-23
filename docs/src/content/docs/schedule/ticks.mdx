@@ -39,7 +39,9 @@ the `occurrence()` a job firing once claimed, and its `replicas()` — and the
 deadline through `cx.deadline()`. An interceptor returning `Ok(tick.skip())`
 settles the tick without running it, and the next occurrence fires as usual.
 
-A tick has no retry, so a failure is reported, never acted on. One a filter
+The scheduler gives a tick no retry, so a failure is reported, never acted on.
+A tick decorated `#[resilient(upstream, idempotent)]` has its policy attempt its
+call again within the one occurrence, before a failure is reported. One a filter
 answers with `tick.skip()`, or with a client's `Problem` (a `4xx`), is one the
 app expected: it is said at `warn` as `scheduled job failed; a layer answered
 it` rather than at `error`. A `5xx` problem is still the server's failure,

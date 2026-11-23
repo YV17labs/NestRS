@@ -206,3 +206,32 @@
   > failure of it and not this one, which the user reads as an error in code they
   > did not write. Could `on_unimplemented` be consulted, or a sibling attribute
   > offered, when an impl is rejected on a region bound it requires?
+
+## An `async` fn or block awaiting a future it was handed holds it twice
+
+- **Seen** — 1.100.0 (`0ef1bc386 2026-11-09`), debug and release alike:
+  `nest-rs-resilience`'s
+  `a_decorated_methods_future_holds_its_body_and_each_argument_once` and
+  `a_runs_future_holds_its_calls_closure_and_each_attempts_future_once`, run
+  against the run path as `async` fns and blocks awaiting what they were handed:
+  a method holding 16 KiB across an `.await` was a 33,328 B future decorated
+  against 16,416 B undecorated, and a `run` whose closure moved 16 KiB in, 82,384 B
+  for a 16,408 B call. An `async` fn's argument is held twice too, as an upvar
+  and as the local it is moved into: an undecorated method taking 16 KiB by value
+  is a 32,800 B future.
+- **Effect** — each layer of `async` code a call goes through holds it again, so a
+  future several layers deep outgrows what its body holds, and overflows a
+  worker's stack at a fraction of the state its body runs with alone.
+- **Our side** — the futures holding a call are written by hand, polled in place:
+  `contain` and `within` (`crates/nest-rs-core/src/panic.rs`,
+  `crates/nest-rs-core/src/net.rs`), a tick's `answered`
+  (`crates/nest-rs-schedule/src/answer.rs`), and a resilience run's
+  (`crates/nest-rs-resilience/src/policy.rs`, `src/resilient.rs`), each held by a
+  size test.
+- **Canary** — none in the suite: the size tests hold our side whether or not
+  rustc fixes the layout.
+- **Upstream** — rust-lang/rust#62958.
+- **When fixed** — the hand-written futures may become `async` fns again, each
+  size test and the 2 MiB-worker tests beside them checked again. A day.
+- **Ticket** — filed as rust-lang/rust#62958; a comment there may add the
+  measurements under Seen.

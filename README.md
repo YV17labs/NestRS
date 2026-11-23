@@ -128,7 +128,7 @@ off — a headless worker compiles no HTTP stack. Each has a reference section o
 
 Claims a clone of this repository lets you check:
 
-- **77 decorators**, one per integration contract, each expanding to plain Rust
+- **78 decorators**, one per integration contract, each expanding to plain Rust
   you can print with `cargo expand` — the index is on
   [nestrs.dev/decorators](https://nestrs.dev/decorators/).
 - **7,000+ tests** across the framework workspace, with the end-to-end suites

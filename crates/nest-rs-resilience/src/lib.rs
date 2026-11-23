@@ -33,7 +33,8 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-/// This crate's span target — a breaker's transitions and a policy's retries.
+/// This crate's span target — every line a policy files: its retries, its
+/// waits and refusals, and its breaker's transitions.
 pub const TARGET: &str = "nest_rs::resilience";
 
 mod breaker;

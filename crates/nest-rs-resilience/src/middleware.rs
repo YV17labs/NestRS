@@ -6,7 +6,8 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use http::Extensions;
-use nest_rs_core::{Instance, Unnamed, within};
+use nest_rs_core::__private::within_until;
+use nest_rs_core::{Instance, Unnamed};
 use nest_rs_reqwest::__private::{Resent, Traced, retry_after};
 use reqwest::header::{DATE, HeaderName, HeaderValue, RETRY_AFTER};
 use reqwest::{Request, Response, StatusCode};
@@ -106,12 +107,20 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
                 .flatten()
             else {
                 let (attempted, ()) = run
-                    .attempt(Once(move |_| sending.run(req, carried)), judged, within)
+                    .attempt(
+                        Once(move |_| sending.run(req, carried)),
+                        judged,
+                        within_until,
+                    )
                     .await;
                 return answered(run.finish(attempted));
             };
             let (attempted, ()) = run
-                .attempt(Once(move |_| sending.run(copy, carried)), judged, within)
+                .attempt(
+                    Once(move |_| sending.run(copy, carried)),
+                    judged,
+                    within_until,
+                )
                 .await;
             if !run.again(&attempted).await {
                 return answered(run.finish(attempted));

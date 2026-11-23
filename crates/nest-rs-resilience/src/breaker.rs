@@ -159,8 +159,9 @@ impl Held {
     }
 
     /// Count an outcome among the latest `window`, once those older than the
-    /// age are forgotten: how many failed.
-    fn count(&mut self, window: usize, failed: bool) -> usize {
+    /// age are forgotten: how many failed. `now` is read only where outcomes
+    /// have an age.
+    fn count(&mut self, window: usize, failed: bool, now: impl FnOnce() -> Instant) -> usize {
         match &mut self.outcomes {
             Outcomes::Counted(outcomes) => {
                 if outcomes.len() == window && outcomes.pop_front() == Some(true) {
@@ -169,7 +170,7 @@ impl Held {
                 outcomes.push_back(failed);
             }
             Outcomes::Aged { age, counted } => {
-                let now = Instant::now();
+                let now = now();
                 while let Some(&(at, old)) = counted.front()
                     && now.saturating_duration_since(at) > *age
                 {
@@ -413,7 +414,7 @@ impl Breaker {
                 self.entered(&held, Moved::Attempts { failed: None });
             }
         } else if held.phase == Phase::Closed {
-            let counted = held.count(self.window, failed);
+            let counted = held.count(self.window, failed, Instant::now);
             if counted >= self.failures {
                 held.phase = self.opened();
                 held.forget();
@@ -1069,6 +1070,18 @@ mod tests {
         tokio::time::advance(Duration::from_secs(24 * 60 * 60)).await;
         attempt(&breaker, true);
         assert_eq!(breaker.state(), "open");
+    }
+
+    /// A window with no age counts an outcome without reading the clock it is
+    /// handed, which only an age reads.
+    #[test]
+    fn a_window_with_no_age_counts_an_outcome_reading_no_clock() {
+        let breaker = breaker(4, 2);
+        let mut held = breaker.held.lock();
+        let unread = || -> Instant { panic!("a window with no age reads no clock to count") };
+        assert_eq!(held.count(4, true, unread), 1);
+        assert_eq!(held.count(4, false, unread), 1);
+        assert_eq!(held.count(4, true, unread), 2);
     }
 
     /// A breaker asking three probes closes on the third in a row, each let

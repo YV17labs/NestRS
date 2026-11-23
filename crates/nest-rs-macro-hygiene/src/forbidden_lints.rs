@@ -14,6 +14,64 @@
 /// of its own, and `!` written out, `async` or not, through the projection's
 /// `Never` and through a `ty` fragment — and one whose future is past
 /// `large_futures`' threshold, which only the expansion awaits.
+///
+/// Each tick answering `!` compiles in a crate of edition 2021 too, under the
+/// same lints, where a diverging expression's type falls back to `()` rather
+/// than `!`; the example is that crate:
+///
+/// ```edition2021
+/// #![forbid(unreachable_code, clippy::diverging_sub_expression)]
+///
+/// use nest_rs::core::injectable;
+/// use nest_rs::schedule::scheduled;
+/// use nest_rs_macro_hygiene::never::Never;
+///
+/// #[injectable]
+/// pub struct HygieneEdition2021Tasks;
+///
+/// #[scheduled]
+/// impl HygieneEdition2021Tasks {
+///     #[after("1s")]
+///     fn halt(&self) -> ! {
+///         loop {
+///             std::thread::park();
+///         }
+///     }
+///
+///     #[after("1s")]
+///     async fn pump(&self) -> ! {
+///         std::future::pending().await
+///     }
+///
+///     #[after("1s")]
+///     fn drain(&self) -> Never {
+///         loop {
+///             std::thread::park();
+///         }
+///     }
+/// }
+///
+/// macro_rules! declare_fragment_tasks {
+///     ($answer:ty) => {
+///         #[injectable]
+///         pub struct HygieneEdition2021FragmentTasks;
+///
+///         #[scheduled]
+///         impl HygieneEdition2021FragmentTasks {
+///             #[after("1s")]
+///             fn halt(&self) -> $answer {
+///                 loop {
+///                     std::thread::park();
+///                 }
+///             }
+///         }
+///     };
+/// }
+///
+/// declare_fragment_tasks!(!);
+///
+/// fn main() {}
+/// ```
 #[cfg(feature = "schedule")]
 pub mod scheduled {
     use nest_rs::core::injectable;

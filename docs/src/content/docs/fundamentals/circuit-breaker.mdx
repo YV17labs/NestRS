@@ -133,14 +133,15 @@ counters](/opentelemetry/metrics/#resilience-policies)).
 ## Test it
 
 What your client is told while the dependency is down takes one failure, not
-ten. The test's root pins the policy to open on the first, and the next call is
-refused unsent.
+ten. The test's root pins the policy to open on the first, the test seeds the
+upstream's address where nothing listens, and the next call is refused unsent.
 
 ```rust title="crates/features/tests/integration/posts/service.rs"
-use features::posts::{PostsModule, PostsService, Upstream};
+use features::posts::{PostsConfig, PostsModule, PostsService, Upstream};
 use nest_rs::core::module;
 use nest_rs::resilience::{ResilienceConfig, ResilienceError, ResilienceModule};
 use nest_rs::testing::HeadlessApp;
+use uuid::Uuid;
 
 #[module(imports = [
     ResilienceModule::for_root((Upstream, ResilienceConfig {
@@ -153,21 +154,28 @@ use nest_rs::testing::HeadlessApp;
 ])]
 struct OpeningOnOneFailure;
 
+fn nowhere() -> PostsConfig {
+    PostsConfig { upstream_url: "https://127.0.0.1:1".to_owned(), ..PostsConfig::default() }
+}
+
 #[tokio::test]
 async fn an_open_breaker_refuses_the_call_unsent() -> anyhow::Result<()> {
-    let app = HeadlessApp::builder().module::<OpeningOnOneFailure>().build_headless().await?;
+    let app = HeadlessApp::builder()
+        .module::<OpeningOnOneFailure>()
+        .provide(nowhere())
+        .build_headless()
+        .await?;
     let posts = app.container().get::<PostsService>().expect("provided");
-    let nowhere = "https://127.0.0.1:1/";
 
-    assert!(matches!(posts.preview(nowhere).await, Err(ResilienceError::Failed(_))));
-    assert!(matches!(posts.preview(nowhere).await, Err(ResilienceError::Open { .. })));
+    assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Failed(_))));
+    assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Open { .. })));
     Ok(())
 }
 ```
 
 Or it takes none: opened by hand, the breaker refuses the call unsent; closed by
 hand, it sends the next, which fails where nothing listens. Beside the test
-above, on its root, which sends each call once:
+above, on its root, which sends each call once, and its `nowhere`:
 
 ```rust title="crates/features/tests/integration/posts/service.rs"
 use std::time::Duration;
@@ -176,17 +184,20 @@ use nest_rs::resilience::{BreakerState, ResiliencePolicy};
 
 #[tokio::test]
 async fn a_preview_is_refused_while_opened_by_hand_and_sent_once_closed() -> anyhow::Result<()> {
-    let app = HeadlessApp::builder().module::<OpeningOnOneFailure>().build_headless().await?;
+    let app = HeadlessApp::builder()
+        .module::<OpeningOnOneFailure>()
+        .provide(nowhere())
+        .build_headless()
+        .await?;
     let posts = app.container().get::<PostsService>().expect("provided");
     let upstream = app.container().get::<ResiliencePolicy<Upstream>>().expect("built");
-    let nowhere = "https://127.0.0.1:1/";
 
     upstream.open_breaker(Duration::from_secs(60))?;
-    assert!(matches!(posts.preview(nowhere).await, Err(ResilienceError::Open { .. })));
+    assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Open { .. })));
 
     upstream.close_breaker()?;
     assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
-    assert!(matches!(posts.preview(nowhere).await, Err(ResilienceError::Failed(_))));
+    assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Failed(_))));
     Ok(())
 }
 ```

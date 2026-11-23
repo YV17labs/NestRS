@@ -21,6 +21,9 @@ pub const TRANSACTIONAL: &str = "transactional";
 /// The key, spelled once.
 pub const TIMEOUT: &str = "timeout";
 
+/// The key, spelled once: `#[resilient]` pins a method's retries with it too.
+pub const RETRIES: &str = "retries";
+
 /// The longest `timeout` a job decorator takes: a day.
 const TIMEOUT_CEILING_MILLIS: u64 = 24 * 60 * 60 * 1000;
 
@@ -162,7 +165,7 @@ impl JobKey {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Queue => "queue",
-            Self::Retries => "retries",
+            Self::Retries => RETRIES,
             Self::Concurrency => "concurrency",
             Self::Throttle => "throttle",
             Self::Timeout => TIMEOUT,

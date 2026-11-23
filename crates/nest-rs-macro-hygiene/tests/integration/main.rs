@@ -1,7 +1,7 @@
 //! `nest-rs-macro-hygiene`'s suite: what the decorators refuse, pinned through
-//! the one dependency a developer installs, and what a build lacking a
-//! capability still compiles as 7.0.0 compiled it.
+//! the one dependency a developer installs, and an operation's attributes
+//! placed as 7.0.0 placed them, beside the resilience capability and without it.
 
 mod diagnostics;
-#[cfg(all(feature = "graphql", not(feature = "resilience")))]
+#[cfg(feature = "graphql")]
 mod resolver;

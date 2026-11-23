@@ -160,12 +160,15 @@ receiver rule, `self: &Arc<Self>` lent as a provider's, and their reading by
 type; it dispatches nothing, so a generic method is its own. It goes on a
 handler of every impl half but a socket's connection hook, which answers `()`,
 so **an impl half keeps it on the developer's method**, read by its name, and
-moves no other attribute from where a released version placed it: `#[operations]`
-hands an operation's others to the field it generates, so one naming the
-method's own `self` does not compile until a major moves them, and reads the
-name only in a build enabling its capability (`nest-rs-graphql-macros`'
-`resilience` feature), since a released version placed an app's attribute of
-that name on the field too.
+places every other attribute where a released version placed it, the field
+`#[operations]` generates carrying an `#[expect]` as an `#[allow]` so the
+expectation is checked on the method alone: `#[operations]` hands an
+operation's others to that field, so one naming the method's own `self` does not
+compile until a major moves them, and reads the name only in a build where some
+crate enables its capability (`nest-rs-graphql-macros`' `resilience` feature,
+which Cargo's feature unification turns on for every crate of that build),
+since a released version placed an app's attribute of that name on the field
+too.
 
 **What a method answers is read by its type, never by its spelling.** A
 decorator resolves no name, so a renamed `Result` or a type alias must behave

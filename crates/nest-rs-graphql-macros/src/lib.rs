@@ -113,12 +113,14 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// the guards and the pipes too, and names the field's own parameters. The
 /// inherent method keeps its docs, its `allow`s and `expect`s — the delegating
 /// method allowing what the inherent one expects — its `#[cfg]`s and, in a
-/// build enabling the `resilience` feature — which `nest-rs-graphql`'s enables,
-/// and the umbrella's `resilience` that one — a `#[resilient]`, read by its
-/// name, which runs the inherent method's body under its policy; such an
-/// operation spells its `Result<…>` out, any other answer refused at its return
-/// type. A build without the feature hands an attribute of that name to the
-/// delegating method like every other, as 7.0.0 did.
+/// build where any crate enables the `resilience` feature (`nest-rs-graphql`'s
+/// enables it, and the umbrella's `resilience` that one; Cargo unifies a
+/// package's features across the build), a `#[resilient]`, read by its last
+/// segment however its path is written, which runs the inherent method's body
+/// under its policy; such an operation spells its `Result<…>` out, any other
+/// answer refused at its return type. An app's own attribute of that name is
+/// imported under another, which goes on the delegating method; a build without
+/// the feature hands one of that name there too, as 7.0.0 did.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {

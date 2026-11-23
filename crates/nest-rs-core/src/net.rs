@@ -174,11 +174,24 @@ pub fn within<F: Future>(
     wait: Duration,
     call: F,
 ) -> impl Future<Output = Result<F::Output, Unanswered>> {
+    within_until(wait, None, call)
+}
+
+/// [`within`], its wait ending at `until` when one is given rather than `wait`
+/// after the call's first `Pending`: a wait read off a deadline that another
+/// timer cuts at too ends with that timer, however long the call takes to
+/// first wait. `wait` is what [`Unanswered::Elapsed`] says.
+pub fn within_until<F: Future>(
+    wait: Duration,
+    until: Option<tokio::time::Instant>,
+    call: F,
+) -> impl Future<Output = Result<F::Output, Unanswered>> {
     // Not an `async fn`: its state would keep `call` beside the future built
     // from it.
     Within {
         call: crate::panic::contain(call),
         wait,
+        until,
         timer: None,
     }
 }
@@ -190,6 +203,7 @@ pin_project_lite::pin_project! {
         #[pin]
         call: C,
         wait: Duration,
+        until: Option<tokio::time::Instant>,
         #[pin]
         timer: Option<tokio::time::Sleep>,
     }
@@ -208,7 +222,10 @@ where
             return Poll::Ready(answered.map_err(Unanswered::Panicked));
         }
         if this.timer.is_none() {
-            this.timer.set(Some(tokio::time::sleep(*this.wait)));
+            this.timer.set(Some(match *this.until {
+                Some(until) => tokio::time::sleep_until(until),
+                None => tokio::time::sleep(*this.wait),
+            }));
         }
         let Some(timer) = this.timer.as_pin_mut() else {
             return Poll::Pending;
@@ -267,6 +284,33 @@ mod tests {
         })
         .await;
         assert!(matches!(answered, Ok("late but in time")), "{answered:?}");
+    }
+
+    /// A wait ending at an instant ends there, counting the time its call took
+    /// to first wait, where `within`'s counts from that first `Pending`.
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_ending_at_an_instant_counts_the_time_its_call_took_to_first_wait() {
+        let slow_to_wait = || async {
+            tokio::time::advance(Duration::from_millis(3)).await;
+            std::future::pending::<()>().await
+        };
+        let sent = tokio::time::Instant::now();
+        let wait = Duration::from_secs(1);
+        let given_up = within_until(wait, Some(sent + wait), slow_to_wait()).await;
+        assert!(
+            matches!(given_up, Err(Unanswered::Elapsed(said)) if said == wait),
+            "{given_up:?}"
+        );
+        assert_eq!(sent.elapsed(), wait);
+
+        let sent = tokio::time::Instant::now();
+        let given_up = within(wait, slow_to_wait()).await;
+        assert!(matches!(given_up, Err(Unanswered::Elapsed(_))));
+        assert_eq!(
+            sent.elapsed(),
+            wait + Duration::from_millis(3),
+            "`within` counts its wait from the call's first `Pending`"
+        );
     }
 
     /// One poll of `future`, answered whether or not it is ready.

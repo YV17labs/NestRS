@@ -302,6 +302,7 @@ pub mod __private {
     };
     pub use crate::millis::millis;
     pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
+    pub use crate::net::within_until;
     pub use crate::opaque::__private::OpaqueCause;
     pub use crate::operation_log::__private::{
         KNOWN_VERBS, declare_unit, forget_cause, known_verb, measured_unit, protocol_version,

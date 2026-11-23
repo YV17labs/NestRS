@@ -1,6 +1,8 @@
-//! Covers `src/policy.rs` through the HTTP edge: an attempt ends by the
+//! Covers `src/policy.rs`: through the HTTP edge, an attempt ends by the
 //! request's deadline, before the policy's own timeout, so its client is told
-//! by the policy and its breaker counts the attempt.
+//! by the policy and its breaker counts the attempt; and, under no edge, what a
+//! run's future holds — its size against its call's, and a large one run on a
+//! worker of tokio's default stack.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,6 +38,19 @@ impl SlowController {
             .run(|_| std::future::pending::<Result<String, Silent>>())
             .await
     }
+
+    /// A call whose first poll takes time — a request built, a handshake
+    /// begun — before it waits.
+    #[get("/busy")]
+    #[public]
+    async fn busy(&self) -> Result<String, ResilienceError<Silent>> {
+        self.upstream
+            .run(|_| async {
+                tokio::time::advance(Duration::from_millis(3)).await;
+                std::future::pending::<Result<String, Silent>>().await
+            })
+            .await
+    }
 }
 
 #[module(
@@ -57,25 +72,29 @@ impl SlowController {
 )]
 struct SlowModule;
 
+/// The policy gives the attempt up at the request's deadline, however long its
+/// call took to first wait, so the edge's own cut there finds it counted.
 #[tokio::test(start_paused = true)]
 async fn an_attempt_ends_by_the_requests_deadline_and_its_breaker_counts_it() {
-    let app = TestApp::for_module::<SlowModule>()
-        .await
-        .expect("a route over a policy boots");
+    for path in ["/slow", "/slow/busy"] {
+        let app = TestApp::for_module::<SlowModule>()
+            .await
+            .expect("a route over a policy boots");
 
-    let started = tokio::time::Instant::now();
-    let given_up = app.http().get("/slow").send().await;
-    given_up.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    given_up.assert_header_is_not_exist("retry-after");
-    assert_eq!(
-        started.elapsed(),
-        Duration::from_secs(1),
-        "the request's deadline, not the policy's 10 s"
-    );
+        let started = tokio::time::Instant::now();
+        let given_up = app.http().get(path).send().await;
+        given_up.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        given_up.assert_header_is_not_exist("retry-after");
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(1),
+            "{path}: the request's deadline, not the policy's 10 s"
+        );
 
-    let refused = app.http().get("/slow").send().await;
-    refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
-    refused.assert_header("retry-after", "30");
+        let refused = app.http().get(path).send().await;
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        refused.assert_header("retry-after", "30");
+    }
 }
 
 /// What a body below holds across its `.await`, or its closure moves in: past

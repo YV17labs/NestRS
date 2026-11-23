@@ -260,7 +260,8 @@ How each holds:
   the `503` with the time to the reset, never attempted again. No limit builds
   no rate.
 - **The breaker forgets an outcome past its age**, counted from its answer,
-  each time the window counts one; unset, it stores no instant. **Its probes are
+  each time the window counts one; unset, it stores no instant and reads no
+  clock to count. **Its probes are
   a series**, one at a time: a failed probe opens it again for its whole open
   time and the series starts over, a probe cut at its timeout has failed, and
   one never sent, or dropped by its caller, counts as neither. A
@@ -295,8 +296,9 @@ How each holds:
   read by its type, `!` included. The expansion hands the call's own future to
   `answered`, which boxes `Answered` over it, the future pinned in place and held
   once, at the size 7.0 boxed the run at; it binds no answer and writes no lint
-  attribute, so no lint level a crate sets refuses a tick 7.0 compiled. The
-  family keeps two bounds: `#[hooks]`, `#[indicators]` and a tick take
+  attribute, so no lint level a crate sets refuses a tick 7.0 compiled, in
+  edition 2021 as in 2024. The family keeps two bounds: `#[hooks]`,
+  `#[indicators]` and a tick take
   `E: Into<anyhow::Error>`; `#[on_event]` and `#[process]` take
   `E: Into<Box<dyn Error + Send + Sync>>`, and `#[process]` alone has a
   `ToProblem` tier beside it. The class between them is a difference stated, not
@@ -317,12 +319,15 @@ How each holds:
   `#[resilient]`. The wrapper carries each `#[expect]` as an `#[allow]` of the
   same lints and reason, so the expectation is checked on the method alone;
   7.0.0 handed it to the wrapper too, where it went unfulfilled. `#[resilient]` is
-  read by its name in a build enabling the capability alone —
-  `nest-rs-graphql-macros`' `resilience` feature, which `nest-rs-graphql`'s
-  enables and the umbrella's `resilience` forwards weakly, so no app writes a
-  manifest line: a build without it places an attribute of that name on the
-  wrapper like any other, as 7.0.0 placed an app's own, and refuses nothing
-  7.0.0 compiled.
+  read by its path's last segment in a build where any crate enables the
+  capability — `nest-rs-graphql-macros`' `resilience` feature, which
+  `nest-rs-graphql`'s enables and the umbrella's `resilience` forwards weakly,
+  so no app writes a manifest line. Cargo unifies a package's features across a
+  build, so a dependency, or a workspace member built beside a crate, turns the
+  reading on for that crate too. A build without it places an attribute of that
+  name on the wrapper like any other, as 7.0.0 placed an app's own, and refuses
+  nothing 7.0.0 compiled; a crate with an attribute of its own by that name
+  imports it under another name, which goes on the wrapper in every build.
 - **A bound's reason holds for every value its siblings take**: it says what its
   own mechanism does to a call or lets happen, true for every value it refuses,
   every value its siblings take, every traffic and every client a policy wraps,
@@ -377,7 +382,8 @@ How each holds:
   refuses 7.0 programs whose attribute names a parameter the field leaves out —
   `#[tracing::instrument(skip(self, ctx))]` beside a `Scoped<T>`, which is no
   `Debug` — a break inside a major. `#[resilient]`, new in 7.1, is the one kept
-  there, in a build enabling its capability, which no 7.0 program does.
+  there, in a build where any crate enables its capability, which no 7.0 build
+  can: 7.0 has no such feature.
 - **`#[resilient]` read by its full path**: the docs import it under its short
   name, as every decorator is.
 - **Each attempt's future held in place, unboxed**: no layout of the run's
@@ -433,10 +439,16 @@ How each holds:
   256 KiB. Idempotent, borrowing its arguments, or built for release, it runs
   where its twin does. Closing it is a run holding the closure outside its
   stages, handed to the attempt that makes the call.
-- **An app's own attribute named `resilient` on an operation**, in a build
-  enabling the resilience capability, is read as the framework's and kept on the
-  developer's method. Closing it is reading the decorator by its path, which
-  its short-name import defeats.
+- **An app's own attribute named `resilient` on an operation** is read as the
+  framework's and kept on the developer's method in a build where any crate
+  enables the resilience capability: Cargo unifies a package's features across a
+  build, so a dependency, or a workspace member built beside the crate, turns it
+  on for a crate that never asked, whose operation then fails to compile naming
+  the attribute — never a wrong behaviour at run time. The reading is by the
+  path's last segment, so a full path ending in `resilient` is read too; the
+  crate imports its attribute under another name, which goes on the field as
+  7.0.0 placed it. Closing it is reading the decorator by its path, which its
+  short-name import defeats.
 - **An attribute of an operation reading the method's own `self`** —
   `#[tracing::instrument(fields(depot = self.depot.0))]` — does not compile, as
   in 7.0: it goes on the field `#[operations]` generates, whose `self` is

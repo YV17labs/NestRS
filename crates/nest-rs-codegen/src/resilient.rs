@@ -6,14 +6,11 @@
 use syn::{Attribute, Expr, ExprLit, Lit};
 
 use crate::args::{site, takes_value};
-use crate::job::TIMEOUT;
+use crate::job::{RETRIES, TIMEOUT};
 use crate::ungrouped::ungrouped_expr;
 
 /// The decorator, as it is written.
 pub const RESILIENT: &str = "resilient";
-
-/// The key a method pins its retries with.
-pub const RETRIES: &str = "retries";
 
 /// Whether `attr` is a `#[resilient]`, however its path is written: read by
 /// its last segment, since a macro resolves no name.

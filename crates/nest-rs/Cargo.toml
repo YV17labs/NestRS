@@ -216,9 +216,11 @@ reqwest = [
 ]
 # Named policies an app wraps around an outbound call: no HTTP stack of the
 # framework's, so a worker calling a dependency compiles none. Beside `graphql`,
-# `#[operations]` reads an attribute named `resilient` as this capability's
-# decorator and keeps it on the developer's method; a build without it places
-# every attribute of an operation as 7.0.0 did.
+# `#[operations]` reads an attribute named `resilient`, by any path, as this
+# capability's decorator and keeps it on the developer's method, in every crate
+# of a build where any crate enables this feature, Cargo unifying a package's
+# features across the build; a build without it places an attribute of that
+# name on the field `#[operations]` generates, as 7.0.0 did.
 resilience = ["dep:nest-rs-resilience", "nest-rs-graphql?/resilience"]
 openapi = ["dep:nest-rs-openapi", "http"]
 # A resource the framework opens ships its indicator in its own crate, behind

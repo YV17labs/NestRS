@@ -1943,9 +1943,10 @@ fn field_parent_label(sig: &Signature) -> String {
 }
 
 /// Whether `attr` is `#[resilient]`, which runs the body the developer's method
-/// is and so stays on it: an attribute read by its name in a build that enables
-/// the resilience capability alone, since 7.0.0 placed one of that name — an
-/// app's own — on the field like every other.
+/// is and so stays on it: an attribute read by its last segment, in a build
+/// where any crate enables the resilience capability — Cargo unifies a package's
+/// features across a build — since 7.0.0 placed one of that name, an app's own,
+/// on the field like every other.
 fn kept_on_the_method(attr: &Attribute) -> bool {
     cfg!(feature = "resilience") && is_resilient(attr)
 }

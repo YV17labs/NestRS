@@ -222,12 +222,19 @@
 - **Effect** — each layer of `async` code a call goes through holds it again, so a
   future several layers deep outgrows what its body holds, and overflows a
   worker's stack at a fraction of the state its body runs with alone.
-- **Our side** — the futures holding a call are written by hand, polled in place:
-  `contain` and `within` (`crates/nest-rs-core/src/panic.rs`,
-  `crates/nest-rs-core/src/net.rs`), a tick's `answered`
-  (`crates/nest-rs-schedule/src/answer.rs`), and a resilience run's
-  (`crates/nest-rs-resilience/src/policy.rs`, `src/resilient.rs`), each held by a
-  size test.
+- **Our side** — the futures holding a call are written by hand, polled in place,
+  or built from combinators in their caller's own frame: `contain` and `within`
+  (`crates/nest-rs-core/src/panic.rs`, `crates/nest-rs-core/src/net.rs`), the
+  ambient context's `Install` and the pipeline's `dispatch`
+  (`crates/nest-rs-core/src/request_scope.rs`,
+  `crates/nest-rs-core/src/dispatch.rs`, the second also for the poll frame a
+  debug build reserves for each arm's copy of the tail, which a fix of this
+  issue alone does not retire), a GraphQL field's unit
+  (`crates/nest-rs-graphql/src/operation.rs`), an MCP operation's tail, a closure
+  `dispatch` makes the future from (`crates/nest-rs-mcp/src/operation.rs`), a
+  tick's `answered` (`crates/nest-rs-schedule/src/answer.rs`), and a resilience
+  run's (`crates/nest-rs-resilience/src/policy.rs`, `src/resilient.rs`), each but
+  `within` held by a size test.
 - **Canary** — none in the suite: the size tests hold our side whether or not
   rustc fixes the layout.
 - **Upstream** — rust-lang/rust#62958.

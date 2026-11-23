@@ -6,8 +6,10 @@
 //! a method pins, the lines naming it, the docs' recipes as they run (an answer
 //! that is no failure, a fallback, a breaker opened by hand), each receiver and
 //! host it takes, a refusal answered `503` by every edge serving a decorated
-//! handler, and a method of every impl half that takes one, called through the
-//! framework's own path, attempted again within that one call.
+//! handler, a method of every impl half that takes one, called through the
+//! framework's own path, attempted again within that one call, and what a
+//! decorated method's future holds (`footprint`): its size against its
+//! undecorated twin's, and a large one run on a worker of tokio's default stack.
 
 use std::cell::Cell;
 use std::future::Future;
@@ -705,13 +707,21 @@ fn opening_on_the_first_failure() -> ResilienceConfig {
 )]
 struct OpeningModule;
 
+/// One breaker counts every method on its field, and its transition is the
+/// policy's own: it names the instance, never the method whose failure moved it.
 #[tokio::test(start_paused = true)]
 async fn every_method_on_one_field_counts_in_one_breaker() {
     let app = boot::<OpeningModule>().await;
     let parcels = parcels(&app);
+    let logs = LogCapture::install();
 
     assert!(failed(&parcels.ship().await));
     parcels.attempted();
+    let opened = logs.expect_one(nest_rs_resilience::TARGET, "circuit breaker changed state");
+    assert_eq!(opened.field("instance").as_deref(), Some("courier"));
+    assert_eq!(opened.field("state").as_deref(), Some("open"));
+    assert_eq!(opened.field("host"), None, "{opened:?}");
+    assert_eq!(opened.field("method"), None, "{opened:?}");
 
     let refused = parcels.quote().await;
     let Err(ResilienceError::Open { retry_after, .. }) = refused else {
@@ -736,17 +746,36 @@ impl From<reqwest::Error> for UpstreamFailed {
     }
 }
 
+/// Where the docs' feature reaches its upstream: the address a deployment sets,
+/// never one a caller passes.
+#[nest_rs_config::config(namespace = "posts")]
+#[derive(Clone, Default)]
+struct PostsConfig {
+    upstream_url: String,
+}
+
+/// The upstream's address in a test whose upstream is a peer, or none.
+fn upstream_at(url: &str) -> PostsConfig {
+    PostsConfig {
+        upstream_url: url.to_owned(),
+    }
+}
+
 #[injectable]
 struct LinksService {
     #[inject]
     courier: Arc<ResiliencePolicy<Courier>>,
+    #[inject]
+    config: Arc<PostsConfig>,
 }
 
 impl LinksService {
+    /// The docs' first call: the one host the config names, a post's id in
+    /// its path.
     #[resilient(courier, idempotent)]
-    async fn preview(&self, url: &str) -> Result<String, ResilienceError<UpstreamFailed>> {
-        let page = reqwest::get(url).await?;
-        Ok(page.text().await?)
+    async fn preview(&self, post: u64) -> Result<String, ResilienceError<UpstreamFailed>> {
+        let url = format!("{}/previews/{post}", self.config.upstream_url);
+        Ok(reqwest::get(url).await?.text().await?)
     }
 }
 
@@ -762,18 +791,27 @@ struct LinksModule;
 ])]
 struct OpeningOnOneFailure;
 
+/// `M` booted with the docs' feature reaching its upstream at `url`.
+async fn boot_reaching<M: Module + 'static>(url: &str) -> HeadlessApp {
+    HeadlessApp::builder()
+        .module::<M>()
+        .provide(upstream_at(url))
+        .build_headless()
+        .await
+        .expect("the module boots")
+}
+
 #[tokio::test]
 async fn a_policy_pinned_to_open_on_one_failure_refuses_the_next_call_unsent() {
-    let app = boot::<OpeningOnOneFailure>().await;
+    let app = boot_reaching::<OpeningOnOneFailure>("https://127.0.0.1:1").await;
     let links = app.container().get::<LinksService>().expect("provided");
-    let nowhere = "https://127.0.0.1:1/";
 
-    let failed = links.preview(nowhere).await;
+    let failed = links.preview(7).await;
     assert!(
         matches!(failed, Err(ResilienceError::Failed(_))),
         "{failed:?}"
     );
-    let refused = links.preview(nowhere).await;
+    let refused = links.preview(7).await;
     assert!(
         matches!(refused, Err(ResilienceError::Open { retry_after, .. })
             if retry_after <= Duration::from_secs(30)),
@@ -839,10 +877,11 @@ impl nest_rs_core::ToProblem for PreviewFailed {
     }
 }
 
-/// A host the test builds itself: the previewer's policy, and a client trusting
-/// the peer's authority.
+/// A host the test builds itself: the previewer's policy, the upstream's
+/// address the app's config holds, and a client trusting the peer's authority.
 struct Previews {
     previewer: Arc<ResiliencePolicy<Previewer>>,
+    config: Arc<PostsConfig>,
     http: reqwest::Client,
 }
 
@@ -852,6 +891,10 @@ impl Previews {
             reqwest::Certificate::from_pem(AUTHORITY.pem().as_bytes()).expect("the authority");
         Self {
             previewer: held::<Previewer>(app),
+            config: app
+                .container()
+                .get::<PostsConfig>()
+                .expect("the test seeded the upstream's address"),
             http: reqwest::Client::builder()
                 .tls_certs_only([authority])
                 .build()
@@ -859,10 +902,11 @@ impl Previews {
         }
     }
 
-    /// The docs' answer that is no failure: a page the previewer does not have
-    /// is its answer, `None`, and any other failing status an `Err`.
+    /// The docs' answer that is no failure: a post the previewer has no
+    /// preview of is its answer, `None`, and any other failing status an `Err`.
     #[resilient(previewer, idempotent)]
-    async fn preview(&self, url: &str) -> Result<Option<String>, ResilienceError<PreviewFailed>> {
+    async fn preview(&self, post: u64) -> Result<Option<String>, ResilienceError<PreviewFailed>> {
+        let url = format!("{}/previews/{post}", self.config.upstream_url);
         let page = self.http.get(url).send().await?;
         if page.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -871,20 +915,20 @@ impl Previews {
         Ok(Some(page.text().await?))
     }
 
-    /// The docs' fallback: the bare link while the policy refuses the call, the
+    /// The docs' fallback: no card while the policy refuses the call, the
     /// refusal filed at `warn` with its chain, and the previewer's own failure
     /// kept as the caller's error.
-    async fn link_card(&self, url: &str) -> Result<Option<String>, PreviewFailed> {
-        self.preview(url).await.or_else(|error| match error {
+    async fn link_card(&self, post: u64) -> Result<Option<String>, PreviewFailed> {
+        self.preview(post).await.or_else(|error| match error {
             ResilienceError::Failed(failed) => Err(failed),
             refused => {
                 let error = error_message(&refused);
                 tracing::warn!(
                     target: POSTS,
                     %error,
-                    "link preview refused; answering the bare link",
+                    "link preview refused; answering no card",
                 );
-                Ok(Some(url.to_owned()))
+                Ok(None)
             }
         })
     }
@@ -908,8 +952,6 @@ struct AnsweringModule;
 /// attempted again and counted, its two failures opening the breaker.
 #[tokio::test]
 async fn an_answer_the_dependency_gave_is_the_calls_ok_never_attempted_again_nor_a_failure() {
-    let app = boot::<AnsweringModule>().await;
-    let previews = Previews::of(&app);
     let peer = HttpsPeer::answering(
         &CERTIFICATE,
         [
@@ -919,9 +961,11 @@ async fn an_answer_the_dependency_gave_is_the_calls_ok_never_attempted_again_nor
         ],
     )
     .await;
+    let app = boot_reaching::<AnsweringModule>(&peer.url("")).await;
+    let previews = Previews::of(&app);
 
     for sent in 1..=2 {
-        let missing = previews.preview(&peer.url("/missing")).await;
+        let missing = previews.preview(7).await;
         assert!(matches!(missing, Ok(None)), "{missing:?}");
         assert_eq!(
             peer.requests().len(),
@@ -930,12 +974,17 @@ async fn an_answer_the_dependency_gave_is_the_calls_ok_never_attempted_again_nor
         );
     }
     assert_eq!(
+        peer.requests()[0].line,
+        "GET /previews/7 HTTP/1.1",
+        "the config's host, the caller's post in the path"
+    );
+    assert_eq!(
         previews.previewer.breaker_state(),
         Some(BreakerState::Closed),
         "nor counted as a failure: two would have opened the breaker"
     );
 
-    let down = previews.preview(&peer.url("/down")).await;
+    let down = previews.preview(8).await;
     assert!(matches!(down, Err(ResilienceError::Failed(_))), "{down:?}");
     assert_eq!(
         peer.requests().len(),
@@ -955,30 +1004,28 @@ async fn an_answer_the_dependency_gave_is_the_calls_ok_never_attempted_again_nor
 struct FallbackModule;
 
 /// The fallback recipe, as it runs: the previewer's own failure is the caller's
-/// error, and the call the breaker it opened refuses answers the bare link,
-/// unsent, its refusal filed at `warn` with the chain the policy answered.
+/// error, and the call the breaker it opened refuses answers no card, unsent,
+/// its refusal filed at `warn` with the chain the policy answered.
 #[tokio::test]
 async fn the_methods_result_is_its_fallback_a_refusal_answered_and_a_failure_kept() {
-    let app = boot::<FallbackModule>().await;
-    let previews = Previews::of(&app);
     let peer = HttpsPeer::answering(&CERTIFICATE, [PeerAnswer::status(503)]).await;
-    let link = peer.url("/down");
+    let app = boot_reaching::<FallbackModule>(&peer.url("")).await;
+    let previews = Previews::of(&app);
     let logs = LogCapture::install();
 
-    let failed = previews.link_card(&link).await;
+    let failed = previews.link_card(7).await;
     assert!(matches!(failed, Err(PreviewFailed(_))), "{failed:?}");
-    logs.expect_none(POSTS, "link preview refused; answering the bare link");
-    let refused = previews.link_card(&link).await;
-    assert_eq!(
-        refused.ok().flatten().as_deref(),
-        Some(link.as_str()),
-        "the bare link while the breaker refuses the call"
+    logs.expect_none(POSTS, "link preview refused; answering no card");
+    let refused = previews.link_card(7).await;
+    assert!(
+        matches!(refused, Ok(None)),
+        "no card while the breaker refuses the call: {refused:?}"
     );
     assert_eq!(peer.requests().len(), 1, "the refused call is never sent");
-    let said = logs.expect_one(POSTS, "link preview refused; answering the bare link");
+    let said = logs.expect_one(POSTS, "link preview refused; answering no card");
     assert_eq!(said.level, "warn", "{said:?}");
     let open = previews
-        .preview(&link)
+        .preview(7)
         .await
         .expect_err("the breaker still refuses the call");
     assert_eq!(

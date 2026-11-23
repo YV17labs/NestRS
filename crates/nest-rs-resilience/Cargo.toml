@@ -94,6 +94,9 @@ nest-rs-pipes = { path = "../nest-rs-pipes" }
 # The refusal's `503` on every edge and the queue's honouring its wait: a
 # resolver, a gateway, an `#[mcp]` host and a processor, each answering it as an
 # app's does. A crate defining a `#[resolver]` names `async_graphql::` itself.
+# `resilience` keeps a decorated operation's `#[resilient]` on its own method,
+# whose `self` holds the policy, where the field `#[operations]` generates holds
+# none.
 nest-rs-graphql = { path = "../nest-rs-graphql", features = ["resilience"] }
 nest-rs-ws = { path = "../nest-rs-ws" }
 nest-rs-mcp = { path = "../nest-rs-mcp" }

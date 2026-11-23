@@ -20,10 +20,11 @@ all-features = true
 proc-macro = true
 
 [features]
-# `#[operations]` reads an attribute named `resilient` as the resilience
-# capability's decorator, kept on the developer's method, only in a build that
-# enables that capability: without it, every attribute is placed as 7.0.0 placed
-# them. `nest-rs-graphql`'s `resilience` feature enables it.
+# `#[operations]` reads an attribute named `resilient`, by any path, as the
+# resilience capability's decorator, kept on the developer's method, in a build
+# where any crate enables this feature, Cargo unifying a package's features
+# across the build: without it, an attribute of that name goes on the field as
+# 7.0.0 placed it. `nest-rs-graphql`'s `resilience` feature enables it.
 resilience = []
 
 [dependencies]

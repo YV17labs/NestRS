@@ -17,9 +17,8 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use nest_rs_config::{ConfigError, Namespaced, instance_namespace};
-use nest_rs_core::{
-    Backoff, Deadline, Instance, Problem, Unanswered, Unnamed, process_seed, within,
-};
+use nest_rs_core::__private::within_until;
+use nest_rs_core::{Backoff, Deadline, Instance, Problem, Unanswered, Unnamed, process_seed};
 use tokio::sync::SemaphorePermit;
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -288,7 +287,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        RunOnce::new(self.begin(method), call, judged, within)
+        RunOnce::new(self.begin(method), call, judged, within_until)
     }
 
     /// [`run_idempotent`](Self::run_idempotent), for `method` when a decorated
@@ -304,7 +303,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
     {
-        RunAgain::new(self.begin(method), call, judged_asking, within)
+        RunAgain::new(self.begin(method), call, judged_asking, within_until)
     }
 
     /// Open one run — of `method`, when a decorated method opens it — taking a
@@ -476,7 +475,7 @@ impl<'p, I: Instance> Run<'p, I> {
 
     /// One attempt of `call`, let through by the unit's deadline, the breaker
     /// and the rate, then bounded by the run's timeout or what is left of the
-    /// unit's deadline, whichever ends first, through `bounded` — `within`,
+    /// unit's deadline, whichever ends first, through `bounded` — `within_until`,
     /// handed as a function since its future has no name — its answer counted
     /// as `judge` reads it. A retry counts on the retries' counter when it is
     /// let through, its call sent. A panic in the call counts as a failure and
@@ -485,7 +484,7 @@ impl<'p, I: Instance> Run<'p, I> {
         &self,
         call: C,
         judge: J,
-        bounded: fn(Duration, C::Made) -> W,
+        bounded: fn(Duration, Option<Instant>, C::Made) -> W,
     ) -> Attempt<'p, I, C, C::Kept, C::Made, J, W>
     where
         C: Call,
@@ -607,14 +606,32 @@ impl<'p, I: Instance> Run<'p, I> {
     }
 }
 
+/// How long an attempt sent now may run, and, under a unit's deadline, the
+/// instant that ends at: its timer is armed at that instant, so it fires with
+/// the edge's cut at the deadline, never after it, however long the call takes
+/// to first wait.
+#[derive(Clone, Copy)]
+pub(crate) struct Bound {
+    wait: Duration,
+    until: Option<Instant>,
+}
+
 impl<I> Terms<'_, I> {
     /// How long an attempt sent now may run: the run's timeout, or what is left
     /// of the unit's deadline when that is shorter.
-    fn bound(&self) -> Duration {
+    fn bound(&self) -> Bound {
         if self.deadline.is_none() {
-            return self.timeout;
+            return Bound {
+                wait: self.timeout,
+                until: None,
+            };
         }
-        self.bound_at(Instant::now())
+        let now = Instant::now();
+        let wait = self.bound_at(now);
+        Bound {
+            wait,
+            until: Some(now + wait),
+        }
     }
 
     /// How long an attempt sent at `at` may run.
@@ -696,10 +713,7 @@ where
 
 // The run's futures are polled in place, each holding the call once — the
 // closure, then the future it made — where an `async` fn or block awaiting a
-// future it was handed keeps it twice (rust-lang/rust#62958). No bound sits on
-// their definitions: with bounds there, rustc refused the `Send` of a future
-// holding them whose answer borrows ("one type is more general than the
-// other").
+// future it was handed keeps it twice (rust-lang/rust#62958).
 pin_project_lite::pin_project! {
     /// An attempt waiting to be let through, in order, by what is left of the
     /// unit's deadline, the breaker and the rate, answered with the bound its
@@ -721,7 +735,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<'p, I: Instance> Future for Admitted<'p, I> {
-    type Output = Result<(Option<Pass<'p>>, Duration), Refusal>;
+    type Output = Result<(Option<Pass<'p>>, Bound), Refusal>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -732,8 +746,8 @@ impl<'p, I: Instance> Future for Admitted<'p, I> {
             }
             let terms = *this.terms;
             let bound = terms.bound();
-            if bound.is_zero() {
-                return Poll::Ready(Err(Refusal::TimedOut(bound)));
+            if bound.wait.is_zero() {
+                return Poll::Ready(Err(Refusal::TimedOut(bound.wait)));
             }
             // Another call may have opened the breaker, or taken the probe's
             // turn, while this one waited for the reset, and a manual switch
@@ -743,7 +757,7 @@ impl<'p, I: Instance> Future for Admitted<'p, I> {
                     .policy
                     .breaker
                     .as_ref()
-                    .map(|breaker| breaker.admit(bound))
+                    .map(|breaker| breaker.admit(bound.wait))
                     .transpose()
                 {
                     Ok(pass) => *this.pass = pass,
@@ -790,7 +804,7 @@ pin_project_lite::pin_project! {
         // Whether the attempt is a retry, counted once it is let through.
         retry: bool,
         judge: J,
-        bounded: fn(Duration, M) -> W,
+        bounded: fn(Duration, Option<Instant>, M) -> W,
         #[pin]
         stage: AttemptStage<'p, I, C, K, W>,
     }
@@ -859,7 +873,7 @@ where
     /// bound — or what it answers refused unsent.
     fn send(
         self: Pin<&mut Self>,
-        admitted: Result<(Option<Pass<'p>>, Duration), Refusal>,
+        admitted: Result<(Option<Pass<'p>>, Bound), Refusal>,
     ) -> Option<(Attempted<M::Output>, K)> {
         let mut this = self.project();
         let AttemptStageOwned::Admitting { call, .. } =
@@ -874,7 +888,7 @@ where
         if *this.retry {
             this.terms.policy.counters.retry();
         }
-        let sent = pass.map(|pass| pass.send(bound));
+        let sent = pass.map(|pass| pass.send(bound.wait));
         let cancel = CancellationToken::new();
         let given_up = cancel.clone().drop_guard();
         // The call is made inside the attempt, so one panicking before it hands
@@ -889,10 +903,10 @@ where
             }
         };
         this.stage.set(AttemptStage::Sending {
-            answer: (this.bounded)(bound, made),
+            answer: (this.bounded)(bound.wait, bound.until, made),
             sent,
             given_up,
-            bound,
+            bound: bound.wait,
             kept,
         });
         None
@@ -938,7 +952,7 @@ pin_project_lite::pin_project! {
     /// taken, then the run's one attempt.
     struct RunOnce<'p, I, B, F, Fut, J, W> {
         judge: J,
-        bounded: fn(Duration, Fut) -> W,
+        bounded: fn(Duration, Option<Instant>, Fut) -> W,
         #[pin]
         stage: OnceStage<'p, I, B, F, Fut, J, W>,
     }
@@ -954,10 +968,12 @@ pin_project_lite::pin_project! {
             begin: B,
             call: F,
         },
+        // `attempt` before `run`: fields drop in order, so a run dropped
+        // mid-attempt hands its probe's turn on before it frees its slot.
         Attempting {
-            run: Run<'p, I>,
             #[pin]
             attempt: Attempt<'p, I, Once<F>, (), Fut, J, W>,
+            run: Run<'p, I>,
         },
         Answered,
     }
@@ -973,7 +989,7 @@ where
 {
     /// The run `begin` opens, `call` sent by its one attempt through
     /// `bounded`, its answer read by `judge`.
-    fn new(begin: B, call: F, judge: J, bounded: fn(Duration, Fut) -> W) -> Self {
+    fn new(begin: B, call: F, judge: J, bounded: fn(Duration, Option<Instant>, Fut) -> W) -> Self {
         Self {
             judge,
             bounded,
@@ -1031,7 +1047,7 @@ pin_project_lite::pin_project! {
     /// backoff.
     struct RunAgain<'p, I, B, F, Fut, J, W> {
         judge: J,
-        bounded: fn(Duration, Fut) -> W,
+        bounded: fn(Duration, Option<Instant>, Fut) -> W,
         #[pin]
         stage: AgainStage<'p, I, B, F, Fut, J, W>,
     }
@@ -1047,10 +1063,11 @@ pin_project_lite::pin_project! {
             begin: B,
             call: F,
         },
+        // `attempt` before `run`, as in `OnceStage`.
         Attempting {
-            run: Run<'p, I>,
             #[pin]
             attempt: Attempt<'p, I, Again<F>, F, Fut, J, W>,
+            run: Run<'p, I>,
         },
         /// Waiting the backoff before the next attempt, the call held.
         Backing {
@@ -1073,7 +1090,7 @@ where
 {
     /// The run `begin` opens, `call` sent by each attempt through `bounded`,
     /// each answer read by `judge`.
-    fn new(begin: B, call: F, judge: J, bounded: fn(Duration, Fut) -> W) -> Self {
+    fn new(begin: B, call: F, judge: J, bounded: fn(Duration, Option<Instant>, Fut) -> W) -> Self {
         Self {
             judge,
             bounded,
@@ -2683,6 +2700,147 @@ mod tests {
         assert!(
             matches!(reopened, Err(ResilienceError::Open { .. })),
             "the next call was the probe: {reopened:?}"
+        );
+    }
+
+    /// Runs its closure when it is dropped, beside the call holding it.
+    struct OnDrop<'a>(&'a dyn Fn());
+
+    impl Drop for OnDrop<'_> {
+        fn drop(&mut self) {
+            (self.0)();
+        }
+    }
+
+    /// A run dropped while its probe's call is out hands the probe's turn on
+    /// before its slot of the bulkhead: the call that slot lets in, polled while
+    /// the attempt is torn down — on another worker, or here from the call's own
+    /// teardown — never meets a turn the dropped probe still holds.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_dropped_while_its_probe_is_out_hands_the_turn_on_before_its_slot() {
+        let policy = policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(10)),
+            retries: Some(1),
+            backoff_first: Duration::from_secs(2),
+            backoff_ceiling: Duration::from_secs(2),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(1),
+            ..ResilienceConfig::default()
+        });
+        let waiting =
+            std::cell::RefCell::new(Box::pin(policy.run(|_| async { Ok::<_, Refused>("sent") })));
+        let answered = std::cell::RefCell::new(None);
+        let poll_waiting = || {
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            if let Poll::Ready(answer) = waiting.borrow_mut().as_mut().poll(&mut cx) {
+                *answered.borrow_mut() = Some(answer);
+            }
+        };
+        let calls = AtomicU32::new(0);
+        let mut holding = Box::pin(policy.run_idempotent(|_| async {
+            if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                return Err(Refused);
+            }
+            let _torn_down = OnDrop(&poll_waiting);
+            std::future::pending::<Result<(), Refused>>().await
+        }));
+        park(&mut holding).await;
+        poll_waiting();
+        assert!(
+            answered.borrow().is_none(),
+            "it waits for the slot the run holds"
+        );
+        tokio::time::timeout(Duration::from_secs(5), holding.as_mut())
+            .await
+            .expect_err("the retry, sent as the probe, never answers");
+        assert_eq!(calls.load(Ordering::Relaxed), 2, "the call and its retry");
+        assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
+
+        drop(holding);
+        let answer = match answered.take() {
+            Some(answer) => answer,
+            None => waiting.into_inner().await,
+        };
+        assert!(
+            matches!(answer, Ok("sent")),
+            "the call let in took the turn the dropped probe handed on: {answer:?}"
+        );
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::Closed),
+            "and closed the breaker as the next probe"
+        );
+    }
+
+    /// The attempt's bound ends at the unit's deadline itself, however long its
+    /// call took to first wait — a request built, a handshake begun: the edge
+    /// cutting the unit at that deadline, as each edge does, finds the attempt
+    /// given up already, and counted in the breaker.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_slow_to_first_wait_ends_at_the_deadline_its_edge_cuts_the_unit_at() {
+        let policy = policy(ResilienceConfig {
+            timeout: Duration::from_secs(5),
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let cut = tokio::time::timeout_at(
+            deadline,
+            nest_rs_core::__private::with_deadline(
+                Some(deadline),
+                policy.run(|_| async {
+                    tokio::time::advance(Duration::from_millis(3)).await;
+                    std::future::pending::<Result<(), Refused>>().await
+                }),
+            ),
+        )
+        .await;
+        assert!(
+            matches!(cut, Ok(Err(ResilienceError::TimedOut { timeout, .. }))
+                if timeout == Duration::from_millis(300)),
+            "the policy gave the attempt up at the deadline, before the edge cut it: {cut:?}"
+        );
+        assert!(
+            matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+            "the attempt counted in the breaker: {:?}",
+            policy.breaker_state()
+        );
+    }
+
+    /// A probe slow to first wait whose unit's deadline comes before its
+    /// timeout has failed once its edge cuts the unit there, as one cut at its
+    /// timeout has: the breaker opens again for its whole open time.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_slow_to_first_wait_cut_at_its_units_deadline_has_failed() {
+        let policy = policy(probing(Duration::from_secs(5)));
+        probe_due(&policy).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let cut = tokio::time::timeout_at(
+            deadline,
+            nest_rs_core::__private::with_deadline(
+                Some(deadline),
+                policy.run(|_| async {
+                    tokio::time::advance(Duration::from_millis(3)).await;
+                    std::future::pending::<Result<(), Refused>>().await
+                }),
+            ),
+        )
+        .await;
+        assert!(
+            matches!(cut, Ok(Err(ResilienceError::TimedOut { .. }))),
+            "{cut:?}"
+        );
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::Open {
+                retry_after: Duration::from_secs(1)
+            }),
+            "the probe failed, opening the breaker again for its whole open time"
         );
     }
 

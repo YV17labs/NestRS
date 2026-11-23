@@ -343,9 +343,8 @@ impl FragmentService {
     }
 }
 
-// The methods come through `tt` fragments, keeping the caller's spans, and their
-// `#[resilient]` the macro's — or the attribute the caller's and the method the
-// macro's: either way the field and the receiver are written in two contexts.
+// A method and its `#[resilient]` come from two contexts, the caller's `tt` fragments and the
+// macro's, either way round, so the field and the receiver are written in two.
 macro_rules! declare_fragment_methods {
     (once: { $($once:tt)* } idempotent: { $($idempotent:tt)* }) => {
         impl FragmentService {

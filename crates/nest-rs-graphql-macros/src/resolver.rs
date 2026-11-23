@@ -1051,14 +1051,13 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ));
         }
 
-        // Every attribute but `#[resilient]` goes on the field: one naming the
-        // field's own parameters compiles only there, so moving any is a break.
-        // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside
-        // `#[cfg_attr]`.
+        // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside `#[cfg_attr]`.
         let mut deleg_attrs = delegated_attrs(
             &method
                 .attrs
                 .iter()
+                // All but `#[resilient]` go on the field: one naming the field's own
+                // parameters compiles only there, so moving any is a break.
                 .filter(|attr| !kept_on_the_method(attr))
                 .cloned()
                 .collect::<Vec<_>>(),
@@ -1302,9 +1301,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // at all.
             let wrapper_sig = {
                 let mut s = sig.clone();
-                // The receiver stays the method's, the lifetime an answer borrows through
-                // included, its `self` resolved where the body reads it, which `tt`
-                // fragments move.
+                // The receiver stays the method's, lifetime included, its `self` resolved
+                // where the body reads it, which `tt` fragments move.
                 s.inputs = s
                     .inputs
                     .into_iter()
@@ -1943,10 +1941,11 @@ fn field_parent_label(sig: &Signature) -> String {
 }
 
 /// Whether `attr` is `#[resilient]`, which runs the body the developer's method
-/// is and so stays on it: an attribute read by its last segment, in a build
-/// where any crate enables the resilience capability — Cargo unifies a package's
-/// features across a build — since 7.0.0 placed one of that name, an app's own,
-/// on the field like every other.
+/// is and so stays on it: an attribute read by its last segment, so an app's own
+/// of that name stays there too, failing to compile or applying to the method
+/// alone, and only in a build where any crate enables the resilience capability
+/// — Cargo unifies a package's features across a build — since 7.0.0 placed one
+/// of that name on the field like every other.
 fn kept_on_the_method(attr: &Attribute) -> bool {
     cfg!(feature = "resilience") && is_resilient(attr)
 }

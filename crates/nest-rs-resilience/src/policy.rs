@@ -712,9 +712,8 @@ where
     }
 }
 
-// The run's futures are polled in place, each holding the call once — the
-// closure, then the future it made — where an `async` fn or block awaiting a
-// future it was handed keeps it twice (rust-lang/rust#62958).
+// The run's futures are polled in place, each holding the call once, where an `async` fn
+// or block awaiting a future it was handed keeps it twice (rust-lang/rust#62958).
 pin_project_lite::pin_project! {
     /// An attempt waiting to be let through, in order, by what is left of the
     /// unit's deadline, the breaker and the rate, answered with the bound its
@@ -750,9 +749,8 @@ impl<'p, I: Instance> Future for Admitted<'p, I> {
             if bound.wait.is_zero() {
                 return Poll::Ready(Err(Refusal::TimedOut(bound.wait)));
             }
-            // Another call may have opened the breaker, or taken the probe's
-            // turn, while this one waited for the reset, and a manual switch
-            // meanwhile voids the turn this one held.
+            // While this one waited for the reset, another call may have opened the
+            // breaker or taken the probe's turn, and a manual switch voids a turn held.
             if !this.pass.as_ref().is_some_and(Pass::probes) {
                 match terms
                     .policy
@@ -2358,6 +2356,79 @@ mod tests {
                 if retry_after == Duration::from_secs(10)),
             "the reset at 22 s, past the 21 s its wait allows: {refused:?}"
         );
+    }
+
+    /// An attempt refused again once its wait ends waits again while what is
+    /// left of its wait reaches the next reset: refused at 0 s with 25 s to
+    /// wait, woken at 10 s, and refused by the window another call opened
+    /// then, it waits for the reset at 20 s and is sent there.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_refused_again_after_its_wait_waits_again_for_a_reset_its_wait_reaches() {
+        let policy = policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(25)),
+        ));
+        let calls = AtomicU32::new(0);
+        let sent = || async {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, Refused>(())
+        };
+        assert!(policy.run(|_| sent()).await.is_ok());
+        let started = tokio::time::Instant::now();
+        let mut waiting = Box::pin(policy.run(|_| sent()));
+        park(&mut waiting).await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert!(
+            policy.run(|_| sent()).await.is_ok(),
+            "a call opens the next window at 10 s"
+        );
+        let answered = waiting.await;
+        assert!(matches!(answered, Ok(())), "{answered:?}");
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(20),
+            "sent at the reset after its second wait"
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+    }
+
+    /// An attempt whose clock was read before another call opened the window —
+    /// a call reading the clock later, on another worker, counted first — is
+    /// told the time from its own read to that window's reset, so the wait it
+    /// computes ends at the reset: with no wait it is refused for all of it, and
+    /// with a wait of the window's length, which that reset lies past, it is
+    /// refused at once rather than woken before the reset and refused again.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_read_before_another_opened_the_window_is_told_that_windows_reset() {
+        let window = Duration::from_secs(10);
+        let later = Duration::from_millis(5);
+        for wait in [None, Some(window)] {
+            let policy = policy(rated(1, window, wait));
+            let started = tokio::time::Instant::now();
+            let rate = policy.rate.as_ref().expect("a rate limit");
+            assert_eq!(
+                rate.count(started + later),
+                Ok(()),
+                "the other call opens it"
+            );
+            let Err(refused) = policy.run(|_| answering()).await else {
+                panic!("with {wait:?} to wait, the window is spent");
+            };
+            assert!(
+                matches!(refused, ResilienceError::Limited { retry_after, .. }
+                    if retry_after == window + later),
+                "with {wait:?} to wait, told the reset {later:?} past the window: {refused:?}"
+            );
+            assert_eq!(
+                started.elapsed(),
+                Duration::ZERO,
+                "with {wait:?}, refused at once"
+            );
+            let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
+                .expect("the problem rides the chain");
+            assert_eq!(problem.retry_after(), Some(11), "its reset rounded up");
+        }
     }
 
     #[tokio::test(start_paused = true)]

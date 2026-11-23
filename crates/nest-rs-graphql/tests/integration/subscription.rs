@@ -1383,9 +1383,8 @@ async fn an_operation_past_the_socket_cap_is_answered_an_error_and_the_rest_keep
     app.shutdown().await.expect("the transport stops cleanly");
 }
 
-// A stream may borrow through the lifetime its method's receiver names, which
-// the subscription's wrapper names too. Its item names none: async-graphql's
-// derive reads the item outside the method, where that lifetime is undeclared.
+// A stream may borrow through its receiver's lifetime, which the wrapper names too; its item
+// names none, async-graphql's derive reading the item outside the method.
 
 /// The chimes a stream reads off the resolver holding them.
 struct Chimes(Vec<String>);

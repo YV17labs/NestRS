@@ -247,9 +247,8 @@ async fn an_operation_calls_its_method_and_not_a_trait_method_of_the_same_name()
     );
 }
 
-// An answer may borrow through the lifetime its method's receiver names, which
-// a root field's wrapper names too; a field resolver's resolver is built per
-// call, so it borrows that one inside its body.
+// An answer may borrow through its receiver's lifetime, which a root field's wrapper names
+// too; a field resolver's resolver is built per call, so it borrows that one in its body.
 
 /// The aisle a shelf stands in, which its fields answer borrowed.
 struct Aisle(String);
@@ -393,10 +392,8 @@ async fn a_field_a_macro_fragment_writes_resolves_as_the_one_written_out() {
     assert_eq!(written["data"]["restack"]["number"], 8, "{written}");
 }
 
-// An operation's attributes go on its field, as 7.0 placed them, so an
-// instrument skipping the field's own parameters compiles beside a parameter the
-// field leaves out, and spans the field's guards and pipes; `#[resilient]` alone
-// stays on the developer's method, whose body it runs under its policy.
+// An operation's attributes go on its field, as 7.0 placed them, an instrument spanning its
+// guards and pipes; `#[resilient]` alone stays on the method, whose body it runs.
 
 /// A ledger lookup's audit, built per request: a `Scoped<Audit>` is no argument
 /// of the schema, and no `Debug`, so the field leaves it out.
@@ -520,6 +517,67 @@ async fn an_attribute_on_an_operation_goes_on_its_field_spanning_its_guards_and_
             scope.contains(&"entry"),
             "the {part} ran outside the field's span: {scope:?}"
         );
+    }
+}
+
+/// An attribute an app names `resilient` that compiles on both items, in this
+/// suite's build, which enables the resilience capability.
+mod named_resilient {
+    use std::sync::PoisonError;
+
+    use nest_rs_core::module;
+    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_pipes::Piped;
+    use nest_rs_testing::TestApp;
+    // A 7.0 program's own attribute macro, named as the decorator is.
+    use tracing::instrument as resilient;
+
+    use super::{BankDown, NotingGuard, NotingTrim, RAN_IN, note};
+
+    #[resolver]
+    struct LookupResolver;
+
+    #[operations]
+    impl LookupResolver {
+        #[query]
+        #[public]
+        #[use_guards(NotingGuard)]
+        #[resilient(skip_all)]
+        async fn lookup(&self, id: i32, label: Piped<NotingTrim>) -> Result<String, BankDown> {
+            note("method");
+            Ok(format!("{id} {}", label.into_inner()))
+        }
+    }
+
+    #[module(imports = [GraphqlModule], providers = [LookupResolver, NotingGuard])]
+    struct LookupModule;
+
+    /// The attribute stays on the developer's method, as the decorator does,
+    /// and spans that method alone: the field's guard and pipe run outside it.
+    #[tokio::test]
+    async fn an_attribute_an_app_names_resilient_spans_the_developers_method_alone() {
+        let _logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<LookupModule>()
+            .await
+            .expect("the schema boots");
+
+        let body = crate::graphql_answer(&app, r#"{ lookup(id: 7, label: "  receipts  ") }"#).await;
+        assert_eq!(body["data"]["lookup"], "7 receipts", "{body}");
+        let ran_in = RAN_IN
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for (part, spanned) in [("guard", false), ("pipe", false), ("method", true)] {
+            let (_, scope) = ran_in
+                .iter()
+                .find(|(noted, _)| *noted == part)
+                .unwrap_or_else(|| panic!("the {part} ran: {ran_in:?}"));
+            assert_eq!(
+                scope.contains(&"lookup"),
+                spanned,
+                "the {part} ran in {scope:?}"
+            );
+        }
     }
 }
 

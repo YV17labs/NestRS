@@ -219,8 +219,9 @@ reqwest = [
 # `#[operations]` reads an attribute named `resilient`, by any path, as this
 # capability's decorator and keeps it on the developer's method, in every crate
 # of a build where any crate enables this feature, Cargo unifying a package's
-# features across the build; a build without it places an attribute of that
-# name on the field `#[operations]` generates, as 7.0.0 did.
+# features across the build: an app's own of that name lands there too, failing
+# to compile or applying to the method alone. A build without it places one of
+# that name on the field `#[operations]` generates, as 7.0.0 did.
 resilience = ["dep:nest-rs-resilience", "nest-rs-graphql?/resilience"]
 openapi = ["dep:nest-rs-openapi", "http"]
 # A resource the framework opens ships its indicator in its own crate, behind

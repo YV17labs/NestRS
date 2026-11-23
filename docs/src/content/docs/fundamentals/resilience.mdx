@@ -97,13 +97,10 @@ or again alike. Each answer is coerced as that method would coerce it — a
 It goes on a provider, a struct you build, a trait impl, a route, a socket
 message, a queue job, a scheduled tick, a listener, a health indicator, a
 lifecycle hook, an MCP tool, prompt, resource or listing, and a GraphQL query,
-mutation, field resolver or entity. `#[operations]` puts an operation's other
-attributes on the field it generates; in a build where any crate enables
-`resilience` — Cargo unifies a package's features across a build — it reads one
-named `resilient`, by any path, as this decorator, kept on your method, so an
-attribute of yours by that name is imported under another. On an `#[sse]` route
-or a `#[subscription]`, it runs the call opening the stream, never the items it
-yields: a stream calling the dependency per item calls a decorated method each.
+mutation, field resolver or entity, where `#[operations]` keeps it on your method
+and puts the method's other attributes on the field it generates. On an `#[sse]`
+route or a `#[subscription]`, it runs the call opening the stream, never the items
+it yields: a stream calling the dependency per item calls a decorated method each.
 
 A method pins its own `timeout`, and an idempotent one its own `retries`, in
 place of the policy's: `#[resilient(upstream, idempotent, timeout = "2s",
@@ -287,9 +284,12 @@ off is `None`.
   reads it**, and is refused: write the trait's method as a native `async fn`.
 - **A WebSocket connection hook answers `()`**, so it carries no `#[resilient]`: it
   calls a decorated method — the gateway's own, or a service's — and handles its error.
-- **A GraphQL field writes its `Result` out.** `#[operations]` reads a field's
-  `Result` by its spelling, so a decorated field answering one through an alias
-  is refused, saying to write it out.
+- **`#[operations]` reads `#[resilient]` by its name**, by any path, in a build
+  where any crate enables `resilience` (Cargo unifies features across a build):
+  one of yours by that name lands on your method instead of the field, failing
+  to compile or covering the method alone, so import it under another name. It
+  reads a decorated field's `Result` by its spelling, refusing one written
+  through an alias.
 
 ## Going further
 

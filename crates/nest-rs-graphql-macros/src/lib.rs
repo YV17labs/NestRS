@@ -118,9 +118,11 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// package's features across the build), a `#[resilient]`, read by its last
 /// segment however its path is written, which runs the inherent method's body
 /// under its policy; such an operation spells its `Result<…>` out, any other
-/// answer refused at its return type. An app's own attribute of that name is
-/// imported under another, which goes on the delegating method; a build without
-/// the feature hands one of that name there too, as 7.0.0 did.
+/// answer refused at its return type. An app's own attribute of that name stays
+/// on the inherent method too, where it fails to compile or applies to that
+/// method alone, so it is imported under another name, which goes on the
+/// delegating method; a build without the feature hands one of that name there
+/// too, as 7.0.0 did.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {

@@ -716,10 +716,8 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     } = op;
     let name = op.name();
 
-    // Each pipe carrier is replaced by the value it wraps, so rmcp derives the
-    // tool's JSON Schema from `T`; a `Scoped<T>` or an `Ambient<T>` is the tail's,
-    // never rmcp's. The receiver stays the method's, its lifetime included, its
-    // `self` resolved where the body reads it, which `tt` fragments move.
+    // Each pipe carrier becomes the value it wraps, so rmcp derives the tool's JSON Schema
+    // from `T`; a `Scoped<T>` or an `Ambient<T>` is the tail's, never rmcp's.
     let mut wire_sig = sig.clone();
     wire_sig.ident = wrapper.clone();
     wire_sig.asyncness = Some(syn::token::Async(name.span()));
@@ -728,6 +726,8 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         .iter()
         .filter_map(|input| {
             if let FnArg::Receiver(receiver) = input {
+                // The receiver stays the method's, lifetime included, its `self` resolved
+                // where the body reads it, which `tt` fragments move.
                 let mut receiver = receiver.clone();
                 receiver.self_token.span =
                     proc_macro2::Span::call_site().located_at(receiver.self_token.span);

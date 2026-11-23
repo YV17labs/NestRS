@@ -448,9 +448,8 @@ fn a_capability_whose_every_method_is_compiled_out_is_not_advertised() {
     );
 }
 
-// An operation may borrow its host through the lifetime its receiver names. A
-// prompt's answer may not, held `'static` by rmcp, nor a resource's, read outside
-// the method for its template.
+// An operation may borrow its host through its receiver's lifetime; a prompt's answer may
+// not, rmcp holding it `'static`, nor a resource's, read outside the method for its template.
 
 const BORROWING: &str = "/mcp/impl-witness/borrowing";
 

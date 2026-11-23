@@ -117,7 +117,9 @@ owning crate's suite is undocumented.
   (mold) is inherited by `demo/`, never duplicated.
 - `rust-toolchain.toml` pins the channel as `major.minor`; each workspace's
   `rust-version`, the images, `nestrs doctor`, the docs and every scaffold move
-  with it in one change. The pin also keeps the trybuild snapshots still.
+  with it in one change, and each entry of `.claude/upstream/rustc.md` is
+  checked again as its *Canary* says. The pin also keeps the trybuild snapshots
+  still.
 - `--workspace` builds one feature union, so a crate that compiles only
   because a sibling enabled a feature passes it. `just lint` builds the umbrella
   and `nest-rs-macro-hygiene` under each feature alone (`cargo hack`): the

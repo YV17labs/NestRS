@@ -23,8 +23,9 @@ proc-macro = true
 # `#[operations]` reads an attribute named `resilient`, by any path, as the
 # resilience capability's decorator, kept on the developer's method, in a build
 # where any crate enables this feature, Cargo unifying a package's features
-# across the build: without it, an attribute of that name goes on the field as
-# 7.0.0 placed it. `nest-rs-graphql`'s `resilience` feature enables it.
+# across the build — an app's own of that name too, failing to compile there or
+# applying to the method alone: without it, one of that name goes on the field
+# as 7.0.0 placed it. `nest-rs-graphql`'s `resilience` feature enables it.
 resilience = []
 
 [dependencies]

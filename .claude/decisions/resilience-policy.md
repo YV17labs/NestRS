@@ -442,15 +442,17 @@ How each holds:
   where its twin does. Closing it is a run holding the closure outside its
   stages, handed to the attempt that makes the call.
 - **An app's own attribute named `resilient` on an operation** is read as the
-  framework's and kept on the developer's method in a build where any crate
-  enables the resilience capability: Cargo unifies a package's features across a
-  build, so a dependency, or a workspace member built beside the crate, turns it
-  on for a crate that never asked, whose operation then fails to compile naming
-  the attribute — never a wrong behaviour at run time. The reading is by the
-  path's last segment, so a full path ending in `resilient` is read too; the
-  crate imports its attribute under another name, which goes on the field as
-  7.0.0 placed it. Closing it is reading the decorator by its path, which its
-  short-name import defeats.
+  framework's in a build where any crate enables the resilience capability:
+  Cargo unifies a package's features across a build, so a dependency, or a
+  workspace member built beside the crate, turns it on for a crate that never
+  asked. The attribute then goes on the developer's method instead of the field,
+  the operation refused unless it spells its `Result<…>` out: there it fails to
+  compile, or compiles and applies to the method alone with no error or warning,
+  an instrument then spanning the method's body and not the field's guards and
+  pipes. The reading is by the path's last segment, so a full path ending in
+  `resilient` is read too; the crate imports its attribute under another name,
+  which goes on the field as 7.0.0 placed it. Closing it is reading the
+  decorator by its path, which its short-name import defeats.
 - **An attribute of an operation reading the method's own `self`** —
   `#[tracing::instrument(fields(depot = self.depot.0))]` — does not compile, as
   in 7.0: it goes on the field `#[operations]` generates, whose `self` is

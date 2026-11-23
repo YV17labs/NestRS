@@ -68,10 +68,11 @@ impl Rate {
         (window.counted >= self.limit).then_some(left)
     }
 
-    /// What is left of `window` at `now`, `None` once it has passed.
+    /// The time from `now` to `window`'s reset, `None` once it has passed: more
+    /// than the window for a `now` read before the window opened.
     fn left(&self, window: &Window, now: Instant) -> Option<Duration> {
-        self.window
-            .checked_sub(now.saturating_duration_since(window.opened))
+        (window.opened + self.window)
+            .checked_duration_since(now)
             .filter(|left| !left.is_zero())
     }
 
@@ -254,13 +255,16 @@ mod tests {
     }
 
     /// An attempt read before another opened the window counts in that one,
-    /// its earlier clock read as no time elapsed.
+    /// told — counted or read — the time from its own read to that window's
+    /// reset, which a wait it computes from that read ends at.
     #[tokio::test(start_paused = true)]
     async fn an_attempt_read_before_the_window_opened_counts_in_it() {
         let rate = Rate::new(1, WINDOW, None);
         let earlier = Instant::now();
         tokio::time::advance(Duration::from_secs(1)).await;
         assert_eq!(counted(&rate), Ok(()));
-        assert_eq!(rate.count(earlier), Err(WINDOW));
+        let to_the_reset = WINDOW + Duration::from_secs(1);
+        assert_eq!(rate.count(earlier), Err(to_the_reset));
+        assert_eq!(rate.refusing(earlier), Some(to_the_reset));
     }
 }

@@ -497,9 +497,8 @@ async fn a_compiled_out_listener_is_skipped_and_the_spelled_out_shapes_are_serve
     );
 }
 
-// A listener may borrow its host through the lifetime its receiver names,
-// written out and through `tt` fragments, which keep the caller's spans while
-// `#[listeners]` takes the macro's.
+// A listener may borrow its host through its receiver's lifetime, written out or through
+// `tt` fragments, which keep the caller's spans while `#[listeners]` takes the macro's.
 
 #[derive(Clone)]
 struct Restocked;

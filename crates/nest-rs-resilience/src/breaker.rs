@@ -1072,6 +1072,60 @@ mod tests {
         assert_eq!(breaker.state(), "open");
     }
 
+    /// A window holds its latest attempts and no more, with an age or without:
+    /// of a failure, a success and a failure, a window of two holds the last
+    /// two, one failure short of opening, where a window of three would open.
+    #[tokio::test(start_paused = true)]
+    async fn a_window_holds_its_latest_attempts_and_no_more_with_an_age_or_without() {
+        for (breaker, kind) in [(breaker(2, 2), "no age"), (aged(2, 2, AGE), "an age")] {
+            attempt(&breaker, true);
+            attempt(&breaker, false);
+            attempt(&breaker, true);
+            assert_eq!(
+                breaker.state(),
+                "closed",
+                "with {kind}: the first failure left"
+            );
+            attempt(&breaker, true);
+            assert_eq!(breaker.state(), "open", "with {kind}");
+        }
+    }
+
+    /// What a breaker counts once it forgot its window: one failure leaves it
+    /// closed and a second opens it, no failure before counting.
+    fn counts_afresh(breaker: &Breaker, forgot: &str) {
+        assert_eq!(breaker.read(), BreakerState::Closed, "{forgot}");
+        attempt(breaker, true);
+        assert_eq!(breaker.state(), "closed", "{forgot}: one failure since");
+        attempt(breaker, true);
+        assert_eq!(breaker.state(), "open", "{forgot}: two failures since");
+    }
+
+    /// A breaker with an age forgets its window as one without does, whatever
+    /// closes it: a manual closing, or the probe after a manual opening or
+    /// after the failures that opened it.
+    #[tokio::test(start_paused = true)]
+    async fn a_breaker_with_an_age_forgets_its_window_whatever_closes_it() {
+        let breaker = aged(2, 2, AGE);
+        attempt(&breaker, true);
+        breaker.close_manually();
+        counts_afresh(&breaker, "closed by hand");
+
+        let breaker = aged(2, 2, AGE);
+        attempt(&breaker, true);
+        breaker.open_manually(OPEN_FOR);
+        tokio::time::advance(OPEN_FOR).await;
+        probe(&breaker).send(BOUND, None).settle(false);
+        counts_afresh(&breaker, "opened by hand, closed by its probe");
+
+        let breaker = aged(2, 2, AGE);
+        attempt(&breaker, true);
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+        probe(&breaker).send(BOUND, None).settle(false);
+        counts_afresh(&breaker, "opened by failures, closed by its probe");
+    }
+
     /// With no age, the window holds a byte per outcome and no instant, and an
     /// outcome counts however old it is.
     #[tokio::test(start_paused = true)]

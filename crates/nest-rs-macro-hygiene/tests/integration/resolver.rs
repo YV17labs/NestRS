@@ -4,7 +4,9 @@
 //! the name `resilient` goes there in a build without the resilience capability,
 //! which `just test` runs as `--no-default-features --features graphql`; in a
 //! build where any crate enables that capability, `#[operations]` reads it as
-//! the framework's decorator, and the other name is the remedy.
+//! the framework's decorator and keeps it on the developer's method, where it
+//! fails to compile or applies to that method alone, and the other name is the
+//! remedy.
 
 use nest_rs::core::{Scoped, injectable};
 use nest_rs::graphql::async_graphql::Context;
@@ -76,5 +78,80 @@ mod named_resilient {
     #[test]
     fn an_attribute_an_app_names_resilient_goes_on_the_field_without_the_capability() {
         assert!(std::any::type_name::<NamedEntryResolver>().ends_with("NamedEntryResolver"));
+    }
+}
+
+/// An attribute an app names `resilient` that compiles on both items, its place
+/// read off a call of the developer's method alone, which it spans only there.
+mod placed {
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use futures_util::FutureExt as _;
+    use nest_rs::graphql::{operations, resolver};
+    // A 7.0 program's own attribute macro, named as the resilience capability's
+    // decorator is, which compiles on the developer's method and on the field.
+    use tracing::instrument as resilient;
+
+    #[resolver]
+    struct PlacedResolver;
+
+    #[operations]
+    impl PlacedResolver {
+        /// Spanned under the decorator's name, its `Result` spelled out, as the
+        /// capability asks of an operation it reads as decorated.
+        #[query]
+        #[public]
+        #[resilient(name = "placed", skip_all)]
+        async fn placed(&self, id: i32) -> Result<String, std::fmt::Error> {
+            Ok(format!("entry {id}"))
+        }
+    }
+
+    /// Notes the name of each span opened while it is the default subscriber.
+    struct Opened(Arc<Mutex<Vec<&'static str>>>);
+
+    impl tracing::Subscriber for Opened {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(span.metadata().name());
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+        fn event(&self, _: &tracing::Event<'_>) {}
+
+        fn enter(&self, _: &tracing::span::Id) {}
+
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// With the resilience capability the attribute stays on the developer's
+    /// method, whose own call opens its span; without it, it goes on the field,
+    /// as 7.0.0 placed it, and that call opens none.
+    #[test]
+    fn an_attribute_an_app_names_resilient_goes_on_the_method_with_the_capability_alone() {
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let answered = tracing::subscriber::with_default(Opened(Arc::clone(&opened)), || {
+            PlacedResolver.placed(7).now_or_never()
+        });
+        assert_eq!(answered, Some(Ok("entry 7".to_owned())));
+        let opened = opened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if cfg!(feature = "resilience") {
+            assert_eq!(opened, ["placed"], "on the developer's method");
+        } else {
+            assert_eq!(opened, Vec::<&str>::new(), "on the field");
+        }
     }
 }

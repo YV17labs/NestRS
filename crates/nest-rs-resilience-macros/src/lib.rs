@@ -55,11 +55,12 @@ mod resilient;
 /// keeps this attribute, read by its last segment, on the method, and hands the
 /// method's other attributes to the field it generates — in a build with
 /// `graphql` and `resilience` both, whichever crate of it enables them, the
-/// umbrella's `resilience` enabling `nest-rs-graphql`'s; an app's own attribute
-/// of this name is imported under another, and without `resilience` one of this
-/// name goes on the field too, as 7.0.0 placed it. A method under
-/// `#[async_trait]` is a `fn` by the time this attribute reads it, and is
-/// refused saying so.
+/// umbrella's `resilience` enabling `nest-rs-graphql`'s. An app's own attribute
+/// of this name stays on the method too, where it fails to compile or applies
+/// to the method alone, so it is imported under another name; without
+/// `resilience` one of this name goes on the field, as 7.0.0 placed it. A
+/// method under `#[async_trait]` is a `fn` by the time this attribute reads it,
+/// and is refused saying so.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry, a full
 /// bulkhead or a reached rate limit files carry its `host` and `method`.

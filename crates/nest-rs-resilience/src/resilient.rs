@@ -174,9 +174,8 @@ where
 
 /// `call` run under `policy` as `method`'s idempotent body, attempted again
 /// after a failure or a timeout.
-// An `async fn`, which keeps `call` twice (rust-lang/rust#62958) — a closure of
-// borrows here — so rustc's error for a future that is not `Send` follows it to
-// the `idempotent` the closure is spanned at.
+// An `async fn`, holding its closure of borrows twice (rust-lang/rust#62958), so that
+// rustc's error for a future not `Send` points at the `idempotent` it is spanned at.
 pub async fn run_idempotent<R, I, C, F>(
     policy: &ResiliencePolicy<I>,
     method: ResilientMethod,

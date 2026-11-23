@@ -263,8 +263,10 @@ How each holds:
   each time the window counts one; unset, it stores no instant and reads no
   clock to count. **Its probes are
   a series**, one at a time: a failed probe opens it again for its whole open
-  time and the series starts over, a probe cut at its timeout has failed, and
-  one never sent, or dropped by its caller, counts as neither. A
+  time and the series starts over, a probe cut at its timeout or its unit's
+  deadline has failed, whichever of the policy's timer and the edge's cut is
+  polled first, and one never sent, or dropped by its caller before then,
+  counts as neither. A
   `BREAKER_FAILURES` above what a rate lets answer within the age of one
   another, each attempt counted at the timeout's ceiling
   (`Rate::most_sent_within`), is refused at boot.

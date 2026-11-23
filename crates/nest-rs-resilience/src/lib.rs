@@ -73,8 +73,14 @@ pub use policy::ResiliencePolicy;
 /// pub struct Courier;
 ///
 /// #[derive(Debug, thiserror::Error)]
-/// #[error("the courier refused the parcel")]
-/// pub struct CourierError;
+/// #[error("the courier did not answer")]
+/// pub struct CourierDown;
+///
+/// /// The courier's own API, down here: its failure, never the caller's input,
+/// /// is the `Err` the breaker counts.
+/// async fn courier_api(_parcel: &str) -> Result<(), CourierDown> {
+///     Err(CourierDown)
+/// }
 ///
 /// #[injectable]
 /// pub struct ShipmentsService {
@@ -84,16 +90,13 @@ pub use policy::ResiliencePolicy;
 ///
 /// impl ShipmentsService {
 ///     #[resilient(courier, idempotent, timeout = "2s")]
-///     pub async fn track(&self, parcel: &str) -> Result<String, ResilienceError<CourierError>> {
+///     pub async fn track(&self, parcel: &str) -> Result<String, ResilienceError<CourierDown>> {
 ///         Ok(format!("{parcel} is on its way"))
 ///     }
 ///
 ///     #[resilient(courier)]
-///     pub async fn ship(&self, parcel: String) -> Result<(), ResilienceError<CourierError>> {
-///         if parcel.is_empty() {
-///             return Err(CourierError);
-///         }
-///         Ok(())
+///     pub async fn ship(&self, parcel: String) -> Result<(), ResilienceError<CourierDown>> {
+///         courier_api(&parcel).await
 ///     }
 /// }
 ///
@@ -106,8 +109,8 @@ pub use policy::ResiliencePolicy;
 /// let shipments = app.container().get::<ShipmentsService>().expect("provided");
 /// assert_eq!(shipments.track("PARCEL-1").await?, "PARCEL-1 is on its way");
 /// assert!(matches!(
-///     shipments.ship(String::new()).await,
-///     Err(ResilienceError::Failed(CourierError))
+///     shipments.ship("PARCEL-2".to_owned()).await,
+///     Err(ResilienceError::Failed(CourierDown))
 /// ));
 /// # Ok(())
 /// # }

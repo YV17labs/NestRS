@@ -3,7 +3,9 @@
 //! its answer borrowed through the lifetime its receiver names, its arguments
 //! read again at each attempt, `?` and `return` answering one attempt, each
 //! answer coerced as the undecorated method's is, the `timeout` and `retries`
-//! a method pins, the lines naming it, the docs' recipes as they run (an answer
+//! a method pins, an attempt given up at its unit's deadline, a probe dropped
+//! mid-call handing its turn on before its slot of the bulkhead, the lines
+//! naming it, the docs' recipes as they run (an answer
 //! that is no failure, a fallback, a breaker opened by hand), each receiver and
 //! host it takes, a refusal answered `503` by every edge serving a decorated
 //! handler, a method of every impl half that takes one, called through the
@@ -162,6 +164,23 @@ impl ParcelsService {
     async fn hurried(&self) -> Answer<&'static str> {
         tokio::time::sleep(Duration::from_secs(1)).await;
         Ok("answered")
+    }
+
+    /// Slow to first wait — a request built, a handshake begun — then never
+    /// answering, sent again once after a failure.
+    #[resilient(courier, idempotent, retries = 1)]
+    async fn stalled(&self) -> Answer<()> {
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        tokio::time::advance(Duration::from_millis(3)).await;
+        std::future::pending().await
+    }
+
+    /// Never answering, `torn_down` run once its attempt is dropped, beside the
+    /// call holding it.
+    #[resilient(courier)]
+    async fn held_out(&self, torn_down: &dyn Fn()) -> Answer<()> {
+        let _torn_down = OnDrop(torn_down);
+        std::future::pending().await
     }
 
     #[resilient(courier, idempotent)]
@@ -732,6 +751,122 @@ async fn every_method_on_one_field_counts_in_one_breaker() {
         parcels.attempted(),
         0,
         "a call refused by an open breaker is never sent"
+    );
+}
+
+/// A decorated idempotent method's attempt ends at its unit's deadline however
+/// long its call takes to first wait: the policy gives it up there, before the
+/// edge cutting the unit at that deadline, its breaker counts it, and it is not
+/// sent again with no time left.
+#[tokio::test(start_paused = true)]
+async fn an_idempotent_methods_attempt_slow_to_first_wait_ends_at_its_units_deadline() {
+    let app = boot::<OpeningModule>().await;
+    let parcels = parcels(&app);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+    let cut = tokio::time::timeout_at(
+        deadline,
+        nest_rs_core::__private::with_deadline(Some(deadline), parcels.stalled()),
+    )
+    .await;
+    assert!(
+        matches!(cut, Ok(Err(ResilienceError::TimedOut { timeout, .. }))
+            if timeout == Duration::from_millis(300)),
+        "the policy gave the attempt up at the deadline, before the edge cut it: {cut:?}"
+    );
+    assert_eq!(parcels.attempted(), 1, "not sent again, with no time left");
+    assert!(
+        matches!(
+            held::<Courier>(&app).breaker_state(),
+            Some(BreakerState::Open { .. })
+        ),
+        "the attempt counted in the breaker"
+    );
+}
+
+/// Runs its closure when it is dropped, beside the call holding it.
+struct OnDrop<'a>(&'a dyn Fn());
+
+impl Drop for OnDrop<'_> {
+    fn drop(&mut self) {
+        (self.0)();
+    }
+}
+
+/// `future` polled once, with no task to wake: what it waits on from then, a
+/// test polls it again for.
+fn polled_once<F: Future + ?Sized>(future: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
+    future.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+}
+
+#[module(
+    imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+        concurrency: Some(1),
+        concurrency_wait: Some(Duration::from_secs(10)),
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        breaker_open: Duration::from_secs(1),
+        ..quiet()
+    }))],
+    providers = [ParcelsService],
+)]
+struct ProbingModule;
+
+/// A decorated method run once, dropped while its probe's call is out, hands
+/// the probe's turn on before its slot of the bulkhead: the call that slot lets
+/// in, polled while the method's attempt is torn down — on another worker, or
+/// here from its call's own teardown — never meets a turn the dropped probe
+/// still holds.
+#[tokio::test(start_paused = true)]
+async fn a_method_run_once_dropped_while_its_probe_is_out_hands_the_turn_on_before_its_slot() {
+    let app = boot::<ProbingModule>().await;
+    let parcels = parcels(&app);
+    let courier = held::<Courier>(&app);
+    let waiting = std::cell::RefCell::new(Box::pin(parcels.quote()));
+    let answered = std::cell::RefCell::new(None);
+    let poll_waiting = || {
+        if let std::task::Poll::Ready(answer) = polled_once(waiting.borrow_mut().as_mut()) {
+            *answered.borrow_mut() = Some(answer);
+        }
+    };
+    let mut holding = Box::pin(parcels.slow());
+    assert!(
+        polled_once(holding.as_mut()).is_pending(),
+        "it takes the slot"
+    );
+    let mut probing = Box::pin(parcels.held_out(&poll_waiting));
+    assert!(
+        polled_once(probing.as_mut()).is_pending(),
+        "it waits for the slot"
+    );
+    poll_waiting();
+    assert!(
+        answered.borrow().is_none(),
+        "it waits for the slot, behind the method that probes once it has it"
+    );
+    courier
+        .open_breaker(Duration::from_secs(1))
+        .expect("an open time the breaker takes");
+    assert!(matches!(holding.await, Ok("answered")));
+    assert!(polled_once(probing.as_mut()).is_pending());
+    assert_eq!(
+        courier.breaker_state(),
+        Some(BreakerState::HalfOpen),
+        "handed the slot, it probes, and its call never answers"
+    );
+
+    drop(probing);
+    let answer = match answered.take() {
+        Some(answer) => answer,
+        None => waiting.into_inner().await,
+    };
+    assert!(
+        matches!(answer, Ok(42)),
+        "the call let in took the turn the dropped probe handed on: {answer:?}"
+    );
+    assert_eq!(
+        courier.breaker_state(),
+        Some(BreakerState::Closed),
+        "and closed the breaker as the next probe"
     );
 }
 
@@ -1447,7 +1582,7 @@ mod routes {
     )]
     struct DecoratedHttpModule;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_route_answers_its_refusal_503_with_the_breakers_wait() {
         let app = TestApp::for_module::<DecoratedHttpModule>()
             .await
@@ -1468,7 +1603,7 @@ mod routes {
             .assert_string(code::UNAVAILABLE.as_str());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_sse_route_answers_its_refusal_503_with_the_breakers_wait() {
         let app = TestApp::for_module::<DecoratedHttpModule>()
             .await
@@ -1594,7 +1729,7 @@ mod operations {
     )]
     struct DecoratedGraphqlModule;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_field_answers_its_refusal_unavailable_with_the_breakers_wait() {
         let app = TestApp::for_module::<DecoratedGraphqlModule>()
             .await
@@ -1622,7 +1757,7 @@ mod operations {
         assert_eq!(extensions["retryAfterSeconds"], 30, "{refused}");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_subscription_answers_its_refusal_unavailable_with_the_breakers_wait() {
         let app = TestApp::for_module::<DecoratedGraphqlModule>()
             .await
@@ -1851,16 +1986,26 @@ mod messages {
             .build_ws()
             .await
             .expect("a decorated gateway boots on a real port");
+        let upstream = app
+            .container()
+            .get::<ResiliencePolicy>()
+            .expect("the module built the policy");
         let mut socket = app.socket("/ws/decorated").connect().await;
 
         socket.send("decorated", serde_json::Value::Null).await;
         let failed = socket.next_envelope().await;
         assert_eq!(failed["data"]["code"], "INTERNAL", "{failed}");
 
+        let most = crate::breaker_wait(&upstream);
         socket.send("decorated", serde_json::Value::Null).await;
         let refused = socket.next_envelope().await;
+        let least = crate::breaker_wait(&upstream);
         assert_eq!(refused["data"]["code"], "UNAVAILABLE", "{refused}");
-        assert_eq!(refused["data"]["retryAfterSeconds"], 30, "{refused}");
+        let told = refused["data"]["retryAfterSeconds"].as_u64();
+        assert!(
+            told.is_some_and(|told| (least..=most).contains(&told)),
+            "the breaker's wait as it refused, {least} to {most} s: {refused}"
+        );
 
         app.shutdown().await.expect("the transport stops cleanly");
     }
@@ -1929,7 +2074,7 @@ mod tools {
     )]
     struct DecoratedMcpModule;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_tool_answers_its_refusal_unavailable_with_the_breakers_wait() {
         let app = TestApp::for_module::<DecoratedMcpModule>()
             .await
@@ -1943,7 +2088,7 @@ mod tools {
         assert!(refused.contains("\"retryAfterSeconds\":30"), "{refused}");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_resource_listing_answers_its_refusal_unavailable_with_the_breakers_wait() {
         let app = TestApp::for_module::<DecoratedMcpModule>()
             .await
@@ -2139,7 +2284,7 @@ mod processor {
         consume::attempt(method, &mut delivery, container.clone(), None).await
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_job_refused_by_an_open_breaker_waits_at_least_its_retry_after() {
         let (_app, upstream) = crate::policy(opening_on_the_first_failure()).await;
         let container = Container::builder()

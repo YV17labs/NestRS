@@ -570,7 +570,7 @@ impl ReconciledResolver {
 )]
 struct ReconciledModule;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_resilient_operation_runs_its_developers_body_under_the_policy() {
     let app = TestApp::for_module::<ReconciledModule>()
         .await

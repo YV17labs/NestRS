@@ -3,7 +3,8 @@
 //! attempt a client operation numbered by its resend count, never sends again
 //! what it does not, and is refused at once — never sent — while the breaker
 //! is open or once its requests reach the rate limit, which counts a redirect
-//! the client follows inside the attempt that met it.
+//! the client follows inside the attempt that met it, and gives each attempt
+//! up at its unit's deadline.
 
 use std::convert::Infallible;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -13,7 +14,7 @@ use nest_rs_core::client_operation::{ClientOperation, HTTP_REQUEST_RESEND_COUNT,
 use nest_rs_core::{Correlation, Problem, code};
 use nest_rs_reqwest::ReqwestMiddleware;
 use nest_rs_resilience::{
-    ResilienceConfig, ResilienceError, ResilienceMiddleware, ResiliencePolicy,
+    BreakerState, ResilienceConfig, ResilienceError, ResilienceMiddleware, ResiliencePolicy,
 };
 use nest_rs_testing::{HttpsPeer, PeerAnswer, TestAuthority, TestCertificate};
 use reqwest::StatusCode;
@@ -251,25 +252,30 @@ async fn an_open_breaker_refuses_the_request_unsent_with_the_503_every_edge_answ
         ..quiet()
     })
     .await;
-    let client = client(policy);
+    let client = client(Arc::clone(&policy));
 
     let failed = client.get(peer.url(PARCEL)).send().await.expect("answered");
     assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
+    let most = crate::breaker_wait(&policy);
     let refused = client
         .get(peer.url(PARCEL))
         .send()
         .await
         .expect_err("the breaker opened on the 500");
+    let least = crate::breaker_wait(&policy);
     assert!(
         matches!(refusal(&refused), ResilienceError::Open { .. }),
         "{refused:?}"
     );
     let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
         .expect("the problem rides the chain");
-    assert_eq!(
-        (problem.status(), problem.code(), problem.retry_after()),
-        (503, code::UNAVAILABLE, Some(30))
+    assert_eq!((problem.status(), problem.code()), (503, code::UNAVAILABLE));
+    assert!(
+        problem
+            .retry_after()
+            .is_some_and(|told| (least..=most).contains(&u64::from(told))),
+        "the breaker's wait as it refused, {least} to {most} s: {problem:?}"
     );
     assert_eq!(peer.requests().len(), 1, "a refused request is never sent");
 }
@@ -406,6 +412,69 @@ async fn a_peer_that_never_answers_is_given_up_at_the_policys_timeout() {
         ),
         "{given_up:?}"
     );
+}
+
+/// What a client does before its first wait — a request built, a handshake
+/// begun — as a middleware after the policy's, which then never answers.
+struct Stalling;
+
+#[async_trait::async_trait]
+impl reqwest_middleware::Middleware for Stalling {
+    async fn handle(
+        &self,
+        _req: reqwest::Request,
+        _extensions: &mut http::Extensions,
+        _next: reqwest_middleware::Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        tokio::time::advance(Duration::from_millis(3)).await;
+        std::future::pending().await
+    }
+}
+
+/// Each attempt of the middleware ends at its unit's deadline however long its
+/// request takes to first wait, whether the request may be sent again or not:
+/// the policy gives it up there, before the edge cutting the unit at that
+/// deadline, and its breaker counts it.
+#[tokio::test(start_paused = true)]
+async fn an_attempt_slow_to_first_wait_ends_at_the_deadline_its_edge_cuts_the_unit_at() {
+    for (method, sent) in [
+        (reqwest::Method::GET, "a request it may send again"),
+        (reqwest::Method::POST, "a request it sends once"),
+    ] {
+        let (_app, policy) = policy(ResilienceConfig {
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..retrying()
+        })
+        .await;
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(ResilienceMiddleware::new(Arc::clone(&policy)))
+            .with(Stalling)
+            .build();
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let cut = tokio::time::timeout_at(
+            deadline,
+            nest_rs_core::__private::with_deadline(
+                Some(deadline),
+                client
+                    .request(method, format!("https://127.0.0.1:1{PARCEL}"))
+                    .send(),
+            ),
+        )
+        .await;
+        let Ok(Err(refused)) = cut else {
+            panic!("the policy gave {sent} up at the deadline, before the edge cut it: {cut:?}");
+        };
+        assert!(
+            matches!(refusal(&refused), ResilienceError::TimedOut { timeout, .. }
+                if *timeout == Duration::from_millis(300)),
+            "{sent}: {refused:?}"
+        );
+        assert!(
+            matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+            "{sent}: the attempt counted in the breaker"
+        );
+    }
 }
 
 #[tokio::test]

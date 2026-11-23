@@ -139,9 +139,10 @@ one:
 
 A transition to `open` marked `nestrs.resilience.breaker.manual` is an
 operator's switch. Unmarked, it is failures opening the breaker, a probe failing,
-or a series' first probe its caller dropped once sent, before it answered, the
-next call then probing. A climbing `refusals` is its clients being answered
-`503`, and its `limited` the rate a dependency allows reached. No convention
+or a series' first probe its caller dropped once sent, unanswered before its
+timeout or its unit's deadline, the next call then probing. A climbing
+`refusals` is its clients being answered `503`, and its `limited` the rate a
+dependency allows reached. No convention
 names a circuit breaker or a retry policy, so the names and their attributes are
 NestRS's own, and API: they change only in a major.
 

@@ -607,9 +607,10 @@ impl<'p, I: Instance> Run<'p, I> {
 }
 
 /// How long an attempt sent now may run, and, under a unit's deadline, the
-/// instant that ends at: its timer is armed at that instant, so it fires with
-/// the edge's cut at the deadline, never after it, however long the call takes
-/// to first wait.
+/// instant that ends at: its timer is armed at that instant, so it is due with
+/// the edge's cut at the deadline however long the call takes to first wait,
+/// and an attempt the edge cuts there first has timed out all the same
+/// ([`Sent`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Bound {
     wait: Duration,
@@ -888,7 +889,7 @@ where
         if *this.retry {
             this.terms.policy.counters.retry();
         }
-        let sent = pass.map(|pass| pass.send(bound.wait));
+        let sent = pass.map(|pass| pass.send(bound.wait, bound.until));
         let cancel = CancellationToken::new();
         let given_up = cancel.clone().drop_guard();
         // The call is made inside the attempt, so one panicking before it hands
@@ -1684,7 +1685,7 @@ mod tests {
             .expect("a breaker")
             .admit(policy.timeout)
             .expect("closed")
-            .send(policy.timeout)
+            .send(policy.timeout, None)
             .settle(true);
 
         let started = tokio::time::Instant::now();
@@ -2520,6 +2521,50 @@ mod tests {
         drop(held);
     }
 
+    /// A call finding no free slot while another holds the probe's turn — the
+    /// probe's call out, or waiting for the rate's reset with its slot held —
+    /// is refused at once, told what is left of that probe's bound, rather than
+    /// after a wait for the slot the probe holds.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_finding_no_free_slot_beside_the_probe_is_refused_at_once_told_its_bound() {
+        for (rate_limit, told, probe) in [
+            (None, 4, "its call out, 1 s into its 5 s timeout"),
+            (
+                Some(1),
+                13,
+                "waiting for the rate's reset 8 s away, then for its 5 s timeout",
+            ),
+        ] {
+            let policy = policy(ResilienceConfig {
+                concurrency: Some(1),
+                concurrency_wait: Some(Duration::from_secs(60)),
+                rate_limit,
+                rate_window: Duration::from_secs(10),
+                rate_wait: Some(Duration::from_secs(10)),
+                ..probing(Duration::from_secs(5))
+            });
+            probe_due(&policy).await;
+            let (probed, refused) = tokio::join!(
+                policy.run(|_| async {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    Ok::<_, Refused>(())
+                }),
+                async {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let arrived = tokio::time::Instant::now();
+                    let refused = policy.run(|_| answering()).await;
+                    (arrived.elapsed(), refused)
+                },
+            );
+            assert!(matches!(probed, Ok(())), "the probe {probe}: {probed:?}");
+            assert!(
+                matches!(refused, (waited, Err(ResilienceError::Open { retry_after, .. }))
+                    if waited.is_zero() && retry_after == Duration::from_secs(told)),
+                "beside the probe {probe}, refused at once: {refused:?}"
+            );
+        }
+    }
+
     /// The attempt's timeout starts when its call is sent, after the wait for
     /// the reset; the unit's deadline bounds the wait and the attempt together.
     #[tokio::test(start_paused = true)]
@@ -2775,6 +2820,72 @@ mod tests {
         );
     }
 
+    /// A run sent once, dropped while its probe's call is out, hands the
+    /// probe's turn on before its slot of the bulkhead as a run sent again
+    /// does: the call that slot lets in never meets a turn the dropped probe
+    /// still holds.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_sent_once_dropped_while_its_probe_is_out_hands_the_turn_on_before_its_slot() {
+        let policy = policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(10)),
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(1),
+            ..ResilienceConfig::default()
+        });
+        let waiting =
+            std::cell::RefCell::new(Box::pin(policy.run(|_| async { Ok::<_, Refused>("sent") })));
+        let answered = std::cell::RefCell::new(None);
+        let poll_waiting = || {
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            if let Poll::Ready(answer) = waiting.borrow_mut().as_mut().poll(&mut cx) {
+                *answered.borrow_mut() = Some(answer);
+            }
+        };
+        let mut holding = Box::pin(policy.run(|_| async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok::<_, Refused>("held")
+        }));
+        park(&mut holding).await;
+        let mut probing = Box::pin(policy.run(|_| async {
+            let _torn_down = OnDrop(&poll_waiting);
+            std::future::pending::<Result<&str, Refused>>().await
+        }));
+        park(&mut probing).await;
+        poll_waiting();
+        assert!(
+            answered.borrow().is_none(),
+            "it waits for the slot, behind the run that probes once it has it"
+        );
+        policy
+            .open_breaker(Duration::from_secs(1))
+            .expect("an open time `breaker_open` takes");
+        assert!(matches!(holding.await, Ok("held")));
+        park(&mut probing).await;
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::HalfOpen),
+            "handed the slot, it probes, and its call never answers"
+        );
+
+        drop(probing);
+        let answer = match answered.take() {
+            Some(answer) => answer,
+            None => waiting.into_inner().await,
+        };
+        assert!(
+            matches!(answer, Ok("sent")),
+            "the call let in took the turn the dropped probe handed on: {answer:?}"
+        );
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::Closed),
+            "and closed the breaker as the next probe"
+        );
+    }
+
     /// The attempt's bound ends at the unit's deadline itself, however long its
     /// call took to first wait — a request built, a handshake begun: the edge
     /// cutting the unit at that deadline, as each edge does, finds the attempt
@@ -2841,6 +2952,150 @@ mod tests {
                 retry_after: Duration::from_secs(1)
             }),
             "the probe failed, opening the breaker again for its whole open time"
+        );
+    }
+
+    /// An idempotent run's attempt ends at its unit's deadline as a run sent
+    /// once does, however long its call takes to first wait: given up there
+    /// before the edge cuts the unit, counted in the breaker, and not sent
+    /// again with no time left.
+    #[tokio::test(start_paused = true)]
+    async fn an_idempotent_attempt_slow_to_first_wait_ends_at_the_deadline_its_edge_cuts_the_unit_at()
+     {
+        let policy = policy(ResilienceConfig {
+            timeout: Duration::from_secs(5),
+            retries: Some(1),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        });
+        let calls = AtomicU32::new(0);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let cut = tokio::time::timeout_at(
+            deadline,
+            nest_rs_core::__private::with_deadline(
+                Some(deadline),
+                policy.run_idempotent(|_| async {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    tokio::time::advance(Duration::from_millis(3)).await;
+                    std::future::pending::<Result<(), Refused>>().await
+                }),
+            ),
+        )
+        .await;
+        assert!(
+            matches!(cut, Ok(Err(ResilienceError::TimedOut { timeout, .. }))
+                if timeout == Duration::from_millis(300)),
+            "the policy gave the attempt up at the deadline, before the edge cut it: {cut:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "not sent again, with no time left"
+        );
+        assert!(
+            matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+            "the attempt counted in the breaker: {:?}",
+            policy.breaker_state()
+        );
+    }
+
+    /// `unit` under its `deadline`, cut there by an edge that sees its own
+    /// timer before the unit's — an order a runtime of several workers may
+    /// poll two timers due at one instant in, tokio firing a tick's timers in
+    /// batches — answering `None` once it cut the unit.
+    async fn cut_first_at<F: Future>(deadline: Instant, unit: F) -> Option<F::Output> {
+        let unit = nest_rs_core::__private::with_deadline(Some(deadline), unit);
+        tokio::select! {
+            biased;
+            () = tokio::time::sleep_until(deadline) => None,
+            answered = unit => Some(answered),
+        }
+    }
+
+    /// An attempt its edge cuts at the deadline it is bound by, before the
+    /// policy saw its own timer due there fire, has timed out all the same:
+    /// the breaker counts it, whichever of the two timers the runtime polls
+    /// first, sent once or again. One its caller drops before its bound ends
+    /// counts for nothing.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_its_edge_cuts_first_at_its_deadline_counts_as_timed_out_in_the_breaker() {
+        /// A run of a call that never answers, sent once or again.
+        fn silent_run(
+            policy: &ResiliencePolicy<Upstream>,
+            idempotent: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ResilienceError<Refused>>> + '_>> {
+            let call = |_| std::future::pending::<Result<(), Refused>>();
+            if idempotent {
+                Box::pin(policy.run_idempotent(call))
+            } else {
+                Box::pin(policy.run(call))
+            }
+        }
+
+        for idempotent in [false, true] {
+            let policy = policy(ResilienceConfig {
+                timeout: Duration::from_secs(5),
+                retries: Some(1),
+                breaker_window: Some(2),
+                breaker_failures: 1,
+                ..ResilienceConfig::default()
+            });
+            let silent = || silent_run(&policy, idempotent);
+            let deadline = Instant::now() + Duration::from_millis(300);
+            let dropped = tokio::time::timeout(
+                Duration::from_millis(100),
+                nest_rs_core::__private::with_deadline(Some(deadline), silent()),
+            )
+            .await;
+            assert!(dropped.is_err(), "its caller dropped it 200 ms early");
+            assert_eq!(
+                policy.breaker_state(),
+                Some(BreakerState::Closed),
+                "dropped before its bound ended, it counted for nothing"
+            );
+
+            let cut = cut_first_at(Instant::now() + Duration::from_millis(300), silent()).await;
+            assert!(cut.is_none(), "the edge cut the unit first: {cut:?}");
+            assert!(
+                matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+                "sent {}, the attempt cut at its bound counted as timed out: {:?}",
+                if idempotent { "again" } else { "once" },
+                policy.breaker_state()
+            );
+        }
+    }
+
+    /// A probe its edge cuts at its unit's deadline, before the policy saw its
+    /// own timer due there fire, has failed all the same: the breaker opens
+    /// again for its whole open time, rather than handing the probe's turn to
+    /// the next call at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_its_edge_cuts_first_at_its_units_deadline_has_failed() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = policy(probing(Duration::from_secs(5)));
+        probe_due(&policy).await;
+        let cut = cut_first_at(
+            Instant::now() + Duration::from_millis(300),
+            policy.run(|_| std::future::pending::<Result<(), Refused>>()),
+        )
+        .await;
+        assert!(cut.is_none(), "the edge cut the unit first: {cut:?}");
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::Open {
+                retry_after: Duration::from_secs(1)
+            }),
+            "the probe failed, opening the breaker again for its whole open time"
+        );
+        let reopened = lines
+            .find(TARGET, "circuit breaker changed state")
+            .pop()
+            .expect("the probe's transition");
+        assert_eq!(
+            (reopened.field("state"), reopened.field("failed")),
+            (Some("open".to_owned()), Some("1".to_owned())),
+            "filed as a failed probe: {reopened:?}"
         );
     }
 

@@ -282,10 +282,11 @@ pub struct ResilienceConfig {
     /// `BREAKER_PROBES`, from 1 to 100; defaults to 1. One probe runs at a
     /// time, and a failed one opens the breaker again for its whole open time,
     /// the series starting over: a probe whose call is cut at its timeout or
-    /// its unit's deadline has failed. A probe whose call is never sent —
-    /// refused by the rate, or its unit out of time before it — or whose
-    /// caller drops it before it answers counts as neither a success nor a
-    /// failure, and the series keeps its count.
+    /// its unit's deadline has failed, whether the policy or the unit's edge
+    /// cut it there. A probe whose call is never sent — refused by the rate,
+    /// or its unit out of time before it — or whose caller drops it unanswered
+    /// before then counts as neither a success nor a failure, and the series
+    /// keeps its count.
     #[config(bounds = BREAKER_PROBES)]
     pub breaker_probes: usize,
     /// How many calls run inside the policy at once, the bulkhead,

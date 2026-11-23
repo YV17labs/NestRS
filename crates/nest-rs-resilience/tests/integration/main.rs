@@ -22,7 +22,7 @@ mod resilient;
 use std::sync::Arc;
 
 use nest_rs_core::{Instance, module};
-use nest_rs_resilience::{ResilienceConfig, ResilienceModule, ResiliencePolicy};
+use nest_rs_resilience::{BreakerState, ResilienceConfig, ResilienceModule, ResiliencePolicy};
 use nest_rs_testing::HeadlessApp;
 
 /// No breaker and no retry: a row of a test sets what it is about.
@@ -54,4 +54,17 @@ fn held<I: Instance>(app: &HeadlessApp) -> Arc<ResiliencePolicy<I>> {
     app.container()
         .get::<ResiliencePolicy<I>>()
         .expect("the module built the instance's policy")
+}
+
+/// The whole seconds `policy`'s open breaker tells a call it refuses now to
+/// wait, as its `Retry-After` says them. A test of a refusal sent over a real
+/// socket keeps the real clock — paused, tokio moves it to the next timer while
+/// the socket is read — so it reads this before and after the refusal: the
+/// two bound what the refusal says, however long the runner stalls between.
+fn breaker_wait<I: Instance>(policy: &ResiliencePolicy<I>) -> u64 {
+    let state = policy.breaker_state();
+    let Some(BreakerState::Open { retry_after, .. }) = state else {
+        panic!("the breaker is open: {state:?}");
+    };
+    u64::from(nest_rs_core::__private::retry_after_secs(retry_after))
 }

@@ -73,7 +73,7 @@ impl PreviewsController {
 )]
 struct PreviewsModule;
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_open_breaker_is_answered_503_with_its_retry_after_and_a_failure_opaquely() {
     let app = TestApp::for_module::<PreviewsModule>()
         .await
@@ -145,7 +145,7 @@ mod graphql {
     )]
     struct PreviewGraphqlModule;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_open_breaker_is_a_field_error_saying_unavailable_and_its_wait() {
         let app = TestApp::for_module::<PreviewGraphqlModule>()
             .await
@@ -214,16 +214,26 @@ mod ws {
             .build_ws()
             .await
             .expect("a gateway over a policy boots on a real port");
+        let upstream = app
+            .container()
+            .get::<ResiliencePolicy>()
+            .expect("the module built the policy");
         let mut socket = app.socket("/ws/previews").connect().await;
 
         socket.send("preview", serde_json::Value::Null).await;
         let failed = socket.next_envelope().await;
         assert_eq!(failed["data"]["code"], "INTERNAL", "{failed}");
 
+        let most = crate::breaker_wait(&upstream);
         socket.send("preview", serde_json::Value::Null).await;
         let refused = socket.next_envelope().await;
+        let least = crate::breaker_wait(&upstream);
         assert_eq!(refused["data"]["code"], "UNAVAILABLE", "{refused}");
-        assert_eq!(refused["data"]["retryAfterSeconds"], 30, "{refused}");
+        let told = refused["data"]["retryAfterSeconds"].as_u64();
+        assert!(
+            told.is_some_and(|told| (least..=most).contains(&told)),
+            "the breaker's wait as it refused, {least} to {most} s: {refused}"
+        );
 
         app.shutdown().await.expect("the transport stops cleanly");
     }
@@ -270,7 +280,7 @@ mod mcp {
     )]
     struct PreviewMcpModule;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn an_open_breaker_is_an_error_saying_unavailable_and_its_wait() {
         let app = TestApp::for_module::<PreviewMcpModule>()
             .await
@@ -342,7 +352,7 @@ mod queue {
         consume::attempt(method, &mut delivery, container.clone(), None).await
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_job_failing_on_an_open_breaker_waits_at_least_its_retry_after() {
         let (_app, upstream) = crate::policy(opening_on_the_first_failure()).await;
         let container = Container::builder()
@@ -363,7 +373,7 @@ mod queue {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_job_refused_by_a_spent_rate_waits_its_retry_after_up_to_an_hour() {
         let window = Duration::from_secs(6 * 60 * 60);
         let (_app, upstream) = crate::policy(ResilienceConfig {

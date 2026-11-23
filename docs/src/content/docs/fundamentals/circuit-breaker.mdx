@@ -63,10 +63,10 @@ attempts however old.
 `BREAKER_PROBES` asks that many probes in a row to succeed before the breaker
 closes, one at a time. A failed probe opens it again for its whole open time,
 and the series starts over. A probe whose call is cut at its timeout or at its
-unit's deadline has failed. A probe whose call is never sent, because the rate
-refused it or its unit ran out of time first, counts as neither a success nor a
-failure. The same goes for one whose caller drops it before it answers, and the
-series keeps its count.
+unit's deadline has failed, whether the policy or the unit's edge cut it. A
+probe whose call is never sent, because the rate refused it or its unit ran out
+of time first, counts as neither a success nor a failure. The same goes for one
+whose caller drops it unanswered before then, and the series keeps its count.
 
 Under a rate limit, an age leaves room for only so many failures to answer
 within it of one another, each attempt running ten minutes at most. A
@@ -124,10 +124,11 @@ only when a probe's call is sent, what the dependency meets. Over a series of
 probes, `half_open` is filed as its first probe is sent and nothing between two
 probes. A failed probe files `open` with its `failed`, `window` and `open_ms`,
 and the last success `closed`. A probe given up before its call is sent files
-nothing. One dropped once its call is out files `open` when it was its series'
-first, and nothing after a success of the series. Each transition counts on
-`nestrs.resilience.breaker.transitions`, by `nestrs.resilience.breaker.state`, a
-manual one marked `nestrs.resilience.breaker.manual` ([the
+nothing. One dropped once its call is out, before its bound ends, files `open`
+when it was its series' first, and nothing after a success of the series. Each
+transition counts on `nestrs.resilience.breaker.transitions`, by
+`nestrs.resilience.breaker.state`, a manual one marked
+`nestrs.resilience.breaker.manual` ([the
 counters](/opentelemetry/metrics/#resilience-policies)).
 
 ## Test it

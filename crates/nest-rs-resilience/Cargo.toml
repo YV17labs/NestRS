@@ -35,8 +35,8 @@ opentelemetry = ["dep:opentelemetry"]
 # of `self` holds.
 nest-rs-resilience-macros.workspace = true
 # `ResilienceModule` is a `Module` generic over its `Instance`; a policy waits
-# through `within_until`, core's bounded wait ending at a unit's deadline, and
-# `Backoff`, and its refusal is a `Problem`.
+# through `WithinHeld`, core's bounded wait around a call it holds, and backs
+# off through `Backoff`, and its refusal is a `Problem`.
 nest-rs-core.workspace = true
 # `ResilienceModule` owns its `#[config]` (`ResilienceConfig`, namespace
 # `resilience`), read per instance from `<PREFIX>_RESILIENCE__*`.

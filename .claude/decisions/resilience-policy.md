@@ -352,13 +352,33 @@ How each holds:
   `async` fn or block awaiting a future it was handed holds it twice
   (rust-lang/rust#62958); the one `async fn` left, a decorated idempotent run's,
   holds its closure of borrows twice, so rustc's error for a future that is not
-  `Send` still points at `idempotent`. `run`, `run_idempotent` and the decorator
-  box each attempt's future, the middleware's being boxed by reqwest-middleware
-  already: held in place, a future holding a third of a 2 MiB worker's stack —
-  which its undecorated twin holds there — overflowed that worker, in a debug
-  build at every layout of the run's futures tried and in a release build too,
-  each step of the run that moves it copying it onto the stack. A decorated
-  method's future is then its arguments and a run's few hundred bytes, where it
+  `Send` still points at `idempotent`. A release build holds each attempt's
+  future where the run is, whatever its size: boxed past tokio's threshold, a
+  future bought no stack, the run's type reserving its size all the same — held
+  across an `.await`, futures up to 1,792 KiB run on a 2 MiB worker either way —
+  and cost an allocation and its size a second time. It holds the closure there
+  up to that threshold, 16 KiB (`BOX_FUTURE_THRESHOLD`, copied in `src/call.rs`,
+  `.claude/upstream/tokio.md`), and boxes it past it; a call sent once then
+  boxes the future it makes too, since the closure leaves its box to be called
+  while that future is built beside it on the stack: with either held in place,
+  a call sent once moving 704 KiB into its closure overflowed a 2 MiB worker,
+  where boxing both runs 960 KiB. A call made again calls its closure where it
+  is held, so its future held in place takes no more of the stack than boxed:
+  moving a buffer in, it overflows from 704 KiB either way. So a call answering
+  at once allocates nothing but its attempt's token; the decision is a constant
+  per type, as tokio's `AutoBox` is, so only the branch taken is built. No step
+  of a run moves what it holds: each writes its fields where they are, and what
+  a run waits on besides its call — its attempt's bound, and only when they come
+  a slot, the rate's reset, a backoff — shares one place. A debug build boxes
+  both whatever their size, a box of what holds nothing allocating nothing: it
+  copies a value's whole type at each move, and a type that may hold a future in
+  place has the size of the largest it may hold, so a run holding a small one in
+  place weighed a large one's size at each step — a run's caller awaiting it
+  took 3.1 times the future's size on the stack, where awaiting the future alone
+  takes 2.1 — and overflowed the worker a large one's twin runs on; choosing the
+  type by the size of what it holds needs `generic_const_exprs`, unstable. The
+  middleware's future is reqwest-middleware's box already. A decorated method's
+  future is then its arguments and a run's bytes, under a kilobyte, where it
   held its body twice and an argument taken by value seven times.
 
 **Refused:**
@@ -388,9 +408,13 @@ How each holds:
   can: 7.0 has no such feature.
 - **`#[resilient]` read by its full path**: the docs import it under its short
   name, as every decorator is.
-- **Each attempt's future held in place, unboxed**: no layout of the run's
-  futures tried kept a large one from overflowing a worker's stack (*How each
-  holds*, above).
+- **A closure held in place whatever its size, the future of a call sent once
+  held in place beside its boxed closure, or either held in place in a debug
+  build at all**: in a release build the first two overflowed a 2 MiB worker
+  from 704 KiB moved into the closure, where boxing both runs 960 KiB, and in a
+  debug build a large one, or a small one where a type that may hold a large
+  one holds it, overflowed the worker its twin runs on (*How each holds*,
+  above).
 
 **Limits, named:**
 
@@ -428,19 +452,44 @@ How each holds:
   meter reading or switching that breaker from inside the line waits for good;
   none of the framework's does. Closing it is filing lines after the lock in an
   order the epoch keeps.
-- **Each attempt's future is boxed**: one allocation an attempt. On a call
-  answering at once, in release on one machine, the median run took 88 ns
-  through `run` before and 110 after, 97 and 134 through `run_idempotent`, 93
-  and 114 through a decorated method, 107 and 139 through an idempotent one.
-  Closing it is holding the future in place with no step moving it through the
-  stack, which no layout tried reached.
+- **Each attempt allocates its `CancellationToken`**, which its call is handed:
+  tokio-util's token is shared through an `Arc`, and every run of the policy has
+  paid it since its first commit. Closing it is a call asking for its token,
+  which `run`'s signature, handing one to every call, does not let a policy
+  know.
+- **A debug build boxes a run's call and each attempt's future**, an allocation
+  each for one that holds anything. Closing it is a type chosen by the size of
+  what it holds, which waits on `generic_const_exprs`
+  (`.claude/upstream/rustc.md`). A release build's call sent once whose
+  closure is past the threshold boxes its future too, and its run still
+  reserves that future's size, so such a run weighs it twice where its task is
+  held; the same type closes it.
+- **A run answering at once costs about 15 ns more than the first policy's**,
+  the policy the 2026-11-20 and 2026-11-21 entries built, before the rate, the
+  breaker's age and probes and the waiters' bound. In release on one machine,
+  medians of three rounds, a call answering at once on a policy with none of
+  those settings ran in 77.8 ns through `run`, where the first policy ran it in
+  63.1 and each attempt's box had taken it to 114.1; with the rate set, 97.9
+  where the box had taken it to 127.1. With the attempt's token, the panic's
+  containment and the deadline's read stripped from both, the first policy ran
+  it in 35.7 ns and this one in 52.0: 12.2 of those 16.3 is the run itself,
+  measured with no breaker in either (42.4 against 30.2) — its futures polled by
+  hand, holding the call once where the first policy's `async` fns held it twice
+  (rust-lang/rust#62958) — and 4.1 the breaker's step, 9.6 here against 5.5
+  there, a pass then a sent attempt checked against the epoch; the three
+  stripped cost 1.6 ns less here (25.8 against 27.4), so the parts add up to the
+  14.7. Closing the first is the run written as `async` fns again once rustc
+  holds an awaited future once; the second, a breaker step 7.1's switches and
+  probes do not need.
 - **A decorated method run once that takes a large argument by value** still
   needs more of a debug build's stack than its undecorated twin: the closure
-  owning the argument moves through the run's stages, each move copying it onto
-  the stack, so on a 2 MiB worker it overflows from 96 KiB where its twin runs
-  256 KiB. Idempotent, borrowing its arguments, or built for release, it runs
-  where its twin does. Closing it is a run holding the closure outside its
-  stages, handed to the attempt that makes the call.
+  owning the argument is built in the method's frame, moved out of its box to be
+  called, and its future built on the stack before it is boxed, each copy a
+  debug build's stack holds a moment, so on a 2 MiB worker it runs at 224 KiB
+  and overflows from 256 KiB, where its twin runs at 384 KiB and overflows from
+  448 KiB. Idempotent, borrowing its arguments, or built for release, it runs
+  where its twin does. Closing it is a body's future built where the run holds
+  it, which safe Rust cannot write.
 - **An app's own attribute named `resilient` on an operation** is read as the
   framework's in a build where any crate enables the resilience capability:
   Cargo unifies a package's features across a build, so a dependency, or a

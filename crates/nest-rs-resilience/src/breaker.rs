@@ -212,6 +212,7 @@ pub(crate) struct Pass<'b> {
 impl<'b> Pass<'b> {
     /// Whether the attempt holds the probe's turn: it took it, and no manual
     /// switch came since.
+    #[inline]
     pub(crate) fn probes(&self) -> bool {
         self.probe && self.breaker.held.lock().epoch == self.epoch
     }
@@ -228,6 +229,7 @@ impl<'b> Pass<'b> {
     /// The attempt's call sent under `bound`, which ends at `until` when the
     /// attempt's timer is armed at an instant: a probe's makes the breaker
     /// half-open until it answers, within `bound`.
+    #[inline]
     pub(crate) fn send(mut self, bound: Duration, until: Option<Instant>) -> Sent<'b> {
         let probe = std::mem::take(&mut self.probe);
         if probe {
@@ -243,6 +245,7 @@ impl<'b> Pass<'b> {
 }
 
 impl Drop for Pass<'_> {
+    #[inline]
     fn drop(&mut self) {
         if self.probe {
             self.breaker.withdraw_probe(self.epoch);
@@ -266,6 +269,7 @@ pub(crate) struct Sent<'b> {
 }
 
 impl Sent<'_> {
+    #[inline]
     pub(crate) fn settle(mut self, failed: bool) {
         let probe = std::mem::take(&mut self.probe);
         self.until = None;
@@ -274,6 +278,7 @@ impl Sent<'_> {
 }
 
 impl Drop for Sent<'_> {
+    #[inline]
     fn drop(&mut self) {
         if self.until.is_some_and(|until| Instant::now() >= until) {
             self.breaker.record(self.epoch, self.probe, true);
@@ -336,6 +341,7 @@ impl Breaker {
     /// `bound` unless it postpones it — or refuse it for the wait the breaker
     /// knows: what is left of the open time, or of the probe's own bound while
     /// another call holds its turn.
+    #[inline]
     pub(crate) fn admit(&self, bound: Duration) -> Result<Pass<'_>, Duration> {
         let mut held = self.held.lock();
         let probing = held.phase.admitting()?;
@@ -397,6 +403,7 @@ impl Breaker {
 
     /// The breaker's state for an attempt admitted in `epoch`: `None` once a
     /// manual switch came since, which leaves the attempt nothing to change.
+    #[inline]
     fn held_since(&self, epoch: u64) -> Option<MutexGuard<'_, Held>> {
         let held = self.held.lock();
         (held.epoch == epoch).then_some(held)
@@ -406,6 +413,7 @@ impl Breaker {
     /// breaker again, or closes it as the last of its series, and any other
     /// attempt counts in the window while it is closed — and for nothing once
     /// another call opened it.
+    #[inline]
     fn record(&self, epoch: u64, probe: bool, failed: bool) {
         let Some(mut held) = self.held_since(epoch) else {
             return;

@@ -252,7 +252,8 @@ pub mod __private {
         HostLayers, HostRequires, ModuleDescriptor, ProviderDescriptor, reachable_providers,
     };
     pub use crate::ambient::{
-        Pending, ReadsWithheld, attached, install_pending, with_ambient_from, with_deadline,
+        Pending, ReadsWithheld, attached, deadline, install_pending, with_ambient_from,
+        with_deadline,
     };
     pub use crate::answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
     pub use crate::app::__private::{
@@ -302,7 +303,7 @@ pub mod __private {
     };
     pub use crate::millis::millis;
     pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
-    pub use crate::net::within_until;
+    pub use crate::net::WithinHeld;
     pub use crate::opaque::__private::OpaqueCause;
     pub use crate::operation_log::__private::{
         KNOWN_VERBS, declare_unit, forget_cause, known_verb, measured_unit, protocol_version,

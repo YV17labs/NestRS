@@ -2558,6 +2558,9 @@ mod footprint {
     /// anything a run holds, so a second copy of it shows.
     const HELD: usize = 16 * 1024;
 
+    /// What the rows under tokio's threshold hold or take: a quarter of it.
+    const UNDER: usize = 4 * 1024;
+
     /// What a run holds whatever its body: its slot, its attempt's pass and
     /// bounds, the timers it waits on.
     const RUN: usize = 1024;
@@ -2605,6 +2608,16 @@ mod footprint {
             tokio::task::yield_now().await;
             Ok(std::hint::black_box(&buffer).len())
         }
+
+        #[resilient(courier)]
+        async fn answering_once(&self) -> Answer<usize> {
+            Ok(7)
+        }
+
+        #[resilient(courier, idempotent)]
+        async fn answering_again(&self) -> Answer<usize> {
+            Ok(7)
+        }
     }
 
     #[module(
@@ -2613,44 +2626,71 @@ mod footprint {
     )]
     struct BuffersModule;
 
-    #[tokio::test]
-    async fn a_decorated_methods_future_holds_its_body_and_each_argument_once() {
-        let app = boot::<BuffersModule>().await;
-        let buffers = app.container().get::<BuffersService>().expect("provided");
-        let profile = if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        };
-        let holding = size_of_val(&buffers.holding::<HELD>());
-        let taking = size_of_val(&buffers.taking::<HELD>([7; HELD]));
-        for (shape, decorated, twin) in [
+    /// Each shape of a method holding or taking `N` bytes: the size of its
+    /// future decorated and undecorated, and what it holds outside its body's
+    /// run — its arguments, as the undecorated method holds them.
+    fn shapes<const N: usize>(
+        buffers: &BuffersService,
+    ) -> [(&'static str, usize, usize, usize, usize); 4] {
+        let holding = size_of_val(&buffers.holding::<N>());
+        let taking = size_of_val(&buffers.taking::<N>([7; N]));
+        [
             (
                 "holding a buffer across an `.await`, run once",
-                size_of_val(&buffers.holding_once::<HELD>()),
+                N,
+                size_of_val(&buffers.holding_once::<N>()),
                 holding,
+                0,
             ),
             (
                 "holding a buffer across an `.await`, run again",
-                size_of_val(&buffers.holding_again::<HELD>()),
+                N,
+                size_of_val(&buffers.holding_again::<N>()),
                 holding,
+                0,
             ),
             (
                 "taking a buffer by value, run once",
-                size_of_val(&buffers.taking_once::<HELD>([7; HELD])),
+                N,
+                size_of_val(&buffers.taking_once::<N>([7; N])),
+                taking,
                 taking,
             ),
             (
                 "taking a buffer by value, run again",
-                size_of_val(&buffers.taking_again::<HELD>([7; HELD])),
+                N,
+                size_of_val(&buffers.taking_again::<N>([7; N])),
+                taking,
                 taking,
             ),
-        ] {
-            assert!(
-                decorated <= twin + RUN,
-                "in a {profile} build, a method {shape} is a future of {decorated} B decorated, \
-                 of {twin} B undecorated"
-            );
+        ]
+    }
+
+    /// A release build holds a decorated method's body and each argument once,
+    /// beside what its run holds whatever its body; a debug build boxes the
+    /// body's closure and its future, so the method holds no more than its
+    /// arguments.
+    #[tokio::test]
+    async fn a_decorated_methods_future_holds_its_body_and_each_argument_once() {
+        let app = boot::<BuffersModule>().await;
+        let buffers = app.container().get::<BuffersService>().expect("provided");
+        for (shape, bytes, decorated, twin, own) in shapes::<HELD>(&buffers)
+            .into_iter()
+            .chain(shapes::<UNDER>(&buffers))
+        {
+            if cfg!(debug_assertions) {
+                assert!(
+                    decorated <= own + RUN,
+                    "in a debug build, a method {shape}, of {bytes} B, is a future of {decorated} \
+                     B decorated, holding {own} B outside its run"
+                );
+            } else {
+                assert!(
+                    decorated <= twin + RUN,
+                    "in a release build, a method {shape}, of {bytes} B, is a future of \
+                     {decorated} B decorated, of {twin} B undecorated"
+                );
+            }
         }
     }
 
@@ -2691,5 +2731,75 @@ mod footprint {
                 tokio::spawn(async move { buffers.holding_again::<HELD_ON_A_WORKER>().await });
             assert!(matches!(again.await, Ok(Ok(HELD_ON_A_WORKER))));
         });
+    }
+
+    /// What the methods below take by value on that stack: three thirty-seconds
+    /// of it. Run once, a decorated method moves what it takes through its
+    /// body's closure and into its future, each copy a debug build's stack holds
+    /// a moment, where its twin moves it once.
+    const TAKEN_ON_A_WORKER: usize = WORKER_STACK * 3 / 32;
+
+    /// A stack overflow aborts the process, as above.
+    #[test]
+    fn a_decorated_method_taking_a_large_buffer_by_value_runs_on_a_worker_of_tokios_default_stack()
+    {
+        // A runtime of the test's own, for its worker's stack.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(WORKER_STACK)
+            .enable_all()
+            .build()
+            .expect("the runtime builds");
+        runtime.block_on(async {
+            let app = boot::<BuffersModule>().await;
+            let buffers = app.container().get::<BuffersService>().expect("provided");
+            let once = tokio::spawn({
+                let buffers = Arc::clone(&buffers);
+                async move {
+                    buffers
+                        .taking_once::<TAKEN_ON_A_WORKER>([7; TAKEN_ON_A_WORKER])
+                        .await
+                }
+            });
+            assert!(matches!(once.await, Ok(Ok(TAKEN_ON_A_WORKER))));
+            let again = tokio::spawn(async move {
+                buffers
+                    .taking_again::<TAKEN_ON_A_WORKER>([7; TAKEN_ON_A_WORKER])
+                    .await
+            });
+            assert!(matches!(again.await, Ok(Ok(TAKEN_ON_A_WORKER))));
+        });
+    }
+
+    /// As a run's under tokio's threshold, a decorated method's call allocates
+    /// nothing of its own in a release build. A debug build boxes its future,
+    /// and its body's closure, which allocates only when it holds something:
+    /// run again it borrows the method's own.
+    #[tokio::test]
+    async fn a_decorated_method_answering_at_once_allocates_nothing_but_its_token_in_a_release_build()
+     {
+        let app = boot::<BuffersModule>().await;
+        let buffers = app.container().get::<BuffersService>().expect("provided");
+        let token = crate::token_allocations();
+        let debug = usize::from(cfg!(debug_assertions));
+        for (shape, boxed, (answered, made)) in [
+            (
+                "run once",
+                debug,
+                crate::allocations(|| buffers.answering_once()),
+            ),
+            (
+                "run again",
+                2 * debug,
+                crate::allocations(|| buffers.answering_again()),
+            ),
+        ] {
+            assert!(matches!(answered, Ok(7)), "{shape}: {answered:?}");
+            assert_eq!(
+                made,
+                token + boxed,
+                "a method {shape} allocates its token, {token}, and in a debug build {boxed} box(es)"
+            );
+        }
     }
 }

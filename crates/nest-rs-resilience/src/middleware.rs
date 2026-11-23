@@ -6,7 +6,6 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use http::Extensions;
-use nest_rs_core::__private::within_until;
 use nest_rs_core::{Instance, Unnamed};
 use nest_rs_reqwest::__private::{Resent, Traced, retry_after};
 use reqwest::header::{DATE, HeaderName, HeaderValue, RETRY_AFTER};
@@ -14,7 +13,7 @@ use reqwest::{Request, Response, StatusCode};
 use reqwest_middleware::{Error, Middleware, Next, Result};
 
 use crate::error::{Refusal, ResilienceError};
-use crate::policy::{Attempted, Once, ResiliencePolicy, Verdict};
+use crate::policy::{Attempted, ResiliencePolicy, Verdict};
 
 /// The header a client sends to make a request it could not otherwise replay
 /// safe to send again (`draft-ietf-httpapi-idempotency-key-header`).
@@ -106,21 +105,13 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
                 .then(|| req.try_clone())
                 .flatten()
             else {
-                let (attempted, ()) = run
-                    .attempt(
-                        Once(move |_| sending.run(req, carried)),
-                        judged,
-                        within_until,
-                    )
+                let attempted = run
+                    .attempt_once(move |_| sending.run(req, carried), judged)
                     .await;
                 return answered(run.finish(attempted));
             };
-            let (attempted, ()) = run
-                .attempt(
-                    Once(move |_| sending.run(copy, carried)),
-                    judged,
-                    within_until,
-                )
+            let attempted = run
+                .attempt_once(move |_| sending.run(copy, carried), judged)
                 .await;
             if !run.again(&attempted).await {
                 return answered(run.finish(attempted));

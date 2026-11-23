@@ -77,31 +77,39 @@ impl<F: Future> Future for Contained<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        assert!(
-            !*this.unwound,
-            "a contained unit was polled again after it panicked"
-        );
-        let unit = this.unit;
-        let unwound = this.unwound;
-        CONTAINED.sync_scope(Cell::new(Vec::new()), || {
-            let polled = std::panic::catch_unwind(AssertUnwindSafe(|| unit.poll(cx)));
-            let mut seen = CONTAINED.with(Cell::take);
-            let polled = match polled {
-                Ok(polled) => polled.map(Ok),
-                Err(payload) => {
-                    *unwound = true;
-                    // The last panic raised with its message is the one that got here.
-                    let message = panic_message(payload.as_ref());
-                    if let Some(at) = seen.iter().rposition(|panic| panic.message == message) {
-                        remember(payload.as_ref(), seen.remove(at));
-                    }
-                    Poll::Ready(Err(payload))
-                }
-            };
-            seen.iter().for_each(unclaimed);
-            polled
-        })
+        poll_contained(this.unit, this.unwound, cx)
     }
+}
+
+/// One poll of `unit` as [`contain`] polls it, `unwound` marking a unit that
+/// panicked, for one held by the caller rather than by a [`contain`].
+pub(crate) fn poll_contained<F: Future>(
+    unit: Pin<&mut F>,
+    unwound: &mut bool,
+    cx: &mut Context<'_>,
+) -> Poll<Result<F::Output, Box<dyn Any + Send>>> {
+    assert!(
+        !*unwound,
+        "a contained unit was polled again after it panicked"
+    );
+    CONTAINED.sync_scope(Cell::new(Vec::new()), || {
+        let polled = std::panic::catch_unwind(AssertUnwindSafe(|| unit.poll(cx)));
+        let mut seen = CONTAINED.with(Cell::take);
+        let polled = match polled {
+            Ok(polled) => polled.map(Ok),
+            Err(payload) => {
+                *unwound = true;
+                // The last panic raised with its message is the one that got here.
+                let message = panic_message(payload.as_ref());
+                if let Some(at) = seen.iter().rposition(|panic| panic.message == message) {
+                    remember(payload.as_ref(), seen.remove(at));
+                }
+                Poll::Ready(Err(payload))
+            }
+        };
+        seen.iter().for_each(unclaimed);
+        polled
+    })
 }
 
 tokio::task_local! {

@@ -39,6 +39,7 @@ pub const TARGET: &str = "nest_rs::resilience";
 
 mod breaker;
 mod bulkhead;
+mod call;
 mod config;
 mod counters;
 mod error;

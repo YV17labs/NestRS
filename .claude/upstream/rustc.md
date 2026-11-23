@@ -233,8 +233,8 @@
   (`crates/nest-rs-graphql/src/operation.rs`), an MCP operation's tail, a closure
   `dispatch` makes the future from (`crates/nest-rs-mcp/src/operation.rs`), a
   tick's `answered` (`crates/nest-rs-schedule/src/answer.rs`), and a resilience
-  run's (`crates/nest-rs-resilience/src/policy.rs`, `src/resilient.rs`), each but
-  `within` held by a size test.
+  run's (`crates/nest-rs-resilience/src/policy.rs`, and what it holds of its
+  call, `src/call.rs`), each but `within` held by a size test.
 - **Canary** — none in the suite: the size tests hold our side whether or not
   rustc fixes the layout.
 - **Upstream** — rust-lang/rust#62958.
@@ -242,3 +242,32 @@
   size test and the 2 MiB-worker tests beside them checked again. A day.
 - **Ticket** — filed as rust-lang/rust#62958; a comment there may add the
   measurements under Seen.
+
+## A type cannot be chosen by the size of a type parameter
+
+- **Seen** — 1.100.0 (`0ef1bc386 2026-11-09`), debug: a resilience run holding
+  each attempt's future in place under tokio's threshold for a spawned future
+  and boxing one past it, its type chosen by neither, failed
+  `a_run_holding_a_large_buffer_across_an_await_runs_on_a_worker_of_tokios_default_stack`
+  and
+  `a_decorated_method_holding_a_large_buffer_across_an_await_runs_on_a_worker_its_twin_runs_on`.
+  A type that may hold a future in place has the size of the largest it may
+  hold, and a debug build copies a value's whole type at each move: a caller
+  awaiting such a run took 3.1 times a 64 KiB future's size on the stack, where
+  awaiting the future alone took 2.1. A type chosen by `size_of::<T>()` needs
+  `generic_const_exprs`; a branch can be chosen by an associated constant.
+- **Effect** — a debug build of a resilience run allocates a box for its call
+  and one for each attempt's future, where a release build holds each future
+  in place whatever its size and the closure up to 16 KiB; and a release
+  build's call sent once whose closure is past 16 KiB boxes its future beside
+  the place its run's type reserves for it, weighing its size twice.
+- **Our side** — `Placed` and `PlacedFuture` box in a debug build
+  (`crates/nest-rs-resilience/src/call.rs`); the allocation tests state what a
+  debug build allocates.
+- **Canary** — none: the feature is unstable.
+- **Upstream** — rust-lang/rust#76560, `generic_const_exprs`' tracking issue.
+- **When fixed** — `Placed`, `PlacedFuture` and the place `Once` holds its
+  future in chosen by size in both profiles, and the allocation tests' debug
+  count made the release one's. An hour.
+- **Ticket** — none to file: stabilising `generic_const_exprs` is the tracking
+  issue's.

@@ -152,6 +152,13 @@ pub fn with_deadline<F: Future>(at: Option<Instant>, fut: F) -> impl Future<Outp
     )
 }
 
+/// The running unit's [`Deadline`], read without holding it, or `None` where it
+/// runs under none.
+pub fn deadline() -> Option<Instant> {
+    request_scope::current_request_ctx(|ctx| ctx.ambient.read(|deadline: &Deadline| deadline.0))
+        .flatten()
+}
+
 impl AmbientValue for Deadline {
     fn carry(self: Arc<Self>, into: Continuation) -> Option<Arc<Self>> {
         (into == Continuation::Batch).then_some(self)
@@ -237,6 +244,13 @@ impl Entries {
         let id = TypeId::of::<T>();
         let held = self.iter().find(|held| held.id == id)?;
         Arc::clone(&held.value).downcast::<T>().ok()
+    }
+
+    /// What `read` makes of the `T` held, without holding it.
+    pub(crate) fn read<T: AmbientValue, R>(&self, read: impl FnOnce(&T) -> R) -> Option<R> {
+        let id = TypeId::of::<T>();
+        let held = self.iter().find(|held| held.id == id)?;
+        held.value.downcast_ref::<T>().map(read)
     }
 
     pub(crate) fn is_empty(&self) -> bool {

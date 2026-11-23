@@ -1,0 +1,35 @@
+error[E0261]: use of undeclared lifetime name `'a`
+  --> tests/integration/diagnostics/graphql/subscription_item_borrowed_through_self.rs:20:58
+   |
+16 | #[operations]
+   | - lifetime `'a` is missing in item created through this procedural macro
+...
+20 |     async fn chimes<'a>(&'a self) -> impl Stream<Item = &'a str> + 'a {
+   |                                                          ^^ undeclared lifetime
+   |
+help: consider introducing lifetime `'a` here
+   |
+16 | #[operations]<'a>
+   |              ++++
+help: consider introducing lifetime `'a` here
+   |
+16 | #[operations]<'a>
+   |              ++++
+
+error[E0261]: use of undeclared lifetime name `'a`
+  --> tests/integration/diagnostics/graphql/subscription_item_borrowed_through_self.rs:20:58
+   |
+16 | #[operations]
+   | - lifetime `'a` is missing in item created through this procedural macro
+...
+20 |     async fn chimes<'a>(&'a self) -> impl Stream<Item = &'a str> + 'a {
+   |                                                          ^^ undeclared lifetime
+   |
+help: consider introducing lifetime `'a` here
+   |
+16 | #[operations]'a,
+   |              +++
+help: consider introducing lifetime `'a` here
+   |
+16 | #[operations]<'a>
+   |              ++++

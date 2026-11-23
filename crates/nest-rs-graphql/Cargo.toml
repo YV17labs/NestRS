@@ -80,6 +80,12 @@ figment = { workspace = true, features = ["test"] }
 # The thread's CPU clock, which std lacks: a cost a test compares is read on
 # it, since a thread waiting for a core accrues none.
 libc.workspace = true
+# `#[resilient]` on an operation, the one attribute kept on the developer's
+# method, every other going on the field.
+nest-rs-resilience = { path = "../nest-rs-resilience" }
+# The spans a field's guard and pipe run in, read off the registry
+# `LogCapture` installs.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

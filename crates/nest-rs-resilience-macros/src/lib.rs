@@ -25,8 +25,11 @@ mod resilient;
 ///   arguments again, so the method binds none `mut` and takes no `&mut` (read
 ///   by spelling: a type alias hiding a `&mut` is not seen), and clones what an
 ///   attempt consumes — rustc answers a consumed argument with `E0507`, whose
-///   help shows the clone. Its error is a `std::error::Error`, whose chain a
-///   retry reads for a `Retry-After`.
+///   help shows the clone. Every attempt borrows the arguments across its
+///   waits, so the method's future is `Send` only where each argument taken by
+///   value is `Sync`; run once, the method moves them, and its future is `Send`
+///   as the undecorated method's is. Its error is a `std::error::Error`, whose
+///   chain a retry reads for a `Retry-After`.
 /// - `timeout = "2s"` — how long each attempt of this method waits, in place
 ///   of the policy's, from `"1ms"` to `"10m"`. The unit's deadline still ends
 ///   every attempt.
@@ -46,10 +49,13 @@ mod resilient;
 /// every impl half, a scheduled tick included. On an `#[sse]` route or a
 /// `#[subscription]`, the policy runs the call opening the stream, never the
 /// items it yields later. A WebSocket connection hook answers `()`, so it
-/// carries none and calls a decorated method instead; a GraphQL field writes
-/// its `Result<T, ResilienceError<E>>` out, since `#[operations]` reads a
-/// field's `Result` by its spelling. A method under `#[async_trait]` is a `fn`
-/// by the time this attribute reads it, and is refused saying so.
+/// carries none and calls a decorated method instead. A GraphQL field writes
+/// its `Result<T, ResilienceError<E>>` out: `#[operations]` reads a field's
+/// `Result` by its spelling, and refuses any other answer of a decorated one. It
+/// keeps this attribute, read by its name, on the method, and hands the
+/// method's other attributes to the field it generates. A method under
+/// `#[async_trait]` is a `fn` by the time this attribute reads it, and is
+/// refused saying so.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry, a full
 /// bulkhead or a reached rate limit files carry its `host` and `method`.

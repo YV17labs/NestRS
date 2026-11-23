@@ -3,7 +3,7 @@
 //! and of every other field of it, the settings its policy holds for every
 //! caller, each pinned against the config by a test in `nest-rs-resilience`.
 
-use syn::{Expr, ExprLit, Lit};
+use syn::{Attribute, Expr, ExprLit, Lit};
 
 use crate::args::{site, takes_value};
 use crate::job::TIMEOUT;
@@ -14,6 +14,15 @@ pub const RESILIENT: &str = "resilient";
 
 /// The key a method pins its retries with.
 pub const RETRIES: &str = "retries";
+
+/// Whether `attr` is a `#[resilient]`, however its path is written: read by
+/// its last segment, since a macro resolves no name.
+pub fn is_resilient(attr: &Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == RESILIENT)
+}
 
 /// A mechanism the policy runs for every caller of its dependency.
 #[derive(Clone, Copy)]
@@ -245,6 +254,20 @@ mod tests {
 
     fn refused(result: syn::Result<impl std::fmt::Debug>) -> String {
         result.expect_err("refused").to_string()
+    }
+
+    #[test]
+    fn the_decorator_is_read_by_its_last_segment_however_its_path_is_written() {
+        let read = |attr: Attribute| is_resilient(&attr);
+        assert!(read(parse_quote!(#[resilient(courier)])));
+        assert!(read(
+            parse_quote!(#[nest_rs::resilience::resilient(courier, idempotent)])
+        ));
+        assert!(read(
+            parse_quote!(#[::nest_rs::prelude::resilient(courier)])
+        ));
+        assert!(!read(parse_quote!(#[tracing::instrument(skip(self))])));
+        assert!(!read(parse_quote!(#[resilient::other(courier)])));
     }
 
     #[test]

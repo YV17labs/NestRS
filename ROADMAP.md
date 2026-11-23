@@ -90,11 +90,14 @@ stable major, and no release candidate holds it.
 8. **A GraphQL id is `ID` and a timestamp `DateTime` at every position, an instant spelled once on every edge**
    (`a-column-reads-in-one-type.md`).
 
-**When a forced major comes**, 8.0 stays mechanical: it moves the dependency, takes what that move requires, and ships an
-upgrade guide. No redesign rides along. It also refuses what a 7.x minor deprecated, each listed under its changelog's
-*Deprecated*. `SECURITY.md` already bounds its pace: a major ships at most every six months,
-announced four weeks ahead with its upgrading guide. A rare, small major is the healthy outcome. A long line that holds a vulnerable
-or outdated library is not.
+**When a forced major comes**, 8.0 stays mechanical: it moves the dependency, takes what that move requires, and ships
+an upgrade guide. No redesign rides along. It also refuses what a 7.x minor deprecated, each listed under its
+changelog's *Deprecated*, and moves what only a break can: `#[operations]` hands every attribute of a GraphQL operation
+but `#[resilient]` to the field it generates, as 7.0 did, so one reading the method's own `self` —
+`#[tracing::instrument(fields(depot = self.depot.0))]` — compiles only once 8.0 keeps them on the method, a move that
+refuses a 7.0 attribute naming a parameter the field leaves out. `SECURITY.md` already bounds its pace: a major ships at
+most every six months, announced four weeks ahead with its upgrading guide. A rare, small major is the healthy outcome.
+A long line that holds a vulnerable or outdated library is not.
 
 What async-graphql 8 would require was measured against rc.5 on 2026-11-18. GraphQL Playground is gone upstream, so the
 `playground` setting and its variable become GraphiQL's. Every `DataLoader` a `#[dataloader]` builds takes a `Spawn` and

@@ -124,3 +124,85 @@
   > async block whose output is inferred, then equated with the declared type.
   > Is the declared return type meant to be the expected type of the body, as
   > an `async fn`'s is?
+
+## A bound failing on a lifetime alone is worded by no `#[diagnostic]` attribute
+
+- **Seen** — 1.100.0 (`0ef1bc386 2026-11-09`), edition 2024: the Ticket's
+  program, saved as `ticket.rs` and built alone with
+  `rustc +1.100 --edition 2024 ticket.rs`. Its trait carries
+  `#[diagnostic::on_unimplemented]`, and its one impl, for `Result<(), E>`,
+  holds for the error the program passes but for `E: 'static`, the error
+  borrowing a local: rustc answers `E0521` and `E0597`, borrowck's, and the
+  trait's message appears nowhere.
+- **Effect** — a refusal nestrs words for every other misuse reaches a developer
+  in rustc's words when only a lifetime fails: a tick answering an error that
+  borrows its host is `E0716` at `#[scheduled]` for an `async` tick, naming the
+  expansion's async block, and `E0515` for a `fn`, where an error converting into
+  no `anyhow::Error` is the framework's sentence.
+- **Our side** — a documented limit: `#[scheduled]`'s rustdoc
+  (`crates/nest-rs-schedule-macros/src/lib.rs`), `docs/src/content/docs/schedule/index.mdx`
+  and `.claude/decisions/resilience-policy.md`, 2026-11-22, *Limits, named*;
+  both errors are pinned by `nest-rs-macro-hygiene`'s snapshot
+  `schedule/scheduled_returns_a_result_whose_error_converts`.
+- **Canary** — none in the suite: the snapshot moves only once `TickAnswer`
+  carries what a fix adds. The Ticket's program is the check, built as Seen says,
+  each time `rust-toolchain.toml`'s pin moves.
+- **Upstream** — not filed. A search of rust-lang/rust's issues on the
+  `diagnostic` namespace and region errors comes before filing.
+- **When fixed** — `TickAnswer` words the borrowing error as it words the
+  others, and the snapshot, the rustdoc, the page and the decision say the
+  framework's sentence. An hour.
+- **Ticket** —
+
+  > **`#[diagnostic::on_unimplemented]` is not consulted when an impl fails on a lifetime alone**
+  >
+  > ```rust
+  > use std::fmt;
+  >
+  > #[diagnostic::on_unimplemented(
+  >     message = "a tick returns `Result<(), E>` whose `E` owns what it holds, and this one returns `{Self}`",
+  >     label = "an error borrowing what it reports"
+  > )]
+  > trait TickAnswer {}
+  >
+  > impl<E: std::error::Error + Send + Sync + 'static> TickAnswer for Result<(), E> {}
+  >
+  > fn answered<A: TickAnswer>(_: A) {}
+  >
+  > struct Tasks;
+  >
+  > #[derive(Debug)]
+  > struct Refused<'a>(&'a str);
+  >
+  > impl fmt::Display for Refused<'_> {
+  >     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+  >         f.write_str(self.0)
+  >     }
+  > }
+  >
+  > impl std::error::Error for Refused<'_> {}
+  >
+  > impl Tasks {
+  >     fn trim<'a>(&'a self, why: &'a str) -> Result<(), Refused<'a>> {
+  >         Err(Refused(why))
+  >     }
+  > }
+  >
+  > fn tick(tasks: &Tasks) {
+  >     let why = String::from("the prune was refused");
+  >     answered(tasks.trim(&why));
+  > }
+  >
+  > fn main() {
+  >     tick(&Tasks);
+  > }
+  > ```
+  >
+  > rustc 1.100.0 answers `E0521` ("borrowed data escapes outside of function")
+  > and `E0597` (`why` does not live long enough), pointing at
+  > `answered(tasks.trim(&why))`; the impl fails on its `'static` alone, and the
+  > trait's `on_unimplemented` message, which says what to write, is not shown. A
+  > library whose macro expansion holds such a bound can word every other
+  > failure of it and not this one, which the user reads as an error in code they
+  > did not write. Could `on_unimplemented` be consulted, or a sibling attribute
+  > offered, when an impl is rejected on a region bound it requires?

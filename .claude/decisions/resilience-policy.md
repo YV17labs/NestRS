@@ -178,10 +178,10 @@ no method is — a call needing its `CancellationToken`, or part of a method.
   lines of a decorated run name its `host` (the type's short name, read off
   `type_name::<Self>()` only when a line is filed) and its `method`; the counters
   stay by instance, a method label multiplying their series.
-- **An impl half keeps another decorator on the developer's method.** `#[routes]`,
-  `#[messages]`, `#[tools]` and `#[processor]` already did; `#[operations]`
-  moved every attribute async-graphql does not read onto its generated field
-  wrapper and is fixed with this change.
+- **An impl half keeps `#[resilient]` on the developer's method**, read by its
+  name. `#[routes]`, `#[messages]`, `#[tools]` and `#[processor]` leave any other
+  decorator there too; `#[operations]` hands an operation's other attributes to
+  the field it generates, where 7.0 placed them.
 
 **Refused:**
 
@@ -214,9 +214,10 @@ a `fn` by the time the attribute reads it, and is refused naming the native
 method rather than being one; closing that is `#[scheduled]` converting the
 error with `Into::into` as `#[hooks]` and `#[indicators]` do, a widening of its
 documented answer for the owner to agree. A GraphQL field writes its `Result`
-out, since `#[operations]` reads a field's answer by its spelling — `#[operations]`' own limit, stated so far for
-subscriptions alone. No `demo/` use site: the demo calls no dependency it does
-not control, and one is not invented for the decorator.
+out, since `#[operations]` reads a field's answer by its spelling: a decorated
+field answering any other is refused at its return type, in one sentence, as a
+subscription's aliased `Result` is. No `demo/` use site: the demo calls no
+dependency it does not control, and one is not invented for the decorator.
 
 ## 2026-11-22 — the rate, the breaker's age, probes, read and switch, the waiters' bound, and a decorated tick
 
@@ -311,7 +312,9 @@ How each holds:
   written before the field is refused as one after it, told where it is set.
 - **`#[operations]`' wrapper carries an `#[expect]` as an `#[allow]`** of the
   same lints and reason, so the expectation is checked on the developer's method
-  alone; 7.0.0 handed it to the wrapper too, where it went unfulfilled.
+  alone; 7.0.0 handed it to the wrapper too, where it went unfulfilled. Every
+  other attribute of an operation goes on the wrapper, as in 7.0, and
+  `#[resilient]` alone stays on the developer's method.
 - **A bound's reason holds for every value its siblings take**: it says what its
   own mechanism does to a call or lets happen, true for every value it refuses,
   every value its siblings take, every traffic and every client a policy wraps,
@@ -348,6 +351,11 @@ How each holds:
   window is given half its quota instead.
 - **Inbound idempotency.** It is ROADMAP item 5, another capability, waiting on
   an owner's decision.
+- **Every attribute of an operation kept on the developer's method**: it
+  refuses 7.0 programs whose attribute names a parameter the field leaves out —
+  `#[tracing::instrument(skip(self, ctx))]` beside a `Scoped<T>`, which is no
+  `Debug` — a break inside a major. `#[resilient]`, new in 7.1, is the one kept
+  there.
 
 **Limits, named:**
 
@@ -385,6 +393,22 @@ How each holds:
   meter reading or switching that breaker from inside the line waits for good;
   none of the framework's does. Closing it is filing lines after the lock in an
   order the epoch keeps.
+- **An attribute of an operation reading the method's own `self`** —
+  `#[tracing::instrument(fields(depot = self.depot.0))]` — does not compile, as
+  in 7.0: it goes on the field `#[operations]` generates, whose `self` is
+  another type. Closing it is keeping the attributes on the method, a break only
+  8.0 can make (ROADMAP § 2).
+- **A `#[resilient]` inside a `#[cfg_attr]` on an operation** goes on the field
+  with the other attributes, `#[operations]` reading it by its name only where
+  it is written plain, and does not compile there while its condition holds.
+  Closing it is splitting a `#[cfg_attr]` by entry, as the `#[cfg]`s inside one
+  are already unfolded.
+- **An idempotent method's future is `Send` only where each argument it takes
+  by value is `Sync`**: every attempt borrows the arguments across its waits,
+  where a method run once moves them, and an async closure owning them still
+  lends each attempt a shared borrow. Closing it is each attempt owning a clone
+  of its arguments, a `Clone` the method would declare, or an exclusive borrow,
+  which would let a body change an argument it binds without `mut`.
 - **The middleware's resend is held `Send` by its trait**, reqwest-middleware's
   boxed `Send` future, and its answer, reqwest's `Response`, is `Sync`: no test
   can give it one that is not. Closing it waits on a middleware answering
@@ -394,13 +418,14 @@ How each holds:
 - **A tick's error borrowing its host is refused in rustc's words** at
   `#[scheduled]`: `E0716` for an `async` tick, naming the return type of the
   run's async block, and `E0515` for one that is not, naming no type. No
-  `#[diagnostic]` reaches a lifetime error on stable. Closing it waits on rustc.
+  `#[diagnostic]` reaches a lifetime error on stable. Closing it waits on rustc
+  (`.claude/upstream/rustc.md`).
 - **A subscription's stream item, a resource's answer and an entity's answer
   cannot name the method's lifetime**, as before this change: async-graphql's
   derive reads a stream's item outside the method, the mime probe a resource's
   answer, and an entity's claim its answer's `type_name`. Closing it is upstream
-  for the first, and the probe and the claim moved inside the method's generics
-  for the other two.
+  for the first (`.claude/upstream/async-graphql.md`), and the probe and the
+  claim moved inside the method's generics for the other two.
 - **A stream's items run outside the policy**: on an `#[sse]` route or a
   `#[subscription]`, it runs the call opening the stream. A stream calling the
   dependency per item calls a decorated method for each; nothing else closes it,

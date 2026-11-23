@@ -157,10 +157,12 @@ with a trybuild snapshot per decorator:
 
 **A method decorator outside a pair** (`#[resilient]`) takes the members'
 receiver rule, `self: &Arc<Self>` lent as a provider's, and their reading by
-type; it dispatches nothing, so a generic method is its own. It goes on any
-host's method, a handler included, so **an impl half keeps on the developer's
-method every attribute its edge's library does not read**, never moving one to a
-wrapper of its own.
+type; it dispatches nothing, so a generic method is its own. It goes on a
+handler of every impl half but a socket's connection hook, which answers `()`,
+so **an impl half keeps it on the developer's method**, read by its name, and
+moves no other attribute from where a released version placed it: `#[operations]`
+hands an operation's others to the field it generates, so one naming the
+method's own `self` does not compile until a major moves them.
 
 **What a method answers is read by its type, never by its spelling.** A
 decorator resolves no name, so a renamed `Result` or a type alias must behave
@@ -169,7 +171,8 @@ as the literal does. Behaviour is decided through a type probe —
 `nest_rs_mcp::__private::OperationAnswer` at `#[tools]`,
 `nest_rs_ws::__private::ReplyValue` at `#[messages]`, `nest_rs_events::__private::ListenerAnswer` at `#[listeners]`,
 `nest_rs_queue::__private::ProcessAnswer` at `#[processor]`,
-`nest_rs_schedule::__private::TickAnswer` at `#[scheduled]`.
+`nest_rs_schedule::__private::TickAnswer` at `#[scheduled]`,
+`nest_rs_resilience::__private::ResilientAnswer` at `#[resilient]`.
 What a parameter resolves is read the same way: an extractor that resolves a
 provider implements `nest_rs_core::ResolvesProvider`, and the impl half asks
 `nest_rs_core::__private::ParamProbe` per parameter type — called on
@@ -195,7 +198,8 @@ names the entity, which `#[subscribe_message]` parameter is the payload (`&WsCli
 `Ambient<T>` by their names — each resolved through a function of the edge crate's
 `__private` returning core's type, so a namesake does not compile), the
 `Scoped<T>` and `Ambient<T>` parameters `#[operations]` and `#[tools]` leave out of
-the protocol's arguments, read the same way, a GraphQL field's
+the protocol's arguments, read the same way, the `#[resilient]` an impl half keeps
+on the developer's method, a GraphQL field's
 `&DataLoader<L>`, whose `L` the boot reads the owner of, and the request parameters an
 OpenAPI document lists off the extractor spelling them (`Json<T>`, `Form<T>`,
 `Query<T>`, `Header<T>`, `Path<…>`, `Multipart`; an extractor that is the body

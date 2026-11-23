@@ -74,3 +74,11 @@ error[E0716]: temporary value dropped while borrowed
    | argument requires that borrow lasts for `'1`
    |
    = note: this error originates in the attribute macro `scheduled` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0515]: cannot return reference to temporary value
+  --> tests/integration/diagnostics/schedule/scheduled_returns_a_result_whose_error_converts.rs:34:1
+   |
+34 | #[scheduled]
+   | ^^^^^^^^^^^^ returns a reference to data owned by the current function
+   |
+   = note: this error originates in the attribute macro `scheduled` (in Nightly builds, run with -Z macro-backtrace for more info)

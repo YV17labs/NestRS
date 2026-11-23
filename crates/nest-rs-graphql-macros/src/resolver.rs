@@ -23,7 +23,7 @@ use nest_rs_codegen::__private::{
     forwarded_idents, from_container_method, guard_capability_bounds, handler_const, host_meta_fn,
     host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, injected_optional_fns, injected_remedies_fn, injects_impls,
-    interceptor_specs, key_as_written, layer_deps, mixed_site_ident, no_row_answered,
+    interceptor_specs, is_resilient, key_as_written, layer_deps, mixed_site_ident, no_row_answered,
     no_tail_decoded, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
     reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_items, site_ref,
     spelled, tail_param, take_posture, takes_value, type_label, unit_of_work_required,
@@ -1001,6 +1001,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         };
         shared_receiver(method, "#[operations]", &base, HostBorrow::Host)?;
         concrete_signature(method, "#[operations]")?;
+        refuse_a_resilient_answer_spelled_otherwise(&method.attrs, &method.sig)?;
         let cfgs = cfg_attrs(&method.attrs);
 
         let verb_attr = method.attrs.remove(idx);
@@ -1050,12 +1051,15 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ));
         }
 
-        // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside `#[cfg_attr]`.
+        // Every attribute but `#[resilient]` goes on the field: one naming the
+        // field's own parameters compiles only there, so moving any is a break.
+        // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside
+        // `#[cfg_attr]`.
         let mut deleg_attrs = delegated_attrs(
             &method
                 .attrs
                 .iter()
-                .filter(|attr| carried_by_the_field(attr))
+                .filter(|attr| !is_resilient(attr))
                 .cloned()
                 .collect::<Vec<_>>(),
         );
@@ -1542,15 +1546,13 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
         }
 
-        // The developer's method keeps its docs, its `allow`s and `expect`s, its
-        // `#[cfg]`s and every attribute the field does not carry: another
-        // decorator (`#[resilient]`) describes the method its body is, never the
-        // field.
+        // The developer's method keeps its docs, its `allow`s and `expect`s and its
+        // `#[cfg]`s, and `#[resilient]`, which runs the body the method is.
         method.attrs.retain(|a| {
             a.path().is_ident("doc")
                 || a.path().is_ident("allow")
                 || a.path().is_ident("expect")
-                || !carried_by_the_field(a)
+                || is_resilient(a)
         });
         for condition in &cfgs {
             method.attrs.extend(syn::parse::Parser::parse2(
@@ -1940,23 +1942,24 @@ fn field_parent_label(sig: &Signature) -> String {
     }
 }
 
-/// Whether `attr` goes on the field async-graphql resolves: its description,
-/// its own `#[graphql(...)]`, its conditions, its lint levels and its
-/// deprecation. Any other attribute stays on the developer's method.
-fn carried_by_the_field(attr: &Attribute) -> bool {
-    const READ: [&str; 10] = [
-        "doc",
-        "graphql",
-        "cfg",
-        "cfg_attr",
-        "allow",
-        "expect",
-        "warn",
-        "deny",
-        "forbid",
-        "deprecated",
-    ];
-    READ.iter().any(|name| attr.path().is_ident(name))
+/// Refuse a `#[resilient]` operation whose answer is not spelled `Result<…>`:
+/// the field's answer is read by that spelling, so under another name the whole
+/// `Result` would be the field's GraphQL type, which no `ResilienceError` is —
+/// unmet bounds deep in the expansion, where this is one sentence.
+fn refuse_a_resilient_answer_spelled_otherwise(
+    attrs: &[Attribute],
+    sig: &Signature,
+) -> syn::Result<()> {
+    if !attrs.iter().any(is_resilient) || matches!(returned(sig), Returned::Fallible(_)) {
+        return Ok(());
+    }
+    Err(syn::Error::new(
+        answer_span(sig),
+        "a `#[resilient]` operation returns `Result<T, ResilienceError<E>>`, spelled \
+         `Result<…>`: `#[operations]` reads a field's `Result` by its last path segment and any \
+         other answer, an alias of one included, as the field's GraphQL type, which a \
+         `ResilienceError` is not",
+    ))
 }
 
 fn graphql_name(attrs: &[Attribute]) -> syn::Result<Option<String>> {

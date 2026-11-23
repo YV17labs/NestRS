@@ -107,6 +107,15 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// interceptors (on a root field the app's and the resolver's, then the
 /// method's; on a field resolver its own alone), the
 /// per-argument pipes, then the inherent method.
+///
+/// A method's attributes go on its delegating method, which async-graphql
+/// reads and which runs that pipeline: a `#[tracing::instrument]` there spans
+/// the guards and the pipes too, and names the field's own parameters. The
+/// inherent method keeps its docs, its `allow`s and `expect`s — the delegating
+/// method allowing what the inherent one expects — its `#[cfg]`s and a
+/// `#[resilient]`, read by its name, which runs the inherent method's body under
+/// its policy; such an operation spells its `Result<…>` out, any other answer
+/// refused at its return type.
 #[proc_macro_attribute]
 pub fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::__private::reroot_impl_half(args.into(), |args| {

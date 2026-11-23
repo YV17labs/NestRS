@@ -1,14 +1,24 @@
 //! Module-gating: a resolver in a reachable module appears in the schema; a
 //! resolver in no reachable module is silently skipped, unless a served parent
 //! carries its `#[field_resolver]`, which refuses the boot. Beside it, the
-//! developer's method an operation calls — by its path, keeping every
-//! attribute async-graphql does not read — and the name each field is served
-//! under.
+//! developer's method an operation calls — by its path, its attributes on the
+//! field but `#[resilient]` — and the name each field is served under.
+
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use nest_rs_config::Surface;
-use nest_rs_core::module;
-use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+use nest_rs_core::{
+    Layer, Problem, Scoped, ToProblem, UnitContext, async_trait, injectable, instance, module,
+};
+use nest_rs_graphql::async_graphql::Context;
+use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlView, operations, resolver};
+use nest_rs_guards::{Denial, Guard, GuardFor};
+use nest_rs_pipes::{Pipe, PipeError, Piped};
+use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
 use nest_rs_testing::TestApp;
+use tracing_subscriber::registry::LookupSpan as _;
 
 #[resolver]
 struct LooseResolver;
@@ -383,72 +393,213 @@ async fn a_field_a_macro_fragment_writes_resolves_as_the_one_written_out() {
     assert_eq!(written["data"]["restack"]["number"], 8, "{written}");
 }
 
-// Another decorator describes the developer's method, never the field wrapper
-// the expansion writes on another type: each span below names a field of the
-// resolver, which neither the root object nor the parent holds, so on the
-// wrapper it would not compile.
+// An operation's attributes go on its field, as 7.0 placed them, so an
+// instrument skipping the field's own parameters compiles beside a parameter the
+// field leaves out, and spans the field's guards and pipes; `#[resilient]` alone
+// stays on the developer's method, whose body it runs under its policy.
 
-/// Where the resolver ships from, which its spans record.
-struct Depot(&'static str);
+/// A ledger lookup's audit, built per request: a `Scoped<Audit>` is no argument
+/// of the schema, and no `Debug`, so the field leaves it out.
+#[injectable(scope = request)]
+#[derive(Default)]
+struct Audit {
+    lookups: AtomicU32,
+}
 
-impl Default for Depot {
-    fn default() -> Self {
-        Self("Lyon")
+impl Audit {
+    fn record(&self) -> u32 {
+        self.lookups.fetch_add(1, Ordering::SeqCst) + 1
     }
 }
 
-#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
-#[graphql(complex)]
-struct Consignment {
-    number: i32,
+/// The spans each part of an instrumented field ran in, innermost first.
+static RAN_IN: Mutex<Vec<(&'static str, Vec<&'static str>)>> = Mutex::new(Vec::new());
+
+/// Notes the names of the spans `part` runs in, read off the registry the
+/// capture installs.
+fn note(part: &'static str) {
+    let scope = tracing::Span::current().id().map_or_else(Vec::new, |id| {
+        tracing::dispatcher::get_default(|dispatch| {
+            dispatch
+                .downcast_ref::<tracing_subscriber::Registry>()
+                .and_then(|registry| registry.span(&id))
+                .map(|span| span.scope().map(|span| span.name()).collect())
+                .unwrap_or_default()
+        })
+    });
+    RAN_IN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((part, scope));
+}
+
+/// Lets every caller through, noting the spans its check runs in.
+#[injectable]
+#[derive(Default, Layer)]
+struct NotingGuard;
+
+#[async_trait]
+impl Guard for NotingGuard {
+    async fn check_http(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        Ok(())
+    }
+
+    async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+        note("guard");
+        Ok(())
+    }
+}
+
+impl GuardFor<GraphqlView> for NotingGuard {}
+
+/// Trims a label, noting the spans it runs in.
+struct NotingTrim;
+
+impl Pipe for NotingTrim {
+    type In = String;
+    type Out = String;
+    fn transform(raw: String) -> Result<String, PipeError> {
+        note("pipe");
+        Ok(raw.trim().to_owned())
+    }
 }
 
 #[resolver]
-#[derive(Default)]
-struct InstrumentedResolver {
-    depot: Depot,
-}
+struct LedgerResolver;
 
 #[operations]
-impl InstrumentedResolver {
+impl LedgerResolver {
     #[query]
     #[public]
-    #[tracing::instrument(skip_all, fields(depot = self.depot.0))]
-    async fn consignment(&self) -> Consignment {
-        Consignment { number: 7 }
-    }
-
-    #[field_resolver]
-    #[tracing::instrument(skip_all, fields(depot = self.depot.0))]
-    async fn route(&self, parent: &Consignment) -> String {
-        format!("{} leaves {}", parent.number, self.depot.0)
+    #[use_guards(NotingGuard)]
+    #[tracing::instrument(skip(self, ctx))]
+    async fn entry(
+        &self,
+        ctx: &Context<'_>,
+        audit: Scoped<Audit>,
+        id: i32,
+        label: Piped<NotingTrim>,
+    ) -> String {
+        note("method");
+        format!(
+            "{} {id} {}, lookup {}",
+            ctx.field().name(),
+            label.into_inner(),
+            audit.record()
+        )
     }
 }
 
-#[module(imports = [GraphqlModule], providers = [InstrumentedResolver])]
-struct InstrumentedModule;
+#[module(imports = [GraphqlModule], providers = [LedgerResolver, NotingGuard, Audit])]
+struct LedgerModule;
 
 #[tokio::test]
-async fn another_decorator_on_an_operation_stays_on_the_developers_method() {
+async fn an_attribute_on_an_operation_goes_on_its_field_spanning_its_guards_and_pipes() {
     let logs = nest_rs_testing::LogCapture::install();
-    let app = TestApp::for_module::<InstrumentedModule>()
+    let app = TestApp::for_module::<LedgerModule>()
         .await
         .expect("the schema boots");
 
-    let body = crate::graphql_answer(&app, "{ consignment { route } }").await;
+    let body = crate::graphql_answer(&app, r#"{ entry(id: 7, label: "  receipts  ") }"#).await;
     assert_eq!(
-        body["data"]["consignment"]["route"], "7 leaves Lyon",
+        body["data"]["entry"], "entry 7 receipts, lookup 1",
         "{body}"
     );
-    for method in ["consignment", "route"] {
-        let span = logs.expect_span(module_path!(), method);
-        assert_eq!(
-            span.field("depot").as_deref(),
-            Some("Lyon"),
-            "{method}: {:?}",
-            span.fields
+    let span = logs.expect_span(module_path!(), "entry");
+    assert_eq!(span.field("id").as_deref(), Some("7"), "{:?}", span.fields);
+    let ran_in = RAN_IN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    for part in ["guard", "pipe", "method"] {
+        let (_, scope) = ran_in
+            .iter()
+            .find(|(noted, _)| *noted == part)
+            .unwrap_or_else(|| panic!("the {part} ran: {ran_in:?}"));
+        assert!(
+            scope.contains(&"entry"),
+            "the {part} ran outside the field's span: {scope:?}"
         );
     }
+}
+
+/// The bank a balance is read from.
+#[instance]
+struct Bank;
+
+/// What the bank answers when it fails: a failure no client reads.
+#[derive(Debug, thiserror::Error)]
+#[error("the bank did not answer")]
+struct BankDown;
+
+impl ToProblem for BankDown {
+    fn to_problem(&self) -> Option<Problem> {
+        None
+    }
+}
+
+/// How many times a balance was asked of the bank.
+#[injectable]
+#[derive(Default)]
+struct BalanceReads {
+    sent: AtomicU32,
+}
+
+#[resolver]
+struct ReconciledResolver {
+    #[inject]
+    bank: Arc<ResiliencePolicy<Bank>>,
+    #[inject]
+    reads: Arc<BalanceReads>,
+}
+
+#[operations]
+impl ReconciledResolver {
+    #[query]
+    #[public]
+    #[resilient(bank)]
+    async fn balance(&self) -> Result<i32, ResilienceError<BankDown>> {
+        self.reads.sent.fetch_add(1, Ordering::SeqCst);
+        Ok(42)
+    }
+}
+
+#[module(
+    imports = [GraphqlModule, ResilienceModule<Bank>],
+    providers = [ReconciledResolver, BalanceReads],
+)]
+struct ReconciledModule;
+
+#[tokio::test]
+async fn a_resilient_operation_runs_its_developers_body_under_the_policy() {
+    let app = TestApp::for_module::<ReconciledModule>()
+        .await
+        .expect("the schema boots");
+    let bank = app
+        .container()
+        .get::<ResiliencePolicy<Bank>>()
+        .expect("the module built the bank's policy");
+    let reads = app
+        .container()
+        .get::<BalanceReads>()
+        .expect("the module provides the count");
+
+    bank.open_breaker(Duration::from_secs(30))
+        .expect("the policy has a breaker");
+    let refused = crate::graphql_answer(&app, "{ balance }").await;
+    let extensions = &refused["errors"][0]["extensions"];
+    assert_eq!(extensions["code"], "UNAVAILABLE", "{refused}");
+    assert_eq!(extensions["retryAfterSeconds"], 30, "{refused}");
+    assert_eq!(
+        reads.sent.load(Ordering::SeqCst),
+        0,
+        "the breaker refused the body unsent"
+    );
+
+    bank.close_breaker().expect("the policy has a breaker");
+    let answered = crate::graphql_answer(&app, "{ balance }").await;
+    assert_eq!(answered["data"]["balance"], 42, "{answered}");
+    assert_eq!(reads.sent.load(Ordering::SeqCst), 1, "sent once closed");
 }
 
 /// A lint level written on an operation describes the developer's method, where

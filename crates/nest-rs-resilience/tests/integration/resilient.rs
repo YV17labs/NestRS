@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use nest_rs_core::{Module, injectable, instance, module};
+use nest_rs_core::{Module, error_message, injectable, instance, module};
 use nest_rs_resilience::{
     BreakerState, ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
 };
@@ -37,6 +37,12 @@ struct CarrierDown;
 #[derive(Debug, thiserror::Error)]
 #[error("no parcel by that number")]
 struct NoParcel;
+
+/// What the carrier answers when it asks to be called again later: a `Problem`
+/// in its chain asking the wait.
+#[derive(Debug, thiserror::Error)]
+#[error("the carrier asked to be called again later")]
+struct CarrierBusy(#[source] nest_rs_core::Problem);
 
 impl From<NoParcel> for CarrierDown {
     fn from(_: NoParcel) -> Self {
@@ -102,6 +108,15 @@ impl ParcelsService {
     async fn insist(&self) -> Answer<()> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         Err(CarrierDown)
+    }
+
+    /// Fails asking a minute's wait, past the backoff's ceiling.
+    #[resilient(courier, idempotent)]
+    async fn reroute(&self) -> Result<(), ResilienceError<CarrierBusy>> {
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        Err(CarrierBusy(
+            nest_rs_core::Problem::new(429, nest_rs_core::code::RATE_LIMITED).with_retry_after(60),
+        ))
     }
 
     /// Owned and borrowed arguments, read by every attempt.
@@ -588,6 +603,58 @@ async fn a_retry_of_a_decorated_method_names_its_host_and_its_method() {
     );
 }
 
+/// A retry a decorated method's run gives up names its host and its method too:
+/// one its dependency asked to wait past the backoff's ceiling, and one whose
+/// backoff would end past the unit's deadline.
+#[tokio::test(start_paused = true)]
+async fn a_retry_a_decorated_method_gives_up_names_its_host_and_its_method() {
+    let app = boot::<RetryingOnceModule>().await;
+    let parcels = parcels(&app);
+    let logs = LogCapture::install();
+
+    let asked = parcels.reroute().await;
+    assert!(
+        matches!(asked, Err(ResilienceError::Failed(CarrierBusy(_)))),
+        "{asked:?}"
+    );
+    assert_eq!(
+        parcels.attempted(),
+        1,
+        "a wait past the ceiling is not waited"
+    );
+    let past = logs.expect_one(
+        nest_rs_resilience::TARGET,
+        "the dependency asked a wait past the backoff's ceiling; not attempted again",
+    );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1);
+    let spent = nest_rs_core::__private::with_deadline(Some(deadline), parcels.track()).await;
+    assert!(failed(&spent), "{spent:?}");
+    assert_eq!(
+        parcels.attempted(),
+        1,
+        "no retry whose wait ends past the deadline"
+    );
+    let out_of_time = logs.expect_one(
+        nest_rs_resilience::TARGET,
+        "no time left before the unit's deadline; not attempted again",
+    );
+
+    for (line, method) in [(&past, "reroute"), (&out_of_time, "track")] {
+        assert_eq!(
+            line.field("instance").as_deref(),
+            Some("courier"),
+            "{line:?}"
+        );
+        assert_eq!(
+            line.field("host").as_deref(),
+            Some("ParcelsService"),
+            "{line:?}"
+        );
+        assert_eq!(line.field("method").as_deref(), Some(method), "{line:?}");
+    }
+}
+
 #[module(
     imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
         concurrency: Some(1),
@@ -745,6 +812,9 @@ static CERTIFICATE: LazyLock<TestCertificate> = LazyLock::new(|| AUTHORITY.serve
 #[instance]
 struct Previewer;
 
+/// The target the docs' feature files its lines on.
+const POSTS: &str = "features::posts";
+
 /// What a call to the previewer fails with.
 #[derive(Debug, thiserror::Error)]
 #[error("the previewer failed")]
@@ -782,12 +852,21 @@ impl Previews {
         page.text().await.map(Some).map_err(PreviewFailed)
     }
 
-    /// The docs' fallback: the bare link while the policy refuses the call, and
-    /// the previewer's own failure kept as the caller's error.
+    /// The docs' fallback: the bare link while the policy refuses the call, the
+    /// refusal filed at `warn` with its chain, and the previewer's own failure
+    /// kept as the caller's error.
     async fn link_card(&self, url: &str) -> Result<Option<String>, PreviewFailed> {
         self.preview(url).await.or_else(|error| match error {
             ResilienceError::Failed(failed) => Err(failed),
-            _refused => Ok(Some(url.to_owned())),
+            refused => {
+                let error = error_message(&refused);
+                tracing::warn!(
+                    target: POSTS,
+                    %error,
+                    "link preview refused; answering the bare link",
+                );
+                Ok(Some(url.to_owned()))
+            }
         })
     }
 }
@@ -858,16 +937,18 @@ struct FallbackModule;
 
 /// The fallback recipe, as it runs: the previewer's own failure is the caller's
 /// error, and the call the breaker it opened refuses answers the bare link,
-/// unsent.
+/// unsent, its refusal filed at `warn` with the chain the policy answered.
 #[tokio::test]
 async fn the_methods_result_is_its_fallback_a_refusal_answered_and_a_failure_kept() {
     let app = boot::<FallbackModule>().await;
     let previews = Previews::of(&app);
     let peer = HttpsPeer::answering(&CERTIFICATE, [PeerAnswer::status(503)]).await;
     let link = peer.url("/down");
+    let logs = LogCapture::install();
 
     let failed = previews.link_card(&link).await;
     assert!(matches!(failed, Err(PreviewFailed(_))), "{failed:?}");
+    logs.expect_none(POSTS, "link preview refused; answering the bare link");
     let refused = previews.link_card(&link).await;
     assert_eq!(
         refused.ok().flatten().as_deref(),
@@ -875,6 +956,17 @@ async fn the_methods_result_is_its_fallback_a_refusal_answered_and_a_failure_kep
         "the bare link while the breaker refuses the call"
     );
     assert_eq!(peer.requests().len(), 1, "the refused call is never sent");
+    let said = logs.expect_one(POSTS, "link preview refused; answering the bare link");
+    assert_eq!(said.level, "warn", "{said:?}");
+    let open = previews
+        .preview(&link)
+        .await
+        .expect_err("the breaker still refuses the call");
+    assert_eq!(
+        said.field("error"),
+        Some(error_message(&open)),
+        "the refusal's whole chain"
+    );
 }
 
 #[tokio::test(start_paused = true)]

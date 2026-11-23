@@ -2,8 +2,8 @@
 //! method's body run under the policy a field of `self` holds.
 
 use nest_rs_codegen::__private::{
-    HostBorrow, RESILIENT, RETRIES, TIMEOUT, answer_span, needs_a_value, resilient_policy_setting,
-    resilient_retries, resilient_timeout, shared_receiver, site,
+    HostBorrow, RESILIENT, RETRIES, TIMEOUT, answer_span, is_resilient, needs_a_value,
+    resilient_policy_setting, resilient_retries, resilient_timeout, shared_receiver, site,
 };
 use nest_rs_codegen::{Grammar, Refusals};
 use proc_macro2::{Group, Span, TokenStream, TokenTree};
@@ -353,14 +353,6 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
         receiver,
         opaque: opaque.is_some(),
     }
-}
-
-/// Whether `attr` is a `#[resilient]`, however its path is written.
-fn is_resilient(attr: &syn::Attribute) -> bool {
-    attr.path()
-        .segments
-        .last()
-        .is_some_and(|segment| segment.ident == RESILIENT)
 }
 
 /// The first `impl Trait` `ty` holds, wherever it sits in it.

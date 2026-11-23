@@ -7,8 +7,8 @@
 //! answer that is no `Result<(), E>` are each one error at the return type, in
 //! the framework's sentence, not a mismatch inside the registry entry the
 //! expansion writes. An error borrowing the host converts by its type but not
-//! for its lifetime, which no `#[diagnostic]` attribute reaches: rustc's own
-//! lifetime error refuses it at `#[scheduled]`, naming the answer's type.
+//! for its lifetime, which no `#[diagnostic]` attribute reaches: rustc refuses
+//! it at `#[scheduled]`, `E0716` naming its type if `async`, else `E0515`.
 
 use nest_rs::core::injectable;
 use nest_rs::schedule::scheduled;
@@ -55,6 +55,11 @@ impl Tasks {
 
     #[every("5m")]
     async fn prune<'a>(&'a self) -> Result<(), Refused<'a>> {
+        Err(Refused(self))
+    }
+
+    #[every("10m")]
+    fn trim<'a>(&'a self) -> Result<(), Refused<'a>> {
         Err(Refused(self))
     }
 }

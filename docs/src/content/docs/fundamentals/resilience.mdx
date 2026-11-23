@@ -88,11 +88,12 @@ or again alike. Each answer is coerced as that method would coerce it — a
 
 It goes on a provider, a struct you build, a trait impl, a route, a socket
 message, a queue job, a scheduled tick, a listener, a health indicator or a
-lifecycle hook. It also goes on a GraphQL query, mutation, field resolver or
-entity, and on an MCP tool, prompt, resource or listing. Everything else on the
-method stays as written. On an `#[sse]` route or a `#[subscription]`, it runs
-the call that opens the stream, never the items the stream yields later. A
-stream calling the dependency for each item calls a decorated method for it.
+lifecycle hook. It also goes on an MCP tool, prompt, resource or listing, and on
+a GraphQL query, mutation, field resolver or entity, whose other attributes go
+on the field `#[operations]` generates. On an `#[sse]` route or a
+`#[subscription]`, it runs the call that opens the stream, never the items the
+stream yields later. A stream calling the dependency for each item calls a
+decorated method for it.
 
 A method pins its own `timeout`, and an idempotent one its own `retries`, in
 place of the policy's:
@@ -104,7 +105,8 @@ is refused with the variable and the `ResilienceConfig` field that set it. An
 idempotent body reads its arguments again at every attempt, so it binds none
 `mut` and takes no `&mut`, both refused at compile time. It clones what an
 attempt consumes: a consumed argument is rustc's `E0507`, whose help writes the
-clone.
+clone. Every attempt borrows them, so its future is `Send` only where each
+argument it takes by value is `Sync`.
 
 **No attempt outlives its unit.** Each attempt ends at its timeout or at the
 deadline of the unit it runs in, whichever comes first. That deadline is the
@@ -116,7 +118,9 @@ A call that is part of a method, or that needs its attempt's
 `CancellationToken`, takes the policy's own `run` or `run_idempotent`:
 `self.upstream.run_idempotent(|cancel| async move { … }).await`. The token is
 cancelled when the policy gives the attempt up, and reaches work the call handed
-to another task, which dropping the attempt's future does not.
+to another task, which dropping the attempt's future does not. A request your
+own reqwest client sends takes neither: [Resilience
+middleware](/fundamentals/resilience-middleware/) runs each under a policy.
 
 ## What counts as a failure
 
@@ -147,14 +151,19 @@ back at least that long. One asking past `BACKOFF_CEILING_MS` ends the run.
 run once has consumed the arguments a fallback would need. The code calling the
 method chooses what stands in for what. `link_card` answers what `preview` does,
 but the bare link while the policy refuses the call: its breaker open, its rate
-spent, its bulkhead full, its attempt out of time. It answers the upstream's own
-failure as the service's error:
+spent, its bulkhead full, its attempt out of time. It files that refusal at
+`warn` with its chain, so the default is never silent, and answers the
+upstream's own failure as the service's error:
 
 ```rust title="crates/features/src/posts/service.rs"
 pub async fn link_card(&self, url: &str) -> Result<Option<String>, UpstreamError> {
     self.preview(url).await.or_else(|error| match error {
         ResilienceError::Failed(failed) => Err(failed),
-        _refused => Ok(Some(url.to_owned())),
+        refused => {
+            let error = nest_rs::core::error_message(&refused);
+            tracing::warn!(target: TARGET, %error, "link preview refused; answering the bare link");
+            Ok(Some(url.to_owned()))
+        }
     })
 }
 ```
@@ -230,12 +239,6 @@ mechanism's own lines are on its page. Once telemetry exports, every policy
 counts its breaker's transitions, its retries and the refusals its runs end on:
 [the counters](/opentelemetry/metrics/#resilience-policies).
 
-## Your reqwest client
-
-`ResilienceMiddleware` runs every request your own reqwest client sends under a
-policy, so a method calling through that client takes no `#[resilient]` of its
-own: [Resilience middleware](/fundamentals/resilience-middleware/).
-
 ## Test it
 
 What your client is told while the dependency is down takes one failure, or
@@ -282,10 +285,8 @@ something off, its field's off is `None`.
   `#[resilient]`: it calls a decorated method — the gateway's own, or a
   service's — and handles its `ResilienceError` itself.
 - **A GraphQL field writes its `Result` out.** `#[operations]` reads a field's
-  `Result` by its spelling, so a decorated field answers
-  `Result<T, ResilienceError<E>>`. Under an alias, the whole answer is read as
-  the field's GraphQL type, which a `ResilienceError` cannot be, and it does not
-  compile.
+  `Result` by its spelling, so a decorated field answering one through an alias
+  is refused, saying to write it out.
 
 ## Going further
 

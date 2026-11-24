@@ -246,7 +246,7 @@ async fn an_ok_sent_again_is_a_retry_telling_no_error() {
     );
     assert_eq!(
         said(retry),
-        filed(&logs.expect_one(TARGET, "attempt failed; retrying the call"))
+        filed(&logs.expect_one(TARGET, "attempt answered; retrying the call"))
     );
 }
 
@@ -504,7 +504,7 @@ async fn a_call_refused_before_it_takes_a_slot_of_the_bulkhead_is_told_once() {
 /// method and saying the error as its line does.
 #[tokio::test(start_paused = true)]
 async fn a_fallback_answering_is_told_with_the_chain_of_the_error_it_answers_for() {
-    const ANSWERS: &str = "the call failed; its fallback answers";
+    const ANSWERS: &str = "the call ended on an error; its fallback answers";
 
     let (_app, service, policy) = quotes(ResilienceConfig {
         retries: None,
@@ -721,7 +721,7 @@ async fn with_no_subscription_a_failing_call_formats_no_chain_for_an_event() {
     );
     assert_eq!(
         lines
-            .find(TARGET, "the call failed; its fallback answers")
+            .find(TARGET, "the call ended on an error; its fallback answers")
             .len(),
         1
     );
@@ -862,7 +862,9 @@ async fn an_outcome_past_its_age_is_read_no_more() {
 }
 
 /// The bulkhead reads the calls holding a slot and the ones waiting for one,
-/// as each takes its slot, waits, and leaves.
+/// as each takes its slot, waits, and leaves, each call in one read at every
+/// instant: a waiter the freed slot is handed to is read as waiting until its
+/// own future takes it.
 #[tokio::test(start_paused = true)]
 async fn the_bulkhead_reads_the_calls_running_and_the_ones_waiting() {
     let (_app, policy) = crate::policy(ResilienceConfig {
@@ -885,6 +887,11 @@ async fn the_bulkhead_reads_the_calls_running_and_the_ones_waiting() {
     assert_eq!(read(), (2, 1), "both slots held, and one call waiting");
 
     drop(first);
+    assert_eq!(
+        read(),
+        (1, 1),
+        "two calls alive: the slot freed is the waiter's, which has yet to take it"
+    );
     assert!(waiting.as_mut().await.is_ok(), "it took the slot freed");
     assert_eq!(read(), (1, 0), "it ran, and left");
     drop(second);

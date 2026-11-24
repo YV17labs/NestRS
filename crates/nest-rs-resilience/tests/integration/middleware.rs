@@ -13,8 +13,8 @@
 //! time its reads wait for the dependency, never the time its caller takes.
 //! What its policy tells a subscription of all this names no method: a retry
 //! as its line files it, a timeout before the retry it earns, a body given up
-//! as the timeout it is, and one the dependency cut short by the breaker's
-//! opening alone.
+//! as the timeout it is, and one the dependency cut short, or dropped by its
+//! caller with a read waiting past the bound, by the breaker's opening alone.
 
 use std::convert::Infallible;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -641,7 +641,9 @@ async fn a_middleware_added_after_the_trace_refuses_every_request_unsent_saying_
     assert_eq!(peer.requests().len(), 0, "nothing is sent");
 }
 
-/// What the line of a retry says.
+/// What the line of a retry says under the middleware, every time: it sends
+/// again a transport failure, a timeout or a status judged a failure, never an
+/// answer it took, so the line of an `Ok` sent again is none of its own.
 const RETRYING: &str = "attempt failed; retrying the call";
 
 /// The `error` of each line on the policy's target saying `message`, none of
@@ -1099,6 +1101,63 @@ async fn a_read_abandoned_then_dropped_past_the_bound_counts_what_the_dependency
     tokio::time::sleep(BODY_TIMEOUT + Duration::from_millis(50)).await;
     drop(answered);
     assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+}
+
+/// A response dropped while a read of it has waited past the bound for a part
+/// the dependency still holds back is a timeout in the breaker, whose opening
+/// says so; and no caller is left to answer, so the policy refuses none: its
+/// subscriptions are told the breaker's opening alone, no timeout.
+#[tokio::test]
+async fn a_response_dropped_with_a_read_waiting_past_the_bound_is_a_timeout_told_to_no_caller() {
+    const FIRST: &str = "the first part, ";
+    let peer = answering([PeerAnswer::parted(200, FIRST, "then the second")]).await;
+    let (_app, policy) = policy(opening_on_one_failure()).await;
+    let logs = LogCapture::install();
+    let mut events = policy.events();
+
+    let mut answered = client(Arc::clone(&policy))
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    let mut read = 0;
+    while read < FIRST.len() {
+        let chunk = answered.chunk().await.expect("a chunk");
+        read += chunk.expect("the first part").len();
+    }
+    let abandoned = tokio::time::timeout(Duration::from_millis(10), answered.chunk()).await;
+    assert!(abandoned.is_err(), "the second part is held back");
+    tokio::time::sleep(BODY_TIMEOUT + Duration::from_millis(50)).await;
+    assert_eq!(
+        policy.breaker_state(),
+        Some(BreakerState::Closed),
+        "an abandoned read is given up by no timer: nothing is counted until the drop"
+    );
+    drop(answered);
+
+    assert!(
+        matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+        "the part never came within the bound"
+    );
+    let opening = logs.expect_one(TARGET, "circuit breaker changed state");
+    assert_eq!(
+        opening.field("error").as_deref(),
+        Some("the call did not answer within its timeout"),
+        "{opening:?}"
+    );
+    let told = told(&mut events);
+    assert!(
+        matches!(
+            &told[..],
+            [ResilienceEvent::Transition {
+                from: BreakerPhase::Closed,
+                to: BreakerPhase::Open,
+                manual: false,
+                ..
+            }]
+        ),
+        "the opening alone, and no timeout: {told:?}"
+    );
 }
 
 /// A body the policy gives up at the attempt's bound reaches the caller as

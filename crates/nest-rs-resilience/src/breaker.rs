@@ -2,7 +2,9 @@
 //! attempts, forgetting an outcome past its age when outcomes have one, opened
 //! by enough failures in it, probing the dependency one call at a time once
 //! its open time has passed, closed by enough probes in a row, and opened or
-//! closed by hand. Its state lives in the process.
+//! closed by hand. An answer counts only while the breaker has neither opened
+//! nor been switched by hand since its attempt was let through. Its state
+//! lives in the process.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -31,7 +33,9 @@ const OVERDUE: Duration = Duration::from_millis(1);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BreakerState {
-    /// The call is sent, and its success or its failure counts in the window.
+    /// The call is sent, and its success or its failure counts in the window
+    /// — unless the breaker opens, or is switched by hand, before it answers:
+    /// its answer then counts nowhere, in that window or the next.
     Closed,
     /// The call is refused unsent, as long as the open time lasts.
     #[non_exhaustive]
@@ -43,10 +47,11 @@ pub enum BreakerState {
     },
     /// The open time has passed, and the breaker lets one probe through at a
     /// time. The call takes the probe's turn when it is free — the open time
-    /// over, or between two probes of the series
-    /// [`breaker_probes`](crate::ResilienceConfig::breaker_probes) asks — and
-    /// is refused while another call holds it, whether that call is sent yet
-    /// or still waits for its token of the rate limit, told when the probe has
+    /// over, or between two probes: of the series
+    /// [`breaker_probes`](crate::ResilienceConfig::breaker_probes) asks, or
+    /// after one whose answer counted in neither direction — and is refused
+    /// while another call holds it, whether that call is sent yet or still
+    /// waits for its token of the rate limit, told when the probe has
     /// answered at the latest. It carries no time: that bound is the probe's
     /// own run's.
     HalfOpen,
@@ -76,7 +81,7 @@ impl BreakerState {
 #[non_exhaustive]
 pub enum BreakerPhase {
     /// Every call is sent, and its success or its failure counts in the
-    /// window.
+    /// window, when it answers before the breaker next opens or is switched.
     Closed,
     /// No call is sent: until the open time has passed, then until a call
     /// probes the dependency.
@@ -100,7 +105,8 @@ impl BreakerPhase {
 /// it: [`ResiliencePolicy::breaker_stats`](crate::ResiliencePolicy::breaker_stats).
 ///
 /// The window counts while the breaker is closed and is forgotten as it opens,
-/// so an open or half-open breaker reads none.
+/// so an open or half-open breaker reads none, and one closed again counts
+/// the attempts let through since: none whose call was sent before it opened.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BreakerStats {
@@ -109,7 +115,8 @@ pub struct BreakerStats {
     /// [`breaker_window`](crate::ResilienceConfig::breaker_window), none older
     /// than [`breaker_age`](crate::ResilienceConfig::breaker_age) when
     /// outcomes have an age. An attempt answering an `Err` its method's
-    /// `record_if` refuses is neither, and none of them.
+    /// `record_if` refuses is neither, and none of them, nor is one let
+    /// through before the breaker last opened or was switched by hand.
     pub outcomes: usize,
     /// The failures among them: the breaker opens once a failure brings them
     /// to [`breaker_failures`](crate::ResilienceConfig::breaker_failures).
@@ -138,20 +145,38 @@ impl BreakerStats {
     }
 }
 
+/// The probe's turn as a call takes it: the first since the breaker opened,
+/// the lines reading it open until that call is sent, the dependency not
+/// called — or the next of a series under way, `passed` of its probes having
+/// succeeded, the lines reading it half-open since the first was sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Turn {
+    First,
+    Next { passed: usize },
+}
+
+impl Turn {
+    /// How many probes of the series succeeded before this one.
+    const fn passed(self) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Next { passed } => passed,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Closed,
     Open {
         until: Instant,
     },
-    /// The open time passed and one call holds the probe's turn, its call not
-    /// sent yet, `passed` probes of the series having succeeded before it:
-    /// every other call is refused until the probe has answered, by `until`
-    /// at the latest, and the lines read the breaker as open until a probe of
-    /// the series is sent, the dependency not called.
+    /// The open time passed and one call holds the probe's `turn`, its call
+    /// not sent yet: every other call is refused until the probe has
+    /// answered, by `until` at the latest.
     ProbePending {
         until: Instant,
-        passed: usize,
+        turn: Turn,
     },
     /// One call probes the dependency, `passed` probes of the series having
     /// succeeded before it; every other is refused until it answers, by
@@ -160,7 +185,8 @@ enum Phase {
         until: Instant,
         passed: usize,
     },
-    /// Between two probes of a series, `passed` of them having succeeded: the
+    /// Between two probes of a series, `passed` of them having succeeded —
+    /// none, where every probe sent so far counted in neither direction: the
     /// probe's turn is free, and the next call takes it.
     BetweenProbes {
         passed: usize,
@@ -172,7 +198,10 @@ impl Phase {
     const fn told(self) -> BreakerPhase {
         match self {
             Self::Closed => BreakerPhase::Closed,
-            Self::Open { .. } | Self::ProbePending { passed: 0, .. } => BreakerPhase::Open,
+            Self::Open { .. }
+            | Self::ProbePending {
+                turn: Turn::First, ..
+            } => BreakerPhase::Open,
             Self::ProbePending { .. } | Self::HalfOpen { .. } | Self::BetweenProbes { .. } => {
                 BreakerPhase::HalfOpen
             }
@@ -180,14 +209,13 @@ impl Phase {
     }
 
     /// What a call meeting the breaker in this phase gets: let through —
-    /// sent as the breaker is closed (`None`), or taking the probe's turn
-    /// after the `passed` probes of its series that succeeded — or refused for
-    /// the wait the breaker knows.
-    fn admitting(self) -> Result<Option<usize>, Duration> {
+    /// sent as the breaker is closed (`None`), or taking the probe's turn —
+    /// or refused for the wait the breaker knows.
+    fn admitting(self) -> Result<Option<Turn>, Duration> {
         match self {
             Self::Closed => Ok(None),
-            Self::Open { until } => left(until).map_or(Ok(Some(0)), Err),
-            Self::BetweenProbes { passed } => Ok(Some(passed)),
+            Self::Open { until } => left(until).map_or(Ok(Some(Turn::First)), Err),
+            Self::BetweenProbes { passed } => Ok(Some(Turn::Next { passed })),
             Self::ProbePending { until, .. } | Self::HalfOpen { until, .. } => {
                 Err(until.saturating_duration_since(Instant::now()).max(OVERDUE))
             }
@@ -228,8 +256,8 @@ enum Outcomes {
 }
 
 /// The phase, the window of latest outcomes and how many of them failed, and
-/// the epoch: how many manual switches came, each voiding what the attempts
-/// admitted before it would change.
+/// the epoch: how many times the breaker opened or was switched by hand, each
+/// voiding what the attempts admitted before it would change or count.
 #[derive(Debug)]
 struct Held {
     phase: Phase,
@@ -318,7 +346,8 @@ pub(crate) struct Breaker {
 /// rate refused it, the unit ran out of time, its caller dropped it — it
 /// counts for nothing, and a probe hands its turn to the next call with no
 /// transition, the dependency never called. It carries the epoch it was
-/// admitted in, so a manual switch since leaves it nothing to change.
+/// admitted in, so an opening or a manual switch since leaves it nothing to
+/// change or count.
 pub(crate) struct Pass<'b> {
     breaker: &'b Breaker,
     probe: bool,
@@ -327,7 +356,8 @@ pub(crate) struct Pass<'b> {
 
 impl<'b> Pass<'b> {
     /// Whether the attempt holds the probe's turn: it took it, and no manual
-    /// switch came since.
+    /// switch came since — nothing else moves the breaker while a call holds
+    /// the turn.
     #[inline]
     pub(crate) fn probes(&self) -> bool {
         self.probe && self.breaker.held.lock().epoch == self.epoch
@@ -377,7 +407,9 @@ impl Drop for Pass<'_> {
 /// Dropped so at or past the instant its bound ends at, it has timed out, as
 /// its own timer due there would have said: an edge cutting its unit at that
 /// deadline may be polled first, tokio firing one instant's timers in batches
-/// that another worker runs between.
+/// that another worker runs between. However it ends, it changes and counts
+/// nothing once the breaker opened or was switched by hand since it was
+/// admitted.
 pub(crate) struct Sent<'b> {
     breaker: &'b Breaker,
     probe: bool,
@@ -396,12 +428,18 @@ impl Sent<'_> {
 
     /// The attempt answered what counts in neither direction — an `Err` its
     /// method's `record_if` refuses: nothing is counted, whenever it answered,
-    /// and a probe hands its turn to the next call as one its caller dropped
-    /// does, its series keeping what it counted.
+    /// and a probe hands its turn to the next call, its series keeping what
+    /// it counted and the breaker half-open as the answer found it, with no
+    /// transition — where a probe its caller dropped, the dependency saying
+    /// nothing, leaves the breaker open again on no success yet.
     #[inline]
     pub(crate) fn ignore(mut self) {
-        // Dropped holding the instant its bound ends at, it would time out there.
+        // Dropped holding its probe's turn, it would abandon it; holding the
+        // instant its bound ends at, it would time out there.
         self.until = None;
+        if std::mem::take(&mut self.probe) {
+            self.breaker.probe_ignored(self.epoch);
+        }
     }
 
     /// The attempt held past its run, with no borrow of the breaker, by what
@@ -501,23 +539,24 @@ impl Breaker {
     #[inline]
     pub(crate) fn admit(&self, bound: Duration) -> Result<Pass<'_>, Duration> {
         let mut held = self.held.lock();
-        let probing = held.phase.admitting()?;
-        if let Some(passed) = probing {
+        let turn = held.phase.admitting()?;
+        if let Some(turn) = turn {
             held.phase = Phase::ProbePending {
                 until: Instant::now() + bound,
-                passed,
+                turn,
             };
         }
         Ok(Pass {
             breaker: self,
-            probe: probing.is_some(),
+            probe: turn.is_some(),
             epoch: held.epoch,
         })
     }
 
     /// The attempt `held` was taken from, one this breaker admitted, to settle:
-    /// in the epoch it was admitted in, so a manual switch since leaves it
-    /// nothing to change. It ends when it is settled, at no instant of its own.
+    /// in the epoch it was admitted in, so an opening or a manual switch since
+    /// leaves it nothing to change or count. It ends when it is settled, at no
+    /// instant of its own.
     #[cfg(feature = "reqwest")]
     pub(crate) fn resume(&self, held: HeldAttempt) -> Sent<'_> {
         Sent {
@@ -556,7 +595,7 @@ impl Breaker {
 
     /// Open the breaker by hand for `open_for` from now, whatever it was in:
     /// every call is refused that long, then probed as after any opening, and
-    /// no attempt admitted before changes it.
+    /// no attempt admitted before changes it, as after any opening.
     pub(crate) fn open_manually(&self, open_for: Duration) {
         self.switch(
             Phase::Open {
@@ -567,7 +606,8 @@ impl Breaker {
     }
 
     /// Close the breaker by hand, whatever it was in, its window forgotten,
-    /// and no attempt admitted before changing it.
+    /// and no attempt admitted before changing it or counting in the next:
+    /// what an opening leaves of the attempts admitted before it.
     pub(crate) fn close_manually(&self) {
         self.switch(Phase::Closed, None);
     }
@@ -583,8 +623,9 @@ impl Breaker {
         self.entered(&held, from, Moved::Manual { open_for });
     }
 
-    /// The breaker's state for an attempt admitted in `epoch`: `None` once a
-    /// manual switch came since, which leaves the attempt nothing to change.
+    /// The breaker's state for an attempt admitted in `epoch`: `None` once
+    /// the breaker opened or was switched by hand since, which leaves the
+    /// attempt nothing to change or count.
     #[inline]
     fn held_since(&self, epoch: u64) -> Option<MutexGuard<'_, Held>> {
         let held = self.held.lock();
@@ -593,8 +634,9 @@ impl Breaker {
 
     /// Count the outcome of an attempt admitted in `epoch`, `failure` saying
     /// what it failed on: a probe opens the breaker again, or closes it as the
-    /// last of its series, and any other attempt counts in the window while it
-    /// is closed — and for nothing once another call opened it.
+    /// last of its series, and any other attempt counts in the window of the
+    /// closed breaker that admitted it — and for nothing once another call
+    /// opened it, closed again since or not.
     #[inline]
     fn record(&self, epoch: u64, probe: bool, failure: Option<&str>) {
         let Some(mut held) = self.held_since(epoch) else {
@@ -606,7 +648,7 @@ impl Breaker {
                 return;
             };
             if let Some(error) = failure {
-                held.phase = self.opened();
+                self.open(&mut held);
                 self.entered(&held, from, Moved::Failures { failed: 1, error });
             } else if passed + 1 < self.probes {
                 held.phase = Phase::BetweenProbes { passed: passed + 1 };
@@ -620,7 +662,7 @@ impl Breaker {
             if let Some(error) = failure
                 && failed >= self.failures
             {
-                held.phase = self.opened();
+                self.open(&mut held);
                 held.forget();
                 self.entered(&held, Phase::Closed, Moved::Failures { failed, error });
             }
@@ -644,12 +686,12 @@ impl Breaker {
             return;
         };
         let from = held.phase;
-        if let Phase::ProbePending { passed, .. } = from {
+        if let Phase::ProbePending { turn, .. } = from {
             held.phase = Phase::HalfOpen {
                 until: Instant::now() + bound,
-                passed,
+                passed: turn.passed(),
             };
-            if passed == 0 {
+            if turn == Turn::First {
                 self.entered(&held, from, Moved::Probe);
             }
         }
@@ -661,12 +703,12 @@ impl Breaker {
         let Some(mut held) = self.held_since(epoch) else {
             return;
         };
-        if let Phase::ProbePending { passed, .. } = held.phase {
-            held.phase = match passed {
-                0 => Phase::Open {
+        if let Phase::ProbePending { turn, .. } = held.phase {
+            held.phase = match turn {
+                Turn::First => Phase::Open {
                     until: Instant::now(),
                 },
-                passed => Phase::BetweenProbes { passed },
+                Turn::Next { passed } => Phase::BetweenProbes { passed },
             };
         }
     }
@@ -692,10 +734,25 @@ impl Breaker {
         }
     }
 
-    fn opened(&self) -> Phase {
-        Phase::Open {
-            until: Instant::now() + self.open_for,
+    /// A probe whose answer counts in neither direction: the next call probes
+    /// instead, the series keeping what it counted — and the breaker,
+    /// half-open as that answer found it, files no transition.
+    fn probe_ignored(&self, epoch: u64) {
+        let Some(mut held) = self.held_since(epoch) else {
+            return;
+        };
+        if let Phase::HalfOpen { passed, .. } = held.phase {
+            held.phase = Phase::BetweenProbes { passed };
         }
+    }
+
+    /// Open `held` for the whole open time, in an epoch of its own: the
+    /// attempts admitted before it change and count nothing from here on.
+    fn open(&self, held: &mut Held) {
+        held.epoch = held.epoch.wrapping_add(1);
+        held.phase = Phase::Open {
+            until: Instant::now() + self.open_for,
+        };
     }
 
     /// Say the transition `held` just made out of `from`, count it and tell it:
@@ -917,6 +974,7 @@ mod tests {
         attempt(&breaker, true);
         late.settle(None);
         assert_eq!(breaker.state(), "open", "a late success closes nothing");
+        assert_eq!(breaker.stats(), NOTHING, "nor counts in a window");
     }
 
     #[tokio::test(start_paused = true)]
@@ -939,7 +997,8 @@ mod tests {
 
     /// Each transition adds one to the counter, by the instance and the state it
     /// entered, on the meter `OpenTelemetry::init()` installs — after the
-    /// breaker was built, too.
+    /// breaker was built, too — and a probe ignored, which moves nothing, adds
+    /// none, nor the probe sent after it.
     #[cfg(feature = "opentelemetry")]
     #[tokio::test(start_paused = true)]
     async fn each_transition_is_counted_by_its_instance_and_the_state_entered() {
@@ -964,10 +1023,8 @@ mod tests {
                 .admit(BOUND)
                 .expect("a probe given up before its call is sent"),
         );
-        let Ok(probe) = breaker.admit(BOUND) else {
-            panic!("the open time passed");
-        };
-        probe.send(BOUND, None).settle(Some(DOWN));
+        probe(&breaker).send(BOUND, None).ignore();
+        probe(&breaker).send(BOUND, None).settle(Some(DOWN));
         provider.force_flush().expect("the export");
 
         let exported = exporter
@@ -1134,6 +1191,29 @@ mod tests {
         let pass = breaker.admit(BOUND).expect("the probe's turn is free");
         assert!(pass.probes(), "the call takes the probe's turn");
         pass
+    }
+
+    /// Each transition `events` was told and has not answered yet, as the
+    /// phase it left, the one it entered and whether a hand moved it.
+    fn told(
+        events: &mut crate::events::ResilienceEvents,
+    ) -> Vec<(BreakerPhase, BreakerPhase, bool)> {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let mut told = Vec::new();
+        loop {
+            let mut next = std::pin::pin!(events.next());
+            let Poll::Ready(Some(event)) =
+                next.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+            else {
+                return told;
+            };
+            let ResilienceEvent::Transition { from, to, manual } = event else {
+                panic!("a transition: {event:?}");
+            };
+            told.push((from, to, manual));
+        }
     }
 
     /// Each transition's line, as `state`, then `manual`, `open_ms` and
@@ -1580,19 +1660,45 @@ mod tests {
         );
     }
 
-    /// A probe ignored hands its turn to the next call as one its caller
-    /// dropped does: the series keeps its count, neither advanced nor started
-    /// over, and on no success yet the lines say the breaker open again, no
-    /// call refused. At the instant its bound ends at it has not failed.
+    /// A probe ignored hands its turn to the next call and moves nothing: the
+    /// breaker stays half-open and its series keeps its count, neither
+    /// advanced nor started over, whether a probe of it succeeded yet or none
+    /// — no call refused, no line filed, no transition told, by the answer or
+    /// by the probe sent after it. At the instant its bound ends at it has
+    /// not failed.
     #[tokio::test(start_paused = true)]
-    async fn a_probe_ignored_hands_its_turn_on_and_its_series_keeps_its_count() {
+    async fn a_probe_ignored_hands_its_turn_on_and_moves_nothing_whatever_its_series_holds() {
+        use BreakerPhase::{Closed, HalfOpen, Open};
+
+        let subscribers = Arc::new(Subscribers::default());
+        let breaker = Breaker::new(
+            "upstream",
+            1,
+            1,
+            OPEN_FOR,
+            None,
+            2,
+            Arc::new(Counters::new("upstream")),
+            Arc::clone(&subscribers),
+        );
         let lines = nest_rs_testing::LogCapture::install();
-        let breaker = probing(2);
+        let mut events = subscribers.subscribe();
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
 
         probe(&breaker).send(BOUND, None).ignore();
-        assert_eq!(breaker.read(), BreakerState::HalfOpen, "the turn is free");
+        assert_eq!(
+            (breaker.read(), breaker.state()),
+            (BreakerState::HalfOpen, "half_open"),
+            "the turn is free, the breaker probing still"
+        );
+        let pending = probe(&breaker);
+        assert_eq!(
+            breaker.state(),
+            "half_open",
+            "the turn taken, its call not sent: a series under way stays half-open"
+        );
+        drop(pending);
         let sent = probe(&breaker).send(BOUND, Some(Instant::now() + BOUND));
         tokio::time::advance(BOUND).await;
         sent.ignore();
@@ -1607,17 +1713,193 @@ mod tests {
         assert_eq!(breaker.read(), BreakerState::HalfOpen, "one of two, kept");
         probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
+        assert_eq!(states(&lines), ["open", "half_open", "closed"]);
+        assert_eq!(
+            told(&mut events),
+            [
+                (Closed, Open, false),
+                (Open, HalfOpen, false),
+                (HalfOpen, Closed, false),
+            ]
+        );
+    }
+
+    /// A probe its caller drops once sent, no probe of its series having
+    /// succeeded, files the breaker open again, and the next probe half-open,
+    /// after a probe ignored as after none.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_dropped_after_one_ignored_files_the_breaker_open_again() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let breaker = probing(2);
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+        probe(&breaker).send(BOUND, None).ignore();
+        drop(probe(&breaker).send(BOUND, None));
+        assert_eq!(breaker.state(), "open");
+        probe(&breaker).send(BOUND, None).settle(None);
+        probe(&breaker).send(BOUND, None).settle(None);
+        assert_eq!(breaker.read(), BreakerState::Closed);
         assert_eq!(
             states(&lines),
-            [
-                "open",
-                "half_open",
-                "open",
-                "half_open",
-                "open",
-                "half_open",
-                "closed"
-            ]
+            ["open", "half_open", "open", "half_open", "closed"]
+        );
+    }
+
+    /// A probe ignored after a switch hands on no turn of the breaker's since:
+    /// the probe holding it keeps it.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_ignored_after_a_switch_takes_nothing_from_the_probe_after_it() {
+        let breaker = breaker(1, 1);
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+        let stale = probe(&breaker).send(BOUND, None);
+        let held_open = Duration::from_secs(10);
+        breaker.open_manually(held_open);
+        tokio::time::advance(held_open).await;
+        let current = probe(&breaker).send(BOUND, None);
+        stale.ignore();
+        assert_eq!(
+            refused_for(&breaker),
+            BOUND,
+            "the call out is still the probe"
+        );
+        current.settle(None);
+        assert_eq!(breaker.read(), BreakerState::Closed);
+    }
+
+    /// The breaker opened by its failures, then closed again by its probe.
+    async fn cycled(breaker: &Breaker) {
+        while breaker.read() == BreakerState::Closed {
+            attempt(breaker, true);
+        }
+        tokio::time::advance(OPEN_FOR).await;
+        probe(breaker).send(BOUND, None).settle(None);
+        assert_eq!(breaker.read(), BreakerState::Closed);
+    }
+
+    const ONE_FAILURE: BreakerStats = BreakerStats {
+        outcomes: 1,
+        failures: 1,
+    };
+
+    const NOTHING: BreakerStats = BreakerStats {
+        outcomes: 0,
+        failures: 0,
+    };
+
+    /// An answer counts only while the breaker has not opened since its
+    /// attempt was admitted: sent before an opening and answering once the
+    /// breaker closed again, a success pushes no failure out of the new
+    /// window, and a failure opens nothing.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_sent_before_an_opening_counts_nowhere_once_the_breaker_closed_again() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let breaker = breaker(2, 2);
+        let sent = || breaker.admit(BOUND).expect("closed").send(BOUND, None);
+        let (success, another, failure) = (sent(), sent(), sent());
+        cycled(&breaker).await;
+        attempt(&breaker, true);
+
+        success.settle(None);
+        another.settle(None);
+        assert_eq!(
+            breaker.stats(),
+            ONE_FAILURE,
+            "no success from before the opening pushed the failure out"
+        );
+        failure.settle(Some(DOWN));
+        assert_eq!(
+            (breaker.read(), breaker.stats()),
+            (BreakerState::Closed, ONE_FAILURE),
+            "no failure from before the opening is the window's second"
+        );
+        attempt(&breaker, true);
+        assert_eq!(
+            breaker.state(),
+            "open",
+            "the second failure since it closed"
+        );
+        assert_eq!(states(&lines), ["open", "half_open", "closed", "open"]);
+    }
+
+    /// However an attempt admitted before an opening ends once the breaker
+    /// closed again, the new window holds nothing of it: dropped past its
+    /// bound's end, where it had timed out; ignored; dropped with no bound;
+    /// and its pass, kept unsent, sent only then and answering a failure.
+    #[tokio::test(start_paused = true)]
+    async fn however_an_attempt_from_before_an_opening_ends_the_new_window_holds_nothing_of_it() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let breaker = breaker(1, 1);
+        let admitted = || breaker.admit(BOUND).expect("closed");
+        let until = Some(Instant::now() + BOUND);
+        let cut = admitted().send(BOUND, until);
+        let ignored = admitted().send(BOUND, until);
+        let dropped = admitted().send(BOUND, None);
+        let unsent = admitted();
+        cycled(&breaker).await;
+
+        drop(cut);
+        ignored.ignore();
+        drop(dropped);
+        assert!(!unsent.probes());
+        unsent.postpone(Instant::now() + BOUND, BOUND);
+        unsent.send(BOUND, None).settle(Some(DOWN));
+        assert_eq!(
+            (breaker.read(), breaker.stats()),
+            (BreakerState::Closed, NOTHING),
+            "a breaker one failure opens, and none of them was one"
+        );
+        assert_eq!(states(&lines), ["open", "half_open", "closed"]);
+    }
+
+    /// An attempt held past its run across an opening and the closing after
+    /// it counts nowhere once it is taken up again, as one its run settles: a
+    /// success pushes no failure out, and a failure opens nothing.
+    #[cfg(feature = "reqwest")]
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_held_across_an_opening_counts_nowhere_once_the_breaker_closed_again() {
+        let breaker = breaker(2, 2);
+        let held = || {
+            breaker
+                .admit(BOUND)
+                .expect("closed")
+                .send(BOUND, None)
+                .hold()
+        };
+        let (success, another, failure) = (held(), held(), held());
+        cycled(&breaker).await;
+        attempt(&breaker, true);
+
+        breaker.resume(success).settle(None);
+        breaker.resume(another).settle(None);
+        assert_eq!(breaker.stats(), ONE_FAILURE);
+        breaker.resume(failure).settle(Some(DOWN));
+        assert_eq!(
+            (breaker.read(), breaker.stats()),
+            (BreakerState::Closed, ONE_FAILURE)
+        );
+    }
+
+    /// A probe is admitted in the opening it probes, and an attempt after it
+    /// in the closing it made: across two openings each still counts — a
+    /// failed probe opens the breaker again, the next closes it, and the
+    /// failures answered since open it a third time.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_and_the_attempts_after_it_count_in_the_opening_they_were_admitted_in() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let breaker = breaker(2, 2);
+        attempt(&breaker, true);
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+        probe(&breaker).send(BOUND, None).settle(Some(DOWN));
+        tokio::time::advance(OPEN_FOR).await;
+        probe(&breaker).send(BOUND, None).settle(None);
+        let late = breaker.admit(BOUND).expect("closed").send(BOUND, None);
+        attempt(&breaker, true);
+        late.settle(Some(DOWN));
+        assert_eq!(
+            states(&lines),
+            ["open", "half_open", "open", "half_open", "closed", "open"]
         );
     }
 
@@ -2022,9 +2304,6 @@ mod tests {
     /// up unsent, a probe passing with more of its series to come.
     #[tokio::test(start_paused = true)]
     async fn each_transition_is_told_leaving_the_phase_the_one_before_it_entered() {
-        use std::future::Future;
-        use std::task::{Context, Poll, Waker};
-
         use BreakerPhase::{Closed, HalfOpen, Open};
 
         let subscribers = Arc::new(Subscribers::default());
@@ -2053,19 +2332,7 @@ mod tests {
         breaker.open_manually(Duration::from_secs(10));
         breaker.close_manually();
 
-        let mut told = Vec::new();
-        loop {
-            let mut next = std::pin::pin!(events.next());
-            let Poll::Ready(Some(event)) =
-                next.as_mut().poll(&mut Context::from_waker(Waker::noop()))
-            else {
-                break;
-            };
-            let ResilienceEvent::Transition { from, to, manual } = event else {
-                panic!("a transition: {event:?}");
-            };
-            told.push((from, to, manual));
-        }
+        let told = told(&mut events);
         assert_eq!(
             told,
             [

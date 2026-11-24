@@ -57,7 +57,7 @@ error[E0277]: a `#[resilient]` method's `fallback_if` is a `Fn(&ResilienceError<
 note: required by a bound in `nest_rs::resilience::__private::fall_back`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
-   | pub fn fall_back<R, I, P, B, S, A, Fut, W>(
+   | pub fn fall_back<R, T, E, I, P, S>(
 ...
-   |     P: FallbackIf<R::Err, S>,
-   |        ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `fall_back`
+   |     P: FallbackIf<E, S>,
+   |        ^^^^^^^^^^^^^^^^ required by this bound in `fall_back`

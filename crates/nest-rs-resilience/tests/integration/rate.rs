@@ -1,7 +1,8 @@
 //! Covers `src/rate.rs` through `#[resilient]`: every attempt a decorated
 //! method sends takes a token of its policy's rate, a retry included,
 //! whichever method on the field sends it; methods finding none free wait in
-//! one line, each for its own token; a method the rate refuses is never
+//! one line, each for its own token, one that found no slot of the bulkhead
+//! free from the instant it is handed one; a method the rate refuses is never
 //! attempted again and is named by the lines its refusal and its wait file;
 //! and the refusal is answered `503` with the time to the next token by a
 //! route, and waited out by a job's retry.
@@ -207,6 +208,45 @@ async fn decorated_methods_finding_no_token_free_wait_in_one_line_each_for_its_o
         matches!(refused, (Err(ResilienceError::Limited { retry_after, .. }), at)
             if retry_after == Duration::from_secs(30) && at.is_zero()),
         "the third, told at once the 30 s to the token it would be due: {refused:?}"
+    );
+}
+
+#[module(
+    imports = [ResilienceModule::for_root((Forwarder, ResilienceConfig {
+        concurrency: Some(1),
+        concurrency_wait: Some(Duration::from_secs(60)),
+        rate_limit: Some(1),
+        rate_window: Duration::from_secs(10),
+        rate_wait: Some(Duration::from_secs(15)),
+        ..quiet()
+    }))],
+    providers = [ShipmentsService],
+)]
+struct OneSlotOneInTenSecondsModule;
+
+/// A decorated method finding the bulkhead's one slot held, by a method
+/// waiting for the token at 10 s, reaches the rate once that slot frees: its
+/// own token, at 20 s, is 19 s from its call at 1 s and past the rate's 15 s
+/// wait from there, and 10 s from the slot it is handed at 10 s. It waits for
+/// the slot, then for the token, and is sent.
+#[tokio::test(start_paused = true)]
+async fn a_decorated_method_finding_no_free_slot_waits_for_a_token_it_reaches_once_a_slot_frees() {
+    let app = boot::<OneSlotOneInTenSecondsModule>().await;
+    let shipments = shipments(&app);
+    let started = tokio::time::Instant::now();
+    assert!(matches!(shipments.ship().await, Ok(())), "the one token");
+
+    let (first, behind) = tokio::join!(shipments.weigh(), async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        shipments.weigh().await
+    });
+    assert!(
+        matches!(first, Ok(at) if at - started == Duration::from_secs(10)),
+        "holding the slot while it waits for its token: {first:?}"
+    );
+    assert!(
+        matches!(behind, Ok(at) if at - started == Duration::from_secs(20)),
+        "sent at the token after, 10 s from the slot freed for it: {behind:?}"
     );
 }
 

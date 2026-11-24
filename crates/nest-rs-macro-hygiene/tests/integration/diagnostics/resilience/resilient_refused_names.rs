@@ -1,8 +1,8 @@
 //! `fallback` names a method of `Self` and `cancel` the attempt's token, each
-//! by a name written alone: a path, a call, a literal, a key written bare and a
-//! method naming itself are each refused where they are written. A body
-//! reading a token the decorator read no name for adds no error, and a token
-//! named and never read is the developer's unused variable, at the name.
+//! by a name alone: a path, a call, a literal, a bare key, a method naming
+//! itself and a token named as an argument are each refused where written. A
+//! body reading a token the decorator bound under no name adds no error, and a
+//! token named and never read is the developer's unused variable, at the name.
 
 use std::sync::Arc;
 
@@ -90,6 +90,24 @@ impl ShipmentsService {
     #[resilient(carrier, idempotent, cancel = token)]
     async fn unread_again(&self) -> Answer {
         Err(CarrierDown)
+    }
+
+    #[resilient(carrier, cancel = token)]
+    async fn named_as_an_argument(&self, token: String) -> Answer {
+        if token.is_empty() {
+            return Err(CarrierDown);
+        }
+        Ok(())
+    }
+
+    async fn unverified(&self, _token: String, _error: ResilienceError<CarrierDown>) -> Answer {
+        Ok(())
+    }
+
+    #[resilient(carrier, fallback = unverified, cancel = token)]
+    async fn named_as_what_its_fallback_takes(&self, token: String) -> Answer {
+        drop(format!("{token:?}"));
+        Ok(())
     }
 }
 

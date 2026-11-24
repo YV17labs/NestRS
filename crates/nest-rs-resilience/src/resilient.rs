@@ -405,6 +405,21 @@ impl<T, E> Answered<T, E, Proved> for Result<T, ResilienceError<E>> {}
 pub trait Fallback<T, E, A, Fut, W> {
     /// The fallback's future, handed the run's `error`.
     fn answer(self, error: ResilienceError<E>) -> Fut;
+
+    /// What a method's run `ended` on, or what `fallback` answers in place of
+    /// its error, handed it by value: the fallback's answer is then the
+    /// method's, an `Err` of its own included.
+    fn in_place_of<R>(ended: Ended<R, T, E>, fallback: Self) -> FellBack<R, Fut, W>
+    where
+        Self: Sized,
+    {
+        match ended.ended {
+            Ok(answered) => FellBack::ran(answered),
+            Err(error) => FellBack::FallingBack {
+                fallback: fallback.answer(error),
+            },
+        }
+    }
 }
 
 #[diagnostic::do_not_recommend]
@@ -468,46 +483,65 @@ where
         .await
 }
 
-/// What `method`'s run answered, `ran`, or what `fallback` answers in its
-/// place when the run ended on an error `fallback_if` takes: the call's own,
-/// from its last attempt, or the policy's refusal, handed on by value. The
-/// fallback's answer is then the method's, an `Err` of its own included.
+/// What `method`'s run ended on, `ran`, its filter asked: the run's own answer,
+/// or the error its fallback answers in place of when `fallback_if` takes it —
+/// the call's own, from its last attempt, or the policy's refusal.
 ///
 /// Decided as it is called: the run is over, its last attempt's savepoint
 /// rolled back, so what the fallback writes is its unit's. An attempt's
 /// savepoint the database could not settle is the unit's own transaction
 /// failing, never the dependency: no predicate is asked, and no fallback
 /// answers for it.
-pub fn fall_back<R, I, P, B, S, A, Fut, W>(
+///
+/// The filter is asked and dropped here, before [`Fallback::in_place_of`] is
+/// handed the fallback: what it borrows of the method's arguments, the
+/// fallback then takes by value.
+pub fn fall_back<R, T, E, I, P, S>(
     policy: &ResiliencePolicy<I>,
     method: ResilientMethod,
     ran: R,
     fallback_if: P,
-    fallback: B,
-) -> FellBack<R, Fut, W>
+) -> Ended<R, T, E>
 where
-    R: ResilientAnswer,
+    R: ResilientAnswer<Ok = T, Err = E>,
+    // Written of `R`, so rustc blames the answer handed in, as `run` does.
     R::Err: ChainedError,
     I: Instance,
-    P: FallbackIf<R::Err, S>,
-    B: Fallback<R::Ok, R::Err, A, Fut, W>,
+    P: FallbackIf<E, S>,
 {
     let error = match ran.failed() {
-        Ok(answered) => return FellBack::ran(answered),
+        Ok(answered) => return Ended::on(Ok(answered)),
         Err(error) => error,
     };
     if matches!(error, ResilienceError::Unsettled { .. }) || !fallback_if(&error) {
-        return FellBack::ran(R::answered(Err(error)));
+        return Ended::on(Ok(R::answered(Err(error))));
     }
     policy.falling_back(&method, &error);
-    FellBack::FallingBack {
-        fallback: fallback.answer(error),
+    Ended::on(Err(error))
+}
+
+/// What a run of a method answering `R`, a `Result<T, ResilienceError<E>>`,
+/// ended on once its fallback's filter was asked: its own answer, or the error
+/// its fallback answers in place of. Only [`fall_back`] builds one, so a
+/// fallback is handed no error its filter refused, nor an unsettled savepoint.
+// No bound on `R`: one here is a second error for an answer `fall_back` refused.
+pub struct Ended<R, T, E> {
+    ended: Result<R, ResilienceError<E>>,
+    answers: PhantomData<fn() -> T>,
+}
+
+impl<R, T, E> Ended<R, T, E> {
+    fn on(ended: Result<R, ResilienceError<E>>) -> Self {
+        Self {
+            ended,
+            answers: PhantomData,
+        }
     }
 }
 
 pin_project_lite::pin_project! {
-    /// What [`fall_back`] answers: the run's own answer, or its fallback's,
-    /// polled in place, `W` being the fallback's proof.
+    /// What [`Fallback::in_place_of`] answers: the run's own answer, or its
+    /// fallback's, polled in place, `W` being the fallback's proof.
     #[project = FellBackProj]
     pub enum FellBack<R, Fut, W> {
         /// The run's own answer.
@@ -808,7 +842,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_ok_retry_ok_if_takes_is_sent_again_and_the_last_answers_once_the_retries_are_spent()
     {
-        const RETRIED: &str = "attempt failed; retrying the call";
+        const RETRIED: &str = "attempt answered; retrying the call";
         let policy = guarded(2);
         let pending = |quote: &u32| *quote < 10;
 
@@ -837,6 +871,7 @@ mod tests {
             retried.iter().all(|line| line.field("error").is_none()),
             "an `Ok` sent again has no error to tell: {retried:#?}"
         );
+        lines.expect_none(TARGET, "attempt failed; retrying the call");
         drop(lines);
 
         let attempts = AtomicU32::new(0);
@@ -1020,11 +1055,8 @@ mod tests {
         let policy = unguarded();
         for (error, says) in errors() {
             let handed = Mutex::new(None);
-            let answered = fall_back::<Answer, _, _, _, _, _, _, _>(
-                &policy,
-                QUOTE,
-                Err(error),
-                every,
+            let answered = Fallback::in_place_of(
+                fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Err(error), every),
                 |error: ResilienceError<Quote>| async {
                     *handed.lock().expect("the fallback's own") = Some(error);
                     Ok(7)
@@ -1047,11 +1079,13 @@ mod tests {
         };
         let open = |error: &ResilienceError<Quote>| matches!(error, ResilienceError::Open { .. });
 
-        let refused = fall_back::<Answer, _, _, _, _, _, _, _>(
-            &policy,
-            QUOTE,
-            Err(ResilienceError::Failed(Quote::Down)),
-            open,
+        let refused = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(
+                &policy,
+                QUOTE,
+                Err(ResilienceError::Failed(Quote::Down)),
+                open,
+            ),
             stale,
         )
         .await;
@@ -1061,11 +1095,13 @@ mod tests {
         );
         assert_eq!(called.load(Ordering::Relaxed), 0);
 
-        let taken = fall_back::<Answer, _, _, _, _, _, _, _>(
-            &policy,
-            QUOTE,
-            Err(Refusal::Open(Duration::from_secs(30)).into()),
-            open,
+        let taken = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(
+                &policy,
+                QUOTE,
+                Err(Refusal::Open(Duration::from_secs(30)).into()),
+                open,
+            ),
             stale,
         )
         .await;
@@ -1073,14 +1109,34 @@ mod tests {
         assert_eq!(called.load(Ordering::Relaxed), 1);
     }
 
+    /// The filter is asked and dropped before the fallback is handed over: what
+    /// it borrowed, the fallback owns, whichever of the two answers.
+    #[tokio::test]
+    async fn a_filter_reads_what_its_fallback_then_takes_by_value() {
+        let policy = unguarded();
+        for (zone, answers) in [("eu", 2), ("us", 0)] {
+            let zone = zone.to_owned();
+            let down = Err(ResilienceError::Failed(Quote::Down));
+            let served = |_: &ResilienceError<Quote>| zone == "eu";
+            let answered = Fallback::in_place_of(
+                fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, down, served),
+                move |_: ResilienceError<Quote>| async move { Ok(zone.len() as u32) },
+            )
+            .await;
+            assert_eq!(answered.unwrap_or(0), answers);
+        }
+    }
+
     #[tokio::test]
     async fn a_fallbacks_own_err_is_the_methods_answer_and_an_ok_run_asks_nothing() {
         let policy = unguarded();
-        let own = fall_back::<Answer, _, _, _, _, _, _, _>(
-            &policy,
-            QUOTE,
-            Err(ResilienceError::Failed(Quote::Down)),
-            every,
+        let own = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(
+                &policy,
+                QUOTE,
+                Err(ResilienceError::Failed(Quote::Down)),
+                every,
+            ),
             |_: ResilienceError<Quote>| async { Err(ResilienceError::Failed(Quote::NoZone)) },
         )
         .await;
@@ -1090,14 +1146,16 @@ mod tests {
         );
 
         let asked = AtomicU32::new(0);
-        let answered = fall_back::<Answer, _, _, _, _, _, _, _>(
-            &policy,
-            QUOTE,
-            Ok(3),
-            |_: &ResilienceError<Quote>| {
-                asked.fetch_add(1, Ordering::Relaxed);
-                true
-            },
+        let answered = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(
+                &policy,
+                QUOTE,
+                Ok(3),
+                |_: &ResilienceError<Quote>| {
+                    asked.fetch_add(1, Ordering::Relaxed);
+                    true
+                },
+            ),
             |_: ResilienceError<Quote>| async {
                 asked.fetch_add(1, Ordering::Relaxed);
                 Ok(7)
@@ -1123,7 +1181,10 @@ mod tests {
         };
         let made = size_of_val(&stale(ResilienceError::Failed(Quote::Down)));
         let down = Err(ResilienceError::Failed(Quote::Down));
-        let falling = fall_back::<Large, _, _, _, _, _, _, _>(&policy, QUOTE, down, every, stale);
+        let falling = Fallback::in_place_of(
+            fall_back::<Large, _, _, _, _, _>(&policy, QUOTE, down, every),
+            stale,
+        );
         let weighs = size_of_val(&falling);
         assert!(
             weighs <= made.max(size_of::<Large>()) + size_of::<usize>(),
@@ -1155,8 +1216,11 @@ mod tests {
             |_| Err(Quote::Down),
         )
         .await;
-        let answered =
-            fall_back::<Answer, _, _, _, _, _, _, _>(&retried, QUOTE, ran, every, stale).await;
+        let answered = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(&retried, QUOTE, ran, every),
+            stale,
+        )
+        .await;
         assert!(matches!(answered, Ok(1)), "{answered:?}");
         assert_eq!(
             attempts.load(Ordering::Relaxed),
@@ -1166,12 +1230,18 @@ mod tests {
 
         let opening = guarded(1);
         let ran = quoted_once(&opening, Err(Quote::Down)).await;
-        let answered =
-            fall_back::<Answer, _, _, _, _, _, _, _>(&opening, QUOTE, ran, every, stale).await;
+        let answered = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(&opening, QUOTE, ran, every),
+            stale,
+        )
+        .await;
         assert!(matches!(answered, Ok(1)), "{answered:?}");
         let ran = quoted_once(&opening, Ok(9)).await;
-        let answered =
-            fall_back::<Answer, _, _, _, _, _, _, _>(&opening, QUOTE, ran, every, stale).await;
+        let answered = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(&opening, QUOTE, ran, every),
+            stale,
+        )
+        .await;
         assert!(
             matches!(answered, Ok(2)),
             "refused unsent by the breaker its failure opened: {answered:?}"
@@ -1182,27 +1252,29 @@ mod tests {
     /// whole chain; a run its fallback does not answer for files none.
     #[tokio::test]
     async fn a_fallback_answering_files_a_debug_line_with_the_errors_chain() {
-        const FELL_BACK: &str = "the call failed; its fallback answers";
+        const FELL_BACK: &str = "the call ended on an error; its fallback answers";
         let policy = unguarded();
         let stale = |_: ResilienceError<Quote>| async { Ok(7) };
         let throttled =
             || ResilienceError::Failed(Quote::Throttled(Problem::new(429, code::RATE_LIMITED)));
 
         let lines = LogCapture::install();
-        let kept =
-            fall_back::<Answer, _, _, _, _, _, _, _>(&policy, QUOTE, Err(throttled()), none, stale)
-                .await;
+        let kept = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Err(throttled()), none),
+            stale,
+        )
+        .await;
         assert!(kept.is_err(), "{kept:?}");
-        let answered =
-            fall_back::<Answer, _, _, _, _, _, _, _>(&policy, QUOTE, Ok(3), every, stale).await;
+        let answered = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Ok(3), every),
+            stale,
+        )
+        .await;
         assert!(matches!(answered, Ok(3)), "{answered:?}");
         lines.expect_none(TARGET, FELL_BACK);
 
-        let fell_back = fall_back::<Answer, _, _, _, _, _, _, _>(
-            &policy,
-            QUOTE,
-            Err(throttled()),
-            every,
+        let fell_back = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Err(throttled()), every),
             stale,
         )
         .await;
@@ -1242,17 +1314,17 @@ mod tests {
         let stale = |_: ResilienceError<Quote>| async { Ok(7) };
         let down = || Err(ResilienceError::Failed(Quote::Down));
         for fallback_if in [every, every, none] {
-            let _answered: Answer = fall_back::<Answer, _, _, _, _, _, _, _>(
-                &policy,
-                QUOTE,
-                down(),
-                fallback_if,
+            let _answered: Answer = Fallback::in_place_of(
+                fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, down(), fallback_if),
                 stale,
             )
             .await;
         }
-        let _answered: Answer =
-            fall_back::<Answer, _, _, _, _, _, _, _>(&policy, QUOTE, Ok(3), every, stale).await;
+        let _answered: Answer = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Ok(3), every),
+            stale,
+        )
+        .await;
 
         provider.force_flush().expect("the export");
         let exported = exporter
@@ -1408,10 +1480,13 @@ mod tests {
                 ready(answer)
             })
             .await;
-            fall_back::<Answer, _, _, _, _, _, _, _>(&policy, method, ran, fallback_if, |_| async {
-                seen.saw(Saw::FellBack { inside: inside() });
-                Ok::<_, ResilienceError<Quote>>(7)
-            })
+            Fallback::in_place_of(
+                fall_back::<Answer, _, _, _, _, _>(&policy, method, ran, fallback_if),
+                |_| async {
+                    seen.saw(Saw::FellBack { inside: inside() });
+                    Ok::<_, ResilienceError<Quote>>(7)
+                },
+            )
             .await
         })
         .await

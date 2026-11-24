@@ -46,6 +46,18 @@ error: #[resilient] `record_if` needs a value — write `record_if = |error| !er
 77 |     #[resilient(carrier, idempotent, record_if, cancel = token)]
    |                                      ^^^^^^^^^
 
+error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:95:35
+   |
+95 |     #[resilient(carrier, cancel = token)]
+   |                                   ^^^^^
+
+error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
+   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:107:58
+    |
+107 |     #[resilient(carrier, fallback = unverified, cancel = token)]
+    |                                                          ^^^^^
+
 warning: unused variable: `token`
   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:85:35
    |

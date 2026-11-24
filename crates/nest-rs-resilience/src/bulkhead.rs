@@ -2,25 +2,33 @@
 //! a call waits for a slot before it is refused, and how many calls wait for
 //! one at once.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::sync::{Semaphore, SemaphorePermit};
+use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
 /// A bound on the calls running inside one policy at once.
 pub(crate) struct Bulkhead {
     slots: Semaphore,
-    /// How many slots there are, taken or free.
-    most: usize,
-    /// How many calls wait for a slot now.
-    waiting: AtomicUsize,
+    /// The calls holding a slot, in the word's high half, and the ones
+    /// waiting for one, in its low half: one word, so a waiter handed its
+    /// slot moves from one count to the other in one step, and a call is in
+    /// exactly one at every instant. A half holds four billion calls, more
+    /// futures than a process has memory for.
+    calls: AtomicU64,
     /// How long a call finding no free slot waits for one, `None` for no wait.
     wait: Option<Duration>,
     /// The places a call finding no free slot waits in, when their number is
     /// bounded and a call waits at all.
     waiters: Option<Waiters>,
 }
+
+/// One call holding a slot, in [`Bulkhead::calls`].
+const RUNNING: u64 = 1 << u32::BITS;
+
+/// One call waiting for a slot, in [`Bulkhead::calls`].
+const WAITING: u64 = 1;
 
 /// The places to wait for a slot in, `most` of them.
 struct Waiters {
@@ -49,6 +57,17 @@ impl Full {
     }
 }
 
+/// A slot one call holds, counted among the calls running from the moment
+/// its own future took it until it is dropped, which frees it.
+#[must_use = "a slot is freed as it is dropped"]
+pub(crate) struct Slot<'b>(&'b Bulkhead);
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
 /// A slot its run took, held past the run by what the run answered — a
 /// response whose body is still to read — with no borrow of the bulkhead. It
 /// is freed through [`Bulkhead::free`] alone, never by its drop, so what holds
@@ -58,10 +77,15 @@ impl Full {
 pub(crate) struct HeldSlot(());
 
 impl Bulkhead {
-    /// `slot`, one of this bulkhead's, held with no borrow of it.
+    /// `slot`, one of this bulkhead's, held with no borrow of it: its call
+    /// stays counted among the ones running.
     #[cfg(feature = "reqwest")]
-    pub(crate) fn hold(&self, slot: SemaphorePermit<'_>) -> HeldSlot {
-        slot.forget();
+    pub(crate) fn hold(&self, slot: Slot<'_>) -> HeldSlot {
+        debug_assert!(
+            std::ptr::eq(slot.0, self),
+            "a slot is held for the bulkhead it was taken from"
+        );
+        std::mem::forget(slot);
         HeldSlot(())
     }
 
@@ -69,7 +93,7 @@ impl Bulkhead {
     #[cfg(feature = "reqwest")]
     pub(crate) fn free(&self, held: HeldSlot) {
         let HeldSlot(()) = held;
-        self.slots.add_permits(1);
+        self.release();
     }
 
     /// A bulkhead of `slots`, a call finding none free waiting up to `wait`
@@ -78,8 +102,7 @@ impl Bulkhead {
     pub(crate) fn new(slots: usize, wait: Option<Duration>, waiters: Option<usize>) -> Self {
         Self {
             slots: Semaphore::new(slots),
-            most: slots,
-            waiting: AtomicUsize::new(0),
+            calls: AtomicU64::new(0),
             wait,
             waiters: waiters.filter(|_| wait.is_some()).map(|most| Waiters {
                 places: Semaphore::new(most),
@@ -88,30 +111,36 @@ impl Bulkhead {
         }
     }
 
-    /// How many calls hold a slot now, one held past its run included.
+    /// How many calls hold a slot now, one held past its run included. A
+    /// slot freed for a call waiting counts once that call's own future has
+    /// taken it: until then the call is read as [`waiting`](Self::waiting).
     pub(crate) fn running(&self) -> usize {
-        self.most.saturating_sub(self.slots.available_permits())
+        half(self.calls.load(Ordering::Relaxed) >> u32::BITS)
     }
 
     /// How many calls wait for a slot now.
     pub(crate) fn waiting(&self) -> usize {
-        self.waiting.load(Ordering::Relaxed)
+        half(self.calls.load(Ordering::Relaxed) & (RUNNING - 1))
+    }
+
+    /// The longest a call finding no free slot waits for one: none, with no wait.
+    pub(crate) fn longest_wait(&self) -> Duration {
+        self.wait.unwrap_or_default()
     }
 
     /// A slot free now, held until the slot is dropped, or `None` while every
-    /// slot is taken.
-    pub(crate) fn try_enter(&self) -> Option<SemaphorePermit<'_>> {
-        self.slots.try_acquire().ok()
+    /// slot is taken, one freed for a call waiting included.
+    pub(crate) fn try_enter(&self) -> Option<Slot<'_>> {
+        self.slots.try_acquire().ok()?.forget();
+        self.calls.fetch_add(RUNNING, Ordering::Relaxed);
+        Some(Slot(self))
     }
 
     /// A slot, held until the slot is dropped, or why none was taken: every
     /// place to wait for one taken, at once, or no slot freed within the wait
     /// — the bulkhead's own, or what is left before `deadline` when that is
     /// sooner; at once with no wait, or none left before `deadline`.
-    pub(crate) async fn enter(
-        &self,
-        deadline: Option<Instant>,
-    ) -> Result<SemaphorePermit<'_>, Full> {
+    pub(crate) async fn enter(&self, deadline: Option<Instant>) -> Result<Slot<'_>, Full> {
         if let Some(free) = self.try_enter() {
             return Ok(free);
         }
@@ -137,30 +166,57 @@ impl Bulkhead {
                     .ok_or(Full::Waiters(waiters.most))
             })
             .transpose()?;
-        let _waiting = Waiting::among(&self.waiting);
+        let waiting = Waiting::among(self);
         // The semaphore is never closed, so its one refusal is no slot in time.
-        tokio::time::timeout(wait, self.slots.acquire())
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .ok_or(Full::Slots)
+        match tokio::time::timeout(wait, self.slots.acquire()).await {
+            Ok(Ok(permit)) => {
+                permit.forget();
+                Ok(waiting.handed())
+            }
+            _ => Err(Full::Slots),
+        }
+    }
+
+    /// One slot free again, its call counted out first, as a call is counted
+    /// in once it has its slot: the waiter the slot goes to may take it on
+    /// another thread at once, and the calls read as running never exceed the
+    /// slots.
+    fn release(&self) {
+        self.calls.fetch_sub(RUNNING, Ordering::Relaxed);
+        self.slots.add_permits(1);
     }
 }
 
-/// One call counted among those waiting for a slot, until it is dropped:
-/// handed its slot, out of time, or its caller gone.
-struct Waiting<'b>(&'b AtomicUsize);
+/// One half of [`Bulkhead::calls`] as a count.
+fn half(count: u64) -> usize {
+    usize::try_from(count).unwrap_or(usize::MAX)
+}
+
+/// One call counted among those waiting for a slot, until it is handed its
+/// slot, or dropped: out of time, or its caller gone.
+struct Waiting<'b>(&'b Bulkhead);
 
 impl<'b> Waiting<'b> {
-    fn among(waiting: &'b AtomicUsize) -> Self {
-        waiting.fetch_add(1, Ordering::Relaxed);
-        Self(waiting)
+    fn among(bulkhead: &'b Bulkhead) -> Self {
+        bulkhead.calls.fetch_add(WAITING, Ordering::Relaxed);
+        Self(bulkhead)
+    }
+
+    /// The slot the call waited for, its own: the call leaves the ones
+    /// waiting for the ones running in one step.
+    fn handed(self) -> Slot<'b> {
+        let bulkhead = self.0;
+        std::mem::forget(self);
+        bulkhead
+            .calls
+            .fetch_add(RUNNING - WAITING, Ordering::Relaxed);
+        Slot(bulkhead)
     }
 }
 
 impl Drop for Waiting<'_> {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        self.0.calls.fetch_sub(WAITING, Ordering::Relaxed);
     }
 }
 
@@ -257,6 +313,34 @@ mod tests {
         assert_eq!(bulkhead.enter(None).await.err(), Some(Full::Slots));
         assert_eq!(bulkhead.waiting(), 0, "its wait ran out");
         drop((second, handed));
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (0, 0));
+    }
+
+    /// A slot freed while a call waits for it is that call's at once, and no
+    /// other's, yet the call is read as waiting, and not as running, until
+    /// its own future holds the slot: at the handover as at every instant it
+    /// is counted once.
+    #[tokio::test(start_paused = true)]
+    async fn a_waiter_handed_a_freed_slot_is_read_as_waiting_until_it_holds_it() {
+        let bulkhead = Bulkhead::new(1, Some(Duration::from_secs(60)), None);
+        let first = bulkhead.enter(None).await.expect("a free slot");
+        let mut handed = Box::pin(bulkhead.enter(None));
+        assert!(waits(handed.as_mut()).await);
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (1, 1));
+
+        drop(first);
+        assert_eq!(
+            (bulkhead.running(), bulkhead.waiting()),
+            (0, 1),
+            "one call alive, yet to be polled with the slot freed for it"
+        );
+        assert!(
+            bulkhead.try_enter().is_none(),
+            "the slot is the waiter's, though it reads as waiting"
+        );
+        let slot = handed.await.expect("the slot freed for it");
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (1, 0));
+        drop(slot);
         assert_eq!((bulkhead.running(), bulkhead.waiting()), (0, 0));
     }
 

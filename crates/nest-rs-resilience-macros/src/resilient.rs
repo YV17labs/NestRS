@@ -15,8 +15,8 @@ use syn::ext::IdentExt;
 use syn::parse::discouraged::Speculative;
 use syn::parse::{ParseStream, Parser};
 use syn::{
-    Expr, FnArg, GenericArgument, Ident, ImplItemFn, Pat, PathArguments, ReturnType, Stmt, Token,
-    Type, TypeParamBound,
+    Expr, FnArg, GenericArgument, Ident, ImplItemFn, Pat, PatIdent, PatType, PathArguments,
+    ReturnType, Stmt, Token, Type, TypeParamBound,
 };
 
 use crate::instrumented::{Part, instrumented};
@@ -143,8 +143,13 @@ impl Args {
     /// The run the list declares.
     fn plan(&self) -> Plan<'_> {
         let fallback = self.key(FALLBACK).zip(self.fallback.as_ref());
+        let judged = self.record_if.as_ref().and(self.key(RECORD_IF));
         Plan {
             idempotent: self.key(IDEMPOTENT),
+            lends: self
+                .key(IDEMPOTENT)
+                .or(fallback.map(|(key, _)| key))
+                .or(judged),
             timeout_millis: self.timeout_millis,
             retries: self.retries,
             retry_if: self.retry_if.as_ref(),
@@ -165,6 +170,7 @@ impl Args {
         Plan {
             field: &self.field,
             idempotent: None,
+            lends: None,
             timeout_millis: None,
             retries: None,
             retry_if: None,
@@ -182,6 +188,11 @@ struct Plan<'a> {
     /// `idempotent` as written, when the call is sent again after a failure:
     /// kept for its span.
     idempotent: Option<&'a Ident>,
+    /// The key that has each attempt borrow the arguments rather than own
+    /// them, as written: `idempotent`, whose next attempt reads them again,
+    /// `fallback`, handed them next, or `record_if`, which may read them once
+    /// the one attempt answered.
+    lends: Option<&'a Ident>,
     timeout_millis: Option<u64>,
     retries: Option<u32>,
     retry_if: Option<&'a Expr>,
@@ -211,8 +222,8 @@ struct Shape {
     /// Its body is a `#[tracing::instrument]` expansion in a shape the
     /// decorator does not read.
     unread: bool,
-    /// Its list writes `cancel` and the decorator read no name under it, so the
-    /// body may read a token nothing binds.
+    /// Its list writes `cancel` and the decorator read no name under it, or one
+    /// an argument already has, so the body may read a token nothing binds.
     unbound: bool,
 }
 
@@ -272,10 +283,11 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
         });
     }
     let unread = refusals.handle(read).is_none();
+    let checked = check(&method, args.as_ref(), &mut refusals);
     let shape = Shape {
         unread,
-        unbound,
-        ..check(&method, args.as_ref(), &mut refusals)
+        unbound: unbound || checked.unbound,
+        ..checked
     };
     match (refusals.finish(), args, shape.receiver) {
         (Ok(()), Some(args), Some(receiver)) => Ok(expand(method, receiver, &args.plan())),
@@ -312,14 +324,11 @@ fn refused(item: TokenStream, refusals: Refusals) -> Refused {
 /// against a stand-in that never runs where its receiver or its field is what
 /// was refused, as written where it is no `async fn` or names no type, and
 /// with no body where the one it has is an instrument's the decorator cannot
-/// type as an attempt, or may read a token whose name the decorator did not.
+/// type as an attempt, or may read a token whose name the decorator did not
+/// bind, its parameters read in that body's place.
 fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStream {
     if shape.unread || shape.unbound {
-        method.attrs.push(syn::parse_quote!(#[allow(unused)]));
-        method.block.stmts = vec![Stmt::Expr(
-            Expr::Verbatim(quote!(::core::unreachable!())),
-            None,
-        )];
+        method.block.stmts = no_body(&method);
         return method.into_token_stream();
     }
     if !shape.asynchronous || shape.opaque {
@@ -328,6 +337,69 @@ fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStre
     match (args, shape.receiver) {
         (Some(args), Some(receiver)) => expand(method, receiver, &args.once()),
         _ => stand_in(method),
+    }
+}
+
+/// The body of a method kept with none: each name its parameters bind, read as
+/// it is bound, then an answer never given. The body that read them is gone,
+/// and a lint attribute in its place is `E0453` in a crate forbidding the lint.
+fn no_body(method: &ImplItemFn) -> Vec<Stmt> {
+    let mut bound = Vec::new();
+    for typed in typed_inputs(method) {
+        bindings(&typed.pat, &mut bound);
+    }
+    let read = bound.iter().map(|binding| {
+        let name = &binding.ident;
+        match (&binding.by_ref, &binding.mutability) {
+            (None, Some(_)) => quote!(&mut #name),
+            _ => quote!(&#name),
+        }
+    });
+    let mut stmts = Vec::new();
+    if !bound.is_empty() {
+        stmts.push(syn::parse_quote!(let _ = (#(#read,)*);));
+    }
+    stmts.push(Stmt::Expr(
+        Expr::Verbatim(quote!(::core::unreachable!())),
+        None,
+    ));
+    stmts
+}
+
+/// The arguments `method` takes beside its receiver.
+fn typed_inputs(method: &ImplItemFn) -> impl Iterator<Item = &PatType> {
+    method.sig.inputs.iter().filter_map(|input| match input {
+        FnArg::Typed(typed) => Some(typed),
+        FnArg::Receiver(_) => None,
+    })
+}
+
+/// Every name `pat` binds, in order, wherever the pattern binds it.
+fn bindings<'a>(pat: &'a Pat, bound: &mut Vec<&'a PatIdent>) {
+    match pat {
+        Pat::Ident(binding) => {
+            bound.push(binding);
+            if let Some((_, sub)) = &binding.subpat {
+                bindings(sub, bound);
+            }
+        }
+        Pat::Tuple(tuple) => tuple.elems.iter().for_each(|elem| bindings(elem, bound)),
+        Pat::TupleStruct(tuple) => tuple.elems.iter().for_each(|elem| bindings(elem, bound)),
+        Pat::Struct(fields) => fields
+            .fields
+            .iter()
+            .for_each(|field| bindings(&field.pat, bound)),
+        Pat::Slice(slice) => slice.elems.iter().for_each(|elem| bindings(elem, bound)),
+        Pat::Reference(reference) => bindings(&reference.pat, bound),
+        Pat::Paren(paren) => bindings(&paren.pat, bound),
+        Pat::Type(typed) => bindings(&typed.pat, bound),
+        // Every case of an or-pattern binds the same names.
+        Pat::Or(or) => or
+            .cases
+            .iter()
+            .take(1)
+            .for_each(|case| bindings(case, bound)),
+        _ => {}
     }
 }
 
@@ -670,10 +742,27 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
     } else {
         fallback.map(|_| Lent::TO_THE_FALLBACK)
     };
-    for typed in method.sig.inputs.iter().filter_map(|input| match input {
-        FnArg::Typed(typed) => Some(typed),
-        FnArg::Receiver(_) => None,
-    }) {
+    let mut bound = Vec::new();
+    for typed in typed_inputs(method) {
+        bindings(&typed.pat, &mut bound);
+    }
+    let hidden = args.and_then(|args| args.cancel.as_ref()).filter(|token| {
+        bound
+            .iter()
+            .any(|binding| binding.ident.unraw() == token.unraw())
+    });
+    if let Some(token) = hidden {
+        refusals.push(syn::Error::new(
+            token.span(),
+            format!(
+                "{} names the attempt's `CancellationToken` in the body, and `{token}` is an \
+                 argument of this method, which the body would read no more under that name — \
+                 name the token otherwise, e.g. `cancel = cancellation`",
+                site(RESILIENT, Some(CANCEL)),
+            ),
+        ));
+    }
+    for typed in typed_inputs(method) {
         if let Some(lent) = &lent {
             if let Some((binding, written)) = mutable_binding(&typed.pat) {
                 refusals.push(syn::Error::new(
@@ -721,13 +810,14 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
         receiver,
         opaque: opaque.is_some(),
         unread: false,
-        unbound: false,
+        unbound: hidden.is_some(),
     }
 }
 
-/// Why every attempt borrows the arguments rather than owning them: the key
-/// declaring it, what that key does with them, and what an attempt's change to
-/// one would reach.
+/// Why no attempt may change an argument it borrows: the key reading the
+/// arguments after an attempt, what that key does with them, and what an
+/// attempt's change to one would reach. `record_if` has the one attempt lend
+/// them too and refuses nothing: rustc refuses the one change it would read.
 struct Lent {
     key: &'static str,
     does: &'static str,
@@ -942,9 +1032,7 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
         )
         #declares
     };
-    let lends = plan
-        .idempotent
-        .or(plan.fallback.as_ref().map(|fallback| fallback.key));
+    let lends = plan.lends;
     // A closure lending the arguments cannot lend its own parameter to the future it
     // answers: the attempt's block takes the token by value, under the name written.
     let (token, bound) = match (plan.cancel, lends) {
@@ -976,7 +1064,7 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
         ::nest_rs_resilience::__private::judging(#named, #retry_if, #retry_ok_if, #record_if)
     };
     // Spanned at the key that has every attempt borrow, where rustc's own words for a
-    // body consuming an argument, or a future not `Send`, then point.
+    // body consuming an argument then point, and for a future not `Send` under `idempotent`.
     let attempt = match lends {
         Some(key) => quote_spanned!(key.span()=> |#token| async #block),
         None => quote!(move |#token| async move #block),
@@ -997,16 +1085,22 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
             let receiver = this(method.span());
             let error = Ident::new("__error", Span::mixed_site().located_at(method.span()));
             let when = written(*when);
-            let answering = quote_spanned!(method.span()=>
-                |#error| #receiver.#method(#(#handed,)* #error)
-            );
+            let names = handed.iter().map(|handed| &handed.name);
+            let under: Vec<_> = handed.iter().map(|handed| &handed.under).collect();
+            let answering = quote_spanned!(method.span()=> |#error| {
+                #(let #under = #names;)*
+                #receiver.#method(#(#under,)* #error)
+            });
             // rustc reads an `.await` as no argument of its own to blame for what the
             // run answers, and reports it once more at the attribute; a call it does.
             let ran = quote_spanned!(at=> ::core::convert::identity(#run));
+            // Two calls: the filter's borrow of an argument ends with the first, and
+            // the closure moving that argument into the fallback is built for the second.
+            let ended = quote! {
+                ::nest_rs_resilience::__private::fall_back(#policy, #site, #ran, #when)
+            };
             let fell_back = quote! {
-                ::nest_rs_resilience::__private::fall_back(
-                    #policy, #site, #ran, #when, #answering,
-                )
+                ::nest_rs_resilience::__private::Fallback::in_place_of(#ended, #answering)
             };
             quote_spanned!(at=> ::core::convert::identity(#fell_back).await)
         }
@@ -1016,19 +1110,31 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
     method.into_token_stream()
 }
 
-/// The name each argument of `method` is bound to, in order, as its fallback
-/// is handed them: resolved as the method binds it, located `at` the key that
-/// hands it on.
-fn arguments(method: &ImplItemFn, at: Span) -> Vec<Ident> {
-    let typed = method.sig.inputs.iter().filter_map(|input| match input {
-        FnArg::Typed(typed) => plain_name(&typed.pat),
-        FnArg::Receiver(_) => None,
-    });
-    typed
-        .map(|name| {
-            let mut handed = name.clone();
-            handed.set_span(name.span().located_at(at));
-            handed
+/// An argument of the method as its fallback is handed it.
+struct Handed {
+    /// The name the method binds it to: resolved as the method binds it, which
+    /// a `macro_rules!` may write apart from the attribute, located at the key
+    /// handing it on.
+    name: Ident,
+    /// The expansion's own local it is passed under: rustc offers its fixes on
+    /// an argument the developer wrote, and one there would rewrite the key.
+    under: Ident,
+}
+
+/// Each argument of `method` as its fallback is handed it, in order, located
+/// `at` the key that hands it on.
+fn arguments(method: &ImplItemFn, at: Span) -> Vec<Handed> {
+    typed_inputs(method)
+        .filter_map(|typed| plain_name(&typed.pat))
+        .enumerate()
+        .map(|(index, bound)| {
+            let mut name = bound.clone();
+            name.set_span(bound.span().located_at(at));
+            let under = Ident::new(
+                &format!("__handed_{index}"),
+                Span::mixed_site().located_at(at),
+            );
+            Handed { name, under }
         })
         .collect()
 }
@@ -1136,6 +1242,43 @@ mod tests {
                  attempt :: < Result < () , ResilienceError < E > > > () ; } send (order) . await }"
             ),
             "{expanded}"
+        );
+    }
+
+    /// A predicate may read an argument once the one attempt answered: under
+    /// `record_if` that attempt borrows the arguments, its token a `let` of its
+    /// block, and the future an instrument built borrows them too.
+    #[test]
+    fn a_method_run_once_under_a_predicate_lends_its_arguments_to_its_one_attempt() {
+        let item = quote! {
+            async fn ship(&self, order: Order) -> Answer {
+                send(&order).await
+            }
+        };
+        for record_if in [quote!(|_| order.urgent()), quote!(Down::counts)] {
+            let once = resilient(quote!(carrier, record_if = #record_if), item.clone()).to_string();
+            assert!(once.contains("run :: < Answer , _ , _ , _ , _ >"), "{once}");
+            assert!(
+                once.contains(&format!("{record_if}) , | _ | async {{ if false")),
+                "{once}"
+            );
+            assert!(!once.contains("move"), "{once}");
+            assert!(!once.contains("with_fallback"), "{once}");
+        }
+        let bound =
+            resilient(quote!(carrier, cancel = token, record_if = counts), item).to_string();
+        assert!(
+            bound.contains("| __cancel | async { let token = __cancel ; if false"),
+            "{bound}"
+        );
+        let wrapped = resilient(
+            quote!(carrier, record_if = counts),
+            instrumented_above(quote!(send(&order).await)),
+        )
+        .to_string();
+        assert!(
+            wrapped.contains("let __tracing_instrument_future = async {"),
+            "{wrapped}"
         );
     }
 
@@ -1456,7 +1599,9 @@ mod tests {
 
     /// The fallback is called on `self` with the method's arguments, by the
     /// names they are bound to, then the run's error; the one attempt lends
-    /// them rather than owning them, and the site says a fallback follows.
+    /// them rather than owning them, and the site says a fallback follows. The
+    /// filter is an argument of the call before the one the fallback's closure
+    /// is built for, so its borrow of an argument ends before that one moves.
     #[test]
     fn a_fallback_is_handed_the_arguments_by_name_then_the_runs_error() {
         let item = quote! {
@@ -1469,9 +1614,10 @@ mod tests {
         for written in [
             "run :: < Answer , _ , _ , _ , _ >",
             "| _ | async { if false",
-            "fall_back (",
-            ":: nest_rs_resilience :: __private :: every , | __error | self . stale (zone , \
-             weight , __error)",
+            "Fallback :: in_place_of (:: nest_rs_resilience :: __private :: fall_back (",
+            ":: nest_rs_resilience :: __private :: every) , | __error | { let __handed_0 = zone \
+             ; let __handed_1 = weight ; self . stale (__handed_0 , __handed_1 , __error) })) . \
+             await",
         ] {
             assert!(once.contains(written), "{written} in {once}");
         }
@@ -1484,7 +1630,8 @@ mod tests {
         .to_string();
         for written in [
             "run_idempotent :: < Answer , _ , _ , _ , _ >",
-            "refused , | __error | self . stale (zone , weight , __error)",
+            ", refused) , | __error | { let __handed_0 = zone ; let __handed_1 = weight ; self . \
+             stale (__handed_0 , __handed_1 , __error) })) . await",
         ] {
             assert!(again.contains(written), "{written} in {again}");
         }
@@ -1555,7 +1702,7 @@ mod tests {
         assert!(
             resilient(quote!(carrier, fallback = r#try, cancel = r#type), track())
                 .to_string()
-                .contains("self . r#try (__error)")
+                .contains("| __error | { self . r#try (__error) }")
         );
     }
 
@@ -1686,7 +1833,7 @@ mod tests {
     /// A refused method is kept run once, its one attempt owning the arguments
     /// and reading its token under the name written; where the decorator read
     /// no name for a token the list writes, it is kept with no body, which may
-    /// read one.
+    /// read one, each parameter read in its place under no lint attribute.
     #[test]
     fn a_refused_method_keeps_its_token_and_none_of_the_keys_it_was_refused_under() {
         let item = quote!(
@@ -1719,11 +1866,103 @@ mod tests {
             quote!(self.carrier, cancel = token),
         ] {
             let kept = kept(unbound.clone(), item.clone());
-            assert!(
-                kept.ends_with("-> Answer { :: core :: unreachable ! () }"),
-                "#[resilient({unbound})]: {kept}"
+            assert_eq!(
+                kept,
+                "async fn ship (& self , mut order : Order) -> Answer { let _ = (& mut order ,) ; \
+                 :: core :: unreachable ! () }",
+                "#[resilient({unbound})]"
             );
         }
+    }
+
+    /// A method kept with no body reads every name its parameters bind, a
+    /// `mut` one as it is bound, and none where it binds none.
+    #[test]
+    fn a_method_kept_with_no_body_reads_each_name_its_parameters_bind() {
+        let patterned = kept(
+            quote!(carrier, cancel),
+            quote! {
+                #[doc = "Ships."]
+                async fn ship(
+                    self: &Arc<Self>,
+                    Path((zone, mut weight)): Path<(Zone, u32)>,
+                    ref mut depot: Depot,
+                    label @ Label { ref carrier, .. }: Label,
+                    [first, ..]: [u8; 4],
+                    &(Parcel(inner) | Crate(inner)): &Held,
+                    _: Unread,
+                ) -> Answer {
+                    send(zone, token).await
+                }
+            },
+        );
+        assert!(
+            patterned.ends_with(
+                "-> Answer { let _ = (& zone , & mut weight , & depot , & label , & carrier , & \
+                 first , & inner ,) ; :: core :: unreachable ! () }"
+            ),
+            "{patterned}"
+        );
+        assert!(
+            patterned.starts_with("# [doc = \"Ships.\"] async fn ship"),
+            "{patterned}"
+        );
+        let bare = kept(quote!(carrier, cancel), track());
+        assert_eq!(
+            bare,
+            "async fn track (& self) -> Answer { :: core :: unreachable ! () }"
+        );
+    }
+
+    /// The token's name is a local of the body, where an argument of that name
+    /// would be read no more: refused at the name, whichever way the attempt
+    /// binds it, and kept with no body, which may read either.
+    #[test]
+    fn a_token_named_as_an_argument_is_refused_at_its_name() {
+        let item = quote! {
+            async fn verify(&self, token: String, r#type: Kind) -> Answer {
+                check(token).await
+            }
+        };
+        for (args, hidden) in [
+            (quote!(carrier, cancel = token), "token"),
+            (quote!(carrier, idempotent, cancel = token), "token"),
+            (
+                quote!(carrier, fallback = stale, cancel = r#token),
+                "r#token",
+            ),
+            (quote!(carrier, cancel = r#type), "r#type"),
+        ] {
+            let refused = refusals(args.clone(), item.clone());
+            assert_eq!(
+                refused,
+                [format!(
+                    "#[resilient] `cancel` names the attempt's `CancellationToken` in the body, \
+                     and `{hidden}` is an argument of this method, which the body would read no \
+                     more under that name — name the token otherwise, e.g. `cancel = cancellation`"
+                )],
+                "#[resilient({args})]"
+            );
+            let kept = kept(args.clone(), item.clone());
+            assert!(
+                kept.ends_with(
+                    "-> Answer { let _ = (& token , & r#type ,) ; :: core :: unreachable ! () }"
+                ),
+                "#[resilient({args})]: {kept}"
+            );
+        }
+        let within = refusals(
+            quote!(carrier, cancel = seal),
+            quote! {
+                async fn verify(&self, Signed(seal): Signed) -> Answer {
+                    check(seal).await
+                }
+            },
+        );
+        assert_eq!(within.len(), 1, "a name a pattern binds: {within:#?}");
+        assert!(within[0].contains("`seal` is an argument"), "{within:#?}");
+        let apart = expansion(quote!(carrier, cancel = cancellation), item);
+        assert!(apart.is_ok(), "a name no argument has");
     }
 
     /// A value holding commas, a closure's parameters or a call's arguments,
@@ -1832,7 +2071,7 @@ mod tests {
         );
         let kept = kept(quote!(carrier, idempotent), item);
         assert!(
-            kept.ends_with("-> Answer { :: core :: unreachable ! () }"),
+            kept.ends_with("-> Answer { let _ = (& order ,) ; :: core :: unreachable ! () }"),
             "{kept}"
         );
     }

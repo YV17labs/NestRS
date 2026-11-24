@@ -34,13 +34,10 @@ pub(crate) const FALLBACKS: &str = "nestrs.resilience.fallbacks";
 #[cfg(feature = "opentelemetry")]
 pub(crate) const BREAKER_STATUS: &str = "nestrs.resilience.breaker.status";
 
-/// The outcomes the breaker's window counts now.
+/// The outcomes the breaker's window counts now, by whether each is a failure
+/// or a success.
 #[cfg(feature = "opentelemetry")]
 pub(crate) const BREAKER_OUTCOMES: &str = "nestrs.resilience.breaker.outcomes";
-
-/// The failures among the outcomes the breaker's window counts now.
-#[cfg(feature = "opentelemetry")]
-pub(crate) const BREAKER_FAILURES: &str = "nestrs.resilience.breaker.failures";
 
 /// The calls holding a slot of the bulkhead now.
 #[cfg(feature = "opentelemetry")]
@@ -59,6 +56,10 @@ pub(crate) const INSTANCE_ATTRIBUTE: &str = "nestrs.resilience.instance";
 
 #[cfg(feature = "opentelemetry")]
 pub(crate) const STATE_ATTRIBUTE: &str = "nestrs.resilience.breaker.state";
+
+/// `failure` or `success`, on the outcomes a breaker's window counts.
+#[cfg(feature = "opentelemetry")]
+pub(crate) const OUTCOME_ATTRIBUTE: &str = "nestrs.resilience.breaker.outcome";
 
 /// `true` on a manual transition, and absent from every other.
 #[cfg(feature = "opentelemetry")]
@@ -282,9 +283,10 @@ struct Reads {
 
 #[cfg(feature = "opentelemetry")]
 impl Reads {
-    /// Register on `provider`'s meter one instrument per read of a mechanism
-    /// the policy has on, each observed when the metric reader exports, and
-    /// observing nothing once the policy is dropped.
+    /// Register on `provider`'s meter the instruments of the reads of each
+    /// mechanism the policy has on — one a read, the breaker's window as one
+    /// instrument by outcome — each observed when the metric reader exports,
+    /// and observing nothing once the policy is dropped.
     fn observe(&self, provider: &(dyn opentelemetry::metrics::MeterProvider + Send + Sync)) {
         use opentelemetry::KeyValue;
 
@@ -321,24 +323,29 @@ impl Reads {
                     }
                 })
                 .build();
-            observe(
-                &meter,
-                BREAKER_OUTCOMES,
-                "{outcome}",
-                "The outcomes the circuit breakers' windows count now.",
-                instance,
-                breaker,
-                |breaker| breaker.stats().outcomes,
-            );
-            observe(
-                &meter,
-                BREAKER_FAILURES,
-                "{failure}",
-                "The failures among the outcomes the circuit breakers' windows count now.",
-                instance,
-                breaker,
-                |breaker| breaker.stats().failures,
-            );
+            let observed = breaker.clone();
+            meter
+                .i64_observable_up_down_counter(BREAKER_OUTCOMES)
+                .with_unit("{outcome}")
+                .with_description(
+                    "The outcomes the circuit breakers' windows count now, by whether each is a \
+                     failure or a success.",
+                )
+                .with_callback(move |observer| {
+                    let Some(breaker) = observed.upgrade() else {
+                        return;
+                    };
+                    for (outcome, count) in by_outcome(breaker.stats()) {
+                        observer.observe(
+                            signed(count),
+                            &[
+                                KeyValue::new(INSTANCE_ATTRIBUTE, instance),
+                                KeyValue::new(OUTCOME_ATTRIBUTE, outcome),
+                            ],
+                        );
+                    }
+                })
+                .build();
         }
         if let Some(bulkhead) = &self.bulkhead {
             observe(
@@ -394,12 +401,29 @@ fn observe<M: Send + Sync + 'static>(
         .with_callback(move |observer| {
             if let Some(mechanism) = observed.upgrade() {
                 observer.observe(
-                    i64::try_from(read(&mechanism)).unwrap_or(i64::MAX),
+                    signed(read(&mechanism)),
                     &[opentelemetry::KeyValue::new(INSTANCE_ATTRIBUTE, instance)],
                 );
             }
         })
         .build();
+}
+
+/// The two series of a breaker's window, both off one read of it: read
+/// apart, an export could pair the failures of one instant with the successes
+/// of another.
+#[cfg(feature = "opentelemetry")]
+const fn by_outcome(stats: crate::breaker::BreakerStats) -> [(&'static str, usize); 2] {
+    [
+        ("failure", stats.failures),
+        ("success", stats.outcomes.saturating_sub(stats.failures)),
+    ]
+}
+
+/// `count` as an up-down counter observes it.
+#[cfg(feature = "opentelemetry")]
+fn signed(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
@@ -446,17 +470,17 @@ mod tests {
         std::future::pending()
     }
 
-    /// One point an instrument observed: the instrument, the instance, the
-    /// breaker's state where the point carries one, and the value.
+    /// One point an instrument observed: the instrument, the instance, what
+    /// the instrument is keyed by beside it — the breaker's state on its
+    /// status, the outcome on its window's — and the value.
     type Point = (&'static str, &'static str, &'static str, i64);
 
     /// Every point of the instruments the reads are observed on, as the last
     /// export says them.
     fn observed(exporter: &InMemoryMetricExporter) -> Vec<(String, String, String, i64)> {
-        const OBSERVED: [&str; 6] = [
+        const OBSERVED: [&str; 5] = [
             BREAKER_STATUS,
             BREAKER_OUTCOMES,
-            BREAKER_FAILURES,
             CONCURRENCY_RUNNING,
             CONCURRENCY_WAITING,
             RATE_AVAILABLE,
@@ -481,12 +505,16 @@ mod tests {
                                 .attributes()
                                 .find(|kv| kv.key.as_str() == key)
                                 .map(|kv| kv.value.to_string())
-                                .unwrap_or_default()
+                        };
+                        let by = match metric.name() {
+                            BREAKER_STATUS => attribute(STATE_ATTRIBUTE),
+                            BREAKER_OUTCOMES => attribute(OUTCOME_ATTRIBUTE),
+                            _ => None,
                         };
                         (
                             metric.name().to_owned(),
-                            attribute(INSTANCE_ATTRIBUTE),
-                            attribute(STATE_ATTRIBUTE),
+                            attribute(INSTANCE_ATTRIBUTE).unwrap_or_default(),
+                            by.unwrap_or_default(),
                             point.value(),
                         )
                     })
@@ -542,8 +570,8 @@ mod tests {
         assert_eq!(
             observed(&exporter),
             sorted(&[
-                (BREAKER_FAILURES, "carrier", "", 0),
-                (BREAKER_OUTCOMES, "carrier", "", 0),
+                (BREAKER_OUTCOMES, "carrier", "failure", 0),
+                (BREAKER_OUTCOMES, "carrier", "success", 0),
                 (BREAKER_STATUS, "carrier", "closed", 1),
                 (BREAKER_STATUS, "carrier", "half_open", 0),
                 (BREAKER_STATUS, "carrier", "open", 0),
@@ -555,6 +583,9 @@ mod tests {
         );
 
         assert!(before.run(|_| async { Err::<(), _>(Down) }).await.is_err());
+        for _ in 0..2 {
+            assert!(before.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
+        }
         let holding = parked(before.run(|_| silent()));
         assert!(after.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
         let sent = parked(after.run(|_| silent()));
@@ -566,15 +597,15 @@ mod tests {
         assert_eq!(
             observed(&exporter),
             sorted(&[
-                (BREAKER_FAILURES, "quotes", "", 1),
-                (BREAKER_OUTCOMES, "quotes", "", 1),
+                (BREAKER_OUTCOMES, "quotes", "failure", 1),
+                (BREAKER_OUTCOMES, "quotes", "success", 2),
                 (BREAKER_STATUS, "quotes", "closed", 1),
                 (BREAKER_STATUS, "quotes", "half_open", 0),
                 (BREAKER_STATUS, "quotes", "open", 0),
                 (CONCURRENCY_RUNNING, "quotes", "", 1),
                 (CONCURRENCY_WAITING, "quotes", "", 0),
-                (BREAKER_FAILURES, "carrier", "", 0),
-                (BREAKER_OUTCOMES, "carrier", "", 0),
+                (BREAKER_OUTCOMES, "carrier", "failure", 0),
+                (BREAKER_OUTCOMES, "carrier", "success", 0),
                 (BREAKER_STATUS, "carrier", "closed", 0),
                 (BREAKER_STATUS, "carrier", "half_open", 0),
                 (BREAKER_STATUS, "carrier", "open", 1),
@@ -582,8 +613,9 @@ mod tests {
                 (CONCURRENCY_WAITING, "carrier", "", 0),
                 (RATE_AVAILABLE, "carrier", "", 3),
             ]),
-            "the one built before from its first run, with no rate to report; the carrier's \
-             two attempts sent, one still running, its window forgotten as it was opened by hand"
+            "the one built before from its first run, its window's three outcomes by what each \
+             was, with no rate to report; the carrier's two attempts sent, one still running, \
+             its window forgotten as it was opened by hand"
         );
 
         drop((holding, sent));

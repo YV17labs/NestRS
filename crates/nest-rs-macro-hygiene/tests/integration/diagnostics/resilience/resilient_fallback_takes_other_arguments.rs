@@ -1,6 +1,6 @@
 //! The fallback is handed the method's arguments, in order, then the run's
 //! error: one taking another type, or fewer arguments, is rustc's own `E0308`
-//! or `E0061`, at the `fallback` key, its note showing the fallback's signature.
+//! or `E0061` at the `fallback` key, its note the signature, no fix on the key.
 
 use std::sync::Arc;
 

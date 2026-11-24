@@ -97,7 +97,8 @@ pub enum ResilienceError<E> {
     },
     /// Every slot of the bulkhead stayed taken for as long as the call waits
     /// for one, or as many calls as may wait for one were waiting: the call
-    /// was refused without being sent.
+    /// was refused without being sent. The error does not say which of the
+    /// two; the refusal's line does, by its `waiters`.
     #[error("the bulkhead has no free slot")]
     #[non_exhaustive]
     Full {

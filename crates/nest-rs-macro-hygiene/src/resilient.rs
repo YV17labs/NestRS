@@ -5,7 +5,9 @@
 //! token — and each host it decorates is a use site: a
 //! provider, a struct built by hand through a trait's native `async fn`, and a
 //! method of every impl half whose feature the build enables — the hooks',
-//! the kernel's, under none.
+//! the kernel's, under none. So is each predicate reading an argument its
+//! method owns, run once or again, and a fallback handed arguments a
+//! `macro_rules!` wrote apart from the decorator.
 
 use std::sync::Arc;
 
@@ -136,6 +138,79 @@ impl HygieneResilientShipments {
         }
     }
 
+    /// A predicate reading an argument the method owns, run once: the attempt
+    /// borrows what the predicate reads once it answered.
+    #[resilient(carrier, record_if = |_error| zone != "eu")]
+    pub async fn quote(&self, zone: String) -> HygieneAnswer<usize> {
+        Ok(zone.len())
+    }
+
+    /// Run once under a predicate, the body changing an argument bound `mut`
+    /// and one taken by `&mut`, and consuming the first.
+    #[resilient(carrier, record_if = HygieneCarrierDown::busy, cancel = token)]
+    pub async fn restock(
+        &self,
+        mut order: String,
+        crates: &mut Vec<String>,
+    ) -> HygieneAnswer<usize> {
+        if token.is_cancelled() {
+            return Ok(0);
+        }
+        order.push('!');
+        crates.push(order);
+        std::future::ready(()).await;
+        Ok(crates.len())
+    }
+
+    /// A filter reading the argument its fallback is handed next, by value.
+    #[resilient(carrier, fallback = last_known, fallback_if = |_error| parcel != "none")]
+    pub async fn estimate(&self, parcel: String) -> HygieneAnswer<usize> {
+        Ok(parcel.len())
+    }
+
+    /// Run once, a predicate and a filter both reading what the fallback takes.
+    #[resilient(
+        carrier,
+        record_if = |_error| !parcel.is_empty(),
+        fallback = last_known,
+        fallback_if = |_error| parcel != "none",
+        cancel = token
+    )]
+    pub async fn reweigh(&self, parcel: String) -> HygieneAnswer<usize> {
+        let _attempt: CancellationToken = token;
+        Ok(parcel.len())
+    }
+
+    /// Sent again, every predicate reading an owned argument, the host and a
+    /// generic one.
+    #[resilient(
+        carrier,
+        idempotent,
+        retry_if = |error| error.busy() && parcel != "none",
+        retry_ok_if = |weight| *weight < parcel.len() + unit.as_ref().len(),
+        record_if = |_error| Arc::strong_count(&self.carrier) > 0,
+        fallback = last_known_in,
+        fallback_if = |_error| parcel != "none" && !unit.as_ref().is_empty(),
+    )]
+    pub async fn remeasure<U>(&self, parcel: String, unit: U) -> HygieneAnswer<usize>
+    where
+        U: AsRef<str> + Send + Sync,
+    {
+        Ok(parcel.len() + unit.as_ref().len())
+    }
+
+    async fn last_known_in<U>(
+        &self,
+        parcel: String,
+        unit: U,
+        _error: ResilienceError<HygieneCarrierDown>,
+    ) -> HygieneAnswer<usize>
+    where
+        U: AsRef<str> + Send + Sync,
+    {
+        Ok(parcel.len() + unit.as_ref().len())
+    }
+
     /// A method compiled out takes its expansion with it.
     #[cfg(any())]
     #[resilient(carrier)]
@@ -143,6 +218,37 @@ impl HygieneResilientShipments {
         crate::does_not_exist::call()
     }
 }
+
+// The decorator and its keys are the macro's, the method's argument its caller's.
+macro_rules! declare_fallback_keyed_here {
+    ($method:ident($zone:ident)) => {
+        impl HygieneResilientShipments {
+            #[resilient(carrier, fallback = last_known, fallback_if = |_error| !$zone.is_empty())]
+            pub async fn $method(&self, $zone: String) -> HygieneAnswer<usize> {
+                Ok($zone.len())
+            }
+        }
+    };
+}
+
+declare_fallback_keyed_here!(recount(parcel));
+
+// The decorator and its keys are the caller's, the method's argument the macro's.
+macro_rules! declare_fallback_keyed_there {
+    ($(#[$decorator:meta])* $method:ident) => {
+        impl HygieneResilientShipments {
+            $(#[$decorator])*
+            pub async fn $method(&self, parcel: String) -> HygieneAnswer<usize> {
+                Ok(parcel.len())
+            }
+        }
+    };
+}
+
+declare_fallback_keyed_there!(
+    #[resilient(carrier, fallback = last_known)]
+    recheck
+);
 
 /// A call a trait declares, its future `Send`.
 pub trait HygieneTracking {

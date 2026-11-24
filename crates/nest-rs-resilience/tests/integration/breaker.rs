@@ -19,37 +19,60 @@
 //! put that many within it already — and its count window of N is
 //! `breaker_window: N` with no age ([`mapped`]).
 //!
-//! **What holds**, each a test below:
+//! **The same at the same call**, each a test below:
 //!
-//! - every behaviour of the two cases, at the same call in both breakers;
-//! - on the reference's bucket boundaries, a dependency down reads the same
-//!   trace for trace once `breaker_age` is 9A/10, and off them that age only
-//!   ever forgets first: the reference drops an outcome by tenths of its
-//!   window, between 9A/10 and A after its answer, and this breaker at its age
-//!   exactly, so the reference lies between the ages 9A/10 and A;
-//! - under the mapping, on every generated trace of calls answered one after
-//!   the other, the two answer alike until a failure that opens this breaker
-//!   and not the reference, never the reverse, and that failure is one of
-//!   three: counted where the reference's rate, or its minimum of calls, is
-//!   not reached (`.claude/decisions/resilience-policy.md`, *Refused from
-//!   #7*); one the reference's bucket dropped up to a tenth of the window
-//!   early; a probe's, which opens this breaker at once where the reference
-//!   waits for its series and judges its rate;
-//! - with more calls in one window than `breaker_window` holds, a window of 2M
-//!   is never the laxer, and one of M is;
-//! - with calls in flight together, two more, this breaker the stricter in
-//!   each: its probes go one at a time, and a call sent before an opening
-//!   counts when it answers after the closing;
-//! - an `Err` a decorated method's `record_if` refuses, the reference's
-//!   `recordIf` answering `false`, counts in neither breaker's window and in
-//!   neither's series of probes, the probe's turn handed on in both.
+//! - every behaviour of the two cases;
+//! - a call its caller dropped, and an `Err` a decorated method's `record_if`
+//!   refuses, the reference's `recordIf` answering `false`: in neither
+//!   breaker's window and in neither's series of probes, the probe's turn
+//!   handed on in both;
+//! - a call sent before an opening and answering after the closing: a success
+//!   or a failure, its answer counts in neither breaker's new window;
+//! - on the reference's bucket boundaries, a dependency down, trace for trace,
+//!   once `breaker_age` is 9A/10.
+//!
+//! **Where the two first differ, this breaker is the stricter.** Under the
+//! mapping, on every generated trace — calls answered one after the other,
+//! and up to [`IN_FLIGHT`] in flight together answered in any order — the two
+//! answer alike until one of:
+//!
+//! - a failure both sent that opens this breaker and not the reference:
+//!   counted where the reference's rate, or its minimum of calls, is not
+//!   reached (`.claude/decisions/resilience-policy.md`, *Refused from #7*);
+//!   one the reference's bucket dropped up to a tenth of the window early; or
+//!   a probe's, which opens this breaker at once where the reference waits for
+//!   its series and judges its rate;
+//! - a call arriving while a probe is out, refused here, where the reference
+//!   sends its probes together.
+//!
+//! Never the reverse on those traces: sampled, not proved.
+//!
+//! **Past its first difference a trace is compared no further, and the two
+//! are out of step** by up to the open time, neither the stricter throughout:
+//! having opened first, this breaker also probes first and closes first, so
+//! it sends a probe, then every call, while the reference, opened later,
+//! still refuses
+//! (`having_opened_first_this_breaker_probes_and_closes_while_the_reference_still_refuses`).
+//!
+//! **The mapping's range:**
+//!
+//! - `breaker_age`: off its bucket boundaries the reference drops an outcome
+//!   by tenths of its window, between 9A/10 and A after its answer, and this
+//!   breaker at its age exactly. Aged A it counts a failure the reference
+//!   dropped; aged 9A/10 it forgets one the reference still holds, and there
+//!   the reference is the stricter;
+//! - `breaker_window`: with more calls in one window than it holds, a window
+//!   of M forgets by count failures the reference's rate still reads, and is
+//!   the laxer. Of 2M it is the laxer on none of the crowded traces drawn,
+//!   answered in turn or in flight together: 2M is shown enough on them, not
+//!   the least that is.
 
 use std::cell::Cell;
 use std::future::{Future, poll_fn};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
@@ -1075,37 +1098,180 @@ async fn a_failing_probe_opens_at_once_where_the_reference_judges_its_series() {
     );
 }
 
-/// This breaker the stricter: the reference's generation discards the answer
-/// of a call admitted under an earlier state, and the failure answered here
-/// is one the new window holds.
-#[tokio::test(start_paused = true)]
-async fn a_call_sent_before_an_opening_counts_when_it_answers_after_the_closing() {
-    let open = Duration::from_secs(1);
+/// What a trace of calls outliving the open time is drawn on: a second.
+const BRIEFLY: Duration = Duration::from_secs(1);
+
+/// The mapping of a breaker two failures open for [`BRIEFLY`], once `early`
+/// calls were sent and left waiting, two failures opened both and a probe
+/// closed both: the calls still in flight were admitted before the opening.
+async fn closed_again_with_calls_in_flight(early: usize) -> (Pair, Vec<Flight>) {
     let mut pair = Pair::mapping(Options {
-        open_duration: open,
+        open_duration: BRIEFLY,
         ..timed(100, 2, 1)
     })
     .await;
-
-    let (early, met) = pair.start().await;
-    assert_eq!(met, both(Decision::Sent));
+    let mut flights = Vec::new();
+    for _ in 0..early {
+        let (flight, met) = pair.start().await;
+        assert_eq!(met, both(Decision::Sent));
+        flights.push(flight);
+    }
     for _ in 0..2 {
-        pair.call(Outcome::Failure).await;
+        assert_eq!(pair.call(Outcome::Failure).await, both(Decision::Sent));
     }
     assert_eq!(pair.states(), both(State::Open));
-    tokio::time::advance(open).await;
-    pair.call(Outcome::Success).await;
+    tokio::time::advance(BRIEFLY).await;
+    assert_eq!(pair.call(Outcome::Success).await, both(Decision::Sent));
     assert_eq!(pair.states(), both(State::Closed));
+    (pair, flights)
+}
+
+/// A failure sent before an opening and answered after the closing opens
+/// neither on evidence older than the recovery: each window is one failure
+/// short after the next, and opens at the one after it.
+#[tokio::test(start_paused = true)]
+async fn a_failure_sent_before_an_opening_counts_in_neither_once_it_answers_after_the_closing() {
+    let (mut pair, mut early) = closed_again_with_calls_in_flight(1).await;
+    let early = early.pop().expect("one call in flight");
 
     pair.settle(early, Outcome::Failure).await;
     assert_eq!(pair.states(), both(State::Closed));
     assert_eq!(pair.call(Outcome::Failure).await, both(Decision::Sent));
+    assert_eq!(pair.states(), both(State::Closed));
+    assert_eq!(pair.call(Outcome::Failure).await, both(Decision::Sent));
+    assert_eq!(pair.states(), both(State::Open));
+}
+
+/// Successes sent before an opening and answered after the closing push no
+/// failure out of either window, as many of them as this policy's holds: both
+/// open at the second failure since the closing, and refuse the call after.
+#[tokio::test(start_paused = true)]
+async fn successes_sent_before_an_opening_push_no_failure_out_once_they_answer_after_the_closing() {
+    let (mut pair, early) = closed_again_with_calls_in_flight(4).await;
+
+    assert_eq!(pair.call(Outcome::Failure).await, both(Decision::Sent));
+    for flight in early {
+        pair.settle(flight, Outcome::Success).await;
+    }
+    assert_eq!(pair.call(Outcome::Failure).await, both(Decision::Sent));
+    assert_eq!(pair.states(), both(State::Open));
+    assert_eq!(
+        pair.call(Outcome::Failure).await,
+        both(Decision::Refused {
+            retry_after: BRIEFLY
+        })
+    );
+}
+
+/// What a deployment moving from the reference must know: the two are alike
+/// until the first failure that opens this breaker alone, and from there
+/// their cycles are out of step by up to the open time. Opened half the open
+/// time before the reference, this breaker probes while the reference still
+/// refuses, and closed by that probe sends every call the reference refuses.
+#[tokio::test(start_paused = true)]
+async fn having_opened_first_this_breaker_probes_and_closes_while_the_reference_still_refuses() {
+    let half = BRIEFLY / 2;
+    let mut pair = Pair::mapping(Options {
+        open_duration: BRIEFLY,
+        ..timed(50, 4, 1)
+    })
+    .await;
+    for _ in 0..2 {
+        assert_eq!(pair.call(Outcome::Failure).await, both(Decision::Sent));
+    }
     assert_eq!(
         pair.states(),
         Both {
             ours: State::Open,
             reference: State::Closed
         }
+    );
+
+    tokio::time::advance(half).await;
+    for _ in 0..2 {
+        assert_eq!(
+            pair.call(Outcome::Failure).await,
+            Both {
+                ours: Decision::Refused { retry_after: half },
+                reference: Decision::Sent
+            }
+        );
+    }
+    assert_eq!(pair.states(), both(State::Open));
+
+    tokio::time::advance(half).await;
+    let still_refused = Both {
+        ours: Decision::Sent,
+        reference: Decision::Refused { retry_after: half },
+    };
+    assert_eq!(
+        pair.call(Outcome::Success).await,
+        still_refused,
+        "the probe"
+    );
+    assert_eq!(
+        pair.states(),
+        Both {
+            ours: State::Closed,
+            reference: State::Open
+        }
+    );
+    assert_eq!(pair.call(Outcome::Success).await, still_refused);
+}
+
+/// A host polling the dependency through a decorated method whose
+/// `retry_ok_if` sends every `Ok` again, counting the attempts sent.
+struct Poller {
+    policy: Arc<ResiliencePolicy>,
+    attempts: AtomicUsize,
+}
+
+impl Poller {
+    #[resilient(policy, idempotent, retry_ok_if = |_| true)]
+    async fn poll(&self) -> Result<(), ResilienceError<Down>> {
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// An `Ok` its method's `retry_ok_if` sends again is a success of its
+/// attempt: each is an outcome of a closed breaker's window, and a probe's
+/// closes a half-open one, the attempts sent after it counted in the window
+/// it opened.
+#[tokio::test(start_paused = true)]
+async fn an_ok_sent_again_counts_as_a_success_in_the_window_and_as_a_probe() {
+    let (_app, policy) = crate::policy(ResilienceConfig {
+        retries: Some(2),
+        breaker_window: Some(4),
+        breaker_failures: 2,
+        ..ResilienceConfig::default()
+    })
+    .await;
+    let poller = Poller {
+        policy: Arc::clone(&policy),
+        attempts: AtomicUsize::new(0),
+    };
+    let counted = || {
+        let stats = policy.breaker_stats().expect("the policy has a breaker");
+        (stats.outcomes, stats.failures)
+    };
+
+    assert!(poller.poll().await.is_ok());
+    assert_eq!(
+        (poller.attempts.swap(0, Ordering::Relaxed), counted()),
+        (3, (3, 0)),
+        "sent, then again twice, each `Ok` a success of the window"
+    );
+
+    policy.open_breaker(BRIEFLY).expect("a breaker to open");
+    tokio::time::advance(BRIEFLY).await;
+    assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
+    assert!(poller.poll().await.is_ok());
+    assert_eq!(poller.attempts.load(Ordering::Relaxed), 3);
+    assert_eq!(
+        (policy.breaker_state(), counted()),
+        (Some(BreakerState::Closed), (2, 0)),
+        "the probe's `Ok` closed it, sent again though it was, and the two after it count"
     );
 }
 
@@ -1272,6 +1438,137 @@ async fn first_difference(
     None
 }
 
+/// How many calls a trace of calls in flight together leaves unanswered at
+/// most.
+const IN_FLIGHT: usize = 4;
+
+/// What each attempt of such a trace is sent under, the longest a policy
+/// takes, and how long one of its calls is left unanswered at most: none
+/// times out.
+const PATIENCE: Duration = Duration::from_secs(600);
+const LONGEST: Duration = Duration::from_secs(300);
+
+/// `config`, its attempts sent under [`PATIENCE`].
+fn patient(config: ResilienceConfig) -> ResilienceConfig {
+    ResilienceConfig {
+        timeout: PATIENCE,
+        ..config
+    }
+}
+
+/// One step of a trace of calls in flight together.
+#[derive(Clone, Copy, Debug)]
+enum Step {
+    /// A call arrived, and each breaker met it so.
+    Arrived(Both<Decision>),
+    /// A call both had sent answered.
+    Answered(Outcome),
+}
+
+/// Where two breakers driven through one trace of calls in flight together
+/// first differ.
+#[derive(Debug)]
+struct Apart {
+    /// The state both were in before the step.
+    met: State,
+    step: Step,
+    then: Both<State>,
+}
+
+impl Apart {
+    /// At a failure both had sent, which opened this breaker and not the
+    /// reference: this breaker the stricter.
+    fn opens_ours_alone(&self) -> bool {
+        matches!(self.step, Step::Answered(Outcome::Failure))
+            && self.then.ours == State::Open
+            && self.then.reference != State::Open
+    }
+
+    /// At a call arriving while a probe is out, which this breaker refuses
+    /// and the reference sends as a probe of its own: this breaker the
+    /// stricter.
+    fn refused_beside_a_probe(&self) -> bool {
+        self.met == State::HalfOpen
+            && matches!(
+                self.step,
+                Step::Arrived(Both {
+                    ours: Decision::Refused { .. },
+                    reference: Decision::Sent,
+                })
+            )
+            && self.then == both(State::HalfOpen)
+    }
+}
+
+/// Draws twice [`CALLS`] steps of `shape` through `pair`, whose policy is
+/// [`patient`] — a call arriving, left unanswered among [`IN_FLIGHT`] at
+/// most, or any one of those answering: the first step whose decision or
+/// whose state after it differs between the two, if one does.
+async fn first_apart(
+    pair: &mut Pair,
+    options: Options,
+    draws: &mut Draws,
+    shape: Shape,
+) -> Option<Apart> {
+    let mut flights: Vec<(Instant, Flight)> = Vec::new();
+    for _ in 0..2 * CALLS {
+        let gap = if draws.chance(shape.resting) {
+            options.open_duration
+        } else {
+            shape.grain * draws.of(shape.gaps)
+        };
+        let overdue = flights
+            .iter()
+            .position(|(sent, _)| sent.elapsed() + gap >= LONGEST);
+        if overdue.is_none() && !gap.is_zero() {
+            tokio::time::advance(gap).await;
+        }
+        let met = pair.states();
+        assert_eq!(met.ours, met.reference, "time alone moves both alike");
+
+        let arrives = flights.is_empty() || (flights.len() < IN_FLIGHT && draws.chance(50));
+        let step = if overdue.is_none() && arrives {
+            let (flight, decision) = pair.start().await;
+            if decision == both(Decision::Sent) {
+                flights.push((Instant::now(), flight));
+            }
+            Step::Arrived(decision)
+        } else {
+            let answering =
+                overdue.unwrap_or_else(|| (draws.next() % flights.len() as u64) as usize);
+            let (_, flight) = flights.swap_remove(answering);
+            let outcome = if draws.chance(5) {
+                Outcome::Ignored
+            } else if draws.chance(shape.failing) {
+                Outcome::Failure
+            } else {
+                Outcome::Success
+            };
+            pair.settle(flight, outcome).await;
+            Step::Answered(outcome)
+        };
+        let then = pair.states();
+        let met_alike = match step {
+            // Beside a probe both refuse a call, the reference telling no
+            // wait and this breaker what is left of the probe's bound.
+            Step::Arrived(Both {
+                ours: Decision::Refused { .. },
+                reference: Decision::Refused { .. },
+            }) if met.ours == State::HalfOpen => true,
+            Step::Arrived(decision) => decision.ours == decision.reference,
+            Step::Answered(_) => true,
+        };
+        if !met_alike || then.ours != then.reference {
+            return Some(Apart {
+                met: met.ours,
+                step,
+                then,
+            });
+        }
+    }
+    None
+}
+
 /// Any options under the mapping, any instants, any answers — a call counting
 /// in neither dropped by its caller on one trace in two, answered what
 /// `record_if` refuses on the other: the two differ first, when they do, at a
@@ -1335,10 +1632,68 @@ async fn generated_traces_differ_only_where_this_breaker_is_the_stricter() {
     );
 }
 
+/// Any options under the mapping, any instants, any answers, up to
+/// [`IN_FLIGHT`] calls in flight together and answered in any order: the two
+/// differ first, when they do, where this breaker is the stricter — at a
+/// failure both sent that opens it alone, or at a call it refuses beside its
+/// probe, which the reference sends as a probe of its own.
+#[tokio::test(start_paused = true)]
+async fn traces_of_calls_in_flight_together_differ_only_where_this_breaker_is_the_stricter() {
+    let (mut alike, mut opened, mut refused) = (0, 0, 0);
+    for index in 0..TRACES {
+        let mut draws = Draws(index);
+        let sliding_window = if draws.chance(25) {
+            SlidingWindow::Count(draws.of(&[10, 20]))
+        } else {
+            SlidingWindow::Time(Duration::from_secs(draws.of(&[1, 10, 60])))
+        };
+        let options = Options {
+            failure_rate_threshold: draws.of(&[25, 50, 100, 100]),
+            minimum_calls: draws.of(&[1, 2, 4, 8, 10]),
+            sliding_window,
+            open_duration: Duration::from_secs(draws.of(&[1, 5, 30])),
+            half_open_max_calls: draws.of(&[1, 2, 3]),
+        };
+        let shape = Shape {
+            grain: match sliding_window {
+                SlidingWindow::Count(_) => Duration::from_millis(250),
+                SlidingWindow::Time(size) => size / 40,
+            },
+            gaps: &ANYWHERE,
+            resting: 15,
+            failing: draws.of(&[40, 60, 100, 100]),
+            down: false,
+            declined: false,
+        };
+        let started = STARTED + draws.next() % 60_000;
+        let mut pair = Pair::new(patient(mapped(options)), options, started).await;
+
+        let Some(apart) = first_apart(&mut pair, options, &mut draws, shape).await else {
+            alike += 1;
+            continue;
+        };
+        if apart.opens_ours_alone() {
+            opened += 1;
+        } else {
+            assert!(
+                apart.refused_beside_a_probe(),
+                "trace {index}, of {options:?}: {apart:?}"
+            );
+            refused += 1;
+        }
+    }
+    assert!(
+        alike > 0 && opened > 0 && refused > 0,
+        "every class is drawn: {alike} alike, {opened} on a failure opening this breaker \
+         alone, {refused} on a call refused beside a probe"
+    );
+}
+
 /// A whole trace within one window, more calls than the policy's holds, their
 /// failures at the reference's own rate: counting twice the reference's
-/// minimum of calls it is never the laxer, and counting that minimum alone it
-/// is, on the traces whose failures the rate reads further back than it counts.
+/// minimum of calls it is never the laxer, its calls answered in turn or in
+/// flight together, and counting that minimum alone it is, on the traces
+/// whose failures the rate reads further back than it counts.
 #[tokio::test(start_paused = true)]
 async fn crowded_traces_find_a_window_of_twice_the_minimum_never_the_laxer() {
     let mut laxer_under = 0;
@@ -1360,6 +1715,13 @@ async fn crowded_traces_find_a_window_of_twice_the_minimum_never_the_laxer() {
         assert!(
             difference.as_ref().is_none_or(Difference::opens_ours_alone),
             "trace {index}, of {options:?}: {difference:?}"
+        );
+
+        let mut together = Pair::new(patient(mapped(options)), options, STARTED).await;
+        let apart = first_apart(&mut together, options, &mut draws.clone(), shape).await;
+        assert!(
+            apart.as_ref().is_none_or(Apart::opens_ours_alone),
+            "trace {index}, of {options:?}: {apart:?}"
         );
 
         let under = ResilienceConfig {

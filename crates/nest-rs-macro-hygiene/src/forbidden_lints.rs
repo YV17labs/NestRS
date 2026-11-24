@@ -2,7 +2,8 @@
 //! expansion's included (`E0453`), and fails on every warning it raises. One
 //! impl half compiles here, `#[scheduled]`: its methods, in every answer its
 //! probe reads, under the lints an answer of `!` trips where it is bound or
-//! read, and the one an `.await` of a large future trips outside a macro.
+//! read, and the one an `.await` of a large future trips outside a macro. One
+//! method decorator does too, `#[resilient]`, in each form its keys expand to.
 
 #![forbid(
     unreachable_code,
@@ -154,4 +155,103 @@ pub mod scheduled {
     }
 
     declare_fragment_tasks!(!);
+}
+
+/// A method of each form `#[resilient]` expands to — run once, its one attempt
+/// owning the arguments or lending them to a predicate, sent again, answered
+/// by a fallback its filter chooses, its token read — each opening on a
+/// `return` never taken, and one whose future is past `large_futures`'
+/// threshold, which only the expansion awaits. The lints a binding nothing
+/// reads trips are forbidden on the methods beside the file's.
+#[cfg(feature = "resilience")]
+pub mod resilient {
+    use std::sync::Arc;
+
+    use nest_rs::core::injectable;
+    use nest_rs::resilience::{ResilienceError, ResiliencePolicy, resilient};
+
+    /// What the depot answers when it fails.
+    #[derive(Debug)]
+    pub struct HygieneDepotDown;
+
+    impl std::fmt::Display for HygieneDepotDown {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the depot did not answer")
+        }
+    }
+
+    impl std::error::Error for HygieneDepotDown {}
+
+    type Answer<T> = Result<T, ResilienceError<HygieneDepotDown>>;
+
+    #[injectable]
+    pub struct HygieneForbiddingDepot {
+        #[inject]
+        depot: Arc<ResiliencePolicy>,
+    }
+
+    #[forbid(unused_variables, unused_mut)]
+    impl HygieneForbiddingDepot {
+        #[resilient(depot)]
+        pub async fn store(&self, mut parcel: String) -> Answer<usize> {
+            parcel.push('!');
+            Ok(parcel.len())
+        }
+
+        #[resilient(depot, record_if = |_error| !parcel.is_empty(), cancel = token)]
+        pub async fn weigh(&self, parcel: String) -> Answer<usize> {
+            if token.is_cancelled() {
+                return Err(HygieneDepotDown);
+            }
+            Ok(parcel.len())
+        }
+
+        #[resilient(
+            depot,
+            idempotent,
+            timeout = "2s",
+            retries = 2,
+            retry_if = |_error| !parcel.is_empty(),
+            retry_ok_if = |weight| *weight == 0,
+            cancel = token
+        )]
+        pub async fn locate(&self, parcel: String) -> Answer<usize> {
+            if token.is_cancelled() {
+                return Err(HygieneDepotDown);
+            }
+            Ok(parcel.len())
+        }
+
+        #[resilient(
+            depot,
+            fallback = last_known,
+            fallback_if = |_error| !parcel.is_empty(),
+            cancel = token
+        )]
+        pub async fn track(&self, parcel: String) -> Answer<usize> {
+            drop(token);
+            Ok(parcel.len())
+        }
+
+        async fn last_known(
+            &self,
+            parcel: String,
+            _error: ResilienceError<HygieneDepotDown>,
+        ) -> Answer<usize> {
+            Ok(parcel.len())
+        }
+
+        /// Holds a buffer past clippy's 16 KiB across an `.await`.
+        #[resilient(depot, idempotent, fallback = unarchived)]
+        pub async fn archive(&self) -> Answer<usize> {
+            let buffer = [0_u8; 32 * 1024];
+            std::future::ready(()).await;
+            std::hint::black_box(&buffer);
+            Ok(buffer.len())
+        }
+
+        async fn unarchived(&self, _error: ResilienceError<HygieneDepotDown>) -> Answer<usize> {
+            Ok(0)
+        }
+    }
 }

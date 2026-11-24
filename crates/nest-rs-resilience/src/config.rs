@@ -295,7 +295,14 @@ pub struct ResilienceConfig {
     pub concurrency: Option<usize>,
     /// How long a call waits for a slot of the bulkhead before it is refused,
     /// `CONCURRENCY_WAIT_MS`, from 1 ms to a minute, `0` for no wait; defaults
-    /// to none, a full bulkhead refusing at once.
+    /// to none, a full bulkhead refusing at once. Beside a
+    /// [`rate_limit`](Self::rate_limit), a call finding no free slot is
+    /// refused by the rate at once, rather than after this wait, only when no
+    /// wait it may make reaches its token: the one due it behind the attempts
+    /// already waiting for theirs, past this wait and
+    /// [`rate_wait`](Self::rate_wait) together, or past its unit's deadline.
+    /// Any other waits for its slot and meets the rate as it stands once it
+    /// holds one, so it may wait for a slot and be refused by the rate after.
     #[config(bounds = CONCURRENCY_WAIT)]
     pub concurrency_wait: Option<Duration>,
     /// How many calls wait for a slot of the bulkhead at once,

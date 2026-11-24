@@ -111,17 +111,29 @@ impl Rate {
         Arrived::Reserved(Reservation { rate: self, place }, at)
     }
 
-    /// How long an attempt arriving at `now` would be refused for, the time
-    /// to the token it would be due, when it could not wait for it: what
-    /// [`arrive`](Self::arrive) would answer, taking and reserving nothing.
-    pub(crate) fn refusing(&self, now: Instant, deadline: Option<Instant>) -> Option<Duration> {
+    /// How long a call at `now` is refused for, the time to the token it is due
+    /// behind the line as it stands, when no wait it may make reaches that
+    /// token: it arrives for it `within` this long at the latest — its wait
+    /// for a slot of the bulkhead — and waits the rate's own wait from there,
+    /// and the token lies past both, or at the unit's `deadline` or past it.
+    /// With `within` none it is what [`arrive`](Self::arrive) would answer.
+    /// It takes and reserves nothing, so the call it lets wait meets the rate
+    /// as it stands once it arrives.
+    pub(crate) fn refusing(
+        &self,
+        now: Instant,
+        within: Duration,
+        deadline: Option<Instant>,
+    ) -> Option<Duration> {
         let held = self.held.lock();
         let due = self.due(&held, held.line.len());
         if self.tick(now) >= due {
             return None;
         }
         let at = self.instant(due);
-        (!self.waits(now, at, deadline)).then(|| at.saturating_duration_since(now))
+        let away = at.saturating_duration_since(now);
+        let reached = within.saturating_add(self.wait.unwrap_or_default());
+        (away > reached || deadline.is_some_and(|deadline| at >= deadline)).then_some(away)
     }
 
     /// The whole tokens free at `now`: what as many attempts arriving
@@ -374,7 +386,10 @@ mod tests {
         assert_eq!(arriving(&rate, origin), Ok(()));
         for _ in 0..5 {
             assert_eq!(arriving(&rate, origin), Err(WINDOW / 2));
-            assert_eq!(rate.refusing(origin, None), Some(WINDOW / 2));
+            assert_eq!(
+                rate.refusing(origin, Duration::ZERO, None),
+                Some(WINDOW / 2)
+            );
         }
         assert_eq!(rate.available(origin + WINDOW / 2), 1);
         assert_eq!(arriving(&rate, origin + WINDOW / 2), Ok(()));
@@ -391,29 +406,110 @@ mod tests {
         let origin = Instant::now();
         for _ in 0..2 {
             for _ in 0..5 {
-                assert_eq!(rate.refusing(origin, None), None, "a token free");
+                assert_eq!(
+                    rate.refusing(origin, Duration::ZERO, None),
+                    None,
+                    "a token free"
+                );
             }
             assert_eq!(arriving(&rate, origin), Ok(()));
         }
-        assert_eq!(rate.refusing(origin, None), Some(SECOND * 5), "empty");
+        assert_eq!(
+            rate.refusing(origin, Duration::ZERO, None),
+            Some(SECOND * 5),
+            "empty"
+        );
         let later = origin + SECOND * 3;
-        assert_eq!(rate.refusing(later, None), Some(SECOND * 2));
+        assert_eq!(rate.refusing(later, Duration::ZERO, None), Some(SECOND * 2));
         assert_eq!(arriving(&rate, later), Err(SECOND * 2), "as arriving says");
-        assert_eq!(rate.refusing(origin + SECOND * 5, None), None);
+        assert_eq!(
+            rate.refusing(origin + SECOND * 5, Duration::ZERO, None),
+            None
+        );
 
         let waiting = Rate::new(1, WINDOW, Some(WINDOW));
         assert_eq!(arriving(&waiting, origin), Ok(()));
         assert_eq!(
-            waiting.refusing(origin, None),
+            waiting.refusing(origin, Duration::ZERO, None),
             None,
             "the token 10 s away is waited for"
         );
         assert_eq!(
-            waiting.refusing(origin, Some(origin + WINDOW)),
+            waiting.refusing(origin, Duration::ZERO, Some(origin + WINDOW)),
             Some(WINDOW),
             "a token at the unit's deadline leaves its call no time"
         );
-        assert_eq!(waiting.refusing(origin, Some(origin + WINDOW + NANO)), None);
+        assert_eq!(
+            waiting.refusing(origin, Duration::ZERO, Some(origin + WINDOW + NANO)),
+            None
+        );
+    }
+
+    /// A read stands behind the attempts waiting, as an attempt arriving
+    /// does: the token it tells is the one after theirs, though the one they
+    /// wait for comes within the wait.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_of_the_rate_stands_behind_the_attempts_waiting() {
+        let rate = Rate::new(1, WINDOW, Some(SECOND * 15));
+        let origin = Instant::now();
+        assert_eq!(arriving(&rate, origin), Ok(()));
+        let (waiting, due) = reserved(&rate, origin);
+        assert_eq!(due, origin + WINDOW);
+        let later = origin + SECOND;
+        assert_eq!(
+            rate.refusing(later, Duration::ZERO, None),
+            Some(SECOND * 19),
+            "the token at 20 s, behind the one waiting for the token 9 s away"
+        );
+        assert!(
+            matches!(rate.arrive(later, None), Arrived::Refused(wait) if wait == SECOND * 19),
+            "as arriving says"
+        );
+        drop(waiting);
+        assert_eq!(rate.refusing(later, Duration::ZERO, None), None);
+    }
+
+    /// A call that arrives for its token later — once a slot of the bulkhead
+    /// frees — is refused by the read only for a token no wait it may make
+    /// reaches: one past its latest arrival and the rate's wait from there,
+    /// to the nanosecond, or at its unit's deadline, however long it may
+    /// wait. With no wait of the rate's, the token is free by its latest
+    /// arrival or the call is refused.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_for_a_call_arriving_later_refuses_only_a_token_no_wait_reaches() {
+        let rate = Rate::new(1, WINDOW, Some(SECOND * 15));
+        let origin = Instant::now();
+        assert_eq!(arriving(&rate, origin), Ok(()));
+        let (_waiting, _) = reserved(&rate, origin);
+        let now = origin + SECOND;
+        let token = origin + WINDOW * 2;
+        let away = Some(SECOND * 19);
+        assert_eq!(rate.refusing(now, Duration::ZERO, None), away);
+        assert_eq!(rate.refusing(now, SECOND * 4 - NANO, None), away);
+        assert_eq!(
+            rate.refusing(now, SECOND * 4, None),
+            None,
+            "arriving 4 s on at the latest, 15 s from its token"
+        );
+        assert_eq!(rate.refusing(now, SECOND * 60, None), None);
+        assert_eq!(
+            rate.refusing(now, SECOND * 60, Some(token)),
+            away,
+            "a token at the unit's deadline leaves its call no time, whatever it may wait"
+        );
+        assert_eq!(rate.refusing(now, SECOND * 60, Some(token + NANO)), None);
+
+        let unwaited = Rate::new(1, WINDOW, None);
+        assert_eq!(arriving(&unwaited, origin), Ok(()));
+        assert_eq!(
+            unwaited.refusing(now, SECOND * 9 - NANO, None),
+            Some(SECOND * 9)
+        );
+        assert_eq!(
+            unwaited.refusing(now, SECOND * 9, None),
+            None,
+            "the token is free as it arrives at the latest"
+        );
     }
 
     /// An attempt waits for a token that comes within the rate's wait and
@@ -598,7 +694,10 @@ mod tests {
         assert_eq!(arriving(&rate, earlier + SECOND), Ok(()));
         let to_the_token = WINDOW + SECOND;
         assert_eq!(arriving(&rate, earlier), Err(to_the_token));
-        assert_eq!(rate.refusing(earlier, None), Some(to_the_token));
+        assert_eq!(
+            rate.refusing(earlier, Duration::ZERO, None),
+            Some(to_the_token)
+        );
     }
 
     /// A window of no time, which the config refuses, refills the bucket at
@@ -611,7 +710,7 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(arriving(&rate, now), Ok(()));
         }
-        assert_eq!(rate.refusing(now, None), None);
+        assert_eq!(rate.refusing(now, Duration::ZERO, None), None);
         assert_eq!(rate.available(now), 1);
         assert_eq!(rate.most_sent_within(SECOND), usize::MAX);
     }

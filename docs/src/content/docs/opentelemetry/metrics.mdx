@@ -152,21 +152,22 @@ the policy has on:
 | Instrument | What it reads |
 |---|---|
 | `nestrs.resilience.breaker.status` (`1`) | the breaker's state as a call arriving now meets it, by `nestrs.resilience.breaker.state`: `1` on the state it is in, `0` on the two others |
-| `nestrs.resilience.breaker.outcomes` (`{outcome}`) | the outcomes its window counts |
-| `nestrs.resilience.breaker.failures` (`{failure}`) | the failures among them |
+| `nestrs.resilience.breaker.outcomes` (`{outcome}`) | the outcomes its window counts, by `nestrs.resilience.breaker.outcome`: `failure` and `success`, both read off the window at one instant |
 | `nestrs.resilience.concurrency.running` (`{call}`) | calls holding a slot of the bulkhead |
 | `nestrs.resilience.concurrency.waiting` (`{call}`) | calls waiting for a slot |
 | `nestrs.resilience.rate.available` (`{token}`) | tokens of the rate limit free |
 
 Each is the read of that name on `ResiliencePolicy` — `breaker_state`,
 `breaker_stats`, `concurrency_running`, `concurrency_waiting`,
-`rate_available`. A dependency in trouble reads as `failures` climbing toward
+`rate_available`. The two `outcomes` sum to the window's count, and `failure`
+over that sum is `BreakerStats::failure_rate`. A dependency in trouble reads as
+`failure` climbing toward
 `BREAKER_FAILURES` before `status` moves to `open`; a saturated bulkhead as
 `running` at `CONCURRENCY` while `waiting` climbs. Summed over replicas,
 `status` counts the replicas in each state. It reads `half_open` as soon as the
 open time has passed, where `transitions` counts `half_open` only once a probe
-is sent; and a window is forgotten as its breaker opens, so `outcomes` and
-`failures` read `0` until it has closed again. A policy built before
+is sent; and a window is forgotten as its breaker opens, so both `outcomes`
+read `0` until it has closed again. A policy built before
 `OpenTelemetry::init()` reports from its first call, one built after it at
 once, and one whose first call came before it not at all.
 

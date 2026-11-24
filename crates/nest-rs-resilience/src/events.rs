@@ -1,5 +1,6 @@
-//! [`ResilienceEvent`] — what a policy tells its app as it happens, each one
-//! the fact a line or a counter of the policy says — read through
+//! [`ResilienceEvent`] — what a policy tells its app as it happens: each
+//! retry, each attempt given up at its bound, each call refused unsent, each
+//! transition of its breaker and each fallback answering — read through
 //! [`ResilienceEvents`], the subscription
 //! [`ResiliencePolicy::events`](crate::ResiliencePolicy::events) opens.
 
@@ -20,13 +21,21 @@ const HELD: usize = 256;
 /// One thing a policy did to a call, or its breaker did, as
 /// [`ResiliencePolicy::events`](crate::ResiliencePolicy::events) tells it.
 ///
-/// Each says what a line of the policy says, in that line's fields: `host` and
-/// `method` name the `#[resilient]` method the call came from, as its
-/// `mounted` line would — both `None` for a call run through
+/// An event names its call as the policy's lines do: `host` and `method` are
+/// the `#[resilient]` method the call came from, as its `mounted` line would
+/// name it. Both are `None` for a call run through
 /// [`run`](crate::ResiliencePolicy::run),
 /// [`run_idempotent`](crate::ResiliencePolicy::run_idempotent) or the
-/// middleware — and an `error` is the error's chain as the line tells it, a URL
-/// cut to its origin, never the error itself.
+/// middleware, which take no name: two callers sharing a policy through them
+/// are told apart by no event, so decorate the method making the call to name
+/// it. An `error` is the error's chain as the lines tell it, a URL cut to its
+/// origin, never the error itself.
+///
+/// An event is not its line. Where a fact files one, the event may say less:
+/// a [`Transition`](Self::Transition) not what opened the breaker, a full
+/// bulkhead's refusal not the waiters it met. And a call an open breaker
+/// refuses, or an attempt given up at its bound, is told with no line of its
+/// own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ResilienceEvent {
@@ -59,8 +68,12 @@ pub enum ResilienceEvent {
         /// says it.
         refusal: ResilienceRefusal,
     },
-    /// An attempt answered what the run sends its call again after: a failure,
-    /// a timeout, or an answer its method said to send again.
+    /// An attempt answered what the run decides to send its call again after:
+    /// a failure, a timeout, or an answer its method said to send again. It is
+    /// told as the retry is decided, before its wait: once the wait ends the
+    /// policy may still refuse the call unsent — a breaker that opened, a rate
+    /// with no token — which a [`Refusal`](Self::Refusal) then tells, and the
+    /// retries' counter counts the calls sent again alone.
     #[non_exhaustive]
     Retry {
         /// The decorated method's host.
@@ -76,7 +89,16 @@ pub enum ResilienceEvent {
         error: Option<String>,
     },
     /// An attempt was given up at its bound, unanswered. A retry follows it
-    /// when the run sends its call again.
+    /// when the run sends its call again, and it counts among the refusals on
+    /// the meter only when the run ends on it.
+    ///
+    /// One timeout is told by no event. A response of
+    /// [`ResilienceMiddleware`](crate::ResilienceMiddleware) its caller drops
+    /// while a read of its body has waited past the bound counts as a timeout
+    /// in the breaker, the dependency having delivered nothing in time, and
+    /// no caller is left to answer: nothing tells it and no refusal counts
+    /// it, but the breaker's [`Transition`](Self::Transition) when that
+    /// failure opens it.
     #[non_exhaustive]
     Timeout {
         /// The decorated method's host.
@@ -89,7 +111,9 @@ pub enum ResilienceEvent {
     },
     /// The circuit breaker changed phase, or was switched by hand. The events
     /// come in the order the transitions took effect, each `from` the `to` of
-    /// the one before it.
+    /// the one before it. What opened it — the failures its window counted,
+    /// what the last failed on, the open time — is on the transition's `warn`
+    /// alone.
     #[non_exhaustive]
     Transition {
         /// The phase it left.
@@ -108,8 +132,16 @@ pub enum ResilienceEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ResilienceRefusal {
-    /// Every slot of the bulkhead stayed taken for as long as the call waits
-    /// for one, or as many calls as may wait were waiting.
+    /// The bulkhead took the call into no slot, for one of two causes the
+    /// event does not tell apart: every slot stayed taken for as long as the
+    /// call waits for one — at once, with no wait — or every place to wait
+    /// was taken, `CONCURRENCY_WAITERS` calls waiting already, which the
+    /// `waiters` of the refusal's line alone says. It carries no count: the
+    /// calls running and waiting are read on the policy, as they stand at the
+    /// read and not as the refusal met them, through
+    /// [`concurrency_running`](crate::ResiliencePolicy::concurrency_running)
+    /// and
+    /// [`concurrency_waiting`](crate::ResiliencePolicy::concurrency_waiting).
     Full,
     /// The rate limit had no token free that the call could wait for.
     #[non_exhaustive]

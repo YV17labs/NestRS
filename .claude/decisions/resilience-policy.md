@@ -595,7 +595,7 @@ reference's word first:
 | The reference | Here | Differs by |
 |---|---|---|
 | `@Resilience(preset)`, `@Retry`, `@Timeout`, `@CircuitBreaker`, `@Bulkhead`, `@Fallback` on a handler or a class | `#[resilient(field, …)]` on the method making the call: a provider's, or a handler of every edge | one decorator; per method, never per class; the field names the policy, so a missing import is refused at boot |
-| `ResilienceService.preset(name)` / `create(options)`, `policy.execute(fn)` | `Arc<ResiliencePolicy<I>>` injected, `run` and `run_idempotent` for a call that is part of a method | a policy is named by a type and built from `<PREFIX>_RESILIENCE__<INSTANCE>__*` or `for_root`; none is built inline |
+| `ResilienceService.preset(name)` / `create(options)`, `policy.execute(fn, { source })` | `Arc<ResiliencePolicy<I>>` injected, `run` and `run_idempotent` for a call that is part of a method | a policy is named by a type and built from `<PREFIX>_RESILIENCE__<INSTANCE>__*` or `for_root`; none is built inline; a call run by hand is told with no `host` and no `method`, a decorated method with its own |
 | `ResiliencePolicy.wrap(…)`, any order | one order: the fallback, the bulkhead's slot for the whole run, then per attempt the unit's deadline, the breaker, the rate, the timeout | no second order |
 | `retry.attempts` (total, default 3, `Infinity`) | `RETRIES`, `retries = N` (after the first, 0 to 10, default 2) | bounded: ten at most |
 | `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS`; doubling, ±20 % | the curve is the framework's one; a `Retry-After` the dependency asks is waited whole |
@@ -615,12 +615,12 @@ reference's word first:
 | `breaker.state`, `breaker.stats` | `breaker_state()`, `breaker_stats()` (`outcomes`, `failures`, `failure_rate()` from 0 to 1) | the age is applied at the read |
 | `breaker.trip()`, `breaker.reset()` | `open_breaker(duration)`, `close_breaker()` | an opening says how long |
 | `bulkhead.maxConcurrent`, `maxQueue`, `queueTimeout` | `CONCURRENCY`, `CONCURRENCY_WAITERS`, `CONCURRENCY_WAIT_MS` | the slot is held for the whole run, its retries included |
-| `bulkhead.active`, `bulkhead.queued` | `concurrency_running()`, `concurrency_waiting()` | — |
+| `bulkhead.active`, `bulkhead.queued`; a rejection's `reason`, `active`, `queued` | `concurrency_running()`, `concurrency_waiting()`; `Full` | a call is in one of the two reads at any instant; the refusal says neither which cause nor a count, its `debug` line's `waiters` and the reads do |
 | `outboundRateLimit.limit`, `interval`, `maxWait` (token bucket) | `RATE_LIMIT`, `RATE_WINDOW_SECS`, `RATE_WAIT_MS` (token bucket) | counts attempts, a retry included; a token is waited for only when it comes before the unit's deadline; one given back goes to the next in line |
 | `limiter.available` | `rate_available()` | — |
 | `@Fallback(method \| fn, { handleIf })` | `fallback = method`, `fallback_if = F` | a method of `Self` alone, its signature checked: handed the method's arguments, then the error by value; default: every error (the reference's skips a 4xx); the failed attempt's savepoint is rolled back first |
 | `preset.fallback` for `execute()` | the `Result` a run answers: `.or_else(…)` | — |
-| `ResilienceEvents.events$`, `nestjs:resilience:<type>` channels | `ResiliencePolicy::events()`; each also a line on `nest_rs::resilience` and a counter | per policy; bounded, a subscription behind is told how many it missed; a send never runs a subscriber |
+| `ResilienceEvents.events$`, `nestjs:resilience:<type>` channels | `ResiliencePolicy::events()`, beside the lines on `nest_rs::resilience` and the counters | per policy; bounded, a subscription behind is told how many it missed; a send never runs a subscriber; a line, an event and a counter each say their own fact (below) |
 | `retry`, `timeout`, `circuit-open` / `-half-open` / `-closed`, `circuit-rejected`, `bulkhead-rejected`, `rate-limited`, `fallback` | `ResilienceEvent`'s `Retry`, `Timeout`, `Transition`, `Refusal`, `Fallback` | one transition and one refusal event, each saying which; the error as its chain in text, never the value |
 | `ResilienceService.circuitBreakers()`, `bulkheads()`, for an app to export | each policy injected by its type; its reads observed on the meter under `opentelemetry` | none enumerates them; the export is built |
 | `mapErrors`: `504` / `503`, `RpcException`, `WsException`, `GraphQLError`; `TIMEOUT`, `CIRCUIT_OPEN`, `BULKHEAD_FULL`, `RATE_LIMITED` | `ToProblem`: `503` `UNAVAILABLE` on every edge, `Retry-After` where known; the variant tells them apart in code | one class |
@@ -639,12 +639,22 @@ reference's word first:
   savepoint rolled back, then it unwinds on. A run sent once reads `record_if`
   alone. A method writing no key is judged by defaults that weigh nothing in
   its run.
+- **A predicate reads `self` and the method's arguments**, owned ones
+  included: wherever a key that reads them is written the attempt lends the
+  arguments, `record_if` on a method sent once as `idempotent` and `fallback`
+  do, and `fallback_if` is asked before the fallback takes them.
 - **An `Err` `record_if` refuses is counted in neither direction**, the
   reference's ignored outcome: the window does not hold it, and as a probe's
-  answer it hands the turn on. Counting it as an answer was the first build,
-  and the one place the proof below found this breaker the laxer. Half-open,
-  such answers neither close nor reopen it: it stays half-open, one call at a
-  time, until an `Ok` or a counted `Err`, as the reference's does.
+  answer it hands the turn on, with no line, no transition counted and no
+  event. Counting it as an answer was the first build, and the one place the
+  proof below found this breaker the laxer. Half-open, such answers neither
+  close nor reopen it: it stays half-open, one call at a time, until an `Ok`
+  or a counted `Err`, as the reference's does.
+- **An answer counts in the breaker only in the phase its attempt was let
+  through in**: one sent before an opening counts nowhere once the breaker has
+  closed again, by its probes as by `close_breaker()` — the reference's
+  generation. The proof found the other rule the laxer: successes in flight
+  across a cycle pushed a fresh failure out of the new window.
 - **The fallback answers after the run**, for the call's own error once its
   attempts are spent and for a refusal that sent nothing; `fallback_if` is
   asked first. It is a method of `Self` named by the key, handed the method's
@@ -659,7 +669,8 @@ reference's word first:
   tier-2 seam), whose `#[diagnostic::on_unimplemented]` is the key's sentence:
   a value of another shape is one error at the value.
 - **`cancel = token` binds the attempt's `CancellationToken`** as a local of
-  the body, never a parameter: the signature stays what callers call.
+  the body, never a parameter: the signature stays what callers call, and a
+  name an argument already holds is refused.
 - **The rate is a token bucket**, the generic cell rate algorithm (ITU-T
   I.371) in whole ticks of `1 / RATE_LIMIT` nanosecond: one instant, exact for
   every value the config takes. Attempts finding no token wait in arrival
@@ -670,19 +681,40 @@ reference's word first:
   event is not built
   (`an_event_is_built_only_while_a_subscription_is_open`); what an open one
   costs a call refused unsent is the `refused` group of `benches/policy.rs`.
+- **A line, an event and a counter each say their own fact.** A policy files
+  ten lines: at `debug` a retry (`attempt failed; retrying the call`, and
+  `attempt answered; retrying the call` for an `Ok` sent again), a retry given
+  up for a wait past the ceiling or for the unit's deadline, a savepoint that
+  could not be settled, a wait for a token, a call the bulkhead or the rate
+  refuses and a fallback answering (`the call ended on an error; its fallback
+  answers`); at `warn` the breaker's transition. A call an open breaker
+  refuses and a run ending on a timeout are counted and told, and file no line
+  of their own: one per refused call is the noise the 2026-11-22 entry
+  refused. A retry's line and event are told as it is decided, its counter
+  counts a call sent again; a `Transition` carries `from`, `to` and `manual`,
+  what opened the breaker being on the `warn` alone.
 - **The reads sit beside `breaker_state()`** — `breaker_stats()`,
   `concurrency_running()`, `concurrency_waiting()`, `rate_available()` — and
   under `opentelemetry` are observed as up-down counters, additive across
-  replicas as the pool's are, registered when the policy is built.
-- **The time window and the probes are covered, and nothing was built**:
+  replicas as the pool's are, registered when the policy is built. The
+  breaker's window is one instrument by `outcome`, both series from one read,
+  so no export says more failures than outcomes.
+- **The time window and the probes are covered**:
   `tests/integration/breaker.rs` ports the reference's breaker as a model and
-  drives both through the same timed traces. Under the table's mapping the two
-  open at the same call for an outcome past its age, a quiet spell, a burst,
-  probes answering and a probe failing; wherever they differ this one is open
-  where the reference is not — a count against a rate, an outcome dropped at
-  its age against its bucket's, probes one at a time, a failed probe opening
-  at once. A `BREAKER_WINDOW` under twice `minimumCalls` is the one way to be
-  the laxer, and the test pins it.
+  drives both through the same timed traces, calls in flight together
+  included. Under the table's mapping the two read the same call for an
+  outcome past its age, a quiet spell, a burst, probes answering, a probe
+  failing and an answer arriving across a cycle; they answer alike until their
+  first difference, and at that difference this one is the stricter — a
+  failure both sent opens this breaker alone (a count against a rate or a
+  minimum of calls, an outcome dropped at its age against its bucket's, a
+  failed probe opening at once), or this breaker refuses beside its probe a
+  call the reference sends as a probe of its own. That is sampled on
+  generated traces, not proved. Past the first difference the two cycles are
+  out of step by up to the open time: having opened first, this one also
+  probes and closes first, and then sends calls the reference still refuses.
+  A `BREAKER_WINDOW` under twice `minimumCalls` forgets by count failures the
+  reference's rate still reads, and the test pins it.
 
 **Superseded above:** the fixed window and its reset (2026-11-22: the rate's
 decision, its three limits and the refusal of "a second way to count a
@@ -690,7 +722,9 @@ rate"); the refusals of `fallback = …`, of a key classifying errors, of an
 in-code stream of events and of handing a decorated body its
 `CancellationToken`; "every `Err` is the dependency failing" now reads "by
 default"; the limit of a `#[resilient]` inside a `#[cfg_attr]` on an
-operation, which is split out and kept on the method.
+operation, which is split out and kept on the method; "each forgets the
+window and starts an epoch" of a switch by hand, an opening by a failure
+starting one too.
 
 **Refused:**
 
@@ -698,27 +732,51 @@ operation, which is split out and kept on the method.
   2026-11-21 refusal stands.
 - **A threshold as a rate after a minimum of calls, and probes sent together
   and judged by their rate**: the count and the series in a row are the
-  stricter, and the mapping above reaches the reference's cases.
+  stricter at the first difference, and the mapping above reaches the
+  reference's cases.
 - **A class-level form and a preset merged field by field**: a policy is one
   named instance, a method names it.
 - **A fallback that is a closure or a free function**: it would have nowhere
   to take the method's arguments from, and no signature to check.
+- **A label on a call run by hand** (`source`): a method wanting its name in
+  an event is decorated.
 - **A burst setting and a bound on the attempts waiting for a token**
   (`RATE_BURST`, `RATE_WAITERS`): no caller, and each a new name.
 
 **Limits, named:**
 
+- **The default breaker is not the reference's default mapped**: ten failures
+  of twenty, where the mapping of the reference's 50 % after ten calls gives
+  five. A deployment moving a default breaker sets `BREAKER_FAILURES`.
 - **A bucket left idle sends its whole limit at once**, then a token at a
   time: up to twice the limit within one window's length, as the reference's.
   A dependency counting every request of the last window takes half its limit.
 - **A token keeps its instant when its attempt is woken late**, so two
   attempts sent after a wait can go out closer than the interval by that lag.
   Checking again at the send would refuse an attempt after its whole wait.
+- **The rate read before a slot's wait is advisory, in tokens**: it refuses at
+  once only a call whose token, behind the line as it stands, lies past
+  `CONCURRENCY_WAIT_MS` plus `RATE_WAIT_MS` from its arrival or past its
+  unit's deadline. A call may still wait for a slot and be refused by the rate
+  after, and one refused at once might have been served by a reservation given
+  back since. Closing the first is reserving a token before the slot, for a
+  call that may never get one.
+- **A body consuming an argument its `record_if` reads** is rustc's own
+  `E0505` at the key, the remedy — a clone in the body — in the key's
+  rustdoc. A method sent once that lends its arguments and takes one that is
+  not `Sync` by value is refused as not `Send` in rustc's words, naming no
+  key; pointing it at the key is the run written as an `async fn`, which
+  holds its call twice.
 - **A non-callable value that is no literal** (a `const`) is refused in the
   key's sentence, then by rustc naming the seam's own types. Nothing on stable
   leaves the proof unresolved without breaking a closure's inference.
 - **A fallback taking other arguments** is rustc's `E0308` or `E0061` at the
   `fallback` key, no sentence of ours leading there.
+- **A refusal reaching a tick, a listener or a hook is that unit's failure**,
+  filed at `error` by its edge at every occurrence while the breaker is open;
+  a refused readiness indicator answers down, and a decorated liveness one
+  would have the orchestrator restart the process for a dependency's outage. A
+  `fallback` is how such a unit answers instead.
 - **A policy whose first run precedes `OpenTelemetry::init()`** never reports
   its observed instruments, as its counters. Closing it is a hook from the
   exporter's crate.

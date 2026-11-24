@@ -32,18 +32,36 @@
 //! [`ResiliencePolicy::close_breaker`]. Under the `reqwest` feature,
 //! [`ResilienceMiddleware`] runs the app's own reqwest client under a policy.
 //!
-//! **A policy tells what it does three ways, each the same fact.** A line on
-//! [`TARGET`]: a retry, a wait and a refusal at `debug`, a breaker's
-//! transition at `warn`. An event in code: [`ResiliencePolicy::events`] opens
-//! a subscription to each retry, timeout, refusal, transition and fallback as
-//! a [`ResilienceEvent`]. And what it holds now, read through
+//! **A policy tells what it does three ways, each with facts of its own.** A
+//! line on [`TARGET`], for an operator. At `debug`: a retry, once it is
+//! certain; a retry given up, the dependency asking a wait past the backoff's
+//! ceiling or the unit's deadline leaving it no time; an attempt's savepoint
+//! the database could not settle; a wait for a token of the rate; a call the
+//! bulkhead or the rate refuses; and a fallback answering. At `warn`: a
+//! breaker's transition.
+//! A call an open breaker refuses and a run ending on a timeout file no line
+//! of their own: the breaker said it opened once, and each caller is answered
+//! its refusal. An event in code: [`ResiliencePolicy::events`] opens a
+//! subscription to each retry, attempt given up at its bound, call refused
+//! unsent, transition and fallback as a [`ResilienceEvent`]; a wait, a retry
+//! given up and an unsettled savepoint are lines alone. And what it holds
+//! now, read through
 //! [`breaker_state`](ResiliencePolicy::breaker_state),
 //! [`breaker_stats`](ResiliencePolicy::breaker_stats),
 //! [`concurrency_running`](ResiliencePolicy::concurrency_running),
 //! [`concurrency_waiting`](ResiliencePolicy::concurrency_waiting) and
-//! [`rate_available`](ResiliencePolicy::rate_available). Under the
-//! `opentelemetry` feature the facts are counted and the reads observed on
-//! the global meter, by the policy's instance.
+//! [`rate_available`](ResiliencePolicy::rate_available).
+//!
+//! Under the `opentelemetry` feature a policy counts on the global meter, by
+//! its instance, each transition of its breaker, each call it sent again,
+//! each run it ended on its own refusal and each fallback answering, and its
+//! reads are observed there. A count is not always an event's: a retry's line
+//! and event are told as the retry is decided, and its counter counts the
+//! call once it is sent again, so a retry the policy then refuses unsent — a
+//! breaker that opened, a rate with no token — is told, and counted as the
+//! refusal its run ends on, never as a retry; and a timeout the run sends its
+//! call again after is told and counts on no counter, where the one a run
+//! ends on counts among the refusals.
 //!
 //! **A policy's state lives in its process.** Each replica keeps its own
 //! breaker, bulkhead and rate, so a dependency failing for one replica is
@@ -54,8 +72,10 @@
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
-/// This crate's span target — every line a policy files: its retries, its
-/// waits and refusals, and its breaker's transitions.
+/// This crate's span target — every line a policy files: at `debug` its
+/// retries and the ones it gives up, its waits for a token of the rate, the
+/// calls its bulkhead and its rate refuse and its fallbacks answering, and at
+/// `warn` its breaker's transitions.
 pub const TARGET: &str = "nest_rs::resilience";
 
 #[cfg(feature = "reqwest")]

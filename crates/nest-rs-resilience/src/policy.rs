@@ -20,7 +20,6 @@ use nest_rs_config::{ConfigError, Namespaced, instance_namespace};
 use nest_rs_core::__private::WithinHeld;
 use nest_rs_core::{Backoff, Instance, Problem, Unanswered, Unnamed, process_seed};
 use nest_rs_database::AtomicError;
-use tokio::sync::SemaphorePermit;
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -28,9 +27,9 @@ use crate::TARGET;
 #[cfg(feature = "reqwest")]
 use crate::breaker::HeldAttempt;
 use crate::breaker::{Breaker, BreakerState, BreakerStats, Pass, Sent};
-use crate::bulkhead::Bulkhead;
 #[cfg(feature = "reqwest")]
 use crate::bulkhead::HeldSlot;
+use crate::bulkhead::{Bulkhead, Slot};
 use crate::call::{Again, Call, Once};
 use crate::config::{LONGEST_ATTEMPT, ResilienceConfig, is_open_time};
 use crate::counters::{Counters, Observed};
@@ -66,15 +65,17 @@ use crate::told::told;
 /// and the rate limit how many attempts it sends per window, a retry included.
 ///
 /// Inside a unit of work holding a transaction, each attempt of a call
-/// declared idempotent runs in a savepoint of it, sent with the attempt's
+/// declared idempotent, and of a decorated method declaring a `fallback`,
+/// sent once or again, runs in a savepoint of it, sent with the attempt's
 /// first statement and settled before the next attempt and before the run
 /// answers: kept when the run answers the attempt's `Ok`, rolled back when the
 /// attempt failed, was given up at its bound or panicked. A failed attempt so
 /// leaves no write for the next to repeat, and a run ending on an error leaves
 /// its unit what it wrote before the call — whatever retries the policy has,
 /// none included: what a call leaves is read off how it is declared, never off
-/// a setting of the deployment's. A call sent once and a run on the pool open
-/// none: an `Err` there leaves what its body wrote, as it does with no policy.
+/// a setting of the deployment's. Any other call sent once, and a run on the
+/// pool, open none: an `Err` there leaves what its body wrote, as it does with
+/// no policy.
 ///
 /// Every `Err` a call run through [`run`](Self::run) or
 /// [`run_idempotent`](Self::run_idempotent) answers counts as the dependency
@@ -208,7 +209,7 @@ pub(crate) type Attempted<T> = Result<(T, Verdict), Refusal>;
 pub(crate) struct Run<'p, I> {
     /// What each of its attempts is sent under.
     terms: Terms<'p, I>,
-    _slot: Option<SemaphorePermit<'p>>,
+    _slot: Option<Slot<'p>>,
     /// How many times the run may send its call again: the policy's retries,
     /// or the ones its method pinned.
     retries: u32,
@@ -508,10 +509,13 @@ impl<I: Instance> ResiliencePolicy<I> {
     }
 
     /// The run of `method` [`open`](Self::open) found no free slot of
-    /// `bulkhead` for, opened once one is freed within the unit's `deadline`:
-    /// refused at once by a rate with no token free whose next it could not
-    /// wait for, read first and taking nothing, rather than after waiting for a
-    /// slot, and
+    /// `bulkhead` for, opened once one is freed within the unit's `deadline`.
+    /// The rate is read first, taking nothing: a call no wait it may make
+    /// brings to its token — the one behind the attempts waiting, past the
+    /// longest it waits for a slot and the rate's wait from there, or at the
+    /// unit's deadline — is refused at once rather than after its wait for a
+    /// slot. Any other waits, and meets the rate as it stands once it holds
+    /// its slot: refused there by a token still past the rate's wait. It is
     /// refused `Full` once no slot is freed for it in time or as many calls
     /// wait for one as may.
     async fn enter<'p>(
@@ -521,7 +525,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         deadline: Option<Instant>,
     ) -> Result<Run<'p, I>, Refusal> {
         if let Some(rate) = &self.rate
-            && let Some(wait) = rate.refusing(Instant::now(), deadline)
+            && let Some(wait) = rate.refusing(Instant::now(), bulkhead.longest_wait(), deadline)
         {
             refused_by_the_rate(I::NAME, method.as_ref(), wait);
             return Err(self.refused(method.as_ref(), Refusal::Limited(wait)));
@@ -545,7 +549,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         &'p self,
         method: Option<ResilientMethod>,
         deadline: Option<Instant>,
-        slot: Option<SemaphorePermit<'p>>,
+        slot: Option<Slot<'p>>,
     ) -> Run<'p, I> {
         Run {
             terms: Terms {
@@ -600,7 +604,10 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// run, its retries and their waits included, and through
     /// [`ResilienceMiddleware`](crate::ResilienceMiddleware) until its
     /// response's body ends — or `None` for a policy with no bulkhead
-    /// (`CONCURRENCY` unset).
+    /// (`CONCURRENCY` unset). A call is counted from the moment its own
+    /// future holds its slot: one a freed slot is handed to is read as
+    /// [waiting](Self::concurrency_waiting) until it is polled, so at every
+    /// instant a call is in one of the two reads and never in both.
     pub fn concurrency_running(&self) -> Option<usize> {
         self.bulkhead.as_deref().map(Bulkhead::running)
     }
@@ -624,9 +631,8 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// A subscription to what the policy does from now on: each retry, each
     /// attempt given up at its bound, each call refused unsent, each
     /// transition of its breaker and each fallback answering for a run, as a
-    /// [`ResilienceEvent`] saying what the line of that fact says. Every
-    /// subscription is told every event; one opened later is told nothing
-    /// that came before it.
+    /// [`ResilienceEvent`]. Every subscription is told every event; one opened
+    /// later is told nothing that came before it.
     ///
     /// With no subscription open, the policy builds no event. A subscription
     /// is this process's, as the policy's state is, and ends once the policy
@@ -697,10 +703,12 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// is sent again, and counted afresh.
     ///
     /// Whatever the breaker was in, a call let through before it changes
-    /// nothing once it answers — a probe answering a failure opens nothing,
-    /// and no answer counts in the window forgotten. Each call files the
-    /// transition's `warn`, marked `manual`, and counts on the transitions'
-    /// counter marked manual, whether or not the breaker was closed already.
+    /// nothing once it answers: a probe answering a failure opens nothing,
+    /// and no such answer counts in the window that follows. A breaker its
+    /// probes closed counts the same way: the answer of a call sent before
+    /// it opened counts nowhere. Each call files the transition's `warn`,
+    /// marked `manual`, and counts on the transitions' counter marked
+    /// manual, whether or not the breaker was closed already.
     /// Like [`open_breaker`](Self::open_breaker), it switches this replica's
     /// breaker alone.
     ///
@@ -715,7 +723,8 @@ impl<I: Instance> ResiliencePolicy<I> {
         Ok(())
     }
 
-    /// `refusal`, which a run of `method` ends on, counted and told.
+    /// `refusal`, which a run of `method` ends on, counted and told. It files
+    /// no line: the bulkhead's and the rate's file theirs where they refuse.
     fn refused(&self, method: Option<&ResilientMethod>, refusal: Refusal) -> Refusal {
         self.counters.refusal(refusal);
         self.subscribers
@@ -735,7 +744,7 @@ impl<I: Instance> ResiliencePolicy<I> {
             host = method.host(),
             method = method.name(),
             error = said.insert(told(error)).as_str(),
-            "the call failed; its fallback answers",
+            "the call ended on an error; its fallback answers",
         );
         self.counters.fallback();
         self.subscribers
@@ -884,20 +893,33 @@ impl<'p, I: Instance> Run<'p, I> {
     }
 
     /// The line of a retry that is certain, saying what the attempt before it
-    /// answered in error: its error's chain, or the timeout's sentence, and
-    /// nothing for an `Ok` sent again. The retry is told as it is filed.
+    /// answered: `attempt failed`, with its error's chain or the timeout's
+    /// sentence, for an `Err` or a timeout, whichever way the `Err` counts in
+    /// the breaker, and `attempt answered`, with no error, for an `Ok` sent
+    /// again. The retry is told as it is filed.
     fn retrying(&self, wait: Duration, error: Option<&str>) {
         let attempt = self.resent.saturating_add(1);
-        tracing::debug!(
-            target: TARGET,
-            instance = I::NAME,
-            host = self.terms.host().as_deref(),
-            method = self.terms.method_name(),
-            attempt,
-            wait_ms = millis(wait),
-            error,
-            "attempt failed; retrying the call",
-        );
+        match error {
+            Some(error) => tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                host = self.terms.host().as_deref(),
+                method = self.terms.method_name(),
+                attempt,
+                wait_ms = millis(wait),
+                error,
+                "attempt failed; retrying the call",
+            ),
+            None => tracing::debug!(
+                target: TARGET,
+                instance = I::NAME,
+                host = self.terms.host().as_deref(),
+                method = self.terms.method_name(),
+                attempt,
+                wait_ms = millis(wait),
+                "attempt answered; retrying the call",
+            ),
+        }
         self.terms
             .policy
             .subscribers
@@ -1186,7 +1208,8 @@ impl<'p, I: Instance> Terms<'p, I> {
     /// otherwise it is refused, taking nothing, told the time to that token.
     /// With no rate, nothing of the rate's runs: no lock, no clock read, no
     /// timer.
-    // Inlined, the rate's step left out of line: called, it costs a run 2 to 4 ns.
+    // Inlined, the rate's step alone left out of line: a run with no rate pays no
+    // call to be let through.
     #[inline(always)]
     fn admit(
         &self,
@@ -3708,20 +3731,55 @@ mod tests {
         );
     }
 
+    /// A call finding no free slot reaches the rate once a slot frees, so its
+    /// wait for its token is counted from there: one token every 10 s, the
+    /// one slot held by a call waiting for the token at 10 s, a call arriving
+    /// at 1 s is due the token at 20 s, 19 s away and past the rate's 15 s
+    /// wait from its arrival. It waits for the slot, freed at 10 s, and for
+    /// its token 10 s from there, and is sent.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_finding_no_free_slot_is_sent_at_a_token_it_reaches_once_a_slot_frees() {
+        let policy = policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(60)),
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(15)))
+        });
+        assert!(policy.run(|_| answering()).await.is_ok());
+        let started = tokio::time::Instant::now();
+        let (waited, behind) = tokio::join!(policy.run(|_| answering()), async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let answered = policy.run(|_| answering()).await;
+            (answered, started.elapsed())
+        });
+        assert!(waited.is_ok(), "{waited:?}");
+        assert!(
+            matches!(behind, (Ok(()), at) if at == Duration::from_secs(20)),
+            "the token at 20 s, 10 s from the slot freed at 10 s: {behind:?}"
+        );
+    }
+
     /// A call finding no free slot reads the rate before it waits for one, as
-    /// `begin` reads the breaker: a bucket empty whose next token lies past
-    /// the rate's wait, or past the unit's deadline, refuses it at once, told
-    /// the time to that token, rather than once its wait for a slot ends. The
-    /// read takes nothing: a call waiting for its slot beside a bucket with a
-    /// token free is sent once the slot frees, taking that token.
+    /// `begin` reads the breaker: a bucket empty whose next token no wait of
+    /// the call's reaches — past the longest it waits for a slot and the
+    /// rate's wait from there, or past the unit's deadline — refuses it at
+    /// once, told the time to that token, rather than once its wait for a slot
+    /// ends. The read takes nothing: a call waiting for its slot beside a
+    /// bucket with a token free is sent once the slot frees, taking that
+    /// token.
     #[tokio::test(start_paused = true)]
     async fn a_call_finding_no_free_slot_is_refused_by_an_empty_bucket_before_it_waits() {
         let lines = nest_rs_testing::LogCapture::install();
         let tracking =
             crate::resilient::resilient_method(|| "ShipmentsService", "track", None, None);
-        for (rate_wait, left, past) in [
-            (Duration::from_secs(5), None, "the rate's 5 s wait"),
+        for (slot_wait, rate_wait, left, past) in [
             (
+                Duration::from_secs(10),
+                Duration::from_secs(5),
+                None,
+                "its 10 s wait for a slot and the rate's 5 s wait",
+            ),
+            (
+                Duration::from_secs(60),
                 Duration::from_secs(60),
                 Some(Duration::from_secs(20)),
                 "the unit's deadline 20 s away",
@@ -3729,7 +3787,7 @@ mod tests {
         ] {
             let policy = policy(ResilienceConfig {
                 concurrency: Some(1),
-                concurrency_wait: Some(Duration::from_secs(60)),
+                concurrency_wait: Some(slot_wait),
                 ..rated(2, Duration::from_secs(60), Some(rate_wait))
             });
             let started = tokio::time::Instant::now();
@@ -3789,6 +3847,74 @@ mod tests {
                 .find(TARGET, "bulkhead full; the call is refused")
                 .is_empty(),
             "no call met the full bulkhead"
+        );
+    }
+
+    /// The read counts the attempts waiting for a token, the call behind them
+    /// all: one token every 10 s, the one slot held by a call waiting for the
+    /// token at 10 s, a call arriving at 7 s may wait 3 s for a slot and 5 s
+    /// for a token. The token at 10 s is the waiting call's, and its own, at
+    /// 20 s, no wait reaches: it is refused at once, told that one, where a
+    /// read of the next token alone would let it wait for the slot.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_finding_no_free_slot_is_read_behind_the_attempts_waiting_for_a_token() {
+        let policy = policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(3)),
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(5)))
+        });
+        assert!(policy.run(|_| answering()).await.is_ok());
+        let started = tokio::time::Instant::now();
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        let (waited, behind) = tokio::join!(policy.run(|_| answering()), async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let refused = policy.run(|_| answering()).await;
+            (refused, started.elapsed())
+        });
+        assert!(waited.is_ok(), "{waited:?}");
+        assert!(
+            matches!(
+                behind,
+                (Err(ResilienceError::Limited { retry_after, .. }), at)
+                    if retry_after == Duration::from_secs(13) && at == Duration::from_secs(7)
+            ),
+            "at once, told the token behind the one waited for: {behind:?}"
+        );
+    }
+
+    /// The read refuses only a call no wait reaches a token for, and counts
+    /// nothing: a call it lets wait for a slot meets the rate as it stands
+    /// once it holds one, and is refused there by a token still past the
+    /// rate's wait. One token every 10 s and no wait for one: the call may
+    /// wait 60 s for a slot, the token back at 10 s within that, and the slot
+    /// frees at 3 s, 7 s before the token.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_let_wait_for_a_slot_is_refused_by_a_token_still_past_the_rates_wait() {
+        let policy = policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(60)),
+            ..rated(1, Duration::from_secs(10), None)
+        });
+        let started = tokio::time::Instant::now();
+        let (holding, waited) = tokio::join!(
+            policy.run(|_| async {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                Ok::<_, Refused>(())
+            }),
+            async {
+                tokio::task::yield_now().await;
+                let waited = policy.run(|_| answering()).await;
+                (waited, started.elapsed())
+            },
+        );
+        assert!(holding.is_ok(), "{holding:?}");
+        assert!(
+            matches!(
+                waited,
+                (Err(ResilienceError::Limited { retry_after, .. }), at)
+                    if retry_after == Duration::from_secs(7) && at == Duration::from_secs(3)
+            ),
+            "after its 3 s wait for the slot: {waited:?}"
         );
     }
 
@@ -5470,6 +5596,59 @@ mod tests {
             .as_deref(),
             Some(UNREACHABLE),
         );
+    }
+
+    /// A retry's line says what its attempt did, one sentence a fact: it
+    /// failed, for an `Err` sent again — one counting in the breaker as
+    /// neither a failure nor a success included — and it answered, with no
+    /// error to tell, for an `Ok` sent again, which nothing failed in.
+    #[tokio::test(start_paused = true)]
+    async fn the_line_a_retry_files_says_whether_its_attempt_failed_or_answered() {
+        const FAILED: &str = "attempt failed; retrying the call";
+        const ANSWERED: &str = "attempt answered; retrying the call";
+        type Polled = Answer<u8, Refused>;
+        let policy = retrying(1);
+
+        let lines = nest_rs_testing::LogCapture::install();
+        let ignored = policy
+            .run_again::<Polled, _, _, _>(
+                None,
+                judging(PhantomData::<Polled>, every, none, none),
+                |_| async { Err(Refused) },
+            )
+            .await;
+        assert!(
+            matches!(ignored, Err(ResilienceError::Failed(Refused))),
+            "{ignored:?}"
+        );
+        assert_eq!(
+            error_of(&lines, FAILED),
+            Some(error_message(&Refused)),
+            "an `Err` `record_if` refuses, sent again"
+        );
+        lines.expect_none(TARGET, ANSWERED);
+        drop(lines);
+
+        let lines = nest_rs_testing::LogCapture::install();
+        let polled = policy
+            .run_again::<Polled, _, _, _>(
+                None,
+                judging(PhantomData::<Polled>, every, every, every),
+                |_| async { Ok(40) },
+            )
+            .await;
+        assert!(matches!(polled, Ok(40)), "{polled:?}");
+        let answered = lines.expect_one(TARGET, ANSWERED);
+        assert_eq!(
+            (
+                answered.level.as_str(),
+                answered.field("attempt").as_deref(),
+                answered.field("error")
+            ),
+            ("debug", Some("1"), None),
+            "{answered:?}"
+        );
+        lines.expect_none(TARGET, FAILED);
     }
 
     /// The opening of a breaker says what the attempt that opened it failed

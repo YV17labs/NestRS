@@ -202,8 +202,9 @@ oauth-resource = ["dep:nest-rs-oauth-resource", "authn", "http"]
 # (`unit`).
 authz = ["dep:nest-rs-authz", "guards", "nest-rs-testing?/authz"]
 social = ["dep:nest-rs-social", "authn", "oauth-client"]
-# Beside `resilience`, a circuit breaker's transitions count on the meter
-# `OpenTelemetry::init()` installs.
+# Beside `resilience`, a policy counts on the meter `OpenTelemetry::init()`
+# installs its breaker's transitions, its retries, its refusals and its
+# fallbacks, and what it holds is observed there.
 opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-resilience?/opentelemetry"]
 # The trace and the client telemetry on the reqwest client an app builds itself:
 # no HTTP stack of the framework's, and no exporter — a request records through

@@ -55,7 +55,8 @@ thiserror.workspace = true
 tokio.workspace = true
 # The `CancellationToken` each attempt is handed, cancelled when it is given up.
 tokio-util.workspace = true
-# A breaker's transition is a `warn`; a retry, a wait and a refusal a `debug`, on
+# A breaker's transition is a `warn`; a retry, one given up, a wait for a token,
+# a call the bulkhead or the rate refuses and a fallback answering a `debug`, on
 # `nest_rs::resilience`.
 tracing.workspace = true
 # The breaker's window and the rate's count — poison-free locking on every call

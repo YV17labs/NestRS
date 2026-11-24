@@ -4335,7 +4335,42 @@ mod instrumented {
             }
         }
 
-        // Sent once, its one attempt owning the argument and the token.
+        // Every predicate reading the argument the method owns, which its
+        // fallback is then handed by value.
+        in_both_orders! {
+            #[tracing::instrument(skip_all)]
+            #[resilient(
+                courier,
+                idempotent,
+                retry_if = |_| parcel != "P0",
+                retry_ok_if = |held: &String| held.len() > parcel.len(),
+                record_if = |_| !parcel.is_empty(),
+                fallback = held,
+                fallback_if = |_| parcel != "P0",
+                cancel = token
+            )]
+            async fn read_above, read_below(&self, parcel: String) -> Answer<String> {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                drop(token);
+                depot(&parcel)?;
+                Ok(parcel.clone())
+            }
+        }
+
+        // Sent once under a predicate reading the argument its one attempt
+        // lends it.
+        in_both_orders! {
+            #[tracing::instrument(skip_all)]
+            #[resilient(courier, record_if = |_| !parcel.is_empty(), cancel = token)]
+            async fn read_once_above, read_once_below(&self, parcel: String) -> Answer<String> {
+                drop(token);
+                depot(&parcel)?;
+                Ok(parcel.clone())
+            }
+        }
+
+        // Sent once under a predicate reading no argument: its one attempt
+        // takes the argument it consumes, and its token.
         in_both_orders! {
             #[tracing::instrument(skip_all)]
             #[resilient(courier, record_if = |_| false, cancel = token)]
@@ -4708,6 +4743,35 @@ mod instrumented {
             (1, 1)
         );
     }
+
+    /// Both orders hold where a predicate reads an argument the method owns:
+    /// the future an instrument written above builds borrows it as the
+    /// attempt does, and the fallback takes it once the filter read it.
+    #[tokio::test(start_paused = true)]
+    async fn a_predicate_reads_an_owned_argument_under_an_instrument_in_either_order() {
+        let (_app, traced) = traced().await;
+        for (parcel, answers, sent) in [
+            ("P1", Ok("P1"), 1),
+            ("P2", Ok("P2 held"), 2),
+            ("P0", Err(()), 1),
+        ] {
+            let above = traced.read_above(parcel.to_owned()).await;
+            assert_eq!(above.as_deref().map_err(drop), answers, "above: {parcel}");
+            assert_eq!(traced.attempted(), sent, "above: {parcel}");
+            let below = traced.read_below(parcel.to_owned()).await;
+            assert_eq!(below.as_deref().map_err(drop), answers, "below: {parcel}");
+            assert_eq!(traced.attempted(), sent, "below: {parcel}");
+        }
+
+        let above = traced.read_once_above("P1".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P1")), "{above:?}");
+        let below = traced.read_once_below("P2".to_owned()).await;
+        assert!(failed(&below), "{below:?}");
+        let sent = Arc::clone(&traced);
+        let spawned = tokio::spawn(async move { sent.read_once_above("P1".to_owned()).await });
+        let spawned = spawned.await.expect("the attempt does not panic");
+        assert!(matches!(spawned.as_deref(), Ok("P1")), "{spawned:?}");
+    }
 }
 
 /// What the predicate keys make of an attempt's answer: `retry_if` and
@@ -4806,6 +4870,43 @@ mod judged {
             match failure {
                 Some(failure) => Err(failure),
                 None => Ok(quote),
+            }
+        }
+
+        /// Run once, a failure counted outside the carrier's own zone:
+        /// `record_if` reads an argument the method owns, a generic one and
+        /// the host, each once the one attempt that read them answered.
+        #[resilient(
+            courier,
+            record_if = |error| {
+                error.failed() && zone != home.as_ref() && self.attempts.load(Ordering::Relaxed) > 0
+            }
+        )]
+        async fn recorded_in<H>(&self, zone: String, home: H, failure: NoQuote) -> Quoted
+        where
+            H: AsRef<str> + Send + Sync,
+        {
+            self.attempt();
+            if zone.is_empty() || home.as_ref().is_empty() {
+                return Ok(0);
+            }
+            Err(failure)
+        }
+
+        /// Sent again as the zone allows, each retry predicate reading an
+        /// argument the method owns: an error outside `home`, a quote in
+        /// `slow` under thirty.
+        #[resilient(
+            courier,
+            idempotent,
+            retry_if = |error| error.transient() && zone != "home",
+            retry_ok_if = |quote| zone == "slow" && *quote < 30,
+        )]
+        async fn routed(&self, zone: String, failure: Option<NoQuote>) -> Quoted {
+            let quote = self.attempt() * 10;
+            match failure {
+                Some(failure) if !zone.is_empty() => Err(failure),
+                _ => Ok(quote),
             }
         }
     }
@@ -4998,6 +5099,58 @@ mod judged {
         );
         assert_eq!(courier.breaker_state(), Some(BreakerState::Closed));
     }
+
+    /// A method run once owns its arguments, and its predicate reads them all
+    /// the same: the attempt borrowed what `record_if` is then asked about.
+    #[tokio::test(start_paused = true)]
+    async fn a_predicate_of_a_method_run_once_reads_an_argument_the_method_owns() {
+        let (_app, quotes, courier) = quotes::<CountedModule>().await;
+
+        let own = quotes
+            .recorded_in("home".to_owned(), "home", NoQuote::Down)
+            .await;
+        assert!(
+            matches!(own, Err(ResilienceError::Failed(NoQuote::Down))),
+            "{own:?}"
+        );
+        let counted = courier.breaker_stats().expect("the policy has a breaker");
+        assert_eq!(
+            (courier.breaker_state(), counted.outcomes, counted.failures),
+            (Some(BreakerState::Closed), 0, 0),
+            "a failure in the carrier's own zone counts in neither direction"
+        );
+
+        let abroad = quotes
+            .recorded_in("abroad".to_owned(), String::from("home"), NoQuote::Down)
+            .await;
+        assert!(abroad.is_err(), "{abroad:?}");
+        assert!(
+            matches!(courier.breaker_state(), Some(BreakerState::Open { .. })),
+            "the same failure elsewhere is counted, and one opens this breaker"
+        );
+        assert_eq!(quotes.attempted(), 2, "each sent once");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_retry_predicates_of_an_idempotent_method_read_an_argument_it_owns() {
+        let (_app, quotes, _courier) = quotes::<RetriedModule>().await;
+        for (zone, failure, sent) in [
+            ("home", Some(NoQuote::Busy), 1),
+            ("abroad", Some(NoQuote::Busy), 3),
+            ("abroad", Some(NoQuote::Declined), 1),
+        ] {
+            let answered = quotes.routed(zone.to_owned(), failure).await;
+            assert!(answered.is_err(), "{zone}: {answered:?}");
+            assert_eq!(quotes.attempted(), sent, "{zone}, {failure:?}");
+        }
+
+        let slow = quotes.routed("slow".to_owned(), None).await;
+        assert!(matches!(slow, Ok(30)), "asked again under thirty: {slow:?}");
+        assert_eq!(quotes.attempted(), 3);
+        let fast = quotes.routed("fast".to_owned(), None).await;
+        assert!(matches!(fast, Ok(10)), "{fast:?}");
+        assert_eq!(quotes.attempted(), 1, "its first quote is its answer");
+    }
 }
 
 /// What `fallback` and `fallback_if` make of the error a run ends on: the
@@ -5122,6 +5275,49 @@ mod fallback {
         async fn listed_rate(&self) -> Answer<u32> {
             Err(CarrierDown)
         }
+
+        /// The rate last known for a zone the method owned.
+        async fn last_known_in(
+            &self,
+            zone: String,
+            weight: u32,
+            error: ResilienceError<CarrierDown>,
+        ) -> Answer<u32> {
+            self.note(format!("{zone}/{weight} after {}", ended_on(&error)));
+            Ok(weight * 2)
+        }
+
+        /// Run once, the predicate and the filter both reading the zone the
+        /// fallback is then handed by value: no rate is known for `closed`,
+        /// and a failure in `quiet` is none in the breaker.
+        #[resilient(
+            courier,
+            record_if = |_| zone != "quiet",
+            fallback = last_known_in,
+            fallback_if = |error| matches!(error, ResilienceError::Failed(_)) && zone != "closed"
+        )]
+        async fn owned_rate(&self, zone: String, weight: u32) -> Answer<u32> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            if zone == "home" {
+                return Ok(weight);
+            }
+            Err(CarrierDown)
+        }
+
+        /// The same filter over a run sent again.
+        #[resilient(
+            courier,
+            idempotent,
+            fallback = last_known_in,
+            fallback_if = |_| zone != "closed" && self.attempts.load(Ordering::Relaxed) > 0
+        )]
+        async fn owned_rate_again(&self, zone: String, weight: u32) -> Answer<u32> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            if zone == "home" {
+                return Ok(weight);
+            }
+            Err(CarrierDown)
+        }
     }
 
     /// One retry a millisecond or two later, and a breaker eight failures open.
@@ -5187,7 +5383,7 @@ mod fallback {
         assert_eq!(rates.journal(), [""; 0], "a run that answered asks nothing");
         logs.expect_none(
             nest_rs_resilience::TARGET,
-            "the call failed; its fallback answers",
+            "the call ended on an error; its fallback answers",
         );
 
         let fell_back = rates.rate("north", 3).await;
@@ -5196,7 +5392,7 @@ mod fallback {
         assert_eq!(rates.attempted(), 2, "each call sent once");
         let line = logs.expect_one(
             nest_rs_resilience::TARGET,
-            "the call failed; its fallback answers",
+            "the call ended on an error; its fallback answers",
         );
         assert_eq!(line.level, "debug", "{line:?}");
         assert_eq!(line.field("instance").as_deref(), Some("courier"));
@@ -5265,7 +5461,7 @@ mod fallback {
         assert_eq!(rates.journal(), [""; 0], "its fallback is not called");
         logs.expect_none(
             nest_rs_resilience::TARGET,
-            "the call failed; its fallback answers",
+            "the call ended on an error; its fallback answers",
         );
 
         courier
@@ -5274,6 +5470,45 @@ mod fallback {
         let refused = rates.refused_rate("north", 3).await;
         assert!(matches!(refused, Ok(6)), "{refused:?}");
         assert_eq!(rates.journal(), ["north/3 after open"]);
+    }
+
+    /// The filter is asked before the fallback takes the arguments: what it
+    /// read by reference, the fallback is handed by value, run once or again.
+    #[tokio::test(start_paused = true)]
+    async fn a_filter_reads_an_argument_its_fallback_is_then_handed_by_value() {
+        let (_app, rates, courier) = rates::<FallingBackModule>().await;
+
+        let answered = rates.owned_rate("home".to_owned(), 3).await;
+        assert!(matches!(answered, Ok(3)), "{answered:?}");
+        let fell_back = rates.owned_rate("north".to_owned(), 3).await;
+        assert!(matches!(fell_back, Ok(6)), "{fell_back:?}");
+        let refused = rates.owned_rate("closed".to_owned(), 3).await;
+        assert!(super::failed(&refused), "{refused:?}");
+        assert_eq!(rates.journal(), ["north/3 after failed"]);
+        assert_eq!(rates.attempted(), 3, "each sent once");
+        let counted = courier.breaker_stats().expect("the policy has a breaker");
+        assert_eq!(
+            (counted.outcomes, counted.failures),
+            (3, 2),
+            "`record_if` read the zone too: both failures counted"
+        );
+        let quiet = rates.owned_rate("quiet".to_owned(), 4).await;
+        assert!(matches!(quiet, Ok(8)), "{quiet:?}");
+        let counted = courier.breaker_stats().expect("the policy has a breaker");
+        assert_eq!(
+            (counted.outcomes, counted.failures),
+            (3, 2),
+            "and none here"
+        );
+        assert_eq!(rates.journal(), ["quiet/4 after failed"]);
+        rates.attempted();
+
+        let fell_back = rates.owned_rate_again("north".to_owned(), 5).await;
+        assert!(matches!(fell_back, Ok(10)), "{fell_back:?}");
+        assert_eq!(rates.attempted(), 2, "sent again, then its fallback");
+        let refused = rates.owned_rate_again("closed".to_owned(), 5).await;
+        assert!(super::failed(&refused), "{refused:?}");
+        assert_eq!(rates.journal(), ["north/5 after failed"]);
     }
 
     #[tokio::test(start_paused = true)]
@@ -5797,7 +6032,7 @@ mod keyed {
     fn fell_back(logs: &LogCapture, host: &str, method: &str, times: usize) {
         let lines = logs.find(
             nest_rs_resilience::TARGET,
-            "the call failed; its fallback answers",
+            "the call ended on an error; its fallback answers",
         );
         assert_eq!(lines.len(), times, "{lines:#?}");
         for line in &lines {

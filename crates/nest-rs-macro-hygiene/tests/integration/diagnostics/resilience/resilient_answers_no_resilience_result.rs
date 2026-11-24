@@ -1,6 +1,7 @@
 //! What a decorated method answers is read by its type: anything but a
 //! `Result<T, ResilienceError<E>>` is one error at its return type, saying its
-//! body answers `Result<T, E>`; the alias above it is read as the literal is.
+//! body answers `Result<T, E>`, whatever keys the method carries; the alias
+//! above it is read as the literal is.
 
 use std::sync::Arc;
 
@@ -47,6 +48,16 @@ impl ShipmentsService {
 
     #[resilient(carrier)]
     async fn nothing(&self) {}
+
+    async fn stale(&self, _error: ResilienceError<CarrierDown>) -> Answer<String> {
+        Ok(String::new())
+    }
+
+    #[resilient(carrier, record_if = |_| true, fallback = stale, cancel = token)]
+    async fn keyed(&self) -> Result<String, CarrierDown> {
+        drop(token);
+        Ok(String::new())
+    }
 }
 
 fn main() {}

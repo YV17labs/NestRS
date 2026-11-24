@@ -1,6 +1,7 @@
 //! The policy tells an error's chain in the line a retry files and in its
 //! breaker's opening, so a decorated method's error is a `std::error::Error`,
-//! sent once or again: one that is not is one error at its return type.
+//! sent once or again, whatever keys the method carries: one that is not is
+//! one error at its return type.
 
 use std::sync::Arc;
 
@@ -24,6 +25,16 @@ impl ShipmentsService {
 
     #[resilient(carrier, idempotent)]
     async fn track(&self) -> Result<(), ResilienceError<Declined>> {
+        Err(Declined)
+    }
+
+    async fn held(&self, error: ResilienceError<Declined>) -> Result<(), ResilienceError<Declined>> {
+        Err(error)
+    }
+
+    #[resilient(carrier, record_if = |_| true, fallback = held, cancel = token)]
+    async fn weigh(&self) -> Result<(), ResilienceError<Declined>> {
+        drop(token);
         Err(Declined)
     }
 }

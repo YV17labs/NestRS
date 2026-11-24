@@ -2,6 +2,7 @@
 //! a call waits for a slot before it is refused, and how many calls wait for
 //! one at once.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{Semaphore, SemaphorePermit};
@@ -10,6 +11,10 @@ use tokio::time::Instant;
 /// A bound on the calls running inside one policy at once.
 pub(crate) struct Bulkhead {
     slots: Semaphore,
+    /// How many slots there are, taken or free.
+    most: usize,
+    /// How many calls wait for a slot now.
+    waiting: AtomicUsize,
     /// How long a call finding no free slot waits for one, `None` for no wait.
     wait: Option<Duration>,
     /// The places a call finding no free slot waits in, when their number is
@@ -73,12 +78,24 @@ impl Bulkhead {
     pub(crate) fn new(slots: usize, wait: Option<Duration>, waiters: Option<usize>) -> Self {
         Self {
             slots: Semaphore::new(slots),
+            most: slots,
+            waiting: AtomicUsize::new(0),
             wait,
             waiters: waiters.filter(|_| wait.is_some()).map(|most| Waiters {
                 places: Semaphore::new(most),
                 most,
             }),
         }
+    }
+
+    /// How many calls hold a slot now, one held past its run included.
+    pub(crate) fn running(&self) -> usize {
+        self.most.saturating_sub(self.slots.available_permits())
+    }
+
+    /// How many calls wait for a slot now.
+    pub(crate) fn waiting(&self) -> usize {
+        self.waiting.load(Ordering::Relaxed)
     }
 
     /// A slot free now, held until the slot is dropped, or `None` while every
@@ -120,12 +137,30 @@ impl Bulkhead {
                     .ok_or(Full::Waiters(waiters.most))
             })
             .transpose()?;
+        let _waiting = Waiting::among(&self.waiting);
         // The semaphore is never closed, so its one refusal is no slot in time.
         tokio::time::timeout(wait, self.slots.acquire())
             .await
             .ok()
             .and_then(Result::ok)
             .ok_or(Full::Slots)
+    }
+}
+
+/// One call counted among those waiting for a slot, until it is dropped:
+/// handed its slot, out of time, or its caller gone.
+struct Waiting<'b>(&'b AtomicUsize);
+
+impl<'b> Waiting<'b> {
+    fn among(waiting: &'b AtomicUsize) -> Self {
+        waiting.fetch_add(1, Ordering::Relaxed);
+        Self(waiting)
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -192,6 +227,37 @@ mod tests {
         };
         let (entered, ()) = tokio::join!(waiting, freeing);
         assert!(entered.is_ok(), "the slot freed inside the wait");
+    }
+
+    /// The reads count what a call arriving now meets: the slots taken, and
+    /// the calls waiting for one, a waiter leaving the count however its wait
+    /// ends — handed its slot, out of time, or dropped.
+    #[tokio::test(start_paused = true)]
+    async fn the_slots_taken_and_the_calls_waiting_are_read_as_they_stand() {
+        let bulkhead = Bulkhead::new(2, Some(Duration::from_millis(500)), None);
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (0, 0));
+        let first = bulkhead.enter(None).await.expect("a free slot");
+        let second = bulkhead.enter(None).await.expect("the other slot");
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (2, 0));
+
+        let mut handed = Box::pin(bulkhead.enter(None));
+        let mut dropped = Box::pin(bulkhead.enter(None));
+        assert!(waits(handed.as_mut()).await && waits(dropped.as_mut()).await);
+        assert_eq!(
+            (bulkhead.running(), bulkhead.waiting()),
+            (2, 2),
+            "no bound on the waiters, and both are counted"
+        );
+        drop(dropped);
+        assert_eq!(bulkhead.waiting(), 1, "its caller gone");
+        drop(first);
+        let handed = handed.await.expect("the slot freed for it");
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (2, 0));
+
+        assert_eq!(bulkhead.enter(None).await.err(), Some(Full::Slots));
+        assert_eq!(bulkhead.waiting(), 0, "its wait ran out");
+        drop((second, handed));
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (0, 0));
     }
 
     /// A slot held past its run stays taken, with no borrow of the bulkhead,

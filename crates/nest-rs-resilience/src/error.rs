@@ -105,16 +105,15 @@ pub enum ResilienceError<E> {
         #[source]
         __problem: Problem,
     },
-    /// The policy sent its dependency as many attempts as its rate limit allows
-    /// in the window, and the window's reset came past what the attempt could
-    /// wait: the call was refused without being sent, and is not attempted
-    /// again.
+    /// The rate limit had no token free for the attempt, and the next one due
+    /// it, behind the attempts already waiting for theirs, came past what it
+    /// could wait or past its unit's deadline: the call was refused without
+    /// being sent, and is not attempted again.
     #[error("the rate limit is reached")]
     #[non_exhaustive]
     Limited {
-        /// How long until the window resets and the policy sends an attempt
-        /// again: the `Retry-After` every edge answers, in whole seconds
-        /// rounded up.
+        /// How long until that token is free: the `Retry-After` every edge
+        /// answers, in whole seconds rounded up.
         retry_after: Duration,
         #[doc(hidden)]
         #[source]
@@ -125,7 +124,8 @@ pub enum ResilienceError<E> {
     /// answered, or roll it back once it failed. The run ends there, whatever
     /// the attempt answered, and is not attempted again: nothing that attempt
     /// wrote stands. No refusal of the policy's, so every edge answers it as
-    /// the server's own failure, opaquely.
+    /// the server's own failure, opaquely, and no fallback answers in its
+    /// place.
     #[error("an attempt's savepoint could not be settled")]
     #[non_exhaustive]
     Unsettled {
@@ -182,7 +182,7 @@ pub(crate) enum Refusal {
     /// For this long at least.
     Open(Duration),
     Full,
-    /// Until the rate's window resets.
+    /// Until the token the attempt would be due is free.
     Limited(Duration),
 }
 

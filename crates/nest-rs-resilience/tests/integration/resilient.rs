@@ -9,9 +9,14 @@
 //! that is no failure, a fallback, a breaker opened by hand), each receiver and
 //! host it takes, a refusal answered `503` by every edge serving a decorated
 //! handler, a method of every impl half that takes one, called through the
-//! framework's own path, attempted again within that one call, and what a
+//! framework's own path, attempted again within that one call, what a
 //! decorated method's future holds (`footprint`): its size against its
-//! undecorated twin's, and a large one run on a worker of tokio's default stack.
+//! undecorated twin's, and a large one run on a worker of tokio's default stack
+//! — and what its other keys do: the predicates saying how an answer counts
+//! (`judged`), the fallback answering in place of a run's error (`fallback`),
+//! the attempt's token in the body (`cancel`), and all of them on each
+//! receiver and host (`keyed`), beside an instrument in either order
+//! (`instrumented`).
 
 use std::cell::Cell;
 use std::future::Future;
@@ -1043,6 +1048,13 @@ impl nest_rs_core::ToProblem for PreviewFailed {
     }
 }
 
+impl PreviewFailed {
+    /// Whether the previewer answered that it has no preview of the post.
+    fn missing(&self) -> bool {
+        self.0.status() == Some(reqwest::StatusCode::NOT_FOUND)
+    }
+}
+
 /// A host the test builds itself: the previewer's policy, the upstream's
 /// address the app's config holds, and a client trusting the peer's authority.
 struct Previews {
@@ -1097,6 +1109,49 @@ impl Previews {
                 Ok(None)
             }
         })
+    }
+
+    /// The docs' answer among the errors: a post the previewer has no preview
+    /// of is `error_for_status`'s `Err`, which the predicates take for its
+    /// answer — sent once, and no failure.
+    #[resilient(
+        previewer,
+        idempotent,
+        retry_if = |error| !error.missing(),
+        record_if = |error| !error.missing()
+    )]
+    async fn page(&self, post: u64) -> Result<String, ResilienceError<PreviewFailed>> {
+        let url = format!("{}/previews/{post}", self.config.upstream_url);
+        let page = self.http.get(url).send().await?.error_for_status()?;
+        Ok(page.text().await?)
+    }
+
+    /// The docs' fallback by key: `no_card` answers for the policy's refusals
+    /// alone, and the previewer's own failure stays the method's error.
+    #[resilient(
+        previewer,
+        fallback = no_card,
+        fallback_if = |error| !matches!(error, ResilienceError::Failed(_))
+    )]
+    async fn card(&self, post: u64) -> Result<Option<String>, ResilienceError<PreviewFailed>> {
+        let url = format!("{}/previews/{post}", self.config.upstream_url);
+        let page = self.http.get(url).send().await?.error_for_status()?;
+        Ok(Some(page.text().await?))
+    }
+
+    async fn no_card(
+        &self,
+        post: u64,
+        refused: ResilienceError<PreviewFailed>,
+    ) -> Result<Option<String>, ResilienceError<PreviewFailed>> {
+        let error = error_message(&refused);
+        tracing::warn!(
+            target: POSTS,
+            post,
+            %error,
+            "link preview refused; answering no card",
+        );
+        Ok(None)
     }
 }
 
@@ -1190,6 +1245,91 @@ async fn the_methods_result_is_its_fallback_a_refusal_answered_and_a_failure_kep
     assert_eq!(peer.requests().len(), 1, "the refused call is never sent");
     let said = logs.expect_one(POSTS, "link preview refused; answering no card");
     assert_eq!(said.level, "warn", "{said:?}");
+    let open = previews
+        .preview(7)
+        .await
+        .expect_err("the breaker still refuses the call");
+    assert_eq!(
+        said.field("error"),
+        Some(error_message(&open)),
+        "the refusal's whole chain"
+    );
+}
+
+/// The same answer told by key, as it runs: a `404` stays the `Err` reqwest
+/// makes of it, and `retry_if` and `record_if` take it for the previewer's
+/// answer — sent once, and no failure in a breaker two failures open; a `503`
+/// is attempted again and counted.
+#[tokio::test]
+async fn an_err_the_predicates_take_for_the_dependencys_answer_is_sent_once_and_no_failure() {
+    let peer = HttpsPeer::answering(
+        &CERTIFICATE,
+        [
+            PeerAnswer::status(404),
+            PeerAnswer::status(404),
+            PeerAnswer::status(503),
+        ],
+    )
+    .await;
+    let app = boot_reaching::<AnsweringModule>(&peer.url("")).await;
+    let previews = Previews::of(&app);
+
+    for sent in 1..=2 {
+        let missing = previews.page(7).await;
+        assert!(
+            matches!(&missing, Err(ResilienceError::Failed(failed)) if failed.missing()),
+            "{missing:?}"
+        );
+        assert_eq!(peer.requests().len(), sent, "its answer is sent once");
+    }
+    assert_eq!(
+        previews.previewer.breaker_state(),
+        Some(BreakerState::Closed),
+        "nor counted as a failure: two would have opened the breaker"
+    );
+
+    let down = previews.page(8).await;
+    assert!(matches!(down, Err(ResilienceError::Failed(_))), "{down:?}");
+    assert_eq!(
+        peer.requests().len(),
+        4,
+        "a failing status is attempted again"
+    );
+    assert!(
+        matches!(
+            previews.previewer.breaker_state(),
+            Some(BreakerState::Open { .. })
+        ),
+        "its two failures opened the breaker"
+    );
+}
+
+/// The fallback named by key, as it runs: the previewer's own failure is the
+/// method's error, its fallback not asked, and the call the breaker it opened
+/// refuses answers no card, unsent, the refusal filed at `warn` with the chain
+/// the policy answered and the post the method was called with.
+#[tokio::test]
+async fn a_fallback_named_by_key_answers_no_card_for_a_refusal_and_keeps_the_previewers_failure() {
+    let peer = HttpsPeer::answering(&CERTIFICATE, [PeerAnswer::status(503)]).await;
+    let app = boot_reaching::<FallbackModule>(&peer.url("")).await;
+    let previews = Previews::of(&app);
+    let logs = LogCapture::install();
+
+    let failed = previews.card(7).await;
+    assert!(
+        matches!(failed, Err(ResilienceError::Failed(PreviewFailed(_)))),
+        "{failed:?}"
+    );
+    logs.expect_none(POSTS, "link preview refused; answering no card");
+    let refused = previews.card(7).await;
+    assert!(
+        matches!(refused, Ok(None)),
+        "no card while the breaker refuses the call: {refused:?}"
+    );
+    assert_eq!(peer.requests().len(), 1, "the refused call is never sent");
+    let said = logs.expect_one(POSTS, "link preview refused; answering no card");
+    assert_eq!(said.level, "warn", "{said:?}");
+    assert_eq!(said.field("post").as_deref(), Some("7"), "{said:?}");
     let open = previews
         .preview(7)
         .await
@@ -3271,6 +3411,61 @@ mod instrumented {
                 Ok(if zone.is_empty() { &self.hub.0 } else { zone })
             }
         }
+
+        /// The parcel held at the hub, in place of the error its run ended on.
+        async fn held(
+            &self,
+            parcel: String,
+            _error: ResilienceError<CarrierDown>,
+        ) -> Answer<String> {
+            Ok(format!("{parcel} held"))
+        }
+
+        // Every other key: each predicate, a fallback handed the argument
+        // each attempt read, and the attempt's token read in the body.
+        in_both_orders! {
+            #[tracing::instrument(skip_all, err)]
+            #[resilient(
+                courier,
+                idempotent,
+                retry_if = |_| true,
+                retry_ok_if = String::is_empty,
+                record_if = |_| true,
+                fallback = held,
+                fallback_if = |_| true,
+                cancel = token
+            )]
+            async fn keyed_above, keyed_below(&self, parcel: String) -> Answer<String> {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                if token.is_cancelled() {
+                    return Ok(String::new());
+                }
+                depot(&parcel)?;
+                Ok(parcel.clone())
+            }
+        }
+
+        // Sent once, its one attempt lending the argument its fallback takes.
+        in_both_orders! {
+            #[tracing::instrument(skip_all, ret)]
+            #[resilient(courier, fallback = held, cancel = token)]
+            async fn lent_above, lent_below(&self, parcel: String) -> Answer<String> {
+                let _attempt = token;
+                depot(&parcel)?;
+                Ok(parcel.clone())
+            }
+        }
+
+        // Sent once, its one attempt owning the argument and the token.
+        in_both_orders! {
+            #[tracing::instrument(skip_all)]
+            #[resilient(courier, record_if = |_| false, cancel = token)]
+            async fn owned_above, owned_below(&self, parcel: String) -> Answer<String> {
+                drop(token);
+                depot(&parcel)?;
+                Ok(parcel)
+            }
+        }
     }
 
     #[module(
@@ -3577,5 +3772,1449 @@ mod instrumented {
         let once = tokio::spawn(async move { sent.once_above("P1".to_owned()).await });
         let once = once.await.expect("the attempt does not panic");
         assert!(matches!(once.as_deref(), Ok("P1")), "{once:?}");
+    }
+
+    /// Both orders hold under every other key. Above, each attempt opens a
+    /// span recording what that attempt answered, and the fallback runs
+    /// outside them all; below, one span covers the run and its fallback, and
+    /// records what the method answers.
+    #[tokio::test(start_paused = true)]
+    async fn a_method_carrying_every_other_key_runs_under_an_instrument_in_either_order() {
+        let (_app, traced) = traced().await;
+        let opened = Opened::default();
+        let _default = tracing::subscriber::set_default(opened.clone());
+
+        let answered = traced.keyed_above("P1".to_owned()).await;
+        assert!(matches!(answered.as_deref(), Ok("P1")), "{answered:?}");
+        assert_eq!(traced.attempted(), 1);
+        let above = traced.keyed_above("P2".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P2 held")), "{above:?}");
+        assert_eq!(traced.attempted(), 2, "sent again, then its fallback");
+        assert_eq!(opened.named("keyed_above"), 3, "a span an attempt");
+        assert_eq!(
+            opened.recorded(),
+            [("error", DOWN.to_owned()), ("error", DOWN.to_owned())],
+            "each attempt's own error"
+        );
+
+        let below = traced.keyed_below("P2".to_owned()).await;
+        assert!(matches!(below.as_deref(), Ok("P2 held")), "{below:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("keyed_below"), 1, "one span for the whole run");
+        assert_eq!(opened.recorded(), [], "the method answered its fallback's");
+
+        let above = traced.lent_above("P2".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P2 held")), "{above:?}");
+        assert_eq!(opened.named("lent_above"), 1);
+        assert_eq!(
+            opened.recorded(),
+            [("return", "Err(CarrierDown)".to_owned())],
+            "the attempt's answer, its fallback outside the span"
+        );
+        let below = traced.lent_below("P2".to_owned()).await;
+        assert!(matches!(below.as_deref(), Ok("P2 held")), "{below:?}");
+        assert_eq!(opened.named("lent_below"), 1);
+        assert_eq!(
+            opened.recorded(),
+            [("return", r#"Ok("P2 held")"#.to_owned())],
+            "the method's answer, its fallback's"
+        );
+
+        let above = traced.owned_above("P1".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P1")), "{above:?}");
+        let below = traced.owned_below("P2".to_owned()).await;
+        assert!(failed(&below), "{below:?}");
+        assert_eq!(
+            (opened.named("owned_above"), opened.named("owned_below")),
+            (1, 1)
+        );
+    }
+}
+
+/// What the predicate keys make of an attempt's answer: `retry_if` and
+/// `retry_ok_if` say what is sent again, `record_if` what counts as a failure
+/// in the breaker, each alone and together, a closure reading the method's
+/// arguments and its host where it names them.
+mod judged {
+    use super::*;
+
+    /// What the carrier answers a quote with when it gives none: its own
+    /// answer or its failure, each final or worth another attempt.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+    enum NoQuote {
+        #[error("the carrier is busy")]
+        Busy,
+        #[error("the carrier declined the parcel")]
+        Declined,
+        #[error("the carrier did not answer")]
+        Down,
+        #[error("the carrier closed the route")]
+        Gone,
+    }
+
+    impl NoQuote {
+        /// Whether another attempt may be answered a quote.
+        fn transient(&self) -> bool {
+            matches!(self, Self::Busy | Self::Down)
+        }
+
+        /// Whether the carrier failed, rather than answered.
+        fn failed(&self) -> bool {
+            matches!(self, Self::Down | Self::Gone)
+        }
+    }
+
+    type Quoted = Result<u32, ResilienceError<NoQuote>>;
+
+    #[injectable]
+    struct QuotesService {
+        #[inject]
+        courier: Arc<ResiliencePolicy<Courier>>,
+        attempts: AtomicU32,
+    }
+
+    impl QuotesService {
+        /// The attempt about to run, counted from one.
+        fn attempt(&self) -> u32 {
+            self.attempts.fetch_add(1, Ordering::Relaxed) + 1
+        }
+
+        fn attempted(&self) -> u32 {
+            self.attempts.swap(0, Ordering::Relaxed)
+        }
+
+        #[resilient(courier, idempotent, retry_if = NoQuote::transient)]
+        async fn retried(&self, failure: NoQuote) -> Quoted {
+            self.attempt();
+            Err(failure)
+        }
+
+        #[resilient(courier, record_if = NoQuote::failed)]
+        async fn recorded(&self, failure: NoQuote) -> Quoted {
+            self.attempt();
+            Err(failure)
+        }
+
+        #[resilient(
+            courier,
+            idempotent,
+            retry_if = NoQuote::transient,
+            record_if = |error| error.failed()
+        )]
+        async fn judged(&self, failure: NoQuote) -> Quoted {
+            self.attempt();
+            Err(failure)
+        }
+
+        /// A quote growing by `step` an attempt, asked again while it is under
+        /// thirty.
+        #[resilient(courier, idempotent, retry_ok_if = |quote| *quote < 30)]
+        async fn polled(&self, step: u32) -> Quoted {
+            Ok(self.attempt() * step)
+        }
+
+        /// Every predicate at once, one reading an argument and one the host:
+        /// a quote is asked again under `floor`, an error once.
+        #[resilient(
+            courier,
+            idempotent,
+            retry_if = |error| error.transient() && self.attempts.load(Ordering::Relaxed) < 2,
+            retry_ok_if = |quote| *quote < floor,
+            record_if = NoQuote::failed,
+        )]
+        async fn bid(&self, floor: u32, failure: Option<NoQuote>) -> Quoted {
+            let quote = self.attempt() * 10;
+            match failure {
+                Some(failure) => Err(failure),
+                None => Ok(quote),
+            }
+        }
+    }
+
+    /// Two retries a millisecond or two apart, and no breaker.
+    fn retrying_twice() -> ResilienceConfig {
+        ResilienceConfig {
+            retries: Some(2),
+            backoff_first: Duration::from_millis(1),
+            backoff_ceiling: Duration::from_millis(2),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, retrying_twice()))],
+        providers = [QuotesService],
+    )]
+    struct RetriedModule;
+
+    /// The same retries, under a breaker its one failure opens.
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(30),
+            ..retrying_twice()
+        }))],
+        providers = [QuotesService],
+    )]
+    struct CountedModule;
+
+    /// `M` booted, the service it provides and the policy that service runs
+    /// under.
+    async fn quotes<M: Module + 'static>() -> (
+        HeadlessApp,
+        Arc<QuotesService>,
+        Arc<ResiliencePolicy<Courier>>,
+    ) {
+        let app = boot::<M>().await;
+        let quotes = app
+            .container()
+            .get::<QuotesService>()
+            .expect("the module provides it");
+        let courier = held::<Courier>(&app);
+        (app, quotes, courier)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_err_retry_if_refuses_ends_the_run_and_one_it_takes_is_sent_again() {
+        let (_app, quotes, _courier) = quotes::<RetriedModule>().await;
+        for (failure, sent) in [
+            (NoQuote::Declined, 1),
+            (NoQuote::Gone, 1),
+            (NoQuote::Busy, 3),
+            (NoQuote::Down, 3),
+        ] {
+            let answered = quotes.retried(failure).await;
+            assert!(
+                matches!(answered, Err(ResilienceError::Failed(last)) if last == failure),
+                "the last attempt's error is the method's: {answered:?}"
+            );
+            assert_eq!(quotes.attempted(), sent, "{failure:?}");
+        }
+    }
+
+    /// Run once, `record_if` alone decides: an `Err` it refuses counts in
+    /// neither direction. The window of a closed breaker holds nothing of it,
+    /// and as a probe's answer it neither closes the breaker nor opens it
+    /// again: the next call probes, until an `Ok` or an `Err` it takes.
+    #[tokio::test(start_paused = true)]
+    async fn an_err_record_if_refuses_counts_in_neither_direction_in_the_breaker() {
+        let (_app, quotes, courier) = quotes::<CountedModule>().await;
+        for answer in [NoQuote::Declined, NoQuote::Busy] {
+            let answered = quotes.recorded(answer).await;
+            assert!(
+                matches!(answered, Err(ResilienceError::Failed(said)) if said == answer),
+                "still the method's error: {answered:?}"
+            );
+            assert_eq!(courier.breaker_state(), Some(BreakerState::Closed));
+            let counted = courier.breaker_stats().expect("the policy has a breaker");
+            assert_eq!(
+                (counted.outcomes, counted.failures),
+                (0, 0),
+                "no outcome of the window, a success no more than a failure"
+            );
+        }
+        assert!(quotes.recorded(NoQuote::Down).await.is_err());
+        assert!(
+            matches!(courier.breaker_state(), Some(BreakerState::Open { .. })),
+            "an `Err` it takes is a failure, and one opens this breaker"
+        );
+
+        tokio::time::advance(Duration::from_secs(31)).await;
+        quotes.attempted();
+        for probe in 0..2 {
+            let answered = quotes.recorded(NoQuote::Declined).await;
+            assert!(
+                matches!(answered, Err(ResilienceError::Failed(NoQuote::Declined))),
+                "probe {probe} is sent: {answered:?}"
+            );
+            assert_eq!(
+                courier.breaker_state(),
+                Some(BreakerState::HalfOpen),
+                "probe {probe} neither closed the breaker nor opened it again"
+            );
+        }
+        assert_eq!(
+            quotes.attempted(),
+            2,
+            "each took the probe's turn in its own"
+        );
+
+        let quoted = quotes.polled(30).await;
+        assert!(matches!(quoted, Ok(30)), "the next probe: {quoted:?}");
+        assert_eq!(
+            courier.breaker_state(),
+            Some(BreakerState::Closed),
+            "an `Ok` closes it"
+        );
+    }
+
+    /// The two axes are independent: the dependency's final answer is neither
+    /// sent again nor a failure, its "busy" is sent again and no failure, and
+    /// its final failure is counted and sent no more.
+    #[tokio::test(start_paused = true)]
+    async fn an_err_is_sent_again_and_counted_each_as_its_own_predicate_says() {
+        let (_app, quotes, courier) = quotes::<CountedModule>().await;
+
+        assert!(quotes.judged(NoQuote::Declined).await.is_err());
+        assert_eq!(quotes.attempted(), 1, "its answer is sent once");
+        assert_eq!(courier.breaker_state(), Some(BreakerState::Closed));
+
+        assert!(quotes.judged(NoQuote::Busy).await.is_err());
+        assert_eq!(quotes.attempted(), 3, "sent again up to the retries");
+        assert_eq!(
+            courier.breaker_state(),
+            Some(BreakerState::Closed),
+            "and none of the three a failure: one opens this breaker"
+        );
+
+        assert!(quotes.judged(NoQuote::Gone).await.is_err());
+        assert_eq!(quotes.attempted(), 1, "a final failure is sent once");
+        assert!(
+            matches!(courier.breaker_state(), Some(BreakerState::Open { .. })),
+            "and counted"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_ok_retry_ok_if_takes_is_sent_again_and_the_last_answers_once_the_retries_are_spent()
+    {
+        let (_app, quotes, courier) = quotes::<CountedModule>().await;
+
+        let ready = quotes.polled(10).await;
+        assert!(matches!(ready, Ok(30)), "{ready:?}");
+        assert_eq!(quotes.attempted(), 3, "asked again under thirty");
+
+        let pending = quotes.polled(1).await;
+        assert!(
+            matches!(pending, Ok(3)),
+            "the last `Ok` answers once the retries are spent: {pending:?}"
+        );
+        assert_eq!(quotes.attempted(), 3);
+        assert_eq!(
+            courier.breaker_state(),
+            Some(BreakerState::Closed),
+            "an `Ok` sent again is no failure"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_predicates_of_one_method_read_its_arguments_and_its_host() {
+        let (_app, quotes, courier) = quotes::<CountedModule>().await;
+
+        let bid = quotes.bid(20, None).await;
+        assert!(matches!(bid, Ok(20)), "{bid:?}");
+        assert_eq!(quotes.attempted(), 2, "asked again under its floor");
+
+        let busy = quotes.bid(0, Some(NoQuote::Busy)).await;
+        assert!(
+            matches!(busy, Err(ResilienceError::Failed(NoQuote::Busy))),
+            "{busy:?}"
+        );
+        assert_eq!(
+            quotes.attempted(),
+            2,
+            "sent again once, though two retries were left"
+        );
+        assert_eq!(courier.breaker_state(), Some(BreakerState::Closed));
+    }
+}
+
+/// What `fallback` and `fallback_if` make of the error a run ends on: the
+/// method naming a fallback answers what it answers, handed the arguments and
+/// that error — the call's own or each refusal of the policy — unless its
+/// filter refuses the error; and every attempt of such a method runs in a
+/// savepoint of its unit's transaction, rolled back before the fallback runs.
+mod fallback {
+    use super::*;
+
+    /// What a run ended on, as its fallback read it.
+    fn ended_on(error: &ResilienceError<CarrierDown>) -> &'static str {
+        match error {
+            ResilienceError::Failed(CarrierDown) => "failed",
+            ResilienceError::TimedOut { .. } => "timed out",
+            ResilienceError::Open { .. } => "open",
+            ResilienceError::Full { .. } => "full",
+            ResilienceError::Limited { .. } => "limited",
+            _ => "unsettled",
+        }
+    }
+
+    #[injectable]
+    struct RatesService {
+        #[inject]
+        courier: Arc<ResiliencePolicy<Courier>>,
+        attempts: AtomicU32,
+        /// What each fallback was handed and how each savepoint was settled,
+        /// in the order they happened.
+        journal: Mutex<Vec<String>>,
+    }
+
+    impl RatesService {
+        fn note(&self, entry: impl Into<String>) {
+            self.journal.lock().expect("unpoisoned").push(entry.into());
+        }
+
+        fn journal(&self) -> Vec<String> {
+            std::mem::take(&mut *self.journal.lock().expect("unpoisoned"))
+        }
+
+        fn attempted(&self) -> u32 {
+            self.attempts.swap(0, Ordering::Relaxed)
+        }
+
+        /// The rate last known for `zone`, twice the weight.
+        async fn last_known(
+            &self,
+            zone: &str,
+            weight: u32,
+            error: ResilienceError<CarrierDown>,
+        ) -> Answer<u32> {
+            self.note(format!("{zone}/{weight} after {}", ended_on(&error)));
+            Ok(weight * 2)
+        }
+
+        /// The carrier quotes its home zone alone.
+        #[resilient(courier, fallback = last_known)]
+        async fn rate(&self, zone: &str, weight: u32) -> Answer<u32> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            if zone == "home" {
+                return Ok(weight);
+            }
+            Err(CarrierDown)
+        }
+
+        #[resilient(courier, timeout = "100ms", fallback = last_known)]
+        async fn slow_rate(&self, zone: &str, weight: u32) -> Answer<u32> {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if zone == "home" {
+                return Ok(weight);
+            }
+            Err(CarrierDown)
+        }
+
+        /// A fallback answering for the policy's refusals alone.
+        #[resilient(
+            courier,
+            fallback = last_known,
+            fallback_if = |error| !matches!(error, ResilienceError::Failed(_))
+        )]
+        async fn refused_rate(&self, zone: &str, weight: u32) -> Answer<u32> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            if zone == "home" {
+                return Ok(weight);
+            }
+            Err(CarrierDown)
+        }
+
+        /// A fallback knowing no rate either.
+        async fn none_known(&self, error: ResilienceError<CarrierDown>) -> Answer<u32> {
+            self.note(format!("none after {}", ended_on(&error)));
+            Err(ResilienceError::Failed(CarrierDown))
+        }
+
+        #[resilient(courier, fallback = none_known)]
+        async fn unknown_rate(&self) -> Answer<u32> {
+            Ok(7)
+        }
+
+        /// An owned argument each attempt reads and the fallback takes.
+        async fn queued(
+            &self,
+            order: String,
+            error: ResilienceError<CarrierDown>,
+        ) -> Answer<String> {
+            self.note(format!("{order} after {}", ended_on(&error)));
+            Ok(format!("{order} queued"))
+        }
+
+        #[resilient(courier, idempotent, retries = 2, fallback = queued)]
+        async fn ship(&self, order: String) -> Answer<String> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            if order.is_empty() {
+                return Ok(order.clone());
+            }
+            Err(CarrierDown)
+        }
+
+        /// No fallback and sent once: its `Err` is its caller's.
+        #[resilient(courier)]
+        async fn listed_rate(&self) -> Answer<u32> {
+            Err(CarrierDown)
+        }
+    }
+
+    /// One retry a millisecond or two later, and a breaker eight failures open.
+    fn falling_back() -> ResilienceConfig {
+        ResilienceConfig {
+            retries: Some(1),
+            backoff_first: Duration::from_millis(1),
+            backoff_ceiling: Duration::from_millis(2),
+            breaker_window: Some(8),
+            breaker_failures: 8,
+            ..ResilienceConfig::default()
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, falling_back()))],
+        providers = [RatesService],
+    )]
+    struct FallingBackModule;
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+            concurrency: Some(1),
+            ..quiet()
+        }))],
+        providers = [RatesService],
+    )]
+    struct OneAtATimeModule;
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+            rate_limit: Some(1),
+            rate_window: Duration::from_secs(30),
+            ..quiet()
+        }))],
+        providers = [RatesService],
+    )]
+    struct LimitedModule;
+
+    /// `M` booted, the service it provides and the policy that service runs
+    /// under.
+    async fn rates<M: Module + 'static>() -> (
+        HeadlessApp,
+        Arc<RatesService>,
+        Arc<ResiliencePolicy<Courier>>,
+    ) {
+        let app = boot::<M>().await;
+        let rates = app
+            .container()
+            .get::<RatesService>()
+            .expect("the module provides it");
+        let courier = held::<Courier>(&app);
+        (app, rates, courier)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fallback_is_handed_the_arguments_and_the_calls_error_and_answers_in_its_place() {
+        let (_app, rates, _courier) = rates::<FallingBackModule>().await;
+        let logs = LogCapture::install();
+
+        let answered = rates.rate("home", 3).await;
+        assert!(matches!(answered, Ok(3)), "{answered:?}");
+        assert_eq!(rates.journal(), [""; 0], "a run that answered asks nothing");
+        logs.expect_none(
+            nest_rs_resilience::TARGET,
+            "the call failed; its fallback answers",
+        );
+
+        let fell_back = rates.rate("north", 3).await;
+        assert!(matches!(fell_back, Ok(6)), "{fell_back:?}");
+        assert_eq!(rates.journal(), ["north/3 after failed"]);
+        assert_eq!(rates.attempted(), 2, "each call sent once");
+        let line = logs.expect_one(
+            nest_rs_resilience::TARGET,
+            "the call failed; its fallback answers",
+        );
+        assert_eq!(line.level, "debug", "{line:?}");
+        assert_eq!(line.field("instance").as_deref(), Some("courier"));
+        assert_eq!(line.field("host").as_deref(), Some("RatesService"));
+        assert_eq!(line.field("method").as_deref(), Some("rate"));
+        assert_eq!(
+            line.field("error"),
+            Some(error_message(&ResilienceError::Failed(CarrierDown))),
+            "the whole chain of the error the run ended on"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fallback_is_handed_a_timeout_and_an_open_breakers_refusal() {
+        let (_app, rates, courier) = rates::<FallingBackModule>().await;
+
+        let timed_out = rates.slow_rate("north", 3).await;
+        assert!(matches!(timed_out, Ok(6)), "{timed_out:?}");
+        assert_eq!(rates.journal(), ["north/3 after timed out"]);
+
+        courier
+            .open_breaker(Duration::from_secs(60))
+            .expect("an open time the breaker takes");
+        let refused = rates.rate("south", 4).await;
+        assert!(matches!(refused, Ok(8)), "{refused:?}");
+        assert_eq!(rates.journal(), ["south/4 after open"]);
+        assert_eq!(rates.attempted(), 0, "refused unsent, and answered");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fallback_is_handed_a_full_bulkheads_refusal() {
+        let (_app, rates, _courier) = rates::<OneAtATimeModule>().await;
+
+        let (held, refused) = tokio::join!(rates.slow_rate("north", 3), async {
+            tokio::task::yield_now().await;
+            rates.rate("south", 4).await
+        });
+        assert!(matches!(refused, Ok(8)), "{refused:?}");
+        assert!(matches!(held, Ok(6)), "{held:?}");
+        assert_eq!(
+            rates.journal(),
+            ["south/4 after full", "north/3 after timed out"]
+        );
+        assert_eq!(rates.attempted(), 0, "the refused call is never sent");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fallback_is_handed_a_reached_rate_limits_refusal() {
+        let (_app, rates, _courier) = rates::<LimitedModule>().await;
+
+        let sent = rates.rate("home", 3).await;
+        assert!(matches!(sent, Ok(3)), "{sent:?}");
+        let refused = rates.rate("home", 4).await;
+        assert!(matches!(refused, Ok(8)), "{refused:?}");
+        assert_eq!(rates.journal(), ["home/4 after limited"]);
+        assert_eq!(rates.attempted(), 1, "the refused call is never sent");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_error_fallback_if_refuses_is_the_methods_and_one_it_takes_is_answered() {
+        let (_app, rates, courier) = rates::<FallingBackModule>().await;
+        let logs = LogCapture::install();
+
+        let failed = rates.refused_rate("north", 3).await;
+        assert!(super::failed(&failed), "{failed:?}");
+        assert_eq!(rates.journal(), [""; 0], "its fallback is not called");
+        logs.expect_none(
+            nest_rs_resilience::TARGET,
+            "the call failed; its fallback answers",
+        );
+
+        courier
+            .open_breaker(Duration::from_secs(60))
+            .expect("an open time the breaker takes");
+        let refused = rates.refused_rate("north", 3).await;
+        assert!(matches!(refused, Ok(6)), "{refused:?}");
+        assert_eq!(rates.journal(), ["north/3 after open"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_fallbacks_own_err_is_the_methods_answer() {
+        let (_app, rates, courier) = rates::<FallingBackModule>().await;
+
+        let answered = rates.unknown_rate().await;
+        assert!(matches!(answered, Ok(7)), "{answered:?}");
+        courier
+            .open_breaker(Duration::from_secs(60))
+            .expect("an open time the breaker takes");
+        let unknown = rates.unknown_rate().await;
+        assert!(
+            super::failed(&unknown),
+            "what the fallback answered, in place of the refusal: {unknown:?}"
+        );
+        assert_eq!(rates.journal(), ["none after open"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idempotent_methods_fallback_answers_after_its_last_attempt_and_takes_what_each_read()
+     {
+        let (_app, rates, _courier) = rates::<FallingBackModule>().await;
+
+        let queued = rates.ship("P1".to_owned()).await;
+        assert!(matches!(queued.as_deref(), Ok("P1 queued")), "{queued:?}");
+        assert_eq!(rates.attempted(), 3, "one call and its two retries first");
+        assert_eq!(rates.journal(), ["P1 after failed"]);
+
+        let sent = rates.ship(String::new()).await;
+        assert!(matches!(sent.as_deref(), Ok("")), "{sent:?}");
+        assert_eq!(rates.journal(), [""; 0]);
+    }
+
+    /// A unit of work holding a transaction, each savepoint it opens noting in
+    /// the service's journal how it was settled.
+    struct Unit(Arc<RatesService>);
+
+    impl nest_rs_database::Executor for Unit {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
+            Some(Arc::new(Savepoint(Arc::clone(&self.0))))
+        }
+    }
+
+    struct Savepoint(Arc<RatesService>);
+
+    impl nest_rs_database::Executor for Savepoint {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    impl nest_rs_database::AtomicBlock for Savepoint {
+        fn settle(
+            self: Arc<Self>,
+            ok: bool,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), nest_rs_database::AtomicError>> + Send>>
+        {
+            self.0.note(if ok { "kept" } else { "rolled back" });
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    /// The savepoint an attempt runs in is settled before what follows it: kept
+    /// when the method answers that attempt's `Ok`, rolled back before the
+    /// fallback runs and before an error its filter refused is answered. A
+    /// method sent once naming no fallback opens none.
+    #[tokio::test(start_paused = true)]
+    async fn under_a_fallback_each_attempts_savepoint_is_settled_before_the_fallback_or_the_answer()
+    {
+        use nest_rs_database::__private::with_request_executor;
+
+        let (_app, rates, _courier) = rates::<FallingBackModule>().await;
+        let unit = || Arc::new(Unit(Arc::clone(&rates))) as Arc<dyn nest_rs_database::Executor>;
+
+        let fell_back = with_request_executor(unit(), rates.rate("north", 3)).await;
+        assert!(matches!(fell_back, Ok(6)), "{fell_back:?}");
+        assert_eq!(rates.journal(), ["rolled back", "north/3 after failed"]);
+
+        let answered = with_request_executor(unit(), rates.rate("home", 3)).await;
+        assert!(matches!(answered, Ok(3)), "{answered:?}");
+        assert_eq!(rates.journal(), ["kept"]);
+
+        let refused = with_request_executor(unit(), rates.refused_rate("north", 3)).await;
+        assert!(super::failed(&refused), "{refused:?}");
+        assert_eq!(rates.journal(), ["rolled back"]);
+
+        let queued = with_request_executor(unit(), rates.ship("P1".to_owned())).await;
+        assert!(queued.is_ok(), "{queued:?}");
+        assert_eq!(
+            rates.journal(),
+            [
+                "rolled back",
+                "rolled back",
+                "rolled back",
+                "P1 after failed"
+            ],
+            "each of the three attempts, then the fallback"
+        );
+
+        let listed = with_request_executor(unit(), rates.listed_rate()).await;
+        assert!(super::failed(&listed), "{listed:?}");
+        assert_eq!(rates.journal(), [""; 0], "sent once with no fallback");
+    }
+}
+
+/// What `cancel` binds in a body: its attempt's own token, cancelled when the
+/// policy gives that attempt up, under whichever shape the attempt takes its
+/// arguments in — owning them, or lending them to the next attempt or to a
+/// fallback.
+mod cancel {
+    use super::*;
+    use nest_rs_resilience::CancellationToken;
+
+    #[injectable]
+    struct DispatchService {
+        #[inject]
+        courier: Arc<ResiliencePolicy<Courier>>,
+        attempts: AtomicU32,
+        /// Each attempt's token, as its body read it.
+        tokens: Mutex<Vec<CancellationToken>>,
+        /// The work an attempt handed to another task.
+        work: Mutex<Option<tokio::task::JoinHandle<&'static str>>>,
+    }
+
+    impl DispatchService {
+        fn keep(&self, token: &CancellationToken) {
+            self.tokens.lock().expect("unpoisoned").push(token.clone());
+        }
+
+        /// Whether each token a body read is cancelled, in the order read.
+        fn cancelled(&self) -> Vec<bool> {
+            let tokens = std::mem::take(&mut *self.tokens.lock().expect("unpoisoned"));
+            tokens.iter().map(CancellationToken::is_cancelled).collect()
+        }
+
+        /// Hands its work to another task, which owns the token, and never
+        /// answers.
+        #[resilient(courier, timeout = "100ms", cancel = token)]
+        async fn dispatch(&self) -> Answer<()> {
+            let work = tokio::spawn(async move {
+                token.cancelled().await;
+                "stopped"
+            });
+            *self.work.lock().expect("unpoisoned") = Some(work);
+            std::future::pending().await
+        }
+
+        /// Its first attempt never answers; its second hands its token on.
+        #[resilient(courier, idempotent, timeout = "100ms", cancel = token)]
+        async fn redispatch(&self, parcel: &str) -> Answer<String> {
+            self.keep(&token);
+            if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                std::future::pending::<()>().await;
+            }
+            let live = !token.is_cancelled();
+            let work = tokio::spawn(async move {
+                token.cancelled().await;
+                "stopped"
+            });
+            *self.work.lock().expect("unpoisoned") = Some(work);
+            Ok(format!("{parcel} dispatched while live: {live}"))
+        }
+
+        async fn parked(
+            &self,
+            parcel: &str,
+            _error: ResilienceError<CarrierDown>,
+        ) -> Answer<String> {
+            Ok(format!("{parcel} parked"))
+        }
+
+        #[resilient(courier, fallback = parked, cancel = attempt)]
+        async fn park(&self, parcel: &str) -> Answer<String> {
+            self.keep(&attempt);
+            if parcel.is_empty() {
+                return Ok(String::new());
+            }
+            Err(CarrierDown)
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, retrying_once()))],
+        providers = [DispatchService],
+    )]
+    struct DispatchModule;
+
+    async fn dispatches() -> (HeadlessApp, Arc<DispatchService>) {
+        let app = boot::<DispatchModule>().await;
+        let dispatches = app
+            .container()
+            .get::<DispatchService>()
+            .expect("the module provides it");
+        (app, dispatches)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_token_a_body_reads_is_cancelled_as_its_attempt_is_given_up_and_stops_work_handed_on()
+     {
+        let (_app, dispatches) = dispatches().await;
+
+        let given_up = dispatches.dispatch().await;
+        assert!(
+            matches!(given_up, Err(ResilienceError::TimedOut { .. })),
+            "{given_up:?}"
+        );
+        let work = dispatches.work.lock().expect("unpoisoned").take();
+        let stopped = tokio::time::timeout(Duration::from_secs(1), work.expect("handed on"))
+            .await
+            .expect("the task the body spawned is told its attempt was given up");
+        assert_eq!(stopped.ok(), Some("stopped"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn each_attempt_reads_a_token_of_its_own() {
+        let (_app, dispatches) = dispatches().await;
+
+        let answered = dispatches.redispatch("P1").await;
+        assert!(
+            matches!(answered.as_deref(), Ok("P1 dispatched while live: true")),
+            "{answered:?}"
+        );
+        assert_eq!(
+            dispatches.cancelled(),
+            [true, false],
+            "the attempt given up is cancelled, the one that answered lives on"
+        );
+        let work = dispatches.work.lock().expect("unpoisoned").take();
+        assert!(
+            !work.expect("handed on").is_finished(),
+            "work the answering attempt handed on is not stopped by its answer"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_lending_its_arguments_to_a_fallback_reads_its_token_too() {
+        let (_app, dispatches) = dispatches().await;
+
+        let parked = dispatches.park("P1").await;
+        assert!(matches!(parked.as_deref(), Ok("P1 parked")), "{parked:?}");
+        assert_eq!(
+            dispatches.cancelled(),
+            [false],
+            "an attempt that answered was not given up"
+        );
+    }
+}
+
+/// The predicates, the fallback and the token on each receiver and host the
+/// decorator takes: a generic method, a receiver lent through its `Arc`, a
+/// method borrowing through a lifetime it names, and a handler of each impl
+/// half, called through the framework's own path.
+mod keyed {
+    use super::*;
+
+    #[injectable]
+    struct KeyedService {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        attempts: AtomicU32,
+        hub: Hub,
+    }
+
+    impl KeyedService {
+        fn attempted(&self) -> u32 {
+            self.attempts.swap(0, Ordering::Relaxed)
+        }
+
+        /// What `raw` parses to: nothing is asked again, an empty text fails.
+        #[resilient(
+            upstream,
+            idempotent,
+            retry_if = |_| true,
+            retry_ok_if = Option::is_none,
+            record_if = |_| false,
+            fallback = unparsed,
+            fallback_if = |_| true,
+            cancel = token
+        )]
+        async fn parsed<T: FromStr + Send + Sync>(&self, raw: &str) -> Answer<Option<T>> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            if raw.is_empty() || token.is_cancelled() {
+                return Err(CarrierDown);
+            }
+            Ok(raw.parse().ok())
+        }
+
+        async fn unparsed<T: Send>(
+            &self,
+            raw: &str,
+            error: ResilienceError<CarrierDown>,
+        ) -> Answer<Option<T>> {
+            if raw.is_empty() {
+                return Ok(None);
+            }
+            Err(error)
+        }
+
+        #[resilient(upstream, record_if = |_| false, fallback = held, cancel = token)]
+        async fn shared(self: &Arc<Self>, url: &str) -> Answer<String> {
+            drop(token);
+            if url.is_empty() {
+                return Err(CarrierDown);
+            }
+            Ok(format!("{url}, held {} times", Arc::strong_count(self)))
+        }
+
+        async fn held(
+            self: &Arc<Self>,
+            url: &str,
+            _error: ResilienceError<CarrierDown>,
+        ) -> Answer<String> {
+            Ok(format!("{url}held {} times", Arc::strong_count(self)))
+        }
+
+        /// Where a parcel for `zone` is sorted: the zone, asked again while it
+        /// has no name, or the hub once the carrier lost it.
+        #[resilient(
+            upstream,
+            idempotent,
+            retry_ok_if = |zone| zone.is_empty(),
+            fallback = home,
+            cancel = token
+        )]
+        async fn sorted<'a>(&'a self, zone: &'a str) -> Answer<&'a str> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            let _attempt = token;
+            match zone {
+                "lost" => Err(CarrierDown),
+                zone => Ok(zone),
+            }
+        }
+
+        async fn home<'a>(
+            &'a self,
+            _zone: &'a str,
+            _error: ResilienceError<CarrierDown>,
+        ) -> Answer<&'a str> {
+            Ok(&self.hub.0)
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root(ResilienceConfig {
+            retries: Some(1),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        })],
+        providers = [KeyedService],
+    )]
+    struct KeyedModule;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_generic_method_an_arc_receiver_and_a_named_lifetime_take_every_key() {
+        let app = boot::<KeyedModule>().await;
+        let keyed = app.container().get::<KeyedService>().expect("provided");
+        let upstream = held::<nest_rs_core::Unnamed>(&app);
+
+        assert!(matches!(keyed.parsed::<u16>("8080").await, Ok(Some(8080))));
+        assert_eq!(keyed.attempted(), 1);
+        assert!(matches!(keyed.parsed::<u16>("port").await, Ok(None)));
+        assert_eq!(keyed.attempted(), 2, "nothing parsed is asked again");
+        assert!(matches!(keyed.parsed::<u16>("").await, Ok(None)));
+        assert_eq!(keyed.attempted(), 2, "sent again, then its fallback");
+        assert_eq!(
+            upstream.breaker_state(),
+            Some(BreakerState::Closed),
+            "no `Err` was a failure, and one opens this breaker"
+        );
+
+        let shared = keyed.shared("https://example.com").await;
+        assert!(
+            shared
+                .as_deref()
+                .is_ok_and(|said| said.starts_with("https://example.com, held ")),
+            "{shared:?}"
+        );
+        let fell_back = keyed.shared("").await;
+        assert!(
+            fell_back
+                .as_deref()
+                .is_ok_and(|said| said.starts_with("held ")),
+            "{fell_back:?}"
+        );
+
+        assert!(matches!(keyed.sorted("north").await, Ok("north")));
+        assert_eq!(keyed.attempted(), 1);
+        assert!(matches!(keyed.sorted("").await, Ok("")));
+        assert_eq!(keyed.attempted(), 2, "a zone with no name is asked again");
+        assert!(matches!(keyed.sorted("lost").await, Ok("the Lyon hub")));
+    }
+
+    /// The breaker a handler's one failure opens, were its `Err` one.
+    fn counting() -> ResilienceConfig {
+        opening_on_the_first_failure()
+    }
+
+    /// The state of the breaker the handlers of `app` ran under: closed, since
+    /// `record_if` took none of their `Err`s for a failure.
+    fn closed(app: &nest_rs_testing::TestApp) -> Option<BreakerState> {
+        app.container()
+            .get::<ResiliencePolicy>()
+            .expect("the module built the policy")
+            .breaker_state()
+    }
+
+    mod routes {
+        use std::sync::Arc;
+
+        use nest_rs_core::module;
+        use nest_rs_http::{Path, controller, routes};
+        use nest_rs_resilience::{
+            BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+        };
+        use nest_rs_testing::TestApp;
+
+        use super::super::UpstreamDown;
+        use super::{closed, counting};
+
+        type Preview = Result<String, ResilienceError<UpstreamDown>>;
+
+        #[controller(path = "/keyed")]
+        struct KeyedController {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+        }
+
+        impl KeyedController {
+            async fn cached(&self, error: ResilienceError<UpstreamDown>) -> Preview {
+                Ok(format!("cached: {error}"))
+            }
+
+            async fn stored(
+                &self,
+                id: Path<u32>,
+                _error: ResilienceError<UpstreamDown>,
+            ) -> Preview {
+                Ok(format!("parcel {} from the store", id.0))
+            }
+        }
+
+        #[routes]
+        impl KeyedController {
+            #[get("/")]
+            #[public]
+            #[resilient(upstream, record_if = |_| false, fallback = cached, cancel = token)]
+            async fn preview(&self) -> Preview {
+                drop(token);
+                Err(UpstreamDown)
+            }
+
+            /// An extractor named whole, as its fallback is handed it, and taken
+            /// apart in the body.
+            #[get("/{id}")]
+            #[public]
+            #[resilient(upstream, record_if = |_| false, fallback = stored)]
+            async fn parcel(&self, id: Path<u32>) -> Preview {
+                let Path(id) = &id;
+                if *id == 0 {
+                    return Ok("no parcel".to_owned());
+                }
+                Err(UpstreamDown)
+            }
+        }
+
+        #[module(
+            imports = [ResilienceModule::for_root(counting())],
+            providers = [KeyedController],
+        )]
+        struct KeyedHttpModule;
+
+        #[tokio::test(start_paused = true)]
+        async fn a_route_answers_what_its_fallback_answers_and_its_err_opens_no_breaker() {
+            let app = TestApp::for_module::<KeyedHttpModule>()
+                .await
+                .expect("a route carrying the keys boots");
+            for _ in 0..2 {
+                let answered = app.http().get("/keyed").send().await;
+                answered.assert_status_is_ok();
+                answered.assert_text("cached: the call failed").await;
+            }
+            let stored = app.http().get("/keyed/7").send().await;
+            stored.assert_status_is_ok();
+            stored.assert_text("parcel 7 from the store").await;
+            assert_eq!(closed(&app), Some(BreakerState::Closed));
+        }
+    }
+
+    mod operations {
+        use std::sync::Arc;
+
+        use nest_rs_core::module;
+        use nest_rs_graphql::{GraphqlModule, operations, resolver};
+        use nest_rs_resilience::{
+            BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+        };
+        use nest_rs_testing::TestApp;
+        use serde_json::{Value, json};
+
+        use super::super::UpstreamDown;
+        use super::{closed, counting};
+
+        #[resolver]
+        struct KeyedResolver {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+        }
+
+        impl KeyedResolver {
+            async fn cached(
+                &self,
+                number: String,
+                _error: ResilienceError<UpstreamDown>,
+            ) -> Result<String, ResilienceError<UpstreamDown>> {
+                Ok(format!("{number} cached"))
+            }
+        }
+
+        #[operations]
+        impl KeyedResolver {
+            #[query]
+            #[public]
+            #[resilient(upstream, record_if = |_| false, fallback = cached, cancel = token)]
+            async fn keyed(&self, number: String) -> Result<String, ResilienceError<UpstreamDown>> {
+                drop(token);
+                if number.is_empty() {
+                    return Ok(number.clone());
+                }
+                Err(UpstreamDown)
+            }
+        }
+
+        #[module(
+            imports = [GraphqlModule, ResilienceModule::for_root(counting())],
+            providers = [KeyedResolver],
+        )]
+        struct KeyedGraphqlModule;
+
+        #[tokio::test(start_paused = true)]
+        async fn a_field_answers_what_its_fallback_answers_and_its_err_opens_no_breaker() {
+            let app = TestApp::for_module::<KeyedGraphqlModule>()
+                .await
+                .expect("a field carrying the keys boots");
+            for _ in 0..2 {
+                let answer = app
+                    .http()
+                    .post("/graphql")
+                    .body_json(&json!({ "query": "{ keyed(number: \"P7\") }" }))
+                    .send()
+                    .await
+                    .json()
+                    .await
+                    .value()
+                    .deserialize::<Value>();
+                assert_eq!(answer["data"]["keyed"], "P7 cached", "{answer}");
+            }
+            assert_eq!(closed(&app), Some(BreakerState::Closed));
+        }
+    }
+
+    mod messages {
+        use std::sync::Arc;
+
+        use nest_rs_core::module;
+        use nest_rs_resilience::{
+            BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+        };
+        use nest_rs_testing::TestApp;
+        use nest_rs_ws::{WsModule, gateway, messages};
+
+        use super::super::UpstreamDown;
+        use super::counting;
+
+        type Preview = Result<String, ResilienceError<UpstreamDown>>;
+
+        #[gateway(path = "/ws/keyed")]
+        struct KeyedGateway {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+        }
+
+        impl KeyedGateway {
+            async fn cached(&self, _error: ResilienceError<UpstreamDown>) -> Preview {
+                Ok("cached".to_owned())
+            }
+        }
+
+        #[messages]
+        impl KeyedGateway {
+            #[subscribe_message("keyed")]
+            #[public]
+            #[resilient(upstream, record_if = |_| false, fallback = cached, cancel = token)]
+            async fn keyed(&self) -> Preview {
+                drop(token);
+                Err(UpstreamDown)
+            }
+        }
+
+        #[module(
+            imports = [WsModule, ResilienceModule::for_root(counting())],
+            providers = [KeyedGateway],
+        )]
+        struct KeyedWsModule;
+
+        #[tokio::test]
+        async fn a_message_answers_what_its_fallback_answers_and_its_err_opens_no_breaker() {
+            let app = TestApp::builder()
+                .module::<KeyedWsModule>()
+                .build_ws()
+                .await
+                .expect("a gateway carrying the keys boots on a real port");
+            let mut socket = app.socket("/ws/keyed").connect().await;
+            for _ in 0..2 {
+                socket.send("keyed", serde_json::Value::Null).await;
+                let answer = socket.next_envelope().await;
+                assert_eq!(answer["data"], "cached", "{answer}");
+            }
+            let upstream = app
+                .container()
+                .get::<ResiliencePolicy>()
+                .expect("the module built the policy");
+            assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+            app.shutdown().await.expect("the transport stops cleanly");
+        }
+    }
+
+    mod tools {
+        use std::sync::Arc;
+
+        use nest_rs_core::module;
+        use nest_rs_mcp::{McpAccess, McpModule, mcp, tools};
+        use nest_rs_resilience::{
+            BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+        };
+        use nest_rs_testing::TestApp;
+        use nest_rs_testing::mcp::{call_method, call_tool, open_session, result};
+        use serde_json::json;
+
+        use super::super::UpstreamDown;
+        use super::{closed, counting};
+
+        const PATH: &str = "/mcp/keyed";
+
+        #[mcp(path = "/mcp/keyed")]
+        #[derive(Clone)]
+        struct KeyedTools {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+        }
+
+        impl KeyedTools {
+            async fn cached(
+                &self,
+                _error: ResilienceError<UpstreamDown>,
+            ) -> Result<String, ResilienceError<UpstreamDown>> {
+                Ok("a cached preview".to_owned())
+            }
+
+            async fn last_seen(
+                &self,
+                id: u32,
+                _error: ResilienceError<UpstreamDown>,
+            ) -> Result<String, ResilienceError<UpstreamDown>> {
+                Ok(format!("parcel {id} was last seen in Lyon"))
+            }
+        }
+
+        #[tools]
+        impl KeyedTools {
+            /// Preview a link through the upstream, or from the cache.
+            #[tool]
+            #[public]
+            #[resilient(upstream, record_if = |_| false, fallback = cached, cancel = token)]
+            async fn keyed(&self) -> Result<String, ResilienceError<UpstreamDown>> {
+                drop(token);
+                Err(UpstreamDown)
+            }
+
+            /// Where a parcel stands, or where it was last seen.
+            #[resource(template = "keyed-parcel://{id}")]
+            #[public]
+            #[resilient(upstream, record_if = |_| false, fallback = last_seen)]
+            async fn parcel(&self, id: u32) -> Result<String, ResilienceError<UpstreamDown>> {
+                if id == 0 {
+                    return Ok("no parcel".to_owned());
+                }
+                Err(UpstreamDown)
+            }
+        }
+
+        #[module(
+            imports = [
+                McpModule::for_root(McpAccess::Public),
+                ResilienceModule::for_root(counting()),
+            ],
+            providers = [KeyedTools],
+        )]
+        struct KeyedMcpModule;
+
+        #[tokio::test(start_paused = true)]
+        async fn a_tool_and_a_resource_answer_what_their_fallbacks_answer() {
+            let app = TestApp::for_module::<KeyedMcpModule>()
+                .await
+                .expect("an #[mcp] host carrying the keys boots");
+
+            let called = call_tool(app.http(), PATH, "keyed", None).await;
+            assert!(called.contains("a cached preview"), "{called}");
+
+            let session = open_session(app.http(), PATH, None).await;
+            let read = call_method(
+                app.http(),
+                PATH,
+                &session,
+                None,
+                "resources/read",
+                json!({ "uri": "keyed-parcel://7" }),
+            )
+            .await;
+            assert_eq!(
+                result(&read)["result"]["contents"][0]["text"],
+                "parcel 7 was last seen in Lyon",
+                "the resource's argument reached its fallback: {read}"
+            );
+            assert_eq!(closed(&app), Some(BreakerState::Closed));
+        }
+    }
+
+    mod processor {
+        use std::sync::Arc;
+
+        use nest_rs_core::Container;
+        use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
+        use nest_rs_queue::{
+            Capabilities, ProcessMethod, QueueBackend, QueueName, WIRE_FORMAT_VERSION, processor,
+            queue,
+        };
+        use nest_rs_resilience::{BreakerState, ResilienceError, ResiliencePolicy, resilient};
+        use serde::{Deserialize, Serialize};
+
+        use super::super::UpstreamDown;
+        use super::counting;
+
+        static BARE: QueueBackend = QueueBackend::new("bare", Capabilities::NONE);
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct RefreshCommand {
+            url: String,
+        }
+
+        #[queue(name = "keyed-refreshes", job = RefreshCommand)]
+        struct KeyedRefreshesQueue;
+
+        #[nest_rs_core::injectable]
+        struct KeyedProcessor {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+        }
+
+        impl KeyedProcessor {
+            /// A refresh the upstream refused is left for the next sweep.
+            async fn skipped(
+                &self,
+                job: RefreshCommand,
+                error: ResilienceError<UpstreamDown>,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                if job.url.is_empty() {
+                    return Err(error);
+                }
+                Ok(())
+            }
+        }
+
+        #[processor]
+        impl KeyedProcessor {
+            #[process(queue = KeyedRefreshesQueue, retries = 3)]
+            #[resilient(upstream, record_if = |_| false, fallback = skipped, cancel = token)]
+            async fn refresh(
+                &self,
+                job: RefreshCommand,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                drop(token);
+                if job.url.is_empty() {
+                    return Ok(());
+                }
+                Err(UpstreamDown)
+            }
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_job_is_done_once_its_fallback_answered_for_it() {
+            let (_app, upstream) = crate::policy(counting()).await;
+            let container = Container::builder()
+                .provide(KeyedProcessor {
+                    upstream: Arc::clone(&upstream),
+                })
+                .build()
+                .expect("the container builds");
+            let method = nest_rs_core::inventory::iter::<ProcessMethod>()
+                .find(|method| method.name() == "KeyedProcessor::refresh")
+                .expect("the method is submitted");
+            for _ in 0..2 {
+                let mut delivery = Delivery::new(
+                    &BARE,
+                    QueueName::new("keyed-refreshes").expect("a valid name"),
+                    serde_json::json!({
+                        "v": WIRE_FORMAT_VERSION,
+                        "payload": { "url": "https://example.com" },
+                    }),
+                );
+                let outcome =
+                    consume::attempt(method, &mut delivery, container.clone(), None).await;
+                assert!(matches!(outcome, AttemptOutcome::Ok), "{outcome:?}");
+            }
+            assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+        }
     }
 }

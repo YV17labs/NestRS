@@ -9,7 +9,9 @@ mod resilient;
 
 /// Runs an `async fn` method's body under the policy a field of `self` holds:
 /// `#[resilient(field)]` sends the call once, `#[resilient(field, idempotent)]`
-/// again after a failure or a timeout.
+/// again after a failure or a timeout, and the keys after the field say how an
+/// answer counts, which method answers in place of the error a run ends on,
+/// and under what name the body reads its attempt's token.
 ///
 /// The field holds an `Arc<ResiliencePolicy<I>>`, which a provider takes
 /// under `#[inject]`, so the boot refuses an app whose modules do not import
@@ -39,6 +41,51 @@ mod resilient;
 ///   every attempt.
 /// - `retries = 3` — this method's retries, in place of the policy's, from 1
 ///   to 10, beside `idempotent` alone: a call run once is never sent again.
+/// - `retry_if = F` — which `Err` is sent again: a `Fn(&E) -> bool`, a
+///   function's path or a closure, asked of each `Err` an attempt answers. Left
+///   out, every `Err` is. An `Err` it refuses ends the run and is the method's
+///   answer. Beside `idempotent` alone.
+/// - `retry_ok_if = F` — which `Ok` is sent again: a `Fn(&T) -> bool`, for a
+///   dependency answering "not ready yet" as a success. Left out, none is. Once
+///   the retries are spent, the last `Ok` is the method's answer. Beside
+///   `idempotent` alone.
+/// - `record_if = F` — which `Err` counts as a failure in the circuit breaker:
+///   a `Fn(&E) -> bool`. Left out, every `Err` does. An `Err` it refuses is the
+///   dependency's answer — a declined card, a missing record — and counts in
+///   neither direction, no failure and no success either: a closed breaker's
+///   window holds nothing of it, and a probe answering it hands its turn to
+///   the next call, its series as it was. While half-open, answers `record_if`
+///   refuses neither close nor reopen the breaker, so it stays half-open, one
+///   call at a time, until an `Ok` or a counted `Err`. It says nothing of the
+///   retry, which is `retry_if`'s: an `Err` counted for no failure is still
+///   sent again by an `idempotent` method whose `retry_if` takes it.
+/// - `fallback = method` — the method of `Self`, named alone, answering in
+///   place of the error the run ends on: the call's own, from its last attempt,
+///   or the policy's refusal — a timeout, an open breaker, a full bulkhead, a
+///   reached rate limit. It is an `async fn` taking the decorated method's
+///   arguments, in order, then that error by value, and answering what the
+///   method answers:
+///   `async fn stale(&self, zone: &str, error: ResilienceError<E>) -> Result<T, ResilienceError<E>>`.
+///   An `Err` it answers is the method's. It runs once the run is over, under
+///   no policy: no timeout, no retry, counted in no breaker. Every attempt
+///   borrows the arguments it is handed next, as under `idempotent` and with
+///   the same bound on a `Send` future: the method binds each to a plain name,
+///   none `mut`, takes no `&mut`, and clones what an attempt consumes, which
+///   rustc answers with `E0382` at the key. A handler taking an extractor
+///   apart in its signature (`Path(id): Path<u32>`) names it instead
+///   (`id: Path<u32>`) and takes it apart in its body.
+/// - `fallback_if = F` — which errors the fallback answers for: a
+///   `Fn(&ResilienceError<E>) -> bool`. Left out, every one, the policy's
+///   refusals included. An error it refuses is the method's answer. Beside
+///   `fallback` alone.
+/// - `cancel = name` — the body reads its attempt's `CancellationToken` under
+///   `name`: each attempt's own, cancelled when the policy gives that attempt
+///   up at its timeout or its unit's deadline, so work the body handed to
+///   another task stops with it.
+///
+/// A timeout is no `E`, so no predicate reads it: it is always a failure in
+/// the breaker, and always sent again by an `idempotent` method. A predicate
+/// that panics fails its attempt as a panic in the body does.
 ///
 /// Every other setting is the policy's, shared by every caller of the
 /// dependency — the backoff's, the circuit breaker's, the bulkhead's and the
@@ -46,18 +93,21 @@ mod resilient;
 /// or after it, is refused with the variable and the `ResilienceConfig` field
 /// that set it.
 ///
-/// Inside a unit of work holding a transaction, each attempt of an
-/// `idempotent` method runs in a savepoint of that transaction, whatever its
-/// retries, none included: what the body writes through the data layer is kept
-/// only when the method answers that attempt's `Ok`, and rolled back
-/// otherwise, so a failed attempt leaves no write for the next to repeat, nor
-/// beside the error the method answers. Once an attempt sent a statement,
-/// another statement of that unit, issued beside the method, waits until the
-/// savepoint settles; the method's future dropped mid-attempt leaves its unit
-/// unable to commit, as an atomic block dropped does; and a savepoint the
-/// database cannot settle ends the method on `ResilienceError::Unsettled`,
-/// attempted no further. A method run once opens none, nor does an
-/// `idempotent` one outside a transaction — no unit of work, or one on the
+/// Inside a unit of work holding a transaction, each attempt of a method
+/// declaring `idempotent` or a `fallback` runs in a savepoint of that
+/// transaction, whatever its retries, none included: what the body writes
+/// through the data layer is kept only when the method answers that attempt's
+/// `Ok`, and rolled back otherwise — an `Ok` sent again included — so a failed
+/// attempt leaves no write for the next to repeat, nor beside the error the
+/// method answers, nor under what its fallback writes: the last attempt is
+/// rolled back before the fallback runs, and before the method answers an
+/// error `fallback_if` refused. Once an attempt sent a statement, another
+/// statement of that unit, issued beside the method, waits until the savepoint
+/// settles; the method's future dropped mid-attempt leaves its unit unable to
+/// commit, as an atomic block dropped does; and a savepoint the database
+/// cannot settle ends the method on `ResilienceError::Unsettled`, attempted no
+/// further and handed to no fallback. A method run once with no fallback opens
+/// none, nor does any outside a transaction — no unit of work, or one on the
 /// pool: an `Err` there leaves what the body wrote, as it does with no policy.
 ///
 /// Everything else on the method stays as written: its visibility, generics,
@@ -90,11 +140,14 @@ mod resilient;
 /// expands first: each attempt opens a span of its own, and `err` and `ret`
 /// record what that attempt answered, the dependency's own error. Above, the
 /// decorator reads the body as tracing-attributes 0.1 wraps it, and refuses one
-/// wrapped otherwise saying to write `#[resilient]` above.
+/// wrapped otherwise saying to write `#[resilient]` above. Both orders hold
+/// under every key: below, the span also covers the fallback and records what
+/// it answers; above, the fallback runs outside every attempt's span. The
+/// token `cancel` names is no argument of the method, so no span records it.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry made or
 /// given up, a savepoint left unsettled, a full bulkhead or a reached rate
-/// limit files carry its `host` and `method`.
+/// limit, and a fallback answering files carry its `host` and `method`.
 #[proc_macro_attribute]
 pub fn resilient(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(resilient::resilient(args.into(), item.into())).into()

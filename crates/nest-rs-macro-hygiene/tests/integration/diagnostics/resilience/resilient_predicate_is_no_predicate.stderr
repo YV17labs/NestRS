@@ -1,0 +1,68 @@
+error: #[resilient] `retry_if` takes a `Fn(&E) -> bool` over the method's error, a function's path or a closure such as `|error| error.is_transient()`
+  --> tests/integration/diagnostics/resilience/resilient_predicate_is_no_predicate.rs:34:49
+   |
+34 |     #[resilient(carrier, idempotent, retry_if = true)]
+   |                                                 ^^^^
+
+error[E0308]: mismatched types
+  --> tests/integration/diagnostics/resilience/resilient_predicate_is_no_predicate.rs:39:47
+   |
+39 |     #[resilient(carrier, record_if = |_error| 7)]
+   |                                               ^ expected `bool`, found integer
+
+error[E0593]: closure is expected to take 1 argument, but it takes 2 arguments
+  --> tests/integration/diagnostics/resilience/resilient_predicate_is_no_predicate.rs:44:5
+   |
+44 |     #[resilient(carrier, idempotent, retry_if = |_error, _attempt| true)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------------------^^^^^^^
+   |     |                                           |
+   |     |                                           takes 2 arguments
+   |     expected closure that takes 1 argument
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a `#[resilient]` method's `record_if` is a `Fn(&CarrierDown) -> bool` over its error, and this is not one
+  --> tests/integration/diagnostics/resilience/resilient_predicate_is_no_predicate.rs:49:38
+   |
+49 |     #[resilient(carrier, record_if = ALWAYS)]
+   |                                      ^^^^^^ what `record_if` is given
+   |
+   = help: the trait `nest_rs::resilience::__private::RecordIf<CarrierDown, (&CarrierDown, nest_rs_resilience::resilient::Proved)>` is not implemented for `bool`
+   = note: it says whether an `Err` the method answered counts as a failure in the circuit breaker: a function's path, or a closure such as `|error| !error.is_declined()`
+note: required by a bound in `nest_rs::resilience::__private::judging`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn judging<R, RI, RO, RC, A1, A2, A3, W1, W2, W3>(
+...
+   |     RC: RecordIf<R::Err, (A3, W3)>,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `judging`
+
+error[E0277]: expected an `Fn(&CarrierDown)` closure, found `bool`
+  --> tests/integration/diagnostics/resilience/resilient_predicate_is_no_predicate.rs:50:33
+   |
+50 |     async fn constant(&self) -> Answer {
+   |                                 ^^^^^^ expected an `Fn(&CarrierDown)` closure, found `bool`
+   |
+   = help: the trait `for<'a> Fn(&'a CarrierDown)` is not implemented for `bool`
+help: the trait `nest_rs::resilience::__private::Judge<R>` is conditionally implemented for `nest_rs_resilience::resilient::Judging<RI, RO, RC>`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | / impl<R, RI, RO, RC> Judge<R> for Judging<RI, RO, RC>
+   | | where
+   | |     R: ResilientAnswer,
+   | |     RI: Predicate<R::Err>,
+   | |     RO: Predicate<R::Ok>,
+   | |     RC: Predicate<R::Err>,
+   | |_________-----------------^
+   |           |
+   |           unsatisfied requirement introduced here: `nest_rs_resilience::resilient::Checked<bool, nest_rs_resilience::resilient::Proved>: nest_rs_resilience::resilient::Predicate<<Result<(), ResilienceError<CarrierDown>> as nest_rs::resilience::__private::ResilientAnswer>::Err>`
+   |           unsatisfied requirement introduced here: `nest_rs_resilience::resilient::Checked<bool, nest_rs_resilience::resilient::Proved>: nest_rs_resilience::resilient::Predicate<<Result<(), ResilienceError<CarrierDown>> as nest_rs::resilience::__private::ResilientAnswer>::Err>`
+   = note: required for `nest_rs_resilience::resilient::Checked<bool, nest_rs_resilience::resilient::Proved>` to implement `nest_rs_resilience::resilient::Predicate<CarrierDown>`
+   = note: required for `nest_rs_resilience::resilient::Judging<nest_rs_resilience::resilient::Checked<for<'a> fn(&'a CarrierDown) -> bool {nest_rs::resilience::__private::every::<CarrierDown>}, nest_rs_resilience::resilient::Proved>, nest_rs_resilience::resilient::Checked<for<'a> fn(&'a ()) -> bool {nest_rs::resilience::__private::none::<()>}, nest_rs_resilience::resilient::Proved>, nest_rs_resilience::resilient::Checked<bool, nest_rs_resilience::resilient::Proved>>` to implement `nest_rs::resilience::__private::Judge<Result<(), ResilienceError<CarrierDown>>>`
+note: required by a bound in `nest_rs::resilience::__private::run`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn run<R, I, J, C, F>(
+...
+   |     J: Judge<R>,
+   |        ^^^^^^^^ required by this bound in `run`

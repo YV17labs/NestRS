@@ -27,8 +27,9 @@ reqwest = [
     "dep:http-body",
     "dep:async-trait",
 ]
-# A breaker's transitions, counted on the meter `OpenTelemetry::init()`
-# installs; the umbrella's `opentelemetry` feature forwards it weakly.
+# What a policy does, counted on the meter `OpenTelemetry::init()` installs,
+# and what it holds, observed there; the umbrella's `opentelemetry` feature
+# forwards it weakly.
 opentelemetry = ["dep:opentelemetry"]
 
 [dependencies]
@@ -48,8 +49,9 @@ nest-rs-config.workspace = true
 nest-rs-database.workspace = true
 # `ResilienceError`, the one error a policy answers.
 thiserror.workspace = true
-# The bulkhead's semaphores — its slots and its waiters' places — and the clock a
-# breaker, a rate and a timeout read, and the timers a run waits on.
+# The bulkhead's semaphores — its slots and its waiters' places — the clock a
+# breaker, a rate and a timeout read, the timers a run waits on, and the
+# broadcast channel a policy's events are told on, behind `ResilienceEvents`.
 tokio.workspace = true
 # The `CancellationToken` each attempt is handed, cancelled when it is given up.
 tokio-util.workspace = true
@@ -79,8 +81,9 @@ http = { workspace = true, optional = true }
 http-body = { workspace = true, optional = true }
 # `Middleware` is an `async_trait`.
 async-trait = { workspace = true, optional = true }
-# The API crate alone: a transition records on the global meter, which
-# `OpenTelemetry::init()` installs and nothing else reads here.
+# The API crate alone: a policy's counters and the instruments its reads are
+# observed on sit on the global meter, which `OpenTelemetry::init()` installs
+# and nothing else reads here.
 opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -92,8 +95,8 @@ tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # issued; a decorated subscription streams over the graphql-ws driver.
 # Path-only intra-workspace dev edges, per the manifest rule.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "http", "tls", "ws"] }
-# Self dev-dependency: the suite runs with the middleware and the transitions'
-# counter on.
+# Self dev-dependency: the suite runs with the middleware and the policy's
+# instruments on.
 nest-rs-resilience = { path = ".", features = ["reqwest", "opentelemetry"] }
 # A route answering a policy's refusal: `#[controller]` and `#[routes]` expand
 # into the guard and pipe chains each route runs.
@@ -129,7 +132,7 @@ reqwest-middleware.workspace = true
 # refused naming the variable and the field that set it.
 nest-rs-codegen = { path = "../nest-rs-codegen" }
 syn.workspace = true
-# The transitions' counter is read off an in-memory exporter the test installs
+# A policy's instruments are read off an in-memory exporter the test installs
 # as the global meter provider.
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }

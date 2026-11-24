@@ -9,6 +9,7 @@ use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,17 +27,18 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use crate::TARGET;
 #[cfg(feature = "reqwest")]
 use crate::breaker::HeldAttempt;
-use crate::breaker::{Breaker, BreakerState, Pass, Sent};
+use crate::breaker::{Breaker, BreakerState, BreakerStats, Pass, Sent};
 use crate::bulkhead::Bulkhead;
 #[cfg(feature = "reqwest")]
 use crate::bulkhead::HeldSlot;
 use crate::call::{Again, Call, Once};
 use crate::config::{LONGEST_ATTEMPT, ResilienceConfig, is_open_time};
-use crate::counters::Counters;
+use crate::counters::{Counters, Observed};
 use crate::error::{BreakerError, Refusal, ResilienceError, TIMED_OUT};
+use crate::events::{ResilienceEvent, ResilienceEvents, Subscribers};
 use crate::millis::millis;
-use crate::rate::Rate;
-use crate::resilient::{ResilientAnswer, ResilientMethod};
+use crate::rate::{Arrived, Rate, Reservation};
+use crate::resilient::{Judge, ResilientAnswer, ResilientMethod, judging_by_default};
 use crate::savepoint::{Ended, Savepoint, Settling};
 use crate::told::told;
 
@@ -48,19 +50,20 @@ use crate::told::told;
 /// `<PREFIX>_RESILIENCE__<INSTANCE>__*` ([`ResilienceConfig`]); the default
 /// instance, `ResiliencePolicy`, reads `<PREFIX>_RESILIENCE__*`. A method runs
 /// its body under it through [`#[resilient]`](macro@crate::resilient), naming
-/// the field that holds it; [`run`](Self::run) and
-/// [`run_idempotent`](Self::run_idempotent) take a call that needs its
-/// attempt's [`CancellationToken`], or is part of a method.
+/// the field that holds it, and reads its attempt's [`CancellationToken`]
+/// under the name its `cancel` key gives; [`run`](Self::run) and
+/// [`run_idempotent`](Self::run_idempotent) take a call that is part of a
+/// method, as a closure handed that token.
 ///
 /// Each attempt is given up past the policy's timeout or the deadline of the
 /// unit it runs in (`nest_rs_core::Deadline`), whichever comes first, and its
 /// [`CancellationToken`] cancelled, so work the call handed to another task
 /// stops with it; no retry starts whose wait ends past that deadline. A call is attempted again only when it is declared
 /// idempotent, through [`run_idempotent`](Self::run_idempotent): replaying one
-/// that is not would charge a card twice. Every attempt's outcome counts in the
-/// circuit breaker, which refuses every call at once while it is open, the
-/// bulkhead bounds how many calls run inside the policy together, and the
-/// rate limit how many attempts it sends per window, a retry included.
+/// that is not would charge a card twice. An attempt's success or failure
+/// counts in the circuit breaker, which refuses every call at once while it is
+/// open, the bulkhead bounds how many calls run inside the policy together,
+/// and the rate limit how many attempts it sends per window, a retry included.
 ///
 /// Inside a unit of work holding a transaction, each attempt of a call
 /// declared idempotent runs in a savepoint of it, sent with the attempt's
@@ -73,9 +76,15 @@ use crate::told::told;
 /// a setting of the deployment's. A call sent once and a run on the pool open
 /// none: an `Err` there leaves what its body wrote, as it does with no policy.
 ///
-/// Every `Err` the call answers counts as the dependency failing. An answer
-/// the dependency gave — a declined card, a parcel not found — belongs in the
-/// call's `Ok`, so it is neither retried nor counted. The error is a
+/// Every `Err` a call run through [`run`](Self::run) or
+/// [`run_idempotent`](Self::run_idempotent) answers counts as the dependency
+/// failing, and is sent again when the call is idempotent: an answer the
+/// dependency gave — a declined card, a parcel not found — belongs in such a
+/// call's `Ok`, so it is neither retried nor counted a failure. A decorated
+/// method says otherwise of its own answers, key by key — `retry_if`,
+/// `retry_ok_if` and `record_if`, an `Err` `record_if` refuses counting in the
+/// breaker as neither a failure nor a success — and names the `fallback`
+/// answering in place of the error its run ends on. The error is a
 /// [`std::error::Error`]: its chain is the `error` of the line a retry files,
 /// at `debug`, and of the `warn` the breaker files when that failure opens it,
 /// where an operator reads what the dependency answered once every caller is
@@ -86,7 +95,12 @@ use crate::told::told;
 /// The breaker's state is read through [`breaker_state`](Self::breaker_state),
 /// and switched by hand — an operator taking a dependency out for its
 /// maintenance window — through [`open_breaker`](Self::open_breaker) and
-/// [`close_breaker`](Self::close_breaker).
+/// [`close_breaker`](Self::close_breaker). What the policy holds now is read
+/// beside it — [`breaker_stats`](Self::breaker_stats),
+/// [`concurrency_running`](Self::concurrency_running),
+/// [`concurrency_waiting`](Self::concurrency_waiting),
+/// [`rate_available`](Self::rate_available) — and what it does is told as it
+/// happens to each subscription [`events`](Self::events) opens.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -126,20 +140,31 @@ pub struct ResiliencePolicy<I = Unnamed> {
     timeout: Duration,
     retries: u32,
     backoff: Backoff,
-    breaker: Option<Breaker>,
-    bulkhead: Option<Bulkhead>,
-    rate: Option<Rate>,
+    // Each behind an `Arc`, so the instruments observed off it hold it weakly.
+    breaker: Option<Arc<Breaker>>,
+    bulkhead: Option<Arc<Bulkhead>>,
+    rate: Option<Arc<Rate>>,
     counters: Arc<Counters>,
+    subscribers: Arc<Subscribers>,
+    observed: Observed,
     /// Sets each run's jitter apart from the others'.
     runs: AtomicU64,
     _instance: PhantomData<fn() -> I>,
 }
 
-/// How an attempt's answer counts.
+/// How an attempt's answer counts, on two axes: in the breaker — a success,
+/// a failure, or neither — and whether the run sends its call again after it,
+/// when it may. An `Ok` is a success, and an `Err` a failure or neither: one
+/// variant for each pair that can be.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Verdict {
+    /// An `Ok`, the run's answer: a success, not sent again.
     Succeeded,
-    /// The dependency failed, asking the wait before a retry when it said one.
+    /// An `Ok` the run sends its call again after: a success, with no error
+    /// to tell and no wait asked.
+    Again,
+    /// The dependency failed, and the run sends its call again, after the
+    /// wait it asked when it said one.
     Failed {
         asked: Option<Duration>,
         /// What it failed on, as the lines telling the attempt say it, said
@@ -147,6 +172,30 @@ pub(crate) enum Verdict {
         /// tells one ([`told`]).
         error: Cow<'static, str>,
     },
+    /// The dependency failed, and the run ends there.
+    Final { error: Cow<'static, str> },
+    /// An `Err` counting in neither direction, the run's answer: the breaker
+    /// holds nothing of it, and the run ends there.
+    Ignored,
+    /// An `Err` counting in neither direction, which the run sends its call
+    /// again after, after the wait it asked when it said one: the breaker
+    /// holds nothing of it, and the retry's line tells its `error`.
+    IgnoredAgain {
+        asked: Option<Duration>,
+        error: Cow<'static, str>,
+    },
+}
+
+impl Verdict {
+    /// The attempt `sent` counted in its breaker as the verdict says: a
+    /// success, a failure saying what it failed on, or nothing.
+    fn settle(&self, sent: Sent<'_>) {
+        match self {
+            Self::Succeeded | Self::Again => sent.settle(None),
+            Self::Failed { error, .. } | Self::Final { error } => sent.settle(Some(error)),
+            Self::Ignored | Self::IgnoredAgain { .. } => sent.ignore(),
+        }
+    }
 }
 
 /// What an attempt whose call unwound failed on; its payload is its unit's to file.
@@ -230,9 +279,9 @@ impl<I: Instance> ResiliencePolicy<I> {
         }
         let rate = config
             .rate_limit
-            .map(|limit| Rate::new(limit, config.rate_window, config.rate_wait));
+            .map(|limit| Arc::new(Rate::new(limit, config.rate_window, config.rate_wait)));
         // An outcome's age runs from its answer, which comes up to the longest
-        // attempt after the rate counted its call.
+        // attempt after its call took its token.
         if let (Some(_), Some(age), Some(rate)) = (config.breaker_window, config.breaker_age, &rate)
             && config.breaker_failures > rate.most_sent_within(age + LONGEST_ATTEMPT)
         {
@@ -252,26 +301,36 @@ impl<I: Instance> ResiliencePolicy<I> {
             .retries
             .map_or(0, |retries| u32::try_from(retries).unwrap_or(u32::MAX));
         let counters = Arc::new(Counters::new(I::NAME));
+        let subscribers = Arc::<Subscribers>::default();
+        let breaker = config.breaker_window.map(|window| {
+            Arc::new(Breaker::new(
+                I::NAME,
+                window,
+                config.breaker_failures,
+                config.breaker_open,
+                config.breaker_age,
+                config.breaker_probes,
+                Arc::clone(&counters),
+                Arc::clone(&subscribers),
+            ))
+        });
+        let bulkhead = config.concurrency.map(|slots| {
+            Arc::new(Bulkhead::new(
+                slots,
+                config.concurrency_wait,
+                config.concurrency_waiters,
+            ))
+        });
         Ok(Self {
             timeout: config.timeout,
             retries,
             backoff: Backoff::new(config.backoff_first, config.backoff_ceiling),
-            breaker: config.breaker_window.map(|window| {
-                Breaker::new(
-                    I::NAME,
-                    window,
-                    config.breaker_failures,
-                    config.breaker_open,
-                    config.breaker_age,
-                    config.breaker_probes,
-                    Arc::clone(&counters),
-                )
-            }),
-            bulkhead: config.concurrency.map(|slots| {
-                Bulkhead::new(slots, config.concurrency_wait, config.concurrency_waiters)
-            }),
+            observed: Observed::new(I::NAME, breaker.as_ref(), bulkhead.as_ref(), rate.as_ref()),
+            breaker,
+            bulkhead,
             rate,
             counters,
+            subscribers,
             runs: AtomicU64::new(0),
             _instance: PhantomData,
         })
@@ -290,15 +349,15 @@ impl<I: Instance> ResiliencePolicy<I> {
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
     {
-        self.run_once::<Result<T, ResilienceError<E>>, F, Fut>(None, call)
+        self.run_once::<Result<T, ResilienceError<E>>, _, F, Fut>(None, judging_by_default(), call)
     }
 
     /// Run the idempotent `call`, attempting it again after a failed or timed
     /// out attempt, up to the policy's retries, each retry waiting the
     /// policy's backoff first — or longer, the `Retry-After` of a
     /// [`Problem`] its error's chain carries. An attempt the circuit breaker
-    /// refuses ends the run at once, as does one past the rate limit that
-    /// cannot wait for the window's reset.
+    /// refuses ends the run at once, as does one finding no token of the rate
+    /// limit free that cannot wait for the next.
     ///
     /// Idempotent means one call or several leave the dependency as one does:
     /// a read, a `PUT`, a request carrying an idempotency key the dependency
@@ -335,27 +394,31 @@ impl<I: Instance> ResiliencePolicy<I> {
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
     {
-        self.run_again::<Result<T, ResilienceError<E>>, F, Fut>(None, call)
+        self.run_again::<Result<T, ResilienceError<E>>, _, F, Fut>(None, judging_by_default(), call)
     }
 
     /// `call` run once, for `method` when a decorated method runs it, its
-    /// answer read as `R` reads a body's and answered as `R`: what
-    /// [`run`](Self::run) runs, with no method.
-    pub(crate) fn run_once<R, F, Fut>(
+    /// answer read as `R` reads a body's and answered as `R`, an `Err` a
+    /// failure in the breaker when `judging` records it and counted in
+    /// neither direction otherwise: what [`run`](Self::run) runs, with no
+    /// method and every `Err` a failure.
+    pub(crate) fn run_once<R, J, F, Fut>(
         &self,
         method: Option<ResilientMethod>,
+        judging: J,
         call: F,
     ) -> impl Future<Output = R>
     where
         R: ResilientAnswer,
         R::Err: Error + 'static,
+        J: Judge<R>,
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = R::Attempt>,
     {
         RunOnce {
             stage: RunStage::Opening,
             call: Once::new(call),
-            judge: judged::<R::Ok, R::Err>,
+            judge: move |answer: &Result<R::Ok, R::Err>| judged_once::<R, J>(&judging, answer),
             attempt: Attempt::new(),
             settling: None,
             wait: Wait::within(),
@@ -369,22 +432,28 @@ impl<I: Instance> ResiliencePolicy<I> {
 
     /// The idempotent `call` run, for `method` when a decorated method runs
     /// it, each answer read as `R` reads a body's and the last answered as
-    /// `R`: what [`run_idempotent`](Self::run_idempotent) runs, with no method.
-    pub(crate) fn run_again<R, F, Fut>(
+    /// `R`, each counted as `judging` says — an `Err` or an `Ok` sent again
+    /// when it retries it, an `Err` a failure in the breaker when it records
+    /// it and counted in neither direction otherwise: what
+    /// [`run_idempotent`](Self::run_idempotent) runs, with no method, every
+    /// `Err` a failure sent again.
+    pub(crate) fn run_again<R, J, F, Fut>(
         &self,
         method: Option<ResilientMethod>,
+        judging: J,
         call: F,
     ) -> impl Future<Output = R>
     where
         R: ResilientAnswer,
         R::Err: Error + 'static,
+        J: Judge<R>,
         F: FnMut(CancellationToken) -> Fut,
         Fut: Future<Output = R::Attempt>,
     {
         RunAgain {
             stage: RunStage::Opening,
             call: Again::new(call),
-            judge: judged_asking::<R::Ok, R::Err>,
+            judge: move |answer: &Result<R::Ok, R::Err>| judged_again::<R, J>(&judging, answer),
             attempt: Attempt::new(),
             settling: None,
             wait: Wait::within(),
@@ -416,14 +485,17 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// breaker; or the bulkhead with no free slot, which the run waits for
     /// through [`enter`](Self::enter).
     fn open(&self, method: Option<ResilientMethod>) -> Opened<'_, I> {
+        self.observed.at_run();
         let deadline = nest_rs_core::__private::deadline();
         let slot = match &self.bulkhead {
             Some(bulkhead) => {
                 if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
-                    return Opened::Refused(self.refused(Refusal::TimedOut(Duration::ZERO)));
+                    let out_of_time = Refusal::TimedOut(Duration::ZERO);
+                    return Opened::Refused(self.refused(method.as_ref(), out_of_time));
                 }
-                if let Some(retry_after) = self.breaker.as_ref().and_then(Breaker::refusing) {
-                    return Opened::Refused(self.refused(Refusal::Open(retry_after)));
+                if let Some(retry_after) = self.breaker.as_deref().and_then(Breaker::refusing) {
+                    let open = Refusal::Open(retry_after);
+                    return Opened::Refused(self.refused(method.as_ref(), open));
                 }
                 let Some(free) = bulkhead.try_enter() else {
                     return Opened::Full(bulkhead, deadline);
@@ -437,8 +509,9 @@ impl<I: Instance> ResiliencePolicy<I> {
 
     /// The run of `method` [`open`](Self::open) found no free slot of
     /// `bulkhead` for, opened once one is freed within the unit's `deadline`:
-    /// refused at once by a spent rate whose reset it could not wait for, read
-    /// first and counting nothing, rather than after waiting for a slot, and
+    /// refused at once by a rate with no token free whose next it could not
+    /// wait for, read first and taking nothing, rather than after waiting for a
+    /// slot, and
     /// refused `Full` once no slot is freed for it in time or as many calls
     /// wait for one as may.
     async fn enter<'p>(
@@ -447,14 +520,11 @@ impl<I: Instance> ResiliencePolicy<I> {
         method: Option<ResilientMethod>,
         deadline: Option<Instant>,
     ) -> Result<Run<'p, I>, Refusal> {
-        if let Some(rate) = &self.rate {
-            let now = Instant::now();
-            if let Some(reset) = rate.refusing(now)
-                && !waits_for_reset(now + reset, rate.waits_until(now), deadline)
-            {
-                refused_by_the_rate(I::NAME, method.as_ref(), reset);
-                return Err(self.refused(Refusal::Limited(reset)));
-            }
+        if let Some(rate) = &self.rate
+            && let Some(wait) = rate.refusing(Instant::now(), deadline)
+        {
+            refused_by_the_rate(I::NAME, method.as_ref(), wait);
+            return Err(self.refused(method.as_ref(), Refusal::Limited(wait)));
         }
         let slot = bulkhead.enter(deadline).await.map_err(|full| {
             tracing::debug!(
@@ -465,7 +535,7 @@ impl<I: Instance> ResiliencePolicy<I> {
                 waiters = full.waiters(),
                 "bulkhead full; the call is refused",
             );
-            self.refused(Refusal::Full)
+            self.refused(method.as_ref(), Refusal::Full)
         })?;
         Ok(self.opened(method, deadline, Some(slot)))
     }
@@ -512,7 +582,78 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// }
     /// ```
     pub fn breaker_state(&self) -> Option<BreakerState> {
-        self.breaker.as_ref().map(Breaker::read)
+        self.breaker.as_deref().map(Breaker::read)
+    }
+
+    /// What the circuit breaker's window counts now — its outcomes, and the
+    /// failures among them — as a call arriving now meets it, or `None` for a
+    /// policy with no breaker (`BREAKER_WINDOW` set to `0`).
+    ///
+    /// An outcome past [`breaker_age`](ResilienceConfig::breaker_age) counts
+    /// no more, and the window is forgotten as the breaker opens: open or
+    /// half-open it reads none, and counts afresh once closed.
+    pub fn breaker_stats(&self) -> Option<BreakerStats> {
+        self.breaker.as_deref().map(Breaker::stats)
+    }
+
+    /// How many calls hold a slot of the bulkhead now — each for its whole
+    /// run, its retries and their waits included, and through
+    /// [`ResilienceMiddleware`](crate::ResilienceMiddleware) until its
+    /// response's body ends — or `None` for a policy with no bulkhead
+    /// (`CONCURRENCY` unset).
+    pub fn concurrency_running(&self) -> Option<usize> {
+        self.bulkhead.as_deref().map(Bulkhead::running)
+    }
+
+    /// How many calls wait for a slot of the bulkhead now, or `None` for a
+    /// policy with no bulkhead (`CONCURRENCY` unset): none ever, where a call
+    /// finding no free slot does not wait (`CONCURRENCY_WAIT_MS` unset).
+    pub fn concurrency_waiting(&self) -> Option<usize> {
+        self.bulkhead.as_deref().map(Bulkhead::waiting)
+    }
+
+    /// How many tokens of the rate limit are free now — what as many attempts
+    /// arriving together would take, none while an attempt waits for one — or
+    /// `None` for a policy with no rate limit (`RATE_LIMIT` unset).
+    pub fn rate_available(&self) -> Option<usize> {
+        self.rate
+            .as_deref()
+            .map(|rate| rate.available(Instant::now()))
+    }
+
+    /// A subscription to what the policy does from now on: each retry, each
+    /// attempt given up at its bound, each call refused unsent, each
+    /// transition of its breaker and each fallback answering for a run, as a
+    /// [`ResilienceEvent`] saying what the line of that fact says. Every
+    /// subscription is told every event; one opened later is told nothing
+    /// that came before it.
+    ///
+    /// With no subscription open, the policy builds no event. A subscription
+    /// is this process's, as the policy's state is, and ends once the policy
+    /// is dropped.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use nest_rs_resilience::{BreakerPhase, ResilienceEvent, ResiliencePolicy};
+    ///
+    /// fn watch(policy: &Arc<ResiliencePolicy>) {
+    ///     // The task holds the subscription and not the policy, so it ends
+    ///     // with the app.
+    ///     let mut events = policy.events();
+    ///     tokio::spawn(async move {
+    ///         while let Some(event) = events.next().await {
+    ///             if let ResilienceEvent::Transition { to, manual: false, .. } = event
+    ///                 && to == BreakerPhase::Open
+    ///             {
+    ///                 // The dependency is failing: page whoever is on call.
+    ///             }
+    ///         }
+    ///     });
+    /// }
+    /// ```
+    pub fn events(&self) -> ResilienceEvents {
+        self.subscribers.subscribe()
     }
 
     /// Open the circuit breaker by hand for `duration`, an open time
@@ -524,8 +665,9 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// Whatever the breaker was in, `duration` counts from now and replaces
     /// any open time it had, shorter or longer, and its window is forgotten:
     /// a call let through before it changes nothing once it answers — a probe
-    /// answering a success closes nothing — and a probe waiting for the rate's
-    /// reset loses its turn. When its wait ends it meets the breaker as a call
+    /// answering a success closes nothing — and a probe waiting for its token
+    /// of the rate loses its turn. When its wait ends it meets the breaker as
+    /// a call
     /// arriving then does: refused while the opening lasts, and taking the
     /// next probe's turn once it has passed. Each call files the transition's
     /// `warn`, marked `manual` and carrying the open time it was given, and
@@ -573,10 +715,31 @@ impl<I: Instance> ResiliencePolicy<I> {
         Ok(())
     }
 
-    /// `refusal`, counted.
-    fn refused(&self, refusal: Refusal) -> Refusal {
+    /// `refusal`, which a run of `method` ends on, counted and told.
+    fn refused(&self, method: Option<&ResilientMethod>, refusal: Refusal) -> Refusal {
         self.counters.refusal(refusal);
+        self.subscribers
+            .tell(|| ResilienceEvent::refused(method, refusal));
         refusal
+    }
+
+    /// A run of `method` ended on `error`, which its fallback answers in
+    /// place of: the line saying so, with the error's chain, counted and
+    /// told. The chain is said once, and only for a line filed or a
+    /// subscription open.
+    pub(crate) fn falling_back(&self, method: &ResilientMethod, error: &(dyn Error + 'static)) {
+        let mut said = None;
+        tracing::debug!(
+            target: TARGET,
+            instance = I::NAME,
+            host = method.host(),
+            method = method.name(),
+            error = said.insert(told(error)).as_str(),
+            "the call failed; its fallback answers",
+        );
+        self.counters.fallback();
+        self.subscribers
+            .tell(|| ResilienceEvent::fallback(method, said.unwrap_or_else(|| told(error))));
     }
 }
 
@@ -632,7 +795,7 @@ impl<'p, I: Instance> Run<'p, I> {
         Held {
             attempt: outstanding.sent.take().map(Sent::hold),
             slot: slot
-                .zip(policy.bulkhead.as_ref())
+                .zip(policy.bulkhead.as_deref())
                 .map(|(slot, bulkhead)| bulkhead.hold(slot)),
             left: outstanding.ends.saturating_duration_since(Instant::now()),
             bound: outstanding.bound,
@@ -642,7 +805,8 @@ impl<'p, I: Instance> Run<'p, I> {
 
     /// The run's last attempt, its refusal counted when it ended on one.
     pub(crate) fn finish<T>(&self, attempted: Attempted<T>) -> Attempted<T> {
-        attempted.map_err(|refusal| self.terms.policy.refused(refusal))
+        let terms = &self.terms;
+        attempted.map_err(|refusal| terms.policy.refused(terms.method.as_ref(), refusal))
     }
 
     /// Whether to attempt the call again after `attempted`, having waited the
@@ -675,52 +839,77 @@ impl<'p, I: Instance> Run<'p, I> {
     /// [`retry`]: Self::retry
     #[cfg(any(feature = "reqwest", test))]
     fn next_wait<T>(&mut self, attempted: &Attempted<T>) -> Option<Duration> {
-        let (asked, error) = failed(attempted)?;
+        let (asked, error) = sent_again(attempted)?;
         let wait = self.retry_wait(asked, error)?;
+        self.given_up(attempted);
         self.retrying(wait, error);
         Some(wait)
     }
 
     /// The retry the run makes after `attempted`, or `None` when it ends
-    /// there: after a failure or a timeout, as [`retry_wait`] decides. Its
-    /// line is left to file once the retry is certain ([`retrying`]): at once
-    /// for an attempt that opened no savepoint, else once that savepoint was
-    /// rolled back. What the attempt failed on is taken out of `attempted`,
-    /// which the run lets go before it waits.
+    /// there: after a timeout or an answer judged one to send again, as
+    /// [`retry_wait`] decides. Its line is left to file once the retry is
+    /// certain ([`retrying`]): at once for an attempt that opened no
+    /// savepoint, else once that savepoint was rolled back. What the attempt
+    /// answered in error is taken out of `attempted`, which the run lets go
+    /// before it waits.
     ///
     /// [`retry_wait`]: Self::retry_wait
     /// [`retrying`]: Self::retrying
     fn retry<T>(&mut self, attempted: &mut Attempted<T>) -> Option<Retry> {
-        let (asked, error) = failed(attempted)?;
+        let (asked, error) = sent_again(attempted)?;
         let wait = self.retry_wait(asked, error)?;
+        self.given_up(attempted);
         let error = match attempted {
-            Ok((_, Verdict::Failed { error, .. })) => std::mem::take(error),
-            _ => Cow::Borrowed(TIMED_OUT),
+            Ok((_, Verdict::Failed { error, .. } | Verdict::IgnoredAgain { error, .. })) => {
+                Some(std::mem::take(error))
+            }
+            Ok((_, Verdict::Again)) => None,
+            _ => Some(Cow::Borrowed(TIMED_OUT)),
         };
         Some(Retry { wait, error })
     }
 
+    /// An attempt given up at its bound, which the run sends its call again
+    /// after, told: its run ends on no refusal, where one is told otherwise
+    /// ([`ResiliencePolicy::refused`]).
+    fn given_up<T>(&self, attempted: &Attempted<T>) {
+        if let Err(timed_out @ Refusal::TimedOut(_)) = attempted {
+            let method = self.terms.method.as_ref();
+            self.terms
+                .policy
+                .subscribers
+                .tell(|| ResilienceEvent::refused(method, *timed_out));
+        }
+    }
+
     /// The line of a retry that is certain, saying what the attempt before it
-    /// failed on: its error's chain, or the timeout's sentence.
-    fn retrying(&self, wait: Duration, error: &str) {
+    /// answered in error: its error's chain, or the timeout's sentence, and
+    /// nothing for an `Ok` sent again. The retry is told as it is filed.
+    fn retrying(&self, wait: Duration, error: Option<&str>) {
+        let attempt = self.resent.saturating_add(1);
         tracing::debug!(
             target: TARGET,
             instance = I::NAME,
             host = self.terms.host().as_deref(),
             method = self.terms.method_name(),
-            attempt = self.resent.saturating_add(1),
+            attempt,
             wait_ms = millis(wait),
             error,
             "attempt failed; retrying the call",
         );
+        self.terms
+            .policy
+            .subscribers
+            .tell(|| ResilienceEvent::retry(self.terms.method.as_ref(), attempt, wait, error));
     }
 
-    /// How long to wait before the next attempt, after one that failed on
+    /// How long to wait before the next attempt, after one that answered
     /// `error` asking `asked`, or `None` when the run ends there: its retries
     /// spent, or a retry left that is given up, whose line says why with
     /// `error` — the dependency asked a wait past the backoff's ceiling, or
     /// the wait ends past the unit's deadline.
-    fn retry_wait(&mut self, asked: Option<Duration>, error: &str) -> Option<Duration> {
+    fn retry_wait(&mut self, asked: Option<Duration>, error: Option<&str>) -> Option<Duration> {
         let terms = self.terms;
         let policy = terms.policy;
         if self.resent >= self.retries {
@@ -818,10 +1007,10 @@ impl<I> Held<I> {
     pub(crate) fn settle(&mut self, failure: Option<&str>) {
         let policy = &*self.policy;
         // The breaker first, as a run's drop hands a probe's turn on before its slot.
-        if let Some((attempt, breaker)) = self.attempt.take().zip(policy.breaker.as_ref()) {
+        if let Some((attempt, breaker)) = self.attempt.take().zip(policy.breaker.as_deref()) {
             breaker.resume(attempt).settle(failure);
         }
-        if let Some((slot, bulkhead)) = self.slot.take().zip(policy.bulkhead.as_ref()) {
+        if let Some((slot, bulkhead)) = self.slot.take().zip(policy.bulkhead.as_deref()) {
             bulkhead.free(slot);
         }
     }
@@ -834,7 +1023,7 @@ impl<I: Instance> Held<I> {
     /// reader is told, counted.
     pub(crate) fn timed_out(&mut self) -> Refusal {
         self.settle(Some(TIMED_OUT));
-        self.policy.refused(Refusal::TimedOut(self.bound))
+        self.policy.refused(None, Refusal::TimedOut(self.bound))
     }
 }
 
@@ -904,12 +1093,12 @@ enum Next<T> {
     Again(Retry),
 }
 
-/// A retry decided after a failed attempt: how long the run waits before it,
-/// counted from that attempt's answer, and what the attempt failed on, which
-/// the retry's line says.
+/// A retry decided after an attempt: how long the run waits before it,
+/// counted from that attempt's answer, and what the attempt answered in
+/// error, which the retry's line says — nothing, for an `Ok` sent again.
 pub(crate) struct Retry {
     wait: Duration,
-    error: Cow<'static, str>,
+    error: Option<Cow<'static, str>>,
 }
 
 /// How long an attempt sent now may run, and, under a unit's deadline, the
@@ -981,39 +1170,40 @@ enum Admission<'p> {
     /// Let through, its call sent under the bound, holding the breaker's pass.
     Through(Option<Pass<'p>>, Bound),
     Refused(Refusal),
-    /// Past the rate's limit, postponed to the window's reset at the instant.
+    /// No token of the rate free, postponed to the instant its reserved one is.
     Postponed(Instant),
 }
 
 impl<'p, I: Instance> Terms<'p, I> {
     /// An attempt let through, in order, by what is left of the unit's
     /// deadline, the breaker and the rate, with the bound its call is sent
-    /// under; with nothing left of the deadline it is not sent, nor counted.
-    /// Past the rate's limit it waits for the window's reset when what is left
-    /// of the rate's wait, ending at `waits_until` from its first refusal,
-    /// reaches it before the unit's deadline — a wait that is no part of the
-    /// attempt — a probe's `pass` keeping its turn and telling the breaker
-    /// when it has answered at the latest; otherwise it is refused, counted for
-    /// nothing, told the time to that reset. With no rate, nothing of the
-    /// rate's runs: no lock, no clock read, no timer.
+    /// under; with nothing left of the deadline it is not sent, and takes no
+    /// token. Finding no token of the rate free it reserves the next and
+    /// waits for it, when that one comes within the rate's wait and before
+    /// the unit's deadline — a wait that is no part of the attempt —
+    /// `reserved` holding its place in the line and a probe's `pass` keeping
+    /// its turn, telling the breaker when it has answered at the latest;
+    /// otherwise it is refused, taking nothing, told the time to that token.
+    /// With no rate, nothing of the rate's runs: no lock, no clock read, no
+    /// timer.
     // Inlined, the rate's step left out of line: called, it costs a run 2 to 4 ns.
     #[inline(always)]
     fn admit(
         &self,
         pass: &mut Option<Pass<'p>>,
-        waits_until: &mut Option<Instant>,
+        reserved: &mut Option<Reservation<'p>>,
     ) -> Admission<'p> {
         let bound = self.bound();
         if bound.wait.is_zero() {
             return Admission::Refused(Refusal::TimedOut(bound.wait));
         }
-        // While this one waited for the reset, another call may have opened the
+        // While this one waited for its token, another call may have opened the
         // breaker or taken the probe's turn, and a manual switch voids a turn held.
         if !pass.as_ref().is_some_and(Pass::probes) {
             match self
                 .policy
                 .breaker
-                .as_ref()
+                .as_deref()
                 .map(|breaker| breaker.admit(bound.wait))
                 .transpose()
             {
@@ -1022,57 +1212,72 @@ impl<'p, I: Instance> Terms<'p, I> {
             }
         }
         match &self.policy.rate {
-            Some(rate) => self.count(rate, pass, waits_until, bound),
+            Some(rate) => self.token(rate, pass, reserved, bound),
             None => Admission::Through(pass.take(), bound),
         }
     }
 
     /// [`admit`](Self::admit)'s step through `rate`, for an attempt the
-    /// breaker let through to be sent under `bound`.
+    /// breaker let through to be sent under `bound`: the token it `reserved`
+    /// taken, or one asked for as it arrives.
     #[inline(never)]
-    fn count(
+    fn token(
         &self,
-        rate: &Rate,
+        rate: &'p Rate,
         pass: &mut Option<Pass<'p>>,
-        waits_until: &mut Option<Instant>,
+        reserved: &mut Option<Reservation<'p>>,
         bound: Bound,
     ) -> Admission<'p> {
         let now = Instant::now();
-        let Err(reset) = rate.count(now) else {
-            return Admission::Through(pass.take(), bound);
-        };
-        let until = *waits_until.get_or_insert_with(|| rate.waits_until(now));
-        let at = now + reset;
-        if !waits_for_reset(at, until, self.deadline) {
-            refused_by_the_rate(I::NAME, self.method.as_ref(), reset);
-            return Admission::Refused(Refusal::Limited(reset));
+        if let Some(reservation) = reserved.take() {
+            return match reservation.take(now) {
+                Ok(()) => Admission::Through(pass.take(), bound),
+                Err((reservation, at)) => {
+                    *reserved = Some(reservation);
+                    Admission::Postponed(at)
+                }
+            };
         }
-        if let Some(pass) = pass.as_ref() {
-            pass.postpone(at, self.bound_at(at));
+        match rate.arrive(now, self.deadline) {
+            Arrived::Taken => Admission::Through(pass.take(), bound),
+            Arrived::Refused(wait) => {
+                refused_by_the_rate(I::NAME, self.method.as_ref(), wait);
+                Admission::Refused(Refusal::Limited(wait))
+            }
+            Arrived::Reserved(reservation, at) => {
+                *reserved = Some(reservation);
+                if let Some(pass) = pass.as_ref() {
+                    pass.postpone(at, self.bound_at(at));
+                }
+                tracing::debug!(
+                    target: TARGET,
+                    instance = I::NAME,
+                    host = self.host().as_deref(),
+                    method = self.method_name(),
+                    wait_ms = millis(at.saturating_duration_since(now)),
+                    "rate limit reached; waiting for a token",
+                );
+                Admission::Postponed(at)
+            }
         }
-        tracing::debug!(
-            target: TARGET,
-            instance = I::NAME,
-            host = self.host().as_deref(),
-            method = self.method_name(),
-            wait_ms = millis(reset),
-            "rate limit reached; waiting for the window to reset",
-        );
-        Admission::Postponed(at)
     }
 }
 
 // The run's futures are polled in place, each holding the call once, where an `async` fn
 // or block awaiting a future it was handed keeps it twice (rust-lang/rust#62958).
 pin_project_lite::pin_project! {
-    /// An attempt the rate refused, waiting for the window's reset, then let
-    /// through again as [`Terms::admit`] says.
+    /// An attempt that found no token of the rate free, waiting for the one
+    /// it reserved, then let through again as [`Terms::admit`] says. Dropped
+    /// before then — its run dropped, its breaker refusing it or its unit out
+    /// of time once the wait ends — it gives the token to the attempt behind.
     struct Admitted<'p, I> {
         terms: Terms<'p, I>,
+        // `reserved` before `pass`: given back first, so the call a probe's turn
+        // is handed to finds the token this one left.
+        reserved: Option<Reservation<'p>>,
         pass: Option<Pass<'p>>,
-        waits_until: Option<Instant>,
         #[pin]
-        reset: Sleep,
+        due: Sleep,
     }
 }
 
@@ -1082,11 +1287,22 @@ impl<'p, I: Instance> Future for Admitted<'p, I> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
         loop {
-            ready!(this.reset.as_mut().poll(cx));
-            match this.terms.admit(this.pass, this.waits_until) {
+            // A reservation given back before this one brings its token forward,
+            // and wakes it: its timer and a probe's latest answer move with it.
+            if let Some(reservation) = this.reserved.as_ref() {
+                let at = reservation.due(cx.waker());
+                if at < this.due.deadline() {
+                    if let Some(pass) = this.pass.as_ref() {
+                        pass.postpone(at, this.terms.bound_at(at));
+                    }
+                    this.due.as_mut().reset(at);
+                }
+            }
+            ready!(this.due.as_mut().poll(cx));
+            match this.terms.admit(this.pass, this.reserved) {
                 Admission::Through(pass, bound) => return Poll::Ready(Ok((pass, bound))),
                 Admission::Refused(refusal) => return Poll::Ready(Err(refusal)),
-                Admission::Postponed(at) => this.reset.as_mut().reset(at),
+                Admission::Postponed(at) => this.due.as_mut().reset(at),
             }
         }
     }
@@ -1095,7 +1311,7 @@ impl<'p, I: Instance> Future for Admitted<'p, I> {
 pin_project_lite::pin_project! {
     /// What a run waits on besides its call, one at a time: the bound of its
     /// attempt, whose timer is armed once the call waits, and only when they
-    /// come, the slot of the bulkhead it found none free of, the rate's reset
+    /// come, the slot of the bulkhead it found none free of, the rate's token
     /// and the backoff before a retry.
     #[project = WaitProj]
     enum Wait<'p, I, B> {
@@ -1136,7 +1352,7 @@ impl<I, B> Wait<'_, I, B> {
 
 /// One attempt of a run's call, polled with its run, what the run waits on
 /// and the call it holds: let through as [`Terms::admit`] says, waiting for the
-/// rate's reset only when it must, then its call made and sent under its
+/// rate's token only when it must, then its call made and sent under its
 /// bound, counted in the breaker once it answers and its token cancelled when
 /// it is given up. Each step writes its fields where they are.
 ///
@@ -1163,7 +1379,7 @@ pub(crate) struct Attempt<'p, const HOLDS: bool = false> {
 enum AttemptStage {
     /// Not let through yet.
     Arriving,
-    /// Waiting for the rate's window to reset.
+    /// Waiting for the token of the rate it reserved.
     Admitting,
     /// Its call sent.
     Sending,
@@ -1229,17 +1445,17 @@ impl<'p, const HOLDS: bool> Attempt<'p, HOLDS> {
         loop {
             let admitted = match self.stage {
                 AttemptStage::Arriving => {
-                    let (mut pass, mut waits_until) = (None, None);
-                    match run.terms.admit(&mut pass, &mut waits_until) {
+                    let (mut pass, mut reserved) = (None, None);
+                    match run.terms.admit(&mut pass, &mut reserved) {
                         Admission::Through(pass, bound) => Ok((pass, bound)),
                         Admission::Refused(refusal) => Err(refusal),
                         Admission::Postponed(at) => {
                             wait.set(Wait::Admitting {
                                 admitted: Admitted {
                                     terms: run.terms,
+                                    reserved,
                                     pass,
-                                    waits_until,
-                                    reset: tokio::time::sleep_until(at),
+                                    due: tokio::time::sleep_until(at),
                                 },
                             });
                             self.stage = AttemptStage::Admitting;
@@ -1249,7 +1465,7 @@ impl<'p, const HOLDS: bool> Attempt<'p, HOLDS> {
                 }
                 AttemptStage::Admitting => {
                     let WaitProj::Admitting { admitted } = wait.as_mut().project() else {
-                        unreachable!("an attempt waits for the reset it was told");
+                        unreachable!("an attempt waits for the token it reserved");
                     };
                     let admitted = ready!(admitted.poll(cx));
                     wait.set(Wait::within());
@@ -1314,7 +1530,8 @@ impl<'p, const HOLDS: bool> Attempt<'p, HOLDS> {
     /// and counted in the breaker, the future the call made dropped first, so
     /// before its savepoint settles. `judge` says what a failed answer failed
     /// on before the breaker is asked, so no `Display` of the call's error runs
-    /// under its lock.
+    /// under its lock; a `judge` that panics — a predicate of the call's —
+    /// fails the attempt as a panic in its call does.
     fn settle<C, R, J>(
         &mut self,
         call: Pin<&mut C>,
@@ -1329,19 +1546,20 @@ impl<'p, const HOLDS: bool> Attempt<'p, HOLDS> {
         self.stage = AttemptStage::Answered;
         self.cancel = None;
         call.spend();
-        let answered = answered.map(|attempt| {
+        let answered = answered.and_then(|attempt| {
             let answer = R::split(attempt);
-            let verdict = judge(&answer);
-            (answer, verdict)
+            match catch_unwind(AssertUnwindSafe(|| judge(&answer))) {
+                Ok(verdict) => Ok((answer, verdict)),
+                Err(unwound) => Err(Unanswered::Panicked(unwound)),
+            }
         });
         let held = HOLDS && matches!(answered, Ok((_, Verdict::Succeeded)));
         if !held && let Some(sent) = self.sent.take() {
-            sent.settle(match &answered {
-                Ok((_, Verdict::Succeeded)) => None,
-                Ok((_, Verdict::Failed { error, .. })) => Some(error.as_ref()),
-                Err(Unanswered::Panicked(_)) => Some(PANICKED),
-                Err(_elapsed) => Some(TIMED_OUT),
-            });
+            match &answered {
+                Ok((_, verdict)) => verdict.settle(sent),
+                Err(Unanswered::Panicked(_)) => sent.settle(Some(PANICKED)),
+                Err(_elapsed) => sent.settle(Some(TIMED_OUT)),
+            }
         }
         let given_up = self.given_up.take();
         match answered {
@@ -1438,7 +1656,7 @@ pin_project_lite::pin_project! {
         stage: RunStage,
         // Dropped in order: the call's future, then the attempt and the wait, each
         // handing on the turn of a probe it holds, sent or waiting for the rate's
-        // reset, then the run, freeing its slot.
+        // token, then the run, freeing its slot.
         #[pin]
         call: Once<F, Fut>,
         judge: J,
@@ -1600,7 +1818,7 @@ where
                 *this.settling = None;
                 match run.terms.after_savepoint(ended, settled_as) {
                     Ok(Next::Answer(attempted)) => break settled(run.finish(attempted)),
-                    Ok(Next::Again(retry)) => run.retrying(retry.wait, &retry.error),
+                    Ok(Next::Again(retry)) => run.retrying(retry.wait, retry.error.as_deref()),
                     Err(unsettled) => break Err(unsettled),
                 }
             }
@@ -1644,7 +1862,7 @@ where
                     let keep = matches!(attempted, Ok((Ok(_), _)));
                     *this.settling = Some(savepoint.settle(keep, Ended::Answer(attempted)));
                 }
-                (None, Some(retry)) => run.retrying(retry.wait, &retry.error),
+                (None, Some(retry)) => run.retrying(retry.wait, retry.error.as_deref()),
                 (None, None) => break settled(run.finish(attempted)),
             }
         };
@@ -1718,59 +1936,90 @@ impl<I: Instance> fmt::Debug for ResiliencePolicy<I> {
     }
 }
 
-/// Whether an attempt waits for the window's reset at `at`: within its wait,
-/// which ends at `until`, and before the unit's `deadline`, at which a call
-/// sent has no time to answer.
-fn waits_for_reset(at: Instant, until: Instant, deadline: Option<Instant>) -> bool {
-    at <= until && deadline.is_none_or(|deadline| at < deadline)
-}
-
 /// The line a call the rate refuses files, naming `method` when a decorated
-/// method ran it.
-fn refused_by_the_rate(instance: &'static str, method: Option<&ResilientMethod>, reset: Duration) {
+/// method ran it, `wait` the time to the next token free.
+fn refused_by_the_rate(instance: &'static str, method: Option<&ResilientMethod>, wait: Duration) {
     tracing::debug!(
         target: TARGET,
         instance,
         host = method.map(ResilientMethod::host).as_deref(),
         method = method.map(ResilientMethod::name),
-        retry_after_ms = millis(reset),
+        retry_after_ms = millis(wait),
         "rate limit reached; the call is refused",
     );
 }
 
-/// An `Err` is the dependency failing, said as the policy tells an error
-/// ([`told`]); an `Ok` says nothing.
-fn judged<T, E: Error + 'static>(answer: &Result<T, E>) -> Verdict {
+/// How the answer of a call sent once counts: an `Ok` is a success; an `Err`
+/// `judging` records is the dependency failing, said as the policy tells an
+/// error ([`told`]), and any other `Err` counts in neither direction, and
+/// says nothing.
+fn judged_once<R, J>(judging: &J, answer: &Result<R::Ok, R::Err>) -> Verdict
+where
+    R: ResilientAnswer,
+    R::Err: Error + 'static,
+    J: Judge<R>,
+{
     match answer {
         Ok(_) => Verdict::Succeeded,
-        Err(error) => Verdict::Failed {
-            asked: None,
+        Err(error) if judging.records(error) => Verdict::Final {
             error: told(error).into(),
         },
+        Err(_) => Verdict::Ignored,
     }
 }
 
-/// [`judged`], asking the wait a [`Problem`] in the error's chain asks.
-fn judged_asking<T, E: Error + 'static>(answer: &Result<T, E>) -> Verdict {
-    match answer {
-        Ok(_) => Verdict::Succeeded,
-        Err(error) => Verdict::Failed {
-            asked: nest_rs_core::__private::find_in_chain::<Problem>(error)
-                .and_then(Problem::retry_after)
-                .map(|seconds| Duration::from_secs(seconds.into())),
+/// How one answer of a call a run may send again counts, on `judging`'s two
+/// axes: an `Ok` is a success, sent again when it retries it; an `Err` is a
+/// failure when it records it and counts in neither direction otherwise, and
+/// is sent again when it retries it, after the wait a [`Problem`] in its
+/// chain asks, whichever it counts for. Its chain is said for an `Err` that
+/// is a failure or sent again, and for no other.
+fn judged_again<R, J>(judging: &J, answer: &Result<R::Ok, R::Err>) -> Verdict
+where
+    R: ResilientAnswer,
+    R::Err: Error + 'static,
+    J: Judge<R>,
+{
+    let error = match answer {
+        Ok(answer) if judging.retries_ok(answer) => return Verdict::Again,
+        Ok(_) => return Verdict::Succeeded,
+        Err(error) => error,
+    };
+    match (judging.records(error), judging.retries(error)) {
+        (true, true) => Verdict::Failed {
+            asked: asked(error),
             error: told(error).into(),
         },
+        (true, false) => Verdict::Final {
+            error: told(error).into(),
+        },
+        (false, true) => Verdict::IgnoredAgain {
+            asked: asked(error),
+            error: told(error).into(),
+        },
+        (false, false) => Verdict::Ignored,
     }
 }
 
-/// What an attempt a run may send again failed on, and the wait its
-/// dependency asked before a retry: a failure or a timeout, never an answer
-/// judged a success, nor a refusal that sent nothing.
-fn failed<T>(attempted: &Attempted<T>) -> Option<(Option<Duration>, &str)> {
+/// The wait a [`Problem`] in `error`'s chain asks before a retry.
+fn asked(error: &(dyn Error + 'static)) -> Option<Duration> {
+    nest_rs_core::__private::find_in_chain::<Problem>(error)
+        .and_then(Problem::retry_after)
+        .map(|seconds| Duration::from_secs(seconds.into()))
+}
+
+/// What an attempt a run sends again, when it may, answered in error — none,
+/// for an `Ok` — and the wait its dependency asked before the retry: a timeout
+/// or an answer judged one to send again, never one the run ends on, nor a
+/// refusal that sent nothing.
+fn sent_again<T>(attempted: &Attempted<T>) -> Option<(Option<Duration>, Option<&str>)> {
     match attempted {
-        Ok((_, Verdict::Failed { asked, error })) => Some((*asked, error.as_ref())),
-        Err(Refusal::TimedOut(_)) => Some((None, TIMED_OUT)),
-        Ok((_, Verdict::Succeeded))
+        Ok((_, Verdict::Failed { asked, error } | Verdict::IgnoredAgain { asked, error })) => {
+            Some((*asked, Some(error)))
+        }
+        Ok((_, Verdict::Again)) => Some((None, None)),
+        Err(Refusal::TimedOut(_)) => Some((None, Some(TIMED_OUT))),
+        Ok((_, Verdict::Succeeded | Verdict::Final { .. } | Verdict::Ignored))
         | Err(Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => None,
     }
 }
@@ -1792,6 +2041,7 @@ mod tests {
     use nest_rs_core::{CarriesRemedy, error_message, instance};
 
     use super::*;
+    use crate::resilient::{every, judging, none};
 
     #[instance]
     struct Upstream;
@@ -1825,6 +2075,15 @@ mod tests {
         }
     }
 
+    /// How the answer of a call sent once counts with no predicate of its
+    /// own: every `Err` a failure.
+    fn judged<T, E: Error + 'static>(answer: &Result<T, E>) -> Verdict {
+        judged_once::<Answer<T, E>, _>(&judging_by_default(), answer)
+    }
+
+    /// What a call answering `Result<T, E>` answers under its policy.
+    type Answer<T, E> = Result<T, ResilienceError<E>>;
+
     /// Retries on, no breaker, no bulkhead: the subject is the retry.
     fn retrying(retries: usize) -> ResiliencePolicy<Upstream> {
         policy(ResilienceConfig {
@@ -1832,6 +2091,91 @@ mod tests {
             breaker_window: None,
             ..ResilienceConfig::default()
         })
+    }
+
+    /// The two axes are independent: `record_if` alone decides whether an
+    /// `Err` is a failure or counts in neither direction, `retry_if` and
+    /// `retry_ok_if` alone the retry, and the wait a `Problem` in the chain
+    /// asks rides an `Err` sent again whichever it counts for. The chain is
+    /// told for an `Err` that is a failure or sent again, and for no other.
+    #[test]
+    fn an_answer_is_judged_on_two_axes_each_by_its_own_predicate() {
+        let throttled =
+            Throttled(Problem::new(429, nest_rs_core::code::RATE_LIMITED).with_retry_after(7));
+        let chain: Cow<'static, str> = error_message(&throttled).into();
+        type Quoted = Answer<u32, Throttled>;
+
+        let asked = Some(Duration::from_secs(7));
+        let err = Err::<u32, _>(throttled);
+        let ok = Ok::<u32, Throttled>(3);
+        let again = |retry_if: fn(&Throttled) -> bool,
+                     retry_ok_if: fn(&u32) -> bool,
+                     record_if: fn(&Throttled) -> bool,
+                     answer: &Result<u32, Throttled>| {
+            let judging = judging(PhantomData::<Quoted>, retry_if, retry_ok_if, record_if);
+            judged_again::<Quoted, _>(&judging, answer)
+        };
+        let once = |record_if: fn(&Throttled) -> bool, answer: &Result<u32, Throttled>| {
+            let judging = judging(PhantomData::<Quoted>, every, none, record_if);
+            judged_once::<Quoted, _>(&judging, answer)
+        };
+
+        assert_eq!(
+            again(every, none, every, &err),
+            Verdict::Failed {
+                asked,
+                error: chain.clone(),
+            },
+            "by default an `Err` is a failure, sent again"
+        );
+        assert_eq!(
+            again(none, none, every, &err),
+            Verdict::Final {
+                error: chain.clone(),
+            },
+            "a failure `retry_if` refuses ends the run"
+        );
+        assert_eq!(
+            again(every, none, none, &err),
+            Verdict::IgnoredAgain {
+                asked,
+                error: chain.clone(),
+            },
+            "an `Err` `record_if` refuses counts in neither direction, still sent again"
+        );
+        assert_eq!(
+            again(none, none, none, &err),
+            Verdict::Ignored,
+            "an `Err` both refuse is the run's answer, counted in neither direction"
+        );
+        assert_eq!(
+            again(every, none, every, &ok),
+            Verdict::Succeeded,
+            "by default an `Ok` is the run's answer"
+        );
+        assert_eq!(
+            again(every, every, every, &ok),
+            Verdict::Again,
+            "an `Ok` `retry_ok_if` takes is a success sent again, with no error to tell"
+        );
+        assert_eq!(
+            again(every, every, none, &ok),
+            Verdict::Again,
+            "an `Ok` is a success whatever `record_if` says"
+        );
+
+        assert_eq!(
+            once(every, &err),
+            Verdict::Final { error: chain },
+            "sent once, an `Err` is a failure the run ends on"
+        );
+        assert_eq!(
+            once(none, &err),
+            Verdict::Ignored,
+            "sent once, an `Err` `record_if` refuses counts in neither direction"
+        );
+        assert_eq!(once(every, &ok), Verdict::Succeeded);
+        assert_eq!(once(none, &ok), Verdict::Succeeded);
     }
 
     #[tokio::test(start_paused = true)]
@@ -2677,11 +3021,11 @@ mod tests {
         let held = policy.begin(None).await.expect("the one slot");
         let started = tokio::time::Instant::now();
         let (waited, crowded) = tokio::join!(
-            policy.run_once::<Ran, _, _>(Some(tracking), |_| answering()),
+            policy.run_once::<Ran, _, _, _>(Some(tracking), judging_by_default(), |_| answering()),
             async {
                 tokio::task::yield_now().await;
                 let crowded = policy
-                    .run_once::<Ran, _, _>(Some(tracking), |_| answering())
+                    .run_once::<Ran, _, _, _>(Some(tracking), judging_by_default(), |_| answering())
                     .await;
                 (started.elapsed(), crowded)
             },
@@ -2842,9 +3186,9 @@ mod tests {
         );
     }
 
-    /// No retry and no breaker, `limit` attempts per `window`, each attempt past
-    /// it waiting up to `wait` for the reset, or refused at once with none: the
-    /// subject is the rate.
+    /// No retry and no breaker, a bucket of `limit` tokens refilled over
+    /// `window`, each attempt finding none free waiting up to `wait` for the
+    /// next, or refused at once with none: the subject is the rate.
     fn rated(limit: usize, window: Duration, wait: Option<Duration>) -> ResilienceConfig {
         ResilienceConfig {
             retries: None,
@@ -2882,7 +3226,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn every_attempt_sent_counts_against_the_rate_a_retry_included() {
+    async fn every_attempt_sent_takes_a_token_of_the_rate_a_retry_included() {
         let policy = policy(ResilienceConfig {
             retries: Some(1),
             ..rated(3, Duration::from_secs(60), None)
@@ -2910,7 +3254,7 @@ mod tests {
         let refused = policy.run(|_| sent()).await;
         assert!(
             matches!(refused, Err(ResilienceError::Limited { .. })),
-            "the retry took the window's last attempt: {refused:?}"
+            "the retry took the bucket's last token: {refused:?}"
         );
         assert_eq!(
             calls.load(Ordering::Relaxed),
@@ -2920,7 +3264,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn past_the_limit_a_call_is_refused_unsent_told_the_time_to_the_windows_reset() {
+    async fn past_the_limit_a_call_is_refused_unsent_told_the_time_to_the_next_token() {
         let policy = policy(rated(2, Duration::from_secs(60), None));
         let calls = AtomicU32::new(0);
         let sent = || async {
@@ -2939,24 +3283,24 @@ mod tests {
         };
         assert_eq!(
             *retry_after,
-            Duration::from_secs(50),
-            "the window the first call opened resets at 60 s"
+            Duration::from_secs(20),
+            "the token the first call took is back half a window after it, at 30 s"
         );
         assert_eq!(started.elapsed(), Duration::ZERO, "refused at once");
         let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
             .expect("the problem rides the chain");
         assert_eq!(
             (problem.status(), problem.code(), problem.retry_after()),
-            (503, nest_rs_core::code::UNAVAILABLE, Some(50))
+            (503, nest_rs_core::code::UNAVAILABLE, Some(20))
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     /// Nothing left of the unit's deadline refuses before the breaker and the
-    /// rate are asked: the attempt counts for nothing, and is told as a unit
-    /// out of time while the rate is reached too.
+    /// rate are asked: the attempt takes no token, and is told as a unit out
+    /// of time while no token is free either.
     #[tokio::test(start_paused = true)]
-    async fn nothing_left_of_the_units_deadline_refuses_before_the_rate_counts() {
+    async fn nothing_left_of_the_units_deadline_refuses_before_the_rate_is_asked() {
         let policy = policy(rated(1, Duration::from_secs(60), None));
         let spent = || {
             nest_rs_core::__private::with_deadline(
@@ -2971,7 +3315,7 @@ mod tests {
         );
         assert!(
             policy.run(|_| answering()).await.is_ok(),
-            "the attempt out of time took nothing of the window"
+            "the attempt out of time took no token"
         );
         let refused = spent().await;
         assert!(
@@ -2981,7 +3325,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_call_an_open_breaker_refuses_counts_nothing_against_the_rate() {
+    async fn a_call_an_open_breaker_refuses_takes_no_token_of_the_rate() {
         let policy = policy(ResilienceConfig {
             breaker_window: Some(1),
             breaker_failures: 1,
@@ -3001,7 +3345,7 @@ mod tests {
         let probed = policy.run(|_| answering()).await;
         assert!(
             matches!(probed, Ok(())),
-            "the probe is the window's second attempt: {probed:?}"
+            "the probe takes the bucket's second token: {probed:?}"
         );
     }
 
@@ -3037,7 +3381,7 @@ mod tests {
             breaker_window: Some(2),
             breaker_failures: 2,
             breaker_open: Duration::from_secs(30),
-            ..rated(2, Duration::from_secs(60), None)
+            ..rated(2, Duration::from_secs(120), None)
         });
         for _ in 0..2 {
             let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
@@ -3056,7 +3400,7 @@ mod tests {
         let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
         assert!(
             matches!(failed, Err(ResilienceError::Failed(Refused))),
-            "the window reset, and a probe is sent at last: {failed:?}"
+            "a token is back, and a probe is sent at last: {failed:?}"
         );
         let reopened = policy.run(|_| answering()).await;
         assert!(
@@ -3066,7 +3410,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn an_attempt_past_the_limit_waits_for_the_reset_its_wait_reaches_then_is_sent() {
+    async fn an_attempt_finding_no_token_free_waits_for_the_next_its_wait_reaches_then_is_sent() {
         let policy = policy(rated(
             1,
             Duration::from_secs(10),
@@ -3085,13 +3429,13 @@ mod tests {
         assert_eq!(
             started.elapsed(),
             Duration::from_secs(6),
-            "until the window's reset, at 10 s"
+            "until its token, at 10 s"
         );
         assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_reset_past_the_wait_or_at_the_units_deadline_is_not_waited() {
+    async fn a_token_past_the_wait_or_at_the_units_deadline_is_not_waited_for() {
         let policy = policy(rated(
             1,
             Duration::from_secs(10),
@@ -3104,7 +3448,7 @@ mod tests {
         assert!(
             matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
                 if retry_after == Duration::from_secs(6)),
-            "a reset 6 s away, past the 5 s wait: {refused:?}"
+            "a token 6 s away, past the 5 s wait: {refused:?}"
         );
         assert_eq!(started.elapsed(), Duration::ZERO, "nothing waited");
 
@@ -3118,7 +3462,7 @@ mod tests {
         assert!(
             matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
                 if retry_after == Duration::from_secs(4)),
-            "a reset at the unit's deadline leaves its call no time: {refused:?}"
+            "a token at the unit's deadline leaves its call no time: {refused:?}"
         );
         assert_eq!(started.elapsed(), Duration::from_secs(2), "nothing waited");
 
@@ -3131,124 +3475,207 @@ mod tests {
         assert_eq!(started.elapsed(), Duration::from_secs(6));
     }
 
-    /// Two attempts wait for one reset; the one the next window refuses again
-    /// has 5 s of its 15 s left, which do not reach the reset after.
+    /// A bucket left to fill sends its limit at once, then a token at a time:
+    /// two per 10 s send two at once, a third 5 s on and a fourth at 10 s,
+    /// twice the limit within one window's length.
     #[tokio::test(start_paused = true)]
-    async fn the_waits_of_one_attempt_never_add_up_past_its_wait() {
-        let policy = policy(rated(
-            1,
-            Duration::from_secs(10),
-            Some(Duration::from_secs(15)),
-        ));
-        assert!(policy.run(|_| answering()).await.is_ok());
+    async fn a_bucket_left_to_fill_sends_its_limit_at_once_then_a_token_at_a_time() {
+        let window = Duration::from_secs(10);
+        let policy = policy(rated(2, window, Some(window)));
+        tokio::time::advance(window * 3).await;
         let started = tokio::time::Instant::now();
-        let (first, second) = tokio::join!(
-            policy.run(|_| async { Ok::<_, Refused>("first") }),
-            policy.run(|_| async { Ok::<_, Refused>("second") }),
-        );
-        let mut answered = [first, second].map(|answered| match answered {
-            Ok(_) => "sent".to_owned(),
-            Err(ResilienceError::Limited { retry_after, .. }) => format!("limited {retry_after:?}"),
-            Err(other) => panic!("{other:?}"),
+        let mut sent = Vec::new();
+        for _ in 0..4 {
+            assert!(policy.run(|_| answering()).await.is_ok());
+            sent.push(started.elapsed().as_secs());
+        }
+        assert_eq!(sent, [0, 0, 5, 10]);
+    }
+
+    /// A retry takes a token as a first attempt does, and waits for one in
+    /// its turn: the one token taken by the attempt that failed, its retry is
+    /// sent once the next is back, past its backoff.
+    #[tokio::test(start_paused = true)]
+    async fn a_retry_finding_no_token_free_waits_for_the_next_as_a_first_attempt_does() {
+        let window = Duration::from_secs(10);
+        let policy = policy(ResilienceConfig {
+            retries: Some(1),
+            ..rated(1, window, Some(window))
         });
-        answered.sort();
-        assert_eq!(answered, ["limited 10s", "sent"]);
-        assert_eq!(
-            started.elapsed(),
-            Duration::from_secs(10),
-            "the one refused again waited no second time"
+        let calls = AtomicU32::new(0);
+        let started = tokio::time::Instant::now();
+        let answered = policy
+            .run_idempotent(|_| async {
+                match calls.fetch_add(1, Ordering::Relaxed) {
+                    0 => Err(Refused),
+                    _ => Ok(started.elapsed()),
+                }
+            })
+            .await;
+        assert!(
+            matches!(answered, Ok(sent) if sent == window),
+            "its retry sent at 10 s, the token its first attempt took back: {answered:?}"
         );
     }
 
-    /// The waits of one attempt end by its first refusal plus its wait, so a
-    /// timer firing late counts against the wait too: refused at 0 s with 21 s
-    /// to wait, woken at 12 s for the reset at 10 s, and refused again by the
-    /// window another call opened then, it does not wait for the reset at
-    /// 22 s, though the two waits it was told add up to 20 s.
+    /// An attempt holding its call, as the middleware's does, takes a token as
+    /// any other: finding none free it waits for the next, and one whose token
+    /// lies past the rate's wait is refused unsent, told the time to it.
     #[tokio::test(start_paused = true)]
-    async fn a_wait_whose_timer_fires_late_counts_whole_against_the_attempts_wait() {
+    async fn an_attempt_holding_its_call_takes_a_token_and_waits_for_one_as_any_other() {
+        let window = Duration::from_secs(10);
+        let policy = policy(rated(1, window, Some(window)));
+        let sent = AtomicU32::new(0);
+        let sending = |_| async {
+            sent.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, Refused>(())
+        };
+        let succeeded = |_: &Result<(), Refused>| Verdict::Succeeded;
+        let started = tokio::time::Instant::now();
+        for at in [Duration::ZERO, window] {
+            let run = policy.begin(None).await.expect("a run");
+            let (attempted, _outstanding) = run.attempt_once(sending, succeeded).await;
+            assert!(matches!(attempted, Ok((Ok(()), Verdict::Succeeded))));
+            assert_eq!(started.elapsed(), at, "the second waited for its token");
+        }
+        let first = policy.begin(None).await.expect("a run");
+        let second = policy.begin(None).await.expect("a run");
+        let ((waited, _), (refused, _)) = tokio::join!(
+            first.attempt_once(sending, succeeded),
+            second.attempt_once(sending, succeeded),
+        );
+        assert!(matches!(waited, Ok((Ok(()), Verdict::Succeeded))));
+        assert!(
+            matches!(refused, Err(Refusal::Limited(wait)) if wait == window * 2),
+            "due the token after the one waited for, 20 s away"
+        );
+        assert_eq!(started.elapsed(), window * 2);
+        assert_eq!(sent.load(Ordering::Relaxed), 3, "the one refused unsent");
+    }
+
+    /// Two attempts find no token free: the first reserves the next one, 10 s
+    /// away, and the second is due the one after, 20 s away. A wait that
+    /// reaches it sends it there, after the one wait it was told; a shorter
+    /// one refuses it at once, told those 20 s, rather than after a first
+    /// wait: no attempt's waits add up past the rate's wait.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_waits_once_for_the_token_it_is_due_behind_the_attempts_before_it() {
+        for (wait, behind) in [(25, "sent at 20s"), (15, "limited 20s at 0ns")] {
+            let policy = policy(rated(
+                1,
+                Duration::from_secs(10),
+                Some(Duration::from_secs(wait)),
+            ));
+            assert!(policy.run(|_| answering()).await.is_ok());
+            let started = tokio::time::Instant::now();
+            let answered = |answered: Ran| match answered {
+                Ok(()) => format!("sent at {:?}", started.elapsed()),
+                Err(ResilienceError::Limited { retry_after, .. }) => {
+                    format!("limited {retry_after:?} at {:?}", started.elapsed())
+                }
+                Err(other) => panic!("{other:?}"),
+            };
+            let (first, second) = tokio::join!(
+                async { answered(policy.run(|_| answering()).await) },
+                async { answered(policy.run(|_| answering()).await) },
+            );
+            assert_eq!(
+                (first.as_str(), second.as_str()),
+                ("sent at 10s", behind),
+                "with {wait} s to wait"
+            );
+        }
+    }
+
+    /// An attempt woken late for its token still has it: parked at 0 s for the
+    /// token at 10 s and polled at 12 s, it is sent at once, and a call that
+    /// arrived at 12 s, before it was polled, took nothing of it, due the
+    /// token after, at 20 s.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_woken_late_for_its_token_is_sent_ahead_of_a_call_arrived_since() {
         let policy = policy(rated(
             1,
             Duration::from_secs(10),
-            Some(Duration::from_secs(21)),
+            Some(Duration::from_secs(10)),
         ));
         assert!(policy.run(|_| answering()).await.is_ok());
+        let started = tokio::time::Instant::now();
         let mut waiting = Box::pin(policy.run(|_| answering()));
         park(&mut waiting).await;
         tokio::time::advance(Duration::from_secs(12)).await;
-        assert!(
-            policy.run(|_| answering()).await.is_ok(),
-            "a call opens the next window at 12 s"
+        let mut arrived = Box::pin(policy.run(|_| answering()));
+        park(&mut arrived).await;
+        assert!(waiting.await.is_ok());
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(12),
+            "sent as soon as it is polled"
         );
-        let refused = waiting.await;
-        assert!(
-            matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
-                if retry_after == Duration::from_secs(10)),
-            "the reset at 22 s, past the 21 s its wait allows: {refused:?}"
-        );
-    }
-
-    /// An attempt refused again once its wait ends waits again while what is
-    /// left of its wait reaches the next reset: refused at 0 s with 25 s to
-    /// wait, woken at 10 s, and refused by the window another call opened
-    /// then, it waits for the reset at 20 s and is sent there.
-    #[tokio::test(start_paused = true)]
-    async fn an_attempt_refused_again_after_its_wait_waits_again_for_a_reset_its_wait_reaches() {
-        let policy = policy(rated(
-            1,
-            Duration::from_secs(10),
-            Some(Duration::from_secs(25)),
-        ));
-        let calls = AtomicU32::new(0);
-        let sent = || async {
-            calls.fetch_add(1, Ordering::Relaxed);
-            Ok::<_, Refused>(())
-        };
-        assert!(policy.run(|_| sent()).await.is_ok());
-        let started = tokio::time::Instant::now();
-        let mut waiting = Box::pin(policy.run(|_| sent()));
-        park(&mut waiting).await;
-        tokio::time::advance(Duration::from_secs(10)).await;
-        assert!(
-            policy.run(|_| sent()).await.is_ok(),
-            "a call opens the next window at 10 s"
-        );
-        let answered = waiting.await;
-        assert!(matches!(answered, Ok(())), "{answered:?}");
+        assert!(arrived.await.is_ok());
         assert_eq!(
             started.elapsed(),
             Duration::from_secs(20),
-            "sent at the reset after its second wait"
+            "at the token after"
         );
-        assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 
-    /// An attempt whose clock was read before another call opened the window —
-    /// a call reading the clock later, on another worker, counted first — is
-    /// told the time from its own read to that window's reset, so the wait it
-    /// computes ends at the reset: with no wait it is refused for all of it, and
-    /// with a wait of the window's length, which that reset lies past, it is
-    /// refused at once rather than woken before the reset and refused again.
+    /// A call dropped while it waits for its token gives it to the attempt
+    /// behind it, woken where it waits: due the token at 20 s, that one is
+    /// sent at 10 s, the instant the dropped call's token is back.
     #[tokio::test(start_paused = true)]
-    async fn an_attempt_read_before_another_opened_the_window_is_told_that_windows_reset() {
+    async fn a_call_dropped_while_it_waits_gives_its_token_to_the_attempt_behind_it() {
+        let policy = Arc::new(policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(20)),
+        )));
+        assert!(policy.run(|_| answering()).await.is_ok());
+        let started = tokio::time::Instant::now();
+        let mut first = Box::pin(policy.run(|_| answering()));
+        park(&mut first).await;
+        let behind = tokio::spawn({
+            let policy = Arc::clone(&policy);
+            async move {
+                let answered = policy.run(|_| answering()).await;
+                (answered, started.elapsed())
+            }
+        });
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        drop(first);
+        let (answered, at) = behind.await.expect("the call's task");
+        assert!(answered.is_ok(), "{answered:?}");
+        assert_eq!(
+            at,
+            Duration::from_secs(10),
+            "woken by the token given back, 10 s sooner than it was told"
+        );
+    }
+
+    /// An attempt whose clock was read before another call took the last
+    /// token — a call reading the clock later, on another worker, took it
+    /// first — is told the time from its own read to the next token, so the
+    /// wait it computes ends there: with no wait it is refused for all of it,
+    /// and with a wait of the window's length, which that token lies past, it
+    /// is refused at once rather than woken before the token is back.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_read_before_another_took_the_last_token_is_told_from_its_own_read() {
         let window = Duration::from_secs(10);
         let later = Duration::from_millis(5);
         for wait in [None, Some(window)] {
             let policy = policy(rated(1, window, wait));
             let started = tokio::time::Instant::now();
             let rate = policy.rate.as_ref().expect("a rate limit");
-            assert_eq!(
-                rate.count(started + later),
-                Ok(()),
-                "the other call opens it"
+            assert!(
+                matches!(rate.arrive(started + later, None), Arrived::Taken),
+                "the other call takes the token"
             );
             let Err(refused) = policy.run(|_| answering()).await else {
-                panic!("with {wait:?} to wait, the window is spent");
+                panic!("with {wait:?} to wait, no token is free");
             };
             assert!(
                 matches!(refused, ResilienceError::Limited { retry_after, .. }
                     if retry_after == window + later),
-                "with {wait:?} to wait, told the reset {later:?} past the window: {refused:?}"
+                "with {wait:?} to wait, told the token {later:?} past the window: {refused:?}"
             );
             assert_eq!(
                 started.elapsed(),
@@ -3257,15 +3684,17 @@ mod tests {
             );
             let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
                 .expect("the problem rides the chain");
-            assert_eq!(problem.retry_after(), Some(11), "its reset rounded up");
+            assert_eq!(problem.retry_after(), Some(11), "rounded up");
         }
     }
 
+    /// The call beside it reads the rate first, and would wait for the token
+    /// after the one reserved, 19 s away: it is the bulkhead that refuses it.
     #[tokio::test(start_paused = true)]
-    async fn the_bulkhead_slot_stays_held_while_an_attempt_waits_for_the_reset() {
+    async fn the_bulkhead_slot_stays_held_while_an_attempt_waits_for_its_token() {
         let policy = policy(ResilienceConfig {
             concurrency: Some(1),
-            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
+            ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(20)))
         });
         assert!(policy.run(|_| answering()).await.is_ok());
         let (waited, refused) = tokio::join!(policy.run(|_| answering()), async {
@@ -3275,18 +3704,18 @@ mod tests {
         assert!(matches!(waited, Ok(())), "{waited:?}");
         assert!(
             matches!(refused, Err(ResilienceError::Full { .. })),
-            "the call waiting for the reset holds the one slot: {refused:?}"
+            "the call waiting for its token holds the one slot: {refused:?}"
         );
     }
 
     /// A call finding no free slot reads the rate before it waits for one, as
-    /// `begin` reads the breaker: a window spent whose reset lies past the
-    /// rate's wait, or at the unit's deadline, refuses it at once, told that
-    /// reset, rather than once its wait for a slot ends. The read counts
-    /// nothing: a call waiting for its slot beside a window with room is sent
-    /// once the slot frees, as the window's second attempt.
+    /// `begin` reads the breaker: a bucket empty whose next token lies past
+    /// the rate's wait, or past the unit's deadline, refuses it at once, told
+    /// the time to that token, rather than once its wait for a slot ends. The
+    /// read takes nothing: a call waiting for its slot beside a bucket with a
+    /// token free is sent once the slot frees, taking that token.
     #[tokio::test(start_paused = true)]
-    async fn a_call_finding_no_free_slot_is_refused_by_a_spent_rate_before_it_waits() {
+    async fn a_call_finding_no_free_slot_is_refused_by_an_empty_bucket_before_it_waits() {
         let lines = nest_rs_testing::LogCapture::install();
         let tracking =
             crate::resilient::resilient_method(|| "ShipmentsService", "track", None, None);
@@ -3294,8 +3723,8 @@ mod tests {
             (Duration::from_secs(5), None, "the rate's 5 s wait"),
             (
                 Duration::from_secs(60),
-                Some(Duration::from_secs(30)),
-                "the unit's deadline 30 s away",
+                Some(Duration::from_secs(20)),
+                "the unit's deadline 20 s away",
             ),
         ] {
             let policy = policy(ResilienceConfig {
@@ -3317,24 +3746,26 @@ mod tests {
             );
             assert!(
                 holding.is_ok(),
-                "the window's first attempt, holding the slot 3 s: {holding:?}"
+                "the bucket's first token, its call holding the slot 3 s: {holding:?}"
             );
             assert!(
                 matches!(waited, (at, Ok(())) if at == Duration::from_secs(3)),
-                "the window's second attempt, sent once the slot freed: {waited:?}"
+                "the bucket's second token, taken once the slot freed: {waited:?}"
             );
 
             let held = policy.begin(None).await.expect("the slot, free again");
             let refused_at = tokio::time::Instant::now();
             let refused = nest_rs_core::__private::with_deadline(
                 left.map(|left| refused_at + left),
-                policy.run_once::<Ran, _, _>(Some(tracking), |_| answering()),
+                policy.run_once::<Ran, _, _, _>(Some(tracking), judging_by_default(), |_| {
+                    answering()
+                }),
             )
             .await;
             assert!(
                 matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
-                    if retry_after == Duration::from_secs(57)),
-                "the reset 57 s away, past {past}: {refused:?}"
+                    if retry_after == Duration::from_secs(27)),
+                "the next token 27 s away, past {past}: {refused:?}"
             );
             assert_eq!(
                 refused_at.elapsed(),
@@ -3351,7 +3782,7 @@ mod tests {
             assert_eq!(line.field("instance").as_deref(), Some("upstream"));
             assert_eq!(line.field("host").as_deref(), Some("ShipmentsService"));
             assert_eq!(line.field("method").as_deref(), Some("track"));
-            assert_eq!(line.field("retry_after_ms").as_deref(), Some("57000"));
+            assert_eq!(line.field("retry_after_ms").as_deref(), Some("27000"));
         }
         assert!(
             lines
@@ -3363,7 +3794,7 @@ mod tests {
 
     /// The rate a call finding no free slot reads comes after the unit's
     /// deadline and the breaker, in an attempt's order: beside the slot held
-    /// and the window spent, a unit out of time is told so, and a call meeting
+    /// and the bucket empty, a unit out of time is told so, and a call meeting
     /// an open breaker is told what is left of its opening, neither filing the
     /// rate's line; once neither refuses, the rate does, at once.
     #[tokio::test(start_paused = true)]
@@ -3379,7 +3810,7 @@ mod tests {
         });
         assert!(
             policy.run(|_| answering()).await.is_ok(),
-            "the window's one attempt"
+            "the bucket's one token"
         );
         let held = policy.begin(None).await.expect("the one slot");
         let started = tokio::time::Instant::now();
@@ -3423,7 +3854,7 @@ mod tests {
     }
 
     /// A call finding no free slot while another holds the probe's turn — the
-    /// probe's call out, or waiting for the rate's reset with its slot held —
+    /// probe's call out, or waiting for the rate's token with its slot held —
     /// is refused at once, told what is left of that probe's bound, rather than
     /// after a wait for the slot the probe holds.
     #[tokio::test(start_paused = true)]
@@ -3433,7 +3864,7 @@ mod tests {
             (
                 Some(1),
                 13,
-                "waiting for the rate's reset 8 s away, then for its 5 s timeout",
+                "waiting for its token 8 s away, then for its 5 s timeout",
             ),
         ] {
             let policy = policy(ResilienceConfig {
@@ -3467,9 +3898,9 @@ mod tests {
     }
 
     /// The attempt's timeout starts when its call is sent, after the wait for
-    /// the reset; the unit's deadline bounds the wait and the attempt together.
+    /// its token; the unit's deadline bounds the wait and the attempt together.
     #[tokio::test(start_paused = true)]
-    async fn the_wait_for_the_reset_is_none_of_the_attempts_and_the_units_deadline_bounds_both() {
+    async fn the_wait_for_a_token_is_none_of_the_attempts_and_the_units_deadline_bounds_both() {
         let policy = policy(ResilienceConfig {
             timeout: Duration::from_secs(1),
             ..rated(1, Duration::from_secs(5), Some(Duration::from_secs(10)))
@@ -3501,13 +3932,13 @@ mod tests {
         assert_eq!(started.elapsed(), Duration::from_millis(4_700));
     }
 
-    /// A wait for the reset is taken only when the reset comes before the
-    /// unit's deadline, but its timer may fire past it: the attempt is then
-    /// refused as a unit out of time, unsent, and takes nothing of the window.
+    /// A token is waited for only when it comes before the unit's deadline,
+    /// but its timer may fire past it: the attempt is then refused as a unit
+    /// out of time, unsent, and gives its token back.
     /// Its call never answers, so what was sent alone tells that refusal from
     /// a call sent with no time left.
     #[tokio::test(start_paused = true)]
-    async fn an_attempt_whose_wait_for_the_reset_ends_past_the_units_deadline_is_refused_unsent() {
+    async fn an_attempt_whose_wait_for_its_token_ends_past_the_units_deadline_is_refused_unsent() {
         let policy = policy(rated(
             1,
             Duration::from_secs(10),
@@ -3527,7 +3958,7 @@ mod tests {
         let late = waiting.await;
         assert!(
             matches!(late, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
-            "its wait for the reset at 10 s ended at 12 s, past its deadline at 11 s: {late:?}"
+            "its wait for the token at 10 s ended at 12 s, past its deadline at 11 s: {late:?}"
         );
         assert_eq!(
             sent.load(Ordering::Relaxed),
@@ -3539,7 +3970,7 @@ mod tests {
         assert_eq!(
             resumed.elapsed(),
             Duration::ZERO,
-            "the next call opens the window at once"
+            "the next call takes that token at once"
         );
     }
 
@@ -3599,7 +4030,7 @@ mod tests {
         assert_eq!(started.elapsed(), Duration::ZERO);
     }
 
-    /// A call dropped while it waits for the reset leaves nothing behind: the
+    /// A call dropped while it waits for its token leaves nothing behind: the
     /// next call takes its slot, and probes in its turn — a probe, since its
     /// failure opens the breaker again where a closed one would hold two.
     #[tokio::test(start_paused = true)]
@@ -3609,7 +4040,7 @@ mod tests {
             breaker_window: Some(2),
             breaker_failures: 2,
             breaker_open: Duration::from_secs(30),
-            ..rated(2, Duration::from_secs(60), Some(Duration::from_secs(60)))
+            ..rated(2, Duration::from_secs(120), Some(Duration::from_secs(60)))
         });
         let calls = AtomicU32::new(0);
         let failing = || async {
@@ -3635,7 +4066,7 @@ mod tests {
         assert_eq!(
             started.elapsed(),
             Duration::from_secs(30),
-            "it waited for the reset"
+            "it waited for its token"
         );
         assert_eq!(
             calls.load(Ordering::Relaxed),
@@ -3765,12 +4196,12 @@ mod tests {
         );
     }
 
-    /// A run dropped while its probe waits for the rate's reset hands the
+    /// A run dropped while its probe waits for the rate's token hands the
     /// probe's turn on before its slot of the bulkhead too, run once or again:
-    /// the call that slot wakes takes the turn, waits for that reset in the
+    /// the call that slot wakes takes the turn, waits for that token in the
     /// dropped probe's place, and closes the breaker once it is sent.
     #[tokio::test(start_paused = true)]
-    async fn a_run_dropped_while_its_probe_waits_for_the_reset_hands_the_turn_on_before_its_slot() {
+    async fn a_run_dropped_while_its_probe_waits_for_its_token_hands_the_turn_on_before_its_slot() {
         for again in [false, true] {
             let policy: &'static ResiliencePolicy<Upstream> =
                 Box::leak(Box::new(policy(ResilienceConfig {
@@ -3796,13 +4227,13 @@ mod tests {
             waiting.poll_now();
             assert!(
                 matches!(failing.await, Err(ResilienceError::Failed(Refused))),
-                "the rate's one attempt in its window fails, opening the breaker for a second"
+                "the call that took the one token fails, opening the breaker for a second"
             );
             tokio::time::advance(Duration::from_secs(1)).await;
             park(&mut probing).await;
             assert!(
                 waiting.answered().is_none(),
-                "again: {again}; it waits for the slot the probe holds while it waits for the reset"
+                "again: {again}; it waits for the slot the probe holds while it waits for its token"
             );
 
             drop(probing);
@@ -3810,13 +4241,13 @@ mod tests {
             assert!(
                 answer.is_none(),
                 "again: {again}; woken by the slot the dropped run freed, it took the turn its \
-                 probe handed on and waits for the reset: {answer:?}"
+                 probe handed on and waits for the token it gave back: {answer:?}"
             );
             tokio::time::sleep(Duration::from_secs(60)).await;
             let answer = waiting.answered();
             assert!(
                 matches!(answer, Some(Ok("sent"))),
-                "again: {again}; sent as the probe at the reset: {answer:?}"
+                "again: {again}; sent as the probe once that token is back: {answer:?}"
             );
             assert_eq!(
                 policy.breaker_state(),
@@ -3928,7 +4359,7 @@ mod tests {
         let (failed, _) = run
             .attempt_once(|_| async { Err::<(), _>(Refused) }, judged)
             .await;
-        assert!(matches!(failed, Ok((Err(Refused), Verdict::Failed { .. }))));
+        assert!(matches!(failed, Ok((Err(Refused), Verdict::Final { .. }))));
         tokio::time::advance(Duration::from_secs(1)).await;
         let (_, outstanding) = run
             .attempt_once(|_| async { Ok::<_, Refused>(()) }, judged)
@@ -4408,11 +4839,11 @@ mod tests {
         );
     }
 
-    /// A call refused while the probe waits for the rate's reset is told when
+    /// A call refused while the probe waits for the rate's token is told when
     /// the probe has answered at the latest: what is left of that wait, then
     /// its call's timeout.
     #[tokio::test(start_paused = true)]
-    async fn a_call_refused_while_the_probe_waits_for_the_reset_is_told_the_reset_then_its_timeout()
+    async fn a_call_refused_while_the_probe_waits_for_its_token_is_told_that_wait_then_its_timeout()
     {
         let policy = policy(ResilienceConfig {
             timeout: Duration::from_secs(2),
@@ -4432,7 +4863,7 @@ mod tests {
         assert!(
             matches!(refused, Err(ResilienceError::Open { retry_after, .. })
                 if retry_after == Duration::from_secs(31)),
-            "at 31 s, the probe waiting for the reset at 60 s, then 2 s: {refused:?}"
+            "at 31 s, the probe waiting for its token at 60 s, then 2 s: {refused:?}"
         );
     }
 
@@ -4457,7 +4888,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(1)).await;
     }
 
-    /// Once the probe's call is sent no wait for the reset is left in its
+    /// Once the probe's call is sent no wait for a token is left in its
     /// bound: a call refused while it is out is told what is left of its
     /// timeout, whatever the rate's wait.
     #[tokio::test(start_paused = true)]
@@ -4495,7 +4926,7 @@ mod tests {
         let tracking =
             crate::resilient::resilient_method(|| "ShipmentsService", "track", Some(30_000), None);
         let (probed, refused) = tokio::join!(
-            policy.run_once::<Ran, _, _>(Some(tracking), |_| async {
+            policy.run_once::<Ran, _, _, _>(Some(tracking), judging_by_default(), |_| async {
                 tokio::time::sleep(Duration::from_secs(20)).await;
                 Ok::<_, Refused>(())
             }),
@@ -4543,11 +4974,11 @@ mod tests {
         );
     }
 
-    /// A probe holding its turn while it waits for the rate's reset is waited
-    /// for until that reset, then for its own bound: the timeout its method
+    /// A probe holding its turn while it waits for the rate's token is waited
+    /// for until that token, then for its own bound: the timeout its method
     /// pinned, or what its unit's deadline leaves of the policy's.
     #[tokio::test(start_paused = true)]
-    async fn a_probe_waiting_for_the_reset_is_waited_for_until_it_then_for_its_own_bound() {
+    async fn a_probe_waiting_for_its_token_is_waited_for_until_it_then_for_its_own_bound() {
         let tracking =
             crate::resilient::resilient_method(|| "ShipmentsService", "track", Some(30_000), None);
         for (method, left, told, bound) in [
@@ -4575,18 +5006,18 @@ mod tests {
             let (probed, refused) = tokio::join!(
                 nest_rs_core::__private::with_deadline(
                     deadline,
-                    policy.run_once::<Ran, _, _>(method, |_| answering())
+                    policy.run_once::<Ran, _, _, _>(method, judging_by_default(), |_| answering())
                 ),
                 async {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     policy.run(|_| answering()).await
                 },
             );
-            assert!(matches!(probed, Ok(())), "sent at the reset: {probed:?}");
+            assert!(matches!(probed, Ok(())), "sent at its token: {probed:?}");
             assert!(
                 matches!(refused, Err(ResilienceError::Open { retry_after, .. })
                     if retry_after == Duration::from_secs(told)),
-                "at 2 s, the probe sent at the reset at 10 s, under {bound}: {refused:?}"
+                "at 2 s, the probe sent at its token's instant, 10 s, under {bound}: {refused:?}"
             );
         }
     }
@@ -4632,7 +5063,7 @@ mod tests {
     }
 
     /// An attempt the closed breaker let through asks it again once its wait
-    /// for the reset ends: a breaker another call opened meanwhile refuses it
+    /// for its token ends: a breaker another call opened meanwhile refuses it
     /// unsent, as it refuses a call made at that instant.
     #[tokio::test(start_paused = true)]
     async fn an_attempt_asks_the_breaker_again_after_its_wait_and_one_opened_meanwhile_refuses_it()
@@ -4673,20 +5104,21 @@ mod tests {
         assert_eq!(
             started.elapsed(),
             Duration::from_secs(10),
-            "refused at the reset it waited for"
+            "refused at the instant of the token it waited for"
         );
         assert_eq!(
             sent.load(Ordering::Relaxed),
             1,
-            "the attempt refused at the reset is never sent"
+            "the attempt refused there is never sent"
         );
     }
 
-    /// An attempt waiting for the reset while another call took the probe's
+    /// An attempt waiting for its token while another call took the probe's
     /// turn is refused when its wait ends: one call probes the dependency at a
-    /// time, and every other is told when it has answered at the latest.
+    /// time, and every other is told when it has answered at the latest. The
+    /// token it gives back goes to the probe, in line behind it, sent there.
     #[tokio::test(start_paused = true)]
-    async fn an_attempt_waiting_for_the_reset_is_never_sent_beside_the_probe() {
+    async fn an_attempt_waiting_for_its_token_is_never_sent_beside_the_probe() {
         let policy = policy(ResilienceConfig {
             breaker_window: Some(1),
             breaker_failures: 1,
@@ -4702,6 +5134,7 @@ mod tests {
                 answer
             }
         };
+        let started = tokio::time::Instant::now();
         let (_, _, beside, probed) = tokio::join!(
             policy.run(call("opening", Err(Refused), Duration::from_secs(1))),
             policy.run(call("filling", Ok(()), Duration::ZERO)),
@@ -4719,8 +5152,15 @@ mod tests {
         assert!(matches!(probed, Ok(())), "{probed:?}");
         assert!(
             matches!(beside, Err(ResilienceError::Open { retry_after, .. })
-                if retry_after == Duration::from_secs(5)),
-            "the probe sent at the reset, within its 5 s timeout: {beside:?}"
+                if retry_after == Duration::from_secs(10)),
+            "at 5 s, the probe due the token after its own, at 10 s, then its 5 s timeout: \
+             {beside:?}"
+        );
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(6),
+            "the probe sent at 5 s, on the token the refused attempt gave back, and answered \
+             a second on"
         );
         assert_eq!(
             *sent.lock().expect("the calls sent"),
@@ -4729,7 +5169,7 @@ mod tests {
     }
 
     /// An attempt whose breaker opened, and whose open time passed, while it
-    /// waited for the reset is the probe when its wait ends, so its answer
+    /// waited for its token is the probe when its wait ends, so its answer
     /// closes the breaker.
     #[tokio::test(start_paused = true)]
     async fn an_attempt_whose_breakers_open_time_passed_while_it_waited_is_sent_as_the_probe() {
@@ -4768,7 +5208,7 @@ mod tests {
     }
 
     /// A probe given up before its call is sent — refused by the rate, or its
-    /// caller dropped while it waits for the reset — files no transition: the
+    /// caller dropped while it waits for its token — files no transition: the
     /// breaker reads half-open from the probe's call sent.
     #[tokio::test(start_paused = true)]
     async fn a_probe_given_up_before_its_call_is_sent_files_no_transition() {
@@ -4796,7 +5236,7 @@ mod tests {
             let refused = policy.run(|_| answering()).await;
             assert!(
                 matches!(refused, Err(ResilienceError::Limited { .. })),
-                "a reset 59 s away, past the 30 s wait: {refused:?}"
+                "a token 59 s away, past the 30 s wait: {refused:?}"
             );
         }
         assert_eq!(states(), ["open"], "ten probes the rate refused, none sent");
@@ -4816,15 +5256,15 @@ mod tests {
         assert_eq!(
             states(),
             ["open", "half_open", "closed"],
-            "the probe sent at the reset"
+            "the probe sent once a token is back"
         );
     }
 
-    /// A probe whose wait for the reset ends past its unit's deadline is given
-    /// up unsent too, as a unit out of time: it files no transition, takes
-    /// nothing of the window, and the next call probes in its turn.
+    /// A probe whose wait for its token ends past its unit's deadline is given
+    /// up unsent too, as a unit out of time: it files no transition, gives its
+    /// token back, and the next call probes in its turn.
     #[tokio::test(start_paused = true)]
-    async fn a_probe_whose_wait_for_the_reset_ends_past_the_units_deadline_hands_its_turn_on() {
+    async fn a_probe_whose_wait_for_its_token_ends_past_the_units_deadline_hands_its_turn_on() {
         let lines = nest_rs_testing::LogCapture::install();
         let policy = policy(ResilienceConfig {
             breaker_window: Some(1),
@@ -4851,7 +5291,7 @@ mod tests {
         let late = probing.await;
         assert!(
             matches!(late, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
-            "its wait for the reset at 10 s ended at 12 s, past its deadline at 11 s: {late:?}"
+            "its wait for the token at 10 s ended at 12 s, past its deadline at 11 s: {late:?}"
         );
         assert_eq!(states(), ["open"], "the probe given up, never sent");
 
@@ -4860,7 +5300,7 @@ mod tests {
         assert_eq!(
             resumed.elapsed(),
             Duration::ZERO,
-            "the next call opens the window at once"
+            "the next call takes that token at once"
         );
         assert_eq!(
             states(),
@@ -4870,7 +5310,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_refusal_by_the_rate_and_a_wait_for_its_reset_are_debug_lines_naming_the_instance() {
+    async fn a_refusal_by_the_rate_and_a_wait_for_a_token_are_debug_lines_naming_the_instance() {
         let lines = nest_rs_testing::LogCapture::install();
         let policy = policy(rated(
             1,
@@ -4888,10 +5328,7 @@ mod tests {
         assert!(policy.run(|_| answering()).await.is_ok());
 
         let refusal = lines.expect_one(TARGET, "rate limit reached; the call is refused");
-        let wait = lines.expect_one(
-            TARGET,
-            "rate limit reached; waiting for the window to reset",
-        );
+        let wait = lines.expect_one(TARGET, "rate limit reached; waiting for a token");
         for (line, field, said) in [
             (&refusal, "retry_after_ms", "6000"),
             (&wait, "wait_ms", "4000"),
@@ -4907,18 +5344,18 @@ mod tests {
         }
     }
 
-    /// A reset under a millisecond away is filed in whole milliseconds rounded
+    /// A token under a millisecond away is filed in whole milliseconds rounded
     /// up, `1`, never the `0` of no wait: told an attempt the rate refuses, and
-    /// waited for by one whose wait reaches it, which is sent once the reset
-    /// has passed, never before.
+    /// waited for by one whose wait reaches it, which is sent once the token
+    /// is back, never before.
     #[tokio::test(start_paused = true)]
-    async fn a_reset_under_a_millisecond_away_is_filed_as_one_never_as_zero() {
+    async fn a_token_under_a_millisecond_away_is_filed_as_one_never_as_zero() {
         let lines = nest_rs_testing::LogCapture::install();
         let window = Duration::from_secs(1);
         let refusing = policy(rated(1, window, None));
         let waiting = policy(rated(1, window, Some(Duration::from_millis(1))));
         for policy in [&refusing, &waiting] {
-            assert!(policy.run(|_| answering()).await.is_ok(), "opens a window");
+            assert!(policy.run(|_| answering()).await.is_ok(), "the one token");
         }
         let near = Duration::from_micros(500);
         tokio::time::advance(window - near).await;
@@ -4927,7 +5364,7 @@ mod tests {
             matches!(refused, Err(ResilienceError::Limited { retry_after, .. }) if retry_after == near),
             "{refused:?}"
         );
-        let reset = tokio::time::Instant::now() + near;
+        let back = tokio::time::Instant::now() + near;
         let sent = std::cell::Cell::new(None);
         let answered = waiting
             .run(|_| async {
@@ -4937,16 +5374,13 @@ mod tests {
             .await;
         assert!(answered.is_ok(), "{answered:?}");
         assert!(
-            sent.get().is_some_and(|sent| sent >= reset),
-            "sent once the reset has passed: {:?}",
+            sent.get().is_some_and(|sent| sent >= back),
+            "sent once the token is back: {:?}",
             sent.get()
         );
 
         let refusal = lines.expect_one(TARGET, "rate limit reached; the call is refused");
-        let wait = lines.expect_one(
-            TARGET,
-            "rate limit reached; waiting for the window to reset",
-        );
+        let wait = lines.expect_one(TARGET, "rate limit reached; waiting for a token");
         for (line, field) in [(&refusal, "retry_after_ms"), (&wait, "wait_ms")] {
             assert_eq!(line.field(field).as_deref(), Some("1"), "{line:?}");
         }
@@ -5118,7 +5552,7 @@ mod tests {
     impl fmt::Display for Watching {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             self.said.fetch_add(1, Ordering::Relaxed);
-            if self.policy.breaker.as_ref().is_some_and(Breaker::locked) {
+            if self.policy.breaker.as_deref().is_some_and(Breaker::locked) {
                 self.under_the_lock.fetch_add(1, Ordering::Relaxed);
             }
             f.write_str("the upstream refused, watching")
@@ -5274,7 +5708,7 @@ mod tests {
             .await;
         assert!(
             matches!(limited, Err(ResilienceError::Limited { .. })),
-            "its retry, refused unsent by the window its first attempt filled: {limited:?}"
+            "its retry, refused unsent by the bucket its first attempt emptied: {limited:?}"
         );
 
         let gated = policy(ResilienceConfig {
@@ -5392,9 +5826,10 @@ mod tests {
     /// Under a rate limit, a breaker opening on more failures than can answer
     /// within its age of one another never opens, and is refused naming the
     /// settings that decide it, quoting none of their values. Three attempts
-    /// an hour let five answer within a minute at most — the two after a
-    /// window's first, sent as it ends, and three as the next one opens — and
-    /// a breaker opening on five is built, and opens on them.
+    /// an hour let three answer within a minute at most — a full bucket's, the
+    /// next token twenty minutes off, past that minute and the ten an attempt
+    /// takes at most — and a breaker opening on three is built, and opens on
+    /// them.
     #[tokio::test(start_paused = true)]
     async fn more_failures_than_the_rate_lets_answer_within_the_age_is_refused() {
         let config = |failures| ResilienceConfig {
@@ -5406,7 +5841,7 @@ mod tests {
             rate_window: Duration::from_secs(3600),
             ..ResilienceConfig::default()
         };
-        let refused = ResiliencePolicy::<Upstream>::new(&config(6))
+        let refused = ResiliencePolicy::<Upstream>::new(&config(4))
             .expect_err("a breaker that never opens")
             .to_string();
         let mut unnamed = refused.clone();
@@ -5425,40 +5860,29 @@ mod tests {
             "no value is quoted: {refused}"
         );
 
-        let policy = policy(config(5));
-        let failed = || async {
+        let policy = policy(config(3));
+        for _ in 0..3 {
             let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
             assert!(
                 matches!(failed, Err(ResilienceError::Failed(Refused))),
                 "{failed:?}"
             );
-        };
-        assert!(policy.run(|_| answering()).await.is_ok(), "the first");
-        tokio::time::advance(Duration::from_secs(3599)).await;
-        for _ in 0..2 {
-            failed().await;
-        }
-        tokio::time::advance(Duration::from_secs(1)).await;
-        for _ in 0..3 {
-            failed().await;
         }
         assert!(
             matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
-            "five failures within a second of one another"
+            "three failures at once, from a bucket left to fill"
         );
     }
 
-    /// Where the age and the longest attempt make a whole number of the rate's
-    /// windows, a window open as that span starts leaves no room for one
-    /// opening at its end, so the most failures that answer within the age
-    /// are a full window's at each opening. Three attempts every ten minutes,
-    /// with a ten minutes' age, let nine: three cut at the ten minutes an
-    /// attempt takes at most, three sent as they are cut, as the next window
-    /// opens, and three as the one after opens, the age later. A breaker
-    /// opening on nine is built and opens on them; one opening on ten is
-    /// refused.
+    /// The most failures that answer within the age of one another are a full
+    /// bucket's and every token back while the age and the longest attempt
+    /// last. Three attempts every ten minutes, with a ten minutes' age, let
+    /// nine: three cut at the ten minutes an attempt takes at most, three sent
+    /// as they are cut, the bucket full again, and three once it has filled
+    /// anew, the age later. A breaker opening on nine is built and opens on
+    /// them; one opening on ten is refused.
     #[tokio::test(start_paused = true)]
-    async fn more_failures_than_the_windows_opening_in_a_span_of_whole_windows_send_is_refused() {
+    async fn more_failures_than_a_full_bucket_and_the_tokens_back_in_the_span_send_is_refused() {
         let window = Duration::from_secs(600);
         let config = |failures| ResilienceConfig {
             timeout: LONGEST_ATTEMPT,
@@ -5812,11 +6236,12 @@ mod tests {
         );
     }
 
-    /// A window under a second, set in code, sends its limit within it and
-    /// refuses the next attempt unsent, told the time to its reset in a
-    /// `Retry-After` of a second, rounded up; past the reset, it sends again.
+    /// A window under a second, set in code, sends its limit at once and
+    /// refuses the next attempt unsent, told the time to the next token in a
+    /// `Retry-After` of a second, rounded up; once that token is back, it
+    /// sends again.
     #[tokio::test(start_paused = true)]
-    async fn a_rate_window_under_a_second_resets_that_often() {
+    async fn a_rate_window_under_a_second_refills_its_bucket_that_fast() {
         let window = Duration::from_millis(500);
         let policy = pinned(rated(2, window, None));
         let calls = AtomicU32::new(0);
@@ -5836,8 +6261,8 @@ mod tests {
         };
         assert_eq!(
             *retry_after,
-            window - into,
-            "the window the first call opened resets at 500 ms"
+            window / 2 - into,
+            "the token the first call took is back half a window after it, at 250 ms"
         );
         let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
             .expect("the problem rides the chain");
@@ -5847,11 +6272,8 @@ mod tests {
             2,
             "a refused call is never sent"
         );
-        tokio::time::advance(window - into).await;
-        assert!(
-            policy.run(|_| sent()).await.is_ok(),
-            "the next window opens"
-        );
+        tokio::time::advance(window / 2 - into).await;
+        assert!(policy.run(|_| sent()).await.is_ok(), "the token is back");
         assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 
@@ -5882,13 +6304,13 @@ mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
-    /// A probe holding its turn while it waits for the rate's reset reads
+    /// A probe holding its turn while it waits for the rate's token reads
     /// half-open, carrying no time, while a call beside it is told when the
     /// probe has answered at the latest. Opened by hand meanwhile, the breaker
     /// refuses the probe when its wait ends, unsent, as it refuses any call
-    /// meeting it open, before the rate counts it.
+    /// meeting it open, before the rate is asked.
     #[tokio::test(start_paused = true)]
-    async fn a_probe_waiting_for_the_reset_when_a_manual_opening_comes_is_refused_unsent() {
+    async fn a_probe_waiting_for_its_token_when_a_manual_opening_comes_is_refused_unsent() {
         let policy = policy(ResilienceConfig {
             timeout: Duration::from_secs(5),
             breaker_window: Some(1),
@@ -5910,7 +6332,7 @@ mod tests {
         assert!(
             matches!(beside, Err(ResilienceError::Open { retry_after, .. })
                 if retry_after == Duration::from_secs(14)),
-            "at 1 s, the probe sent at the reset at 10 s, within its 5 s timeout: {beside:?}"
+            "at 1 s, the probe sent at its token's instant, 10 s, within its 5 s timeout: {beside:?}"
         );
 
         policy
@@ -5929,16 +6351,16 @@ mod tests {
         assert_eq!(
             resumed.elapsed(),
             Duration::ZERO,
-            "the refused probe took nothing of the window after its wait"
+            "the refused probe gave its token back after its wait"
         );
     }
 
-    /// A probe waiting for the rate's reset loses its turn to a manual
+    /// A probe waiting for the rate's token loses its turn to a manual
     /// opening, which may pass before the wait ends: the call then meets the
     /// breaker as a call arriving then does, takes the probe's turn of the
     /// opening by hand, is sent, and its answer closes the breaker.
     #[tokio::test(start_paused = true)]
-    async fn a_probe_waiting_for_the_reset_past_a_shorter_manual_opening_probes_after_it() {
+    async fn a_probe_waiting_for_its_token_past_a_shorter_manual_opening_probes_after_it() {
         let lines = nest_rs_testing::LogCapture::install();
         let policy = policy(ResilienceConfig {
             timeout: Duration::from_secs(5),
@@ -5964,7 +6386,7 @@ mod tests {
             matches!(probed, Ok(())),
             "at 10 s, past the opening by hand at 1 s for 1 s: {probed:?}"
         );
-        assert_eq!(sent.load(Ordering::Relaxed), 1, "sent at the reset");
+        assert_eq!(sent.load(Ordering::Relaxed), 1, "sent at its token");
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
         let states: Vec<String> = lines
             .find(TARGET, "circuit breaker changed state")
@@ -5974,7 +6396,7 @@ mod tests {
         assert_eq!(
             states,
             ["open", "open", "half_open", "closed"],
-            "opened by a failure, then by hand, then probed at the reset"
+            "opened by a failure, then by hand, then probed at its token's instant"
         );
     }
 

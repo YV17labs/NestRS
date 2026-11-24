@@ -9,20 +9,41 @@
 //! (`<PREFIX>_RESILIENCE__<INSTANCE>__*`, [`ResilienceConfig`]), and decorate
 //! the method making the call: [`#[resilient(field)]`](macro@resilient) runs
 //! its body once, `#[resilient(field, idempotent)]` again after a failure, up
-//! to its retries. A call that needs its attempt's [`CancellationToken`], or is
-//! not a whole method, runs through [`ResiliencePolicy::run`] or
-//! [`ResiliencePolicy::run_idempotent`]. Every attempt is bounded by the
-//! policy's timeout and the unit's deadline, whichever ends first, and counted
-//! in its circuit breaker; the bulkhead bounds how many run at once and how
-//! many wait for a slot, and the rate limit how many attempts are sent per
-//! window, a retry included. A refusal — a timeout, an
-//! open breaker, a full bulkhead, a reached rate limit — is a
+//! to its retries. A call reads its attempt's [`CancellationToken`] two ways: a
+//! decorated method names it in its body with the `cancel` key, and a call
+//! that is not a whole method runs through [`ResiliencePolicy::run`] or
+//! [`ResiliencePolicy::run_idempotent`], its closure handed the token. Every
+//! attempt is bounded by the policy's timeout and the unit's deadline,
+//! whichever ends first, and counted in its circuit breaker; the bulkhead
+//! bounds how many run at once and how many wait for a slot, and the rate
+//! limit how many attempts are sent per window, a retry included. Every `Err`
+//! a call answers is its dependency failing — counted in the breaker, and sent
+//! again when the call is idempotent — unless its method says otherwise, key
+//! by key: `retry_if` says which `Err` is sent again and `retry_ok_if` which
+//! `Ok`, and `record_if` which `Err` is a failure in the breaker, one it
+//! refuses counting there as neither a failure nor a success; and `fallback`
+//! names the method answering in place of the error a run ends on, the call's
+//! own or the policy's refusal, `fallback_if` saying which. A refusal — a
+//! timeout, an open breaker, a full bulkhead, a reached rate limit — is a
 //! [`ResilienceError`] every edge answers `503`, an open breaker's and a
 //! reached rate limit's with the `Retry-After` each knows. A breaker's state is
 //! read through [`ResiliencePolicy::breaker_state`], and switched by hand
 //! through [`ResiliencePolicy::open_breaker`] and
 //! [`ResiliencePolicy::close_breaker`]. Under the `reqwest` feature,
 //! [`ResilienceMiddleware`] runs the app's own reqwest client under a policy.
+//!
+//! **A policy tells what it does three ways, each the same fact.** A line on
+//! [`TARGET`]: a retry, a wait and a refusal at `debug`, a breaker's
+//! transition at `warn`. An event in code: [`ResiliencePolicy::events`] opens
+//! a subscription to each retry, timeout, refusal, transition and fallback as
+//! a [`ResilienceEvent`]. And what it holds now, read through
+//! [`breaker_state`](ResiliencePolicy::breaker_state),
+//! [`breaker_stats`](ResiliencePolicy::breaker_stats),
+//! [`concurrency_running`](ResiliencePolicy::concurrency_running),
+//! [`concurrency_waiting`](ResiliencePolicy::concurrency_waiting) and
+//! [`rate_available`](ResiliencePolicy::rate_available). Under the
+//! `opentelemetry` feature the facts are counted and the reads observed on
+//! the global meter, by the policy's instance.
 //!
 //! **A policy's state lives in its process.** Each replica keeps its own
 //! breaker, bulkhead and rate, so a dependency failing for one replica is
@@ -45,6 +66,7 @@ mod call;
 mod config;
 mod counters;
 mod error;
+mod events;
 #[cfg(feature = "reqwest")]
 mod middleware;
 mod millis;
@@ -55,9 +77,10 @@ mod resilient;
 mod savepoint;
 mod told;
 
-pub use breaker::BreakerState;
+pub use breaker::{BreakerPhase, BreakerState, BreakerStats};
 pub use config::ResilienceConfig;
 pub use error::{BreakerError, ResilienceError};
+pub use events::{ResilienceEvent, ResilienceEvents, ResilienceRefusal};
 #[cfg(feature = "reqwest")]
 pub use middleware::ResilienceMiddleware;
 pub use module::{ResilienceModule, ResilienceSetup};
@@ -66,16 +89,24 @@ pub use policy::ResiliencePolicy;
 /// Runs a method calling a dependency under the policy a field of `self` holds,
 /// with no closure and no `run` to call: `#[resilient(field)]` sends the call
 /// once, `#[resilient(field, idempotent)]` again after a failure or a timeout,
-/// and `timeout` and `retries` pin this method's own. The method's error is a
-/// [`std::error::Error`], run once or again: its chain is the `error` of the
-/// line a retry files and of the `warn` its failure files when it opens the
-/// breaker.
+/// and `timeout` and `retries` pin this method's own. `retry_if`, `retry_ok_if`
+/// and `record_if` say how an answer counts — which `Err` and which `Ok` is
+/// sent again, which `Err` is a failure in the circuit breaker, any other
+/// `Err` counting there as neither a failure nor a success; `fallback`
+/// names the method answering in place of the error a run ends on, the call's
+/// own or the policy's refusal, and `fallback_if` which errors it answers for;
+/// `cancel` names the attempt's [`CancellationToken`] in the body. The method's
+/// error is a [`std::error::Error`], run once or again: its chain is the
+/// `error` of the line a retry files and of the `warn` its failure files when
+/// it opens the breaker.
 ///
 /// ```
 /// use std::sync::Arc;
 ///
 /// use nest_rs_core::{App, injectable, instance, module};
-/// use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
+/// use nest_rs_resilience::{
+///     CancellationToken, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+/// };
 ///
 /// #[instance]
 /// pub struct Courier;
@@ -88,6 +119,33 @@ pub use policy::ResiliencePolicy;
 /// /// is the `Err` the breaker counts.
 /// async fn courier_api(_parcel: &str) -> Result<(), CourierDown> {
 ///     Err(CourierDown)
+/// }
+///
+/// /// What the courier's scale answers when it weighs nothing.
+/// #[derive(Debug, thiserror::Error)]
+/// pub enum NoWeight {
+///     #[error("the scale is busy")]
+///     Busy,
+///     #[error("the scale did not answer")]
+///     Down,
+///     #[error("the courier knows no such parcel")]
+///     Unknown,
+/// }
+///
+/// impl NoWeight {
+///     fn is_busy(&self) -> bool {
+///         matches!(self, Self::Busy)
+///     }
+/// }
+///
+/// /// The courier's scale, down here but for a parcel it does not know. It
+/// /// stops the work it started once `stop` is cancelled.
+/// async fn courier_scale(parcel: &str, stop: CancellationToken) -> Result<u32, NoWeight> {
+///     match parcel {
+///         "" => Err(NoWeight::Unknown),
+///         _ if stop.is_cancelled() => Err(NoWeight::Busy),
+///         _ => Err(NoWeight::Down),
+///     }
 /// }
 ///
 /// #[injectable]
@@ -106,6 +164,37 @@ pub use policy::ResiliencePolicy;
 ///     pub async fn ship(&self, parcel: String) -> Result<(), ResilienceError<CourierDown>> {
 ///         courier_api(&parcel).await
 ///     }
+///
+///     /// Asked again while the scale is busy; a parcel the courier does not
+///     /// know is its answer, no failure of its; and while the policy refuses
+///     /// the call or the scale fails, the weight declared answers.
+///     #[resilient(
+///         courier,
+///         idempotent,
+///         retry_if = NoWeight::is_busy,
+///         record_if = |error| !matches!(error, NoWeight::Unknown),
+///         fallback = as_declared,
+///         fallback_if = |error| !matches!(error, ResilienceError::Failed(NoWeight::Unknown)),
+///         cancel = token
+///     )]
+///     pub async fn weigh(
+///         &self,
+///         parcel: &str,
+///         declared: u32,
+///     ) -> Result<u32, ResilienceError<NoWeight>> {
+///         courier_scale(parcel, token).await
+///     }
+///
+///     /// The fallback: `weigh`'s arguments, in order, then the error its run
+///     /// ended on, answering what `weigh` answers.
+///     async fn as_declared(
+///         &self,
+///         parcel: &str,
+///         declared: u32,
+///         error: ResilienceError<NoWeight>,
+///     ) -> Result<u32, ResilienceError<NoWeight>> {
+///         Ok(declared)
+///     }
 /// }
 ///
 /// #[module(imports = [ResilienceModule<Courier>], providers = [ShipmentsService])]
@@ -120,6 +209,11 @@ pub use policy::ResiliencePolicy;
 ///     shipments.ship("PARCEL-2".to_owned()).await,
 ///     Err(ResilienceError::Failed(CourierDown))
 /// ));
+/// assert_eq!(shipments.weigh("PARCEL-3", 8).await?, 8);
+/// assert!(matches!(
+///     shipments.weigh("", 8).await,
+///     Err(ResilienceError::Failed(NoWeight::Unknown))
+/// ));
 /// # Ok(())
 /// # }
 /// ```
@@ -131,8 +225,9 @@ pub mod __private {
     //! may change in any release.
 
     pub use crate::resilient::{
-        ChainedError, PolicyField, ResilientAnswer, ResilientMethod, attempt, policy, refused,
-        resilient_method, run, run_idempotent,
+        ChainedError, Fallback, FallbackIf, Judge, PolicyField, RecordIf, ResilientAnswer,
+        ResilientMethod, RetryIf, RetryOkIf, attempt, every, fall_back, judging, none, policy,
+        refused, resilient_method, run, run_idempotent,
     };
 }
 

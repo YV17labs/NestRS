@@ -1,0 +1,47 @@
+error[E0277]: a `#[resilient]` method's `fallback` takes the error its run ended on and answers what the method answers, `Result<usize, ResilienceError<CarrierDown>>`, and this one does not
+  --> tests/integration/diagnostics/resilience/resilient_fallback_answers_another_type.rs:53:37
+   |
+53 |     #[resilient(carrier, fallback = another_answer)]
+   |                                     ^^^^^^^^^^^^^^ the fallback
+   |
+   = help: the trait `nest_rs::resilience::__private::Fallback<usize, CarrierDown, ResilienceError<CarrierDown>, impl std::future::Future<Output = Result<std::string::String, ResilienceError<CarrierDown>>>, _>` is not implemented for closure `{closure@$DIR/tests/integration/diagnostics/resilience/resilient_fallback_answers_another_type.rs:53:37: 53:51}`
+   = note: the fallback is an `async fn` of `Self` taking the method's arguments, in order, then the error by value, a `ResilienceError<CarrierDown>`
+note: required by a bound in `nest_rs::resilience::__private::fall_back`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn fall_back<R, I, P, B, S, A, Fut, W>(
+...
+   |     B: Fallback<R::Ok, R::Err, A, Fut, W>,
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `fall_back`
+
+error[E0277]: a `#[resilient]` method's `fallback` takes the error its run ended on and answers what the method answers, `Result<usize, ResilienceError<CarrierDown>>`, and this one does not
+  --> tests/integration/diagnostics/resilience/resilient_fallback_answers_another_type.rs:58:37
+   |
+58 |     #[resilient(carrier, fallback = another_error)]
+   |                                     ^^^^^^^^^^^^^ the fallback
+   |
+   = help: the trait `nest_rs::resilience::__private::Fallback<usize, CarrierDown, ResilienceError<DepotDown>, impl std::future::Future<Output = Result<usize, ResilienceError<CarrierDown>>>, nest_rs_resilience::resilient::Proved>` is not implemented for closure `{closure@$DIR/tests/integration/diagnostics/resilience/resilient_fallback_answers_another_type.rs:58:37: 58:50}`
+   = note: the fallback is an `async fn` of `Self` taking the method's arguments, in order, then the error by value, a `ResilienceError<CarrierDown>`
+note: required by a bound in `nest_rs::resilience::__private::fall_back`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn fall_back<R, I, P, B, S, A, Fut, W>(
+...
+   |     B: Fallback<R::Ok, R::Err, A, Fut, W>,
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `fall_back`
+
+error[E0277]: a `#[resilient]` method's `fallback` takes the error its run ended on and answers what the method answers, `Result<usize, ResilienceError<CarrierDown>>`, and this one does not
+  --> tests/integration/diagnostics/resilience/resilient_fallback_answers_another_type.rs:63:37
+   |
+63 |     #[resilient(carrier, fallback = no_async_fn)]
+   |                                     ^^^^^^^^^^^ the fallback
+   |
+   = help: the trait `nest_rs::resilience::__private::Fallback<usize, CarrierDown, ResilienceError<CarrierDown>, Result<usize, ResilienceError<CarrierDown>>, _>` is not implemented for closure `{closure@$DIR/tests/integration/diagnostics/resilience/resilient_fallback_answers_another_type.rs:63:37: 63:48}`
+   = note: the fallback is an `async fn` of `Self` taking the method's arguments, in order, then the error by value, a `ResilienceError<CarrierDown>`
+note: required by a bound in `nest_rs::resilience::__private::fall_back`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn fall_back<R, I, P, B, S, A, Fut, W>(
+...
+   |     B: Fallback<R::Ok, R::Err, A, Fut, W>,
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `fall_back`

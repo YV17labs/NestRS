@@ -1,4 +1,4 @@
-error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout` or `retries`
+error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout`, `retries`, `retry_if`, `retry_ok_if`, `record_if`, `fallback`, `fallback_if` or `cancel`
   --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:30:26
    |
 30 |     #[resilient(carrier, retry = 3)]
@@ -34,7 +34,7 @@ error: #[resilient] `timeout` needs a value — write `timeout = "2s"`
 55 |     #[resilient(carrier, timeout)]
    |                          ^^^^^^^
 
-error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout` or `retries`
+error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout`, `retries`, `retry_if`, `retry_ok_if`, `record_if`, `fallback`, `fallback_if` or `cancel`
   --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:60:40
    |
 60 |     #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
@@ -52,7 +52,7 @@ error: #[resilient] `retries`: must be at most 10 — past ten, the retries let 
 60 |     #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
    |                                    ^^
 
-error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout` or `retries`
+error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout`, `retries`, `retry_if`, `retry_ok_if`, `record_if`, `fallback`, `fallback_if` or `cancel`
   --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:65:39
    |
 65 |     #[resilient(carrier, retries = 3, retry = 3)]

@@ -3,10 +3,12 @@
 //! leaves no write for the next to repeat — rolled back once it failed, was cut
 //! at its timeout mid-statement or met a statement the database refused, what
 //! its unit wrote before it standing — whatever retries its policy has, none
-//! included; an attempt cut before its savepoint answered leaves its unit as
-//! it was; two calls joined in one unit take its turn one after the other; and
-//! nothing is sent for a call that never queries, nor on the pool, which holds
-//! no transaction.
+//! included; a method declaring a fallback runs its attempts so too, the
+//! failed one rolled back before the fallback writes on the unit's own
+//! transaction, or its filter hands the error back; an attempt cut before its
+//! savepoint answered leaves its unit as it was; two calls joined in one unit
+//! take its turn one after the other; and nothing is sent for a call that
+//! never queries, nor on the pool, which holds no transaction.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -102,6 +104,32 @@ impl LedgerService {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         write(entry).await?;
         Err(Failure::Refused)
+    }
+
+    /// One row of `entry`, sent once and refused once it wrote its own: the
+    /// fallback answers in its place when `falls_back`.
+    #[resilient(archive, fallback = write_instead, fallback_if = |_| falls_back)]
+    async fn archive_or_fall_back(
+        &self,
+        entry: Uuid,
+        fallen: Uuid,
+        falls_back: bool,
+    ) -> Result<(), ResilienceError<Failure>> {
+        write(entry).await?;
+        Err(Failure::Refused)
+    }
+
+    /// One row of `fallen`, in place of the entry the archive refused.
+    async fn write_instead(
+        &self,
+        _entry: Uuid,
+        fallen: Uuid,
+        _falls_back: bool,
+        _error: ResilienceError<Failure>,
+    ) -> Result<(), ResilienceError<Failure>> {
+        write(fallen)
+            .await
+            .map_err(|refused| ResilienceError::Failed(refused.into()))
     }
 }
 
@@ -496,6 +524,62 @@ async fn a_run_dropped_mid_attempt_leaves_its_unit_unable_to_commit() {
         "atomic block abandoned before it settled; its unit cannot commit",
     );
     assert_eq!(line.level, "warn");
+}
+
+/// Under a fallback, a failed attempt leaves no write: its savepoint is
+/// rolled back before the fallback runs, whose own write joins the unit's
+/// transaction with what the unit wrote before the call, and before the
+/// method answers an error its filter refused, the unit still free to commit.
+#[tokio::test]
+async fn under_a_fallback_a_failed_attempts_write_is_rolled_back_and_the_fallbacks_commits_with_its_unit()
+ {
+    let conn = db().await;
+    let (_app, service) = service().await;
+
+    let (before, entry, fallen) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let lazy = unit(&conn);
+    let answered = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
+        write(before)
+            .await
+            .expect("the unit writes before the call");
+        service.archive_or_fall_back(entry, fallen, true).await
+    })
+    .await;
+    assert!(answered.is_ok(), "the fallback answers: {answered:?}");
+    committed(lazy).await;
+    assert_eq!(
+        (
+            written(&conn, before).await,
+            written(&conn, entry).await,
+            written(&conn, fallen).await,
+        ),
+        (1, 0, 1),
+        "the unit's earlier write and the fallback's stand, the failed attempt's does not"
+    );
+
+    let (before, entry, fallen) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let lazy = unit(&conn);
+    let refused = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
+        write(before)
+            .await
+            .expect("the unit writes before the call");
+        service.archive_or_fall_back(entry, fallen, false).await
+    })
+    .await;
+    assert!(
+        matches!(refused, Err(ResilienceError::Failed(Failure::Refused))),
+        "the error its filter refused is the method's: {refused:?}"
+    );
+    committed(lazy).await;
+    assert_eq!(
+        (
+            written(&conn, before).await,
+            written(&conn, entry).await,
+            written(&conn, fallen).await,
+        ),
+        (1, 0, 0),
+        "the unit's earlier write stands alone"
+    );
 }
 
 /// The pool holds no transaction to open a savepoint in, and an attempt opens

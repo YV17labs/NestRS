@@ -112,7 +112,7 @@ mod tests {
     use nest_rs_database::{AtomicBlock, Executor, current_executor};
 
     use super::*;
-    use crate::resilient::resilient_method;
+    use crate::resilient::{judging_by_default, resilient_method};
     use crate::{ResilienceConfig, ResilienceError, ResiliencePolicy};
 
     #[instance]
@@ -501,7 +501,7 @@ mod tests {
             let call = answering(&seen, answers);
             let ran: Answer = with_request_executor(
                 unit,
-                policy.run_once::<Answer, _, _>(Some(falling_back), call),
+                policy.run_once::<Answer, _, _, _>(Some(falling_back), judging_by_default(), call),
             )
             .await;
             assert_eq!(ran.is_ok(), settled == Saw::Kept, "{ran:?}");
@@ -518,8 +518,11 @@ mod tests {
 
         let (unit, seen) = Unit::settling(settles);
         let call = answering(&seen, &[]);
-        let ran: Answer =
-            with_request_executor(unit, policy.run_once::<Answer, _, _>(Some(plain), call)).await;
+        let ran: Answer = with_request_executor(
+            unit,
+            policy.run_once::<Answer, _, _, _>(Some(plain), judging_by_default(), call),
+        )
+        .await;
         assert!(ran.is_err(), "{ran:?}");
         assert_eq!(
             seen.all(),
@@ -741,7 +744,7 @@ mod tests {
         std::panic::set_hook(Box::new(|_| {}));
         let unwound = nest_rs_core::panic::contain(with_request_executor(
             unit,
-            policy.run_again::<Answer, _, _>(Some(method), |_| async {
+            policy.run_again::<Answer, _, _, _>(Some(method), judging_by_default(), |_| async {
                 tokio::task::yield_now().await;
                 panic!("inside the attempt")
             }),

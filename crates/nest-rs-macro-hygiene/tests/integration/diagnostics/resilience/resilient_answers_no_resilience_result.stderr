@@ -1,7 +1,7 @@
 error[E0277]: a `#[resilient]` method answers `Result<T, ResilienceError<E>>`, and this one answers `Result<std::string::String, CarrierDown>`
-  --> tests/integration/diagnostics/resilience/resilient_answers_no_resilience_result.rs:36:48
+  --> tests/integration/diagnostics/resilience/resilient_answers_no_resilience_result.rs:37:48
    |
-36 |     async fn own_error(&self, parcel: &str) -> Result<String, CarrierDown> {
+37 |     async fn own_error(&self, parcel: &str) -> Result<String, CarrierDown> {
    |                                                ^^^^^^ what the method answers
    |
    = help: the trait `nest_rs::resilience::__private::ResilientAnswer` is not implemented for `Result<std::string::String, CarrierDown>`
@@ -14,15 +14,15 @@ help: the trait `nest_rs::resilience::__private::ResilientAnswer` is implemented
 note: required by a bound in `nest_rs::resilience::__private::run_idempotent`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
-   | pub async fn run_idempotent<R, I, C, F>(
+   | pub async fn run_idempotent<R, I, J, C, F>(
 ...
    |     R: ResilientAnswer,
    |        ^^^^^^^^^^^^^^^ required by this bound in `run_idempotent`
 
 error[E0277]: a `#[resilient]` method answers `Result<T, ResilienceError<E>>`, and this one answers `std::string::String`
-  --> tests/integration/diagnostics/resilience/resilient_answers_no_resilience_result.rs:44:29
+  --> tests/integration/diagnostics/resilience/resilient_answers_no_resilience_result.rs:45:29
    |
-44 |     async fn bare(&self) -> String {
+45 |     async fn bare(&self) -> String {
    |                             ^^^^^^ what the method answers
    |
    = help: the trait `nest_rs::resilience::__private::ResilientAnswer` is not implemented for `std::string::String`
@@ -35,15 +35,15 @@ help: the trait `nest_rs::resilience::__private::ResilientAnswer` is implemented
 note: required by a bound in `nest_rs::resilience::__private::run`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
-   | pub fn run<R, I, C, F>(
+   | pub fn run<R, I, J, C, F>(
 ...
    |     R: ResilientAnswer,
    |        ^^^^^^^^^^^^^^^ required by this bound in `run`
 
 error[E0277]: a `#[resilient]` method answers `Result<T, ResilienceError<E>>`, and this one answers `()`
-  --> tests/integration/diagnostics/resilience/resilient_answers_no_resilience_result.rs:49:14
+  --> tests/integration/diagnostics/resilience/resilient_answers_no_resilience_result.rs:50:14
    |
-49 |     async fn nothing(&self) {}
+50 |     async fn nothing(&self) {}
    |              ^^^^^^^ what the method answers
    |
    = help: the trait `nest_rs::resilience::__private::ResilientAnswer` is not implemented for `()`
@@ -56,7 +56,28 @@ help: the trait `nest_rs::resilience::__private::ResilientAnswer` is implemented
 note: required by a bound in `nest_rs::resilience::__private::run`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
-   | pub fn run<R, I, C, F>(
+   | pub fn run<R, I, J, C, F>(
+...
+   |     R: ResilientAnswer,
+   |        ^^^^^^^^^^^^^^^ required by this bound in `run`
+
+error[E0277]: a `#[resilient]` method answers `Result<T, ResilienceError<E>>`, and this one answers `Result<std::string::String, CarrierDown>`
+  --> tests/integration/diagnostics/resilience/resilient_answers_no_resilience_result.rs:57:30
+   |
+57 |     async fn keyed(&self) -> Result<String, CarrierDown> {
+   |                              ^^^^^^ what the method answers
+   |
+   = help: the trait `nest_rs::resilience::__private::ResilientAnswer` is not implemented for `Result<std::string::String, CarrierDown>`
+   = note: the body is written as answering `Result<T, E>`, and the policy's refusal is the `ResilienceError`'s; a method answering an error of its own calls a decorated one and maps its error
+help: the trait `nest_rs::resilience::__private::ResilientAnswer` is implemented for `Result<T, ResilienceError<E>>`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | impl<T, E> ResilientAnswer for Result<T, ResilienceError<E>> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `nest_rs::resilience::__private::run`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn run<R, I, J, C, F>(
 ...
    |     R: ResilientAnswer,
    |        ^^^^^^^^^^^^^^^ required by this bound in `run`

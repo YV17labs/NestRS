@@ -2,30 +2,36 @@
 //! again what the HTTP method or an `Idempotency-Key` declares idempotent, each
 //! attempt a client operation numbered by its resend count, never sends again
 //! what it does not, and is refused at once — never sent — while the breaker
-//! is open or once its requests reach the rate limit, which counts a redirect
-//! the client follows inside the attempt that met it, gives each attempt up at
-//! its unit's deadline, and tells what an attempt failed on in the retry's
+//! is open or once its rate has no token free, but for a request whose token
+//! comes within the rate's wait, which waits for it; the rate counts a redirect
+//! the client follows inside the attempt that met it. It gives each attempt up
+//! at its unit's deadline, and tells what an attempt failed on in the retry's
 //! line and the breaker's opening: a status by its code, a transport failure
 //! without the URL it was sent to. The response it hands back is reqwest's
 //! own, its body read as it comes and holding the run's slot, the breaker's
 //! verdict and what its head left of the attempt's bound until it ends: the
 //! time its reads wait for the dependency, never the time its caller takes.
+//! What its policy tells a subscription of all this names no method: a retry
+//! as its line files it, a timeout before the retry it earns, a body given up
+//! as the timeout it is, and one the dependency cut short by the breaker's
+//! opening alone.
 
 use std::convert::Infallible;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nest_rs_core::client_operation::{ClientOperation, HTTP_REQUEST_RESEND_COUNT, SERVER_PORT};
 use nest_rs_core::{Correlation, Problem, code};
 use nest_rs_reqwest::ReqwestMiddleware;
 use nest_rs_resilience::{
-    BreakerState, ResilienceConfig, ResilienceError, ResilienceMiddleware, ResiliencePolicy,
+    BreakerPhase, BreakerState, ResilienceConfig, ResilienceError, ResilienceEvent,
+    ResilienceMiddleware, ResiliencePolicy, TARGET,
 };
 use nest_rs_testing::{HttpsPeer, LogCapture, PeerAnswer, TestAuthority, TestCertificate};
 use reqwest::StatusCode;
 use reqwest_middleware::ClientWithMiddleware;
 
-use crate::{policy, quiet};
+use crate::{policy, quiet, told};
 
 /// The authority the peer's certificate chains to, and the client trusts.
 static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
@@ -323,6 +329,67 @@ async fn every_request_sent_counts_against_the_rate_limit_a_resend_included() {
     );
 }
 
+/// How often the bucket of the test below gains its one token, and the
+/// longest a request waits for one.
+const TOKEN_EVERY: Duration = Duration::from_millis(200);
+
+/// The rate is a bucket of tokens under the middleware too: its one token
+/// spent, the next request waits for the token due within the rate's wait and
+/// is sent, and a third, whose token comes after that one's, past the wait, is
+/// refused unsent with the `503` every edge answers, told the time to it.
+#[tokio::test]
+async fn a_request_finding_no_token_waits_for_one_within_the_rates_wait_and_is_refused_one_past_it()
+{
+    let peer = answering([]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        rate_limit: Some(1),
+        rate_window: TOKEN_EVERY,
+        rate_wait: Some(TOKEN_EVERY),
+        ..quiet()
+    })
+    .await;
+    let client = client(policy);
+    let send = || client.get(peer.url(PARCEL)).send();
+
+    // Polled in this order, each meets the bucket as the one before left it.
+    // The third is refused for arriving while the second waits: within
+    // `TOKEN_EVERY` of the first, the one bound here real time holds.
+    let began = Instant::now();
+    let (sent, waited, refused) = tokio::join!(send(), send(), send());
+    let took = began.elapsed();
+
+    let sent = sent.expect("the bucket's one token");
+    let waited = waited.expect("the next token came within the wait");
+    assert_eq!(
+        (sent.status(), waited.status()),
+        (StatusCode::OK, StatusCode::OK)
+    );
+    assert!(
+        took >= TOKEN_EVERY,
+        "a request is not sent before its token: {took:?}"
+    );
+    let refused = refused.expect_err("its token comes after the waiting request's");
+    let ResilienceError::Limited { retry_after, .. } = refusal(&refused) else {
+        panic!("the rate refused: {refused:?}");
+    };
+    assert!(
+        TOKEN_EVERY < *retry_after && *retry_after <= 2 * TOKEN_EVERY,
+        "the time to its token, the second from the one taken: {retry_after:?}"
+    );
+    let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
+        .expect("the problem rides the chain");
+    assert_eq!(
+        (problem.status(), problem.code(), problem.retry_after()),
+        (503, code::UNAVAILABLE, Some(1)),
+        "that time in whole seconds: {problem:?}"
+    );
+    assert_eq!(
+        peer.requests().len(),
+        2,
+        "a request the rate refuses is never sent"
+    );
+}
+
 /// Where the peer's redirect sends a request.
 const MOVED: &str = "/parcels/43";
 
@@ -482,6 +549,67 @@ async fn an_attempt_slow_to_first_wait_ends_at_the_deadline_its_edge_cuts_the_un
     }
 }
 
+/// A timeout the run sends its request again after is told as it is decided,
+/// before the retry it earns, whose error is the timeout's sentence; the one
+/// the run ends on is told once more, as the refusal its caller is answered.
+/// None names a method: no decorated one sent the request.
+#[tokio::test(start_paused = true)]
+async fn a_timeout_the_run_sends_again_after_is_told_before_its_retry() {
+    const BOUND: Duration = Duration::from_millis(100);
+    let (_app, policy) = policy(ResilienceConfig {
+        timeout: BOUND,
+        retries: Some(1),
+        ..retrying()
+    })
+    .await;
+    let mut events = policy.events();
+    let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+        .with(ResilienceMiddleware::new(policy))
+        .with(Stalling)
+        .build();
+
+    let given_up = client
+        .get(format!("https://127.0.0.1:1{PARCEL}"))
+        .send()
+        .await
+        .expect_err("no answer");
+    let timed_out = refusal(&given_up);
+    assert!(
+        matches!(timed_out, ResilienceError::TimedOut { timeout, .. } if *timeout == BOUND),
+        "{given_up:?}"
+    );
+
+    let told = told(&mut events);
+    let [
+        ResilienceEvent::Timeout {
+            host: None,
+            method: None,
+            timeout: first,
+            ..
+        },
+        ResilienceEvent::Retry {
+            host: None,
+            method: None,
+            attempt: 1,
+            error,
+            ..
+        },
+        ResilienceEvent::Timeout {
+            host: None,
+            method: None,
+            timeout: last,
+            ..
+        },
+    ] = &told[..]
+    else {
+        panic!("a timeout, its retry, the retry's timeout: {told:?}");
+    };
+    assert_eq!(
+        (*first, *last, error.clone()),
+        (BOUND, BOUND, Some(timed_out.to_string()))
+    );
+}
+
 #[tokio::test]
 async fn a_middleware_added_after_the_trace_refuses_every_request_unsent_saying_so() {
     let peer = answering([]).await;
@@ -513,10 +641,13 @@ async fn a_middleware_added_after_the_trace_refuses_every_request_unsent_saying_
     assert_eq!(peer.requests().len(), 0, "nothing is sent");
 }
 
+/// What the line of a retry says.
+const RETRYING: &str = "attempt failed; retrying the call";
+
 /// The `error` of each line on the policy's target saying `message`, none of
 /// which quotes `never`.
-fn told(logs: &LogCapture, message: &str, never: &[&str]) -> Vec<String> {
-    logs.find(nest_rs_resilience::TARGET, message)
+fn filed(logs: &LogCapture, message: &str, never: &[&str]) -> Vec<String> {
+    logs.find(TARGET, message)
         .iter()
         .map(|line| {
             for value in never {
@@ -553,11 +684,11 @@ async fn an_answer_counted_as_a_failure_is_told_by_its_status_code_alone() {
 
     let never = [PARCEL, "127.0.0.1"];
     assert_eq!(
-        told(&logs, "attempt failed; retrying the call", &never),
+        filed(&logs, RETRYING, &never),
         ["the dependency answered 503", "the dependency answered 502"]
     );
     assert_eq!(
-        told(&logs, "circuit breaker changed state", &never),
+        filed(&logs, "circuit breaker changed state", &never),
         ["the dependency answered 502"]
     );
 }
@@ -600,13 +731,137 @@ async fn a_transport_failure_is_told_as_its_chain_without_the_url_it_was_sent_to
     accepting.abort();
 
     let never = [SENT, "/parcels", "for url"];
-    let retried = told(&logs, "attempt failed; retrying the call", &never);
-    let opened = told(&logs, "circuit breaker changed state", &never);
+    let retried = filed(&logs, RETRYING, &never);
+    let opened = filed(&logs, "circuit breaker changed state", &never);
     assert_eq!(retried.len(), 1, "{retried:?}");
     assert_eq!(opened, retried, "one failure, said the same in both");
     assert!(
         retried[0].starts_with("error sending request: "),
         "reqwest's sentence, then its causes: {retried:?}"
+    );
+}
+
+/// A head judged a failure and sent again is told as the retry its line
+/// files: the attempt, the wait and the status by its code alone, naming no
+/// method.
+#[tokio::test]
+async fn a_head_judged_a_failure_and_sent_again_is_told_as_the_retry_its_line_files() {
+    let peer = answering([PeerAnswer::status(503)]).await;
+    let (_app, policy) = policy(retrying()).await;
+    let logs = LogCapture::install();
+    let mut events = policy.events();
+
+    let answered = client(policy)
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(answered.status(), StatusCode::OK, "the resend answered");
+
+    let told = told(&mut events);
+    let [
+        ResilienceEvent::Retry {
+            host: None,
+            method: None,
+            attempt,
+            wait,
+            error,
+            ..
+        },
+    ] = &told[..]
+    else {
+        panic!("one retry, of no decorated method: {told:?}");
+    };
+    assert_eq!(
+        (*attempt, error.as_deref()),
+        (1, Some("the dependency answered 503"))
+    );
+    let line = logs.expect_one(TARGET, RETRYING);
+    assert_eq!(
+        (
+            line.field("host"),
+            line.field("method"),
+            line.field("attempt"),
+            line.field("wait_ms"),
+            line.field("error"),
+        ),
+        (
+            None,
+            None,
+            Some(attempt.to_string()),
+            Some(wait.as_nanos().div_ceil(1_000_000).to_string()),
+            error.clone(),
+        ),
+        "the line's milliseconds are the wait's, rounded up"
+    );
+}
+
+/// A layer of the client's own failing before any answer, its sentence quoting
+/// the URL the request was sent to as a client's error does: a middleware
+/// after the policy's.
+struct Unrouted;
+
+#[derive(Debug, thiserror::Error)]
+#[error("no route to {0}")]
+struct NoRoute(reqwest::Url);
+
+#[async_trait::async_trait]
+impl reqwest_middleware::Middleware for Unrouted {
+    async fn handle(
+        &self,
+        req: reqwest::Request,
+        _extensions: &mut http::Extensions,
+        _next: reqwest_middleware::Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        Err(reqwest_middleware::Error::middleware(NoRoute(
+            req.url().clone(),
+        )))
+    }
+}
+
+/// A retry's event says what its attempt failed on as its line does: the
+/// failure's chain, a URL in it cut to its origin, the path and the query,
+/// which hold what the caller sent, gone.
+#[tokio::test(start_paused = true)]
+async fn a_retrys_event_says_its_failures_chain_with_no_url_past_its_origin() {
+    const SENT: &str = "s3cr3t";
+    const ORIGIN: &str = "https://127.0.0.1:1";
+    let (_app, policy) = policy(ResilienceConfig {
+        retries: Some(1),
+        ..retrying()
+    })
+    .await;
+    let logs = LogCapture::install();
+    let mut events = policy.events();
+    let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+        .with(ResilienceMiddleware::new(policy))
+        .with(Unrouted)
+        .build();
+
+    let failed = client
+        .get(format!("{ORIGIN}/parcels/{SENT}?token={SENT}"))
+        .send()
+        .await
+        .expect_err("no route");
+    assert!(
+        failed.to_string().contains(SENT),
+        "the caller is handed the layer's own error, as it said it: {failed}"
+    );
+
+    let told = told(&mut events);
+    let [
+        ResilienceEvent::Retry {
+            error: Some(error), ..
+        },
+    ] = &told[..]
+    else {
+        panic!("one retry, saying its error: {told:?}");
+    };
+    assert_eq!(*error, format!("no route to {ORIGIN}"));
+    assert_eq!(
+        filed(&logs, RETRYING, &[SENT, "/parcels"]),
+        [error.as_str()],
+        "said the same in its line"
     );
 }
 
@@ -900,6 +1155,52 @@ async fn a_body_given_up_at_its_bound_answers_reqwests_error_holding_the_policys
     drop(answered);
 }
 
+/// A body given up at its bound is told as the timeout it is, once, saying
+/// the attempt's bound and no method, after the opening of the breaker it
+/// counted in; the head that answered before it told nothing.
+#[tokio::test]
+async fn a_body_given_up_at_its_bound_is_told_as_a_timeout_once() {
+    let peer = answering([PeerAnswer::stalling(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        timeout: Duration::from_millis(200),
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..quiet()
+    })
+    .await;
+    let mut events = policy.events();
+
+    let answered = client(policy)
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    assert_eq!(told(&mut events), [], "an answer's head tells nothing");
+    // Guards against a hang alone: a body no bound covers is read for good.
+    let read = tokio::time::timeout(Duration::from_secs(3), answered.bytes()).await;
+    assert!(
+        matches!(read, Ok(Err(_))),
+        "the body's read ends at the attempt's timeout: {read:?}"
+    );
+
+    let told = told(&mut events);
+    assert!(
+        matches!(
+            &told[..],
+            [
+                ResilienceEvent::Transition {
+                    from: BreakerPhase::Closed,
+                    to: BreakerPhase::Open,
+                    manual: false,
+                    ..
+                },
+                ResilienceEvent::Timeout { host: None, method: None, timeout, .. },
+            ] if *timeout == Duration::from_millis(200)
+        ),
+        "{told:?}"
+    );
+}
+
 /// A body the dependency cuts short is a transport failure, never the
 /// policy's refusal: it reaches the caller as reqwest's error, and counts in
 /// the breaker, whose opening says its chain without the URL it was read from.
@@ -932,7 +1233,7 @@ async fn a_body_cut_short_by_the_dependency_is_a_failure_told_as_its_chain() {
         "{:?}",
         policy.breaker_state()
     );
-    let opened = told(
+    let opened = filed(
         &logs,
         "circuit breaker changed state",
         &[PARCEL, "127.0.0.1"],
@@ -941,6 +1242,42 @@ async fn a_body_cut_short_by_the_dependency_is_a_failure_told_as_its_chain() {
     assert!(
         opened[0].starts_with("request or response body error: "),
         "reqwest's sentence, then its causes: {opened:?}"
+    );
+}
+
+/// A body the dependency cuts short is no attempt the policy gave up: the
+/// failure is told by the opening of the breaker it counts in, and no timeout.
+#[tokio::test]
+async fn a_body_cut_short_by_the_dependency_is_told_by_the_breakers_opening_alone() {
+    let peer = answering([PeerAnswer::truncated(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..quiet()
+    })
+    .await;
+    let mut events = policy.events();
+
+    let answered = client(policy)
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    let failed = answered.bytes().await.expect_err("half a body");
+    assert!(cut(&failed).is_none(), "the transport's own: {failed:?}");
+
+    let told = told(&mut events);
+    assert!(
+        matches!(
+            &told[..],
+            [ResilienceEvent::Transition {
+                from: BreakerPhase::Closed,
+                to: BreakerPhase::Open,
+                manual: false,
+                ..
+            }]
+        ),
+        "{told:?}"
     );
 }
 

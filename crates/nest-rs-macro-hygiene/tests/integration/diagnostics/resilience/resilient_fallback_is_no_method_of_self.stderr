@@ -1,0 +1,5 @@
+error[E0599]: no method named `stale` found for reference `&ShipmentsService` in the current scope
+  --> tests/integration/diagnostics/resilience/resilient_fallback_is_no_method_of_self.rs:33:37
+   |
+33 |     #[resilient(carrier, fallback = stale)]
+   |                                     ^^^^^ method not found in `&ShipmentsService`

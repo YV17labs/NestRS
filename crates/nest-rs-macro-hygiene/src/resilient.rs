@@ -1,7 +1,8 @@
 //! `#[resilient]` — an `async fn` method's body run under the policy a field of
 //! `self` holds, through the umbrella alone: the expansion reaches
 //! `nest-rs-resilience`, so the umbrella's `resilience` feature must pull it.
-//! Each key a method takes and each host it decorates is a use site: a
+//! Each key a method takes — its pins, its predicates, its fallback and its
+//! token — and each host it decorates is a use site: a
 //! provider, a struct built by hand through a trait's native `async fn`, and a
 //! method of every impl half whose feature the build enables — the hooks',
 //! the kernel's, under none.
@@ -9,7 +10,7 @@
 use std::sync::Arc;
 
 use nest_rs::core::{Problem, ToProblem, injectable, instance};
-use nest_rs::resilience::{ResilienceError, ResiliencePolicy, resilient};
+use nest_rs::resilience::{CancellationToken, ResilienceError, ResiliencePolicy, resilient};
 
 #[instance]
 pub struct HygieneCarrier;
@@ -25,6 +26,13 @@ impl std::fmt::Display for HygieneCarrierDown {
 }
 
 impl std::error::Error for HygieneCarrierDown {}
+
+impl HygieneCarrierDown {
+    /// Whether the carrier asked to be called again, which a predicate reads.
+    pub fn busy(&self) -> bool {
+        true
+    }
+}
 
 impl ToProblem for HygieneCarrierDown {
     fn to_problem(&self) -> Option<Problem> {
@@ -79,6 +87,53 @@ impl HygieneResilientShipments {
     #[resilient(upstream, timeout = "500ms")]
     pub async fn preview<T: Default + Send>(&self) -> HygieneAnswer<T> {
         Ok(T::default())
+    }
+
+    /// Each answer counted as its predicate says, one a function's path and
+    /// two closures.
+    #[resilient(
+        carrier,
+        idempotent,
+        retry_if = HygieneCarrierDown::busy,
+        retry_ok_if = |depot: &String| depot.is_empty(),
+        record_if = |error| !error.busy(),
+    )]
+    pub async fn locate(&self, parcel: &str) -> HygieneAnswer<String> {
+        depot(parcel)
+    }
+
+    /// A fallback handed the argument and the run's error, answering for the
+    /// policy's refusals alone, the attempt's token read under the name given.
+    #[resilient(
+        carrier,
+        fallback = last_known,
+        fallback_if = |error| !matches!(error, ResilienceError::Failed(_)),
+        cancel = token
+    )]
+    pub async fn weigh(&self, parcel: String) -> HygieneAnswer<usize> {
+        if token.is_cancelled() {
+            return Ok(0);
+        }
+        Ok(depot(&parcel)?.len())
+    }
+
+    /// The fallback of an `idempotent` method through the `Arc`, each attempt's
+    /// token its own.
+    #[resilient(carrier, idempotent, fallback = last_known, cancel = token)]
+    pub async fn measure(self: &Arc<Self>, parcel: String) -> HygieneAnswer<usize> {
+        let _attempt: CancellationToken = token;
+        Ok(depot(&parcel)?.len())
+    }
+
+    async fn last_known(
+        &self,
+        parcel: String,
+        error: ResilienceError<HygieneCarrierDown>,
+    ) -> HygieneAnswer<usize> {
+        match error {
+            ResilienceError::Failed(failed) => Err(ResilienceError::Failed(failed)),
+            _refused => Ok(parcel.len()),
+        }
     }
 
     /// A method compiled out takes its expansion with it.

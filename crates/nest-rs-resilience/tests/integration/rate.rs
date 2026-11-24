@@ -1,9 +1,10 @@
 //! Covers `src/rate.rs` through `#[resilient]`: every attempt a decorated
-//! method sends counts against its policy's rate, a retry included, whichever
-//! method on the field sends it; a method the rate refuses is never attempted
-//! again and is named by the lines its refusal and its wait file; and the
-//! refusal is answered `503` with the time to the window's reset by a route,
-//! and waited out by a job's retry.
+//! method sends takes a token of its policy's rate, a retry included,
+//! whichever method on the field sends it; methods finding none free wait in
+//! one line, each for its own token; a method the rate refuses is never
+//! attempted again and is named by the lines its refusal and its wait file;
+//! and the refusal is answered `503` with the time to the next token by a
+//! route, and waited out by a job's retry.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -59,6 +60,12 @@ impl ShipmentsService {
         Ok(())
     }
 
+    /// Answers the instant its body ran at.
+    #[resilient(forwarder)]
+    async fn weigh(&self) -> Answer<tokio::time::Instant> {
+        Ok(tokio::time::Instant::now())
+    }
+
     #[resilient(forwarder, idempotent)]
     async fn insist(&self) -> Answer {
         self.attempts.fetch_add(1, Ordering::Relaxed);
@@ -91,7 +98,7 @@ fn shipments(app: &HeadlessApp) -> Arc<ShipmentsService> {
 struct TwoAMinuteModule;
 
 #[tokio::test(start_paused = true)]
-async fn every_attempt_a_decorated_method_sends_counts_its_retry_included() {
+async fn every_attempt_a_decorated_method_sends_takes_a_token_its_retry_included() {
     let app = boot::<TwoAMinuteModule>().await;
     let shipments = shipments(&app);
 
@@ -101,7 +108,7 @@ async fn every_attempt_a_decorated_method_sends_counts_its_retry_included() {
     let refused = shipments.ship().await;
     assert!(
         matches!(refused, Err(ResilienceError::Limited { .. })),
-        "the other method's retry took the window's last attempt: {refused:?}"
+        "the other method's retry took the bucket's last token: {refused:?}"
     );
     assert_eq!(
         shipments.attempted(),
@@ -131,7 +138,7 @@ async fn a_decorated_method_the_rate_refuses_ends_its_run_and_its_lines_name_it(
     let refused = shipments.insist().await;
     assert!(
         matches!(refused, Err(ResilienceError::Limited { .. })),
-        "its first retry met the limit, its reset past the 5 s wait: {refused:?}"
+        "its first retry found no token free, the next past the 5 s wait: {refused:?}"
     );
     assert_eq!(
         shipments.attempted(),
@@ -144,16 +151,13 @@ async fn a_decorated_method_the_rate_refuses_ends_its_run_and_its_lines_name_it(
     tokio::time::advance(Duration::from_secs(6)).await;
     assert!(
         matches!(shipments.ship().await, Ok(())),
-        "a reset under 4 s away, within the wait"
+        "a token under 4 s away, within the wait"
     );
     assert_eq!(shipments.attempted(), 2);
 
     for (message, method) in [
         ("rate limit reached; the call is refused", "insist"),
-        (
-            "rate limit reached; waiting for the window to reset",
-            "ship",
-        ),
+        ("rate limit reached; waiting for a token", "ship"),
     ] {
         let line = logs.expect_one(TARGET, message);
         assert_eq!(line.level, "debug", "{line:?}");
@@ -163,7 +167,50 @@ async fn a_decorated_method_the_rate_refuses_ends_its_run_and_its_lines_name_it(
     }
 }
 
-/// A decorated route over a policy sending one attempt per 30 s window.
+#[module(
+    imports = [ResilienceModule::for_root((Forwarder, ResilienceConfig {
+        rate_limit: Some(1),
+        rate_window: Duration::from_secs(10),
+        rate_wait: Some(Duration::from_secs(20)),
+        ..quiet()
+    }))],
+    providers = [ShipmentsService],
+)]
+struct WaitingInLineModule;
+
+/// One token every 10 s, taken: two methods on the field, called together,
+/// wait in the order they were called, the first for the token at 10 s and
+/// the second for the one after, and a third, whose token lies past the 20 s
+/// wait, is refused at once.
+#[tokio::test(start_paused = true)]
+async fn decorated_methods_finding_no_token_free_wait_in_one_line_each_for_its_own_token() {
+    let app = boot::<WaitingInLineModule>().await;
+    let shipments = shipments(&app);
+    let started = tokio::time::Instant::now();
+    assert!(matches!(shipments.ship().await, Ok(())), "the one token");
+
+    let (weighed, shipped, refused) = tokio::join!(shipments.weigh(), shipments.ship(), async {
+        let refused = shipments.weigh().await;
+        (refused, started.elapsed())
+    });
+    assert!(
+        matches!(weighed, Ok(at) if at - started == Duration::from_secs(10)),
+        "the first in line, sent at the next token: {weighed:?}"
+    );
+    assert!(matches!(shipped, Ok(())), "{shipped:?}");
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(20),
+        "the second in line, sent at the token after"
+    );
+    assert!(
+        matches!(refused, (Err(ResilienceError::Limited { retry_after, .. }), at)
+            if retry_after == Duration::from_secs(30) && at.is_zero()),
+        "the third, told at once the 30 s to the token it would be due: {refused:?}"
+    );
+}
+
+/// A decorated route over a policy sending one attempt per 30 s.
 mod routes {
     use std::sync::Arc;
     use std::time::Duration;
@@ -206,7 +253,7 @@ mod routes {
     struct QuotesHttpModule;
 
     #[tokio::test(start_paused = true)]
-    async fn a_route_the_rate_refuses_answers_503_with_the_time_to_the_windows_reset() {
+    async fn a_route_the_rate_refuses_answers_503_with_the_time_to_the_next_token() {
         let app = TestApp::for_module::<QuotesHttpModule>()
             .await
             .expect("a decorated route boots");
@@ -232,7 +279,7 @@ mod routes {
 }
 
 /// A decorated job, whose refusal by the rate holds its retry back until the
-/// window's reset.
+/// next token.
 mod processor {
     use std::sync::Arc;
     use std::time::Duration;
@@ -290,7 +337,7 @@ mod processor {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_job_the_rate_refuses_waits_at_least_the_time_to_the_reset_before_its_retry() {
+    async fn a_job_the_rate_refuses_waits_at_least_the_time_to_the_next_token_before_its_retry() {
         let (_app, upstream) = crate::policy(ResilienceConfig {
             rate_limit: Some(1),
             rate_window: Duration::from_secs(30),
@@ -308,10 +355,10 @@ mod processor {
         let AttemptOutcome::Retry { after } = attempted(&container).await else {
             panic!("a 503 another attempt may clear retries");
         };
-        let reset = Duration::from_secs(30);
+        let to_the_token = Duration::from_secs(30);
         assert!(
-            after >= reset && after <= reset.mul_f64(1.2),
-            "the time to the reset, stretched by a fifth at most: {after:?}"
+            after >= to_the_token && after <= to_the_token.mul_f64(1.2),
+            "the time to the next token, stretched by a fifth at most: {after:?}"
         );
     }
 }

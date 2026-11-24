@@ -184,13 +184,12 @@ const RATE_LIMIT: CountBounds = CountBounds::new(
 
 const RATE_WINDOW: DurationBounds = DurationBounds::secs(
     Floor::AboveZero(
-        "a zero window resets on every call, so the count never passes one and no limit refuses \
-         a call",
+        "a zero window refills the bucket at every instant, so no limit refuses a call",
     ),
     Bound::new(
         24 * 60 * 60,
-        "a window past a day is a quota rather than a rate, and a count each replica keeps in \
-         memory, forgotten at its restart, holds no quota",
+        "a window past a day is a quota rather than a rate, and a bucket each replica keeps in \
+         memory, full again at its restart, holds no quota",
     ),
 );
 
@@ -203,9 +202,9 @@ const RATE_WAIT: DurationBounds = DurationBounds::millis(
     )),
     Bound::new(
         60 * 1000,
-        "a call waiting past a minute for the window's reset outwaits a request's default \
-         deadline three times over, holding its slot of the bulkhead, where there is one, all \
-         along; one that must wait longer is refused with a `Retry-After` naming the reset",
+        "a call waiting past a minute for its token outwaits a request's default deadline three \
+         times over, holding its slot of the bulkhead, where there is one, all along; one that \
+         must wait longer is refused with a `Retry-After` naming the time to that token",
     ),
 );
 
@@ -217,7 +216,7 @@ const RATE_WAIT: DurationBounds = DurationBounds::millis(
 ///
 /// Every wait is bounded: an attempt by [`timeout`](Self::timeout), the wait
 /// before a retry by [`backoff_ceiling`](Self::backoff_ceiling), a slot by
-/// [`concurrency_wait`](Self::concurrency_wait), the window's reset by
+/// [`concurrency_wait`](Self::concurrency_wait), a token of the rate limit by
 /// [`rate_wait`](Self::rate_wait), and the number of attempts by
 /// [`retries`](Self::retries); the calls waiting for a slot at once, by
 /// [`concurrency_waiters`](Self::concurrency_waiters).
@@ -284,8 +283,9 @@ pub struct ResilienceConfig {
     /// the series starting over: a probe whose call is cut at its timeout or
     /// its unit's deadline has failed, whether the policy or the unit's edge
     /// cut it there. A probe whose call is never sent — refused by the rate,
-    /// or its unit out of time before it — or whose caller drops it unanswered
-    /// before then counts as neither a success nor a failure, and the series
+    /// or its unit out of time before it — whose caller drops it unanswered
+    /// before then, or which answers an `Err` its method's `record_if`
+    /// refuses, counts as neither a success nor a failure, and the series
     /// keeps its count.
     #[config(bounds = BREAKER_PROBES)]
     pub breaker_probes: usize,
@@ -310,14 +310,18 @@ pub struct ResilienceConfig {
     pub concurrency_waiters: Option<usize>,
     /// How many attempts the policy sends its dependency per
     /// [`rate_window`](Self::rate_window), a retry included, `RATE_LIMIT`,
-    /// from 1 to a billion, `0` for none; defaults to none. An attempt past it
-    /// is not sent: the run ends refused, told the time to the window's reset,
-    /// unless [`rate_wait`](Self::rate_wait) reaches it. Each replica counts
-    /// its own attempts, so a limit the dependency sets for the whole app is
-    /// divided by the replicas sharing it. The window is fixed, so up to twice
-    /// the limit goes out within one window's length around its reset: a
-    /// dependency counting over a sliding window is given half the limit it
-    /// allows.
+    /// from 1 to a billion, `0` for none; defaults to none. It is a token
+    /// bucket: it holds that many tokens, starts full, and gains one every
+    /// `RATE_LIMIT`th of the window until it is full again. An attempt takes
+    /// a token to be sent, and one finding none free is not sent: the run
+    /// ends refused, told the time to the next token, unless
+    /// [`rate_wait`](Self::rate_wait) reaches it. Each replica keeps its own
+    /// bucket, so a limit the dependency sets for the whole app is divided by
+    /// the replicas sharing it. A bucket left idle for a window is full, and
+    /// sends `RATE_LIMIT` attempts at once, then `RATE_LIMIT` per window: up
+    /// to twice the limit goes out within one window's length after an idle
+    /// spell, so a dependency that counts every request of the last window is
+    /// given half the limit it allows.
     ///
     /// It counts attempts, not the requests one makes: a redirect the call's
     /// client follows, or a second request in one body, goes out inside the
@@ -326,20 +330,29 @@ pub struct ResilienceConfig {
     /// with `redirect::Policy::none()` answers a redirect as it came.
     #[config(bounds = RATE_LIMIT)]
     pub rate_limit: Option<usize>,
-    /// The window the rate limit counts over, `RATE_WINDOW_SECS`, whole
-    /// seconds from 1 to a day, and in code anything above zero up to a day;
-    /// defaults to a minute. It is fixed: the first attempt counted opens it,
-    /// and the count starts again once it has passed.
+    /// The window the rate limit counts over, the time an empty bucket takes
+    /// to fill, `RATE_WINDOW_SECS`, whole seconds from 1 to a day, and in code
+    /// anything above zero up to a day; defaults to a minute. No window opens
+    /// or resets: a token is back every [`rate_limit`](Self::rate_limit)th of
+    /// it, from the first one a full bucket gives.
     #[config(bounds = RATE_WINDOW)]
     pub rate_window: Duration,
-    /// The longest one attempt waits in all for the window's reset,
-    /// `RATE_WAIT_MS`, from 1 ms to a minute, `0` for no wait; defaults to
-    /// none, an attempt past the limit refused at once. A reset this wait or
-    /// the unit's deadline cannot reach is not waited for, the attempt refused
-    /// at once, and the wait is not the attempt's: its
-    /// [`timeout`](Self::timeout) starts when its call is sent. When the wait
-    /// ends the circuit breaker is asked again, so one that opened meanwhile
-    /// refuses the attempt unsent.
+    /// The longest one attempt waits for a token, `RATE_WAIT_MS`, from 1 ms to
+    /// a minute, `0` for no wait; defaults to none, an attempt finding no
+    /// token free refused at once. Attempts waiting are served in the order
+    /// they arrived: each reserves the token after the last one's, and one
+    /// arriving stands behind them all. A token this wait or the unit's
+    /// deadline cannot reach is not waited for, the attempt refused at once,
+    /// so no more attempts wait at once than tokens come within the wait. An
+    /// attempt waits once, the time it is told as it reserves its token, or
+    /// less: a call dropped while it waits, refused by the circuit breaker
+    /// once its wait ends or out of its unit's time by then gives its token
+    /// to the attempt behind it. A token keeps its instant however late the
+    /// runtime wakes the attempt before it, so two attempts sent after a wait
+    /// may go out closer than a token's interval by that lag. The wait is not
+    /// the attempt's: its [`timeout`](Self::timeout) starts when its call is
+    /// sent. When the wait ends the circuit breaker is asked again, so one
+    /// that opened meanwhile refuses the attempt unsent.
     #[config(bounds = RATE_WAIT)]
     pub rate_wait: Option<Duration>,
 }
@@ -908,16 +921,16 @@ mod tests {
             (
                 "RATE_WINDOW_SECS",
                 past(RATE_WINDOW.most().count),
-                "a window past a day is a quota rather than a rate, and a count each replica \
-                 keeps in memory, forgotten at its restart, holds no quota",
+                "a window past a day is a quota rather than a rate, and a bucket each replica \
+                 keeps in memory, full again at its restart, holds no quota",
             ),
             (
                 "RATE_WAIT_MS",
                 past(RATE_WAIT.most().count),
-                "a call waiting past a minute for the window's reset outwaits a request's default \
+                "a call waiting past a minute for its token outwaits a request's default \
                  deadline three times over, holding its slot of the bulkhead, where there is one, \
                  all along; one that must wait longer is refused with a `Retry-After` naming the \
-                 reset",
+                 time to that token",
             ),
         ] {
             let refused = read(&[(key, raw.as_str())])
@@ -1020,8 +1033,8 @@ mod tests {
         let age = "an age of no time forgets an outcome once the clock has moved past its answer, \
                    so the window counts only the outcomes answered at one instant; `0` turns the \
                    age off";
-        let window = "a zero window resets on every call, so the count never passes one and no \
-                      limit refuses a call";
+        let window =
+            "a zero window refills the bucket at every instant, so no limit refuses a call";
         for (key, why) in [
             ("TIMEOUT_MS", timeout),
             ("BACKOFF_FIRST_MS", backoff),
@@ -1297,7 +1310,7 @@ mod tests {
         );
     }
 
-    /// A wait for a slot or for the rate's reset pinned under a millisecond is
+    /// A wait for a slot or for the rate's token pinned under a millisecond is
     /// refused in words true of it, the timer its wait arms counting whole
     /// milliseconds; a millisecond is taken, and no wait is `None`, `0` from
     /// either variable, over a pin too.

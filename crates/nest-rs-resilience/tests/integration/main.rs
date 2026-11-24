@@ -1,9 +1,11 @@
 //! `nest-rs-resilience` in process: the documented wiring booted — one policy
 //! per instance, imported bare or pinned — a refusal answered by every edge,
-//! `#[resilient]`'s expansion run on each host it takes, and the middleware on
-//! a reqwest client sending real requests to a TLS peer double whose
-//! certificate a `TestAuthority` issued. The binary's allocator counts what a
-//! run allocates on its thread.
+//! `#[resilient]`'s expansion run on each host it takes, the middleware on a
+//! reqwest client sending real requests to a TLS peer double whose certificate
+//! a `TestAuthority` issued, the breaker driven beside a model of the
+//! reference's through the same timed traces, and each event a run tells its
+//! policy's subscriptions, with each read of a mechanism. The binary's
+//! allocator counts what a run allocates on its thread.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -12,8 +14,10 @@
     reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
 )]
 
+mod breaker;
 mod config;
 mod error;
+mod events;
 mod middleware;
 mod module;
 mod policy;
@@ -28,7 +32,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use nest_rs_core::{Instance, module};
-use nest_rs_resilience::{BreakerState, ResilienceConfig, ResilienceModule, ResiliencePolicy};
+use nest_rs_resilience::{
+    BreakerState, ResilienceConfig, ResilienceEvent, ResilienceEvents, ResilienceModule,
+    ResiliencePolicy,
+};
 use nest_rs_testing::HeadlessApp;
 
 /// No breaker and no retry: a row of a test sets what it is about.
@@ -73,6 +80,19 @@ fn breaker_wait<I: Instance>(policy: &ResiliencePolicy<I>) -> u64 {
         panic!("the breaker is open: {state:?}");
     };
     u64::from(nest_rs_core::__private::retry_after_secs(retry_after))
+}
+
+/// Every event `events` was told and has not answered yet, waiting for none.
+fn told(events: &mut ResilienceEvents) -> Vec<ResilienceEvent> {
+    let mut told = Vec::new();
+    loop {
+        // Outside tokio's budget, which would end a long read as if it waited.
+        let mut next = pin!(tokio::task::unconstrained(events.next()));
+        match next.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(Some(event)) => told.push(event),
+            Poll::Ready(None) | Poll::Pending => return told,
+        }
+    }
 }
 
 #[global_allocator]

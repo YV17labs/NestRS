@@ -1,0 +1,175 @@
+---
+title: Failures and fallbacks
+description: "Say which answers of a call count as the dependency failing, what answers in place of an error, and what happens to a unit's writes."
+sidebar:
+  order: 11.65
+---
+
+By default every `Err` a decorated method answers is the dependency failing: the
+breaker counts it and an idempotent call sends it again. Two keys say otherwise
+for the dependency's own answers, and a fallback answers in place of an error. In
+`page`, a missing post's `404` is sent once and counted for no failure:
+
+```rust title="crates/features/src/posts/service.rs"
+#[resilient(
+    upstream,
+    idempotent,
+    retry_if = |error| !error.missing(),
+    record_if = |error| !error.missing()
+)]
+pub async fn page(&self, post: Uuid) -> Result<String, ResilienceError<UpstreamError>> {
+    let url = format!("{}/previews/{post}", self.config.upstream_url);
+    let page = reqwest::get(url).await?.error_for_status()?;
+    Ok(page.text().await?)
+}
+```
+
+## What counts as a failure
+
+`retry_if` says which `Err` is sent again, `record_if` which one is a failure in
+the breaker, and the two are independent: one says nothing of the other. A `404`
+is the upstream's answer, and `page` answers it as
+`Err(ResilienceError::Failed(error))` for its caller to read with
+`error.missing()` ([the call's error](/fundamentals/resilience/#what-the-client-is-told));
+a `503` is attempted again and counted as a failure. An `Err` that `retry_if`
+refuses ends the run and is the method's answer.
+
+A predicate reads `self` and the arguments by reference, and `E` is the call's
+own error: a timeout is no `E`, so neither `retry_if` nor `record_if` reads it,
+and `fallback_if` reads it as `ResilienceError::TimedOut`. A `retry_if`,
+`retry_ok_if` or `record_if` that panics fails its attempt as a panic in the body
+does: one failure in the breaker, its savepoint rolled back, and the panic
+unwinds from the method. `fallback_if` and the fallback are asked once the run
+is over, so a panic in either unwinds from the method and fails nothing more.
+
+**An `Err` that `record_if` refuses is counted in neither direction.** It is no
+failure and no success either: a closed breaker's window holds nothing of it,
+and a half-open breaker's probe answering it hands its turn to the next call.
+While half-open, such answers neither close nor reopen the breaker, which stays
+half-open, one call at a time, until an `Ok` or a counted `Err` answers.
+
+`retry_ok_if` asks the same of an `Ok`, for a dependency answering "not ready
+yet" as a success: one it takes is sent again, and once the retries are spent the
+last `Ok` is the method's answer. A timeout is always a failure in the breaker,
+and always sent again by an idempotent method.
+
+An error whose chain carries a `Problem` with a `Retry-After` — an upstream's
+`429` passed on — holds its retry back at least that long. One asking past
+`BACKOFF_CEILING_MS` ends the run.
+
+An answer the dependency gave can also be the call's `Ok` — `Ok(None)` for a
+page it does not have, `Ok(Err(declined))` for a card it declined — neither
+attempted again nor counted as a failure. That is how a call run by hand, which
+reads no key, says it.
+
+## A fallback
+
+`fallback = method` names a method of `Self` that answers in place of the error
+a run ends on: the call's own, from its last attempt, or the policy's refusal —
+a timeout, an open breaker, a full bulkhead, a reached rate limit. It takes the
+decorated method's arguments, in order, then that error by value, and answers
+what the method answers; an `Err` it answers is the method's. `card` answers no
+card for a refusal, files it at `warn` with its chain, and leaves the upstream's
+own failure to its caller:
+
+```rust title="crates/features/src/posts/service.rs"
+#[resilient(
+    upstream,
+    fallback = no_card,
+    fallback_if = |error| !matches!(error, ResilienceError::Failed(_))
+)]
+pub async fn card(&self, post: Uuid) -> Result<Option<String>, ResilienceError<UpstreamError>> {
+    let url = format!("{}/previews/{post}", self.config.upstream_url);
+    let page = reqwest::get(url).await?.error_for_status()?;
+    Ok(Some(page.text().await?))
+}
+
+async fn no_card(
+    &self,
+    _post: Uuid,
+    refused: ResilienceError<UpstreamError>,
+) -> Result<Option<String>, ResilienceError<UpstreamError>> {
+    let error = nest_rs::core::error_message(&refused);
+    tracing::warn!(target: crate::posts::TARGET, %error, "link preview refused; answering no card");
+    Ok(None)
+}
+```
+
+`fallback_if` is asked first; left out, every error is answered, the policy's
+refusals included, and an error it refuses is the method's answer. The fallback
+runs once the run is over, under no policy: no timeout, no retry, counted in no
+breaker. `ResilienceError::Unsettled` never reaches it.
+
+Every attempt lends the arguments the fallback is then handed, so the method
+binds each to a plain name, none `mut`, takes no `&mut`, and clones what an
+attempt consumes, which rustc answers with `E0382` at the key. A handler naming
+its extractor whole, `id: Path<u32>`, takes it apart in its body; one binding it
+by a pattern, `Path(id): Path<u32>`, is refused. A fallback taking other
+arguments is rustc's `E0308` or `E0061` at the key, and one naming the method it
+answers for is refused. The fallback is always a method, whose signature is
+checked against the decorated one's: a closure or a free function answers
+through a method that calls it.
+
+A call run by hand has no key, and its `Result` is its fallback: an
+`.or_else(…)` on what `run` answers chooses what stands in for a refusal.
+
+## A unit's transaction
+
+Inside a unit holding a transaction — a mutating route's, a job's — each attempt
+of a method declaring `idempotent` or a `fallback` runs in a savepoint of it,
+whatever its retries, none included, and so does each attempt of
+`run_idempotent`. What the body writes through the data layer is kept only when
+the method answers that attempt's `Ok`, and rolled back otherwise, an `Ok` sent
+again by `retry_ok_if` included: a failed attempt leaves no write for the next to
+repeat, nor beside the error the method answers. The last attempt is rolled back
+before a fallback runs, and before the method answers an error `fallback_if`
+refused. A method run once with no fallback opens none, nor does any outside a
+transaction — a safe route, which runs on the pool: an `Err` there leaves what the
+body wrote, as it does with no policy.
+
+A savepoint the database cannot settle ends the method on
+`ResilienceError::Unsettled`, attempted no further and handed to no fallback: the
+unit cannot commit what the attempt wrote. Another statement of the unit, issued
+beside the method, waits until an attempt that sent a statement has settled; a
+method's future dropped mid-attempt leaves its unit unable to commit, as an
+[atomic block](/database/transactions/#atomic-blocks) dropped does.
+
+## Limits
+
+- **A body consuming or changing an argument its `record_if` reads** is rustc's
+  borrow error at the key. Under `record_if` on a method run once, the one
+  attempt lends its arguments, for the predicate to read once that attempt
+  answered. One the body consumes is `E0505`: the body consumes a clone. One
+  bound `mut` and changed is `E0502`: bind it plain and change a copy in the
+  body. A `&mut` the body writes through is `E0500`: the predicate reads the
+  error and the other arguments instead.
+- **A method lending its arguments to each attempt is `Send` only where each
+  argument it takes by value is `Sync`.** That is every idempotent method, every
+  one naming a `fallback`, and one run once under `record_if`, for each argument
+  its body only reads; a non-`Sync`
+  argument taken by value is refused as not `Send`, in rustc's words, naming no
+  key.
+- **A fallback has no time past its unit's deadline**: one that answers at once
+  answers for the unit, and one that waits is cut with it.
+- **Two calls joined in one transaction wait for each other**: the second's first
+  statement waits for the first's whole attempt and may be given up at its timeout,
+  counted as the dependency's failure. Send them one after the other, or outside
+  the transaction.
+- **A refusal reaching a tick, a listener or a hook is that unit's failure.** A
+  tick's, a listener's and a shutdown hook's are filed at `error` by their edge,
+  a tick's at every occurrence while the breaker is open. An init hook's fails
+  the boot naming the hook, the chain in the error `init` returns and on no log
+  line. A refused readiness indicator answers down, the chain in a `warn`.
+- **A decorated `#[liveness]` indicator refused by an open breaker fails the
+  liveness probe**, and the orchestrator restarts the process for a dependency's
+  outage: decorate readiness checks, never liveness ones. A `fallback` is how any
+of these units answers instead of failing.
+
+## Going further
+
+- [Resilience](/fundamentals/resilience/) — the decorator, its keys and what the
+  client is told.
+- [Circuit breaker](/fundamentals/circuit-breaker/) — what a counted failure
+  opens, and how its probes close it.
+- [Transactions](/database/transactions/) — the unit's transaction an attempt's
+  savepoint nests in.

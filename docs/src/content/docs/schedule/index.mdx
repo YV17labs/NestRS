@@ -90,6 +90,8 @@ impl AudioTasks {
   host, since an `anyhow::Error` owns its error. One borrowing it through
   `&'a self` is refused at `#[scheduled]` in rustc's words, not the framework's:
   `E0716` for an `async` method, `E0515` for one that is not.
+  A tick its policy refuses is reported failed and the next occurrence fires;
+  [what the line says](/schedule/ticks/#layers-around-a-tick).
 - **The cron method is thin.** Its only job is to decide *when* and
   *what payload* (here a synthetic file id). The plumbing — the object
   store, the `Jobs` handle, the queue — lives inside

@@ -54,8 +54,8 @@ enters. One past `BACKOFF_CEILING_MS` ends the run with that answer. The last
 answer comes back as it came; a refusal is a
 `reqwest_middleware::Error::Middleware`.
 
-Each request it hands on is one attempt of the policy, and the rate limit counts
-it once. A redirect the client follows is sent inside it ([what an attempt
+Each request it hands on is one attempt of the policy, and the rate limit, a
+token bucket, takes one token for it. A redirect the client follows is sent inside it ([what an attempt
 is](/fundamentals/bulkhead-and-rate-limit/#what-an-attempt-is)).
 
 <Aside type="caution">
@@ -63,6 +63,21 @@ The resilience middleware goes before `ReqwestMiddleware`: each attempt is then
 a client span of its own, numbered by `http.request.resend_count`. Added after
 it, it refuses every request, unsent, with an error saying so.
 </Aside>
+
+## What it tells
+
+What it does is told as the policy's own: its [lines](/fundamentals/resilience-events/#the-lines)
+on `nest_rs::resilience`, its [events](/fundamentals/resilience-events/) and its counters. Each names the policy's
+`instance`, and none names a host or a method: a request the middleware runs
+comes from no decorated method, so two clients sharing a policy are told apart
+by nothing it files. Give each client a policy of its own, one instance per
+dependency.
+
+A failure rides the retry's line, its event and the breaker's opening as its
+chain, and never the request's address: every URL in it is cut to its origin,
+its scheme, host and port, the userinfo, the path, the query and the fragment
+gone, since they hold what you sent. A status is told by its code alone
+(`the dependency answered 503`), never a header or a body.
 
 ## The answer's body
 

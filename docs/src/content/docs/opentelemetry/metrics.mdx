@@ -139,11 +139,13 @@ for the default one:
 | `nestrs.resilience.fallbacks` (`{fallback}`) | run a fallback answered in place of its error |
 
 A transition to `open` marked `nestrs.resilience.breaker.manual` is an
-operator's switch. Unmarked, it is failures opening the breaker, a probe failing,
-or a series' first probe its caller dropped once sent, unanswered before its
-timeout or its unit's deadline, the next call then probing. A climbing
-`refusals` is its clients being answered `503`, and its `limited` the rate a
-dependency allows reached.
+operator's switch. Unmarked, it is failures opening the breaker, a probe
+failing, or a probe its caller dropped once sent, unanswered before its timeout
+or its unit's deadline, no probe of its series having succeeded; the next call
+then probes. `refusals` counts the runs the policy ended on its own refusal,
+whether its caller is answered `503` or the method's fallback answers in its
+place, which `fallbacks` then counts too. Its `limited` is the rate a dependency
+allows reached.
 
 What a policy holds is read when the metric reader exports, on up-down
 counters keyed the same way — recorded on no call, and only for a mechanism
@@ -168,8 +170,11 @@ over that sum is `BreakerStats::failure_rate`. A dependency in trouble reads as
 open time has passed, where `transitions` counts `half_open` only once a probe
 is sent; and a window is forgotten as its breaker opens, so both `outcomes`
 read `0` until it has closed again. A policy built before
-`OpenTelemetry::init()` reports from its first call, one built after it at
-once, and one whose first call came before it not at all.
+`OpenTelemetry::init()` reports these reads from its first run, one built after
+it at once, and one whose first run came before `init()` not at all. A counter
+is made at its first record, so one first recorded before `init()` — a retry, a
+refusal, a transition or a fallback — records nothing after it either: start
+OpenTelemetry before the first call a policy runs.
 
 No convention names a circuit breaker or a retry policy, so the names and
 their attributes are NestRS's own, and API: they change only in a major.

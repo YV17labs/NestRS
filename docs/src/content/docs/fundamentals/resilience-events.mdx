@@ -1,0 +1,151 @@
+---
+title: Resilience events and reads
+description: "What a resilience policy tells your code and your operator: its events, its reads, the lines it files and the counters it makes."
+sidebar:
+  order: 11.95
+---
+
+`ResiliencePolicy::events()` opens a subscription to what a policy does from
+then on, and `next()` waits for each event. This one watches for the breaker
+opening of itself:
+
+```rust title="crates/features/src/posts/service.rs"
+use nest_rs::resilience::{BreakerPhase, ResilienceEvent};
+
+impl PostsService {
+    pub fn watch_upstream(&self) {
+        // The task holds the subscription and not the policy, so it ends
+        // with the app.
+        let mut events = self.upstream.events();
+        tokio::spawn(async move {
+            while let Some(event) = events.next().await {
+                if let ResilienceEvent::Transition { to, manual: false, .. } = event
+                    && to == BreakerPhase::Open
+                {
+                    // The dependency is failing: page whoever is on call.
+                }
+            }
+        });
+    }
+}
+```
+
+## The events
+
+| Event | Told when |
+|---|---|
+| `Retry` | an attempt answered what the run sends its call again after, as it is decided and before the wait: its `attempt`, the first being `1`, the `wait`, and the `error` — its chain, or the timeout's sentence, `None` for an `Ok` sent again |
+| `Timeout` | an attempt was given up at its bound, with the `timeout`: zero for a call its unit had no time left to send |
+| `Refusal` | the policy refused a call unsent: `ResilienceRefusal::Open`, `Full` or `Limited`, the first and the last with their `retry_after`; `Full` says neither its cause nor a count |
+| `Transition` | the breaker moved, `from` and `to` a `BreakerPhase`, and whether by hand (`manual`) |
+| `Fallback` | a fallback answers, with the `error` it answers for |
+| `Lag` | the subscription fell behind, `missed` events dropped |
+
+A subscription holds up to 256 unread events; past that the oldest are dropped
+and `next()` answers a `Lag` before the oldest one kept. Every subscription is
+told every event from its opening on, and `next()` answers `None` once the policy
+is dropped and every event it told was read. With none open the policy builds no
+event. An event names its call by `host` and `method` when a decorated method ran
+it, and by neither when `run`, `run_idempotent` or the middleware did: a call
+that should be named in its events is a decorated method. An `error` is the
+error's chain.
+
+## The reads
+
+What the policy holds now is read on it, each `None` for a mechanism that is off:
+
+| Read | Answers |
+|---|---|
+| `breaker_state()` | `Closed`, `Open` with its `retry_after`, or `HalfOpen`: what a call arriving now meets |
+| `breaker_stats()` | the `outcomes` its window holds and the `failures` among them, and `failure_rate()` from `0.0` to `1.0`; no outcome while open or half-open, the window being forgotten as the breaker opens |
+| `concurrency_running()` | the calls holding a slot of the bulkhead, each for its whole run; a call is in this read or the next, never both |
+| `concurrency_waiting()` | the calls waiting for a slot |
+| `rate_available()` | the tokens of the rate limit free now, none while an attempt waits for one |
+
+## The lines
+
+Every line is on `nest_rs::resilience` and names the policy's `instance`, every
+duration in whole milliseconds rounded up. A line about a call adds the `host`
+and `method` of the decorated method that ran it, and neither when `run`,
+`run_idempotent` or the middleware did. A policy files ten lines:
+
+| Message | Level | Fields |
+|---|---|---|
+| `attempt failed; retrying the call` | `debug` | `attempt`, `wait_ms`, `error` |
+| `attempt answered; retrying the call` | `debug` | `attempt`, `wait_ms` |
+| `no time left before the unit's deadline; not attempted again` | `debug` | `wait_ms`, `error` |
+| `the dependency asked a wait past the backoff's ceiling; not attempted again` | `debug` | `asked_ms`, `ceiling_ms`, `error` |
+| `an attempt's savepoint could not be settled; not attempted again` | `debug` | none |
+| `rate limit reached; waiting for a token` | `debug` | `wait_ms` |
+| `rate limit reached; the call is refused` | `debug` | `retry_after_ms` |
+| `bulkhead full; the call is refused` | `debug` | `waiters`, the bound met when every place to wait was taken |
+| `the call ended on an error; its fallback answers` | `debug` | `error` |
+| `circuit breaker changed state` | `warn` | `state`; an opening by failures adds `failed`, `window`, `open_ms` and `error`, a switch by hand `manual`, and an opening by hand its `open_ms` |
+
+The first is a retry after a failure and the second a retry of an `Ok` sent again
+by `retry_ok_if`, which has no `error`. The third and fourth are a retry left but
+not made. Each transition of the breaker files the last line, probes and switches
+by hand included, and only an opening by failures adds the `error` of the failure
+that opened it. An `error` is the error's chain with every URL in it cut to its
+origin, or the timeout's sentence.
+
+A call an open breaker refuses and a run ending on a timeout file no line of
+their own: the breaker said it opened once, and each caller is answered its
+refusal. Each mechanism's page says what it files:
+[the breaker's](/fundamentals/circuit-breaker/#what-it-files),
+[the bulkhead's and the rate's](/fundamentals/bulkhead-and-rate-limit/).
+
+A line carries the error's sentence, so an error quoting a payload value puts it
+on the line: keep it out of the error's message, as `UpstreamError` keeps the URL
+out ([Resilience](/fundamentals/resilience/#what-the-client-is-told)).
+
+## The counters
+
+Once telemetry exports, every policy counts its breaker's transitions, its
+retries, the refusals its runs end on and its fallbacks, and observes its reads
+as up-down counters: [the instruments](/opentelemetry/metrics/#resilience-policies)
+are listed there, each by the policy's `instance`.
+
+## A line, an event and a counter each say their own fact
+
+- A retry's line and event are told as it is decided, before the wait; its
+  counter counts the call once sent again. A retry the policy then refuses unsent
+  counts as that refusal.
+- A call an open breaker refuses and a run ending on a timeout are counted as
+  refusals and told as events, and file no line.
+- A timeout the run retries is told as a `Timeout` event and counted by no
+  counter.
+- A response of `ResilienceMiddleware` its caller drops while a read of its body
+  has waited past the bound counts as a timeout in the breaker, and no caller is
+  left to tell: no event says it and no refusal counts it, and only a
+  `Transition` follows, when that failure opens the breaker.
+- A `Transition` event says `from`, `to` and `manual`, and not what opened the
+  breaker: that is on the `warn` alone. A wait for a token, a retry given up and
+  an unsettled savepoint are lines alone.
+
+## With `#[tracing::instrument]`
+
+`#[tracing::instrument]` goes above `#[resilient]` or below, and the order says
+what the span covers. Below, one span covers the whole run — every attempt, the
+waits between them, what the policy refuses unsent and the fallback — and its
+`err` and `ret` record what the method answers. Above, each attempt opens a span
+of its own, and `err` and `ret` record what that attempt answered, the
+dependency's own error; the fallback runs outside every attempt's span, and the
+token `cancel` names is no argument, so no span records it. Above, the decorator
+reads the body as `tracing-attributes` 0.1 wraps it, and refuses one wrapped
+otherwise, saying to write `#[resilient]` above.
+
+## Limits
+
+- **A policy whose first run precedes `OpenTelemetry::init()`** never reports
+  its observed reads, and a counter it first counts on before then never reports
+  either: start OpenTelemetry before the first call a policy runs.
+- **`ResilienceEvents` offers `next()` alone**, no `Stream`.
+
+## Going further
+
+- [Metrics](/opentelemetry/metrics/#resilience-policies) — every instrument, its
+  unit and its attributes.
+- [Circuit breaker](/fundamentals/circuit-breaker/#what-it-files) — the line and
+  the event of a transition.
+- [Resilience](/fundamentals/resilience/#test-it) — reading a policy in a test.

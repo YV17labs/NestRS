@@ -92,9 +92,10 @@ stable major, and no release candidate holds it.
 
 **When a forced major comes**, 8.0 stays mechanical: it moves the dependency, takes what that move requires, and ships
 an upgrade guide. No redesign rides along. It also refuses what a 7.x minor deprecated, each listed under its
-changelog's *Deprecated*, and moves what only a break can: `#[operations]` hands every attribute of a GraphQL operation
-but `#[resilient]` to the field it generates, as 7.0 did, so one reading the method's own `self` —
-`#[tracing::instrument(fields(depot = self.depot.0))]` — compiles only once 8.0 keeps them on the method, a move that
+changelog's *Deprecated*, and moves what only a break can: `#[operations]` keeps `#[resilient]` on a GraphQL
+operation's method, plain or under a `#[cfg_attr]`, and hands every other attribute to the field it generates, as 7.0
+did, so one reading the method's own `self` — `#[tracing::instrument(fields(depot = self.depot.0))]` — compiles only
+once 8.0 keeps them on the method, a move that
 refuses a 7.0 attribute naming a parameter the field leaves out. `SECURITY.md` already bounds its pace: a major ships at
 most every six months, announced four weeks ahead with its upgrading guide. A rare, small major is the healthy outcome.
 A long line that holds a vulnerable or outdated library is not.
@@ -118,7 +119,7 @@ to what NestRS already ships:
 | `@nestjs/authorization` | `nest-rs-authz`: abilities, row-level filtering, per-field masking, on every edge |
 | `@nestjs/outbox` | the queue's transactional push: a push inside a unit commits with it, and a relay files it (`transactional-outbox.md`) |
 | `@nestjs/http-client` | the app's own `reqwest` client with `nest_rs::reqwest::ReqwestMiddleware` (trace context and client spans), and `nest_rs::resilience::ResilienceMiddleware` for its timeouts and retries |
-| `@nestjs/resilience` | `nest-rs-resilience`, for 7.1 (`changelog/7.1.md`): `#[resilient(field)]` on the method making the call, on a provider as on a handler of every edge, a scheduled tick included — `idempotent` where it may be sent again, and a method's own `timeout` and `retries`, every value checked by the compiler — under a named policy per dependency: a timeout per attempt within the unit's deadline, retries when the caller declares the call idempotent, a count-window circuit breaker with an age, a series of probes, a state read and a switch by hand, a bulkhead bounding its waiters, and an outbound rate limit over a fixed window — every refusal a `503` with the `Retry-After` it knows, its state per process (`.claude/decisions/resilience-policy.md`) |
+| `@nestjs/resilience` | `nest-rs-resilience`, for 7.1 (`changelog/7.1.md`): `#[resilient(field)]` on the method making the call, on a provider as on a handler of every edge, a scheduled tick included, with nine keys checked by the compiler — `idempotent` where it may be sent again, `timeout` and `retries`, `retry_if`, `retry_ok_if` and `record_if` to classify an answer, `fallback` and `fallback_if` for the method answering in its place, `cancel` for the attempt's token — each attempt of an idempotent or fallback method in a savepoint of the unit's transaction, under a named policy per dependency: a timeout per attempt within the unit's deadline, retries when the caller declares the call idempotent, a count-window circuit breaker with an age, a series of probes, a state read and a switch by hand, a bulkhead bounding its waiters, and an outbound token bucket — every refusal a `503` with the `Retry-After` it knows, events readable in code, reads and instruments on the meter, its state per process. Open for 8.0: every attribute of a GraphQL operation kept on its method, where 7.1 keeps `#[resilient]` alone (`.claude/decisions/resilience-policy.md`) |
 
 ## 4. Not planned, and why
 

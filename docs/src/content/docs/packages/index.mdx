@@ -120,7 +120,7 @@ event as around a request. See [Interceptors](/fundamentals/interceptors/) and
 | [`nest-rs-opentelemetry`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-opentelemetry) | `opentelemetry` | Logs, traces, metrics, W3C propagation, OTLP export | [OpenTelemetry](/opentelemetry/) |
 | [`nest-rs-server-timing`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-server-timing) | `server-timing` | W3C `Server-Timing` response header (independent of OTel) | [Server-Timing](/server-timing/) |
 | [`nest-rs-reqwest`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-reqwest) | `reqwest` | The unit's trace and client telemetry on the reqwest client your app builds | [Calling another service](/fundamentals/calling-another-service/) |
-| [`nest-rs-resilience`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-resilience) | `resilience` | `#[resilient]`, a method calling a dependency run under a named policy — a timeout per attempt, retries when idempotent, a circuit breaker read and switched by hand, a bulkhead, an outbound rate limit — and `ResilienceMiddleware` beside `reqwest` | [Resilience](/fundamentals/resilience/) |
+| [`nest-rs-resilience`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-resilience) | `resilience` | `#[resilient]`, a method calling a dependency run under a named policy — a timeout per attempt, retries when idempotent, which answers count and which are sent again, a fallback, a circuit breaker read and switched by hand, a bulkhead, an outbound token-bucket rate limit, each attempt of an idempotent call or one with a fallback in a savepoint of its unit's transaction — its events and reads in code, and `ResilienceMiddleware` beside `reqwest` | [Resilience](/fundamentals/resilience/) |
 
 ## Developer tools
 
@@ -243,10 +243,10 @@ either. Name each at a requirement compatible with the framework's: the
 libraries NestRS's own API is written in keep one major for the whole 7.x line
 ([Third-party libraries](/semver/#third-party-libraries)).
 
-**GraphQL** used to be the one exception, and no longer is: `#[operations]` wraps
-async-graphql's `#[Object]`, but it now pins that expansion to the framework's
-own re-export, so `nest-rs --features graphql` alone compiles a resolver.
-`async-graphql` returns to the rule above — yours when your code names it,
+**GraphQL** follows the same rule: `#[operations]` wraps async-graphql's
+`#[Object]` and pins that expansion to the framework's own re-export, so
+`nest-rs --features graphql` alone compiles a resolver. `async-graphql` is
+yours when your code names it,
 which for its *types* you can avoid entirely with
 `use nest_rs::graphql::async_graphql::{Context, Result};`, and for its *derives*
 you cannot, exactly as for `serde`.

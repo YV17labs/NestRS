@@ -42,7 +42,7 @@ resolver — carries across intact.
 | NestJS | NestRS |
 |---|---|
 | `@Module({ imports, providers })` | `#[module(imports = [...], providers = [...])]` |
-| `@Module({ controllers: [...] })` | the same `providers` list — there is no `controllers` key |
+| `@Module({ controllers: [...] })` | the same `providers` list, which holds the controllers too |
 | `@Injectable()` | `#[injectable]` |
 | `@Controller('users')` | `#[controller(path = "/users")]` |
 | `@Get()` / `@Post()` methods | `#[get("/")]` / `#[post("/")]` in a `#[routes] impl` |
@@ -66,9 +66,9 @@ resolver — carries across intact.
 | `onModuleDestroy()` / `beforeApplicationShutdown(signal)`, run before the server closes | `#[on_module_destroy]` / `#[before_application_shutdown]`, run once every transport has drained; work due at the signal waits on `stopping()` on an injected `Arc<AppLifecycle>` ([why](/fundamentals/lifecycle/#the-five-phases)) |
 | `onApplicationShutdown(signal)` | `#[on_application_shutdown]`; the signal is `cause()` on an injected `Arc<AppLifecycle>` (`StopCause::Terminate`, `Interrupt`, …) |
 | `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `<PREFIX>_<NS>__<KEY>` |
-| `XModule.forRootAsync({ useFactory })` | none, by design: a config comes from `for_root`, the environment or a `_FILE`; a resource computed from another provider is a factory [reading `ConfigModule::resolved`](/extending/package/#a-resource-it-opens) |
+| `XModule.forRootAsync({ useFactory })` | a config from `for_root`, the environment or a `_FILE`; a resource computed from another provider is a factory [reading `ConfigModule::resolved`](/extending/package/#a-resource-it-opens) |
 | `ServeStaticModule.forRoot({ rootPath })` | `StaticFilesModule::for_root(StaticFilesConfig { root, .. })` — or `for_root(Embedded::of::<WebAssets>())` for a folder embedded in the binary |
-| `@nestjs/resilience` | `#[resilient(field)]` on the method making the call, `idempotent` where it may be sent again, under a [resilience policy](/fundamentals/resilience/) per dependency (`ResiliencePolicy<I>`, which `ResilienceModule<I>` builds): a timeout per attempt, retries, a circuit breaker read and switched by hand, a bulkhead and an outbound rate limit; [`ResilienceMiddleware`](/fundamentals/resilience-middleware/) on your reqwest client |
+| `@nestjs/resilience` | `#[resilient(field)]` under a [resilience policy](/fundamentals/resilience/) per dependency, and [`ResilienceMiddleware`](/fundamentals/resilience-middleware/) on your reqwest client; every capability is mapped [below](#resilience-capability-by-capability) |
 | `Test.createTestingModule(...)` | `TestApp` booting the real `ApiModule` |
 | `NestFactory.createApplicationContext(...)`, then `app.close()` | `App::builder()…build()`, `init()`, then `close()` ([running without serving](/fundamentals/app-state/#running-without-serving)) |
 | `nest g resource users` | `nestrs g resource users` |
@@ -112,30 +112,26 @@ imports `UsersHttpModule` and `UsersGraphqlModule` and a worker that imports
 neither. Dropping the import unmounts the routes, and there is no second list to
 keep in sync with the first.
 
-## No exports array
+## Visibility is Rust's
 
 In NestJS a provider is private to its module until you add it to `exports`,
-and a consumer imports the whole module to reach it. NestRS has no per-module
-export list. A provider becomes shareable by exposing a `pub trait` and binding
-it in the module's `providers` as `SomeProvider as dyn Trait`; a consumer then
-injects `Arc<dyn Trait>`.
+and a consumer imports the whole module to reach it. In NestRS a provider
+becomes shareable by exposing a `pub trait` and binding it in the module's
+`providers` as `SomeProvider as dyn Trait`; a consumer then injects
+`Arc<dyn Trait>`.
 
-Visibility is Rust's job. The container is flat, and the orphan and coherence
-rules already decide what a crate can name. Adding an `exports` list on top of
-that would be a second, redundant gate, so there is not one.
+Visibility is Rust's job: the container is flat, and `pub` with the orphan and
+coherence rules decides what a crate can name, the one gate.
 
-## Wiring is checked at boot, not on the first request
+## Wiring is checked at boot
 
-NestJS resolves the dependency graph as the app instantiates, and a bad wire
-often surfaces as a `Cannot resolve dependency` the first time a route runs.
-NestRS records every module's imports and every provider's dependencies at
-compile time. At startup, `App::builder().build()` walks that graph.
+NestJS resolves the dependency graph as the app instantiates. NestRS records
+every module's imports and every provider's dependencies at compile time, and
+at startup `App::builder().build()` walks that graph.
 
 A provider that injects something its module cannot reach fails startup with an
-error naming the missing dependency and the fix — never a runtime resolution
-error minutes after deploy. The reflex to test-request an endpoint just to
-confirm it wired up does not carry over; if it **boots**, it's wired — and it
-boots in milliseconds, so you find out immediately.
+error naming the missing dependency and the fix. If it **boots**, it's wired —
+and it boots in milliseconds, so you find out immediately.
 
 <Aside type="note">
   This is [property 5 in *Why NestRS*](/why/#5-wiring-verified-at-boot). The
@@ -145,11 +141,10 @@ boots in milliseconds, so you find out immediately.
 
 ## Every config field has an environment variable
 
-In NestJS the two configuration paths rarely line up: some knobs live in a
-`forRoot` literal in code, others behind an untyped
-`configService.get('SOME_KEY')`, and which is which is a per-module habit.
-NestRS makes it a framework rule instead. Every field of every `nest-rs-*`
-module config is reachable both ways:
+In NestJS a knob lives in a `forRoot` literal in code or is read through
+`configService.get('SOME_KEY')`, as each module chooses. In NestRS it is a
+framework rule: every field of every `nest-rs-*` module config is reachable
+both ways:
 
 1. **Pinned in code** — `Module::for_root(MyConfig { .. })`, type-checked by
    the compiler.
@@ -181,13 +176,111 @@ the readiness probe instead of surfacing as a mystery three requests later.
   the framework reads is in the [env reference](/configuration/env-reference/).
 </Aside>
 
+## Resilience, capability by capability
+
+`@nestjs/resilience` gathers its capabilities as decorators and a service;
+NestRS carries them as keys of one decorator, `#[resilient(field, …)]`, on the
+method making the call, under a policy per dependency. The field names the
+policy, an `Arc<ResiliencePolicy<I>>` that `ResilienceModule<I>` builds, so an
+app that forgets the import does not boot. The policy's settings are the
+variables `<PREFIX>_RESILIENCE__<INSTANCE>__<KEY>`, `<PREFIX>_RESILIENCE__<KEY>`
+for the default instance, or a `for_root` value; the keys below are written as
+the variable's last segment. [Resilience](/fundamentals/resilience/), [Failures and fallbacks](/fundamentals/failures-and-fallbacks/)
+and [Resilience events and reads](/fundamentals/resilience-events/) are the pages
+to read in full.
+
+```rust title="a method under a policy, from the crate's tests"
+#[resilient(
+    previewer,
+    idempotent,
+    retry_if = |error| !error.missing(),
+    record_if = |error| !error.missing()
+)]
+async fn page(&self, post: u64) -> Result<String, ResilienceError<PreviewFailed>> {
+    let url = format!("{}/previews/{post}", self.config.upstream_url);
+    let page = self.http.get(url).send().await?.error_for_status()?;
+    Ok(page.text().await?)
+}
+```
+
+### The policy and its order
+
+| `@nestjs/resilience` | NestRS | What NestRS does |
+|---|---|---|
+| `@Resilience(preset)`, `@Retry`, `@Timeout`, `@CircuitBreaker`, `@Bulkhead`, `@Fallback`, on a handler or a class | `#[resilient(field, …)]` on the method making the call: a provider's, or a handler of every edge but a WebSocket connection hook, which calls a decorated method | One decorator, on each method making a call, which names its policy. |
+| `ResilienceService.preset(name)` / `create(options)`, `policy.execute(fn, { source })` | an injected `Arc<ResiliencePolicy<I>>`; `run` and `run_idempotent` for a call that is part of a method | A policy is named by a type and built from its variables or `for_root`, never inline. A call run by hand is told with no `host` and no `method`; a decorated method is told with its own, so a method that wants its name in an event is decorated. |
+| `ResiliencePolicy.wrap(…)`, in any order | the one order: the fallback, the bulkhead's slot for the whole run, then each attempt under the unit's deadline, the breaker, the rate and the timeout | One order. |
+| `ResilienceContext.run(scope, fn)` | the unit's ambient `Deadline` | The deadline bounds every attempt and every wait; no attempt is ambient. |
+| `ResilienceModuleOptions.defaults`, merged under every preset and decorator | `ResilienceConfig`'s defaults, and `ResilienceModule::for_root((Upstream, config))` for a base per instance | Each policy reads its own variables over its own base. |
+| `ExecuteOptions.signal`, the caller's own cancellation | the caller drops the run's future | An attempt in flight is dropped with it, counted in neither direction before its bound and as a timeout past it; a slot, a token or a probe's turn it held is given back. |
+
+### Retries
+
+| `@nestjs/resilience` | NestRS | What NestRS does |
+|---|---|---|
+| `retry.attempts` (the total, 3 by default, `Infinity`) | `RETRIES`, or `retries = N` on an `idempotent` method | Counts the sends after the first: `RETRIES` from 1 to 10, `0` for none, 2 by default; `retries` from 1 to 10. |
+| `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS` | One curve: doubling, with ±20 % of jitter. A `Retry-After` the dependency asks is waited whole; one past `BACKOFF_CEILING_MS` ends the run. |
+| `retry.retryIf(error, attempt)` | `retry_if = F`, with `F: Fn(&E) -> bool`, on an `idempotent` method | Every `Err` is sent again unless `F` says no. A timeout is sent again and read by no predicate. |
+| `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, with `F: Fn(&T) -> bool`, on an `idempotent` method | On every host, a handler included. Once the retries are spent, the last `Ok` is the answer. |
+| `idempotent`, else `GET`, `HEAD`, `OPTIONS` and GraphQL queries | `idempotent` on the decorator | Always written by the developer, for every method. `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods, `QUERY` and `Idempotency-Key`. |
+| a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body; inside a transaction, each attempt of an `idempotent` method, or of one naming a `fallback`, runs in a savepoint of it | The unit is not replayed. A failed attempt's writes are rolled back; a savepoint the database cannot settle ends the run on `ResilienceError::Unsettled`. |
+| `@Timeout(d)`, per attempt | `TIMEOUT_MS`, or `timeout = "2s"` on a method, from `"1ms"` to `"10m"` | Every policy has a timeout, 5 seconds by default; the unit's deadline ends an attempt sooner. |
+| `@Signal()`, `AttemptContext.signal`, `ResilienceContext.signal` | `cancel = token` in a decorated method; the closure's argument in `run` and `run_idempotent` | The attempt's future is dropped at its bound, so the token is for work handed to another task. |
+| `AttemptContext.attempt`, `ResilienceContext.attempt` | a count the call keeps itself | A body, a predicate and a fallback read the method's arguments, and no attempt number; the closure `run_idempotent` takes is an `FnMut`, which counts its own calls. |
+
+### The circuit breaker
+
+| `@nestjs/resilience` | NestRS | What NestRS does |
+|---|---|---|
+| `slidingWindow` of a `count` | `BREAKER_WINDOW` | The same count of outcomes, 20 by default; `0` turns the breaker off. |
+| `slidingWindow` of a `time` of `A` | `BREAKER_AGE_SECS` of `A`, over a `BREAKER_WINDOW` of twice `minimumCalls` or more | An outcome is forgotten at its own age. The variable takes whole seconds; an age under a second is pinned through `for_root`. |
+| `failureRateThreshold` `T` and `minimumCalls` `M` | `BREAKER_FAILURES`, of `⌈T × M / 100⌉` | The threshold is a count of failures, read when a failure is counted: the breaker opens at that many failures, whatever the answers between them. A threshold of 50 % after ten calls is a `BREAKER_FAILURES` of 5. The default, ten failures of twenty, is not that mapping: set `BREAKER_FAILURES` to carry a default breaker over. |
+| `openDuration` | `BREAKER_OPEN_SECS` | The same. |
+| `halfOpenMaxCalls`, sent together and judged by their rate | `BREAKER_PROBES`, in a row | Probes go one at a time; one failed probe opens the breaker again. |
+| `recordIf(error)` | `record_if = F`, with `F: Fn(&E) -> bool` | An `Err` it refuses is counted in neither direction, and a probe hands its turn on. |
+| `breaker.state`, `breaker.stats` | `breaker_state()`, `breaker_stats()` (`outcomes`, `failures`, `failure_rate()` from 0 to 1) | The age is applied at the read. |
+| `breaker.trip()`, `breaker.reset()` | `open_breaker(duration)`, `close_breaker()` | An opening says for how long. |
+| `isClientError()` as the default filter | every `Err` a failure, unless `record_if` says otherwise | The developer classifies; `ResilienceMiddleware` reads statuses. |
+
+### The bulkhead and the rate
+
+| `@nestjs/resilience` | NestRS | What NestRS does |
+|---|---|---|
+| `bulkhead.maxConcurrent`, `maxQueue`, `queueTimeout` | `CONCURRENCY`, `CONCURRENCY_WAITERS`, `CONCURRENCY_WAIT_MS` | Off by default. The slot is held for the whole run, its retries included. |
+| `bulkhead.active`, `bulkhead.queued` | `concurrency_running()`, `concurrency_waiting()` | A call is in one of the two at any instant. |
+| a rejection's `reason`, `active` and `queued` | the `Full` variant of `ResilienceError` | The error names neither a cause nor a count; the `debug` line's `waiters` and the two reads do. |
+| `outboundRateLimit.limit`, `interval`, `maxWait`, a token bucket | `RATE_LIMIT`, `RATE_WINDOW_SECS`, `RATE_WAIT_MS`, a token bucket | Off by default. Counts attempts, a retry included. A token is waited for only when it comes within `RATE_WAIT_MS` and before the unit's deadline. A bucket left idle sends its whole limit at once, then a token at a time: up to twice the limit within one window's length. |
+| `limiter.available` | `rate_available()` | The same. |
+
+### The fallback
+
+| `@nestjs/resilience` | NestRS | What NestRS does |
+|---|---|---|
+| `@Fallback(method or fn, { handleIf })` | `fallback = method`, `fallback_if = F`, with `F: Fn(&ResilienceError<E>) -> bool` | The method is one of `Self`, its signature checked: the decorated method's arguments, then the error by value, answering what the method answers. It answers every error, the policy's refusals included, unless `fallback_if` says no, and runs under no policy. The failed attempt's savepoint is rolled back first; `ResilienceError::Unsettled` is never handed to it. A free function or a closure answers through a method of `Self` that calls it. |
+| `preset.fallback` for `execute()` | `.or_else(…)` on the `Result` a run answers | The same. |
+| `executeObservable`, committed once a value is emitted | `#[sse]` and `#[subscription]` | The policy runs the call that opens the stream, never the items it yields later. |
+
+### Events, reads and errors
+
+| `@nestjs/resilience` | NestRS | What NestRS does |
+|---|---|---|
+| `ResilienceEvents.events$`, the `nestjs:resilience:<type>` channels | `ResiliencePolicy::events()`, read with `next().await` | A subscription per policy, holding 256 events unread: one further behind is told how many it missed (`Lag`), and a send never runs a subscriber. The lines on `nest_rs::resilience` and the counters each say their own fact. |
+| `retry`, `timeout`, `circuit-open`, `circuit-half-open`, `circuit-closed`, `circuit-rejected`, `bulkhead-rejected`, `rate-limited`, `fallback` | `ResilienceEvent`'s `Retry`, `Timeout`, `Transition`, `Refusal` and `Fallback` | One `Transition` and one `Refusal`, each saying which; an error is its chain as text, never its value. |
+| `ResilienceService.circuitBreaker(name)`, `bulkhead(name)`, `circuitBreakers()` and `bulkheads()`, for an app to export | each policy injected by its type | A policy is reached by its type wherever it is injected; under the `opentelemetry` feature its reads are observed on the meter, by instance. |
+| `mapErrors`: `504`, `503`, `RpcException`, `WsException`, `GraphQLError`; `TIMEOUT`, `CIRCUIT_OPEN`, `BULKHEAD_FULL`, `RATE_LIMITED` | `ResilienceError`, through `ToProblem` | A refusal of the policy's is one `503` with the code `UNAVAILABLE` on every edge, and `Retry-After` where known; the variant tells the causes apart in code. `Failed` answers as the call's own error says. |
+| `mapErrors: false` | a method answering an error of its own | It maps the `ResilienceError` it holds, as it maps any error of its own. |
+
+A policy's state lives in its process: each replica keeps its own breaker,
+bulkhead and rate, and no store shares them. [The middleware](/fundamentals/resilience-middleware/)
+puts the same policy on your reqwest client.
+
 ## What runs differently
 
 Beyond the vocabulary, the machine underneath diverges: security holds by
 composition, a forgotten guard refuses the boot, there is no `forwardRef` and no
 runtime reflection, and the parameter's type is the decorator.
 [What runs differently](/coming-from-nestjs/what-runs-differently/) takes each,
-and what you will reach for and not find.
+and what NestRS does where you reach for a NestJS tool.
 
 ## What the port changes
 

@@ -21,6 +21,12 @@ unauthenticated, and an error from a connection check carries a DSN, an
 internal hostname or a driver message. Triage is one filtered log query;
 it is not a value anyone can read off an open port.
 
+An indicator under [`#[resilient]`](/fundamentals/resilience/) reports `down`
+while its breaker is open, so decorate `#[readiness]` checks only: a refused
+`#[liveness]` one fails the liveness probe, and the orchestrator restarts the
+process for a dependency's outage
+([the limit](/fundamentals/failures-and-fallbacks/#limits)).
+
 ## A first indicator
 
 ```rust title="crates/features/src/upstream/health/indicator.rs"

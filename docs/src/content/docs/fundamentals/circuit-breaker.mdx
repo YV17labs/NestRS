@@ -37,20 +37,49 @@ For thirty seconds each call is refused unsent: its client is answered `503` at
 once, its `Retry-After` counting down from `30`, instead of after a five-second
 timeout. Then one call probes, and the breaker closes or opens for thirty more.
 
-**A share is written as a count.** "Half the calls failed, after at least ten"
-is written `BREAKER_FAILURES=10` and `BREAKER_WINDOW=20`, the defaults: half of
+**A share is written as a count.** "Half the calls failed, ten of them at
+least" is written `BREAKER_FAILURES=10` and `BREAKER_WINDOW=20`, the defaults: half of
 a full window, and never before ten calls failed. Until the window holds twenty
 outcomes it still waits for ten failures, which makes it the stricter rule. Ten
 calls of which five failed leave it closed, where a rate counted from the tenth
 call opens it. A share `p`, never before `m` failures, is `BREAKER_FAILURES=m`
 and `BREAKER_WINDOW=m/p`: a quarter, never before five, is `5` of `20`.
 
+**A share, by an age.** A breaker configured by a time window, a failure rate and
+a minimum of calls maps to this one so: `BREAKER_AGE_SECS` is the time window,
+`BREAKER_WINDOW` is at least twice the minimum of calls, and `BREAKER_FAILURES` is
+the fewest failures that rate opens on, the rate times the minimum, rounded up.
+Half the calls failing, once at least ten calls answered, over sixty seconds, is
+`BREAKER_AGE_SECS=60`, `BREAKER_WINDOW=20` and `BREAKER_FAILURES=5`. The count is
+read as each failure is counted: the fifth failure within the age opens the
+breaker whatever answered between them, so it can open on a failure that rate
+would not open on yet. A window narrower than twice the minimum forgets by count
+failures that rate would still read. The defaults, ten failures of twenty, are
+not this mapping of half the calls after ten, which opens on five: a breaker
+moved here from that rule sets `BREAKER_FAILURES=5`.
+
+**An error the method does not count.** A method's `record_if` says which `Err`
+is the dependency failing. One it refuses is counted in neither direction, and
+the breaker files, counts and tells nothing of it: the window does not hold it, a probe
+answering it hands its turn on, and half-open the breaker neither closes nor
+opens again on it, but stays half-open, one call at a time, until an `Ok` or a
+counted `Err`. By default every `Err` is a failure. A timeout is no `Err` of the
+method's: no `record_if` reads it, and it is always a failure. A probe answering
+such an `Err` files nothing and leaves the breaker half-open, the next call
+probing.
+
+**An answer counts in the phase its attempt was let through in.** One sent before
+an opening counts nowhere once the breaker has closed again, whether its probes
+closed it or `close_breaker()` did: a late success does not push a fresh failure
+out of the new window, and a late failure does not open it.
+
 **One probe at a time.** While a call holds the probe's turn, every other call
 is refused, told what is left of that probe's own bound. The bound is the
 probe's timeout, its method's pin included, or what its unit's deadline leaves
-when that is sooner. While the probe waits for the rate's reset, it counts from
-the reset. Past the bound, a refused call is told a millisecond, the probe being
-given up at any moment.
+when that is sooner. While the probe waits for its token of the
+[rate limit](/fundamentals/bulkhead-and-rate-limit/#the-rate-limit), it counts
+from the instant the token is due. Past the bound, a refused call is told a
+millisecond, the probe being given up at any moment.
 
 ## An age and a series of probes
 
@@ -95,6 +124,15 @@ pub fn refused_for(upstream: &ResiliencePolicy<Upstream>) -> Option<Duration> {
 }
 ```
 
+`breaker_stats()` answers what the window counts now, a `BreakerStats`: its
+`outcomes`, its `failures`, and `failure_rate()` from `0.0` to `1.0`, `0.0` for a
+window holding none. It is `None` for a policy with no breaker. An outcome past
+`BREAKER_AGE_SECS` counts no more, and the window is forgotten as the breaker
+opens, so an open or half-open breaker reads none and a closed one counts afresh.
+With OpenTelemetry on, the window is the `nestrs.resilience.breaker.outcomes`
+instrument and the state `nestrs.resilience.breaker.status`
+([the metrics](/opentelemetry/metrics/#resilience-policies)).
+
 `open_breaker(duration)` takes the dependency out by hand, for a maintenance
 window or an outage you already know of. Every call is refused unsent for
 `duration`, counted from the call and replacing any open time the breaker had.
@@ -102,7 +140,7 @@ Then the dependency is probed as after any opening. `close_breaker()` sends
 every call again. Each forgets the window, and a call let through before it
 changes nothing once it answers. A probe answering a success after an opening
 closes nothing, and one answering a failure after a closing opens nothing. A
-probe waiting for the rate's reset loses its turn.
+probe waiting for its token of the rate limit loses its turn.
 
 Each answers `Result<(), BreakerError>`: `Off` for a policy with no breaker, and
 `OutOfRange` for an opening `breaker_open` would not take in code, none or past
@@ -114,22 +152,31 @@ was. Each moves this replica's breaker alone.
 Each transition is a `warn` on `nest_rs::resilience`,
 `circuit breaker changed state`, naming the `instance` and the `state` it
 entered: `open`, `half_open` or `closed`. Failures opening it add `failed`,
-`window` and `open_ms`. A switch by hand adds `manual = true`, and an opening
-its `open_ms`, filed even when it enters the state it found. Every duration is
-in whole milliseconds, rounded up.
+`window`, `open_ms` and `error`: what the last of them failed on, the error's
+chain with every URL in it cut to its origin, or the timeout's sentence for an
+attempt given up at its bound. A switch by hand adds `manual = true`, and an
+opening its `open_ms`, filed even when it enters the state it found. Every
+duration is in whole milliseconds, rounded up.
 
 The read and the line answer two questions. The read says `HalfOpen` once the
 open time has passed, what a call arriving then meets. The line says `half_open`
 only when a probe's call is sent, what the dependency meets. Over a series of
 probes, `half_open` is filed as its first probe is sent and nothing between two
-probes. A failed probe files `open` with its `failed`, `window` and `open_ms`,
-and the last success `closed`. A probe given up before its call is sent files
+probes. A failed probe files `open` with its `failed`, `window`, `open_ms` and
+`error`, and the last success `closed`. A probe given up before its call is sent files
 nothing. One dropped once its call is out, before its bound ends, files `open`
-when it was its series' first, and nothing after a success of the series. Each
+when no probe of its series has succeeded, and nothing after a success of the
+series. Each
 transition counts on `nestrs.resilience.breaker.transitions`, by
 `nestrs.resilience.breaker.state`, a manual one marked
 `nestrs.resilience.breaker.manual` ([the
 counters](/opentelemetry/metrics/#resilience-policies)).
+
+Code reads the same transitions on `ResiliencePolicy::events()`: a subscription
+is told each one as a `ResilienceEvent::Transition` carrying `from`, `to` (a
+`BreakerPhase`) and `manual`, in the order they took effect. What opened the
+breaker, its failures, the last one's error and the open time, is on the `warn`
+alone. With no subscription open, no event is built.
 
 ## Test it
 

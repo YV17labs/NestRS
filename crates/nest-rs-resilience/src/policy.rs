@@ -247,7 +247,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
     {
-        self.run_for(None, call)
+        self.run_once::<Result<T, ResilienceError<E>>, F, Fut>(None, call)
     }
 
     /// Run the idempotent `call`, attempting it again after a failed or timed
@@ -270,39 +270,12 @@ impl<I: Instance> ResiliencePolicy<I> {
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
     {
-        self.run_idempotent_for(None, call)
-    }
-
-    /// [`run`](Self::run), for `method` when a decorated method runs it.
-    pub(crate) fn run_for<T, E, F, Fut>(
-        &self,
-        method: Option<ResilientMethod>,
-        call: F,
-    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
-    where
-        F: FnOnce(CancellationToken) -> Fut,
-        Fut: Future<Output = Result<T, E>>,
-    {
-        self.run_once::<Result<T, ResilienceError<E>>, F, Fut>(method, call)
-    }
-
-    /// [`run_idempotent`](Self::run_idempotent), for `method` when a decorated
-    /// method runs it.
-    pub(crate) fn run_idempotent_for<T, E, F, Fut>(
-        &self,
-        method: Option<ResilientMethod>,
-        call: F,
-    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
-    where
-        F: FnMut(CancellationToken) -> Fut,
-        Fut: Future<Output = Result<T, E>>,
-        E: Error + 'static,
-    {
-        self.run_again::<Result<T, ResilienceError<E>>, F, Fut>(method, call)
+        self.run_again::<Result<T, ResilienceError<E>>, F, Fut>(None, call)
     }
 
     /// `call` run once, for `method` when a decorated method runs it, its
-    /// answer read as `R` reads a body's and answered as `R`.
+    /// answer read as `R` reads a body's and answered as `R`: what
+    /// [`run`](Self::run) runs, with no method.
     pub(crate) fn run_once<R, F, Fut>(
         &self,
         method: Option<ResilientMethod>,
@@ -318,7 +291,7 @@ impl<I: Instance> ResiliencePolicy<I> {
             call: Once::new(call),
             judge: judged::<R::Ok, R::Err>,
             attempt: Attempt::new(),
-            waits: Waits::within(),
+            wait: Wait::within(),
             run: None,
             policy: self,
             method,
@@ -329,7 +302,7 @@ impl<I: Instance> ResiliencePolicy<I> {
 
     /// The idempotent `call` run, for `method` when a decorated method runs
     /// it, each answer read as `R` reads a body's and the last answered as
-    /// `R`.
+    /// `R`: what [`run_idempotent`](Self::run_idempotent) runs, with no method.
     pub(crate) fn run_again<R, F, Fut>(
         &self,
         method: Option<ResilientMethod>,
@@ -346,7 +319,7 @@ impl<I: Instance> ResiliencePolicy<I> {
             call: Again::new(call),
             judge: judged_asking::<R::Ok, R::Err>,
             attempt: Attempt::new(),
-            waits: Waits::within(),
+            wait: Wait::within(),
             run: None,
             policy: self,
             method,
@@ -562,7 +535,7 @@ impl<'p, I: Instance> Run<'p, I> {
             call: Once::new(call),
             judge,
             attempt: Attempt::new(),
-            waits: Waits::within(),
+            wait: Wait::within(),
             run: self,
             answer: PhantomData,
         }
@@ -852,8 +825,8 @@ pin_project_lite::pin_project! {
     /// attempt, whose timer is armed once the call waits, and only when they
     /// come, the slot of the bulkhead it found none free of, the rate's reset
     /// and the backoff before a retry.
-    #[project = WaitsProj]
-    enum Waits<'p, I, B> {
+    #[project = WaitProj]
+    enum Wait<'p, I, B> {
         Within {
             #[pin]
             within: WithinHeld,
@@ -866,14 +839,14 @@ pin_project_lite::pin_project! {
             #[pin]
             admitted: Admitted<'p, I>,
         },
-        Backing {
+        BackingOff {
             #[pin]
             backoff: Sleep,
         },
     }
 }
 
-impl<I, B> Waits<'_, I, B> {
+impl<I, B> Wait<'_, I, B> {
     const fn within() -> Self {
         Self::Within {
             within: WithinHeld::new(Duration::ZERO, None),
@@ -882,7 +855,7 @@ impl<I, B> Waits<'_, I, B> {
 
     /// The attempt's bound, which the run holds whenever it waits on nothing else.
     fn bound(self: Pin<&mut Self>) -> Pin<&mut WithinHeld> {
-        let WaitsProj::Within { within } = self.project() else {
+        let WaitProj::Within { within } = self.project() else {
             unreachable!("an attempt is sent and answers while its run waits on nothing else");
         };
         within
@@ -935,7 +908,7 @@ impl<'p> Attempt<'p> {
     fn poll_call<I, B, C, R, J>(
         &mut self,
         run: &Run<'p, I>,
-        mut waits: Pin<&mut Waits<'p, I, B>>,
+        mut wait: Pin<&mut Wait<'p, I, B>>,
         mut call: Pin<&mut C>,
         judge: &J,
         cx: &mut Context<'_>,
@@ -955,7 +928,7 @@ impl<'p> Attempt<'p> {
                         Admission::Through(pass, bound) => Ok((pass, bound)),
                         Admission::Refused(refusal) => Err(refusal),
                         Admission::Postponed(at) => {
-                            waits.set(Waits::Admitting {
+                            wait.set(Wait::Admitting {
                                 admitted: Admitted {
                                     terms: run.terms,
                                     pass,
@@ -969,11 +942,11 @@ impl<'p> Attempt<'p> {
                     }
                 }
                 AttemptStage::Admitting => {
-                    let WaitsProj::Admitting { admitted } = waits.as_mut().project() else {
+                    let WaitProj::Admitting { admitted } = wait.as_mut().project() else {
                         unreachable!("an attempt waits for the reset it was told");
                     };
                     let admitted = ready!(admitted.poll(cx));
-                    waits.set(Waits::within());
+                    wait.set(Wait::within());
                     admitted
                 }
                 AttemptStage::Sending => {
@@ -981,13 +954,13 @@ impl<'p> Attempt<'p> {
                         call: call.as_mut(),
                         cancel: &mut self.cancel,
                     };
-                    let answered = ready!(waits.as_mut().bound().poll(pin!(making), cx));
+                    let answered = ready!(wait.as_mut().bound().poll(pin!(making), cx));
                     return Poll::Ready(self.settle::<C, R, J>(call, answered, judge));
                 }
                 AttemptStage::Answered => unreachable!("an attempt is polled after it answered"),
             };
             match admitted {
-                Ok((pass, bound)) => self.send(run, waits.as_mut(), pass, bound),
+                Ok((pass, bound)) => self.send(run, wait.as_mut(), pass, bound),
                 Err(refusal) => {
                     self.stage = AttemptStage::Answered;
                     return Poll::Ready(Err(refusal));
@@ -1003,7 +976,7 @@ impl<'p> Attempt<'p> {
     fn send<I: Instance, B>(
         &mut self,
         run: &Run<'p, I>,
-        waits: Pin<&mut Waits<'p, I, B>>,
+        wait: Pin<&mut Wait<'p, I, B>>,
         pass: Option<Pass<'p>>,
         bound: Bound,
     ) {
@@ -1015,7 +988,7 @@ impl<'p> Attempt<'p> {
         self.given_up = Some(cancel.clone().drop_guard());
         self.cancel = Some(cancel);
         self.bound = bound.wait;
-        waits.bound().reset(bound.wait, bound.until);
+        wait.bound().reset(bound.wait, bound.until);
         self.stage = AttemptStage::Sending;
     }
 
@@ -1085,7 +1058,7 @@ pin_project_lite::pin_project! {
         judge: J,
         attempt: Attempt<'p>,
         #[pin]
-        waits: Waits<'p, I, std::future::Pending<()>>,
+        wait: Wait<'p, I, std::future::Pending<()>>,
         run: &'r Run<'p, I>,
         answer: PhantomData<fn() -> R>,
     }
@@ -1105,7 +1078,7 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         this.attempt
-            .poll_call::<_, _, _, R, J>(this.run, this.waits, this.call, this.judge, cx)
+            .poll_call::<_, _, _, R, J>(this.run, this.wait, this.call, this.judge, cx)
     }
 }
 
@@ -1114,14 +1087,15 @@ pin_project_lite::pin_project! {
     /// taken, then the run's one attempt.
     struct RunOnce<'p, I, E, B, R, F, Fut, J> {
         stage: RunStage,
-        // Dropped in order: the call's future, then the attempt, handing a probe's
-        // turn on, then the run, freeing its slot.
+        // Dropped in order: the call's future, then the attempt and the wait, each
+        // handing on the turn of a probe it holds, sent or waiting for the rate's
+        // reset, then the run, freeing its slot.
         #[pin]
         call: Once<F, Fut>,
         judge: J,
         attempt: Attempt<'p>,
         #[pin]
-        waits: Waits<'p, I, B>,
+        wait: Wait<'p, I, B>,
         run: Option<Run<'p, I>>,
         policy: &'p ResiliencePolicy<I>,
         method: Option<ResilientMethod>,
@@ -1150,7 +1124,7 @@ where
                 this.policy,
                 *this.method,
                 this.enter,
-                this.waits.as_mut(),
+                this.wait.as_mut(),
                 cx
             ));
             match opened {
@@ -1160,6 +1134,7 @@ where
                 }
                 Err(refusal) => {
                     *this.stage = RunStage::Answered;
+                    released(this.call, this.wait);
                     return Poll::Ready(R::answered(Err(refusal.into())));
                 }
             }
@@ -1167,13 +1142,17 @@ where
         let (RunStage::Attempting, Some(run)) = (*this.stage, this.run.as_ref()) else {
             unreachable!("a run is polled after it answered");
         };
-        let attempted = ready!(
-            this.attempt
-                .poll_call::<_, _, _, R, J>(run, this.waits, this.call, this.judge, cx)
-        );
+        let attempted = ready!(this.attempt.poll_call::<_, _, _, R, J>(
+            run,
+            this.wait.as_mut(),
+            this.call.as_mut(),
+            this.judge,
+            cx
+        ));
         let ran = settled(run.finish(attempted));
         *this.run = None;
         *this.stage = RunStage::Answered;
+        released(this.call, this.wait);
         Poll::Ready(R::answered(ran))
     }
 }
@@ -1189,7 +1168,7 @@ pin_project_lite::pin_project! {
         judge: J,
         attempt: Attempt<'p>,
         #[pin]
-        waits: Waits<'p, I, B>,
+        wait: Wait<'p, I, B>,
         run: Option<Run<'p, I>>,
         policy: &'p ResiliencePolicy<I>,
         method: Option<ResilientMethod>,
@@ -1217,7 +1196,7 @@ where
                 this.policy,
                 *this.method,
                 this.enter,
-                this.waits.as_mut(),
+                this.wait.as_mut(),
                 cx
             ));
             match opened {
@@ -1227,6 +1206,7 @@ where
                 }
                 Err(refusal) => {
                     *this.stage = RunStage::Answered;
+                    released(this.call, this.wait);
                     return Poll::Ready(R::answered(Err(refusal.into())));
                 }
             }
@@ -1235,15 +1215,15 @@ where
             let (RunStage::Attempting, Some(run)) = (*this.stage, this.run.as_mut()) else {
                 unreachable!("a run is polled after it answered");
             };
-            if let WaitsProj::Backing { backoff } = this.waits.as_mut().project() {
+            if let WaitProj::BackingOff { backoff } = this.wait.as_mut().project() {
                 ready!(backoff.poll(cx));
-                this.waits.set(Waits::within());
+                this.wait.set(Wait::within());
                 run.resent = run.resent.saturating_add(1);
                 *this.attempt = Attempt::new();
             }
             let attempted = ready!(this.attempt.poll_call::<_, _, _, R, J>(
                 run,
-                this.waits.as_mut(),
+                this.wait.as_mut(),
                 this.call.as_mut(),
                 this.judge,
                 cx
@@ -1252,25 +1232,34 @@ where
                 let ran = settled(run.finish(attempted));
                 *this.run = None;
                 *this.stage = RunStage::Answered;
+                released(this.call, this.wait);
                 return Poll::Ready(R::answered(ran));
             };
             // Dropped before the backoff, so no wait holds the answer.
             drop(attempted);
-            this.waits.set(Waits::Backing {
+            this.wait.set(Wait::BackingOff {
                 backoff: tokio::time::sleep(wait),
             });
         }
     }
 }
 
+/// What a run holds let go as it answers, though its future is kept: the
+/// closure, with what it captured, and the attempt's bound, whose timer would
+/// wake the task once more.
+fn released<I, B, C: Call>(call: Pin<&mut C>, mut wait: Pin<&mut Wait<'_, I, B>>) {
+    call.release();
+    wait.set(Wait::within());
+}
+
 /// A run of `method` opened under `policy` through
 /// [`ResiliencePolicy::open`], its wait for a slot of the bulkhead, through
-/// `enter`, built only when none is free and held in `waits`.
+/// `enter`, built only when none is free and held in `wait`.
 fn poll_open<'p, I, E, B>(
     policy: &'p ResiliencePolicy<I>,
     method: Option<ResilientMethod>,
     enter: &E,
-    mut waits: Pin<&mut Waits<'p, I, B>>,
+    mut wait: Pin<&mut Wait<'p, I, B>>,
     cx: &mut Context<'_>,
 ) -> Poll<Result<Run<'p, I>, Refusal>>
 where
@@ -1278,20 +1267,20 @@ where
     E: Fn(&'p ResiliencePolicy<I>, &'p Bulkhead, Option<ResilientMethod>, Option<Instant>) -> B,
     B: Future<Output = Result<Run<'p, I>, Refusal>>,
 {
-    if let WaitsProj::Within { .. } = waits.as_mut().project() {
+    if let WaitProj::Within { .. } = wait.as_mut().project() {
         match policy.open(method) {
             Opened::Run(run) => return Poll::Ready(Ok(run)),
             Opened::Refused(refusal) => return Poll::Ready(Err(refusal)),
-            Opened::Full(bulkhead, deadline) => waits.set(Waits::Entering {
+            Opened::Full(bulkhead, deadline) => wait.set(Wait::Entering {
                 entering: enter(policy, bulkhead, method, deadline),
             }),
         }
     }
-    let WaitsProj::Entering { entering } = waits.as_mut().project() else {
+    let WaitProj::Entering { entering } = wait.as_mut().project() else {
         unreachable!("a run waits for the slot it found none free of");
     };
     let entered = ready!(entering.poll(cx));
-    waits.set(Waits::within());
+    wait.set(Wait::within());
     Poll::Ready(entered)
 }
 
@@ -1571,21 +1560,32 @@ mod tests {
 
     /// Each attempt's token is its own: live while its call runs and after it
     /// answers, so work the call handed on is not stopped by an answer, and
-    /// cancelled once the attempt is given up, the retry handed a fresh one.
+    /// cancelled as the attempt is given up, before its backoff, the retry
+    /// handed a fresh one.
     #[tokio::test(start_paused = true)]
     async fn each_attempts_token_lives_past_its_answer_and_is_cancelled_once_it_is_given_up() {
+        let timeout = Duration::from_millis(100);
         let policy = policy(ResilienceConfig {
-            timeout: Duration::from_millis(100),
+            timeout,
             retries: Some(1),
             breaker_window: None,
             ..ResilienceConfig::default()
         });
         let handed = std::cell::RefCell::new(Vec::new());
         let live_while_running = std::cell::RefCell::new(Vec::new());
+        let cancelled_at = Arc::new(std::sync::Mutex::new(None));
+        let started = tokio::time::Instant::now();
         let answered = policy
             .run_idempotent(|cancel: CancellationToken| {
                 handed.borrow_mut().push(cancel.clone());
                 let first = handed.borrow().len() == 1;
+                if first {
+                    let (token, at) = (cancel.clone(), Arc::clone(&cancelled_at));
+                    tokio::spawn(async move {
+                        token.cancelled().await;
+                        *at.lock().expect("one writer") = Some(tokio::time::Instant::now());
+                    });
+                }
                 let live_while_running = &live_while_running;
                 async move {
                     tokio::task::yield_now().await;
@@ -1611,6 +1611,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             [true, false],
             "the timed-out attempt's token is cancelled, the retry's lives past its answer"
+        );
+        assert_eq!(
+            *cancelled_at.lock().expect("one writer"),
+            Some(started + timeout),
+            "the timed-out attempt's token is cancelled as it is given up, before its backoff"
         );
 
         let mut handed = None;
@@ -1689,19 +1694,131 @@ mod tests {
         }
     }
 
+    /// What the run of a call making a [`SaysItsDrop`] answers.
+    type Says<'a> =
+        Pin<Box<dyn Future<Output = Result<&'static str, ResilienceError<Refused>>> + 'a>>;
+
     /// A call sent once has its future dropped before its run answers, the run
-    /// still held: what the future holds is let go when the answer is read.
+    /// still held: what the future holds is let go when the answer is read,
+    /// whether its closure is held in place or boxed past tokio's threshold.
     #[tokio::test(start_paused = true)]
     async fn a_call_sent_onces_future_is_dropped_before_its_run_answers() {
         let policy = retrying(0);
-        let dropped = std::cell::Cell::new(false);
-        let mut run = std::pin::pin!(policy.run(|_| SaysItsDrop(&dropped)));
-        let answered = std::future::poll_fn(|cx| run.as_mut().poll(cx)).await;
-        assert!(matches!(answered, Ok("answered")), "{answered:?}");
-        assert!(
-            dropped.get(),
-            "the future was dropped before the run answered"
-        );
+        for past in [false, true] {
+            let dropped = std::cell::Cell::new(false);
+            let says = &dropped;
+            let buffer = [7_u8; 16 * 1024 + 1];
+            let moving = move |_| {
+                std::hint::black_box(&buffer);
+                SaysItsDrop(says)
+            };
+            assert!(size_of_val(&moving) > 16 * 1024, "past the threshold");
+            let mut run: Says<'_> = if past {
+                Box::pin(policy.run(moving))
+            } else {
+                Box::pin(policy.run(|_| SaysItsDrop(says)))
+            };
+            let answered = std::future::poll_fn(|cx| run.as_mut().poll(cx)).await;
+            assert!(matches!(answered, Ok("answered")), "{answered:?}");
+            assert!(
+                dropped.get(),
+                "past the threshold: {past}; the future was dropped before the run answered"
+            );
+        }
+    }
+
+    /// A run lets its closure go as it answers, before the answer is read and
+    /// though its future is kept: a call sent once the policy refused unsent,
+    /// and a call made again, which holds its closure across its attempts.
+    #[tokio::test(start_paused = true)]
+    async fn a_runs_closure_is_dropped_before_its_answer_is_read() {
+        for (again, refused) in [(false, false), (false, true), (true, false), (true, true)] {
+            let policy = policy(ResilienceConfig {
+                retries: None,
+                breaker_window: Some(1),
+                breaker_failures: 1,
+                ..ResilienceConfig::default()
+            });
+            if refused {
+                policy
+                    .open_breaker(Duration::from_secs(10))
+                    .expect("an open time `breaker_open` takes");
+            }
+            let dropped = std::cell::Cell::new(false);
+            let gone = || dropped.set(true);
+            let held = OnDrop(&gone);
+            let call = move |_| {
+                let _held = &held;
+                async { Ok::<_, Refused>(()) }
+            };
+            let mut run: Dropped<'_> = if again {
+                Box::pin(policy.run_idempotent(call))
+            } else {
+                Box::pin(policy.run(call))
+            };
+            let answered = std::future::poll_fn(|cx| run.as_mut().poll(cx)).await;
+            assert_eq!(answered.is_err(), refused, "{answered:?}");
+            assert!(
+                dropped.get(),
+                "again: {again}, refused: {refused}; the closure was dropped before the answer \
+                 was read"
+            );
+        }
+    }
+
+    /// Counts the wakes of a task a test polls by hand.
+    struct CountsWakes(AtomicU32);
+
+    impl std::task::Wake for CountsWakes {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// A run lets its attempt's bound go as it answers: kept unread past the
+    /// instant that bound would have ended at, it wakes its task no more.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_kept_after_it_answers_is_woken_no_more_once_its_attempts_bound_passes() {
+        for again in [false, true] {
+            let policy = policy(ResilienceConfig {
+                timeout: Duration::from_secs(5),
+                retries: None,
+                breaker_window: None,
+                ..ResilienceConfig::default()
+            });
+            let gate = tokio::sync::Notify::new();
+            let call = |_| async {
+                gate.notified().await;
+                Ok::<_, Refused>(())
+            };
+            let mut run: Dropped<'_> = if again {
+                Box::pin(policy.run_idempotent(call))
+            } else {
+                Box::pin(policy.run(call))
+            };
+            let wakes = Arc::new(CountsWakes(AtomicU32::new(0)));
+            let waker = std::task::Waker::from(Arc::clone(&wakes));
+            let mut cx = Context::from_waker(&waker);
+            assert!(
+                run.as_mut().poll(&mut cx).is_pending(),
+                "its call waits, its bound's timer armed"
+            );
+            gate.notify_one();
+            let answered = run.as_mut().poll(&mut cx);
+            assert!(matches!(answered, Poll::Ready(Ok(()))), "{answered:?}");
+            let woken = wakes.0.load(Ordering::Relaxed);
+            tokio::time::advance(Duration::from_secs(6)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(
+                wakes.0.load(Ordering::Relaxed),
+                woken,
+                "again: {again}; no wake once the run answered"
+            );
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -2122,12 +2239,16 @@ mod tests {
             crate::resilient::resilient_method(|| "ShipmentsService", "track", None, None);
         let held = policy.begin(None).await.expect("the one slot");
         let started = tokio::time::Instant::now();
-        let (waited, crowded) =
-            tokio::join!(policy.run_for(Some(tracking), |_| answering()), async {
+        let (waited, crowded) = tokio::join!(
+            policy.run_once::<Ran, _, _>(Some(tracking), |_| answering()),
+            async {
                 tokio::task::yield_now().await;
-                let crowded = policy.run_for(Some(tracking), |_| answering()).await;
+                let crowded = policy
+                    .run_once::<Ran, _, _>(Some(tracking), |_| answering())
+                    .await;
                 (started.elapsed(), crowded)
-            },);
+            },
+        );
         drop(held);
         assert!(
             matches!(waited, Err(ResilienceError::Full { .. })),
@@ -2312,6 +2433,10 @@ mod tests {
     async fn answering() -> Result<(), Refused> {
         Ok(())
     }
+
+    /// What the run of [`answering`], or of any call answering as it does,
+    /// answers.
+    type Ran = Result<(), ResilienceError<Refused>>;
 
     /// Polls `run` once, into the wait it parks in. Moving the clock past that
     /// wait's end before `run` is polled again wakes it late, as a busy runtime
@@ -2776,7 +2901,7 @@ mod tests {
             let refused_at = tokio::time::Instant::now();
             let refused = nest_rs_core::__private::with_deadline(
                 left.map(|left| refused_at + left),
-                policy.run_for(Some(tracking), |_| answering()),
+                policy.run_once::<Ran, _, _>(Some(tracking), |_| answering()),
             )
             .await;
             assert!(
@@ -3107,44 +3232,36 @@ mod tests {
     }
 
     /// A run dropped while its probe's call is out hands the probe's turn on
-    /// before its slot of the bulkhead: the call that slot lets in, polled while
-    /// the attempt is torn down — on another worker, or here from the call's own
-    /// teardown — never meets a turn the dropped probe still holds.
+    /// before its slot of the bulkhead: the call waiting for that slot, polled
+    /// as soon as the freed slot wakes it — as a task another worker runs may
+    /// be, before the drop goes on — takes the turn the dropped probe handed on.
     #[tokio::test(start_paused = true)]
     async fn a_run_dropped_while_its_probe_is_out_hands_the_turn_on_before_its_slot() {
-        let policy = policy(ResilienceConfig {
-            concurrency: Some(1),
-            concurrency_wait: Some(Duration::from_secs(10)),
-            retries: Some(1),
-            backoff_first: Duration::from_secs(2),
-            backoff_ceiling: Duration::from_secs(2),
-            breaker_window: Some(1),
-            breaker_failures: 1,
-            breaker_open: Duration::from_secs(1),
-            ..ResilienceConfig::default()
-        });
-        let waiting =
-            std::cell::RefCell::new(Box::pin(policy.run(|_| async { Ok::<_, Refused>("sent") })));
-        let answered = std::cell::RefCell::new(None);
-        let poll_waiting = || {
-            let mut cx = Context::from_waker(std::task::Waker::noop());
-            if let Poll::Ready(answer) = waiting.borrow_mut().as_mut().poll(&mut cx) {
-                *answered.borrow_mut() = Some(answer);
-            }
-        };
+        let policy: &'static ResiliencePolicy<Upstream> =
+            Box::leak(Box::new(policy(ResilienceConfig {
+                concurrency: Some(1),
+                concurrency_wait: Some(Duration::from_secs(10)),
+                retries: Some(1),
+                backoff_first: Duration::from_secs(2),
+                backoff_ceiling: Duration::from_secs(2),
+                breaker_window: Some(1),
+                breaker_failures: 1,
+                breaker_open: Duration::from_secs(1),
+                ..ResilienceConfig::default()
+            })));
         let calls = AtomicU32::new(0);
         let mut holding = Box::pin(policy.run_idempotent(|_| async {
             if calls.fetch_add(1, Ordering::Relaxed) == 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 return Err(Refused);
             }
-            let _torn_down = OnDrop(&poll_waiting);
             std::future::pending::<Result<(), Refused>>().await
         }));
         park(&mut holding).await;
-        poll_waiting();
+        let waiting = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("sent") }));
+        waiting.poll_now();
         assert!(
-            answered.borrow().is_none(),
+            waiting.answered().is_none(),
             "it waits for the slot the run holds"
         );
         tokio::time::timeout(Duration::from_secs(5), holding.as_mut())
@@ -3154,13 +3271,11 @@ mod tests {
         assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
 
         drop(holding);
-        let answer = match answered.take() {
-            Some(answer) => answer,
-            None => waiting.into_inner().await,
-        };
+        let answer = waiting.answered();
         assert!(
-            matches!(answer, Ok("sent")),
-            "the call let in took the turn the dropped probe handed on: {answer:?}"
+            matches!(answer, Some(Ok("sent"))),
+            "woken by the slot the dropped run freed, it took the turn its probe handed on: \
+             {answer:?}"
         );
         assert_eq!(
             policy.breaker_state(),
@@ -3171,41 +3286,31 @@ mod tests {
 
     /// A run sent once, dropped while its probe's call is out, hands the
     /// probe's turn on before its slot of the bulkhead as a run sent again
-    /// does: the call that slot lets in never meets a turn the dropped probe
-    /// still holds.
+    /// does: the call that slot wakes takes the turn the dropped probe handed
+    /// on.
     #[tokio::test(start_paused = true)]
     async fn a_run_sent_once_dropped_while_its_probe_is_out_hands_the_turn_on_before_its_slot() {
-        let policy = policy(ResilienceConfig {
-            concurrency: Some(1),
-            concurrency_wait: Some(Duration::from_secs(10)),
-            retries: None,
-            breaker_window: Some(1),
-            breaker_failures: 1,
-            breaker_open: Duration::from_secs(1),
-            ..ResilienceConfig::default()
-        });
-        let waiting =
-            std::cell::RefCell::new(Box::pin(policy.run(|_| async { Ok::<_, Refused>("sent") })));
-        let answered = std::cell::RefCell::new(None);
-        let poll_waiting = || {
-            let mut cx = Context::from_waker(std::task::Waker::noop());
-            if let Poll::Ready(answer) = waiting.borrow_mut().as_mut().poll(&mut cx) {
-                *answered.borrow_mut() = Some(answer);
-            }
-        };
+        let policy: &'static ResiliencePolicy<Upstream> =
+            Box::leak(Box::new(policy(ResilienceConfig {
+                concurrency: Some(1),
+                concurrency_wait: Some(Duration::from_secs(10)),
+                retries: None,
+                breaker_window: Some(1),
+                breaker_failures: 1,
+                breaker_open: Duration::from_secs(1),
+                ..ResilienceConfig::default()
+            })));
         let mut holding = Box::pin(policy.run(|_| async {
             tokio::time::sleep(Duration::from_secs(1)).await;
             Ok::<_, Refused>("held")
         }));
         park(&mut holding).await;
-        let mut probing = Box::pin(policy.run(|_| async {
-            let _torn_down = OnDrop(&poll_waiting);
-            std::future::pending::<Result<&str, Refused>>().await
-        }));
+        let mut probing = Box::pin(policy.run(|_| std::future::pending::<Result<&str, Refused>>()));
         park(&mut probing).await;
-        poll_waiting();
+        let waiting = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("sent") }));
+        waiting.poll_now();
         assert!(
-            answered.borrow().is_none(),
+            waiting.answered().is_none(),
             "it waits for the slot, behind the run that probes once it has it"
         );
         policy
@@ -3220,18 +3325,71 @@ mod tests {
         );
 
         drop(probing);
-        let answer = match answered.take() {
-            Some(answer) => answer,
-            None => waiting.into_inner().await,
-        };
+        let answer = waiting.answered();
         assert!(
-            matches!(answer, Ok("sent")),
-            "the call let in took the turn the dropped probe handed on: {answer:?}"
+            matches!(answer, Some(Ok("sent"))),
+            "woken by the slot the dropped run freed, it took the turn its probe handed on: \
+             {answer:?}"
         );
         assert_eq!(
             policy.breaker_state(),
             Some(BreakerState::Closed),
             "and closed the breaker as the next probe"
+        );
+    }
+
+    /// A run dropped while its probe waits for the rate's reset hands the
+    /// probe's turn on before its slot of the bulkhead too: the call that slot
+    /// wakes takes the turn, waits for that reset in the dropped probe's place,
+    /// and closes the breaker once it is sent.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_dropped_while_its_probe_waits_for_the_reset_hands_the_turn_on_before_its_slot() {
+        let policy: &'static ResiliencePolicy<Upstream> =
+            Box::leak(Box::new(policy(ResilienceConfig {
+                concurrency: Some(1),
+                concurrency_wait: Some(Duration::from_secs(10)),
+                breaker_window: Some(1),
+                breaker_failures: 1,
+                breaker_open: Duration::from_secs(1),
+                ..rated(1, Duration::from_secs(60), Some(Duration::from_secs(60)))
+            })));
+        let mut failing = Box::pin(policy.run(|_| async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Err::<(), _>(Refused)
+        }));
+        park(&mut failing).await;
+        let mut probing = Box::pin(policy.run(|_| answering()));
+        park(&mut probing).await;
+        let waiting = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("sent") }));
+        waiting.poll_now();
+        assert!(
+            matches!(failing.await, Err(ResilienceError::Failed(Refused))),
+            "the rate's one attempt in its window fails, opening the breaker for a second"
+        );
+        tokio::time::advance(Duration::from_secs(1)).await;
+        park(&mut probing).await;
+        assert!(
+            waiting.answered().is_none(),
+            "it waits for the slot the probe holds while it waits for the reset"
+        );
+
+        drop(probing);
+        let answer = waiting.answered();
+        assert!(
+            answer.is_none(),
+            "woken by the slot the dropped run freed, it took the turn its probe handed on and \
+             waits for the reset: {answer:?}"
+        );
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let answer = waiting.answered();
+        assert!(
+            matches!(answer, Some(Ok("sent"))),
+            "sent as the probe at the reset: {answer:?}"
+        );
+        assert_eq!(
+            policy.breaker_state(),
+            Some(BreakerState::Closed),
+            "and closed the breaker"
         );
     }
 
@@ -3309,11 +3467,31 @@ mod tests {
     /// What the run a waker polls answers.
     type Woken = Result<&'static str, ResilienceError<Refused>>;
 
-    /// A run a waker polls once, as a task another worker runs may be polled
-    /// before the code that woke it goes on.
+    /// A run polled at each wake, with a waker of its own, as a task another
+    /// worker runs may be polled before the code that woke it goes on.
     struct PollsOnWake {
-        run: std::sync::Mutex<Pin<Box<dyn Future<Output = Woken> + Send>>>,
+        run: std::sync::Mutex<Option<Pin<Box<dyn Future<Output = Woken> + Send>>>>,
         answered: std::sync::Mutex<Option<Woken>>,
+    }
+
+    impl PollsOnWake {
+        /// `run`, first polled at a wake.
+        fn new(run: impl Future<Output = Woken> + Send + 'static) -> Arc<Self> {
+            Arc::new(Self {
+                run: std::sync::Mutex::new(Some(Box::pin(run))),
+                answered: std::sync::Mutex::new(None),
+            })
+        }
+
+        /// The run polled now, as a wake polls it.
+        fn poll_now(self: &Arc<Self>) {
+            std::task::Wake::wake_by_ref(self);
+        }
+
+        /// What the run answered, once it has.
+        fn answered(&self) -> Option<Woken> {
+            self.answered.lock().expect("one wake at a time").take()
+        }
     }
 
     impl std::task::Wake for PollsOnWake {
@@ -3322,13 +3500,14 @@ mod tests {
         }
 
         fn wake_by_ref(self: &Arc<Self>) {
-            let mut answered = self.answered.lock().expect("one wake at a time");
-            if answered.is_none() {
-                let mut cx = Context::from_waker(std::task::Waker::noop());
-                let mut run = self.run.lock().expect("one wake at a time");
-                if let Poll::Ready(answer) = run.as_mut().poll(&mut cx) {
-                    *answered = Some(answer);
-                }
+            let mut run = self.run.lock().expect("one wake at a time");
+            let Some(polled) = run.as_mut() else {
+                return;
+            };
+            let waker = std::task::Waker::from(Arc::clone(self));
+            if let Poll::Ready(answer) = polled.as_mut().poll(&mut Context::from_waker(&waker)) {
+                *run = None;
+                *self.answered.lock().expect("one wake at a time") = Some(answer);
             }
         }
     }
@@ -3359,12 +3538,7 @@ mod tests {
             assert!(parked, "the probe's call never answers");
             assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
             let token = handed.take().expect("the probe's call was made");
-            let woken = Arc::new(PollsOnWake {
-                run: std::sync::Mutex::new(Box::pin(
-                    policy.run(|_| async { Ok::<_, Refused>("woken") }),
-                )),
-                answered: std::sync::Mutex::new(None),
-            });
+            let woken = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("woken") }));
             let waker = std::task::Waker::from(Arc::clone(&woken));
             let mut cancelled = Box::pin(token.cancelled_owned());
             assert!(
@@ -3375,7 +3549,7 @@ mod tests {
             );
 
             drop(probing);
-            let answered = woken.answered.lock().expect("woken once").take();
+            let answered = woken.answered();
             assert!(
                 matches!(answered, Some(Ok("woken"))),
                 "again: {again}; woken by the cancellation, it took the turn the dropped attempt \
@@ -3684,7 +3858,7 @@ mod tests {
         let tracking =
             crate::resilient::resilient_method(|| "ShipmentsService", "track", Some(30_000), None);
         let (probed, refused) = tokio::join!(
-            policy.run_for(Some(tracking), |_| async {
+            policy.run_once::<Ran, _, _>(Some(tracking), |_| async {
                 tokio::time::sleep(Duration::from_secs(20)).await;
                 Ok::<_, Refused>(())
             }),
@@ -3764,7 +3938,7 @@ mod tests {
             let (probed, refused) = tokio::join!(
                 nest_rs_core::__private::with_deadline(
                     deadline,
-                    policy.run_for(method, |_| answering())
+                    policy.run_once::<Ran, _, _>(method, |_| answering())
                 ),
                 async {
                     tokio::time::sleep(Duration::from_secs(1)).await;

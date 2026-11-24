@@ -330,10 +330,11 @@ fn closure_of<const N: usize>()
 
 /// The threshold `src/call.rs` mirrors, held on both sides: in a release
 /// build, a closure of exactly tokio's threshold is held where its run is, and
-/// one a byte past it is boxed, with the future a call sent once makes of it. A
+/// one a byte past it is boxed when its call is sent once, with the future it
+/// makes; a call made again holds its closure in place whatever its size. A
 /// debug build boxes every closure and every future.
 #[tokio::test]
-async fn a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed_in_a_release_build()
+async fn a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed_when_sent_once_in_a_release_build()
  {
     assert_eq!(size_of_val(&closure_of::<THRESHOLD>()), THRESHOLD);
     let (_app, policy) = crate::policy(ResilienceConfig::default()).await;
@@ -358,7 +359,7 @@ async fn a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed
         ),
         (
             "a byte past it, run again",
-            in_release(1),
+            in_release(0),
             crate::allocations(|| policy.run_idempotent(closure_of::<{ THRESHOLD + 1 }>())),
         ),
     ] {

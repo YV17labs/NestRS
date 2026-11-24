@@ -175,11 +175,9 @@ impl ParcelsService {
         std::future::pending().await
     }
 
-    /// Never answering, `torn_down` run once its attempt is dropped, beside the
-    /// call holding it.
+    /// Never answering.
     #[resilient(courier)]
-    async fn held_out(&self, torn_down: &dyn Fn()) -> Answer<()> {
-        let _torn_down = OnDrop(torn_down);
+    async fn held_out(&self) -> Answer<()> {
         std::future::pending().await
     }
 
@@ -782,12 +780,51 @@ async fn an_idempotent_methods_attempt_slow_to_first_wait_ends_at_its_units_dead
     );
 }
 
-/// Runs its closure when it is dropped, beside the call holding it.
-struct OnDrop<'a>(&'a dyn Fn());
+/// A future polled at each wake, with a waker of its own, as a task another
+/// worker runs may be polled before the code that woke it goes on.
+struct PollsOnWake<T> {
+    future: Mutex<Option<std::pin::Pin<Box<dyn Future<Output = T> + Send>>>>,
+    answered: Mutex<Option<T>>,
+}
 
-impl Drop for OnDrop<'_> {
-    fn drop(&mut self) {
-        (self.0)();
+impl<T: Send + 'static> PollsOnWake<T> {
+    /// `future`, first polled at a wake.
+    fn new(future: impl Future<Output = T> + Send + 'static) -> Arc<Self> {
+        Arc::new(Self {
+            future: Mutex::new(Some(Box::pin(future))),
+            answered: Mutex::new(None),
+        })
+    }
+
+    /// The future polled now, as a wake polls it.
+    fn poll_now(self: &Arc<Self>) {
+        std::task::Wake::wake_by_ref(self);
+    }
+
+    /// What the future answered, once it has.
+    fn answered(&self) -> Option<T> {
+        self.answered.lock().expect("one wake at a time").take()
+    }
+}
+
+impl<T: Send + 'static> std::task::Wake for PollsOnWake<T> {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let mut future = self.future.lock().expect("one wake at a time");
+        let Some(polled) = future.as_mut() else {
+            return;
+        };
+        let waker = std::task::Waker::from(Arc::clone(self));
+        if let std::task::Poll::Ready(answer) = polled
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker))
+        {
+            *future = None;
+            *self.answered.lock().expect("one wake at a time") = Some(answer);
+        }
     }
 }
 
@@ -811,35 +848,32 @@ fn polled_once<F: Future + ?Sized>(future: std::pin::Pin<&mut F>) -> std::task::
 struct ProbingModule;
 
 /// A decorated method run once, dropped while its probe's call is out, hands
-/// the probe's turn on before its slot of the bulkhead: the call that slot lets
-/// in, polled while the method's attempt is torn down — on another worker, or
-/// here from its call's own teardown — never meets a turn the dropped probe
-/// still holds.
+/// the probe's turn on before its slot of the bulkhead: the call waiting for
+/// that slot, polled as soon as the freed slot wakes it — as a task another
+/// worker runs may be, before the drop goes on — takes the turn the dropped
+/// probe handed on.
 #[tokio::test(start_paused = true)]
 async fn a_method_run_once_dropped_while_its_probe_is_out_hands_the_turn_on_before_its_slot() {
     let app = boot::<ProbingModule>().await;
     let parcels = parcels(&app);
     let courier = held::<Courier>(&app);
-    let waiting = std::cell::RefCell::new(Box::pin(parcels.quote()));
-    let answered = std::cell::RefCell::new(None);
-    let poll_waiting = || {
-        if let std::task::Poll::Ready(answer) = polled_once(waiting.borrow_mut().as_mut()) {
-            *answered.borrow_mut() = Some(answer);
-        }
-    };
     let mut holding = Box::pin(parcels.slow());
     assert!(
         polled_once(holding.as_mut()).is_pending(),
         "it takes the slot"
     );
-    let mut probing = Box::pin(parcels.held_out(&poll_waiting));
+    let mut probing = Box::pin(parcels.held_out());
     assert!(
         polled_once(probing.as_mut()).is_pending(),
         "it waits for the slot"
     );
-    poll_waiting();
+    let waiting = PollsOnWake::new({
+        let parcels = Arc::clone(&parcels);
+        async move { parcels.quote().await }
+    });
+    waiting.poll_now();
     assert!(
-        answered.borrow().is_none(),
+        waiting.answered().is_none(),
         "it waits for the slot, behind the method that probes once it has it"
     );
     courier
@@ -854,13 +888,11 @@ async fn a_method_run_once_dropped_while_its_probe_is_out_hands_the_turn_on_befo
     );
 
     drop(probing);
-    let answer = match answered.take() {
-        Some(answer) => answer,
-        None => waiting.into_inner().await,
-    };
+    let answer = waiting.answered();
     assert!(
-        matches!(answer, Ok(42)),
-        "the call let in took the turn the dropped probe handed on: {answer:?}"
+        matches!(answer, Some(Ok(42))),
+        "woken by the slot the dropped method freed, it took the turn its probe handed on: \
+         {answer:?}"
     );
     assert_eq!(
         courier.breaker_state(),
@@ -2627,8 +2659,11 @@ mod footprint {
     struct BuffersModule;
 
     /// Each shape of a method holding or taking `N` bytes: the size of its
-    /// future decorated and undecorated, and what it holds outside its body's
-    /// run — its arguments, as the undecorated method holds them.
+    /// future decorated and undecorated, and what a debug build holds outside
+    /// its body's run — no buffer the body holds, the argument once that a
+    /// method run once moves into its body's closure, and the arguments as the
+    /// undecorated method holds them that a method run again lends each
+    /// attempt.
     fn shapes<const N: usize>(
         buffers: &BuffersService,
     ) -> [(&'static str, usize, usize, usize, usize); 4] {
@@ -2654,7 +2689,7 @@ mod footprint {
                 N,
                 size_of_val(&buffers.taking_once::<N>([7; N])),
                 taking,
-                taking,
+                N,
             ),
             (
                 "taking a buffer by value, run again",
@@ -2667,9 +2702,9 @@ mod footprint {
     }
 
     /// A release build holds a decorated method's body and each argument once,
-    /// beside what its run holds whatever its body; a debug build boxes the
-    /// body's closure and its future, so the method holds no more than its
-    /// arguments.
+    /// in place, beside what its run holds whatever its body; a debug build
+    /// boxes the body's closure and its future, so the method holds no more
+    /// than its arguments.
     #[tokio::test]
     async fn a_decorated_methods_future_holds_its_body_and_each_argument_once() {
         let app = boot::<BuffersModule>().await;
@@ -2686,7 +2721,7 @@ mod footprint {
                 );
             } else {
                 assert!(
-                    decorated <= twin + RUN,
+                    twin <= decorated && decorated <= twin + RUN,
                     "in a release build, a method {shape}, of {bytes} B, is a future of \
                      {decorated} B decorated, of {twin} B undecorated"
                 );

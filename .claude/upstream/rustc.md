@@ -236,7 +236,10 @@
   run's (`crates/nest-rs-resilience/src/policy.rs`, and what it holds of its
   call, `src/call.rs`), each but `within` held by a size test.
 - **Canary** — none in the suite: the size tests hold our side whether or not
-  rustc fixes the layout.
+  rustc fixes the layout. Each time `rust-toolchain.toml`'s pin moves,
+  rust-lang/rust#62958 is read for a fix the new version ships, and the
+  version's release notes for a change to how an `async` fn's state holds what
+  it awaits.
 - **Upstream** — rust-lang/rust#62958.
 - **When fixed** — the hand-written futures may become `async` fns again, each
   size test and the 2 MiB-worker tests beside them checked again. A day.
@@ -256,18 +259,26 @@
   awaiting such a run took 3.1 times a 64 KiB future's size on the stack, where
   awaiting the future alone took 2.1. A type chosen by `size_of::<T>()` needs
   `generic_const_exprs`; a branch can be chosen by an associated constant.
-- **Effect** — a debug build of a resilience run allocates a box for its call
-  and one for each attempt's future, where a release build holds each future
-  in place whatever its size and the closure up to 16 KiB; and a release
-  build's call sent once whose closure is past 16 KiB boxes its future beside
-  the place its run's type reserves for it, weighing its size twice.
-- **Our side** — `Placed` and `PlacedFuture` box in a debug build
-  (`crates/nest-rs-resilience/src/call.rs`); the allocation tests state what a
-  debug build allocates.
-- **Canary** — none: the feature is unstable.
+- **Effect** — a debug build of a resilience run boxes its closure and each
+  attempt's future, allocating for each that holds anything, where a release
+  build holds each future in place whatever its size and the closure too but
+  for a call sent once whose closure is past 16 KiB. That call boxes its
+  closure and the future it makes, and its run's type still reserves the
+  closure's size and the future's beside the two boxes, in the one place it
+  holds either in when they fit, so the run weighs the larger twice.
+- **Our side** — `Placed` and `PlacedFuture` box in a debug build, and `Once`
+  boxes a closure past the threshold beside the place it keeps for one that
+  fits (`crates/nest-rs-resilience/src/call.rs`); the allocation tests state
+  what a debug build allocates.
+- **Canary** — none in the suite: the feature is unstable, so no test on the
+  pinned toolchain can use it. Each time `rust-toolchain.toml`'s pin moves, the
+  new version's release notes are read for the stabilisation of
+  `generic_const_exprs`, or of a part of it that lets a type be chosen by
+  `size_of::<T>()`.
 - **Upstream** — rust-lang/rust#76560, `generic_const_exprs`' tracking issue.
-- **When fixed** — `Placed`, `PlacedFuture` and the place `Once` holds its
-  future in chosen by size in both profiles, and the allocation tests' debug
+- **When fixed** — `Placed` and `PlacedFuture` chosen by size in both profiles,
+  and `Once`'s place for its closure and its future chosen by their sizes, so a
+  boxed call reserves neither beside its boxes; the allocation tests' debug
   count made the release one's. An hour.
 - **Ticket** — none to file: stabilising `generic_const_exprs` is the tracking
   issue's.

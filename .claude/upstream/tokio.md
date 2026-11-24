@@ -10,11 +10,16 @@
   future, and making the same trade-off, cannot read the size tokio chose: it
   copies the number, which a tokio release may change.
 - **Our side** — `BOX_THRESHOLD` in `crates/nest-rs-resilience/src/call.rs`
-  copies the release value: a release build's run holds its closure where it
-  is up to it, and boxes it past it; a debug build boxes every closure, so the
-  debug value is not copied. On a tokio bump, the constant is read again in
-  tokio's source and the copy moved with it.
-  `a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed_in_a_release_build`
+  copies the release value, and `AutoBox::<T>::SHOULD_BOX` beside it decides as
+  tokio's does: a release build's call sent once holds its closure where its
+  run is up to it, and past it boxes the closure and the future it makes,
+  while its run's type still reserves the closure's size and the future's in
+  the place it holds either in when they fit. A call made again holds its
+  closure in place whatever its size: it calls the closure where it is held,
+  so a box buys no stack. A debug build boxes every closure, so the debug value
+  is not copied. On a tokio bump, the constant is read again in tokio's source
+  and the copy moved with it.
+  `a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed_when_sent_once_in_a_release_build`
   (`tests/integration/policy.rs`) holds the copy on both sides of 16384, never
   tokio's value.
 - **Canary** — none: no test can read a `pub(crate)` constant.

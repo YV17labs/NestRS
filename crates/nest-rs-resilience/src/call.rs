@@ -1,8 +1,9 @@
 //! What a run calls: its closure, then the future each attempt makes of it. A
-//! release build holds each future where the run is, whatever its size, and the
-//! closure there up to tokio's threshold; past it, it boxes the closure, and in
-//! a call sent once the future that closure makes. A debug build boxes both. A
-//! run moves neither once it holds it.
+//! release build holds each future where the run is, whatever its size, and
+//! the closure there too, but for a call sent once whose closure is past
+//! tokio's threshold, which it boxes with the future that closure makes. A
+//! debug build boxes both. A run moves neither once it holds it, and drops the
+//! closure as it answers.
 
 use std::future::Future;
 use std::marker::PhantomData;
@@ -10,20 +11,22 @@ use std::pin::Pin;
 
 use tokio_util::sync::CancellationToken;
 
-use self::placed::{Placed, PlacedFuture, borrowed, pinned, placed, placed_future};
+use self::placed::{Placed, PlacedFuture, placed, placed_future, placed_future_mut, placed_mut};
 
-/// Past this size a release build boxes a run's closure: tokio's own threshold
-/// for a future it spawns in a release build, read off tokio 1.54's
-/// `BOX_FUTURE_THRESHOLD` (`src/runtime/mod.rs`, `.claude/upstream/tokio.md`).
+/// Past this size a release build boxes the closure of a call sent once:
+/// tokio's own threshold for a future it spawns in a release build, read off
+/// tokio 1.54's `BOX_FUTURE_THRESHOLD` (`src/runtime/mod.rs`,
+/// `.claude/upstream/tokio.md`).
 const BOX_THRESHOLD: usize = 16384;
 
-/// Whether a run places a closure `T` with the rest of what it holds, an
-/// associated constant as tokio's `AutoBox` is: read once per type, so only the
-/// branch taken is built.
-struct Placement<T>(PhantomData<T>);
+/// Whether a call sent once boxes its closure `T`, decided as tokio's own
+/// `AutoBox` decides for a future it spawns: an associated constant, read once
+/// per type, so only the branch taken is built.
+struct AutoBox<T>(PhantomData<T>);
 
-impl<T> Placement<T> {
-    const FITS: bool = size_of::<T>() <= BOX_THRESHOLD;
+impl<T> AutoBox<T> {
+    /// `true` if a value of type `T` is larger than [`BOX_THRESHOLD`].
+    const SHOULD_BOX: bool = size_of::<T>() > BOX_THRESHOLD;
 }
 
 /// How a release build places a value in a run: in place.
@@ -38,7 +41,7 @@ mod placed {
         value
     }
 
-    pub(super) const fn borrowed<T>(placed: &mut Placed<T>) -> &mut T {
+    pub(super) const fn placed_mut<T>(placed: &mut Placed<T>) -> &mut T {
         placed
     }
 
@@ -46,7 +49,7 @@ mod placed {
         future
     }
 
-    pub(super) const fn pinned<T>(placed: Pin<&mut PlacedFuture<T>>) -> Pin<&mut T> {
+    pub(super) const fn placed_future_mut<T>(placed: Pin<&mut PlacedFuture<T>>) -> Pin<&mut T> {
         placed
     }
 }
@@ -65,7 +68,7 @@ mod placed {
         Box::new(value)
     }
 
-    pub(super) fn borrowed<T>(placed: &mut Placed<T>) -> &mut T {
+    pub(super) fn placed_mut<T>(placed: &mut Placed<T>) -> &mut T {
         placed
     }
 
@@ -73,7 +76,7 @@ mod placed {
         Box::pin(future)
     }
 
-    pub(super) fn pinned<T>(placed: Pin<&mut PlacedFuture<T>>) -> Pin<&mut T> {
+    pub(super) fn placed_future_mut<T>(placed: Pin<&mut PlacedFuture<T>>) -> Pin<&mut T> {
         placed.get_mut().as_mut()
     }
 }
@@ -92,14 +95,18 @@ pub(crate) trait Call {
 
     /// The attempt's future dropped once it ends.
     fn spend(self: Pin<&mut Self>);
+
+    /// The closure dropped once the run answers, with what it captured.
+    fn release(self: Pin<&mut Self>);
 }
 
 pin_project_lite::pin_project! {
     /// A call its run's one attempt makes, consuming the closure: the closure
-    /// until then and the future it made after. Up to the threshold, a release
-    /// build holds both in one place, the future whatever its size; past it, it
-    /// boxes both, since the closure leaves its box to be called and a future
-    /// built beside it to be moved into place would take its size again.
+    /// until then and the future it made after, sharing one place. Past the
+    /// threshold, a release build boxes both, since the closure leaves its box
+    /// to be called and a future built beside it to be moved into place would
+    /// take its size again; the place they share still reserves the larger of
+    /// their two sizes beside the boxes.
     pub(crate) struct Once<F, Fut> {
         #[pin]
         placed: OncePlaced<F, Fut>,
@@ -128,18 +135,18 @@ where
     Fut: Future,
 {
     pub(crate) fn new(call: F) -> Self {
-        if Placement::<F>::FITS {
+        if AutoBox::<F>::SHOULD_BOX {
+            Self {
+                placed: OncePlaced::Call { call: None },
+                boxed_call: Some(Box::new(call)),
+                boxed_made: None,
+            }
+        } else {
             Self {
                 placed: OncePlaced::Call {
                     call: Some(placed(call)),
                 },
                 boxed_call: None,
-                boxed_made: None,
-            }
-        } else {
-            Self {
-                placed: OncePlaced::Call { call: None },
-                boxed_call: Some(Box::new(call)),
                 boxed_made: None,
             }
         }
@@ -155,7 +162,12 @@ where
 
     fn make(self: Pin<&mut Self>, cancel: CancellationToken) {
         let mut this = self.project();
-        if Placement::<F>::FITS {
+        if AutoBox::<F>::SHOULD_BOX {
+            let Some(call) = this.boxed_call.take() else {
+                unreachable!("a call made once is made by its run's one attempt");
+            };
+            *this.boxed_made = Some(Box::pin(call(cancel)));
+        } else {
             let OncePlacedProj::Call { call } = this.placed.as_mut().project() else {
                 unreachable!("a call made once is made by its run's one attempt");
             };
@@ -165,47 +177,51 @@ where
             this.placed.set(OncePlaced::Made {
                 made: placed_future(call(cancel)),
             });
-        } else {
-            let Some(call) = this.boxed_call.take() else {
-                unreachable!("a call made once is made by its run's one attempt");
-            };
-            *this.boxed_made = Some(Box::pin(call(cancel)));
         }
     }
 
     fn made(self: Pin<&mut Self>) -> Pin<&mut Fut> {
         let this = self.project();
-        if Placement::<F>::FITS {
-            let OncePlacedProj::Made { made } = this.placed.project() else {
-                unreachable!("an attempt polls the future its call made");
-            };
-            pinned(made)
-        } else {
+        if AutoBox::<F>::SHOULD_BOX {
             let Some(made) = this.boxed_made else {
                 unreachable!("an attempt polls the future its call made");
             };
             made.as_mut()
+        } else {
+            let OncePlacedProj::Made { made } = this.placed.project() else {
+                unreachable!("an attempt polls the future its call made");
+            };
+            placed_future_mut(made)
         }
     }
 
     fn spend(self: Pin<&mut Self>) {
         let mut this = self.project();
-        if Placement::<F>::FITS {
-            this.placed.set(OncePlaced::Spent);
-        } else {
+        if AutoBox::<F>::SHOULD_BOX {
             *this.boxed_made = None;
+        } else {
+            this.placed.set(OncePlaced::Spent);
+        }
+    }
+
+    fn release(self: Pin<&mut Self>) {
+        let this = self.project();
+        if AutoBox::<F>::SHOULD_BOX {
+            *this.boxed_call = None;
+        } else if let OncePlacedProj::Call { call } = this.placed.project() {
+            *call = None;
         }
     }
 }
 
 pin_project_lite::pin_project! {
     /// A call each attempt of its run makes, the closure held throughout and
-    /// each attempt's future after it. A release build holds each future where
-    /// the run is whatever its size, and the closure up to the threshold, boxed
-    /// past it.
+    /// each attempt's future after it. A release build holds both where the
+    /// run is, whatever their size: the closure is called where it is held,
+    /// and the run's type reserves its size either way, so a box would buy no
+    /// stack.
     pub(crate) struct Again<F, Fut> {
         call: Option<Placed<F>>,
-        boxed_call: Option<Box<F>>,
         #[pin]
         made: Option<PlacedFuture<Fut>>,
     }
@@ -217,18 +233,9 @@ where
     Fut: Future,
 {
     pub(crate) fn new(call: F) -> Self {
-        if Placement::<F>::FITS {
-            Self {
-                call: Some(placed(call)),
-                boxed_call: None,
-                made: None,
-            }
-        } else {
-            Self {
-                call: None,
-                boxed_call: Some(Box::new(call)),
-                made: None,
-            }
+        Self {
+            call: Some(placed(call)),
+            made: None,
         }
     }
 }
@@ -242,13 +249,8 @@ where
 
     fn make(self: Pin<&mut Self>, cancel: CancellationToken) {
         let mut this = self.project();
-        let call = if Placement::<F>::FITS {
-            this.call.as_mut().map(borrowed)
-        } else {
-            this.boxed_call.as_deref_mut()
-        };
-        let Some(call) = call else {
-            unreachable!("a call made again holds its closure throughout its run");
+        let Some(call) = this.call.as_mut().map(placed_mut) else {
+            unreachable!("a call made again holds its closure until its run answers");
         };
         this.made.set(Some(placed_future(call(cancel))));
     }
@@ -257,10 +259,14 @@ where
         let Some(made) = self.project().made.as_pin_mut() else {
             unreachable!("an attempt polls the future its call made");
         };
-        pinned(made)
+        placed_future_mut(made)
     }
 
     fn spend(self: Pin<&mut Self>) {
         self.project().made.set(None);
+    }
+
+    fn release(self: Pin<&mut Self>) {
+        *self.project().call = None;
     }
 }

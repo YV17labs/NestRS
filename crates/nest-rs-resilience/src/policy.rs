@@ -2444,7 +2444,7 @@ mod tests {
     /// does on its own.
     async fn park<F>(run: &mut std::pin::Pin<Box<F>>)
     where
-        F: Future,
+        F: Future + ?Sized,
         F::Output: fmt::Debug,
     {
         tokio::select! {
@@ -3339,58 +3339,64 @@ mod tests {
     }
 
     /// A run dropped while its probe waits for the rate's reset hands the
-    /// probe's turn on before its slot of the bulkhead too: the call that slot
-    /// wakes takes the turn, waits for that reset in the dropped probe's place,
-    /// and closes the breaker once it is sent.
+    /// probe's turn on before its slot of the bulkhead too, run once or again:
+    /// the call that slot wakes takes the turn, waits for that reset in the
+    /// dropped probe's place, and closes the breaker once it is sent.
     #[tokio::test(start_paused = true)]
     async fn a_run_dropped_while_its_probe_waits_for_the_reset_hands_the_turn_on_before_its_slot() {
-        let policy: &'static ResiliencePolicy<Upstream> =
-            Box::leak(Box::new(policy(ResilienceConfig {
-                concurrency: Some(1),
-                concurrency_wait: Some(Duration::from_secs(10)),
-                breaker_window: Some(1),
-                breaker_failures: 1,
-                breaker_open: Duration::from_secs(1),
-                ..rated(1, Duration::from_secs(60), Some(Duration::from_secs(60)))
-            })));
-        let mut failing = Box::pin(policy.run(|_| async {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            Err::<(), _>(Refused)
-        }));
-        park(&mut failing).await;
-        let mut probing = Box::pin(policy.run(|_| answering()));
-        park(&mut probing).await;
-        let waiting = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("sent") }));
-        waiting.poll_now();
-        assert!(
-            matches!(failing.await, Err(ResilienceError::Failed(Refused))),
-            "the rate's one attempt in its window fails, opening the breaker for a second"
-        );
-        tokio::time::advance(Duration::from_secs(1)).await;
-        park(&mut probing).await;
-        assert!(
-            waiting.answered().is_none(),
-            "it waits for the slot the probe holds while it waits for the reset"
-        );
+        for again in [false, true] {
+            let policy: &'static ResiliencePolicy<Upstream> =
+                Box::leak(Box::new(policy(ResilienceConfig {
+                    concurrency: Some(1),
+                    concurrency_wait: Some(Duration::from_secs(10)),
+                    breaker_window: Some(1),
+                    breaker_failures: 1,
+                    breaker_open: Duration::from_secs(1),
+                    ..rated(1, Duration::from_secs(60), Some(Duration::from_secs(60)))
+                })));
+            let mut failing = Box::pin(policy.run(|_| async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Err::<(), _>(Refused)
+            }));
+            park(&mut failing).await;
+            let mut probing: Dropped<'_> = if again {
+                Box::pin(policy.run_idempotent(|_| answering()))
+            } else {
+                Box::pin(policy.run(|_| answering()))
+            };
+            park(&mut probing).await;
+            let waiting = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("sent") }));
+            waiting.poll_now();
+            assert!(
+                matches!(failing.await, Err(ResilienceError::Failed(Refused))),
+                "the rate's one attempt in its window fails, opening the breaker for a second"
+            );
+            tokio::time::advance(Duration::from_secs(1)).await;
+            park(&mut probing).await;
+            assert!(
+                waiting.answered().is_none(),
+                "again: {again}; it waits for the slot the probe holds while it waits for the reset"
+            );
 
-        drop(probing);
-        let answer = waiting.answered();
-        assert!(
-            answer.is_none(),
-            "woken by the slot the dropped run freed, it took the turn its probe handed on and \
-             waits for the reset: {answer:?}"
-        );
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        let answer = waiting.answered();
-        assert!(
-            matches!(answer, Some(Ok("sent"))),
-            "sent as the probe at the reset: {answer:?}"
-        );
-        assert_eq!(
-            policy.breaker_state(),
-            Some(BreakerState::Closed),
-            "and closed the breaker"
-        );
+            drop(probing);
+            let answer = waiting.answered();
+            assert!(
+                answer.is_none(),
+                "again: {again}; woken by the slot the dropped run freed, it took the turn its \
+                 probe handed on and waits for the reset: {answer:?}"
+            );
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let answer = waiting.answered();
+            assert!(
+                matches!(answer, Some(Ok("sent"))),
+                "again: {again}; sent as the probe at the reset: {answer:?}"
+            );
+            assert_eq!(
+                policy.breaker_state(),
+                Some(BreakerState::Closed),
+                "again: {again}; and closed the breaker"
+            );
+        }
     }
 
     /// `policy`'s breaker opened by one failure, then its open second passed,

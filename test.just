@@ -47,6 +47,10 @@ seaorm_alone := kernel_alone + " --features seaorm"
 # without its `otlp` feature, the console alone, which the union turns on.
 console_alone := "cargo nextest run -p nest-rs-opentelemetry --no-default-features --no-fail-fast"
 
+# What a release build holds that a debug one cannot reach: nest-rs-resilience's
+# run holds its call in place where a debug build boxes it.
+resilience_release := "cargo nextest run -p nest-rs-resilience --release --no-fail-fast"
+
 # Every test: unit, integration, e2e and the doc examples
 all: && doc
     #!/usr/bin/env bash
@@ -57,6 +61,7 @@ all: && doc
     {{seaorm_alone}}
     {{kernel_alone}}
     {{console_alone}} --lib --test integration
+    {{resilience_release}}
     # A failover moves the primaries every other test runs on, and a node
     # requiring a client certificate refuses their connections: last, one at a time.
     if [ "{{topology}}" != standalone ]; then
@@ -67,6 +72,7 @@ all: && doc
 unit:
     {{nextest}} --lib --bins
     {{console_alone}} --lib
+    {{resilience_release}} --lib
 
 # The in-process suites under each crate's `tests/`, no service needed
 integration:
@@ -75,6 +81,7 @@ integration:
     {{seaorm_alone}}
     {{kernel_alone}}
     {{console_alone}} --test integration
+    {{resilience_release}} --test integration
 
 # The `tests/e2e` suites, against Postgres, Valkey and S3
 e2e:

@@ -63,9 +63,16 @@ mod resilient;
 ///   the one attempt borrows each argument its body only reads, so the
 ///   predicate reads it once that attempt answered, and the method's future is
 ///   `Send` only where such an argument, taken by value, is `Sync`. An
-///   argument the body consumes or changes is the attempt's own: one the
-///   predicate reads too is rustc's borrow error at the key, `E0505` or
-///   `E0502`, and the body clones it.
+///   argument the body consumes or changes, the predicate does not read too:
+///   the decorator cannot tell which arguments a predicate reads, so the
+///   refusal is rustc's borrow error at the key, one code per case. Consumed,
+///   it is `E0505`, and the body consumes a clone. Bound `mut` and changed, it
+///   is `E0502`, and the method binds it without `mut` and changes a copy
+///   inside the body, the predicate reading the argument as the method was
+///   called with it. A `&mut` the body writes through is `E0500`, where a copy
+///   would keep the change from the caller: the predicate reads the error and
+///   the other arguments, or the method takes what the predicate needs as an
+///   argument of its own.
 /// - `fallback = method` — the method of `Self`, named alone, answering in
 ///   place of the error the run ends on: the call's own, from its last attempt,
 ///   or the policy's refusal — a timeout, an open breaker, a full bulkhead, a
@@ -90,15 +97,24 @@ mod resilient;
 ///   `name`: each attempt's own, cancelled when the policy gives that attempt
 ///   up at its timeout or its unit's deadline, so work the body handed to
 ///   another task stops with it. The name is a local of the body, and no
-///   argument's: one an argument already has is refused.
+///   argument's: one an argument already has is refused, and so is an
+///   argument bound by a macro's pattern (`parcel!(weight): u32`) beside
+///   `cancel`, since no attribute reads the names such a pattern binds.
 ///
 /// A predicate is an expression of the method: a closure reads `self` and the
 /// arguments by reference, as the `idempotent` method's attempts, the one
 /// attempt of a method run once under `record_if`, and the attempts of one
 /// naming a `fallback` do. A timeout is no `E`, so no predicate reads it: it
 /// is always a failure in the breaker, and always sent again by an
-/// `idempotent` method. A predicate that panics fails its attempt as a panic
-/// in the body does.
+/// `idempotent` method. `retry_if`, `retry_ok_if` and `record_if` judge an
+/// attempt's answer, so one that panics fails its attempt as a panic in the
+/// body does: one failure in the breaker, the savepoint it ran in rolled
+/// back, and the panic unwinds from the method. `fallback_if` and the
+/// fallback are asked once the run is over, outside every attempt: a panic in
+/// either unwinds from the method and fails none — the run stays counted as
+/// it ended, the breaker's window and the bulkhead as it left them, its last
+/// attempt's savepoint already rolled back — and files no line of its own,
+/// the fallback's coming after the line and the count saying it answers.
 ///
 /// Every other setting is the policy's, shared by every caller of the
 /// dependency — the backoff's, the circuit breaker's, the bulkhead's and the

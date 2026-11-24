@@ -1,9 +1,10 @@
 //! Covers `src/policy.rs`: through the HTTP edge, an attempt ends by the
 //! request's deadline, before the policy's own timeout, so its client is told
 //! by the policy and its breaker counts the attempt; and, under no edge, what a
-//! run's future holds — its size against its call's, what it allocates, alone
-//! and inside a unit of work whose transaction each attempt opens a savepoint
-//! of, and a large one run on a worker of tokio's default stack.
+//! run's future holds — its size against its call's, what it allocates, alone,
+//! through every mechanism its policy takes and inside a unit of work whose
+//! transaction each attempt opens a savepoint of, and a large one run on a
+//! worker of tokio's default stack.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +12,9 @@ use std::time::Duration;
 use http::StatusCode;
 use nest_rs_core::{Problem, ToProblem, module};
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
-use nest_rs_resilience::{ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy};
+use nest_rs_resilience::{
+    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+};
 use nest_rs_testing::TestApp;
 
 #[derive(Debug, thiserror::Error)]
@@ -291,6 +294,93 @@ async fn a_call_answering_at_once_allocates_nothing_but_its_token_in_a_release_b
             "a call {shape} allocates its token, {token}, and in a debug build its future's box"
         );
     }
+}
+
+/// Every mechanism a policy takes, on: the breaker and the retries of the
+/// defaults, a bulkhead with a wait and a bound on its waiters, and a rate
+/// with a wait, a slot and a token free for every call a test makes.
+fn every_mechanism() -> ResilienceConfig {
+    ResilienceConfig {
+        concurrency: Some(8),
+        concurrency_wait: Some(Duration::from_secs(1)),
+        concurrency_waiters: Some(8),
+        rate_limit: Some(1_000),
+        rate_window: Duration::from_secs(1),
+        rate_wait: Some(Duration::from_secs(1)),
+        ..ResilienceConfig::default()
+    }
+}
+
+/// A host built by hand over a policy, each method answering at once.
+struct Answering {
+    policy: Arc<ResiliencePolicy>,
+}
+
+impl Answering {
+    #[resilient(policy)]
+    async fn once(&self) -> Result<u32, ResilienceError<Silent>> {
+        Ok(7)
+    }
+
+    #[resilient(policy, idempotent)]
+    async fn again(&self) -> Result<u32, ResilienceError<Silent>> {
+        Ok(7)
+    }
+}
+
+/// A slot of the bulkhead, a token of the rate and the breaker's pass cost a
+/// call answering at once no allocation, by whichever path an app calls its
+/// policy: in a release build it allocates its token alone. A debug build
+/// boxes its future, and a decorated method's closure where it holds
+/// something, as an idempotent one's does.
+#[tokio::test(start_paused = true)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
+)]
+async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_its_token_in_a_release_build()
+ {
+    let (_app, policy) = crate::policy(every_mechanism()).await;
+    let host = Answering {
+        policy: Arc::clone(&policy),
+    };
+    let token = crate::token_allocations();
+    let debug = usize::from(cfg!(debug_assertions));
+    for (shape, boxed, (answered, made)) in [
+        (
+            "run once",
+            debug,
+            crate::allocations(|| policy.run(|_| async { Ok::<_, Silent>(7) })),
+        ),
+        (
+            "run again",
+            debug,
+            crate::allocations(|| policy.run_idempotent(|_| async { Ok::<_, Silent>(7) })),
+        ),
+        (
+            "of a decorated method run once",
+            debug,
+            crate::allocations(|| host.once()),
+        ),
+        (
+            "of a decorated method run again",
+            2 * debug,
+            crate::allocations(|| host.again()),
+        ),
+    ] {
+        assert!(matches!(answered, Ok(7)), "{shape}: {answered:?}");
+        assert_eq!(
+            made,
+            token + boxed,
+            "through a breaker, a bulkhead and a rate, a call {shape} allocates its token, \
+             {token}, and in a debug build {boxed} box(es)"
+        );
+    }
+    assert_eq!(
+        (policy.concurrency_running(), policy.rate_available()),
+        (Some(0), Some(996)),
+        "each of the four took a slot, given back, and a token"
+    );
 }
 
 /// A release build holds an attempt's future where its run is whatever its

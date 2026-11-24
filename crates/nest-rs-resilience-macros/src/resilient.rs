@@ -14,6 +14,7 @@ use quote::{ToTokens, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::parse::discouraged::Speculative;
 use syn::parse::{ParseStream, Parser};
+use syn::spanned::Spanned;
 use syn::{
     Expr, FnArg, GenericArgument, Ident, ImplItemFn, Pat, PatIdent, PatType, PathArguments,
     ReturnType, Stmt, Token, Type, TypeParamBound,
@@ -223,7 +224,8 @@ struct Shape {
     /// decorator does not read.
     unread: bool,
     /// Its list writes `cancel` and the decorator read no name under it, or one
-    /// an argument already has, so the body may read a token nothing binds.
+    /// an argument already has or may have, bound by a pattern no attribute
+    /// reads, so the body may read a token nothing binds.
     unbound: bool,
 }
 
@@ -320,18 +322,27 @@ fn refused(item: TokenStream, refusals: Refusals) -> Refused {
 
 /// A refused method, in the nearest form its body compiles in as written —
 /// as if it answered `Result<T, E>` — so that no error but its refusals is
-/// reported: run once where the method could be expanded at all, checked
-/// against a stand-in that never runs where its receiver or its field is what
-/// was refused, as written where it is no `async fn` or names no type, and
-/// with no body where the one it has is an instrument's the decorator cannot
-/// type as an attempt, or may read a token whose name the decorator did not
-/// bind, its parameters read in that body's place.
+/// reported: as written where it answers an `impl Trait`, which its body alone
+/// names, whatever else refused it; with no body where the one it has is an
+/// instrument's the decorator cannot type as an attempt, or may read a token
+/// whose name the decorator did not bind, its parameters read in that body's
+/// place; as written where it is no `async fn`; run once where the method
+/// could be expanded at all; and checked against a stand-in that never runs
+/// where its receiver or its field is what was refused.
 fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStream {
-    if shape.unread || shape.unbound {
-        method.block.stmts = no_body(&method);
+    if !shape.opaque && (shape.unread || shape.unbound) {
+        no_body(&mut method);
         return method.into_token_stream();
     }
     if !shape.asynchronous || shape.opaque {
+        let token = args.and_then(|args| args.cancel.as_ref());
+        if let Some(token) = token.filter(|_| !shape.unbound) {
+            let stmts = &mut method.block.stmts;
+            stmts.insert(
+                leading_items(stmts),
+                syn::parse_quote!(let #token = ::nest_rs_resilience::CancellationToken::new();),
+            );
+        }
         return method.into_token_stream();
     }
     match (args, shape.receiver) {
@@ -340,30 +351,50 @@ fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStre
     }
 }
 
-/// The body of a method kept with none: each name its parameters bind, read as
-/// it is bound, then an answer never given. The body that read them is gone,
-/// and a lint attribute in its place is `E0453` in a crate forbidding the lint.
-fn no_body(method: &ImplItemFn) -> Vec<Stmt> {
-    let mut bound = Vec::new();
-    for typed in typed_inputs(method) {
-        bindings(&typed.pat, &mut bound);
-    }
-    let read = bound.iter().map(|binding| {
-        let name = &binding.ident;
-        match (&binding.by_ref, &binding.mutability) {
-            (None, Some(_)) => quote!(&mut #name),
-            _ => quote!(&#name),
+/// How many items open `stmts`, ahead of its first statement.
+fn leading_items(stmts: &[Stmt]) -> usize {
+    stmts
+        .iter()
+        .take_while(|stmt| matches!(stmt, Stmt::Item(_)))
+        .count()
+}
+
+/// Leaves `method` no body: each name its parameters bind, read as it is
+/// bound, then an answer never given. The body that read them is gone, and a
+/// lint attribute in its place is `E0453` in a crate forbidding the lint. A
+/// parameter binding names no attribute reads is taken under none, `_`.
+fn no_body(method: &mut ImplItemFn) {
+    let mut read = Vec::new();
+    for input in &mut method.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+        let mut bound = Bound::default();
+        bound.read(&typed.pat);
+        if bound.unparsed.is_empty() {
+            read.extend(bound.names.iter().map(|binding| {
+                let name = &binding.ident;
+                match (&binding.by_ref, &binding.mutability) {
+                    (None, Some(_)) => quote!(&mut #name),
+                    _ => quote!(&#name),
+                }
+            }));
+        } else {
+            *typed.pat = Pat::Wild(syn::PatWild {
+                attrs: Vec::new(),
+                underscore_token: Token![_](typed.pat.span()),
+            });
         }
-    });
+    }
     let mut stmts = Vec::new();
-    if !bound.is_empty() {
+    if !read.is_empty() {
         stmts.push(syn::parse_quote!(let _ = (#(#read,)*);));
     }
     stmts.push(Stmt::Expr(
         Expr::Verbatim(quote!(::core::unreachable!())),
         None,
     ));
-    stmts
+    method.block.stmts = stmts;
 }
 
 /// The arguments `method` takes beside its receiver.
@@ -374,32 +405,59 @@ fn typed_inputs(method: &ImplItemFn) -> impl Iterator<Item = &PatType> {
     })
 }
 
-/// Every name `pat` binds, in order, wherever the pattern binds it.
-fn bindings<'a>(pat: &'a Pat, bound: &mut Vec<&'a PatIdent>) {
-    match pat {
-        Pat::Ident(binding) => {
-            bound.push(binding);
-            if let Some((_, sub)) = &binding.subpat {
-                bindings(sub, bound);
-            }
+/// A name `cancel` takes, offered to a method whose token was refused the one
+/// it wrote: the example every other sentence of the key gives, first.
+const TOKEN_NAMES: [&str; 3] = ["token", "cancellation", "stop"];
+
+/// What patterns bind, as far as an attribute reads them.
+#[derive(Default)]
+struct Bound<'a> {
+    /// Every name bound, in order, wherever a pattern binds it.
+    names: Vec<&'a PatIdent>,
+    /// Each pattern whose names no attribute reads: a macro's, expanded after
+    /// every attribute on its method, and one `syn` keeps as tokens.
+    unparsed: Vec<&'a Pat>,
+}
+
+impl<'a> Bound<'a> {
+    /// What the arguments of `method` bind, beside its receiver.
+    fn by(method: &'a ImplItemFn) -> Self {
+        let mut bound = Self::default();
+        for typed in typed_inputs(method) {
+            bound.read(&typed.pat);
         }
-        Pat::Tuple(tuple) => tuple.elems.iter().for_each(|elem| bindings(elem, bound)),
-        Pat::TupleStruct(tuple) => tuple.elems.iter().for_each(|elem| bindings(elem, bound)),
-        Pat::Struct(fields) => fields
-            .fields
+        bound
+    }
+
+    /// Adds what `pat` binds, wherever it binds it.
+    fn read(&mut self, pat: &'a Pat) {
+        match pat {
+            Pat::Ident(binding) => {
+                self.names.push(binding);
+                if let Some((_, sub)) = &binding.subpat {
+                    self.read(sub);
+                }
+            }
+            Pat::Tuple(tuple) => tuple.elems.iter().for_each(|elem| self.read(elem)),
+            Pat::TupleStruct(tuple) => tuple.elems.iter().for_each(|elem| self.read(elem)),
+            Pat::Struct(fields) => fields.fields.iter().for_each(|field| self.read(&field.pat)),
+            Pat::Slice(slice) => slice.elems.iter().for_each(|elem| self.read(elem)),
+            Pat::Reference(reference) => self.read(&reference.pat),
+            Pat::Paren(paren) => self.read(&paren.pat),
+            Pat::Type(typed) => self.read(&typed.pat),
+            // Every case of an or-pattern binds the same names.
+            Pat::Or(or) => or.cases.iter().take(1).for_each(|case| self.read(case)),
+            Pat::Macro(_) | Pat::Verbatim(_) => self.unparsed.push(pat),
+            // A constant, a literal, a path, a range, `..` and `_` bind no name.
+            _ => {}
+        }
+    }
+
+    /// Whether a name read is `name`, written raw or not.
+    fn binds(&self, name: &str) -> bool {
+        self.names
             .iter()
-            .for_each(|field| bindings(&field.pat, bound)),
-        Pat::Slice(slice) => slice.elems.iter().for_each(|elem| bindings(elem, bound)),
-        Pat::Reference(reference) => bindings(&reference.pat, bound),
-        Pat::Paren(paren) => bindings(&paren.pat, bound),
-        Pat::Type(typed) => bindings(&typed.pat, bound),
-        // Every case of an or-pattern binds the same names.
-        Pat::Or(or) => or
-            .cases
-            .iter()
-            .take(1)
-            .for_each(|case| bindings(case, bound)),
-        _ => {}
+            .any(|binding| binding.ident.unraw() == name)
     }
 }
 
@@ -742,23 +800,36 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
     } else {
         fallback.map(|_| Lent::TO_THE_FALLBACK)
     };
-    let mut bound = Vec::new();
-    for typed in typed_inputs(method) {
-        bindings(&typed.pat, &mut bound);
-    }
-    let hidden = args.and_then(|args| args.cancel.as_ref()).filter(|token| {
-        bound
-            .iter()
-            .any(|binding| binding.ident.unraw() == token.unraw())
-    });
+    let bound = Bound::by(method);
+    let token = args.and_then(|args| args.cancel.as_ref());
+    let hidden = token.filter(|token| bound.binds(&token.unraw().to_string()));
     if let Some(token) = hidden {
+        let example = TOKEN_NAMES
+            .iter()
+            .find(|name| !bound.binds(name))
+            .map(|name| format!(", e.g. `cancel = {name}`"))
+            .unwrap_or_default();
         refusals.push(syn::Error::new(
             token.span(),
             format!(
                 "{} names the attempt's `CancellationToken` in the body, and `{token}` is an \
                  argument of this method, which the body would read no more under that name — \
-                 name the token otherwise, e.g. `cancel = cancellation`",
+                 name the token otherwise{example}",
                 site(RESILIENT, Some(CANCEL)),
+            ),
+        ));
+    }
+    let unseen = token.map_or(&[][..], |_| bound.unparsed.as_slice());
+    // Under `fallback`, such a pattern is refused below as binding no plain name: one fix.
+    for pat in unseen.iter().filter(|_| fallback.is_none()) {
+        refusals.push(syn::Error::new_spanned(
+            pat,
+            format!(
+                "{} names the attempt's `CancellationToken` in the body, where an argument of \
+                 that name would be read no more, and `{}` binds names this attribute cannot \
+                 read — name the argument, and take it apart inside the body",
+                site(RESILIENT, Some(CANCEL)),
+                written(pat),
             ),
         ));
     }
@@ -810,14 +881,36 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
         receiver,
         opaque: opaque.is_some(),
         unread: false,
-        unbound: hidden.is_some(),
+        unbound: hidden.is_some() || !unseen.is_empty(),
     }
+}
+
+/// `pat` as a sentence quotes it: a macro's call as it is written, where its
+/// tokens print a space after the `!`.
+fn written(pat: &Pat) -> String {
+    let Pat::Macro(call) = pat else {
+        return pat.to_token_stream().to_string();
+    };
+    let path: String = call
+        .mac
+        .path
+        .to_token_stream()
+        .to_string()
+        .split_whitespace()
+        .collect();
+    let (open, close) = match call.mac.delimiter {
+        syn::MacroDelimiter::Paren(_) => ('(', ')'),
+        syn::MacroDelimiter::Brace(_) => ('{', '}'),
+        syn::MacroDelimiter::Bracket(_) => ('[', ']'),
+    };
+    format!("{path}!{open}{}{close}", call.mac.tokens)
 }
 
 /// Why no attempt may change an argument it borrows: the key reading the
 /// arguments after an attempt, what that key does with them, and what an
 /// attempt's change to one would reach. `record_if` has the one attempt lend
-/// them too and refuses nothing: rustc refuses the one change it would read.
+/// them too and refuses nothing, a predicate's tokens not saying which
+/// argument it reads: rustc refuses the one its body consumes or changes.
 struct Lent {
     key: &'static str,
     does: &'static str,
@@ -981,10 +1074,7 @@ fn body(
         Part::Future(_) | Part::Written(_) => {}
     })
     .unwrap_or_default();
-    let items = stmts
-        .iter()
-        .take_while(|stmt| matches!(stmt, syn::Stmt::Item(_)))
-        .count();
+    let items = leading_items(&stmts);
     stmts.insert(
         items,
         syn::Stmt::Expr(
@@ -1941,7 +2031,7 @@ mod tests {
                      and `{hidden}` is an argument of this method, which the body would read no \
                      more under that name — name the token otherwise, e.g. `cancel = cancellation`"
                 )],
-                "#[resilient({args})]"
+                "#[resilient({args})]: `token` is an argument's too"
             );
             let kept = kept(args.clone(), item.clone());
             assert!(
@@ -1963,6 +2053,205 @@ mod tests {
         assert!(within[0].contains("`seal` is an argument"), "{within:#?}");
         let apart = expansion(quote!(carrier, cancel = cancellation), item);
         assert!(apart.is_ok(), "a name no argument has");
+    }
+
+    /// The refusal offers a name the method could write: the first of the
+    /// decorator's own examples no argument has, and none once each is one's.
+    #[test]
+    fn a_token_named_as_an_argument_is_offered_a_name_no_argument_has() {
+        let said = |arguments: TokenStream, token: TokenStream| {
+            let refused = refusals(
+                quote!(carrier, cancel = #token),
+                quote! {
+                    async fn verify(&self, #arguments) -> Answer {
+                        check().await
+                    }
+                },
+            );
+            assert_eq!(refused.len(), 1, "{refused:#?}");
+            let (_, remedy) = refused[0].split_once(" — ").expect("a remedy");
+            remedy.to_owned()
+        };
+        for (arguments, token, offered) in [
+            (quote!(seal: Seal), quote!(seal), "token"),
+            (quote!(token: String), quote!(token), "cancellation"),
+            (quote!(cancellation: String), quote!(cancellation), "token"),
+            (
+                quote!(r#token: String, Signed(cancellation): Signed),
+                quote!(cancellation),
+                "stop",
+            ),
+        ] {
+            assert_eq!(
+                said(arguments.clone(), token),
+                format!("name the token otherwise, e.g. `cancel = {offered}`"),
+                "({arguments})"
+            );
+        }
+        assert_eq!(
+            said(
+                quote!(token: String, cancellation: String, stop: bool),
+                quote!(stop)
+            ),
+            "name the token otherwise",
+            "each example is an argument's"
+        );
+        for name in TOKEN_NAMES {
+            let token = Ident::new(name, Span::call_site());
+            assert!(
+                expansion(quote!(carrier, cancel = #token), track()).is_ok(),
+                "`cancel = {name}` is a name the key takes"
+            );
+        }
+    }
+
+    /// An answer no expansion can name has no stand-in either: a body that
+    /// answers nothing would be typed `!`, an error of the decorator's own, so
+    /// the method is kept as written whatever else refuses it, its token bound
+    /// where the decorator read a name no argument has.
+    #[test]
+    fn a_refused_method_answering_impl_trait_is_kept_as_written_whatever_else_refuses_it() {
+        let item = quote! {
+            async fn opaque(&self, token: String) -> impl Quoted {
+                token
+            }
+        };
+        let as_written = "async fn opaque (& self , token : String) -> impl Quoted { token }";
+        for args in [
+            quote!(carrier),
+            quote!(carrier, cancel = token),
+            quote!(carrier, cancel),
+            quote!(carrier, cancel = "token"),
+            quote!(cancel = token),
+        ] {
+            let refused = refusals(args.clone(), item.clone());
+            assert!(
+                refused
+                    .iter()
+                    .any(|refused| refused.starts_with("#[resilient] writes the method's return")),
+                "#[resilient({args})]: {refused:#?}"
+            );
+            assert_eq!(
+                kept(args.clone(), item.clone()),
+                as_written,
+                "#[resilient({args})]"
+            );
+        }
+        let unread = kept(
+            quote!(carrier, idempotent),
+            quote! {
+                async fn opaque(&self, order: Order) -> impl Quoted {
+                    let __tracing_attr_span = ::tracing::span!(::tracing::Level::INFO, "ship");
+                    let _entered = __tracing_attr_span.enter();
+                    order
+                }
+            },
+        );
+        assert!(
+            unread.ends_with("let _entered = __tracing_attr_span . enter () ; order }"),
+            "an instrument's body the decorator cannot read: {unread}"
+        );
+        for (written, kept_as) in [
+            (
+                quote! {
+                    async fn opaque(&self, order: Order) -> impl Quoted {
+                        use std::fmt::Write as _;
+                        stop.cancelled().await;
+                        order
+                    }
+                },
+                "async fn opaque (& self , order : Order) -> impl Quoted { use std :: fmt :: \
+                 Write as _ ; let stop = :: nest_rs_resilience :: CancellationToken :: new () ; \
+                 stop . cancelled () . await ; order }",
+            ),
+            (
+                quote! {
+                    fn boxed(&self) -> Answer {
+                        Box::pin(async move { stop.is_cancelled() })
+                    }
+                },
+                "fn boxed (& self) -> Answer { let stop = :: nest_rs_resilience :: \
+                 CancellationToken :: new () ; Box :: pin (async move { stop . is_cancelled () \
+                 }) }",
+            ),
+        ] {
+            assert_eq!(kept(quote!(carrier, cancel = stop), written), kept_as);
+        }
+    }
+
+    /// A macro's pattern is expanded after every attribute on its method, so
+    /// the names it binds are read by none: a token's name could be one of
+    /// them, and a method kept with no body takes the argument under no name.
+    #[test]
+    fn a_pattern_a_macro_writes_is_read_by_no_decorator() {
+        let item = quote! {
+            async fn weigh(
+                &self,
+                token: String,
+                pat!(zone): u32,
+                Path((depot, pat!(mut weight))): Path<(Depot, u32)>,
+            ) -> Answer {
+                send(zone, weight).await
+            }
+        };
+        let method: ImplItemFn = syn::parse2(item.clone()).expect("a method");
+        let bound = Bound::by(&method);
+        let names: Vec<_> = bound
+            .names
+            .iter()
+            .map(|name| name.ident.to_string())
+            .collect();
+        assert_eq!(names, ["token", "depot"]);
+        let unparsed: Vec<_> = bound
+            .unparsed
+            .iter()
+            .map(|pat| pat.to_token_stream().to_string())
+            .collect();
+        assert_eq!(unparsed, ["pat ! (zone)", "pat ! (mut weight)"]);
+
+        let refused = refusals(quote!(carrier, cancel = zone), item.clone());
+        assert_eq!(
+            refused,
+            [
+                "#[resilient] `cancel` names the attempt's `CancellationToken` in the body, where \
+                 an argument of that name would be read no more, and `pat!(zone)` binds names \
+                 this attribute cannot read — name the argument, and take it apart inside the body",
+                "#[resilient] `cancel` names the attempt's `CancellationToken` in the body, where \
+                 an argument of that name would be read no more, and `pat!(mut weight)` binds \
+                 names this attribute cannot read — name the argument, and take it apart inside \
+                 the body",
+            ]
+        );
+        let stood_in = kept(quote!(carrier, cancel = zone), item.clone());
+        assert!(
+            stood_in.ends_with(
+                "(& self , token : String , _ : u32 , _ : Path < (Depot , u32) > ,) -> Answer { \
+                 let _ = (& token ,) ; :: core :: unreachable ! () }"
+            ),
+            "{stood_in}"
+        );
+        let handed = refusals(
+            quote!(carrier, fallback = stale, cancel = zone),
+            item.clone(),
+        );
+        assert_eq!(
+            handed.len(),
+            2,
+            "the fallback's refusal says the same fix: {handed:#?}"
+        );
+        assert!(
+            handed
+                .iter()
+                .all(|refused| refused.contains("binds this one to no plain name")),
+            "{handed:#?}"
+        );
+        for unasked in [
+            quote!(carrier),
+            quote!(carrier, idempotent, record_if = counts),
+        ] {
+            let read = expansion(unasked.clone(), item.clone());
+            assert!(read.is_ok(), "#[resilient({unasked})] names no token");
+        }
     }
 
     /// A value holding commas, a closure's parameters or a call's arguments,

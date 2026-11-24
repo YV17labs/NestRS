@@ -1,6 +1,6 @@
 # nest-rs-resilience
 
-Resilience for NestRS: `#[resilient]` runs a method calling a dependency under a named policy — a timeout per attempt, retries when it is idempotent, a circuit breaker read and switched by hand, a bulkhead and an outbound rate limit — answered 503 with Retry-After.
+Resilience for NestRS: `#[resilient]` runs a method calling a dependency under a named policy — a timeout per attempt, retries when it is idempotent, answers classified by keys, a fallback, a circuit breaker read and switched by hand, a bulkhead and an outbound token bucket — answered 503 with Retry-After; events and state readable in code.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under one [semver policy](https://nestrs.dev/semver/).
 

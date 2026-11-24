@@ -6,8 +6,10 @@
 //! provider, a struct built by hand through a trait's native `async fn`, and a
 //! method of every impl half whose feature the build enables — the hooks',
 //! the kernel's, under none. So is each predicate reading an argument its
-//! method owns, run once or again, and a fallback handed arguments a
-//! `macro_rules!` wrote apart from the decorator.
+//! method owns, run once or again, the way out of each borrow error a
+//! predicate reading what its body changes earns, an argument a macro's
+//! pattern binds, and a fallback handed arguments a `macro_rules!` wrote apart
+//! from the decorator.
 
 use std::sync::Arc;
 
@@ -51,6 +53,12 @@ fn depot(parcel: &str) -> Result<String, HygieneCarrierDown> {
         return Err(HygieneCarrierDown);
     }
     Ok(parcel.to_owned())
+}
+
+macro_rules! hygiene_unit {
+    ($unit:ident) => {
+        $unit
+    };
 }
 
 #[injectable]
@@ -160,6 +168,30 @@ impl HygieneResilientShipments {
         crates.push(order);
         std::future::ready(()).await;
         Ok(crates.len())
+    }
+
+    /// Run once, a predicate reading an argument the body would change: bound
+    /// without `mut`, its copy changed, and read as the method was called.
+    #[resilient(carrier, record_if = |_error| !order.is_empty())]
+    pub async fn relabel(&self, order: String) -> HygieneAnswer<usize> {
+        let mut order = order.clone();
+        order.push('!');
+        Ok(order.len())
+    }
+
+    /// Run once, the body writing through a `&mut` its predicate leaves alone,
+    /// reading the argument the method takes for it.
+    #[resilient(carrier, record_if = |_error| counted)]
+    pub async fn reload(&self, crates: &mut Vec<String>, counted: bool) -> HygieneAnswer<usize> {
+        crates.push(String::new());
+        Ok(crates.len())
+    }
+
+    /// An argument a macro's pattern binds, under every key but `cancel` and
+    /// `fallback`.
+    #[resilient(carrier, idempotent, record_if = HygieneCarrierDown::busy)]
+    pub async fn reweigh_in(&self, hygiene_unit!(grams): usize) -> HygieneAnswer<usize> {
+        Ok(grams)
     }
 
     /// A filter reading the argument its fallback is handed next, by value.

@@ -512,9 +512,10 @@ How each holds:
   needs more of a debug build's stack than its undecorated twin: the closure
   owning the argument is built in the method's frame, moved out of its box to be
   called, and its future built on the stack before it is boxed, each copy a
-  debug build's stack holds a moment, so a 2 MiB worker overflows at a smaller
-  argument than its twin's; taking three thirty-seconds of that stack, it runs
-  (`a_decorated_method_taking_a_large_buffer_by_value_runs_on_a_worker_of_tokios_default_stack`).
+  debug build's stack holds a moment. One taking three thirty-seconds of a
+  2 MiB worker's stack runs on that worker
+  (`a_decorated_method_taking_a_large_buffer_by_value_runs_on_a_worker_of_tokios_default_stack`);
+  where it overflows, against its twin, no committed test measures.
   Idempotent, borrowing its arguments, or built for release, it runs
   where its twin does. Closing it is a body's future built where the run holds
   it, which safe Rust cannot write.
@@ -622,8 +623,10 @@ reference's word first:
 | `preset.fallback` for `execute()` | the `Result` a run answers: `.or_else(…)` | — |
 | `ResilienceEvents.events$`, `nestjs:resilience:<type>` channels | `ResiliencePolicy::events()`, beside the lines on `nest_rs::resilience` and the counters | per policy; bounded, a subscription behind is told how many it missed; a send never runs a subscriber; a line, an event and a counter each say their own fact (below) |
 | `retry`, `timeout`, `circuit-open` / `-half-open` / `-closed`, `circuit-rejected`, `bulkhead-rejected`, `rate-limited`, `fallback` | `ResilienceEvent`'s `Retry`, `Timeout`, `Transition`, `Refusal`, `Fallback` | one transition and one refusal event, each saying which; the error as its chain in text, never the value |
-| `ResilienceService.circuitBreakers()`, `bulkheads()`, for an app to export | each policy injected by its type; its reads observed on the meter under `opentelemetry` | none enumerates them; the export is built |
-| `mapErrors`: `504` / `503`, `RpcException`, `WsException`, `GraphQLError`; `TIMEOUT`, `CIRCUIT_OPEN`, `BULKHEAD_FULL`, `RATE_LIMITED` | `ToProblem`: `503` `UNAVAILABLE` on every edge, `Retry-After` where known; the variant tells them apart in code | one class |
+| `ResilienceService.circuitBreaker(name)`, `bulkhead(name)`, `circuitBreakers()`, `bulkheads()`, for an app to export | each policy injected by its type; its reads observed on the meter under `opentelemetry` | none is looked up by a name or enumerated; the export is built |
+| `ResilienceModuleOptions.defaults`, merged under every preset and decorator | `ResilienceConfig`'s defaults; `for_root` pins a base per instance, the environment overlays it | no defaults shared across policies |
+| `ExecuteOptions.signal`, the caller's own cancellation | the caller drops the run's future | an attempt in flight is dropped with it, counted in neither direction before its bound and a timeout past it; a slot, a token or a probe's turn it held is given back |
+| `mapErrors`: `504` / `503`, `RpcException`, `WsException`, `GraphQLError`; `TIMEOUT`, `CIRCUIT_OPEN`, `BULKHEAD_FULL`, `RATE_LIMITED`; `mapErrors: false` | `ToProblem`: `503` `UNAVAILABLE` on every edge, `Retry-After` where known; the variant tells them apart in code | one class; no switch — a method answering otherwise maps the `ResilienceError` it holds |
 | `isClientError()` as the default filter | none: every `Err` is a failure; `ResilienceMiddleware` reads statuses | the developer classifies |
 | `executeObservable`, committed once a value is emitted | an `#[sse]` route and a `#[subscription]` run the call opening the stream | — |
 | `ResilienceContext.run(scope, fn)` | the unit's ambient `Deadline` | no ambient attempt |
@@ -669,8 +672,9 @@ reference's word first:
   tier-2 seam), whose `#[diagnostic::on_unimplemented]` is the key's sentence:
   a value of another shape is one error at the value.
 - **`cancel = token` binds the attempt's `CancellationToken`** as a local of
-  the body, never a parameter: the signature stays what callers call, and a
-  name an argument already holds is refused.
+  the body, never a parameter: the signature stays what callers call. A name
+  an argument already holds is refused, and so is the key beside an argument a
+  macro's pattern binds, whose names no attribute reads.
 - **The rate is a token bucket**, the generic cell rate algorithm (ITU-T
   I.371) in whole ticks of `1 / RATE_LIMIT` nanosecond: one instant, exact for
   every value the config takes. Attempts finding no token wait in arrival
@@ -696,7 +700,8 @@ reference's word first:
 - **The reads sit beside `breaker_state()`** — `breaker_stats()`,
   `concurrency_running()`, `concurrency_waiting()`, `rate_available()` — and
   under `opentelemetry` are observed as up-down counters, additive across
-  replicas as the pool's are, registered when the policy is built. The
+  replicas as the pool's are, registered when the policy is built and again
+  at its first run on a meter provider installed since. The
   breaker's window is one instrument by `outcome`, both series from one read,
   so no export says more failures than outcomes.
 - **The time window and the probes are covered**:
@@ -724,7 +729,9 @@ in-code stream of events and of handing a decorated body its
 default"; the limit of a `#[resilient]` inside a `#[cfg_attr]` on an
 operation, which is split out and kept on the method; "each forgets the
 window and starts an epoch" of a switch by hand, an opening by a failure
-starting one too.
+starting one too; "where a method run once moves them" of the idempotent
+`Send` limit, a method sent once under `record_if` or a `fallback` lending
+its arguments as well.
 
 **Refused:**
 
@@ -761,9 +768,12 @@ starting one too.
   after, and one refused at once might have been served by a reservation given
   back since. Closing the first is reserving a token before the slot, for a
   call that may never get one.
-- **A body consuming an argument its `record_if` reads** is rustc's own
-  `E0505` at the key, the remedy — a clone in the body — in the key's
-  rustdoc. A method sent once that lends its arguments and takes one that is
+- **A body consuming or changing an argument its `record_if` reads** is
+  rustc's own error at the key — `E0505` consumed, `E0502` bound `mut` and
+  changed, `E0500` written through a `&mut` — each with its remedy in the
+  key's rustdoc: a predicate's tokens do not say which argument it reads, so
+  refusing every `mut` there would refuse valid methods. A method sent once
+  that lends its arguments and takes one that is
   not `Sync` by value is refused as not `Send` in rustc's words, naming no
   key; pointing it at the key is the run written as an `async fn`, which
   holds its call twice.
@@ -772,14 +782,17 @@ starting one too.
   leaves the proof unresolved without breaking a closure's inference.
 - **A fallback taking other arguments** is rustc's `E0308` or `E0061` at the
   `fallback` key, no sentence of ours leading there.
-- **A refusal reaching a tick, a listener or a hook is that unit's failure**,
-  filed at `error` by its edge at every occurrence while the breaker is open;
-  a refused readiness indicator answers down, and a decorated liveness one
-  would have the orchestrator restart the process for a dependency's outage. A
-  `fallback` is how such a unit answers instead.
+- **A refusal reaching a tick, a listener or a shutdown hook is that unit's
+  failure**, filed at `error` by its edge — a tick's at every occurrence while
+  the breaker is open. An init hook's fails the boot naming the hook, the
+  chain in the error `init` returns and on no line. A refused readiness
+  indicator answers down with the chain in a `warn`, and a decorated liveness
+  one would have the orchestrator restart the process for a dependency's
+  outage. A `fallback` is how such a unit answers instead.
 - **A policy whose first run precedes `OpenTelemetry::init()`** never reports
-  its observed instruments, as its counters. Closing it is a hook from the
-  exporter's crate.
+  its observed instruments, and a counter first recorded before it stays on
+  the meter that records nothing. Closing it is a hook from the exporter's
+  crate.
 - **`ResilienceEvents` offers `next()` alone**, no `Stream`: it would bring
   `futures-core` into the port.
 - **`BREAKER_AGE_SECS` is whole seconds** in the environment; a window under a

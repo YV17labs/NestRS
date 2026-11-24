@@ -3031,7 +3031,7 @@ mod scheduled {
                 "the one refusal, filed once"
             );
 
-            // The refusal a caller of the method is answered, as the tick was.
+            // The occurrence that ran ended the refusal, its open time over or its stall lifted.
             refusing.arrange(app.container());
             assert_eq!(
                 failed.field("error"),
@@ -5028,6 +5028,127 @@ mod judged {
             Some(BreakerState::Closed),
             "an `Ok` closes it"
         );
+    }
+
+    /// A probe answering an `Err` `record_if` refuses, no success yet in its
+    /// series, is not one its caller gave up: the breaker moved as the first
+    /// was let through, to half-open, and no answer moves it since — no line,
+    /// no transition told, no count on any counter — the call after probing.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_answering_an_err_record_if_refuses_moves_the_breaker_nowhere() {
+        use nest_rs_resilience::BreakerPhase;
+        use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+        };
+
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+        // Every counter's points, as the latest export says them: a transition counts
+        // on one, and an answer that moves nothing on none.
+        let counted = || {
+            provider.force_flush().expect("the export");
+            let exported = exporter
+                .get_finished_metrics()
+                .expect("the exported metrics");
+            let mut points: Vec<(String, String, u64)> = exported
+                .last()
+                .into_iter()
+                .flat_map(|resource| resource.scope_metrics())
+                .flat_map(|scope| scope.metrics())
+                .flat_map(|metric| {
+                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                        return Vec::new();
+                    };
+                    sum.data_points()
+                        .map(|point| {
+                            let mut by: Vec<_> = point
+                                .attributes()
+                                .map(|kv| format!("{}={}", kv.key, kv.value))
+                                .collect();
+                            by.sort();
+                            (metric.name().to_owned(), by.join(","), point.value())
+                        })
+                        .collect()
+                })
+                .collect();
+            points.sort();
+            points
+        };
+        let total = |points: &[(String, String, u64)]| -> u64 {
+            points.iter().map(|(_, _, value)| value).sum()
+        };
+
+        let (_app, quotes, courier) = quotes::<CountedModule>().await;
+        assert!(quotes.recorded(NoQuote::Down).await.is_err());
+        assert!(
+            matches!(courier.breaker_state(), Some(BreakerState::Open { .. })),
+            "one failure opens this breaker"
+        );
+        tokio::time::advance(Duration::from_secs(31)).await;
+        quotes.attempted();
+        let opened = counted();
+        assert_eq!(total(&opened), 1, "the opening, counted: {opened:?}");
+
+        let logs = LogCapture::install();
+        let mut events = courier.events();
+        let moved = |logs: &LogCapture| -> Vec<Option<String>> {
+            logs.find(nest_rs_resilience::TARGET, "circuit breaker changed state")
+                .iter()
+                .map(|line| line.field("state"))
+                .collect()
+        };
+        let transitions = |events: &mut nest_rs_resilience::ResilienceEvents| {
+            let mut told = crate::told(events);
+            told.retain(|event| matches!(event, ResilienceEvent::Transition { .. }));
+            told
+        };
+
+        let answered = quotes.recorded(NoQuote::Declined).await;
+        assert!(
+            matches!(answered, Err(ResilienceError::Failed(NoQuote::Declined))),
+            "sent as the probe: {answered:?}"
+        );
+        assert_eq!(courier.breaker_state(), Some(BreakerState::HalfOpen));
+        assert_eq!(
+            moved(&logs),
+            [Some("half_open".to_owned())],
+            "the probe let through, and nothing its answer filed"
+        );
+        let told = transitions(&mut events);
+        assert!(
+            matches!(
+                &told[..],
+                [ResilienceEvent::Transition {
+                    from: BreakerPhase::Open,
+                    to: BreakerPhase::HalfOpen,
+                    manual: false,
+                    ..
+                }]
+            ),
+            "{told:?}"
+        );
+        let probed = counted();
+        assert_eq!(total(&probed), 2, "and the half-opening: {probed:?}");
+
+        let answered = quotes.recorded(NoQuote::Declined).await;
+        assert!(
+            matches!(answered, Err(ResilienceError::Failed(NoQuote::Declined))),
+            "the next call probes in its turn: {answered:?}"
+        );
+        assert_eq!(quotes.attempted(), 2, "each was sent");
+        assert_eq!(courier.breaker_state(), Some(BreakerState::HalfOpen));
+        assert_eq!(
+            moved(&logs).len(),
+            1,
+            "a probe in a breaker already half-open"
+        );
+        let told = transitions(&mut events);
+        assert!(told.is_empty(), "{told:?}");
+        assert_eq!(counted(), probed);
     }
 
     /// The two axes are independent: the dependency's final answer is neither

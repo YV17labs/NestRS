@@ -1,8 +1,11 @@
 //! `fallback` names a method of `Self` and `cancel` the attempt's token, each
 //! by a name alone: a path, a call, a literal, a bare key, a method naming
-//! itself and a token named as an argument are each refused where written. A
-//! body reading a token the decorator bound under no name adds no error, and a
-//! token named and never read is the developer's unused variable, at the name.
+//! itself and a token named as an argument are each refused where written,
+//! the last offered a name no argument has. So is an argument a macro's
+//! pattern binds beside `cancel`: the token's name may be one no attribute
+//! reads. A body reading a token the decorator bound under no name adds no
+//! error, and a token named and never read is the developer's unused
+//! variable, at the name.
 
 use std::sync::Arc;
 
@@ -21,6 +24,12 @@ impl std::fmt::Display for CarrierDown {
 impl std::error::Error for CarrierDown {}
 
 type Answer<T = ()> = Result<T, ResilienceError<CarrierDown>>;
+
+macro_rules! parcel {
+    ($weight:ident) => {
+        $weight
+    };
+}
 
 #[injectable]
 struct ShipmentsService {
@@ -107,6 +116,24 @@ impl ShipmentsService {
     #[resilient(carrier, fallback = unverified, cancel = token)]
     async fn named_as_what_its_fallback_takes(&self, token: String) -> Answer {
         drop(format!("{token:?}"));
+        Ok(())
+    }
+
+    #[resilient(carrier, cancel = cancellation)]
+    async fn named_as_the_name_offered(&self, cancellation: String) -> Answer {
+        drop(cancellation);
+        Ok(())
+    }
+
+    #[resilient(carrier, cancel = weight)]
+    async fn named_as_a_macro_may_bind(&self, parcel!(weight): u32) -> Answer {
+        drop(weight);
+        Ok(())
+    }
+
+    #[resilient(carrier)]
+    async fn weighed(&self, parcel!(weight): u32) -> Answer {
+        drop(weight);
         Ok(())
     }
 }

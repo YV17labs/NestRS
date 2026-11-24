@@ -1,17 +1,31 @@
 error: #[resilient] `cancel` needs a value — write `cancel = token`
-  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:33:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:41:26
    |
-33 |     #[resilient(carrier, cancel)]
+41 |     #[resilient(carrier, cancel)]
    |                          ^^^^^^
 
 error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
-  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:42:35
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:50:35
    |
-42 |     #[resilient(carrier, cancel = token)]
+50 |     #[resilient(carrier, cancel = token)]
    |                                   ^^^^^
 
 error: #[resilient] under a `#[tracing::instrument]` types the body that attribute wrapped as one attempt, and found it in no shape it reads — write `#[resilient]` above `#[tracing::instrument]`, whose span then covers the whole run
-  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:49:9
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:57:9
    |
-49 |         let __tracing_attr_span = slug.len();
+57 |         let __tracing_attr_span = slug.len();
    |         ^^^
+
+error: #[resilient] `cancel` needs a value — write `cancel = token`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:61:26
+   |
+61 |     #[resilient(carrier, cancel)]
+   |                          ^^^^^^
+
+warning: unused macro definition: `parcel`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:27:14
+   |
+27 | macro_rules! parcel {
+   |              ^^^^^^
+   |
+   = note: `#[warn(unused_macros)]` (part of `#[warn(unused)]`) on by default

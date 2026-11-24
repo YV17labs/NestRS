@@ -1,6 +1,6 @@
 # nest-rs-resilience-macros
 
-Macro crate for the NestRS framework — the #[resilient] decorator macro; re-exported by nest-rs-resilience: depend on that crate, not this one.
+Macro crate for the NestRS framework — the #[resilient] decorator macro and its nine keys; re-exported by nest-rs-resilience: depend on that crate, not this one.
 
 A `proc-macro` companion crate — never added directly. Its decorators are re-exported by the surface crate, reached through the [`nest-rs`](https://crates.io/crates/nest-rs) umbrella.
 

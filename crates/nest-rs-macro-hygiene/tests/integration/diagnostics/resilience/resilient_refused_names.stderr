@@ -1,73 +1,85 @@
 error: #[resilient] `fallback` takes the name of an `async fn` method of `Self`, alone, e.g. `fallback = stale`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:36:37
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:45:37
    |
-36 |     #[resilient(carrier, fallback = self.stale)]
+45 |     #[resilient(carrier, fallback = self.stale)]
    |                                     ^^^^^^^^^^
 
 error: #[resilient] `fallback` takes the name of an `async fn` method of `Self`, alone, e.g. `fallback = stale`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:41:37
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:50:37
    |
-41 |     #[resilient(carrier, fallback = Self::stale)]
+50 |     #[resilient(carrier, fallback = Self::stale)]
    |                                     ^^^^^^^^^^^
 
 error: #[resilient] `fallback` takes the name of an `async fn` method of `Self`, alone, e.g. `fallback = stale`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:46:37
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:55:37
    |
-46 |     #[resilient(carrier, fallback = |_error| async { Ok(()) })]
+55 |     #[resilient(carrier, fallback = |_error| async { Ok(()) })]
    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: #[resilient] `fallback` needs a value — write `fallback = stale`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:51:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:60:26
    |
-51 |     #[resilient(carrier, fallback)]
+60 |     #[resilient(carrier, fallback)]
    |                          ^^^^^^^^
 
 error: #[resilient] `fallback` names the method answering in place of this one's error, and `itself` is this method itself, which would run under its policy again — name another method
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:56:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:65:26
    |
-56 |     #[resilient(carrier, fallback = itself)]
+65 |     #[resilient(carrier, fallback = itself)]
    |                          ^^^^^^^^
 
 error: #[resilient] `cancel` takes the name the body reads its attempt's `CancellationToken` under, e.g. `cancel = token`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:61:35
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:70:35
    |
-61 |     #[resilient(carrier, cancel = "token")]
+70 |     #[resilient(carrier, cancel = "token")]
    |                                   ^^^^^^^
 
 error: #[resilient] `cancel` needs a value — write `cancel = token`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:69:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:78:26
    |
-69 |     #[resilient(carrier, cancel)]
+78 |     #[resilient(carrier, cancel)]
    |                          ^^^^^^
 
 error: #[resilient] `record_if` needs a value — write `record_if = |error| !error.is_declined()`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:77:38
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:86:38
    |
-77 |     #[resilient(carrier, idempotent, record_if, cancel = token)]
+86 |     #[resilient(carrier, idempotent, record_if, cancel = token)]
    |                                      ^^^^^^^^^
 
 error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:95:35
-   |
-95 |     #[resilient(carrier, cancel = token)]
-   |                                   ^^^^^
+   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:104:35
+    |
+104 |     #[resilient(carrier, cancel = token)]
+    |                                   ^^^^^
 
 error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
-   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:107:58
+   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:116:58
     |
-107 |     #[resilient(carrier, fallback = unverified, cancel = token)]
+116 |     #[resilient(carrier, fallback = unverified, cancel = token)]
     |                                                          ^^^^^
 
+error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `cancellation` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = token`
+   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:122:35
+    |
+122 |     #[resilient(carrier, cancel = cancellation)]
+    |                                   ^^^^^^^^^^^^
+
+error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, where an argument of that name would be read no more, and `parcel!(weight)` binds names this attribute cannot read — name the argument, and take it apart inside the body
+   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:129:47
+    |
+129 |     async fn named_as_a_macro_may_bind(&self, parcel!(weight): u32) -> Answer {
+    |                                               ^^^^^^^^^^^^^^^
+
 warning: unused variable: `token`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:85:35
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:94:35
    |
-85 |     #[resilient(carrier, cancel = token)]
+94 |     #[resilient(carrier, cancel = token)]
    |                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_token`
    |
    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
 warning: unused variable: `token`
-  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:90:47
+  --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:99:47
    |
-90 |     #[resilient(carrier, idempotent, cancel = token)]
+99 |     #[resilient(carrier, idempotent, cancel = token)]
    |                                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_token`

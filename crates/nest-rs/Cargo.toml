@@ -202,9 +202,8 @@ oauth-resource = ["dep:nest-rs-oauth-resource", "authn", "http"]
 # (`unit`).
 authz = ["dep:nest-rs-authz", "guards", "nest-rs-testing?/authz"]
 social = ["dep:nest-rs-social", "authn", "oauth-client"]
-# Beside `resilience`, a policy counts on the meter `OpenTelemetry::init()`
-# installs its breaker's transitions, its retries, its refusals and its
-# fallbacks, and what it holds is observed there.
+# Beside `resilience`, a policy's four counters and the reads observed of what
+# it holds sit on the meter `OpenTelemetry::init()` installs.
 opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-resilience?/opentelemetry"]
 # The trace and the client telemetry on the reqwest client an app builds itself:
 # no HTTP stack of the framework's, and no exporter — a request records through
@@ -215,12 +214,14 @@ reqwest = [
     "nest-rs-reqwest/middleware",
     "nest-rs-resilience?/reqwest",
 ]
-# Named policies an app wraps around an outbound call: no HTTP stack of the
+# Named policies an app wraps around an outbound call, `#[resilient]` and its
+# nine keys, events and state readable in code: no HTTP stack of the
 # framework's, so a worker calling a dependency compiles none. Beside `graphql`,
-# `#[operations]` reads an attribute named `resilient`, by any path, as this
-# capability's decorator and keeps it on the developer's method, in every crate
-# of a build where any crate enables this feature, Cargo unifying a package's
-# features across the build: an app's own of that name lands there too, failing
+# `#[operations]` reads an attribute named `resilient`, by any path, plain or an
+# entry of a `#[cfg_attr]`, as this capability's decorator and keeps it on the
+# developer's method, in every crate of a build where any crate enables this
+# feature, Cargo unifying a package's features across the build: an app's own
+# of that name lands there too, failing
 # to compile or applying to the method alone. A build without it places one of
 # that name on the field `#[operations]` generates, as 7.0.0 did.
 resilience = ["dep:nest-rs-resilience", "nest-rs-graphql?/resilience"]

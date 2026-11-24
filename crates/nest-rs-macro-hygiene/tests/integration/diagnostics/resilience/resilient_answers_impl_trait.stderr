@@ -1,5 +1,23 @@
 error: #[resilient] writes the method's return type into its expansion, where `impl Trait` names no type — name the type the method answers, or box it as a `Box<dyn …>`
-  --> tests/integration/diagnostics/resilience/resilient_answers_impl_trait.rs:30:37
+  --> tests/integration/diagnostics/resilience/resilient_answers_impl_trait.rs:37:37
    |
-30 |     async fn label(&self) -> Result<impl std::fmt::Display, ResilienceError<CarrierDown>> {
+37 |     async fn label(&self) -> Result<impl std::fmt::Display, ResilienceError<CarrierDown>> {
    |                                     ^^^^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] writes the method's return type into its expansion, where `impl Trait` names no type — name the type the method answers, or box it as a `Box<dyn …>`
+  --> tests/integration/diagnostics/resilience/resilient_answers_impl_trait.rs:42:60
+   |
+42 |     async fn named_as_an_argument(&self, token: String) -> impl Quoted {
+   |                                                            ^^^^^^^^^^^
+
+error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
+  --> tests/integration/diagnostics/resilience/resilient_answers_impl_trait.rs:41:35
+   |
+41 |     #[resilient(carrier, cancel = token)]
+   |                                   ^^^^^
+
+error: #[resilient] writes the method's return type into its expansion, where `impl Trait` names no type — name the type the method answers, or box it as a `Box<dyn …>`
+  --> tests/integration/diagnostics/resilience/resilient_answers_impl_trait.rs:47:44
+   |
+47 |     async fn read_under_its_name(&self) -> impl Quoted {
+   |                                            ^^^^^^^^^^^

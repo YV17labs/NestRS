@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Resilience for NestRS: #[resilient] runs a method calling a dependency under a named policy — a timeout per attempt, retries when it is idempotent, a circuit breaker read and switched by hand, a bulkhead and an outbound rate limit — answered 503 with Retry-After."
+description = "Resilience for NestRS: #[resilient] runs a method calling a dependency under a named policy — a timeout per attempt, retries when it is idempotent, answers classified by keys, a fallback, a circuit breaker read and switched by hand, a bulkhead and an outbound token bucket — answered 503 with Retry-After; events and state readable in code."
 keywords = ["framework", "nestrs", "resilience", "circuit-breaker", "retry"]
 categories = ["web-programming", "asynchronous"]
 
@@ -55,9 +55,9 @@ thiserror.workspace = true
 tokio.workspace = true
 # The `CancellationToken` each attempt is handed, cancelled when it is given up.
 tokio-util.workspace = true
-# A breaker's transition is a `warn`; a retry, one given up, a wait for a token,
-# a call the bulkhead or the rate refuses and a fallback answering a `debug`, on
-# `nest_rs::resilience`.
+# A breaker's transition is a `warn`; a retry, one given up, a savepoint that
+# could not be settled, a wait for a token, a call the bulkhead or the rate
+# refuses and a fallback answering a `debug`, on `nest_rs::resilience`.
 tracing.workspace = true
 # The breaker's window and the rate's count — poison-free locking on every call
 # a breaker admits and every attempt a rate counts.

@@ -1,10 +1,11 @@
 //! The counters a policy records on — its breaker's transitions, its retries,
 //! the refusals its runs end on and the fallbacks answering in place of a
-//! run's error — each made on the global meter at its first use, so a policy
-//! built before `OpenTelemetry::init()` still counts; and the ones its reads
-//! are [`Observed`] on, read when the metric reader exports and recorded on no
-//! run. Without the `opentelemetry` feature a record is nothing, and nothing
-//! is observed.
+//! run's error — each made at its first record, on the global meter installed
+//! then: first recorded after `OpenTelemetry::init()` it counts, its policy
+//! built before it or after, and first recorded before it, it stays on the
+//! meter that records nothing; and the ones its reads are [`Observed`] on,
+//! read when the metric reader exports and recorded on no run. Without the
+//! `opentelemetry` feature a record is nothing, and nothing is observed.
 
 use std::sync::Arc;
 
@@ -83,7 +84,7 @@ pub(crate) struct Counters {
     fallbacks: Lazy,
 }
 
-/// A counter made at its first use.
+/// A counter made at its first record, and kept.
 #[cfg(feature = "opentelemetry")]
 type Lazy = std::sync::OnceLock<opentelemetry::metrics::Counter<u64>>;
 
@@ -176,7 +177,9 @@ impl Counters {
     }
 }
 
-/// The counter `lazy` holds, made on the global meter at its first use.
+/// The counter `lazy` holds, made at its first record on the global meter
+/// installed then: one made before `OpenTelemetry::init()` records nothing,
+/// after it too.
 #[cfg(feature = "opentelemetry")]
 fn made<'c>(
     lazy: &'c Lazy,
@@ -539,6 +542,39 @@ mod tests {
             .collect();
         points.sort();
         points
+    }
+
+    /// A counter is made at its first record, on the meter installed then:
+    /// one first recorded once a provider is installed counts, though another
+    /// of its policy recorded before, and that other counts nothing, after
+    /// the provider is installed too.
+    #[test]
+    fn a_counter_reports_only_when_its_first_record_found_a_meter_provider_installed() {
+        let counters = Counters::new("quotes");
+        counters.retry();
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+        counters.retry();
+        counters.fallback();
+
+        provider.force_flush().expect("the export");
+        let exported = exporter
+            .get_finished_metrics()
+            .expect("the exported metrics");
+        let reported: Vec<_> = exported
+            .iter()
+            .flat_map(|export| export.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .map(|metric| metric.name())
+            .collect();
+        assert_eq!(
+            reported,
+            [FALLBACKS],
+            "the fallbacks, first recorded since, and no retry"
+        );
     }
 
     /// The reads are observed on the meter by instance, read when the reader

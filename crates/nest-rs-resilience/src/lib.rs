@@ -55,7 +55,10 @@
 //! Under the `opentelemetry` feature a policy counts on the global meter, by
 //! its instance, each transition of its breaker, each call it sent again,
 //! each run it ended on its own refusal and each fallback answering, and its
-//! reads are observed there. A count is not always an event's: a retry's line
+//! reads are observed there. The meter is the one `OpenTelemetry::init()`
+//! installs: a counter first recorded before it, and the reads of a policy
+//! whose first run came before it, report nothing, then or after. A count is
+//! not always an event's: a retry's line
 //! and event are told as the retry is decided, and its counter counts the
 //! call once it is sent again, so a retry the policy then refuses unsent — a
 //! breaker that opened, a rate with no token — is told, and counted as the
@@ -73,9 +76,10 @@
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
 /// This crate's span target — every line a policy files: at `debug` its
-/// retries and the ones it gives up, its waits for a token of the rate, the
-/// calls its bulkhead and its rate refuse and its fallbacks answering, and at
-/// `warn` its breaker's transitions.
+/// retries and the ones it gives up, an attempt's savepoint the database
+/// could not settle, its waits for a token of the rate, the calls its
+/// bulkhead and its rate refuse and its fallbacks answering, and at `warn`
+/// its breaker's transitions.
 pub const TARGET: &str = "nest_rs::resilience";
 
 #[cfg(feature = "reqwest")]

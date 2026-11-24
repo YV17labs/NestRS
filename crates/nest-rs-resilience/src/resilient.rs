@@ -496,6 +496,10 @@ where
 /// The filter is asked and dropped here, before [`Fallback::in_place_of`] is
 /// handed the fallback: what it borrows of the method's arguments, the
 /// fallback then takes by value.
+///
+/// A filter that panics unwinds from here, and a fallback from the future
+/// [`Fallback::in_place_of`] answers: no attempt is out to fail, so the run
+/// stays counted as it ended and the panic files no line.
 pub fn fall_back<R, T, E, I, P, S>(
     policy: &ResiliencePolicy<I>,
     method: ResilientMethod,
@@ -1549,6 +1553,122 @@ mod tests {
             seen.all(),
             [Saw::Opened, Saw::Called { inside: true }, Saw::RolledBack]
         );
+    }
+
+    async fn panicking(_: ResilienceError<Quote>) -> Answer {
+        panic!("the fallback panicked")
+    }
+
+    /// `fallback_if` and the fallback are asked once the run is over, outside
+    /// every attempt: a panic in either unwinds on and fails none. The run
+    /// stays counted as it ended — its `Err` once in the breaker's window, a
+    /// refusal not at all — its slot free and its attempt rolled back, and
+    /// the one line is the fallback's, filed before it was called.
+    #[tokio::test(start_paused = true)]
+    async fn a_filter_or_a_fallback_that_panics_unwinds_from_a_run_already_counted() {
+        const FELL_BACK: &str = "the call ended on an error; its fallback answers";
+        #[derive(Clone, Copy, Debug)]
+        enum Panics {
+            Filter,
+            Fallback,
+        }
+
+        let method = QUOTE.with_fallback();
+        for (panics_in, refused, counted, saw) in [
+            (
+                Panics::Filter,
+                false,
+                (1, 1),
+                vec![Saw::Opened, Saw::Called { inside: true }, Saw::RolledBack],
+            ),
+            (Panics::Filter, true, (0, 0), vec![]),
+            (
+                Panics::Fallback,
+                false,
+                (1, 1),
+                vec![Saw::Opened, Saw::Called { inside: true }, Saw::RolledBack],
+            ),
+            (Panics::Fallback, true, (0, 0), vec![]),
+        ] {
+            let policy = policy(ResilienceConfig {
+                retries: None,
+                breaker_window: Some(3),
+                breaker_failures: 2,
+                concurrency: Some(1),
+                ..ResilienceConfig::default()
+            });
+            if refused {
+                policy
+                    .open_breaker(Duration::from_secs(30))
+                    .expect("the policy has a breaker");
+            }
+            let read = || {
+                let stats = policy.breaker_stats().expect("the policy has a breaker");
+                (
+                    (stats.outcomes, stats.failures),
+                    policy.breaker_state(),
+                    policy.concurrency_running(),
+                )
+            };
+            let (unit, seen) = Unit::settling(settles);
+            let lines = LogCapture::install();
+            let filed = || {
+                let own = lines.events();
+                own.iter().filter(|line| line.target == TARGET).count()
+            };
+            let (unwound, before, filed_before) = with_request_executor(unit, async {
+                let ran = run::<Answer, _, _, _, _>(
+                    &policy,
+                    method,
+                    judging(ANSWER, every, none, every),
+                    |_| {
+                        seen.saw(Saw::Called { inside: inside() });
+                        ready(Err(Quote::Down))
+                    },
+                )
+                .await;
+                assert_eq!(
+                    matches!(ran, Err(ResilienceError::Open { .. })),
+                    refused,
+                    "{panics_in:?}: {ran:?}"
+                );
+                let before = (read(), filed());
+                let unwound = match panics_in {
+                    Panics::Filter => contain(async {
+                        Fallback::in_place_of(
+                            fall_back::<Answer, _, _, _, _, _>(&policy, method, ran, panics),
+                            panicking,
+                        )
+                        .await
+                    })
+                    .await
+                    .is_err(),
+                    Panics::Fallback => contain(Fallback::in_place_of(
+                        fall_back::<Answer, _, _, _, _, _>(&policy, method, ran, every),
+                        panicking,
+                    ))
+                    .await
+                    .is_err(),
+                };
+                (unwound, before.0, before.1)
+            })
+            .await;
+            let case = format!("a panic in the {panics_in:?}, the run refused unsent: {refused}");
+            assert!(unwound, "{case}");
+            assert_eq!(before.0, counted, "{case}: the run, counted as it ended");
+            assert_eq!(read(), before, "{case}: the panic counts nothing");
+            assert_eq!(before.2, Some(0), "{case}: the run gave its slot back");
+            assert_eq!(seen.all(), saw, "{case}");
+            let fell_back = lines.find(TARGET, FELL_BACK).len();
+            assert_eq!(
+                (filed() - filed_before, fell_back),
+                match panics_in {
+                    Panics::Filter => (0, 0),
+                    Panics::Fallback => (1, 1),
+                },
+                "{case}: no line but the one saying a fallback answers"
+            );
+        }
     }
 
     /// An `Ok` sent again is rolled back as a failed attempt is, the one the

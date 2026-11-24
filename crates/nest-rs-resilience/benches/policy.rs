@@ -6,11 +6,12 @@
 //! unsent, with a subscription to the policy's events open and with none; and
 //! the token every attempt is handed, alone.
 //!
-//! `cargo bench -p nest-rs-resilience --bench policy`; the protocol and how a
-//! run is reported are `bench/RUNBOOK.md`'s. An attempt inside a transaction
-//! opens a savepoint, which needs a database: what it allocates is held by
-//! `tests/integration/policy.rs`.
-#![allow(
+//! `cargo bench -p nest-rs-resilience --bench policy` prints criterion's
+//! estimate of each row. A figure is its machine's and its run's: quoted, it
+//! names both, and two commits are compared back to back on one machine. An
+//! attempt inside a transaction opens a savepoint, which needs a database:
+//! what it allocates is held by `tests/integration/policy.rs`.
+#![expect(
     clippy::expect_used,
     reason = "a benchmark that cannot set itself up has nothing to measure; it stops there"
 )]

@@ -901,6 +901,7 @@ async fn an_answers_body_is_read_within_its_attempts_timeout_and_counts_in_the_b
     );
 }
 
+/// The slot's call is read as running for as long as the body holds it.
 #[tokio::test]
 async fn an_answers_body_holds_its_runs_slot_until_it_is_read_or_dropped() {
     let peer = answering([PeerAnswer::stalling(200)]).await;
@@ -909,13 +910,18 @@ async fn an_answers_body_holds_its_runs_slot_until_it_is_read_or_dropped() {
         ..quiet()
     })
     .await;
-    let client = client(policy);
+    let client = client(Arc::clone(&policy));
 
     let unread = client
         .post(peer.url(PARCEL))
         .send()
         .await
         .expect("the head answered");
+    assert_eq!(
+        policy.concurrency_running(),
+        Some(1),
+        "the call runs while its answer's body is unread"
+    );
     let refused = client
         .post(peer.url(PARCEL))
         .send()
@@ -928,6 +934,11 @@ async fn an_answers_body_holds_its_runs_slot_until_it_is_read_or_dropped() {
     assert_eq!(peer.requests().len(), 1, "refused unsent");
 
     drop(unread);
+    assert_eq!(
+        policy.concurrency_running(),
+        Some(0),
+        "dropped unread, its call is counted out"
+    );
     let next = client
         .post(peer.url(PARCEL))
         .send()
@@ -945,8 +956,8 @@ fn cut(error: &reqwest::Error) -> Option<&ResilienceError<Infallible>> {
 /// What a caller read off reqwest's response before, it reads still — the URL
 /// and the body's length, which reqwest's own conversions lose or derive, the
 /// status, the version, the headers, the peer's address, the status as an
-/// error — and a body read to its end frees the run's slot there, the response
-/// still held.
+/// error — and a body read to its end frees the run's slot there, its call
+/// read as running until then and no longer, the response still held.
 #[tokio::test]
 async fn an_answer_with_a_body_is_reqwests_own_response_and_frees_its_slot_at_the_bodys_end() {
     const BODY: &str = "a parcel on its way";
@@ -956,10 +967,11 @@ async fn an_answer_with_a_body_is_reqwests_own_response_and_frees_its_slot_at_th
         ..quiet()
     })
     .await;
-    let client = client(policy);
+    let client = client(Arc::clone(&policy));
     let length = u64::try_from(BODY.len()).ok();
 
     let mut answered = client.get(peer.url(PARCEL)).send().await.expect("answered");
+    assert_eq!(policy.concurrency_running(), Some(1), "its body unread");
     assert_eq!(answered.url().as_str(), peer.url(PARCEL));
     assert_eq!(answered.content_length(), length);
     assert_eq!(answered.status(), StatusCode::OK);
@@ -980,6 +992,11 @@ async fn an_answer_with_a_body_is_reqwests_own_response_and_frees_its_slot_at_th
         read.extend_from_slice(&chunk);
     }
     assert_eq!(read, BODY.as_bytes());
+    assert_eq!(
+        policy.concurrency_running(),
+        Some(0),
+        "read to its end, its call is counted out"
+    );
 
     let missing = client
         .get(peer.url(PARCEL))

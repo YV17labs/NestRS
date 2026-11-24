@@ -1,5 +1,8 @@
 //! The expansion writes the method's return type where `impl Trait` names no
-//! type: refused at the `impl Trait`, saying to name the type or box it.
+//! type: refused at the `impl Trait`, saying to name the type or box it. Only
+//! the body names that type, so the method keeps it whatever else is refused:
+//! a token named as an argument adds its refusal and no error of a stand-in,
+//! and a token the decorator read a name for is bound for the body reading it.
 
 use std::sync::Arc;
 
@@ -25,10 +28,27 @@ struct ShipmentsService {
     carrier: Arc<ResiliencePolicy>,
 }
 
+trait Quoted {}
+
+impl Quoted for String {}
+
 impl ShipmentsService {
     #[resilient(carrier)]
     async fn label(&self) -> Result<impl std::fmt::Display, ResilienceError<CarrierDown>> {
         Ok("labelled")
+    }
+
+    #[resilient(carrier, cancel = token)]
+    async fn named_as_an_argument(&self, token: String) -> impl Quoted {
+        token
+    }
+
+    #[resilient(carrier, cancel = stop)]
+    async fn read_under_its_name(&self) -> impl Quoted {
+        if stop.is_cancelled() {
+            return String::new();
+        }
+        String::from("quoted")
     }
 }
 

@@ -344,17 +344,20 @@ mod tests {
         assert_eq!((bulkhead.running(), bulkhead.waiting()), (0, 0));
     }
 
-    /// A slot held past its run stays taken, with no borrow of the bulkhead,
-    /// until it is freed: once, for the one call it was taken for.
+    /// A slot held past its run stays taken, and its call read as running,
+    /// with no borrow of the bulkhead, until it is freed: once, for the one
+    /// call it was taken for.
     #[cfg(feature = "reqwest")]
     #[tokio::test(start_paused = true)]
-    async fn a_slot_held_past_its_run_stays_taken_until_it_is_freed() {
+    async fn a_slot_held_past_its_run_stays_taken_and_read_as_running_until_it_is_freed() {
         let bulkhead = Bulkhead::new(2, None, None);
         let taken = bulkhead.try_enter().expect("a free slot");
         let held = bulkhead.hold(bulkhead.try_enter().expect("the other slot"));
         assert_eq!(bulkhead.enter(None).await.err(), Some(Full::Slots));
+        assert_eq!(bulkhead.running(), 2, "the held slot's call still runs");
 
         bulkhead.free(held);
+        assert_eq!(bulkhead.running(), 1, "freed, its call is counted out");
         let freed = bulkhead.try_enter().expect("the slot it held");
         assert!(
             bulkhead.try_enter().is_none(),
@@ -362,6 +365,66 @@ mod tests {
         );
         drop((taken, freed));
         assert_eq!(bulkhead.slots.available_permits(), 2);
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (0, 0));
+    }
+
+    /// A call waiting for a slot, polled inside the wake that hands it one,
+    /// as a waiter on another thread may be before the call freeing the slot
+    /// has returned; what it answers is kept.
+    struct PolledAtItsWake {
+        entering: std::sync::Mutex<Option<Pin<Box<dyn Future<Output = usize> + Send>>>>,
+        answered: std::sync::Mutex<Option<usize>>,
+    }
+
+    impl std::task::Wake for PolledAtItsWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            let mut entering = self.entering.lock().expect("one wake at a time");
+            let Some(polled) = entering.as_mut() else {
+                return;
+            };
+            let waker = std::task::Waker::from(Arc::clone(self));
+            let polled = polled
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(&waker));
+            if let Poll::Ready(answer) = polled {
+                *entering = None;
+                *self.answered.lock().expect("one wake at a time") = Some(answer);
+            }
+        }
+    }
+
+    /// The calls read as running never exceed the slots: the call freeing a
+    /// slot is counted out before the waiter the slot goes to can take it,
+    /// so a waiter taking it inside the wake reads itself alone.
+    #[tokio::test(start_paused = true)]
+    async fn a_freed_slot_is_counted_out_before_the_waiter_it_goes_to_takes_it() {
+        let bulkhead = Arc::new(Bulkhead::new(1, Some(Duration::from_secs(60)), None));
+        let held = bulkhead.enter(None).await.expect("a free slot");
+        let waiter = Arc::new(PolledAtItsWake {
+            entering: std::sync::Mutex::new(Some(Box::pin({
+                let bulkhead = Arc::clone(&bulkhead);
+                async move {
+                    let _slot = bulkhead.enter(None).await.expect("the slot freed for it");
+                    bulkhead.running()
+                }
+            }))),
+            answered: std::sync::Mutex::new(None),
+        });
+        std::task::Wake::wake_by_ref(&waiter);
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (1, 1));
+
+        drop(held);
+        let read = waiter.answered.lock().expect("one wake at a time").take();
+        assert_eq!(
+            read,
+            Some(1),
+            "handed the slot inside the wake, it read the calls running with its own"
+        );
+        assert_eq!((bulkhead.running(), bulkhead.waiting()), (0, 0));
     }
 
     /// A bound on the waiters means nothing where no call waits, as a wait

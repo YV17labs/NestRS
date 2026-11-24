@@ -1,0 +1,12 @@
+error[E0502]: cannot borrow `order` as mutable because it is also borrowed as immutable
+  --> tests/integration/diagnostics/resilience/resilient_record_if_changes_an_argument.rs:36:26
+   |
+36 |     #[resilient(carrier, record_if = |_error| !order.is_empty())]
+   |                          ^^^^^^^^^   --------  ----- first borrow occurs due to use of `order` in closure
+   |                          |           |
+   |                          |           immutable borrow occurs here
+   |                          mutable borrow occurs here
+37 |     async fn ship(&self, mut order: String) -> Answer<usize> {
+   |                                                ------ immutable borrow later used by call
+38 |         order.push('!');
+   |         ----- second borrow occurs due to use of `order` in closure

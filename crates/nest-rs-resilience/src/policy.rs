@@ -5651,6 +5651,77 @@ mod tests {
         lines.expect_none(TARGET, FAILED);
     }
 
+    /// A probe answering an `Err` `record_if` refuses is ignored, never
+    /// dropped as one its caller gave up: sent once as sent again, the
+    /// breaker stays half-open on the one transition its first probe filed,
+    /// where a probe dropped on no success yet files it open again.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_answering_an_err_record_if_refuses_files_no_transition_and_tells_none() {
+        const MOVED: &str = "circuit breaker changed state";
+        type Polled = Answer<(), Refused>;
+        let policy = policy(ResilienceConfig {
+            retries: Some(1),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(1),
+            ..ResilienceConfig::default()
+        });
+        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
+        tokio::time::advance(Duration::from_secs(1)).await;
+
+        let lines = nest_rs_testing::LogCapture::install();
+        let mut events = policy.events();
+        let once = policy
+            .run_once::<Polled, _, _, _>(
+                None,
+                judging(PhantomData::<Polled>, every, none, none),
+                |_| async { Err(Refused) },
+            )
+            .await;
+        let sent = AtomicU32::new(0);
+        let again = policy
+            .run_again::<Polled, _, _, _>(
+                None,
+                judging(PhantomData::<Polled>, every, none, none),
+                |_| async {
+                    sent.fetch_add(1, Ordering::Relaxed);
+                    Err(Refused)
+                },
+            )
+            .await;
+        assert!(
+            matches!(
+                (&once, &again),
+                (
+                    Err(ResilienceError::Failed(Refused)),
+                    Err(ResilienceError::Failed(Refused))
+                )
+            ),
+            "{once:?}, {again:?}"
+        );
+        assert_eq!(sent.load(Ordering::Relaxed), 2, "each a probe in its turn");
+        assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
+
+        let filed: Vec<String> = lines
+            .find(TARGET, MOVED)
+            .iter()
+            .map(|line| line.field("state").unwrap_or_default())
+            .collect();
+        assert_eq!(
+            filed,
+            ["half_open"],
+            "the three probes filed one transition"
+        );
+        let mut told = Vec::new();
+        while let Ok(Some(event)) = tokio::time::timeout(Duration::ZERO, events.next()).await {
+            if let ResilienceEvent::Transition { to, .. } = event {
+                told.push(to);
+            }
+        }
+        assert_eq!(told, [crate::BreakerPhase::HalfOpen]);
+    }
+
     /// The opening of a breaker says what the attempt that opened it failed
     /// on, run once as run again: its error's whole chain, the timeout's
     /// sentence for one given up at its bound, and for one whose call unwound

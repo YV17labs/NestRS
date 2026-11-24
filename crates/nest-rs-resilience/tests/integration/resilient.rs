@@ -9,7 +9,9 @@
 //! that is no failure, a fallback, a breaker opened by hand), each receiver and
 //! host it takes, a refusal answered `503` by every edge serving a decorated
 //! handler, a method of every impl half that takes one, called through the
-//! framework's own path, attempted again within that one call, what a
+//! framework's own path, attempted again within that one call, a refusal where
+//! no client reads a `503` — a tick, a listener, an indicator, a hook — filed
+//! as that unit's failure with what the framework does next, what a
 //! decorated method's future holds (`footprint`): its size against its
 //! undecorated twin's, and a large one run on a worker of tokio's default stack
 //! — and what its other keys do: the predicates saying how an answer counts
@@ -21,13 +23,14 @@
 use std::cell::Cell;
 use std::future::Future;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use nest_rs_core::{Module, error_message, injectable, instance, module};
 use nest_rs_resilience::{
-    BreakerState, ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+    BreakerState, ResilienceConfig, ResilienceError, ResilienceEvent, ResilienceModule,
+    ResiliencePolicy, ResilienceRefusal, resilient,
 };
 use nest_rs_testing::{
     HeadlessApp, HttpsPeer, LogCapture, PeerAnswer, TestAuthority, TestCertificate,
@@ -1704,19 +1707,200 @@ impl Attempts {
     }
 }
 
+/// One retry a millisecond or two after the failure, for a test on the real
+/// clock.
+fn retrying_at_once() -> ResilienceConfig {
+    ResilienceConfig {
+        backoff_first: Duration::from_millis(1),
+        backoff_ceiling: Duration::from_millis(2),
+        ..retrying_once()
+    }
+}
+
+/// The one retry `logs` holds, which is `method` of `host`'s: a handler sent
+/// again within the call that reached it files what a provider's method does.
+#[track_caller]
+fn retried_once(logs: &LogCapture, host: &str, method: &str) {
+    let retried = logs.expect_one(
+        nest_rs_resilience::TARGET,
+        "attempt failed; retrying the call",
+    );
+    assert_eq!(retried.field("host").as_deref(), Some(host), "{retried:?}");
+    assert_eq!(retried.field("method").as_deref(), Some(method));
+    assert_eq!(
+        retried.field("error"),
+        Some(error_message(&UpstreamDown)),
+        "{retried:?}"
+    );
+}
+
+/// The dependency a unit no client waits on calls below: it answers at once,
+/// or never while a test stalls it.
+#[injectable]
+#[derive(Default)]
+struct Dependency {
+    calls: AtomicU32,
+    stalled: AtomicBool,
+}
+
+impl Dependency {
+    async fn call(&self) -> Result<(), UpstreamDown> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        if self.stalled.load(Ordering::Relaxed) {
+            std::future::pending::<()>().await;
+        }
+        Ok(())
+    }
+
+    fn called(&self) -> u32 {
+        self.calls.load(Ordering::Relaxed)
+    }
+}
+
+/// The timeout each unit below pins, `timeout = "100ms"`, which a stalled
+/// dependency outlasts.
+const PINNED: Duration = Duration::from_millis(100);
+
+/// A breaker only a hand opens, and one slot of the bulkhead: what a refused
+/// unit leaves held, the next one meets.
+fn refusing() -> ResilienceConfig {
+    ResilienceConfig {
+        retries: None,
+        breaker_window: Some(8),
+        breaker_failures: 8,
+        concurrency: Some(1),
+        ..ResilienceConfig::default()
+    }
+}
+
+/// How a test has its policy refuse the call of a unit no client reads the
+/// `503` of: one refusal telling its wait, and one telling none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refusing {
+    /// The breaker opened by hand: the call is never sent.
+    Open,
+    /// The dependency stalled past the timeout the method pins.
+    TimedOut,
+}
+
+impl Refusing {
+    const EACH: [Self; 2] = [Self::Open, Self::TimedOut];
+
+    /// Has the policy and the dependency `container` holds refuse every call
+    /// this way until it is lifted.
+    fn arrange(
+        self,
+        container: &nest_rs_core::Container,
+    ) -> (Arc<ResiliencePolicy>, Arc<Dependency>) {
+        self.arrange_for(container, Duration::from_secs(30))
+    }
+
+    /// [`arrange`](Self::arrange), the breaker open for `open` alone.
+    fn arrange_for(
+        self,
+        container: &nest_rs_core::Container,
+        open: Duration,
+    ) -> (Arc<ResiliencePolicy>, Arc<Dependency>) {
+        let upstream = container
+            .get::<ResiliencePolicy>()
+            .expect("the module built the policy");
+        let dependency = container.get::<Dependency>().expect("provided");
+        match self {
+            Self::Open => upstream
+                .open_breaker(open)
+                .expect("the policy has a breaker, and takes the open time"),
+            Self::TimedOut => dependency.stalled.store(true, Ordering::Relaxed),
+        }
+        (upstream, dependency)
+    }
+
+    /// Lets the next call through: the breaker closed, the dependency
+    /// answering.
+    fn lift(self, upstream: &ResiliencePolicy, dependency: &Dependency) {
+        match self {
+            Self::Open => upstream.close_breaker().expect("the policy has a breaker"),
+            Self::TimedOut => dependency.stalled.store(false, Ordering::Relaxed),
+        }
+    }
+
+    /// How often the dependency was called by a unit refused this way: an
+    /// open breaker sends nothing.
+    fn sent(self) -> u32 {
+        match self {
+            Self::Open => 0,
+            Self::TimedOut => 1,
+        }
+    }
+
+    /// The chain a line tells `refused` by, which is this refusal: what the
+    /// decorated method answers a caller of its own, as the unit was answered.
+    #[track_caller]
+    fn chain(self, refused: Result<(), ResilienceError<UpstreamDown>>) -> String {
+        let error = refused.expect_err("the policy refuses the call");
+        let wait =
+            nest_rs_core::ToProblem::to_problem(&error).and_then(|problem| problem.retry_after());
+        match (self, &error) {
+            (Self::Open, ResilienceError::Open { .. }) => {
+                assert!(wait.is_some(), "an open breaker tells its wait: {error:?}");
+            }
+            (Self::TimedOut, ResilienceError::TimedOut { timeout, .. }) => {
+                assert_eq!(*timeout, PINNED);
+                assert_eq!(wait, None, "a timeout tells no wait: {error:?}");
+            }
+            _ => panic!("refused {self:?}: {error:?}"),
+        }
+        error_message(&error)
+    }
+
+    /// Holds that `told`, what a subscription of the policy read, says
+    /// `method` of `host` was refused this way: what the app reads of it in
+    /// code.
+    #[track_caller]
+    fn told(self, told: &[ResilienceEvent], host: &str, method: &str) {
+        let named = |told_host: &Option<String>, told_method: &Option<&'static str>| {
+            told_host.as_deref() == Some(host) && *told_method == Some(method)
+        };
+        let said = told.iter().any(|event| match (self, event) {
+            (
+                Self::Open,
+                ResilienceEvent::Refusal {
+                    host,
+                    method,
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                },
+            ) => named(host, method),
+            (
+                Self::TimedOut,
+                ResilienceEvent::Timeout {
+                    host,
+                    method,
+                    timeout,
+                    ..
+                },
+            ) => named(host, method) && *timeout == PINNED,
+            _ => false,
+        });
+        assert!(said, "{self:?} of {host}::{method} is told: {told:#?}");
+    }
+}
+
 /// A decorated handler and `#[sse]` route of a `#[routes]` block, failing, then
-/// refused, and an `#[sse]` route attempted again.
+/// refused, and each attempted again within its one request.
 mod routes {
     use std::sync::Arc;
 
     use http::StatusCode;
+    use nest_rs_core::operation_log::TARGET as OPERATIONS;
     use nest_rs_core::{code, module};
     use nest_rs_http::futures_util::stream;
     use nest_rs_http::{SseEvent, SseStream, controller, routes};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
-    use nest_rs_testing::TestApp;
+    use nest_rs_testing::{LogCapture, TestApp};
 
-    use super::{Attempts, UpstreamDown, opening_on_the_first_failure, retrying_once};
+    use super::{
+        Attempts, UpstreamDown, opening_on_the_first_failure, retried_once, retrying_once,
+    };
 
     #[controller(path = "/decorated")]
     struct DecoratedController {
@@ -1811,6 +1995,16 @@ mod routes {
 
     #[routes]
     impl RetriedController {
+        #[get("/")]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn preview(&self) -> Result<String, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok("previewed".to_owned())
+        }
+
         /// A stream whose opening calls the upstream, again after a failure.
         #[sse("/feed")]
         #[public]
@@ -1847,22 +2041,47 @@ mod routes {
         let attempts = app.container().get::<Attempts>().expect("provided");
         assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
     }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_route_failing_once_answers_on_its_retry_within_its_one_request() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<RetriedHttpModule>()
+            .await
+            .expect("a retried route boots");
+
+        let answered = app.http().get("/retried").send().await;
+        answered.assert_status_is_ok();
+        answered.assert_text("previewed").await;
+
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+        retried_once(&logs, "RetriedController", "preview");
+        let request = logs.expect_one(OPERATIONS, nest_rs_http::unit::REQUEST.name());
+        assert_eq!(
+            request.field("status").as_deref(),
+            Some("200"),
+            "{request:?}"
+        );
+    }
 }
 
 /// A decorated root field and subscription of an `#[operations]` block, and its
-/// mutation, field resolver, entity and subscription attempted again.
+/// query, mutation, field resolver, entity and subscription attempted again.
 mod operations {
     use std::sync::Arc;
 
     use async_graphql::futures_util::StreamExt as _;
     use async_graphql::futures_util::stream::{self, BoxStream};
     use nest_rs_core::module;
+    use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
     use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
-    use nest_rs_testing::TestApp;
+    use nest_rs_testing::{LogCapture, TestApp};
     use serde_json::{Value, json};
 
-    use super::{Attempts, UpstreamDown, opening_on_the_first_failure, retrying_once};
+    use super::{
+        Attempts, UpstreamDown, opening_on_the_first_failure, retried_once, retrying_once,
+    };
 
     #[resolver]
     struct DecoratedResolver {
@@ -1990,6 +2209,16 @@ mod operations {
             }
         }
 
+        #[query]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn tracked(&self) -> Result<String, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok("in transit".to_owned())
+        }
+
         #[mutation]
         #[public]
         #[resilient(upstream, idempotent)]
@@ -2070,6 +2299,23 @@ mod operations {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_query_failing_once_answers_on_its_retry_within_its_one_operation() {
+        let logs = LogCapture::install();
+        let (answer, attempts) = retried(json!({ "query": "{ tracked }" })).await;
+        assert_eq!(answer["data"]["tracked"], "in transit", "{answer}");
+        assert_eq!(answer.get("errors"), None, "{answer}");
+        assert_eq!(attempts, 2, "the failed attempt and its retry");
+        retried_once(&logs, "RetriedResolver", "tracked");
+        let operation = logs.expect_one(OPERATIONS, nest_rs_graphql::unit::OPERATION.name());
+        assert_eq!(
+            operation.field("outcome").as_deref(),
+            Some(OK),
+            "{operation:?}"
+        );
+        logs.expect_one(OPERATIONS, nest_rs_http::unit::REQUEST.name());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_mutation_failing_once_answers_on_its_retry() {
         let (answer, attempts) = retried(json!({ "query": "mutation { reroute }" })).await;
         assert_eq!(answer["data"]["reroute"], "rerouted", "{answer}");
@@ -2117,16 +2363,20 @@ mod operations {
     }
 }
 
-/// A decorated message of a `#[messages]` block.
+/// A decorated message of a `#[messages]` block, refused, and attempted again
+/// within its one unit.
 mod messages {
     use std::sync::Arc;
 
     use nest_rs_core::module;
+    use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
-    use nest_rs_testing::TestApp;
+    use nest_rs_testing::{LogCapture, TestApp};
     use nest_rs_ws::{WsModule, gateway, messages};
 
-    use super::{UpstreamDown, opening_on_the_first_failure};
+    use super::{
+        Attempts, UpstreamDown, opening_on_the_first_failure, retried_once, retrying_at_once,
+    };
 
     #[gateway(path = "/ws/decorated")]
     struct DecoratedGateway {
@@ -2180,22 +2430,77 @@ mod messages {
 
         app.shutdown().await.expect("the transport stops cleanly");
     }
+
+    #[gateway(path = "/ws/retried")]
+    struct RetriedGateway {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    #[messages]
+    impl RetriedGateway {
+        #[subscribe_message("track")]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn track(&self) -> Result<String, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok("in transit".to_owned())
+        }
+    }
+
+    #[module(
+        imports = [WsModule, ResilienceModule::for_root(retrying_at_once())],
+        providers = [RetriedGateway, Attempts],
+    )]
+    struct RetriedWsModule;
+
+    /// On the real clock, as the socket is: the retry comes a millisecond or
+    /// two after the failure.
+    #[tokio::test]
+    async fn a_message_failing_once_answers_on_its_retry_within_its_one_unit() {
+        let logs = LogCapture::install();
+        let app = TestApp::builder()
+            .module::<RetriedWsModule>()
+            .build_ws()
+            .await
+            .expect("a retried gateway boots on a real port");
+        let mut socket = app.socket("/ws/retried").connect().await;
+
+        socket.send("track", serde_json::Value::Null).await;
+        let answer = socket.next_envelope().await;
+        assert_eq!(answer["data"], "in transit", "{answer}");
+
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+        retried_once(&logs, "RetriedGateway", "track");
+        let message = logs.expect_one(OPERATIONS, nest_rs_ws::unit::MESSAGE.name());
+        assert_eq!(message.field("outcome").as_deref(), Some(OK), "{message:?}");
+
+        app.shutdown().await.expect("the transport stops cleanly");
+    }
 }
 
-/// A decorated tool and resource listing of a `#[tools]` block, and its prompt,
-/// resource and listing attempted again.
+/// A decorated tool and resource listing of a `#[tools]` block, and its tool,
+/// prompt, resource and listing attempted again.
 mod tools {
     use std::sync::Arc;
 
     use nest_rs_core::module;
+    use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
     use nest_rs_mcp::model::{GetPromptResult, PromptMessage, Resource, Role};
     use nest_rs_mcp::{McpAccess, McpError, McpModule, mcp, tools};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
-    use nest_rs_testing::TestApp;
     use nest_rs_testing::mcp::{call_method, call_tool, open_session, result};
+    use nest_rs_testing::{LogCapture, TestApp};
     use serde_json::{Value, json};
 
-    use super::{Attempts, UpstreamDown, opening_on_the_first_failure, retrying_once};
+    use super::{
+        Attempts, UpstreamDown, opening_on_the_first_failure, retried_once, retrying_once,
+    };
 
     const PATH: &str = "/mcp/decorated";
 
@@ -2309,6 +2614,17 @@ mod tools {
 
     #[tools]
     impl RetriedTools {
+        /// Track a parcel through the carrier, under its policy.
+        #[tool]
+        #[public]
+        #[resilient(upstream, idempotent)]
+        async fn track(&self) -> Result<String, ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            Ok("in transit".to_owned())
+        }
+
         /// Draft a note to the carrier, under its policy.
         #[prompt]
         #[public]
@@ -2367,6 +2683,30 @@ mod tools {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_tool_failing_once_answers_on_its_retry_within_its_one_call() {
+        let logs = LogCapture::install();
+        let app = TestApp::for_module::<RetriedMcpModule>()
+            .await
+            .expect("a host decorating its tool boots");
+
+        let called = call_tool(app.http(), RETRIED, "track", None).await;
+        let answer = result(&called);
+        assert_eq!(
+            answer["result"]["content"][0]["text"], "in transit",
+            "{answer}"
+        );
+        assert_ne!(answer["result"]["isError"], true, "{answer}");
+
+        let attempts = app.container().get::<Attempts>().expect("provided");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+        retried_once(&logs, "RetriedTools", "track");
+        let mut calls = logs.find(OPERATIONS, nest_rs_mcp::unit::OPERATION.name());
+        calls.retain(|line| line.field("tool").as_deref() == Some("track"));
+        assert_eq!(calls.len(), 1, "one call of the tool: {calls:#?}");
+        assert_eq!(calls[0].field("outcome").as_deref(), Some(OK));
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_prompt_failing_once_answers_on_its_retry() {
         let (answer, attempts) =
             retried("prompts/get", json!({ "name": "draft", "arguments": {} })).await;
@@ -2399,20 +2739,25 @@ mod tools {
 }
 
 /// A decorated job of a `#[processor]` block, whose refusal holds its retry
-/// back the breaker's wait.
+/// back the breaker's wait, and whose handler is sent again within the job's
+/// one attempt.
 mod processor {
     use std::sync::Arc;
     use std::time::Duration;
 
     use nest_rs_core::Container;
+    use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
     use nest_rs_queue::__private::consume::{self, AttemptOutcome, Delivery};
     use nest_rs_queue::{
         Capabilities, ProcessMethod, QueueBackend, QueueName, WIRE_FORMAT_VERSION, processor, queue,
     };
     use nest_rs_resilience::{ResilienceError, ResiliencePolicy, resilient};
+    use nest_rs_testing::LogCapture;
     use serde::{Deserialize, Serialize};
 
-    use super::{UpstreamDown, opening_on_the_first_failure};
+    use super::{
+        Attempts, UpstreamDown, opening_on_the_first_failure, retried_once, retrying_once,
+    };
 
     static BARE: QueueBackend = QueueBackend::new("bare", Capabilities::NONE);
 
@@ -2475,21 +2820,83 @@ mod processor {
             "the breaker's wait, stretched by a fifth at most: {after:?}"
         );
     }
+
+    #[queue(name = "retried-refreshes", job = RefreshCommand)]
+    struct RetriedRefreshesQueue;
+
+    #[nest_rs_core::injectable]
+    struct RetriedProcessor {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        attempts: Arc<Attempts>,
+    }
+
+    #[processor]
+    impl RetriedProcessor {
+        #[process(queue = RetriedRefreshesQueue, retries = 3)]
+        #[resilient(upstream, idempotent)]
+        async fn refresh(&self, job: RefreshCommand) -> Result<(), ResilienceError<UpstreamDown>> {
+            if self.attempts.first() {
+                return Err(UpstreamDown);
+            }
+            assert_eq!(job.url, "https://example.com");
+            Ok(())
+        }
+    }
+
+    /// The handler is sent again inside the job's one attempt: the queue is
+    /// answered done, and never asked for a second attempt of the job.
+    #[tokio::test(start_paused = true)]
+    async fn a_job_failing_once_is_done_on_its_retry_within_its_one_attempt() {
+        let logs = LogCapture::install();
+        let (_app, upstream) = crate::policy(retrying_once()).await;
+        let attempts = Arc::new(Attempts::default());
+        let container = Container::builder()
+            .provide(RetriedProcessor {
+                upstream,
+                attempts: Arc::clone(&attempts),
+            })
+            .build()
+            .expect("the container builds");
+        let method = nest_rs_core::inventory::iter::<ProcessMethod>()
+            .find(|method| method.name() == "RetriedProcessor::refresh")
+            .expect("the method is submitted");
+        let mut delivery = Delivery::new(
+            &BARE,
+            QueueName::new("retried-refreshes").expect("a valid name"),
+            serde_json::json!({
+                "v": WIRE_FORMAT_VERSION,
+                "payload": { "url": "https://example.com" },
+            }),
+        );
+
+        let outcome = consume::attempt(method, &mut delivery, container, None).await;
+        assert!(matches!(outcome, AttemptOutcome::Ok), "{outcome:?}");
+        assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+        retried_once(&logs, "RetriedProcessor", "refresh");
+        let job = logs.expect_one(OPERATIONS, nest_rs_queue::unit::JOB.name());
+        assert_eq!(job.field("outcome").as_deref(), Some(OK), "{job:?}");
+        assert_eq!(job.field("attempt").as_deref(), Some("1"), "{job:?}");
+    }
 }
 
 /// A decorated tick of a `#[scheduled]` block, attempted again within the one
-/// run its trigger fires.
+/// run its trigger fires, and refused: the occurrence filed failed, the one
+/// after it run.
 mod scheduled {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
+    use nest_rs_core::operation_log::{ERROR, OK, TARGET as OPERATIONS};
     use nest_rs_core::{injectable, module};
-    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
+    use nest_rs_resilience::{
+        BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+    };
     use nest_rs_schedule::{Scheduler, scheduled};
     use nest_rs_testing::{HeadlessApp, LogCapture};
 
-    use super::{Attempts, UpstreamDown, retrying_once};
+    use super::{Attempts, Dependency, Refusing, UpstreamDown, refusing, retrying_once};
 
     #[injectable]
     struct RefreshTasks {
@@ -2538,20 +2945,116 @@ mod scheduled {
         assert_eq!(ran.field("outcome").as_deref(), Some(OK));
         logs.expect_none(nest_rs_schedule::TARGET, "scheduled job failed");
     }
+
+    #[injectable]
+    struct SyncTasks {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        dependency: Arc<Dependency>,
+    }
+
+    #[scheduled]
+    impl SyncTasks {
+        #[every("1s")]
+        #[resilient(upstream, timeout = "100ms")]
+        async fn sync(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+            self.dependency.call().await
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root(refusing())],
+        providers = [SyncTasks, Dependency],
+    )]
+    struct RefusedScheduleModule;
+
+    /// No client reads a tick's `503`: its refusal is the occurrence failed,
+    /// filed as any failure of a tick, and the schedule goes on.
+    #[tokio::test(start_paused = true)]
+    async fn a_tick_its_policy_refuses_is_filed_failed_and_its_next_occurrence_runs() {
+        for refusing in Refusing::EACH {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<RefusedScheduleModule>()
+                .build_headless()
+                .await
+                .expect("a decorated tick boots");
+            let tasks = app.container().get::<SyncTasks>().expect("provided");
+            // Open past the first occurrence, and no longer at the second.
+            let (upstream, dependency) =
+                refusing.arrange_for(app.container(), Duration::from_millis(1500));
+            let mut events = upstream.events();
+            let scheduler = app
+                .spawn_transport(Scheduler::new())
+                .await
+                .expect("the scheduler configures against the app");
+
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            let mounted = logs.expect_one(nest_rs_schedule::TARGET, "mounted");
+            let failed = logs.expect_one(nest_rs_schedule::TARGET, "scheduled job failed");
+            assert_eq!(failed.level, "error", "{failed:?}");
+            assert_eq!(logs.events_at(tracing::Level::ERROR).len(), 1);
+            let ran = logs.expect_one(OPERATIONS, nest_rs_schedule::unit::TICK.name());
+            assert_eq!(ran.field("outcome").as_deref(), Some(ERROR), "{ran:?}");
+            for line in [&failed, &ran] {
+                assert_eq!(line.field("host"), mounted.field("host"), "{line:?}");
+                assert_eq!(line.field("method"), mounted.field("method"), "{line:?}");
+            }
+            assert_eq!(mounted.field("host").as_deref(), Some("SyncTasks"));
+            assert_eq!(mounted.field("method").as_deref(), Some("sync"));
+            refusing.told(&crate::told(&mut events), "SyncTasks", "sync");
+            assert_eq!(dependency.called(), refusing.sent());
+            assert_eq!(
+                upstream.concurrency_running(),
+                Some(0),
+                "the refused run holds no slot of the bulkhead"
+            );
+
+            // The breaker is left to its open time: the occurrence after it
+            // is the probe that closes it.
+            if refusing == Refusing::TimedOut {
+                refusing.lift(&upstream, &dependency);
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            scheduler.shutdown().await.expect("the scheduler stops");
+
+            let ticks = logs.find(OPERATIONS, nest_rs_schedule::unit::TICK.name());
+            assert_eq!(ticks.len(), 2, "the occurrence after it fired: {ticks:#?}");
+            assert_eq!(ticks[1].field("outcome").as_deref(), Some(OK), "{ticks:#?}");
+            assert_eq!(dependency.called(), refusing.sent() + 1);
+            assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+            assert_eq!(
+                logs.find(nest_rs_schedule::TARGET, "scheduled job failed")
+                    .len(),
+                1,
+                "the one refusal, filed once"
+            );
+
+            // The refusal a caller of the method is answered, as the tick was.
+            refusing.arrange(app.container());
+            assert_eq!(
+                failed.field("error"),
+                Some(refusing.chain(tasks.sync().await)),
+                "{failed:?}"
+            );
+        }
+    }
 }
 
 /// A decorated listener of a `#[listeners]` block, attempted again within the
-/// one call an emit makes.
+/// one call an emit makes, and refused: its unit filed failed, the emit going
+/// on.
 mod listeners {
     use std::sync::Arc;
 
-    use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
+    use nest_rs_core::operation_log::{ERROR, OK, TARGET as OPERATIONS};
     use nest_rs_core::{injectable, module};
     use nest_rs_events::{EventBus, EventsModule, listeners};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
     use nest_rs_testing::{HeadlessApp, LogCapture};
 
-    use super::{Attempts, UpstreamDown, retrying_once};
+    use super::{Attempts, Dependency, Refusing, UpstreamDown, refusing, retrying_once};
 
     /// A parcel left the depot, which the listener tells the carrier.
     #[derive(Clone)]
@@ -2602,19 +3105,143 @@ mod listeners {
         let ran = logs.expect_one(OPERATIONS, nest_rs_events::unit::DISPATCH.name());
         assert_eq!(ran.field("outcome").as_deref(), Some(OK));
     }
+
+    /// Whom a returned parcel goes back to, which no line may say.
+    const RECIPIENT: &str = "ada.lovelace@example.com";
+
+    /// A parcel came back, which two listeners tell the dependency.
+    #[derive(Clone)]
+    struct Returned {
+        recipient: &'static str,
+    }
+
+    #[injectable]
+    struct ReturnsListener {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        dependency: Arc<Dependency>,
+    }
+
+    #[listeners]
+    impl ReturnsListener {
+        #[on_event]
+        #[resilient(upstream, timeout = "100ms")]
+        async fn refund(&self, event: Returned) -> Result<(), ResilienceError<UpstreamDown>> {
+            assert_eq!(event.recipient, RECIPIENT);
+            self.dependency.call().await
+        }
+
+        #[on_event]
+        #[resilient(upstream, timeout = "100ms")]
+        async fn restock(&self, event: Returned) -> Result<(), ResilienceError<UpstreamDown>> {
+            assert_eq!(event.recipient, RECIPIENT);
+            self.dependency.call().await
+        }
+    }
+
+    #[module(
+        imports = [EventsModule, ResilienceModule::for_root(refusing())],
+        providers = [ReturnsListener, Dependency],
+    )]
+    struct RefusedEventsModule;
+
+    /// No client reads a listener's `503`: its refusal fails its own unit,
+    /// filed as any failure of a listener, the listener after it is still
+    /// called — refused in its turn here, so whichever the bus calls first —
+    /// and the emit returns to its caller.
+    #[tokio::test(start_paused = true)]
+    async fn a_listener_its_policy_refuses_fails_its_unit_and_the_emit_goes_on() {
+        for refusing in Refusing::EACH {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<RefusedEventsModule>()
+                .build_headless()
+                .await
+                .expect("a decorated listener boots");
+            let listener = app.container().get::<ReturnsListener>().expect("provided");
+            let bus = app
+                .container()
+                .get::<EventBus>()
+                .expect("the bus is provided");
+            let (upstream, dependency) = refusing.arrange(app.container());
+            let mut events = upstream.events();
+
+            bus.emit(Returned {
+                recipient: RECIPIENT,
+            })
+            .await;
+            let told = crate::told(&mut events);
+            assert_eq!(dependency.called(), 2 * refusing.sent());
+
+            let mounted = logs.find(nest_rs_events::TARGET, "mounted");
+            let failed = logs.find(
+                nest_rs_events::TARGET,
+                "event listener failed — dispatch continues with the next listener",
+            );
+            let ran = logs.find(OPERATIONS, nest_rs_events::unit::DISPATCH.name());
+            let chain = refusing.chain(
+                listener
+                    .refund(Returned {
+                        recipient: RECIPIENT,
+                    })
+                    .await,
+            );
+            for method in ["refund", "restock"] {
+                let named = |lines: &[nest_rs_testing::CapturedEvent]| {
+                    let mut named = lines
+                        .iter()
+                        .filter(|line| line.field("method").as_deref() == Some(method));
+                    let line = named.next().cloned();
+                    assert!(
+                        named.next().is_none(),
+                        "one line for `{method}`: {lines:#?}"
+                    );
+                    line.unwrap_or_else(|| panic!("a line for `{method}`: {lines:#?}"))
+                };
+                let (mounted, failed, ran) = (named(&mounted), named(&failed), named(&ran));
+                assert_eq!(failed.level, "error", "{failed:?}");
+                assert_eq!(
+                    failed.field("error").as_deref(),
+                    Some(&*chain),
+                    "{failed:?}"
+                );
+                assert_eq!(ran.field("outcome").as_deref(), Some(ERROR), "{ran:?}");
+                for line in [&failed, &ran] {
+                    assert_eq!(line.field("host"), mounted.field("host"), "{line:?}");
+                    assert_eq!(line.field("event"), mounted.field("event"), "{line:?}");
+                }
+                assert_eq!(mounted.field("host").as_deref(), Some("ReturnsListener"));
+                assert_eq!(mounted.field("event").as_deref(), Some("Returned"));
+                refusing.told(&told, "ReturnsListener", method);
+            }
+            assert_eq!(
+                failed.len(),
+                2,
+                "each listener's refusal, once: {failed:#?}"
+            );
+            assert_eq!(logs.events_at(tracing::Level::ERROR).len(), 2);
+            assert!(
+                !logs.quotes(RECIPIENT),
+                "no line says what the event carried"
+            );
+        }
+    }
 }
 
 /// A decorated indicator of an `#[indicators]` block, attempted again within
-/// the one run its probe makes.
+/// the one run its probe makes, and refused: its probe down, the others up.
 mod indicators {
     use std::sync::Arc;
 
+    use http::StatusCode;
     use nest_rs_core::{injectable, module};
     use nest_rs_health::{HealthModule, HealthService, IndicatorStatus, ProbeKind, indicators};
     use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
-    use nest_rs_testing::HeadlessApp;
+    use nest_rs_testing::{HeadlessApp, LogCapture, TestApp};
+    use serde_json::Value;
 
-    use super::{Attempts, UpstreamDown, retrying_once};
+    use super::{Attempts, Dependency, Refusing, UpstreamDown, refusing, retrying_once};
 
     #[injectable]
     struct UpstreamIndicator {
@@ -2660,18 +3287,108 @@ mod indicators {
         let attempts = app.container().get::<Attempts>().expect("provided");
         assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
     }
+
+    #[injectable]
+    struct DependencyIndicator {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        dependency: Arc<Dependency>,
+    }
+
+    #[indicators]
+    impl DependencyIndicator {
+        #[readiness]
+        #[resilient(upstream, timeout = "100ms")]
+        async fn dependency_reachable(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+            self.dependency.call().await
+        }
+    }
+
+    #[module(
+        imports = [HealthModule, ResilienceModule::for_root(refusing())],
+        providers = [DependencyIndicator, Dependency],
+    )]
+    struct RefusedHealthModule;
+
+    /// What the probe at `path` answers: its status and its report.
+    async fn probed(app: &TestApp, path: &str) -> (StatusCode, Value) {
+        let answered = app.http().get(path).send().await;
+        let status = answered.0.status();
+        (status, answered.json().await.value().deserialize::<Value>())
+    }
+
+    /// The `503` here is the probe's own, which an orchestrator reads: a
+    /// refused indicator is down, its refusal in the log and never in the
+    /// body, and the probe after the refusal lifted is up.
+    #[tokio::test(start_paused = true)]
+    async fn an_indicator_its_policy_refuses_answers_down_on_its_probe_alone() {
+        for refusing in Refusing::EACH {
+            let logs = LogCapture::install();
+            let app = TestApp::for_module::<RefusedHealthModule>()
+                .await
+                .expect("a decorated indicator boots");
+            let indicator = app
+                .container()
+                .get::<DependencyIndicator>()
+                .expect("provided");
+            let (upstream, dependency) = refusing.arrange(app.container());
+            let mut events = upstream.events();
+
+            let (status, ready) = probed(&app, "/health/ready").await;
+            let told = crate::told(&mut events);
+            assert_eq!(dependency.called(), refusing.sent());
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{ready}");
+            assert_eq!(ready["status"], "down", "{ready}");
+            assert_eq!(ready["error"]["dependency_reachable"]["status"], "down");
+            let (status, live) = probed(&app, "/health/live").await;
+            assert_eq!(status, StatusCode::OK, "{live}");
+            assert_eq!(live["status"], "up", "{live}");
+
+            let failed = logs.expect_one(nest_rs_health::TARGET, "health indicator failed");
+            assert_eq!(failed.level, "warn", "{failed:?}");
+            assert_eq!(
+                failed.field("indicator").as_deref(),
+                Some("dependency_reachable")
+            );
+            assert_eq!(
+                failed.field("kind").as_deref(),
+                Some(ProbeKind::Readiness.as_str())
+            );
+            refusing.told(&told, "DependencyIndicator", "dependency_reachable");
+            let chain = refusing.chain(indicator.dependency_reachable().await);
+            assert_eq!(
+                failed.field("error").as_deref(),
+                Some(&*chain),
+                "{failed:?}"
+            );
+            assert!(
+                !ready.to_string().contains(&chain),
+                "the report says the indicator is down, never why: {ready}"
+            );
+
+            refusing.lift(&upstream, &dependency);
+            let (status, ready) = probed(&app, "/health/ready").await;
+            assert_eq!(status, StatusCode::OK, "{ready}");
+            assert_eq!(ready["info"]["dependency_reachable"]["status"], "up");
+        }
+    }
 }
 
 /// A decorated hook of a `#[hooks]` block, attempted again within the one run
-/// the app's init makes.
+/// the app's init makes, and refused: an init hook failing the boot, a shutdown
+/// hook filed with the hook after it run.
 mod hooks {
     use std::sync::Arc;
 
-    use nest_rs_core::{hooks, injectable, module};
-    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
-    use nest_rs_testing::HeadlessApp;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
-    use super::{Attempts, UpstreamDown, retrying_once};
+    use nest_rs_core::operation_log::{ERROR, OK, TARGET as OPERATIONS};
+    use nest_rs_core::{BootStep, LifecyclePhase, hooks, injectable, module};
+    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
+    use nest_rs_testing::{HeadlessApp, LogCapture};
+
+    use super::{Attempts, Dependency, Refusing, UpstreamDown, refusing, retrying_once};
 
     #[injectable]
     struct CacheWarmer {
@@ -2710,6 +3427,168 @@ mod hooks {
 
         let attempts = app.container().get::<Attempts>().expect("provided");
         assert_eq!(attempts.made(), 2, "the failed attempt and its retry");
+    }
+
+    #[injectable]
+    struct WarmingHooks {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        dependency: Arc<Dependency>,
+    }
+
+    #[hooks]
+    impl WarmingHooks {
+        #[on_module_init]
+        #[resilient(upstream, timeout = "100ms")]
+        async fn warm(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+            self.dependency.call().await
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root(refusing())],
+        providers = [WarmingHooks, Dependency],
+    )]
+    struct RefusedInitModule;
+
+    /// No client reads an init hook's `503`: its refusal fails the boot, the
+    /// error naming the hook over the refusal itself, which a `main` matches.
+    #[tokio::test(start_paused = true)]
+    async fn an_init_hook_its_policy_refuses_fails_the_boot_naming_it() {
+        for refusing in Refusing::EACH {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<RefusedInitModule>()
+                .build_headless()
+                .await
+                .expect("a decorated hook boots");
+            let hooks = app.container().get::<WarmingHooks>().expect("provided");
+            let (upstream, dependency) = refusing.arrange(app.container());
+            let mut events = upstream.events();
+
+            let failed = app
+                .init()
+                .await
+                .expect_err("the hook's refusal fails the boot");
+            let told = crate::told(&mut events);
+            assert_eq!(dependency.called(), refusing.sent());
+
+            let ran = logs.expect_one(OPERATIONS, nest_rs_core::unit::HOOK.name());
+            assert_eq!(ran.field("outcome").as_deref(), Some(ERROR), "{ran:?}");
+            assert_eq!(
+                ran.field("phase").as_deref(),
+                Some(LifecyclePhase::OnModuleInit.as_str())
+            );
+            assert_eq!(ran.field("host").as_deref(), Some("WarmingHooks"));
+            assert_eq!(ran.field("method").as_deref(), Some("warm"));
+            assert_eq!(ran.field("origin").as_deref(), Some(module_path!()));
+            refusing.told(&told, "WarmingHooks", "warm");
+            let torn_down = logs.expect_one(
+                nest_rs_core::target::LIFECYCLE,
+                "the boot failed after init hooks ran: running the shutdown hooks",
+            );
+            assert_eq!(torn_down.field("host"), ran.field("host"), "{torn_down:?}");
+            assert_eq!(torn_down.field("method"), ran.field("method"));
+
+            assert!(
+                failed
+                    .chain()
+                    .any(|link| link.is::<ResilienceError<UpstreamDown>>()),
+                "the refusal itself, for a `main` to match: {failed:?}"
+            );
+            let step = BootStep::InitHook {
+                phase: LifecyclePhase::OnModuleInit,
+                host: "WarmingHooks",
+                method: "warm",
+                origin: module_path!(),
+            };
+            let chain = refusing.chain(hooks.warm().await);
+            assert_eq!(format!("{failed:#}"), format!("{step} failed: {chain}"));
+        }
+    }
+
+    #[injectable]
+    struct FlushingHooks {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+        #[inject]
+        dependency: Arc<Dependency>,
+        closed: AtomicU32,
+    }
+
+    #[hooks]
+    impl FlushingHooks {
+        #[on_module_destroy]
+        #[resilient(upstream, timeout = "100ms")]
+        async fn flush(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+            self.dependency.call().await
+        }
+
+        #[on_application_shutdown]
+        async fn close(&self) -> anyhow::Result<()> {
+            self.closed.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root(refusing())],
+        providers = [FlushingHooks, Dependency],
+    )]
+    struct RefusedShutdownModule;
+
+    /// No client reads a shutdown hook's `503`: its refusal is filed as any
+    /// failure of a shutdown hook, and the hook after it still runs.
+    #[tokio::test(start_paused = true)]
+    async fn a_shutdown_hook_its_policy_refuses_is_filed_and_the_hook_after_it_runs() {
+        for refusing in Refusing::EACH {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<RefusedShutdownModule>()
+                .build_headless()
+                .await
+                .expect("a decorated hook boots");
+            app.init().await.expect("no init hook fails");
+            let hooks = app.container().get::<FlushingHooks>().expect("provided");
+            let (upstream, dependency) = refusing.arrange(app.container());
+            let mut events = upstream.events();
+
+            app.close().await;
+            let told = crate::told(&mut events);
+            assert_eq!(dependency.called(), refusing.sent());
+
+            let failed = logs.expect_one(nest_rs_core::target::LIFECYCLE, "lifecycle hook failed");
+            assert_eq!(failed.level, "error", "{failed:?}");
+            assert_eq!(logs.events_at(tracing::Level::ERROR).len(), 1);
+            let mut ran = logs.find(OPERATIONS, nest_rs_core::unit::HOOK.name());
+            ran.retain(|line| line.field("host").as_deref() == Some("FlushingHooks"));
+            let [flushed, closed] = &ran[..] else {
+                panic!("the refused hook, then the one after it: {ran:#?}");
+            };
+            assert_eq!(flushed.field("outcome").as_deref(), Some(ERROR));
+            for line in [&failed, flushed] {
+                assert_eq!(
+                    line.field("phase").as_deref(),
+                    Some(LifecyclePhase::OnModuleDestroy.as_str()),
+                    "{line:?}"
+                );
+                assert_eq!(line.field("host").as_deref(), Some("FlushingHooks"));
+                assert_eq!(line.field("method").as_deref(), Some("flush"));
+                assert_eq!(line.field("origin").as_deref(), Some(module_path!()));
+            }
+            assert_eq!(closed.field("method").as_deref(), Some("close"));
+            assert_eq!(closed.field("outcome").as_deref(), Some(OK));
+            assert_eq!(hooks.closed.load(Ordering::Relaxed), 1);
+            refusing.told(&told, "FlushingHooks", "flush");
+
+            let chain = refusing.chain(hooks.flush().await);
+            assert_eq!(
+                failed.field("error").as_deref(),
+                Some(&*chain),
+                "{failed:?}"
+            );
+        }
     }
 }
 
@@ -4650,8 +5529,8 @@ mod cancel {
 
 /// The predicates, the fallback and the token on each receiver and host the
 /// decorator takes: a generic method, a receiver lent through its `Arc`, a
-/// method borrowing through a lifetime it names, and a handler of each impl
-/// half, called through the framework's own path.
+/// method borrowing through a lifetime it names, a method of a trait impl, and
+/// a handler of each impl half, called through the framework's own path.
 mod keyed {
     use super::*;
 
@@ -4793,9 +5672,678 @@ mod keyed {
         assert!(matches!(keyed.sorted("lost").await, Ok("the Lyon hub")));
     }
 
+    /// What a carrier quotes for a zone, which a host built by hand asks.
+    trait Quoting {
+        fn quote(&self, zone: &str) -> impl Future<Output = Answer<Option<u32>>> + Send;
+    }
+
+    /// A host the app's code builds itself, holding a policy the container
+    /// built.
+    struct Quotes {
+        upstream: Arc<ResiliencePolicy>,
+        attempts: AtomicU32,
+    }
+
+    impl Quotes {
+        /// The price listed for `zone`, where the carrier quoted none.
+        async fn listed(
+            &self,
+            zone: &str,
+            error: ResilienceError<CarrierDown>,
+        ) -> Answer<Option<u32>> {
+            match zone {
+                "far" => Ok(Some(9)),
+                _ => Err(error),
+            }
+        }
+    }
+
+    impl Quoting for Quotes {
+        #[resilient(
+            upstream,
+            idempotent,
+            retry_if = |_| true,
+            retry_ok_if = Option::is_none,
+            record_if = |_| false,
+            fallback = listed,
+            fallback_if = |error| matches!(error, ResilienceError::Failed(_)),
+            cancel = token
+        )]
+        async fn quote(&self, zone: &str) -> Answer<Option<u32>> {
+            self.attempts.fetch_add(1, Ordering::Relaxed);
+            match zone {
+                "home" if !token.is_cancelled() => Ok(Some(4)),
+                "" => Ok(None),
+                _ => Err(CarrierDown),
+            }
+        }
+    }
+
+    /// The fallback a method of a trait impl names is an inherent method of
+    /// its host: `Self`'s, as the key says, whichever impl the method is in.
+    #[tokio::test(start_paused = true)]
+    async fn a_method_of_a_trait_impl_takes_every_key_its_fallback_an_inherent_method() {
+        let app = boot::<KeyedModule>().await;
+        let upstream = held::<nest_rs_core::Unnamed>(&app);
+        let quotes = Quotes {
+            upstream: Arc::clone(&upstream),
+            attempts: AtomicU32::new(0),
+        };
+        let attempted = || quotes.attempts.swap(0, Ordering::Relaxed);
+
+        assert!(matches!(quotes.quote("home").await, Ok(Some(4))));
+        assert_eq!(attempted(), 1);
+        assert!(matches!(quotes.quote("").await, Ok(None)));
+        assert_eq!(attempted(), 2, "no quote is asked again");
+        assert!(matches!(quotes.quote("far").await, Ok(Some(9))));
+        assert_eq!(attempted(), 2, "sent again, then its fallback");
+        assert!(
+            failed(&quotes.quote("lost").await),
+            "the fallback's own `Err`, the run's error handed back"
+        );
+        assert_eq!(
+            upstream.breaker_state(),
+            Some(BreakerState::Closed),
+            "no `Err` was a failure, and one opens this breaker"
+        );
+
+        upstream
+            .open_breaker(Duration::from_secs(30))
+            .expect("the policy has a breaker");
+        attempted();
+        let refused = quotes.quote("far").await;
+        assert!(
+            matches!(refused, Err(ResilienceError::Open { .. })),
+            "a refusal `fallback_if` leaves to the caller: {refused:?}"
+        );
+        assert_eq!(attempted(), 0);
+    }
+
     /// The breaker a handler's one failure opens, were its `Err` one.
     fn counting() -> ResilienceConfig {
         opening_on_the_first_failure()
+    }
+
+    /// What the fallback of a unit no client waits on was handed, in order.
+    #[injectable]
+    #[derive(Default)]
+    struct Journal {
+        entries: Mutex<Vec<String>>,
+    }
+
+    impl Journal {
+        /// Notes the error a run ended on, after `what` it was handed with it.
+        fn note(&self, what: &str, error: &ResilienceError<UpstreamDown>) {
+            let ended_on = match error {
+                ResilienceError::Failed(UpstreamDown) => "failed".to_owned(),
+                ResilienceError::Open { .. } => "open".to_owned(),
+                ResilienceError::TimedOut { timeout, .. } => format!("timed out at {timeout:?}"),
+                _ => "another refusal".to_owned(),
+            };
+            self.entries
+                .lock()
+                .expect("unpoisoned")
+                .push(format!("{what}{ended_on}"));
+        }
+
+        fn entries(&self) -> Vec<String> {
+            self.entries.lock().expect("unpoisoned").clone()
+        }
+    }
+
+    /// The one line a fallback answering for `method` of `host` files each
+    /// time, the last of `times`: a handler's, as a provider's method's.
+    #[track_caller]
+    fn fell_back(logs: &LogCapture, host: &str, method: &str, times: usize) {
+        let lines = logs.find(
+            nest_rs_resilience::TARGET,
+            "the call failed; its fallback answers",
+        );
+        assert_eq!(lines.len(), times, "{lines:#?}");
+        for line in &lines {
+            assert_eq!(line.field("host").as_deref(), Some(host), "{line:?}");
+            assert_eq!(line.field("method").as_deref(), Some(method), "{line:?}");
+        }
+    }
+
+    mod scheduled {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::time::Duration;
+
+        use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
+        use nest_rs_core::{injectable, module};
+        use nest_rs_resilience::{
+            BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+        };
+        use nest_rs_schedule::{Scheduler, scheduled};
+        use nest_rs_testing::{HeadlessApp, LogCapture};
+
+        use super::super::UpstreamDown;
+        use super::{Journal, counting, fell_back};
+
+        #[injectable]
+        struct KeyedTasks {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+            #[inject]
+            journal: Arc<Journal>,
+            attempts: AtomicU32,
+        }
+
+        impl KeyedTasks {
+            /// A refresh the upstream did not take is left to the occurrence
+            /// after it.
+            async fn skipped(
+                &self,
+                error: ResilienceError<UpstreamDown>,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                self.journal.note("", &error);
+                Ok(())
+            }
+        }
+
+        #[scheduled]
+        impl KeyedTasks {
+            #[every("1s")]
+            #[resilient(
+                upstream,
+                idempotent,
+                retries = 1,
+                retry_if = |_| false,
+                retry_ok_if = |_| false,
+                record_if = |_| false,
+                fallback = skipped,
+                fallback_if = |error| !matches!(error, ResilienceError::TimedOut { .. }),
+                cancel = token
+            )]
+            async fn refresh(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+                drop(token);
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                Err(UpstreamDown)
+            }
+        }
+
+        #[module(
+            imports = [ResilienceModule::for_root(counting())],
+            providers = [KeyedTasks, Journal],
+        )]
+        struct KeyedScheduleModule;
+
+        /// A tick that falls back instead of failing: its occurrence is filed
+        /// `ok`, for its own `Err` and for the refusal of a breaker opened by
+        /// hand between two occurrences.
+        #[tokio::test(start_paused = true)]
+        async fn a_tick_is_filed_ok_once_its_fallback_answered_and_its_err_opens_no_breaker() {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<KeyedScheduleModule>()
+                .build_headless()
+                .await
+                .expect("a tick carrying the keys boots");
+            let tasks = app.container().get::<KeyedTasks>().expect("provided");
+            let upstream = app
+                .container()
+                .get::<ResiliencePolicy>()
+                .expect("the module built the policy");
+            let scheduler = app
+                .spawn_transport(Scheduler::new())
+                .await
+                .expect("the scheduler configures against the app");
+
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert_eq!(
+                tasks.attempts.load(Ordering::Relaxed),
+                1,
+                "an `Err` `retry_if` refuses is sent once"
+            );
+            assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+            upstream
+                .open_breaker(Duration::from_secs(30))
+                .expect("the policy has a breaker");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            scheduler.shutdown().await.expect("the scheduler stops");
+
+            assert_eq!(tasks.journal.entries(), ["failed", "open"]);
+            assert_eq!(tasks.attempts.load(Ordering::Relaxed), 1, "refused unsent");
+            let ticks = logs.find(OPERATIONS, nest_rs_schedule::unit::TICK.name());
+            assert_eq!(ticks.len(), 2, "{ticks:#?}");
+            for tick in &ticks {
+                assert_eq!(tick.field("outcome").as_deref(), Some(OK), "{tick:?}");
+            }
+            logs.expect_none(nest_rs_schedule::TARGET, "scheduled job failed");
+            fell_back(&logs, "KeyedTasks", "refresh", 2);
+        }
+    }
+
+    mod listeners {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        use nest_rs_core::operation_log::{ERROR, OK, TARGET as OPERATIONS};
+        use nest_rs_core::{injectable, module};
+        use nest_rs_events::{EventBus, EventsModule, listeners};
+        use nest_rs_resilience::{
+            BreakerState, CancellationToken, ResilienceError, ResilienceModule, ResiliencePolicy,
+            resilient,
+        };
+        use nest_rs_testing::{HeadlessApp, LogCapture};
+
+        use super::super::UpstreamDown;
+        use super::{Journal, counting, fell_back};
+
+        /// A parcel left the depot, which the listener tells the carrier.
+        #[derive(Clone)]
+        struct Dispatched {
+            parcel: &'static str,
+        }
+
+        /// How long the unit of the listener asking about a late parcel lasts,
+        /// its `timeout = "50ms"`.
+        const UNIT: Duration = Duration::from_millis(50);
+
+        /// A parcel is late, which the listener asks the carrier about for as
+        /// long as its unit lasts.
+        #[derive(Clone)]
+        struct Delayed {
+            /// Whether the fallback waits before it answers.
+            patient: bool,
+        }
+
+        #[injectable]
+        struct KeyedListener {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+            #[inject]
+            journal: Arc<Journal>,
+            attempts: AtomicU32,
+            /// The token of each attempt at asking about a late parcel.
+            tokens: Mutex<Vec<CancellationToken>>,
+        }
+
+        impl KeyedListener {
+            /// The carrier is told later, of the parcel the event named.
+            async fn queued(
+                &self,
+                event: Dispatched,
+                error: ResilienceError<UpstreamDown>,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                self.journal
+                    .note(&format!("{} after ", event.parcel), &error);
+                Ok(())
+            }
+
+            /// The carrier is asked again at the next sweep.
+            async fn asked_later(
+                &self,
+                event: Delayed,
+                error: ResilienceError<UpstreamDown>,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                self.journal.note("late after ", &error);
+                if event.patient {
+                    tokio::task::yield_now().await;
+                }
+                Ok(())
+            }
+        }
+
+        #[listeners]
+        impl KeyedListener {
+            /// The event is lent to each attempt and handed to the fallback.
+            #[on_event]
+            #[resilient(
+                upstream,
+                idempotent,
+                retries = 1,
+                retry_if = |_| true,
+                retry_ok_if = |_| false,
+                record_if = |_| false,
+                fallback = queued,
+                fallback_if = |_| true,
+                cancel = token
+            )]
+            async fn on_dispatched(
+                &self,
+                event: Dispatched,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                drop(token);
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                if event.parcel.is_empty() {
+                    return Ok(());
+                }
+                Err(UpstreamDown)
+            }
+
+            /// A carrier that never answers, asked for as long as the unit
+            /// lasts.
+            #[on_event(timeout = "50ms")]
+            #[resilient(upstream, fallback = asked_later, cancel = token)]
+            async fn on_delayed(
+                &self,
+                event: Delayed,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                let Delayed { .. } = &event;
+                self.tokens.lock().expect("unpoisoned").push(token);
+                std::future::pending().await
+            }
+        }
+
+        #[module(
+            imports = [EventsModule, ResilienceModule::for_root(counting())],
+            providers = [KeyedListener, Journal],
+        )]
+        struct KeyedEventsModule;
+
+        #[tokio::test(start_paused = true)]
+        async fn a_listeners_unit_is_filed_ok_once_its_fallback_took_the_event() {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<KeyedEventsModule>()
+                .build_headless()
+                .await
+                .expect("a listener carrying the keys boots");
+            let listener = app.container().get::<KeyedListener>().expect("provided");
+            let upstream = app
+                .container()
+                .get::<ResiliencePolicy>()
+                .expect("the module built the policy");
+            let bus = app
+                .container()
+                .get::<EventBus>()
+                .expect("the bus is provided");
+
+            bus.emit(Dispatched { parcel: "P7" }).await;
+            assert_eq!(
+                listener.attempts.load(Ordering::Relaxed),
+                2,
+                "sent again, then its fallback"
+            );
+            assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+            upstream
+                .open_breaker(Duration::from_secs(30))
+                .expect("the policy has a breaker");
+            bus.emit(Dispatched { parcel: "P8" }).await;
+
+            assert_eq!(
+                listener.journal.entries(),
+                ["P7 after failed", "P8 after open"]
+            );
+            assert_eq!(
+                listener.attempts.load(Ordering::Relaxed),
+                2,
+                "refused unsent"
+            );
+            let dispatched = logs.find(OPERATIONS, nest_rs_events::unit::DISPATCH.name());
+            assert_eq!(dispatched.len(), 2, "{dispatched:#?}");
+            for unit in &dispatched {
+                assert_eq!(unit.field("outcome").as_deref(), Some(OK), "{unit:?}");
+            }
+            fell_back(&logs, "KeyedListener", "on_dispatched", 2);
+        }
+
+        /// What a handler adds to a key is its unit. The deadline its edge
+        /// cuts it at ends the attempt before the policy's own timeout, five
+        /// seconds here; the token is cancelled there, and the fallback is
+        /// handed the time the unit had left and none of its own: one
+        /// answering at once answers for the unit, one that waits is cut with
+        /// it, its unit filed failed.
+        #[tokio::test(start_paused = true)]
+        async fn a_listeners_fallback_answers_at_its_units_deadline_and_has_no_time_past_it() {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<KeyedEventsModule>()
+                .build_headless()
+                .await
+                .expect("a listener carrying the keys boots");
+            let listener = app.container().get::<KeyedListener>().expect("provided");
+            let upstream = app
+                .container()
+                .get::<ResiliencePolicy>()
+                .expect("the module built the policy");
+            let bus = app
+                .container()
+                .get::<EventBus>()
+                .expect("the bus is provided");
+            let asked = || logs.find(OPERATIONS, nest_rs_events::unit::DISPATCH.name());
+
+            let sent = tokio::time::Instant::now();
+            bus.emit(Delayed { patient: false }).await;
+            assert_eq!(sent.elapsed(), UNIT, "given up at the unit's deadline");
+            assert_eq!(
+                listener.journal.entries(),
+                [format!("late after timed out at {UNIT:?}")]
+            );
+            assert_eq!(asked()[0].field("outcome").as_deref(), Some(OK));
+            fell_back(&logs, "KeyedListener", "on_delayed", 1);
+            assert!(
+                matches!(upstream.breaker_state(), Some(BreakerState::Open { .. })),
+                "the attempt given up there is a failure, and one opens this breaker"
+            );
+
+            upstream.close_breaker().expect("the policy has a breaker");
+            bus.emit(Delayed { patient: true }).await;
+            assert_eq!(
+                listener.journal.entries().len(),
+                2,
+                "the fallback was called for the second timeout too"
+            );
+            let cut = asked();
+            assert_eq!(cut.len(), 2, "{cut:#?}");
+            assert_eq!(cut[1].field("outcome").as_deref(), Some(ERROR), "{cut:#?}");
+            let failed = logs.expect_one(
+                nest_rs_events::TARGET,
+                "event listener failed — dispatch continues with the next listener",
+            );
+            assert_eq!(failed.field("method").as_deref(), Some("on_delayed"));
+
+            let tokens = listener.tokens.lock().expect("unpoisoned");
+            assert_eq!(tokens.len(), 2);
+            assert!(
+                tokens.iter().all(CancellationToken::is_cancelled),
+                "each attempt's token, cancelled as it was given up"
+            );
+        }
+    }
+
+    mod indicators {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use nest_rs_core::{injectable, module};
+        use nest_rs_health::{HealthModule, HealthService, IndicatorStatus, ProbeKind, indicators};
+        use nest_rs_resilience::{
+            BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+        };
+        use nest_rs_testing::{HeadlessApp, LogCapture};
+
+        use super::super::UpstreamDown;
+        use super::{Journal, counting, fell_back};
+
+        #[injectable]
+        struct KeyedIndicator {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+            #[inject]
+            journal: Arc<Journal>,
+        }
+
+        impl KeyedIndicator {
+            /// The app serves without the upstream while its policy holds
+            /// calls back.
+            async fn degraded(
+                &self,
+                error: ResilienceError<UpstreamDown>,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                self.journal.note("", &error);
+                Ok(())
+            }
+        }
+
+        #[indicators]
+        impl KeyedIndicator {
+            #[readiness]
+            #[resilient(
+                upstream,
+                idempotent,
+                retry_if = |_| false,
+                retry_ok_if = |_| false,
+                record_if = |_| false,
+                fallback = degraded,
+                fallback_if = |error| !matches!(error, ResilienceError::Failed(_)),
+                cancel = token
+            )]
+            async fn upstream_answers(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+                drop(token);
+                Err(UpstreamDown)
+            }
+        }
+
+        #[module(
+            imports = [HealthModule, ResilienceModule::for_root(counting())],
+            providers = [KeyedIndicator, Journal],
+        )]
+        struct KeyedHealthModule;
+
+        /// A probe that falls back instead of failing: down for the call's
+        /// own `Err`, which `fallback_if` leaves it, and up once the policy
+        /// refuses the call.
+        #[tokio::test(start_paused = true)]
+        async fn an_indicator_answers_up_once_its_fallback_answered_for_a_refusal() {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<KeyedHealthModule>()
+                .build_headless()
+                .await
+                .expect("an indicator carrying the keys boots");
+            let indicator = app.container().get::<KeyedIndicator>().expect("provided");
+            let upstream = app
+                .container()
+                .get::<ResiliencePolicy>()
+                .expect("the module built the policy");
+            let health = app
+                .container()
+                .get::<HealthService>()
+                .expect("HealthModule provides it");
+
+            let failed = health.probe(ProbeKind::Readiness).await;
+            assert_eq!(failed.status, IndicatorStatus::Down, "{:?}", failed.details);
+            logs.expect_one(nest_rs_health::TARGET, "health indicator failed");
+            assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+
+            upstream
+                .open_breaker(Duration::from_secs(30))
+                .expect("the policy has a breaker");
+            let degraded = health.probe(ProbeKind::Readiness).await;
+            assert_eq!(
+                degraded.status,
+                IndicatorStatus::Up,
+                "{:?}",
+                degraded.details
+            );
+            assert!(degraded.info.contains_key("upstream_answers"));
+            assert_eq!(indicator.journal.entries(), ["open"]);
+            assert_eq!(
+                logs.find(nest_rs_health::TARGET, "health indicator failed")
+                    .len(),
+                1,
+                "the probe its fallback answered files no failure"
+            );
+            fell_back(&logs, "KeyedIndicator", "upstream_answers", 1);
+        }
+    }
+
+    mod hooks {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
+        use nest_rs_core::{hooks, injectable, module};
+        use nest_rs_resilience::{
+            BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+        };
+        use nest_rs_testing::{HeadlessApp, LogCapture};
+
+        use super::super::UpstreamDown;
+        use super::{Journal, counting, fell_back};
+
+        #[injectable]
+        struct KeyedHooks {
+            #[inject]
+            upstream: Arc<ResiliencePolicy>,
+            #[inject]
+            journal: Arc<Journal>,
+            attempts: AtomicU32,
+        }
+
+        impl KeyedHooks {
+            /// The cache starts cold, and fills as it is read.
+            async fn cold(
+                &self,
+                error: ResilienceError<UpstreamDown>,
+            ) -> Result<(), ResilienceError<UpstreamDown>> {
+                self.journal.note("", &error);
+                Ok(())
+            }
+        }
+
+        #[hooks]
+        impl KeyedHooks {
+            #[on_module_init]
+            #[resilient(
+                upstream,
+                idempotent,
+                retries = 1,
+                retry_if = |_| true,
+                retry_ok_if = |_| false,
+                record_if = |_| false,
+                fallback = cold,
+                fallback_if = |_| true,
+                cancel = token
+            )]
+            async fn warm(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+                drop(token);
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                Err(UpstreamDown)
+            }
+        }
+
+        #[module(
+            imports = [ResilienceModule::for_root(counting())],
+            providers = [KeyedHooks, Journal],
+        )]
+        struct KeyedHooksModule;
+
+        /// An init hook that falls back instead of failing the boot.
+        #[tokio::test(start_paused = true)]
+        async fn an_init_hook_completes_the_boot_once_its_fallback_answered() {
+            let logs = LogCapture::install();
+            let app = HeadlessApp::builder()
+                .module::<KeyedHooksModule>()
+                .build_headless()
+                .await
+                .expect("a hook carrying the keys boots");
+            let hooks = app.container().get::<KeyedHooks>().expect("provided");
+            let upstream = app
+                .container()
+                .get::<ResiliencePolicy>()
+                .expect("the module built the policy");
+
+            app.init().await.expect("the hook's fallback answered");
+
+            assert_eq!(
+                hooks.attempts.load(Ordering::Relaxed),
+                2,
+                "sent again, then its fallback"
+            );
+            assert_eq!(hooks.journal.entries(), ["failed"]);
+            assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+            let mut ran = logs.find(OPERATIONS, nest_rs_core::unit::HOOK.name());
+            ran.retain(|line| line.field("host").as_deref() == Some("KeyedHooks"));
+            assert_eq!(ran.len(), 1, "{ran:#?}");
+            assert_eq!(ran[0].field("outcome").as_deref(), Some(OK), "{ran:#?}");
+            fell_back(&logs, "KeyedHooks", "warm", 1);
+        }
     }
 
     /// The state of the breaker the handlers of `app` ran under: closed, since

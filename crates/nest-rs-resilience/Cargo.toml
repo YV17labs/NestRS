@@ -136,6 +136,12 @@ syn.workspace = true
 # as the global meter provider.
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+# What a call pays its policy, measured in `benches/`.
+criterion.workspace = true
+
+[[bench]]
+name = "policy"
+harness = false
 
 [lints]
 workspace = true

@@ -354,20 +354,22 @@ How each holds:
   holds its closure of borrows twice, so rustc's error for a future that is not
   `Send` still points at `idempotent`. A release build holds each attempt's
   future where the run is, whatever its size: boxed past tokio's threshold, a
-  future bought no stack, the run's type reserving its size all the same — held
-  across an `.await`, futures up to 1,984 KiB, the largest probed, run on a
-  2 MiB worker either way — and cost an allocation and its size a second time.
+  future bought no stack, the run's type reserving its size all the same, and
+  cost an allocation and its size a second time; held in place, one holding a
+  third of a 2 MiB worker's stack across an `.await` runs on that worker
+  (`a_run_holding_a_large_buffer_across_an_await_runs_on_a_worker_of_tokios_default_stack`).
   A call made again holds its closure there whatever its size too: it calls the
   closure where it is held, and the run's type reserves the closure's size
-  either way, so boxed past the threshold a closure bought no stack — moving a
-  buffer in, it runs at 672 KiB and overflows from 704 KiB, boxed or held — and
-  cost an allocation. A call sent once holds its closure there up to that
+  either way, so boxed past the threshold a closure bought no stack and cost an
+  allocation. A call sent once holds its closure there up to that
   threshold, 16 KiB (`BOX_FUTURE_THRESHOLD`, copied in `src/call.rs`,
   `.claude/upstream/tokio.md`), and past it boxes the closure and the future it
   makes, since the closure leaves its box to be called while that future is
   built beside it on the stack: with either held in place, a call sent once
-  moving 704 KiB into its closure overflowed a 2 MiB worker, where boxing both
-  runs 992 KiB. Its run's type still reserves the closure's size and the
+  overflowed a 2 MiB worker moving into its closure a buffer that boxing both
+  runs with, three eighths of that stack
+  (`a_call_sent_once_moving_a_large_buffer_into_its_closure_runs_on_a_worker_of_tokios_default_stack`).
+  Its run's type still reserves the closure's size and the
   future's beside the two boxes, in the one place it holds either in when they
   fit. So a call answering at once allocates nothing but its attempt's token;
   the decision is a constant per type, `AutoBox::<T>::SHOULD_BOX` as tokio's
@@ -380,14 +382,15 @@ How each holds:
   build boxes both whatever their size, a box of what holds nothing allocating
   nothing: it copies a value's whole type at each move, and a type that may
   hold a future in place has the size of the largest it may hold, so a run
-  holding a small one in place weighed a large one's size at each step — a
-  run's caller awaiting it took 3.1 times the future's size on the stack, where
-  awaiting the future alone takes 2.1 — and overflowed the worker a large one's
+  holding a small one in place weighed a large one's size at each step, its
+  caller awaiting it taking more of the stack for each byte of the future than
+  awaiting the future alone, and overflowed the worker a large one's
   twin runs on; choosing the type by the size of what it holds needs
   `generic_const_exprs`, unstable. The middleware's future is
   reqwest-middleware's box already. A decorated method's future is then its
-  arguments and a run's bytes, under a kilobyte, where it held its body twice
-  and an argument taken by value seven times.
+  arguments and a run's bytes, under a kilobyte
+  (`a_decorated_methods_future_holds_its_body_and_each_argument_once`), where it
+  held its body and an argument taken by value more than once.
 
 **Refused:**
 
@@ -419,14 +422,13 @@ How each holds:
 - **A call sent once holding its closure in place whatever its size, or its
   future in place beside its boxed closure, or a debug build holding either in
   place at all**: in a release build each of the first two overflowed a 2 MiB
-  worker from 704 KiB moved into a call sent once's closure, where boxing both
-  runs 992 KiB, and in a debug build a large one, or a small one where a type
+  worker moving into a call sent once's closure a buffer that boxing both runs
+  with, and in a debug build a large one, or a small one where a type
   that may hold a large one holds it, overflowed the worker its twin runs on
   (*How each holds*, above).
 - **A call made again boxing its closure past the threshold**: it calls the
   closure where it is held, and its run's type reserves the closure's size
-  either way, so the box bought no stack — moving a buffer in, it ran at
-  672 KiB and overflowed from 704 KiB, boxed or held — and cost an allocation
+  either way, so the box bought no stack and cost an allocation
   (*How each holds*, above).
 
 **Limits, named:**
@@ -453,7 +455,7 @@ How each holds:
   after it still costs the call its wait. Closing it is counting the attempt
   before the wait, which counts attempts never sent.
 - **An age costs memory**: a slot holds its outcome's instant beside its byte,
-  24 bytes on 64-bit Linux, about 240 KB at the window's ceiling. Closing it is
+  for every slot up to the window's ceiling. Closing it is
   a narrower instant per slot, which no measurement has asked for.
 - **The boot's check of an age under a rate** counts each attempt at the
   timeout's ceiling and each timeout as firing on time: a policy whose attempts
@@ -478,33 +480,42 @@ How each holds:
   type still reserves the closure's size and the future's beside the boxes, in
   the one place it holds either in when they fit, so such a run weighs the
   larger twice where its task is held; the same type closes it.
-- **A run answering at once costs 15 to 19 ns more than the first policy's**,
-  the policy the 2026-11-20 and 2026-11-21 entries built, before the rate, the
-  breaker's age and probes and the waiters' bound. In release on one machine,
-  medians of three interleaved rounds, on a policy with none of those settings:
-  in a binary timing `run` alone, a call answering at once ran in 77.9 ns,
-  where the first policy ran it in 62.2 and each attempt's box had taken it to
-  112.9, and with the rate set in 96.3, where the box had taken it to 125.7; in
-  a second binary timing four paths, `run` took 88.5 against the first policy's
-  70.0, `run_idempotent` 93.0 against 74.3, a decorated method 89.7 against
-  74.5 and a decorated idempotent one 99.1 against 81.1. With the attempt's
-  token, the panic's containment and the deadline's read stripped from both,
-  the first policy ran it in 35.4 ns and this one in 52.5: 13.5 of those 17.1
-  is the run itself, measured with no breaker in either (43.5 against 30.0) —
-  its futures polled by hand, holding the call once where the first policy's
-  `async` fns held it twice (rust-lang/rust#62958) — and 3.6 the breaker's
-  step, 9.0 here against 5.4 there, a pass then a sent attempt checked against
-  the epoch; the three stripped cost 1.4 ns less here (25.4 against 26.8), so
-  the parts add up to the 15.7 through `run`. Closing the first is the run
-  written as `async` fns again once rustc holds an awaited future once; the
-  second, a breaker step 7.1's switches and probes do not need.
+- **A run answering at once costs more than the first policy's**, the policy
+  the 2026-11-20 and 2026-11-21 entries built, before the rate, the breaker's
+  age and probes and the waiters' bound: its futures are polled by hand, holding
+  the call once where the first policy's `async` fns held it twice
+  (rust-lang/rust#62958), and its breaker's step is a pass, then a sent attempt
+  checked against the epoch. By how much was measured against code since
+  removed, with a harness never committed, so no figure of it is kept. Closing
+  the first is the run written as `async` fns again once rustc holds an awaited
+  future once; the second, a breaker step 7.1's switches and probes do not
+  need. What a run costs now is `benches/policy.rs`'s to measure
+  (`cargo bench -p nest-rs-resilience --bench policy`), a figure of the machine
+  and the run it is read on, never a constant. In the dev container on
+  2026-11-24 — aarch64, criterion's medians of one run, a row moving by up to
+  13 ns, and one by 29, from the run before it, another build sharing the
+  cores — a call answering at once took 85 ns through `run`, 85 through
+  `run_idempotent`, 81 through a decorated method run once and 100 through an
+  idempotent one on a policy with no optional mechanism (`run/bare`,
+  `run_idempotent/bare`, `resilient/bare`, `resilient_idempotent/bare`); the
+  breaker added 9 to 11 ns to each (`…/breaker`), the bulkhead up to 5
+  (`…/bulkhead`) and the rate 16 to 20 (`…/rate`), and the attempt's token
+  alone, built and dropped, took 16 (`token/new`). An `Ok` its method's keys
+  read took no more than one the defaults read, 96 ns against 100, and 111
+  under a `fallback`; an `Err` the default counts as a failure took 275 where
+  one `record_if` refuses took 80, the failure's chain being said for the
+  breaker's opening whether or not the policy has a breaker (`judged/bare`). A
+  call an open breaker refuses unsent took 72 ns through `run` and 69 through a
+  decorated method, and with a subscription to the policy's events open 83 and
+  131 (`refused`).
 - **A decorated method run once that takes a large argument by value** still
   needs more of a debug build's stack than its undecorated twin: the closure
   owning the argument is built in the method's frame, moved out of its box to be
   called, and its future built on the stack before it is boxed, each copy a
-  debug build's stack holds a moment, so on a 2 MiB worker it runs at 224 KiB
-  and overflows from 256 KiB, where its twin runs at 384 KiB and overflows from
-  416 KiB. Idempotent, borrowing its arguments, or built for release, it runs
+  debug build's stack holds a moment, so a 2 MiB worker overflows at a smaller
+  argument than its twin's; taking three thirty-seconds of that stack, it runs
+  (`a_decorated_method_taking_a_large_buffer_by_value_runs_on_a_worker_of_tokios_default_stack`).
+  Idempotent, borrowing its arguments, or built for release, it runs
   where its twin does. Closing it is a body's future built where the run holds
   it, which safe Rust cannot write.
 - **An app's own attribute named `resilient` on an operation** is read as the
@@ -656,7 +667,9 @@ reference's word first:
   one token.
 - **`ResiliencePolicy::events()` opens a subscription**, bounded at 256 unread
   events, past which it is told how many it missed (`Lag`). With none open an
-  event costs one atomic load and builds nothing.
+  event is not built
+  (`an_event_is_built_only_while_a_subscription_is_open`); what an open one
+  costs a call refused unsent is the `refused` group of `benches/policy.rs`.
 - **The reads sit beside `breaker_state()`** — `breaker_stats()`,
   `concurrency_running()`, `concurrency_waiting()`, `rate_available()` — and
   under `opentelemetry` are observed as up-down counters, additive across

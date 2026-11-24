@@ -3,7 +3,8 @@
 
 use nest_rs_codegen::__private::{
     HostBorrow, RESILIENT, RETRIES, TIMEOUT, answer_span, is_resilient, needs_a_value,
-    resilient_policy_setting, resilient_retries, resilient_timeout, shared_receiver, site,
+    opens_on_operation_field_mark, resilient_policy_setting, resilient_retries, resilient_timeout,
+    shared_receiver, site,
 };
 use nest_rs_codegen::{Grammar, Refusals};
 use proc_macro2::{Group, Span, TokenStream, TokenTree};
@@ -11,9 +12,11 @@ use quote::{ToTokens, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
 use syn::{
-    Expr, FnArg, GenericArgument, Ident, ImplItemFn, Pat, PathArguments, ReturnType, Token, Type,
-    TypeParamBound,
+    Expr, FnArg, GenericArgument, Ident, ImplItemFn, Pat, PathArguments, ReturnType, Stmt, Token,
+    Type, TypeParamBound,
 };
+
+use crate::instrumented::{Part, instrumented};
 
 /// The key declaring the call replayable, read off `run_idempotent`.
 const IDEMPOTENT: &str = "idempotent";
@@ -24,15 +27,62 @@ const GRAMMAR: Grammar = Grammar::new(RESILIENT, &KEYS)
     .bare(bare)
     .elsewhere(resilient_policy_setting);
 
+/// A key that says nothing without another, and why.
+struct Needs {
+    key: &'static str,
+    needs: &'static str,
+    why: &'static str,
+}
+
+const NEEDS: [Needs; 1] = [Needs {
+    key: RETRIES,
+    needs: IDEMPOTENT,
+    why: "a call run once is never sent again — declare the call `idempotent` where sending it \
+          twice leaves the dependency as sending it once does, or drop `retries`",
+}];
+
 /// What `#[resilient(…)]` was given.
 struct Args {
     field: Ident,
-    /// The key as written: the replayed closure is spanned there, so what
-    /// rustc says of it points at the declaration.
-    idempotent: Option<Ident>,
+    /// Every key the list read, as written: the replayed closure is spanned at
+    /// `idempotent`, so what rustc says of it points at the declaration.
+    keys: Vec<Ident>,
+    /// The list was read to its end. A refused key ends its reading, and a key
+    /// past it is unread, never absent.
+    whole: bool,
     timeout_millis: Option<u64>,
-    /// The value as written and its key, read once the whole list is.
-    retries: Option<(Expr, Ident)>,
+    /// The value as written, judged beside `idempotent` alone.
+    retries: Option<Expr>,
+}
+
+impl Args {
+    /// `key` as the list wrote it, when it read one.
+    fn key(&self, key: &str) -> Option<&Ident> {
+        self.keys.iter().find(|written| written.unraw() == key)
+    }
+
+    /// Refuse each key written without the one it needs, in a list read whole
+    /// alone: past a refused key, the one needed may stand unread.
+    fn refuse_unmet_needs(&self, refusals: &mut Refusals) {
+        if !self.whole {
+            return;
+        }
+        for need in &NEEDS {
+            if let Some(key) = self.key(need.key)
+                && self.key(need.needs).is_none()
+            {
+                refusals.push(syn::Error::new(
+                    key.span(),
+                    format!(
+                        "{} needs `{}`: {}",
+                        site(RESILIENT, Some(need.key)),
+                        need.needs,
+                        need.why,
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 /// How a method's body runs under its policy.
@@ -50,6 +100,9 @@ struct Shape {
     receiver: Option<Token![self]>,
     /// Its return type holds an `impl Trait`, which no expansion can name.
     opaque: bool,
+    /// Its body is a `#[tracing::instrument]` expansion in a shape the
+    /// decorator does not read.
+    unread: bool,
 }
 
 /// The method `item` is, its body run under the policy its field holds — or,
@@ -85,26 +138,40 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
         ));
         return Err(refused(item, refusals));
     };
-    let shape = check(&method, args.as_ref(), &mut refusals);
+    let mut on_a_generated_field = false;
+    let read = match method.sig.asyncness {
+        Some(_) => instrumented(&mut method.block.stmts, &mut |part| {
+            if let Part::Written(stmts) = part {
+                on_a_generated_field = opens_on_operation_field_mark(stmts);
+            }
+        }),
+        None => Ok(()),
+    };
+    if on_a_generated_field {
+        return Err(Refused {
+            kept: item,
+            refusal: syn::Error::new(
+                Span::call_site(),
+                "#[resilient] reached the field `#[operations]` generates for this operation, not \
+                 the method written: `#[operations]` reads the decorator by its name — import it \
+                 as `resilient`, and it stays on the method, whose `self` holds the policy",
+            ),
+        });
+    }
+    let unread = refusals.handle(read).is_none();
+    let shape = Shape {
+        unread,
+        ..check(&method, args.as_ref(), &mut refusals)
+    };
     let retries = args.as_ref().and_then(|args| {
-        let (value, key) = args.retries.as_ref()?;
-        if args.idempotent.is_none() {
-            refusals.push(syn::Error::new(
-                key.span(),
-                format!(
-                    "{} needs `idempotent`: a call run once is never sent again — declare the \
-                     call `idempotent` where sending it twice leaves the dependency as sending it \
-                     once does, or drop `retries`",
-                    site(RESILIENT, Some(RETRIES)),
-                ),
-            ));
-            return None;
-        }
+        args.refuse_unmet_needs(&mut refusals);
+        let value = args.retries.as_ref()?;
+        args.key(IDEMPOTENT)?;
         refusals.handle(resilient_retries(value))
     });
     match (refusals.finish(), args, shape.receiver) {
         (Ok(()), Some(args), Some(receiver)) => {
-            let run = match &args.idempotent {
+            let run = match args.key(IDEMPOTENT) {
                 Some(key) => Run::Idempotent(key),
                 None => Run::Once,
             };
@@ -148,8 +215,18 @@ fn refused(item: TokenStream, refusals: Refusals) -> Refused {
 /// as if it answered `Result<T, E>` — so that no error but its refusals is
 /// reported: run once where the method could be expanded at all, checked
 /// against a stand-in that never runs where its receiver or its field is what
-/// was refused, and as written where it is no `async fn` or names no type.
-fn kept(method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStream {
+/// was refused, as written where it is no `async fn` or names no type, and
+/// with no body where the one it has is an instrument's the decorator cannot
+/// type as an attempt.
+fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStream {
+    if shape.unread {
+        method.attrs.push(syn::parse_quote!(#[allow(unused)]));
+        method.block.stmts = vec![Stmt::Expr(
+            Expr::Verbatim(quote!(::core::unreachable!())),
+            None,
+        )];
+        return method.into_token_stream();
+    }
     if !shape.asynchronous || shape.opaque {
         return method.into_token_stream();
     }
@@ -176,7 +253,8 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
         let field = field(input)?;
         let mut args = Args {
             field,
-            idempotent: None,
+            keys: Vec::new(),
+            whole: true,
             timeout_millis: None,
             retries: None,
         };
@@ -185,6 +263,7 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
         }
         input.parse::<Token![,]>()?;
         let keys = GRAMMAR.parse(input, |arg| {
+            let written = arg.ident().clone();
             match arg.key() {
                 IDEMPOTENT => {
                     let rest = arg.input();
@@ -198,10 +277,9 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
                             ),
                         ));
                     }
-                    args.idempotent = Some(arg.ident().clone());
                 }
                 TIMEOUT => args.timeout_millis = refusals.handle(resilient_timeout(&arg.expr()?)),
-                RETRIES => args.retries = Some((arg.expr()?, arg.ident().clone())),
+                RETRIES => args.retries = Some(arg.expr()?),
                 unread => {
                     return Err(syn::Error::new_spanned(
                         arg.ident(),
@@ -213,10 +291,12 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
                     ));
                 }
             }
+            args.keys.push(written);
             Ok(())
         });
         if let Err(refusal) = keys {
             refusals.push(refusal);
+            args.whole = false;
             // What follows the refused key is read by nothing.
             input.step(|cursor| {
                 let mut rest = *cursor;
@@ -317,7 +397,7 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
              names no type — name the type the method answers, or box it as a `Box<dyn …>`",
         ));
     }
-    if args.is_some_and(|args| args.idempotent.is_some()) {
+    if args.is_some_and(|args| args.key(IDEMPOTENT).is_some()) {
         for input in &method.sig.inputs {
             let FnArg::Typed(typed) = input else {
                 continue;
@@ -352,6 +432,7 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
         asynchronous,
         receiver,
         opaque: opaque.is_some(),
+        unread: false,
     }
 }
 
@@ -465,8 +546,23 @@ fn answer(method: &ImplItemFn) -> (TokenStream, Span) {
 /// `method`'s body, taken out of it and braced as it was written, opening after
 /// its items on a `return` of the attempt's type never taken: rustc types an
 /// async block's output from its body, so without it no answer is coerced.
-fn body(method: &mut ImplItemFn, answer: &TokenStream, at: Span) -> syn::Block {
+///
+/// A body `#[tracing::instrument]` wrapped answers the attempt's type inside
+/// the future it built too, and where each attempt `borrows` the arguments,
+/// that future borrows them as the body it holds would.
+fn body(method: &mut ImplItemFn, answer: &TokenStream, at: Span, borrows: bool) -> syn::Block {
     let mut stmts = std::mem::take(&mut method.block.stmts);
+    // `expansion` refused a shape this stops at, and `kept` gave it no body to type.
+    instrumented(&mut stmts, &mut |part| match part {
+        Part::Answer(ty) => {
+            *ty = Type::Verbatim(quote_spanned! {at=>
+                <#answer as ::nest_rs_resilience::__private::ResilientAnswer>::Attempt
+            });
+        }
+        Part::Future(future) if borrows => future.capture = None,
+        Part::Future(_) | Part::Written(_) => {}
+    })
+    .unwrap_or_default();
     let items = stmts
         .iter()
         .take_while(|stmt| matches!(stmt, syn::Stmt::Item(_)))
@@ -516,7 +612,7 @@ fn expand(
             #retries,
         )
     };
-    let block = body(&mut method, &answer, at);
+    let block = body(&mut method, &answer, at, matches!(run, Run::Idempotent(_)));
     let call = match run {
         Run::Idempotent(key) => {
             let replayed = quote_spanned!(key.span()=> |_| async #block);
@@ -543,7 +639,7 @@ fn expand(
 /// reads no field and never runs.
 fn stand_in(mut method: ImplItemFn) -> TokenStream {
     let (answer, at) = answer(&method);
-    let block = body(&mut method, &answer, at);
+    let block = body(&mut method, &answer, at, false);
     let checked = quote_spanned! {at=>
         ::nest_rs_resilience::__private::refused::<#answer, _, _>(move |_| async move #block)
     };
@@ -702,6 +798,197 @@ mod tests {
         );
         assert_eq!(refused.len(), 1, "{refused:#?}");
         assert!(refused[0].starts_with("#[resilient] `retries` needs `idempotent`"));
+    }
+
+    /// A refused key ends the list's reading, so `idempotent` after it is
+    /// unread, not absent: the one refusal is the key's, and none says
+    /// `retries` needs what the method wrote.
+    #[test]
+    fn a_refused_key_adds_no_refusal_for_what_the_list_did_not_read() {
+        for unread in [
+            quote!(carrier, retries = 3, retry = 1, idempotent),
+            quote!(
+                carrier,
+                retries = 3,
+                timeout = "1s",
+                timeout = "2s",
+                idempotent
+            ),
+        ] {
+            let refused = refusals(
+                unread.clone(),
+                quote!(
+                    async fn track(&self) -> Answer {
+                        send().await
+                    }
+                ),
+            );
+            assert_eq!(refused.len(), 1, "#[resilient({unread})]: {refused:#?}");
+            assert!(
+                !refused[0].contains("needs `idempotent`"),
+                "#[resilient({unread})]: {refused:#?}"
+            );
+        }
+    }
+
+    /// A key needed that was read before the refused one is known written, so
+    /// what stands beside it is still judged; one that may stand past it is not.
+    #[test]
+    fn a_need_met_before_a_refused_key_is_judged_and_one_unread_is_not() {
+        let item = quote!(
+            async fn track(&self) -> Answer {
+                send().await
+            }
+        );
+        let met = refusals(
+            quote!(carrier, idempotent, retries = 11, retry = 1),
+            item.clone(),
+        );
+        assert_eq!(met.len(), 2, "{met:#?}");
+        assert!(met[0].starts_with("unknown #[resilient] argument `retry`"));
+        assert!(met[1].starts_with("#[resilient] `retries`: must be at most 10"));
+        let unread = refusals(quote!(carrier, retries = 0, retry = 1), item);
+        assert_eq!(unread.len(), 1, "{unread:#?}");
+        assert!(unread[0].starts_with("unknown #[resilient] argument `retry`"));
+    }
+
+    /// Every key that needs another is refused in one sentence, naming both.
+    #[test]
+    fn every_key_needing_another_is_refused_without_it_in_one_sentence() {
+        for need in &NEEDS {
+            let args: TokenStream = format!("carrier, {} = 1", need.key)
+                .parse()
+                .expect("arguments");
+            let refused = refusals(
+                args,
+                quote!(
+                    async fn track(&self) -> Answer {
+                        send().await
+                    }
+                ),
+            );
+            assert_eq!(
+                refused,
+                [format!(
+                    "#[resilient] `{}` needs `{}`: {}",
+                    need.key, need.needs, need.why
+                )]
+            );
+        }
+    }
+
+    /// `ship` as tracing-attributes 0.1.31 leaves it when its instrument is
+    /// written above the decorator, whose body is `written`.
+    fn instrumented_above(written: TokenStream) -> TokenStream {
+        quote! {
+            async fn ship(&self, order: Order) -> Answer {
+                {}
+                let __tracing_attr_span = ::tracing::span!(::tracing::Level::INFO, "ship");
+                let __tracing_instrument_future = async move {
+                    #[allow(unreachable_code)]
+                    if false {
+                        let __tracing_attr_fake_return: Answer = loop {};
+                        return __tracing_attr_fake_return;
+                    }
+                    { #written }
+                };
+                if !__tracing_attr_span.is_disabled() {
+                    ::tracing::Instrument::instrument(
+                        __tracing_instrument_future,
+                        __tracing_attr_span
+                    )
+                    .await
+                } else {
+                    __tracing_instrument_future.await
+                }
+            }
+        }
+    }
+
+    /// The future tracing built answers the attempt's type, as the body it
+    /// holds was written to, and keeps its `move` where the one attempt owns
+    /// the arguments; where each attempt borrows them, it borrows them too.
+    #[test]
+    fn a_body_an_instrument_wrapped_answers_the_attempts_type_in_the_future_it_built() {
+        let item = instrumented_above(quote!(send(&order).await));
+        let attempt = "let __tracing_attr_fake_return : < Answer as :: nest_rs_resilience :: \
+                       __private :: ResilientAnswer > :: Attempt = loop { } ;";
+        let once = resilient(quote!(carrier), item.clone()).to_string();
+        assert!(once.contains(attempt), "{once}");
+        assert!(
+            once.contains("let __tracing_instrument_future = async move {"),
+            "{once}"
+        );
+        let again = resilient(quote!(carrier, idempotent), item).to_string();
+        assert!(again.contains(attempt), "{again}");
+        assert!(
+            again.contains("let __tracing_instrument_future = async {"),
+            "{again}"
+        );
+        assert!(
+            again.contains("| _ | async { if false { return"),
+            "the attempt opens on its own type, ahead of tracing's statements: {again}"
+        );
+    }
+
+    /// A body in a shape of tracing's the decorator does not read is one
+    /// refusal, and is kept with no body: typed as the method's own answer,
+    /// each answer it writes as an attempt would be an error of its own.
+    #[test]
+    fn a_body_an_instrument_wrapped_otherwise_is_refused_once_and_kept_with_no_body() {
+        let item = quote! {
+            async fn ship(&self, order: Order) -> Answer {
+                let __tracing_attr_span = ::tracing::span!(::tracing::Level::INFO, "ship");
+                let _entered = __tracing_attr_span.enter();
+                send(order).await
+            }
+        };
+        let refused = refusals(quote!(carrier, idempotent), item.clone());
+        assert_eq!(refused.len(), 1, "{refused:#?}");
+        assert!(
+            refused[0].contains("write `#[resilient]` above `#[tracing::instrument]`"),
+            "{refused:#?}"
+        );
+        let kept = kept(quote!(carrier, idempotent), item);
+        assert!(
+            kept.ends_with("-> Answer { :: core :: unreachable ! () }"),
+            "{kept}"
+        );
+    }
+
+    /// Handed to the field `#[operations]` generates, the decorator says so and
+    /// nothing else: what it would refuse of that field — its arguments, its
+    /// receiver's type — is not the developer's to fix.
+    #[test]
+    fn a_decorator_handed_to_a_generated_field_is_refused_once_and_the_field_kept_as_it_is() {
+        let mark = nest_rs_codegen::__private::operation_field_mark();
+        let field = quote! {
+            async fn preview(&self, ctx: &Context<'_>) -> Result<FieldAnswer<String>> {
+                #mark
+                run_field(SITE, ctx, move || async move { resolve(ctx).await }).await
+            }
+        };
+        for args in [
+            quote!(upstream),
+            quote!(upstream, retries = 0, breaker_open = 1),
+        ] {
+            let refused = refusals(args.clone(), field.clone());
+            assert_eq!(refused.len(), 1, "{refused:#?}");
+            assert!(
+                refused[0].starts_with("#[resilient] reached the field `#[operations]` generates")
+                    && refused[0].contains("import it as `resilient`"),
+                "{refused:#?}"
+            );
+            assert_eq!(kept(args, field.clone()), field.to_string());
+        }
+        // An instrument the field carries above the decorator wraps the mark with the body.
+        let wrapped = instrumented_above(quote! {
+            #mark
+            run_field(SITE, ctx, move || async move { resolve(ctx).await }).await
+        });
+        let refused = refusals(quote!(upstream), wrapped);
+        assert_eq!(refused.len(), 1, "{refused:#?}");
+        assert!(refused[0].starts_with("#[resilient] reached the field"));
     }
 
     /// A setting the policy holds for every caller is told whose it is and

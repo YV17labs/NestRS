@@ -3029,6 +3029,7 @@ dependencies = [
  "anyhow",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-database",
  "nest-rs-resilience-macros",
  "opentelemetry",
  "parking_lot 0.13.0",

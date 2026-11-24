@@ -65,6 +65,21 @@ pub trait Executor: Any + Send + Sync + 'static {
         None
     }
 
+    /// Open a savepoint of the transaction this executor runs its statements
+    /// in — the block [`atomic`](Self::atomic) opens there — or `None` when it
+    /// holds none: a pool, whose atomic block is a transaction of its own,
+    /// committed as it settles, where what a savepoint keeps stays its unit's
+    /// to commit or roll back. Opening sends nothing: the block's first
+    /// statement does.
+    ///
+    /// What a resilience policy runs each attempt of a call it may send again
+    /// in. The default offers none, and such an attempt then runs on this
+    /// executor itself; a driver whose `atomic` opens a savepoint inside a
+    /// transaction overrides it.
+    fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
+        None
+    }
+
     /// Write `records` on the transaction this executor's unit holds, so they
     /// commit or roll back with its writes — or `None` when it keeps no
     /// outbox: a pool, a driver binding no [`OutboxStore`](crate::OutboxStore),
@@ -405,6 +420,12 @@ mod tests {
         assert!(handle.write_outbox(&mut unread).is_none());
         assert!(handle.remove_outbox("notify", uuid::Uuid::nil()).is_none());
         assert!(handle.remove_outbox_unique("notify", "key").is_none());
+    }
+
+    #[test]
+    fn a_driver_that_overrides_neither_offers_no_block_and_no_savepoint() {
+        assert!(StubExecutor.atomic().is_none());
+        assert!(StubExecutor.savepoint().is_none());
     }
 
     #[tokio::test]

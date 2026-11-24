@@ -24,6 +24,7 @@ reqwest = [
     "dep:reqwest-middleware",
     "nest-rs-reqwest/middleware",
     "dep:http",
+    "dep:http-body",
     "dep:async-trait",
 ]
 # A breaker's transitions, counted on the meter `OpenTelemetry::init()`
@@ -41,6 +42,10 @@ nest-rs-core.workspace = true
 # `ResilienceModule` owns its `#[config]` (`ResilienceConfig`, namespace
 # `resilience`), read per instance from `<PREFIX>_RESILIENCE__*`.
 nest-rs-config.workspace = true
+# The data port, named for no ORM: an attempt of a call declared idempotent, or
+# replaced by a fallback, runs in a savepoint of the transaction its unit of
+# work holds (`Executor::savepoint`), rolled back when it fails.
+nest-rs-database.workspace = true
 # `ResilienceError`, the one error a policy answers.
 thiserror.workspace = true
 # The bulkhead's semaphores — its slots and its waiters' places — and the clock a
@@ -69,6 +74,9 @@ reqwest-middleware = { workspace = true, optional = true }
 nest-rs-reqwest = { workspace = true, optional = true }
 # The `Extensions` `Middleware::handle` takes.
 http = { workspace = true, optional = true }
+# The body `ResilienceMiddleware` hands back inside reqwest's own, read under
+# the policy until it ends; no type of it reaches this crate's API.
+http-body = { workspace = true, optional = true }
 # `Middleware` is an `async_trait`.
 async-trait = { workspace = true, optional = true }
 # The API crate alone: a transition records on the global meter, which

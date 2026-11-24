@@ -1,0 +1,39 @@
+error[E0277]: a `#[resilient]` method's error is a `std::error::Error`, and `Declined` is not one
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:21:29
+   |
+21 |     async fn ship(&self) -> Result<(), ResilienceError<Declined>> {
+   |                             ^^^^^^ what the method answers
+   |
+help: the trait `nest_rs::resilience::__private::ChainedError` is not implemented for `Declined`
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:11:1
+   |
+11 | struct Declined;
+   | ^^^^^^^^^^^^^^^
+   = note: the policy tells the error's chain in the line a retry files and in its breaker's opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks
+note: required by a bound in `nest_rs::resilience::__private::run`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn run<R, I, C, F>(
+...
+   |     R::Err: ChainedError,
+   |             ^^^^^^^^^^^^ required by this bound in `run`
+
+error[E0277]: a `#[resilient]` method's error is a `std::error::Error`, and `Declined` is not one
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:26:30
+   |
+26 |     async fn track(&self) -> Result<(), ResilienceError<Declined>> {
+   |                              ^^^^^^ what the method answers
+   |
+help: the trait `nest_rs::resilience::__private::ChainedError` is not implemented for `Declined`
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:11:1
+   |
+11 | struct Declined;
+   | ^^^^^^^^^^^^^^^
+   = note: the policy tells the error's chain in the line a retry files and in its breaker's opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks
+note: required by a bound in `nest_rs::resilience::__private::run_idempotent`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub async fn run_idempotent<R, I, C, F>(
+...
+   |     R::Err: ChainedError,
+   |             ^^^^^^^^^^^^ required by this bound in `run_idempotent`

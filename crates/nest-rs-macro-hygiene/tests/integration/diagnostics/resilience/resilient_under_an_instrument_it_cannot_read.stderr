@@ -1,0 +1,5 @@
+error: #[resilient] under a `#[tracing::instrument]` types the body that attribute wrapped as one attempt, and found it in no shape it reads — write `#[resilient]` above `#[tracing::instrument]`, whose span then covers the whole run
+  --> tests/integration/diagnostics/resilience/resilient_under_an_instrument_it_cannot_read.rs:33:9
+   |
+33 |         let __tracing_attr_span = slug.len();
+   |         ^^^

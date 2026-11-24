@@ -809,18 +809,21 @@ impl SeaOrmExecutor {
     /// transaction or another block, a savepoint of its own sent on the same
     /// connection.
     pub(crate) fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        let block = match self {
-            SeaOrmExecutor::Pool(pool) => {
-                AtomicExecutor::own(Arc::new(LazyTransaction::new(pool.clone(), ATOMIC)))
-            }
-            SeaOrmExecutor::Lazy(lazy) => {
-                AtomicExecutor::savepoint(Arc::new(Savepoint::in_boundary(Arc::clone(lazy))))
-            }
-            SeaOrmExecutor::Savepoint(block) => {
-                AtomicExecutor::savepoint(Arc::new(Savepoint::in_block(Arc::clone(block))))
-            }
+        self.savepoint().or_else(|| {
+            let own = AtomicExecutor::own(Arc::new(self.own_block()?));
+            Some(Arc::new(own) as Arc<dyn AtomicBlock>)
+        })
+    }
+
+    /// A savepoint inside a lazy transaction or another block, sent on the
+    /// same connection; none on the pool, which holds no transaction.
+    pub(crate) fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
+        let savepoint = match self {
+            SeaOrmExecutor::Pool(_) => return None,
+            SeaOrmExecutor::Lazy(lazy) => Savepoint::in_boundary(Arc::clone(lazy)),
+            SeaOrmExecutor::Savepoint(block) => Savepoint::in_block(Arc::clone(block)),
         };
-        Some(Arc::new(block))
+        Some(Arc::new(AtomicExecutor::savepoint(Arc::new(savepoint))))
     }
 }
 
@@ -888,6 +891,10 @@ impl nest_rs_database::Executor for Installed {
 
     fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
         self.0.atomic()
+    }
+
+    fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
+        self.0.savepoint()
     }
 
     #[cfg(feature = "queue")]
@@ -976,6 +983,41 @@ mod tests {
     #[test]
     fn a_pool_has_nothing_to_step_out_of() {
         assert!(pool().non_transactional().is_none());
+    }
+
+    /// A savepoint is offered where a transaction is held, through every
+    /// handle a unit installs: a lazy transaction, a block inside it, and the
+    /// block of its own an `atomic` on the pool runs on. The pool holds none,
+    /// its atomic block being a transaction that commits as it settles.
+    #[test]
+    fn a_savepoint_is_offered_inside_a_transaction_and_never_on_the_pool() {
+        let unit = Arc::new(LazyTransaction::new(DatabaseConnection::default(), "test"));
+        let lazy: Arc<dyn nest_rs_database::Executor> =
+            SeaOrmExecutor::Lazy(Arc::clone(&unit)).into();
+        let block = lazy.savepoint().expect("a lazy transaction offers one");
+        assert!(matches!(
+            Installed::of(&*block),
+            Some(SeaOrmExecutor::Savepoint(_))
+        ));
+        let nested = block.savepoint().expect("a block offers one of its own");
+        assert!(matches!(
+            Installed::of(&*nested),
+            Some(SeaOrmExecutor::Savepoint(_))
+        ));
+        drop((nested, block));
+        assert!(!unit.is_opened(), "opening a savepoint sends nothing");
+
+        let on_pool: Arc<dyn nest_rs_database::Executor> = pool().into();
+        assert!(on_pool.savepoint().is_none());
+        let own = on_pool.atomic().expect("a pool's block is of its own");
+        assert!(matches!(
+            Installed::of(&*own),
+            Some(SeaOrmExecutor::Lazy(_))
+        ));
+        assert!(
+            own.savepoint().is_some(),
+            "a block of its own holds a transaction"
+        );
     }
 
     #[tokio::test]

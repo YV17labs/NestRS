@@ -44,7 +44,29 @@ impl Full {
     }
 }
 
+/// A slot its run took, held past the run by what the run answered — a
+/// response whose body is still to read — with no borrow of the bulkhead. It
+/// is freed through [`Bulkhead::free`] alone, never by its drop, so what holds
+/// it frees it at its own.
+#[cfg(feature = "reqwest")]
+#[must_use = "a held slot is freed through `Bulkhead::free` alone"]
+pub(crate) struct HeldSlot(());
+
 impl Bulkhead {
+    /// `slot`, one of this bulkhead's, held with no borrow of it.
+    #[cfg(feature = "reqwest")]
+    pub(crate) fn hold(&self, slot: SemaphorePermit<'_>) -> HeldSlot {
+        slot.forget();
+        HeldSlot(())
+    }
+
+    /// The slot `held` took, free again.
+    #[cfg(feature = "reqwest")]
+    pub(crate) fn free(&self, held: HeldSlot) {
+        let HeldSlot(()) = held;
+        self.slots.add_permits(1);
+    }
+
     /// A bulkhead of `slots`, a call finding none free waiting up to `wait`
     /// for one, and at most `waiters` calls waiting at once when they are
     /// bounded. With no wait no call waits, so the bound builds nothing.
@@ -170,6 +192,26 @@ mod tests {
         };
         let (entered, ()) = tokio::join!(waiting, freeing);
         assert!(entered.is_ok(), "the slot freed inside the wait");
+    }
+
+    /// A slot held past its run stays taken, with no borrow of the bulkhead,
+    /// until it is freed: once, for the one call it was taken for.
+    #[cfg(feature = "reqwest")]
+    #[tokio::test(start_paused = true)]
+    async fn a_slot_held_past_its_run_stays_taken_until_it_is_freed() {
+        let bulkhead = Bulkhead::new(2, None, None);
+        let taken = bulkhead.try_enter().expect("a free slot");
+        let held = bulkhead.hold(bulkhead.try_enter().expect("the other slot"));
+        assert_eq!(bulkhead.enter(None).await.err(), Some(Full::Slots));
+
+        bulkhead.free(held);
+        let freed = bulkhead.try_enter().expect("the slot it held");
+        assert!(
+            bulkhead.try_enter().is_none(),
+            "one slot came back, not two"
+        );
+        drop((taken, freed));
+        assert_eq!(bulkhead.slots.available_permits(), 2);
     }
 
     /// A bound on the waiters means nothing where no call waits, as a wait

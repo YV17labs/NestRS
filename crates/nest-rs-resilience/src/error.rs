@@ -6,15 +6,21 @@
 use std::time::Duration;
 
 use nest_rs_core::{Problem, ToProblem, code};
+use nest_rs_database::AtomicError;
 
 use crate::config::{LONGEST_OPEN, ResilienceConfig};
 
 const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 
+/// What an attempt given up at its bound says: [`ResilienceError::TimedOut`]'s
+/// sentence, and the `error` of the lines telling that attempt.
+pub(crate) const TIMED_OUT: &str = "the call did not answer within its timeout";
+
 /// Why a policy's call did not succeed.
 ///
 /// [`Failed`](Self::Failed) carries the call's own error, from its last
-/// attempt. Every other variant is the policy's refusal, answered on every edge
+/// attempt, and [`Unsettled`](Self::Unsettled) the failure of the unit's own
+/// database. Every other variant is the policy's refusal, answered on every edge
 /// as a `503`, `UNAVAILABLE`, an open breaker's and a reached rate limit's with
 /// the `Retry-After` each knows. The problem also rides the error's chain: a
 /// domain error wrapping this one answers it by handing its
@@ -64,7 +70,7 @@ pub enum ResilienceError<E> {
     Failed(#[source] E),
     /// The last attempt did not answer within the policy's timeout, or the
     /// unit's deadline came first.
-    #[error("the call did not answer within its timeout")]
+    #[error("{}", TIMED_OUT)]
     #[non_exhaustive]
     TimedOut {
         /// What the attempt was given up at: the policy's timeout — the one a
@@ -114,6 +120,26 @@ pub enum ResilienceError<E> {
         #[source]
         __problem: Problem,
     },
+    /// An attempt ran in a savepoint of its unit's transaction, and the
+    /// database could not settle it: keep what the attempt wrote once it
+    /// answered, or roll it back once it failed. The run ends there, whatever
+    /// the attempt answered, and is not attempted again: nothing that attempt
+    /// wrote stands. No refusal of the policy's, so every edge answers it as
+    /// the server's own failure, opaquely.
+    #[error("an attempt's savepoint could not be settled")]
+    #[non_exhaustive]
+    Unsettled {
+        #[doc(hidden)]
+        #[source]
+        __cause: AtomicError,
+    },
+}
+
+impl<E> ResilienceError<E> {
+    /// The run ended on its attempt's savepoint, which `cause` left unsettled.
+    pub(crate) const fn unsettled(cause: AtomicError) -> Self {
+        Self::Unsettled { __cause: cause }
+    }
 }
 
 /// Why [`ResiliencePolicy::open_breaker`](crate::ResiliencePolicy::open_breaker)
@@ -310,6 +336,21 @@ mod tests {
         let asked = Problem::new(429, code::RATE_LIMITED).with_retry_after(7);
         let passed = ResilienceError::Failed(Passed(asked.clone()));
         assert_eq!(passed.to_problem(), Some(asked));
+    }
+
+    /// A savepoint the database could not settle is the server's failure: it
+    /// answers no problem of the policy's, and its chain says what the port
+    /// said.
+    #[test]
+    fn an_unsettled_savepoint_answers_opaquely_and_says_its_cause() {
+        let unsettled: ResilienceError<Upstream> =
+            ResilienceError::unsettled(AtomicError::Poisoned { retryable: false });
+        assert_eq!(unsettled.to_problem(), None, "the edge answers it opaquely");
+        assert_eq!(
+            error_message(&unsettled),
+            "an attempt's savepoint could not be settled: a statement failed inside the atomic \
+             block; nothing it wrote stands"
+        );
     }
 
     /// The call's error is read as itself before its chain: a domain error's

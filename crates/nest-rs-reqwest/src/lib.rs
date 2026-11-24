@@ -7,6 +7,11 @@
 //! builds and injects its reqwest client, in reqwest's own words. The
 //! `middleware` feature, on by default, brings [`ReqwestMiddleware`]; the
 //! framework's own reqwest clients take this crate without it.
+//!
+//! In a program linking this crate, [`nest_rs_core::error_message`] says a
+//! reqwest error — and reqwest-middleware's, under `middleware` — without the
+//! URL its own sentence quotes, wherever a chain holds one: a log line names
+//! what failed and why, never the path and the query a request carried.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 
@@ -14,6 +19,7 @@ mod delay_seconds;
 #[cfg(feature = "middleware")]
 mod middleware;
 mod retry_after;
+mod safe_link;
 mod traced;
 
 #[cfg(feature = "middleware")]

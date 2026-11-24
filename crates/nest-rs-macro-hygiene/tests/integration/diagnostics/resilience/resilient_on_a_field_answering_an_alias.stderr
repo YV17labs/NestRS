@@ -1,4 +1,4 @@
-error: a `#[resilient]` operation returns `Result<T, ResilienceError<E>>`, spelled `Result<…>`: `#[operations]` reads a field's `Result` by its last path segment and any other answer, an alias of one included, as the field's GraphQL type, which a `ResilienceError` is not
+error: `#[operations]` reads an attribute named `resilient` as the resilience decorator, whose operation returns `Result<T, ResilienceError<E>>`, spelled `Result<…>`: any other answer, an alias of one included, is read as the field's GraphQL type — spell the `Result` out, or, where `resilient` is an attribute of the app's own, import it under another name, which goes on the field as every other attribute does
   --> tests/integration/diagnostics/resilience/resilient_on_a_field_answering_an_alias.rs:36:32
    |
 36 |     async fn preview(&self) -> Answer<String> {

@@ -178,7 +178,7 @@ pub(crate) fn cfg_attr_conditions(arguments: TokenStream) -> Option<TokenStream>
 }
 
 /// `tokens` split at each comma outside a group.
-fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
+pub(crate) fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
     let mut entries = vec![TokenStream::new()];
     for token in tokens {
         if matches!(&token, TokenTree::Punct(punct) if punct.as_char() == ',') {

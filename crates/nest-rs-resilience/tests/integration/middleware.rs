@@ -3,8 +3,12 @@
 //! attempt a client operation numbered by its resend count, never sends again
 //! what it does not, and is refused at once — never sent — while the breaker
 //! is open or once its requests reach the rate limit, which counts a redirect
-//! the client follows inside the attempt that met it, and gives each attempt
-//! up at its unit's deadline.
+//! the client follows inside the attempt that met it, gives each attempt up at
+//! its unit's deadline, and tells what an attempt failed on in the retry's
+//! line and the breaker's opening: a status by its code, a transport failure
+//! without the URL it was sent to. The response it hands back is reqwest's
+//! own, its body read as it comes and holding the run's slot, the attempt's
+//! bound and the breaker's verdict until it ends.
 
 use std::convert::Infallible;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -16,7 +20,7 @@ use nest_rs_reqwest::ReqwestMiddleware;
 use nest_rs_resilience::{
     BreakerState, ResilienceConfig, ResilienceError, ResilienceMiddleware, ResiliencePolicy,
 };
-use nest_rs_testing::{HttpsPeer, PeerAnswer, TestAuthority, TestCertificate};
+use nest_rs_testing::{HttpsPeer, LogCapture, PeerAnswer, TestAuthority, TestCertificate};
 use reqwest::StatusCode;
 use reqwest_middleware::ClientWithMiddleware;
 
@@ -506,4 +510,450 @@ async fn a_middleware_added_after_the_trace_refuses_every_request_unsent_saying_
         "{refused}"
     );
     assert_eq!(peer.requests().len(), 0, "nothing is sent");
+}
+
+/// The `error` of each line on the policy's target saying `message`, none of
+/// which quotes `never`.
+fn told(logs: &LogCapture, message: &str, never: &[&str]) -> Vec<String> {
+    logs.find(nest_rs_resilience::TARGET, message)
+        .iter()
+        .map(|line| {
+            for value in never {
+                assert!(!line.quotes(value), "`{value}` in {line:?}");
+            }
+            line.field("error").unwrap_or_default()
+        })
+        .collect()
+}
+
+/// A status a retry may cure is told by its code alone, in the line of the
+/// retry it earns and in the opening of the breaker it opens: the second
+/// failure opens the breaker, which refuses the retry after it.
+#[tokio::test]
+async fn an_answer_counted_as_a_failure_is_told_by_its_status_code_alone() {
+    let peer = answering([PeerAnswer::status(503), PeerAnswer::status(502)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        breaker_window: Some(2),
+        breaker_failures: 2,
+        ..retrying()
+    })
+    .await;
+    let logs = LogCapture::install();
+
+    let refused = client(policy)
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect_err("the second failure opened the breaker");
+    assert!(
+        matches!(refusal(&refused), ResilienceError::Open { .. }),
+        "{refused:?}"
+    );
+
+    let never = [PARCEL, "127.0.0.1"];
+    assert_eq!(
+        told(&logs, "attempt failed; retrying the call", &never),
+        ["the dependency answered 503", "the dependency answered 502"]
+    );
+    assert_eq!(
+        told(&logs, "circuit breaker changed state", &never),
+        ["the dependency answered 502"]
+    );
+}
+
+/// A request that reached no answer is told as its failure's chain, without
+/// the URL reqwest's own sentence quotes: its path and its query hold what
+/// the caller sent.
+#[tokio::test]
+async fn a_transport_failure_is_told_as_its_chain_without_the_url_it_was_sent_to() {
+    const SENT: &str = "s3cr3t";
+    // A peer closing every connection it accepts, before any handshake.
+    let closing = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback port");
+    let port = closing.local_addr().expect("its address").port();
+    let accepting = tokio::spawn(async move {
+        while let Ok((accepted, _)) = closing.accept().await {
+            drop(accepted);
+        }
+    });
+    let (_app, policy) = policy(ResilienceConfig {
+        retries: Some(1),
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..retrying()
+    })
+    .await;
+    let logs = LogCapture::install();
+
+    let refused = client(policy)
+        .get(format!(
+            "https://127.0.0.1:{port}/parcels/{SENT}?token={SENT}"
+        ))
+        .send()
+        .await
+        .expect_err("the failure opened the breaker");
+    assert!(
+        matches!(refusal(&refused), ResilienceError::Open { .. }),
+        "{refused:?}"
+    );
+    accepting.abort();
+
+    let never = [SENT, "/parcels", "for url"];
+    let retried = told(&logs, "attempt failed; retrying the call", &never);
+    let opened = told(&logs, "circuit breaker changed state", &never);
+    assert_eq!(retried.len(), 1, "{retried:?}");
+    assert_eq!(opened, retried, "one failure, said the same in both");
+    assert!(
+        retried[0].starts_with("error sending request: "),
+        "reqwest's sentence, then its causes: {retried:?}"
+    );
+}
+
+/// What an answer's head starts, its body ends: a peer answering `200` and
+/// stalling mid-body holds the caller as one that never answered would, so the
+/// response the middleware hands back keeps the attempt's bound, the breaker's
+/// verdict and the run's slot of the bulkhead until its body ends.
+#[tokio::test]
+async fn an_answers_body_is_read_within_its_attempts_timeout_and_counts_in_the_breaker() {
+    let peer = answering([PeerAnswer::stalling(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        timeout: Duration::from_millis(200),
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..quiet()
+    })
+    .await;
+
+    let answered = client(Arc::clone(&policy))
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    assert_eq!(answered.status(), StatusCode::OK);
+    // Guards against a hang alone: a body no bound covers is read for good.
+    let read = tokio::time::timeout(Duration::from_secs(3), answered.bytes()).await;
+    assert!(
+        matches!(read, Ok(Err(_))),
+        "the body's read ends at the attempt's timeout: {read:?}"
+    );
+    assert!(
+        matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+        "a body cut at its bound is a failure the breaker counts: {:?}",
+        policy.breaker_state()
+    );
+}
+
+#[tokio::test]
+async fn an_answers_body_holds_its_runs_slot_until_it_is_read_or_dropped() {
+    let peer = answering([PeerAnswer::stalling(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        concurrency: Some(1),
+        ..quiet()
+    })
+    .await;
+    let client = client(policy);
+
+    let unread = client
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    let refused = client
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect_err("the one slot is the unread body's");
+    assert!(
+        matches!(refusal(&refused), ResilienceError::Full { .. }),
+        "{refused:?}"
+    );
+    assert_eq!(peer.requests().len(), 1, "refused unsent");
+
+    drop(unread);
+    let next = client
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the slot is free once the answer is dropped");
+    assert_eq!(next.status(), StatusCode::OK);
+}
+
+/// The policy's refusal the read of a body ended on, when it did: what tells
+/// the policy's cut from a transport's failure.
+fn cut(error: &reqwest::Error) -> Option<&ResilienceError<Infallible>> {
+    nest_rs_core::__private::find_in_chain(error)
+}
+
+/// What a caller read off reqwest's response before, it reads still — the URL
+/// and the body's length, which reqwest's own conversions lose or derive, the
+/// status, the version, the headers, the peer's address, the status as an
+/// error — and a body read to its end frees the run's slot there, the response
+/// still held.
+#[tokio::test]
+async fn an_answer_with_a_body_is_reqwests_own_response_and_frees_its_slot_at_the_bodys_end() {
+    const BODY: &str = "a parcel on its way";
+    let peer = answering([PeerAnswer::body(200, BODY), PeerAnswer::body(404, BODY)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        concurrency: Some(1),
+        ..quiet()
+    })
+    .await;
+    let client = client(policy);
+    let length = u64::try_from(BODY.len()).ok();
+
+    let mut answered = client.get(peer.url(PARCEL)).send().await.expect("answered");
+    assert_eq!(answered.url().as_str(), peer.url(PARCEL));
+    assert_eq!(answered.content_length(), length);
+    assert_eq!(answered.status(), StatusCode::OK);
+    assert_eq!(answered.version(), reqwest::Version::HTTP_11);
+    assert_eq!(
+        answered
+            .headers()
+            .get("content-length")
+            .map(|length| length.as_bytes()),
+        Some(BODY.len().to_string().as_bytes())
+    );
+    assert_eq!(
+        answered.remote_addr().map(|peer| peer.port()),
+        Some(peer.port())
+    );
+    let mut read = Vec::new();
+    while let Some(chunk) = answered.chunk().await.expect("a chunk") {
+        read.extend_from_slice(&chunk);
+    }
+    assert_eq!(read, BODY.as_bytes());
+
+    let missing = client
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the slot is free once the body ended");
+    drop(answered);
+    let refused = missing
+        .error_for_status()
+        .expect_err("a status that is an error");
+    assert_eq!(refused.status(), Some(StatusCode::NOT_FOUND));
+    assert_eq!(
+        refused.url().map(reqwest::Url::as_str),
+        Some(peer.url(PARCEL).as_str())
+    );
+}
+
+/// The body is streamed, never buffered: its first part is read while the
+/// peer still holds the second back, which comes once the peer is released.
+/// A body buffered would be read only once it is whole, so the first read
+/// would wait for a part the test has not released yet, until the attempt's
+/// bound gave it up.
+#[tokio::test]
+async fn an_answers_body_is_read_as_it_comes_never_buffered() {
+    const FIRST: &str = "the first part, ";
+    const SECOND: &str = "then the second";
+    let peer = answering([PeerAnswer::parted(200, FIRST, SECOND)]).await;
+    let (_app, policy) = policy(quiet()).await;
+
+    let mut answered = client(policy)
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    assert_eq!(
+        answered.content_length(),
+        u64::try_from(FIRST.len() + SECOND.len()).ok()
+    );
+    let mut read = Vec::new();
+    while read.len() < FIRST.len() {
+        let chunk = answered.chunk().await.expect("a chunk");
+        read.extend_from_slice(&chunk.expect("the first part, the second held back"));
+    }
+    assert_eq!(read, FIRST.as_bytes());
+
+    peer.release();
+    let rest = answered.text().await.expect("the rest");
+    assert_eq!(rest, SECOND);
+}
+
+/// A body the policy gives up at the attempt's bound reaches the caller as
+/// reqwest's own error, the policy's refusal in its chain with the `503` every
+/// edge answers, and frees the run's slot as it is given up, the response
+/// still held.
+#[tokio::test]
+async fn a_body_given_up_at_its_bound_answers_reqwests_error_holding_the_policys_refusal() {
+    let peer = answering([PeerAnswer::stalling(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        timeout: Duration::from_millis(200),
+        concurrency: Some(1),
+        ..quiet()
+    })
+    .await;
+    let client = client(policy);
+
+    let mut answered = client
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    let declared = answered.content_length();
+    let half = answered.chunk().await.expect("read").expect("what came");
+    assert_eq!(
+        u64::try_from(2 * half.len()).ok(),
+        declared,
+        "the half the peer wrote before it stalled"
+    );
+    // Guards against a hang alone: a body no bound covers is read for good.
+    let given_up = tokio::time::timeout(Duration::from_secs(3), answered.chunk())
+        .await
+        .expect("the read ends at the attempt's timeout")
+        .expect_err("the rest never came");
+
+    assert!(given_up.is_decode(), "reqwest's own error: {given_up:?}");
+    assert!(
+        matches!(
+            cut(&given_up),
+            Some(ResilienceError::TimedOut { timeout, .. }) if *timeout == Duration::from_millis(200)
+        ),
+        "{given_up:?}"
+    );
+    let problem = nest_rs_core::__private::find_in_chain::<Problem>(&given_up)
+        .expect("the problem rides the chain");
+    assert_eq!((problem.status(), problem.code()), (503, code::UNAVAILABLE));
+
+    let next = client
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the slot is free once the body is given up");
+    assert_eq!(next.status(), StatusCode::OK);
+    drop(answered);
+}
+
+/// A body the dependency cuts short is a transport failure, never the
+/// policy's refusal: it reaches the caller as reqwest's error, and counts in
+/// the breaker, whose opening says its chain without the URL it was read from.
+#[tokio::test]
+async fn a_body_cut_short_by_the_dependency_is_a_failure_told_as_its_chain() {
+    let peer = answering([PeerAnswer::truncated(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..quiet()
+    })
+    .await;
+    let logs = LogCapture::install();
+
+    let answered = client(Arc::clone(&policy))
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+    let failed = answered.bytes().await.expect_err("half a body");
+
+    assert!(failed.is_decode(), "reqwest's own error: {failed:?}");
+    assert!(
+        cut(&failed).is_none(),
+        "no refusal of the policy's: {failed:?}"
+    );
+    assert!(
+        matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+        "{:?}",
+        policy.breaker_state()
+    );
+    let opened = told(
+        &logs,
+        "circuit breaker changed state",
+        &[PARCEL, "127.0.0.1"],
+    );
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert!(
+        opened[0].starts_with("request or response body error: "),
+        "reqwest's sentence, then its causes: {opened:?}"
+    );
+}
+
+/// A probe follows the body's rules: answered with no body, it closes the
+/// breaker as its head comes; answered with one, it keeps the probe's turn
+/// while the body is unread, and closes the breaker when the caller, having
+/// read the status alone, drops the response.
+#[tokio::test]
+async fn a_probes_answer_closes_the_breaker_once_its_body_is_read_or_dropped() {
+    let peer = answering([PeerAnswer::status(200), PeerAnswer::stalling(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..quiet()
+    })
+    .await;
+    let client = client(Arc::clone(&policy));
+    let probing = || async {
+        policy
+            .open_breaker(Duration::from_millis(1))
+            .expect("a breaker");
+        nest_rs_testing::wait_until(Duration::from_secs(10), || {
+            policy.breaker_state() == Some(BreakerState::HalfOpen)
+        })
+        .await;
+    };
+
+    probing().await;
+    let bodiless = client.get(peer.url(PARCEL)).send().await.expect("answered");
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+    drop(bodiless);
+
+    probing().await;
+    let unread = client
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    assert_eq!(unread.status(), StatusCode::OK);
+    let refused = client
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect_err("the unread body holds the probe's turn");
+    assert!(
+        matches!(refusal(&refused), ResilienceError::Open { .. }),
+        "{refused:?}"
+    );
+    drop(unread);
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+}
+
+/// What is returned is the last attempt's answer: one the run sends again is
+/// dropped unread, its slot kept by the run, and a last answer counted as a
+/// failure at its head is still the caller's to read.
+#[tokio::test]
+async fn an_answer_sent_again_is_dropped_and_the_last_is_the_callers_to_read() {
+    let peer = answering([
+        PeerAnswer::body(503, "down"),
+        PeerAnswer::body(200, "up"),
+        PeerAnswer::body(503, "down again"),
+    ])
+    .await;
+    let (_app, policy) = policy(ResilienceConfig {
+        concurrency: Some(1),
+        breaker_window: Some(3),
+        breaker_failures: 2,
+        ..retrying()
+    })
+    .await;
+    let client = client(Arc::clone(&policy));
+
+    let answered = client.get(peer.url(PARCEL)).send().await.expect("answered");
+    assert_eq!(answered.status(), StatusCode::OK);
+    assert_eq!(answered.text().await.expect("the last answer's body"), "up");
+    assert_eq!(peer.requests().len(), 2);
+
+    let failed = client
+        .post(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the slot is free, and a POST is sent once");
+    assert_eq!(failed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+        "the window's second 503 counted at its head, its body unread"
+    );
+    assert_eq!(failed.text().await.expect("its body"), "down again");
 }

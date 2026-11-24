@@ -155,3 +155,59 @@ mod placed {
         }
     }
 }
+
+/// `#[resilient]` under a `#[cfg_attr]`, beside an attribute of the app's own
+/// in the same one: `#[operations]` splits the `cfg_attr` by entry, so the
+/// decorator stays on the developer's method, whose `self` holds the policy,
+/// and the other goes on the field, as 7.0.0 placed it.
+#[cfg(feature = "resilience")]
+mod conditional {
+    use std::sync::Arc;
+
+    use nest_rs::graphql::{operations, resolver};
+    use nest_rs::resilience::{ResilienceError, ResiliencePolicy, resilient};
+    use tracing::instrument as traced;
+
+    #[derive(Debug)]
+    struct UpstreamDown;
+
+    impl std::fmt::Display for UpstreamDown {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the upstream did not answer")
+        }
+    }
+
+    impl std::error::Error for UpstreamDown {}
+
+    #[resolver]
+    struct ConditionalResolver {
+        #[inject]
+        upstream: Arc<ResiliencePolicy>,
+    }
+
+    #[operations]
+    impl ConditionalResolver {
+        #[query]
+        #[public]
+        #[cfg_attr(all(), resilient(upstream, idempotent), traced(skip_all))]
+        async fn conditional(&self, id: i32) -> Result<String, ResilienceError<UpstreamDown>> {
+            Ok(format!("entry {id}"))
+        }
+
+        /// A condition that does not hold leaves the method undecorated: its
+        /// body answers the method's own type.
+        #[query]
+        #[public]
+        #[cfg_attr(any(), resilient(upstream))]
+        async fn unconditional(&self, id: i32) -> Result<String, ResilienceError<UpstreamDown>> {
+            Ok(format!("entry {id}"))
+        }
+    }
+
+    /// The resolver above compiles: each entry of the `cfg_attr` went where
+    /// it would have gone written plain.
+    #[test]
+    fn a_resilient_inside_a_cfg_attr_stays_on_the_method_and_its_neighbour_goes_on_the_field() {
+        assert!(std::any::type_name::<ConditionalResolver>().ends_with("ConditionalResolver"));
+    }
+}

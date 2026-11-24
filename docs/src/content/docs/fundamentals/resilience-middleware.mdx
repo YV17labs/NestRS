@@ -64,6 +64,20 @@ a client span of its own, numbered by `http.request.resend_count`. Added after
 it, it refuses every request, unsent, with an error saying so.
 </Aside>
 
+## The answer's body
+
+The policy covers the body too, read as it comes and never buffered. The
+response is reqwest's own; until its body ends it holds the run's slot of the
+bulkhead, the breaker's verdict and what is left of the attempt's timeout, which
+runs from the send.
+
+- Read to its end, or dropped before it, the answer counts as its head did.
+- A read that fails counts as a failure in the breaker.
+- A read still waiting for the dependency when the timeout ends is given up
+  there. `bytes()`, `chunk()` and the others answer reqwest's error, whose chain
+  holds the `ResilienceError::TimedOut` a request given up before its head
+  carries.
+
 ## Test it
 
 `nest_rs::testing::HttpsPeer` stands in for the upstream: an HTTPS peer on
@@ -71,6 +85,13 @@ loopback presenting a `TestAuthority` certificate. It answers each request from
 a script, `PeerAnswer::status(503).header("retry-after", "1")` then
 `PeerAnswer::status(200)`, and keeps every request's head. A test then asserts
 what was sent again and what each attempt carried.
+
+## Limits
+
+- A body longer than `TIMEOUT_MS` is cut at it. Build the client of a download
+  or an event stream without this middleware, or under a policy of its own.
+- A response you keep unread keeps its slot, and a probe's keeps the half-open
+  breaker's one turn: read it or drop it.
 
 ## Going further
 

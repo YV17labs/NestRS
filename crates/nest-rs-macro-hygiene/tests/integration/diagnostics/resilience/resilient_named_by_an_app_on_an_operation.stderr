@@ -1,0 +1,5 @@
+error: `#[operations]` reads an attribute named `resilient` as the resilience decorator, whose operation returns `Result<T, ResilienceError<E>>`, spelled `Result<…>`: any other answer, an alias of one included, is read as the field's GraphQL type — spell the `Result` out, or, where `resilient` is an attribute of the app's own, import it under another name, which goes on the field as every other attribute does
+  --> tests/integration/diagnostics/resilience/resilient_named_by_an_app_on_an_operation.rs:19:39
+   |
+19 |     async fn entry(&self, id: i32) -> String {
+   |                                       ^^^^^^

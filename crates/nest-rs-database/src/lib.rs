@@ -41,7 +41,10 @@
 //! 5. Override [`Executor::atomic`] to offer [`atomic`](fn@atomic) a block: an
 //!    [`AtomicBlock`] whose statements run inside a savepoint (a transaction of
 //!    its own on a pool), settled once. The default offers none, and `atomic`
-//!    then fails closed with [`AtomicError::Unsupported`].
+//!    then fails closed with [`AtomicError::Unsupported`]. Override
+//!    [`Executor::savepoint`] with the same block on every handle holding a
+//!    transaction, and never on a pool: a resilience policy runs each attempt
+//!    of a call it may send again in one, and on the handle itself without.
 //! 6. Match [`ExecutorScope`] and [`TransactionPolicy`] with a `_` arm that
 //!    fails closed: both can grow within 7.x.
 //! 7. Keep the queue port's transactional outbox, so a job pushed inside a

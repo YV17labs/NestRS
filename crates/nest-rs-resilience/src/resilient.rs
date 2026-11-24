@@ -22,6 +22,7 @@ pub struct ResilientMethod {
     name: &'static str,
     timeout: Option<Duration>,
     retries: Option<u32>,
+    fallback: bool,
 }
 
 /// The method `#[resilient]` decorates: `host` names its `Self`, `name` is the
@@ -40,10 +41,24 @@ pub const fn resilient_method(
             None => None,
         },
         retries,
+        fallback: false,
     }
 }
 
 impl ResilientMethod {
+    /// The method, declaring a fallback that answers in place of its run's
+    /// error: each of its attempts then runs in a savepoint of its unit's
+    /// transaction, rolled back before the fallback when it failed.
+    #[must_use]
+    pub const fn with_fallback(mut self) -> Self {
+        self.fallback = true;
+        self
+    }
+
+    pub(crate) const fn fallback(&self) -> bool {
+        self.fallback
+    }
+
     /// The host, as a `mounted` line names it: the type's own name, without
     /// its path.
     pub(crate) fn host(&self) -> String {
@@ -130,14 +145,13 @@ impl<T, E> ResilientAnswer for Result<T, ResilienceError<E>> {
     }
 }
 
-/// The error an idempotent `#[resilient]` method answers: one whose chain a
-/// retry reads.
+/// The error a `#[resilient]` method answers: one whose chain the policy
+/// tells, and reads before a retry.
 #[diagnostic::on_unimplemented(
-    message = "an idempotent `#[resilient]` method's error is a `std::error::Error`, and `{Self}` \
-               is not one",
+    message = "a `#[resilient]` method's error is a `std::error::Error`, and `{Self}` is not one",
     label = "what the method answers",
-    note = "before a retry, the policy reads the error's chain for the `Retry-After` a `Problem` \
-            in it asks"
+    note = "the policy tells the error's chain in the line a retry files and in its breaker's \
+            opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks"
 )]
 pub trait ChainedError: Error + 'static {}
 
@@ -159,6 +173,7 @@ pub fn run<R, I, C, F>(
 ) -> impl Future<Output = R>
 where
     R: ResilientAnswer,
+    R::Err: ChainedError,
     I: Instance,
     C: FnOnce(CancellationToken) -> F,
     F: Future<Output = R::Attempt>,

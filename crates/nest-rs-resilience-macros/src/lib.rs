@@ -4,6 +4,7 @@
 
 use proc_macro::TokenStream;
 
+mod instrumented;
 mod resilient;
 
 /// Runs an `async fn` method's body under the policy a field of `self` holds:
@@ -52,15 +53,27 @@ mod resilient;
 /// carries none and calls a decorated method instead. A GraphQL field writes
 /// its `Result<T, ResilienceError<E>>` out: `#[operations]` reads a field's
 /// `Result` by its spelling, and refuses any other answer of a decorated one. It
-/// keeps this attribute, read by its last segment, on the method, and hands the
-/// method's other attributes to the field it generates — in a build with
-/// `graphql` and `resilience` both, whichever crate of it enables them, the
-/// umbrella's `resilience` enabling `nest-rs-graphql`'s. An app's own attribute
-/// of this name stays on the method too, where it fails to compile or applies
-/// to the method alone, so it is imported under another name; without
-/// `resilience` one of this name goes on the field, as 7.0.0 placed it. A
-/// method under `#[async_trait]` is a `fn` by the time this attribute reads it,
-/// and is refused saying so.
+/// keeps this attribute, read by its last segment, on the method — written
+/// plain, or as an entry of a `#[cfg_attr]`, kept under its condition — and
+/// hands the method's other attributes and entries to the field it generates,
+/// in a build with `graphql` and `resilience` both, whichever crate of it
+/// enables them, the umbrella's `resilience` enabling `nest-rs-graphql`'s. So
+/// the decorator is imported as `resilient` there: under another name it is
+/// handed to the field, and refused saying so. An app's own attribute of this
+/// name stays on the method too, where it fails to compile or applies to the
+/// method alone, so it is imported under another name; without `resilience`
+/// one of this name goes on the field, as 7.0.0 placed it. A method under
+/// `#[async_trait]` is a `fn` by the time this attribute reads it, and is
+/// refused saying so.
+///
+/// `#[tracing::instrument]` goes above it or below, and the order says what
+/// the span covers. Below `#[resilient]`, one span covers the whole run —
+/// every attempt, the waits between them and what the policy refuses unsent —
+/// and its `err` and `ret` record what the method answers. Above, tracing
+/// expands first: each attempt opens a span of its own, and `err` and `ret`
+/// record what that attempt answered, the dependency's own error. Above, the
+/// decorator reads the body as tracing-attributes 0.1 wraps it, and refuses one
+/// wrapped otherwise saying to write `#[resilient]` above.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry, a full
 /// bulkhead or a reached rate limit files carry its `host` and `method`.

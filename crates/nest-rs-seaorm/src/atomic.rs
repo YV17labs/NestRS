@@ -64,6 +64,10 @@ impl nest_rs_database::Executor for AtomicExecutor {
         self.executor.0.atomic()
     }
 
+    fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
+        self.executor.0.savepoint()
+    }
+
     #[cfg(feature = "queue")]
     fn write_outbox(
         &self,

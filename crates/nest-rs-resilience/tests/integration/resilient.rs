@@ -2811,6 +2811,10 @@ mod footprint {
     /// and its body's closure, which allocates only when it holds something:
     /// run again it borrows the method's own.
     #[tokio::test]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
+    )]
     async fn a_decorated_method_answering_at_once_allocates_nothing_but_its_token_in_a_release_build()
      {
         let app = boot::<BuffersModule>().await;
@@ -2836,5 +2840,664 @@ mod footprint {
                 "a method {shape} allocates its token, {token}, and in a debug build {boxed} box(es)"
             );
         }
+    }
+}
+
+/// What the dependency answered is told where an operator reads it: the chain
+/// of the error an attempt answered rides the retry's line and the breaker's
+/// opening, so a run ending on the breaker's refusal still leaves its cause.
+mod told {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("the label printer refused the job")]
+    struct PrinterDown(#[source] std::io::Error);
+
+    const CHAIN: &str = "the label printer refused the job: connection reset by peer";
+
+    #[injectable]
+    struct LabelsService {
+        #[inject]
+        courier: Arc<ResiliencePolicy<Courier>>,
+    }
+
+    impl LabelsService {
+        #[resilient(courier, idempotent)]
+        async fn print(&self) -> Result<(), ResilienceError<PrinterDown>> {
+            Err(PrinterDown(std::io::Error::other(
+                "connection reset by peer",
+            )))
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+            retries: Some(2),
+            breaker_window: Some(20),
+            breaker_failures: 10,
+            ..ResilienceConfig::default()
+        }))],
+        providers = [LabelsService],
+    )]
+    struct LabelsModule;
+
+    fn labels(app: &HeadlessApp) -> Arc<LabelsService> {
+        app.container()
+            .get::<LabelsService>()
+            .expect("the module provides it")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_retrys_line_carries_the_chain_of_the_error_its_attempt_answered() {
+        let app = boot::<LabelsModule>().await;
+        let labels = labels(&app);
+        let logs = LogCapture::install();
+
+        let answered = labels.print().await;
+        assert!(
+            matches!(answered, Err(ResilienceError::Failed(_))),
+            "{answered:?}"
+        );
+        let retried = logs.find(
+            nest_rs_resilience::TARGET,
+            "attempt failed; retrying the call",
+        );
+        assert_eq!(retried.len(), 2, "{retried:#?}");
+        for line in &retried {
+            assert_eq!(line.field("error").as_deref(), Some(CHAIN), "{line:?}");
+        }
+    }
+
+    /// Fifty idempotent callers of a dependency that is down: the breaker
+    /// opens on the first ten failures, and every caller whose retry it then
+    /// refuses answers `Open`. The opening's `warn` carries the chain of the
+    /// failure that opened it, the one line a production filter keeps.
+    #[tokio::test(start_paused = true)]
+    async fn the_breakers_opening_carries_the_chain_of_the_failure_that_opened_it() {
+        let app = boot::<LabelsModule>().await;
+        let labels = labels(&app);
+        let logs = LogCapture::install();
+
+        let callers: Vec<_> = (0..50)
+            .map(|_| {
+                let labels = Arc::clone(&labels);
+                tokio::spawn(async move { labels.print().await })
+            })
+            .collect();
+        let mut refused = 0;
+        for caller in callers {
+            match caller.await.expect("no caller panics") {
+                Err(ResilienceError::Open { .. }) => refused += 1,
+                Err(ResilienceError::Failed(_)) => {}
+                other => panic!("a down dependency fails or is refused: {other:?}"),
+            }
+        }
+        assert!(refused > 0, "the breaker opened under its callers");
+
+        let opened = logs
+            .find(nest_rs_resilience::TARGET, "circuit breaker changed state")
+            .into_iter()
+            .find(|line| line.field("state").as_deref() == Some("open"))
+            .expect("the breaker's opening is filed");
+        assert_eq!(opened.field("error").as_deref(), Some(CHAIN), "{opened:?}");
+    }
+
+    /// What the tracker's URL carries, in its path and in its query.
+    const SENT: &str = "s3cr3t";
+
+    /// An app's error holding reqwest's as it came, its URL not taken out.
+    #[derive(Debug, thiserror::Error)]
+    #[error("the tracker could not be reached")]
+    struct TrackerDown(#[from] reqwest::Error);
+
+    #[injectable]
+    struct TrackingService {
+        #[inject]
+        courier: Arc<ResiliencePolicy<Courier>>,
+    }
+
+    impl TrackingService {
+        /// A call to a port nothing listens on.
+        #[resilient(courier, idempotent)]
+        async fn track(&self) -> Result<String, ResilienceError<TrackerDown>> {
+            let url = format!("https://127.0.0.1:1/parcels/{SENT}?token={SENT}");
+            Ok(reqwest::get(url).await?.text().await?)
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+            retries: Some(1),
+            backoff_first: Duration::from_millis(1),
+            backoff_ceiling: Duration::from_millis(2),
+            breaker_window: Some(2),
+            breaker_failures: 2,
+            ..ResilienceConfig::default()
+        }))],
+        providers = [TrackingService],
+    )]
+    struct TrackingModule;
+
+    /// reqwest's sentence quotes the URL a request was sent to, and an app's
+    /// error may hold reqwest's as it came: the retry's line and the breaker's
+    /// opening say its chain all the same, without that URL.
+    #[tokio::test]
+    async fn a_reqwest_error_an_app_wrapped_with_its_url_is_told_without_it() {
+        let app = boot::<TrackingModule>().await;
+        let tracking = app
+            .container()
+            .get::<TrackingService>()
+            .expect("the module provides it");
+        let logs = LogCapture::install();
+
+        let answered = tracking.track().await;
+        let Err(ResilienceError::Failed(TrackerDown(failed))) = &answered else {
+            panic!("both attempts are refused the connection: {answered:?}");
+        };
+        assert!(
+            failed.to_string().contains(SENT),
+            "the error holds its URL: {failed}"
+        );
+
+        let retried = logs.expect_one(
+            nest_rs_resilience::TARGET,
+            "attempt failed; retrying the call",
+        );
+        let opened = logs
+            .find(nest_rs_resilience::TARGET, "circuit breaker changed state")
+            .into_iter()
+            .find(|line| line.field("state").as_deref() == Some("open"))
+            .expect("the second failure opened the breaker");
+        for line in [&retried, &opened] {
+            let error = line.field("error").unwrap_or_default();
+            assert!(
+                error.starts_with("the tracker could not be reached: error sending request: "),
+                "the app's sentence, reqwest's, then its causes: {line:?}"
+            );
+            for quoted in [SENT, "/parcels", "for url"] {
+                assert!(!line.quotes(quoted), "`{quoted}` in {line:?}");
+            }
+        }
+        assert_eq!(
+            retried.field("error"),
+            opened.field("error"),
+            "one failure, said the same in both"
+        );
+    }
+}
+
+/// `#[tracing::instrument]` beside `#[resilient]`, in either order: written
+/// above, tracing expands first and its span covers one attempt; written
+/// below, the span covers the whole run. Each flavour of the instrument that
+/// changes what it expands to is run in both orders, held to the attempts it
+/// makes, the spans it opens and what each records.
+mod instrumented {
+    use super::*;
+
+    #[injectable]
+    struct TracedService {
+        #[inject]
+        courier: Arc<ResiliencePolicy<Courier>>,
+        attempts: AtomicU32,
+        hub: Hub,
+    }
+
+    /// One method written twice, `$above` under an instrument written above
+    /// its policy and `$below` under the same one written below it. The
+    /// method's tokens reach both as written, so each is the method a
+    /// developer types.
+    macro_rules! in_both_orders {
+        (
+            #[tracing::instrument($($traced:tt)*)]
+            #[resilient($($policy:tt)*)]
+            async fn $above:ident, $below:ident $($method:tt)*
+        ) => {
+            #[tracing::instrument($($traced)*)]
+            #[resilient($($policy)*)]
+            async fn $above $($method)*
+
+            #[resilient($($policy)*)]
+            #[tracing::instrument($($traced)*)]
+            async fn $below $($method)*
+        };
+    }
+
+    impl TracedService {
+        fn fails_first(&self) -> bool {
+            self.attempts.fetch_add(1, Ordering::Relaxed) == 0
+        }
+
+        fn attempted(&self) -> u32 {
+            self.attempts.swap(0, Ordering::Relaxed)
+        }
+
+        #[tracing::instrument(name = "above", skip_all)]
+        #[resilient(courier, idempotent)]
+        async fn above(&self, parcel: String) -> Answer<String> {
+            if self.fails_first() {
+                return Err(CarrierDown);
+            }
+            Ok(parcel.clone())
+        }
+
+        #[resilient(courier, idempotent)]
+        #[tracing::instrument(name = "below", skip_all)]
+        async fn below(&self, parcel: String) -> Answer<String> {
+            if self.fails_first() {
+                return Err(CarrierDown);
+            }
+            Ok(parcel.clone())
+        }
+
+        /// Run once, consuming its argument, its error recorded by the span.
+        #[tracing::instrument(name = "above_once", skip_all, err)]
+        #[resilient(courier)]
+        async fn above_once(&self, parcel: String) -> Answer<String> {
+            depot(&parcel)?;
+            Ok(parcel)
+        }
+
+        /// Two instruments above the policy, one inside the other: each
+        /// attempt opens both.
+        #[tracing::instrument(name = "outer", skip_all)]
+        #[tracing::instrument(name = "inner", skip_all, err)]
+        #[resilient(courier, idempotent)]
+        async fn twice_above(&self, parcel: String) -> Answer<String> {
+            if self.fails_first() {
+                return Err(CarrierDown);
+            }
+            Ok(parcel.clone())
+        }
+
+        in_both_orders! {
+            #[tracing::instrument(skip_all, err)]
+            #[resilient(courier, idempotent)]
+            async fn err_above, err_below(&self, parcel: String) -> Answer<String> {
+                if self.fails_first() {
+                    return Err(CarrierDown);
+                }
+                depot(&parcel)?;
+                Ok(parcel.clone())
+            }
+        }
+
+        in_both_orders! {
+            #[tracing::instrument(skip_all, ret)]
+            #[resilient(courier, idempotent)]
+            async fn ret_above, ret_below(&self, parcel: String) -> Answer<String> {
+                if self.fails_first() {
+                    return Err(CarrierDown);
+                }
+                Ok(parcel.clone())
+            }
+        }
+
+        in_both_orders! {
+            #[tracing::instrument(skip_all, err, ret)]
+            #[resilient(courier, idempotent)]
+            async fn both_above, both_below(&self, parcel: String) -> Answer<String> {
+                if self.fails_first() {
+                    return Err(CarrierDown);
+                }
+                Ok(parcel.clone())
+            }
+        }
+
+        // An owned argument the span records and each attempt reads again,
+        // beside a field computed from one.
+        in_both_orders! {
+            #[tracing::instrument(skip(self, zone), fields(weight = parcel.len()))]
+            #[resilient(courier, idempotent)]
+            async fn fields_above, fields_below(&self, parcel: String, zone: &str) -> Answer<String> {
+                if self.fails_first() {
+                    return Err(CarrierDown);
+                }
+                Ok(format!("{parcel} to {zone}"))
+            }
+        }
+
+        // Run once: the one attempt consumes the argument it was moved.
+        in_both_orders! {
+            #[tracing::instrument(skip_all, err, ret)]
+            #[resilient(courier)]
+            async fn once_above, once_below(&self, parcel: String) -> Answer<String> {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                depot(&parcel)?;
+                Ok(parcel)
+            }
+        }
+
+        in_both_orders! {
+            #[tracing::instrument(skip_all, ret)]
+            #[resilient(courier, idempotent)]
+            async fn generic_above, generic_below<T>(&self, parcel: T) -> Answer<T>
+            where
+                T: std::fmt::Debug + Clone + Sync,
+            {
+                if self.fails_first() {
+                    return Err(CarrierDown);
+                }
+                Ok(parcel.clone())
+            }
+        }
+
+        // The answer borrows its host or its argument through a lifetime the
+        // method names.
+        in_both_orders! {
+            #[tracing::instrument(skip_all, err)]
+            #[resilient(courier, idempotent)]
+            async fn borrowed_above, borrowed_below<'a>(&'a self, zone: &'a str) -> Answer<&'a str> {
+                if self.fails_first() {
+                    return Err(CarrierDown);
+                }
+                Ok(if zone.is_empty() { &self.hub.0 } else { zone })
+            }
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, retrying_once()))],
+        providers = [TracedService],
+    )]
+    struct TracedModule;
+
+    /// What the instruments of this module filed while `Opened` is the default
+    /// subscriber: each span opened, by its name and the fields it declares,
+    /// and each event an `err` or a `ret` recorded, as its field and its value.
+    #[derive(Default)]
+    struct Filed {
+        spans: Vec<(&'static str, Vec<&'static str>)>,
+        events: Vec<(&'static str, String)>,
+    }
+
+    #[derive(Clone, Default)]
+    struct Opened(Arc<Mutex<Filed>>);
+
+    impl Opened {
+        fn named(&self, name: &str) -> usize {
+            self.fields(name).len()
+        }
+
+        /// The fields the spans named `name` declare, one list a span.
+        fn fields(&self, name: &str) -> Vec<Vec<&'static str>> {
+            let filed = self.0.lock().expect("unpoisoned");
+            let named = filed.spans.iter().filter(|(opened, _)| *opened == name);
+            named.map(|(_, fields)| fields.clone()).collect()
+        }
+
+        /// The events recorded since the last read, oldest first.
+        fn recorded(&self) -> Vec<(&'static str, String)> {
+            std::mem::take(&mut self.0.lock().expect("unpoisoned").events)
+        }
+    }
+
+    impl tracing::field::Visit for Opened {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            let mut filed = self.0.lock().expect("unpoisoned");
+            filed.events.push((field.name(), format!("{value:?}")));
+        }
+    }
+
+    impl tracing::Subscriber for Opened {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            let fields = span.metadata().fields().iter().map(|field| field.name());
+            let mut filed = self.0.lock().expect("unpoisoned");
+            filed.spans.push((span.metadata().name(), fields.collect()));
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+        /// The policy files lines of its own, on its own target: only what an
+        /// instrument of this module records is kept.
+        fn event(&self, event: &tracing::Event<'_>) {
+            if event.metadata().target() == module_path!() {
+                event.record(&mut self.clone());
+            }
+        }
+
+        fn enter(&self, _: &tracing::span::Id) {}
+
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    async fn traced() -> (HeadlessApp, Arc<TracedService>) {
+        let app = boot::<TracedModule>().await;
+        let traced = app
+            .container()
+            .get::<TracedService>()
+            .expect("the module provides it");
+        (app, traced)
+    }
+
+    const DOWN: &str = "the carrier did not answer";
+
+    #[tokio::test(start_paused = true)]
+    async fn a_method_instrumented_above_or_below_its_policy_runs_under_it() {
+        let (_app, traced) = traced().await;
+        let opened = Opened::default();
+        let _default = tracing::subscriber::set_default(opened.clone());
+
+        let above = traced.above("P1".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P1")), "{above:?}");
+        assert_eq!(traced.attempted(), 2, "sent again after its failure");
+        assert_eq!(opened.named("above"), 2, "a span an attempt");
+
+        let below = traced.below("P1".to_owned()).await;
+        assert!(matches!(below.as_deref(), Ok("P1")), "{below:?}");
+        assert_eq!(traced.attempted(), 2, "sent again after its failure");
+        assert_eq!(opened.named("below"), 1, "one span for the whole run");
+
+        let once = traced.above_once("P1".to_owned()).await;
+        assert!(matches!(once.as_deref(), Ok("P1")), "{once:?}");
+        let unknown = traced.above_once("P2".to_owned()).await;
+        assert!(failed(&unknown), "{unknown:?}");
+        assert_eq!(opened.named("above_once"), 2);
+        assert_eq!(traced.attempted(), 0, "`above_once` counts no attempt");
+        assert_eq!(opened.recorded(), [("error", DOWN.to_owned())]);
+
+        let twice = traced.twice_above("P1".to_owned()).await;
+        assert!(matches!(twice.as_deref(), Ok("P1")), "{twice:?}");
+        assert_eq!(traced.attempted(), 2, "sent again after its failure");
+        assert_eq!(opened.named("outer"), 2, "a span an attempt");
+        assert_eq!(opened.named("inner"), 2, "a span an attempt");
+        assert_eq!(opened.recorded(), [("error", DOWN.to_owned())]);
+    }
+
+    /// Above, `err` records what an attempt answered, the dependency's own
+    /// error; below, what the run answered, which here is no error.
+    #[tokio::test(start_paused = true)]
+    async fn an_err_above_records_each_attempts_error_and_below_the_runs() {
+        let (_app, traced) = traced().await;
+        let opened = Opened::default();
+        let _default = tracing::subscriber::set_default(opened.clone());
+
+        let above = traced.err_above("P1".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P1")), "{above:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("err_above"), 2, "a span an attempt");
+        assert_eq!(opened.recorded(), [("error", DOWN.to_owned())]);
+
+        let below = traced.err_below("P1".to_owned()).await;
+        assert!(matches!(below.as_deref(), Ok("P1")), "{below:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("err_below"), 1, "one span for the whole run");
+        assert_eq!(opened.recorded(), [], "the run answered");
+
+        // A `?` converts its error into the attempt's in both orders, and a
+        // run ending on it is the one error the span below records.
+        let above = traced.err_above("P2".to_owned()).await;
+        assert!(failed(&above), "{above:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(
+            opened.recorded(),
+            [("error", DOWN.to_owned()), ("error", DOWN.to_owned())]
+        );
+        let below = traced.err_below("P2".to_owned()).await;
+        assert!(failed(&below), "{below:?}");
+        assert_eq!(traced.attempted(), 2);
+        let run = below.expect_err("failed").to_string();
+        assert_eq!(opened.recorded(), [("error", run)]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_ret_above_records_each_attempts_answer_and_below_the_runs() {
+        let (_app, traced) = traced().await;
+        let opened = Opened::default();
+        let _default = tracing::subscriber::set_default(opened.clone());
+
+        let above = traced.ret_above("P1".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P1")), "{above:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("ret_above"), 2, "a span an attempt");
+        assert_eq!(
+            opened.recorded(),
+            [
+                ("return", "Err(CarrierDown)".to_owned()),
+                ("return", r#"Ok("P1")"#.to_owned()),
+            ]
+        );
+
+        let below = traced.ret_below("P1".to_owned()).await;
+        assert!(matches!(below.as_deref(), Ok("P1")), "{below:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("ret_below"), 1, "one span for the whole run");
+        assert_eq!(opened.recorded(), [("return", r#"Ok("P1")"#.to_owned())]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_err_and_a_ret_above_record_each_attempt_and_below_the_run() {
+        let (_app, traced) = traced().await;
+        let opened = Opened::default();
+        let _default = tracing::subscriber::set_default(opened.clone());
+
+        let above = traced.both_above("P1".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P1")), "{above:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("both_above"), 2, "a span an attempt");
+        assert_eq!(
+            opened.recorded(),
+            [("error", DOWN.to_owned()), ("return", r#""P1""#.to_owned())]
+        );
+
+        let below = traced.both_below("P1".to_owned()).await;
+        assert!(matches!(below.as_deref(), Ok("P1")), "{below:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("both_below"), 1, "one span for the whole run");
+        assert_eq!(opened.recorded(), [("return", r#""P1""#.to_owned())]);
+    }
+
+    /// The span's fields are read off the arguments as each attempt holds
+    /// them: skipped, recorded by name, or computed from one.
+    #[tokio::test(start_paused = true)]
+    async fn a_span_reads_the_arguments_it_records_at_each_attempt() {
+        let (_app, traced) = traced().await;
+        let opened = Opened::default();
+        let _default = tracing::subscriber::set_default(opened.clone());
+
+        let above = traced.fields_above("P1".to_owned(), "north").await;
+        assert!(matches!(above.as_deref(), Ok("P1 to north")), "{above:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(
+            opened.fields("fields_above"),
+            [["parcel", "weight"], ["parcel", "weight"]],
+            "a span an attempt"
+        );
+
+        let below = traced.fields_below("P1".to_owned(), "north").await;
+        assert!(matches!(below.as_deref(), Ok("P1 to north")), "{below:?}");
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(
+            opened.fields("fields_below"),
+            [["parcel", "weight"]],
+            "one span for the whole run"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_method_run_once_consumes_its_argument_under_an_instrument_in_either_order() {
+        let (_app, traced) = traced().await;
+        let opened = Opened::default();
+        let _default = tracing::subscriber::set_default(opened.clone());
+
+        let above = traced.once_above("P1".to_owned()).await;
+        assert!(matches!(above.as_deref(), Ok("P1")), "{above:?}");
+        let unknown = traced.once_above("P2".to_owned()).await;
+        assert!(failed(&unknown), "{unknown:?}");
+        assert_eq!(traced.attempted(), 2, "each call sent once");
+        assert_eq!(opened.named("once_above"), 2, "a span a call");
+        assert_eq!(
+            opened.recorded(),
+            [("return", r#""P1""#.to_owned()), ("error", DOWN.to_owned())]
+        );
+
+        let below = traced.once_below("P1".to_owned()).await;
+        assert!(matches!(below.as_deref(), Ok("P1")), "{below:?}");
+        let unknown = traced.once_below("P2".to_owned()).await;
+        assert!(failed(&unknown), "{unknown:?}");
+        assert_eq!(traced.attempted(), 2, "each call sent once");
+        assert_eq!(opened.named("once_below"), 2, "a span a call");
+        let run = unknown.expect_err("failed").to_string();
+        assert_eq!(
+            opened.recorded(),
+            [("return", r#""P1""#.to_owned()), ("error", run)]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_generic_method_and_one_borrowing_through_a_lifetime_run_in_either_order() {
+        let (_app, traced) = traced().await;
+        let opened = Opened::default();
+        let _default = tracing::subscriber::set_default(opened.clone());
+
+        assert!(matches!(traced.generic_above(7_u32).await, Ok(7)));
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("generic_above"), 2, "a span an attempt");
+        assert!(matches!(
+            traced.generic_below(("P1", 7_u8)).await,
+            Ok(("P1", 7))
+        ));
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(
+            opened.named("generic_below"),
+            1,
+            "one span for the whole run"
+        );
+
+        let zone = "north".to_owned();
+        assert!(matches!(traced.borrowed_above(&zone).await, Ok("north")));
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(opened.named("borrowed_above"), 2, "a span an attempt");
+        assert!(matches!(
+            traced.borrowed_below("").await,
+            Ok("the Lyon hub")
+        ));
+        assert_eq!(traced.attempted(), 2);
+        assert_eq!(
+            opened.named("borrowed_below"),
+            1,
+            "one span for the whole run"
+        );
+    }
+
+    /// An instrumented attempt holds its span and its arguments across its
+    /// waits as the method's own future does: it runs on another task.
+    #[tokio::test(start_paused = true)]
+    async fn a_method_instrumented_above_its_policy_runs_on_a_task_of_its_own() {
+        let (_app, traced) = traced().await;
+        let sent = Arc::clone(&traced);
+        let above = tokio::spawn(async move { sent.err_above("P1".to_owned()).await });
+        let above = above.await.expect("no attempt panics");
+        assert!(matches!(above.as_deref(), Ok("P1")), "{above:?}");
+        let sent = Arc::clone(&traced);
+        let once = tokio::spawn(async move { sent.once_above("P1".to_owned()).await });
+        let once = once.await.expect("the attempt does not panic");
+        assert!(matches!(once.as_deref(), Ok("P1")), "{once:?}");
     }
 }

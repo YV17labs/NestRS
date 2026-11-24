@@ -1,8 +1,9 @@
 //! Covers `src/policy.rs`: through the HTTP edge, an attempt ends by the
 //! request's deadline, before the policy's own timeout, so its client is told
 //! by the policy and its breaker counts the attempt; and, under no edge, what a
-//! run's future holds — its size against its call's, what it allocates, and a
-//! large one run on a worker of tokio's default stack.
+//! run's future holds — its size against its call's, what it allocates, alone
+//! and inside a unit of work whose transaction each attempt opens a savepoint
+//! of, and a large one run on a worker of tokio's default stack.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -265,6 +266,10 @@ fn a_call_sent_once_moving_a_large_buffer_into_its_closure_runs_on_a_worker_of_t
 /// the run's own future, so a run allocates nothing of its own; a debug build
 /// boxes both, a closure holding nothing in a box that allocates nothing.
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
+)]
 async fn a_call_answering_at_once_allocates_nothing_but_its_token_in_a_release_build() {
     let (_app, policy) = crate::policy(ResilienceConfig::default()).await;
     let token = crate::token_allocations();
@@ -292,6 +297,10 @@ async fn a_call_answering_at_once_allocates_nothing_but_its_token_in_a_release_b
 /// size, past tokio's threshold too, so such a call allocates nothing of its
 /// own; a debug build boxes it.
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
+)]
 async fn a_call_whose_future_is_past_tokios_threshold_allocates_nothing_but_its_token_in_a_release_build()
  {
     let (_app, policy) = crate::policy(ResilienceConfig::default()).await;
@@ -334,6 +343,10 @@ fn closure_of<const N: usize>()
 /// makes; a call made again holds its closure in place whatever its size. A
 /// debug build boxes every closure and every future.
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
+)]
 async fn a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed_when_sent_once_in_a_release_build()
  {
     assert_eq!(size_of_val(&closure_of::<THRESHOLD>()), THRESHOLD);
@@ -368,6 +381,109 @@ async fn a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed
             made,
             token + boxes,
             "a call whose closure is {shape} allocates its token, {token}, and {boxes} box(es)"
+        );
+    }
+}
+
+/// A unit of work holding a transaction, whose savepoint allocates itself and
+/// the future settling it, each once.
+struct InTransaction;
+
+impl nest_rs_database::Executor for InTransaction {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
+        Some(Arc::new(InSavepoint))
+    }
+}
+
+struct InSavepoint;
+
+impl nest_rs_database::Executor for InSavepoint {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl nest_rs_database::AtomicBlock for InSavepoint {
+    fn settle(
+        self: Arc<Self>,
+        _ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), nest_rs_database::AtomicError>> + Send>>
+    {
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
+/// What a savepoint costs the attempt running in it, beside what its driver
+/// allocates to open and settle it: the port's install at each poll of the
+/// call, and one box holding the answer while the savepoint settles — the same
+/// for a call declared idempotent whether or not its policy has retries. A
+/// call sent once reads nothing of its unit and allocates nothing for it.
+#[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
+)]
+async fn inside_a_transaction_an_idempotent_calls_attempt_allocates_its_savepoints_install_and_settling()
+ {
+    use nest_rs_database::__private::with_request_executor;
+
+    let (_app, once) = crate::policy(crate::quiet()).await;
+    let (_app, again) = crate::policy(ResilienceConfig {
+        breaker_window: None,
+        ..ResilienceConfig::default()
+    })
+    .await;
+    let unit = || Arc::new(InTransaction) as Arc<dyn nest_rs_database::Executor>;
+    let token = crate::token_allocations();
+    let boxed = usize::from(cfg!(debug_assertions));
+    let (_, installed) =
+        crate::allocations(|| with_request_executor(unit(), std::future::ready(())));
+
+    // The double's savepoint and its settling, then the port's install at the
+    // call's one poll (the executor as the unit carries it, and the unit's
+    // context), then the box the answer waits in.
+    const DRIVER: usize = 2;
+    const INSTALL: usize = 2;
+    const SETTLING: usize = 1;
+    for (shape, own, (answered, made)) in [
+        (
+            "sent once",
+            0,
+            crate::allocations(|| {
+                with_request_executor(unit(), once.run(|_| async { Ok::<_, Silent>(7) }))
+            }),
+        ),
+        (
+            "sent again, its retries off",
+            DRIVER + INSTALL + SETTLING,
+            crate::allocations(|| {
+                with_request_executor(
+                    unit(),
+                    once.run_idempotent(|_| async { Ok::<_, Silent>(7) }),
+                )
+            }),
+        ),
+        (
+            "sent again, its retries on",
+            DRIVER + INSTALL + SETTLING,
+            crate::allocations(|| {
+                with_request_executor(
+                    unit(),
+                    again.run_idempotent(|_| async { Ok::<_, Silent>(7) }),
+                )
+            }),
+        ),
+    ] {
+        assert!(matches!(answered, Ok(7)), "{shape}: {answered:?}");
+        assert_eq!(
+            made,
+            installed + token + boxed + own,
+            "inside a transaction, a call {shape} allocates its unit's install, {installed}, its \
+             token, {token}, in a debug build its future's box, and {own} for its savepoint"
         );
     }
 }

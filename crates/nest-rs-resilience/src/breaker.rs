@@ -13,6 +13,7 @@ use tokio::time::Instant;
 
 use crate::TARGET;
 use crate::counters::Counters;
+use crate::error::TIMED_OUT;
 use crate::millis::millis;
 
 /// What a call refused beside a probe past its bound is told: one tick of the
@@ -253,13 +254,14 @@ impl Drop for Pass<'_> {
     }
 }
 
-/// One admitted attempt whose call was sent, settled once with its outcome.
-/// Dropped unsettled before its bound ends — its caller dropped the call — it
-/// counts for nothing, and a probe hands its turn to the next call. Dropped
-/// unsettled at or past the instant its bound ends at, it has timed out, as
-/// its own timer due there would have said: an edge cutting its unit at that
-/// deadline may be polled first, tokio firing one instant's timers in batches
-/// that another worker runs between.
+/// One admitted attempt whose call was sent, settled once with its outcome:
+/// what it failed on, said before the breaker is asked, or `None` for an
+/// answer. Dropped unsettled before its bound ends — its caller dropped the
+/// call — it counts for nothing, and a probe hands its turn to the next call.
+/// Dropped unsettled at or past the instant its bound ends at, it has timed
+/// out, as its own timer due there would have said: an edge cutting its unit
+/// at that deadline may be polled first, tokio firing one instant's timers in
+/// batches that another worker runs between.
 pub(crate) struct Sent<'b> {
     breaker: &'b Breaker,
     probe: bool,
@@ -270,18 +272,39 @@ pub(crate) struct Sent<'b> {
 
 impl Sent<'_> {
     #[inline]
-    pub(crate) fn settle(mut self, failed: bool) {
+    pub(crate) fn settle(mut self, failure: Option<&str>) {
         let probe = std::mem::take(&mut self.probe);
         self.until = None;
-        self.breaker.record(self.epoch, probe, failed);
+        self.breaker.record(self.epoch, probe, failure);
     }
+
+    /// The attempt held past its run, with no borrow of the breaker, by what
+    /// its call answered: a response whose body is still to read.
+    #[cfg(feature = "reqwest")]
+    pub(crate) fn hold(mut self) -> Unsettled {
+        self.until = None;
+        Unsettled {
+            probe: std::mem::take(&mut self.probe),
+            epoch: self.epoch,
+        }
+    }
+}
+
+/// A [`Sent`] attempt held past its run, its outcome not settled yet: taken up
+/// again through [`Breaker::resume`], and settled then. Dropped, a probe would
+/// keep its turn for good, so what holds it resumes it at its own drop.
+#[cfg(feature = "reqwest")]
+#[must_use = "an attempt held unsettled is taken up again through `Breaker::resume`"]
+pub(crate) struct Unsettled {
+    probe: bool,
+    epoch: u64,
 }
 
 impl Drop for Sent<'_> {
     #[inline]
     fn drop(&mut self) {
         if self.until.is_some_and(|until| Instant::now() >= until) {
-            self.breaker.record(self.epoch, self.probe, true);
+            self.breaker.record(self.epoch, self.probe, Some(TIMED_OUT));
         } else if self.probe {
             self.breaker.abandon_probe(self.epoch);
         }
@@ -290,10 +313,11 @@ impl Drop for Sent<'_> {
 
 /// What moved the breaker, as the line its transition files says it.
 #[derive(Clone, Copy)]
-enum Moved {
-    /// Its attempts' outcomes: `failed` failures counted, when failures
-    /// opened it.
-    Attempts { failed: Option<usize> },
+enum Moved<'e> {
+    /// `failed` failures counted opened it, the last of them saying `error`.
+    Failures { failed: usize, error: &'e str },
+    /// A probe sent, abandoned or closing it.
+    Probe,
     /// A manual switch, opening it for `open_for` or closing it.
     Manual { open_for: Option<Duration> },
 }
@@ -358,6 +382,19 @@ impl Breaker {
         })
     }
 
+    /// The attempt `held` was taken from, one this breaker admitted, to settle:
+    /// in the epoch it was admitted in, so a manual switch since leaves it
+    /// nothing to change. It ends when it is settled, at no instant of its own.
+    #[cfg(feature = "reqwest")]
+    pub(crate) fn resume(&self, held: Unsettled) -> Sent<'_> {
+        Sent {
+            breaker: self,
+            probe: held.probe,
+            epoch: held.epoch,
+            until: None,
+        }
+    }
+
     /// How long a call is refused for now, leaving the breaker as it stands.
     pub(crate) fn refusing(&self) -> Option<Duration> {
         self.held.lock().phase.admitting().err()
@@ -371,6 +408,12 @@ impl Breaker {
     #[cfg(test)]
     fn state(&self) -> &'static str {
         self.held.lock().phase.as_str()
+    }
+
+    /// Whether the breaker's lock is held now.
+    #[cfg(test)]
+    pub(crate) fn locked(&self) -> bool {
+        self.held.try_lock().is_none()
     }
 
     /// Open the breaker by hand for `open_for` from now, whatever it was in:
@@ -409,12 +452,12 @@ impl Breaker {
         (held.epoch == epoch).then_some(held)
     }
 
-    /// Count the outcome of an attempt admitted in `epoch`: a probe opens the
-    /// breaker again, or closes it as the last of its series, and any other
-    /// attempt counts in the window while it is closed — and for nothing once
-    /// another call opened it.
+    /// Count the outcome of an attempt admitted in `epoch`, `failure` saying
+    /// what it failed on: a probe opens the breaker again, or closes it as the
+    /// last of its series, and any other attempt counts in the window while it
+    /// is closed — and for nothing once another call opened it.
     #[inline]
-    fn record(&self, epoch: u64, probe: bool, failed: bool) {
+    fn record(&self, epoch: u64, probe: bool, failure: Option<&str>) {
         let Some(mut held) = self.held_since(epoch) else {
             return;
         };
@@ -422,27 +465,24 @@ impl Breaker {
             let Phase::HalfOpen { passed, .. } = held.phase else {
                 return;
             };
-            if failed {
+            if let Some(error) = failure {
                 held.phase = self.opened();
-                self.entered(&held, Moved::Attempts { failed: Some(1) });
+                self.entered(&held, Moved::Failures { failed: 1, error });
             } else if passed + 1 < self.probes {
                 held.phase = Phase::BetweenProbes { passed: passed + 1 };
             } else {
                 held.phase = Phase::Closed;
                 held.forget();
-                self.entered(&held, Moved::Attempts { failed: None });
+                self.entered(&held, Moved::Probe);
             }
         } else if held.phase == Phase::Closed {
-            let counted = held.count(self.window, failed, Instant::now);
-            if counted >= self.failures {
+            let failed = held.count(self.window, failure.is_some(), Instant::now);
+            if let Some(error) = failure
+                && failed >= self.failures
+            {
                 held.phase = self.opened();
                 held.forget();
-                self.entered(
-                    &held,
-                    Moved::Attempts {
-                        failed: Some(counted),
-                    },
-                );
+                self.entered(&held, Moved::Failures { failed, error });
             }
         }
     }
@@ -469,7 +509,7 @@ impl Breaker {
                 passed,
             };
             if passed == 0 {
-                self.entered(&held, Moved::Attempts { failed: None });
+                self.entered(&held, Moved::Probe);
             }
         }
     }
@@ -506,7 +546,7 @@ impl Breaker {
             held.phase = Phase::Open {
                 until: Instant::now(),
             };
-            self.entered(&held, Moved::Attempts { failed: None });
+            self.entered(&held, Moved::Probe);
         }
     }
 
@@ -517,16 +557,19 @@ impl Breaker {
     }
 
     /// Say the transition `held` just made, and count it: what failures opened
-    /// it when they did, and that it was manual, with the open time it was
-    /// given, when a manual switch moved it.
+    /// it when they did, with what the last of them failed on, and that it was
+    /// manual, with the open time it was given, when a manual switch moved it.
     ///
     /// Filed under the breaker's lock, which `held` borrows: no transition
     /// comes between this one and its line, so the lines say the transitions
     /// in the order they took effect, and the last one the state it is in.
-    fn entered(&self, held: &Held, moved: Moved) {
-        let (failed, open_for, manual) = match moved {
-            Moved::Attempts { failed } => (failed, failed.map(|_| self.open_for), false),
-            Moved::Manual { open_for } => (None, open_for, true),
+    fn entered(&self, held: &Held, moved: Moved<'_>) {
+        let (failed, error, open_for, manual) = match moved {
+            Moved::Failures { failed, error } => {
+                (Some(failed), Some(error), Some(self.open_for), false)
+            }
+            Moved::Probe => (None, None, None, false),
+            Moved::Manual { open_for } => (None, None, open_for, true),
         };
         let state = held.phase.as_str();
         tracing::warn!(
@@ -537,6 +580,7 @@ impl Breaker {
             window = failed.map(|_| self.window),
             open_ms = open_for.map(millis),
             manual = manual.then_some(true),
+            error,
             "circuit breaker changed state",
         );
         self.counters.transition(state, manual);
@@ -565,12 +609,15 @@ mod tests {
         )
     }
 
+    /// What a failed attempt of these tests says.
+    const DOWN: &str = "the upstream refused: connection reset by peer";
+
     fn attempt(breaker: &Breaker, failed: bool) {
         breaker
             .admit(BOUND)
             .expect("a closed breaker admits")
             .send(BOUND, None)
-            .settle(failed);
+            .settle(failed.then_some(DOWN));
     }
 
     fn states(lines: &nest_rs_testing::LogCapture) -> Vec<String> {
@@ -637,7 +684,7 @@ mod tests {
             BOUND,
             "one probe at a time; another call waits for its answer",
         );
-        probe.settle(false);
+        probe.settle(None);
         assert_eq!(breaker.state(), "closed");
         attempt(&breaker, false);
     }
@@ -667,7 +714,7 @@ mod tests {
         assert_eq!(refused_for(&breaker), 2 * second);
         tokio::time::advance(5 * second).await;
         assert_eq!(refused_for(&breaker), OVERDUE);
-        probe.settle(false);
+        probe.settle(None);
         assert_eq!(breaker.state(), "closed");
     }
 
@@ -679,7 +726,7 @@ mod tests {
         let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
-        probe.send(BOUND, None).settle(true);
+        probe.send(BOUND, None).settle(Some(DOWN));
         assert_eq!(breaker.state(), "open");
         assert_eq!(refused_for(&breaker), OPEN_FOR);
     }
@@ -717,7 +764,7 @@ mod tests {
         };
         let late = late.send(BOUND, None);
         attempt(&breaker, true);
-        late.settle(false);
+        late.settle(None);
         assert_eq!(breaker.state(), "open", "a late success closes nothing");
     }
 
@@ -730,7 +777,7 @@ mod tests {
         let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
-        probe.send(BOUND, None).settle(false);
+        probe.send(BOUND, None).settle(None);
         attempt(&breaker, true);
         assert_eq!(
             breaker.state(),
@@ -769,7 +816,7 @@ mod tests {
         let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
-        probe.send(BOUND, None).settle(true);
+        probe.send(BOUND, None).settle(Some(DOWN));
         provider.force_flush().expect("the export");
 
         let exported = exporter
@@ -816,7 +863,7 @@ mod tests {
         let Ok(probe) = breaker.admit(BOUND) else {
             panic!("the open time passed");
         };
-        probe.send(BOUND, None).settle(false);
+        probe.send(BOUND, None).settle(None);
         let said: Vec<(String, String)> = lines
             .find(TARGET, "circuit breaker changed state")
             .iter()
@@ -836,6 +883,67 @@ mod tests {
                 ("half_open".to_owned(), String::new()),
                 ("closed".to_owned(), String::new()),
             ]
+        );
+    }
+
+    /// An opening by failures says what the failure that opened it failed on —
+    /// the last of the window's, a failed probe's, and the timeout's sentence
+    /// for a probe its edge cut first at its bound — and no other transition
+    /// says an error: a probe sent, abandoned or closing it, a manual switch.
+    #[tokio::test(start_paused = true)]
+    async fn an_opening_by_failures_says_what_the_last_of_them_failed_on_and_no_other_transition() {
+        const REFUSED: &str = "the upstream refused: 503";
+        let lines = nest_rs_testing::LogCapture::install();
+        let breaker = breaker(2, 2);
+        attempt(&breaker, true);
+        breaker
+            .admit(BOUND)
+            .expect("a closed breaker admits")
+            .send(BOUND, None)
+            .settle(Some(REFUSED));
+        tokio::time::advance(OPEN_FOR).await;
+        probe(&breaker).send(BOUND, None).settle(Some(DOWN));
+        tokio::time::advance(OPEN_FOR).await;
+        drop(probe(&breaker).send(BOUND, None));
+        let cut = probe(&breaker).send(BOUND, Some(Instant::now() + BOUND));
+        tokio::time::advance(BOUND).await;
+        drop(cut);
+        tokio::time::advance(OPEN_FOR).await;
+        probe(&breaker).send(BOUND, None).settle(None);
+        breaker.open_manually(OPEN_FOR);
+        breaker.close_manually();
+
+        let said: Vec<(String, Option<String>)> = lines
+            .find(TARGET, "circuit breaker changed state")
+            .iter()
+            .map(|event| {
+                (
+                    event.field("state").unwrap_or_default(),
+                    event.field("error"),
+                )
+            })
+            .collect();
+        let said: Vec<(&str, Option<&str>)> = said
+            .iter()
+            .map(|(state, error)| (state.as_str(), error.as_deref()))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("open", Some(REFUSED)),
+                ("half_open", None),
+                ("open", Some(DOWN)),
+                ("half_open", None),
+                ("open", None),
+                ("half_open", None),
+                ("open", Some(TIMED_OUT)),
+                ("half_open", None),
+                ("closed", None),
+                ("open", None),
+                ("closed", None),
+            ],
+            "failures, a failed probe, a probe abandoned, a probe cut at its bound, a probe \
+             closing it, then a hand opening and closing it"
         );
     }
 
@@ -936,7 +1044,7 @@ mod tests {
         tokio::time::advance(under - tick).await;
         assert_eq!(refused_for(&breaker), tick, "a microsecond before its end");
         tokio::time::advance(tick).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
     }
 
@@ -967,7 +1075,7 @@ mod tests {
         attempt(&breaker, true);
         let late = breaker.admit(BOUND).expect("closed").send(BOUND, None);
         tokio::time::advance(AGE + Duration::from_millis(1)).await;
-        late.settle(true);
+        late.settle(Some(DOWN));
         assert_eq!(breaker.state(), "closed");
     }
 
@@ -1123,14 +1231,14 @@ mod tests {
         attempt(&breaker, true);
         breaker.open_manually(OPEN_FOR);
         tokio::time::advance(OPEN_FOR).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         counts_afresh(&breaker, "opened by hand, closed by its probe");
 
         let breaker = aged(2, 2, AGE);
         attempt(&breaker, true);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         counts_afresh(&breaker, "opened by failures, closed by its probe");
     }
 
@@ -1173,7 +1281,7 @@ mod tests {
             assert_eq!(refused_for(&breaker), BOUND, "probe {nth} holds the turn");
             let sent = pending.send(BOUND, None);
             assert_eq!(refused_for(&breaker), BOUND, "probe {nth}'s call is out");
-            sent.settle(false);
+            sent.settle(None);
         }
         assert_eq!(breaker.read(), BreakerState::Closed);
         attempt(&breaker, false);
@@ -1188,17 +1296,17 @@ mod tests {
         let breaker = probing(2);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        probe(&breaker).send(BOUND, None).settle(false);
-        probe(&breaker).send(BOUND, None).settle(true);
+        probe(&breaker).send(BOUND, None).settle(None);
+        probe(&breaker).send(BOUND, None).settle(Some(DOWN));
         assert_eq!(refused_for(&breaker), OPEN_FOR);
         tokio::time::advance(OPEN_FOR).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(
             breaker.read(),
             BreakerState::HalfOpen,
             "one probe of two since it opened again"
         );
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
         assert_eq!(
             states(&lines),
@@ -1215,14 +1323,14 @@ mod tests {
         let breaker = probing(3);
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         drop(probe(&breaker));
         assert_eq!(breaker.read(), BreakerState::HalfOpen, "dropped unsent");
         drop(probe(&breaker).send(BOUND, None));
         assert_eq!(breaker.read(), BreakerState::HalfOpen, "dropped sent");
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(breaker.read(), BreakerState::HalfOpen, "two of three");
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
         assert_eq!(states(&lines), ["open", "half_open", "closed"]);
     }
@@ -1256,7 +1364,7 @@ mod tests {
             BreakerState::HalfOpen,
             "a probe dropped early hands its turn on"
         );
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         let sent = probe(&breaker).send(BOUND, until());
         tokio::time::advance(BOUND).await;
         drop(sent);
@@ -1311,7 +1419,7 @@ mod tests {
         );
         let sent = pending.send(BOUND, None);
         assert_eq!(breaker.read(), BreakerState::HalfOpen, "the call out");
-        sent.settle(false);
+        sent.settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
     }
 
@@ -1324,7 +1432,7 @@ mod tests {
         breaker.open_manually(held_open);
         assert_eq!(refused_for(&breaker), held_open);
         tokio::time::advance(held_open).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(breaker.state(), "closed");
     }
 
@@ -1379,13 +1487,13 @@ mod tests {
         breaker.open_manually(held_open);
         tokio::time::advance(held_open).await;
         let current = probe(&breaker).send(BOUND, None);
-        sent.settle(false);
+        sent.settle(None);
         assert_eq!(
             breaker.read(),
             BreakerState::HalfOpen,
             "the probe sent before the switch closed nothing"
         );
-        current.settle(true);
+        current.settle(Some(DOWN));
         assert_eq!(refused_for(&breaker), OPEN_FOR, "the probe after it failed");
 
         tokio::time::advance(OPEN_FOR).await;
@@ -1394,7 +1502,7 @@ mod tests {
         assert!(!admitted.probes(), "the switch took its turn");
         tokio::time::advance(held_open).await;
         let current = probe(&breaker);
-        admitted.send(BOUND, None).settle(false);
+        admitted.send(BOUND, None).settle(None);
         assert_eq!(
             states(&lines),
             ["open", "half_open", "open", "half_open", "open", "open"],
@@ -1405,7 +1513,7 @@ mod tests {
             "the probe admitted before the switch took nothing"
         );
         assert_eq!(breaker.read(), BreakerState::HalfOpen);
-        current.send(BOUND, None).settle(false);
+        current.send(BOUND, None).settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
         assert_eq!(
             states(&lines),
@@ -1423,6 +1531,113 @@ mod tests {
         );
     }
 
+    /// An attempt held unsettled past its run counts when it is taken up again
+    /// and settled, never before: a failure then opens the breaker, saying what
+    /// it failed on.
+    #[cfg(feature = "reqwest")]
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_held_unsettled_counts_once_it_is_taken_up_again_and_settled() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let breaker = breaker(2, 2);
+        let admitted = || breaker.admit(BOUND).expect("closed");
+        let first = admitted().send(BOUND, None).hold();
+        let second = admitted().send(BOUND, Some(Instant::now() + BOUND)).hold();
+        tokio::time::advance(2 * BOUND).await;
+        assert_eq!(
+            breaker.read(),
+            BreakerState::Closed,
+            "held past its bound's end, it has not timed out: its holder says when it has"
+        );
+
+        breaker.resume(first).settle(Some(DOWN));
+        assert_eq!(breaker.read(), BreakerState::Closed, "one failure of two");
+        breaker.resume(second).settle(Some(DOWN));
+        assert_eq!(
+            breaker.read(),
+            BreakerState::Open {
+                retry_after: OPEN_FOR
+            }
+        );
+        let opened = lines.find(TARGET, "circuit breaker changed state");
+        assert_eq!(opened.len(), 1, "{opened:?}");
+        assert_eq!(opened[0].field("error").as_deref(), Some(DOWN));
+    }
+
+    /// A probe held unsettled keeps its turn until it is taken up again, then
+    /// hands it on exactly once: by its answer, closing the breaker or opening
+    /// it again, or dropped unsettled, to the next call.
+    #[cfg(feature = "reqwest")]
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_held_unsettled_keeps_its_turn_until_it_is_taken_up_again() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let breaker = breaker(1, 1);
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+
+        let held = probe(&breaker).send(BOUND, None).hold();
+        tokio::time::advance(2 * BOUND).await;
+        assert_eq!(refused_for(&breaker), OVERDUE, "the turn is still held");
+        drop(breaker.resume(held));
+        assert_eq!(states(&lines), ["open", "half_open", "open"]);
+
+        let held = probe(&breaker).send(BOUND, None).hold();
+        breaker.resume(held).settle(Some(DOWN));
+        assert_eq!(refused_for(&breaker), OPEN_FOR, "the probe failed");
+
+        tokio::time::advance(OPEN_FOR).await;
+        let held = probe(&breaker).send(BOUND, None).hold();
+        assert_eq!(breaker.read(), BreakerState::HalfOpen);
+        breaker.resume(held).settle(None);
+        assert_eq!(breaker.read(), BreakerState::Closed);
+        attempt(&breaker, false);
+        assert_eq!(
+            states(&lines),
+            [
+                "open",
+                "half_open",
+                "open",
+                "half_open",
+                "open",
+                "half_open",
+                "closed"
+            ]
+        );
+    }
+
+    /// A manual switch while an attempt is held unsettled leaves it nothing to
+    /// change once it is taken up again: a failure opens nothing after a manual
+    /// closing, and a probe's success closes nothing after a manual opening,
+    /// nor takes the turn of the probe after it.
+    #[cfg(feature = "reqwest")]
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_held_unsettled_across_a_manual_switch_changes_nothing() {
+        let breaker = breaker(1, 1);
+        let held = breaker
+            .admit(BOUND)
+            .expect("closed")
+            .send(BOUND, None)
+            .hold();
+        breaker.close_manually();
+        breaker.resume(held).settle(Some(DOWN));
+        assert_eq!(breaker.read(), BreakerState::Closed);
+
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+        let held = probe(&breaker).send(BOUND, None).hold();
+        let held_open = Duration::from_secs(10);
+        breaker.open_manually(held_open);
+        tokio::time::advance(held_open).await;
+        let current = probe(&breaker).send(BOUND, None);
+        breaker.resume(held).settle(None);
+        assert_eq!(
+            breaker.read(),
+            BreakerState::HalfOpen,
+            "the probe held across the switch closed nothing"
+        );
+        current.settle(None);
+        assert_eq!(breaker.read(), BreakerState::Closed);
+    }
+
     /// A probe answering a failure after a manual closing leaves the breaker
     /// closed, and a probe of the breaker opened since as it was.
     #[tokio::test(start_paused = true)]
@@ -1432,7 +1647,7 @@ mod tests {
         tokio::time::advance(OPEN_FOR).await;
         let sent = probe(&breaker).send(BOUND, None);
         breaker.close_manually();
-        sent.settle(true);
+        sent.settle(Some(DOWN));
         assert_eq!(breaker.read(), BreakerState::Closed);
 
         attempt(&breaker, true);
@@ -1442,13 +1657,13 @@ mod tests {
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
         let current = probe(&breaker).send(BOUND, None);
-        sent.settle(true);
+        sent.settle(Some(DOWN));
         assert_eq!(
             breaker.read(),
             BreakerState::HalfOpen,
             "the probe from before the switch opened nothing"
         );
-        current.settle(false);
+        current.settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
     }
 
@@ -1460,7 +1675,7 @@ mod tests {
         attempt(&breaker, true);
         let late = breaker.admit(BOUND).expect("closed").send(BOUND, None);
         breaker.close_manually();
-        late.settle(true);
+        late.settle(Some(DOWN));
         attempt(&breaker, true);
         assert_eq!(breaker.state(), "closed", "one failure since the switch");
         attempt(&breaker, true);
@@ -1491,7 +1706,7 @@ mod tests {
             BOUND,
             "the call out is still the probe"
         );
-        after.settle(false);
+        after.settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
     }
 
@@ -1524,8 +1739,8 @@ mod tests {
             "the probe holding the turn has not sent its call"
         );
         drop(current);
-        stale.settle(false);
-        probe(&breaker).send(BOUND, None).settle(false);
+        stale.settle(None);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed, "the turn passed on");
         assert_eq!(states(&lines), ["open", "open", "half_open", "closed"]);
     }
@@ -1546,9 +1761,9 @@ mod tests {
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
         drop(probe(&breaker).send(BOUND, None));
-        probe(&breaker).send(BOUND, None).settle(true);
+        probe(&breaker).send(BOUND, None).settle(Some(DOWN));
         tokio::time::advance(OPEN_FOR).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(
             said(&lines),
             [
@@ -1591,9 +1806,9 @@ mod tests {
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
         drop(probe(&breaker).send(BOUND, None));
-        probe(&breaker).send(BOUND, None).settle(true);
+        probe(&breaker).send(BOUND, None).settle(Some(DOWN));
         tokio::time::advance(OPEN_FOR).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         provider.force_flush().expect("the export");
 
         let exported = exporter
@@ -1749,10 +1964,10 @@ mod tests {
         assert_eq!(last_said(), breaker.state(), "a probe sent");
         drop(sent);
         assert_eq!(last_said(), breaker.state(), "the probe abandoned");
-        probe(&breaker).send(BOUND, None).settle(true);
+        probe(&breaker).send(BOUND, None).settle(Some(DOWN));
         assert_eq!(last_said(), breaker.state(), "a probe failed");
         tokio::time::advance(OPEN_FOR).await;
-        probe(&breaker).send(BOUND, None).settle(false);
+        probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(last_said(), breaker.state(), "the probe closing it");
         breaker.open_manually(OPEN_FOR);
         assert_eq!(last_said(), breaker.state(), "opened by hand");

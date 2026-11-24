@@ -37,6 +37,8 @@
 /// waits and refusals, and its breaker's transitions.
 pub const TARGET: &str = "nest_rs::resilience";
 
+#[cfg(feature = "reqwest")]
+mod body;
 mod breaker;
 mod bulkhead;
 mod call;
@@ -50,6 +52,7 @@ mod module;
 mod policy;
 mod rate;
 mod resilient;
+mod savepoint;
 
 pub use breaker::BreakerState;
 pub use config::ResilienceConfig;
@@ -62,7 +65,10 @@ pub use policy::ResiliencePolicy;
 /// Runs a method calling a dependency under the policy a field of `self` holds,
 /// with no closure and no `run` to call: `#[resilient(field)]` sends the call
 /// once, `#[resilient(field, idempotent)]` again after a failure or a timeout,
-/// and `timeout` and `retries` pin this method's own.
+/// and `timeout` and `retries` pin this method's own. The method's error is a
+/// [`std::error::Error`], run once or again: its chain is the `error` of the
+/// line a retry files and of the `warn` its failure files when it opens the
+/// breaker.
 ///
 /// ```
 /// use std::sync::Arc;

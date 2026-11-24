@@ -1,6 +1,6 @@
-//! A retry reads the error's chain for a `Retry-After`, so an idempotent
-//! method's error is a `std::error::Error`: one that is not is one error at its
-//! return type, where a method sent once takes it as it is.
+//! The policy tells an error's chain in the line a retry files and in its
+//! breaker's opening, so a decorated method's error is a `std::error::Error`,
+//! sent once or again: one that is not is one error at its return type.
 
 use std::sync::Arc;
 

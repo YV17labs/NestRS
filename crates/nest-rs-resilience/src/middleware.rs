@@ -1,19 +1,21 @@
 //! [`ResilienceMiddleware`] — a policy on the reqwest client an app builds
-//! itself: every request it sends runs under the policy, and one the HTTP
-//! method or an `Idempotency-Key` declares idempotent is sent again.
+//! itself: every request it sends runs under the policy, its answer's body
+//! included, and one the HTTP method or an `Idempotency-Key` declares
+//! idempotent is sent again.
 
 use std::convert::Infallible;
 use std::sync::Arc;
 
 use http::Extensions;
-use nest_rs_core::{Instance, Unnamed};
+use nest_rs_core::{Instance, Unnamed, error_message};
 use nest_rs_reqwest::__private::{Resent, Traced, retry_after};
 use reqwest::header::{DATE, HeaderName, HeaderValue, RETRY_AFTER};
-use reqwest::{Request, Response, StatusCode};
+use reqwest::{Request, Response, ResponseBuilderExt, StatusCode};
 use reqwest_middleware::{Error, Middleware, Next, Result};
 
+use crate::body::ResilienceBody;
 use crate::error::{Refusal, ResilienceError};
-use crate::policy::{Attempted, ResiliencePolicy, Verdict};
+use crate::policy::{Attempted, Held, Outstanding, ResiliencePolicy, Run, Verdict};
 
 /// The header a client sends to make a request it could not otherwise replay
 /// safe to send again (`draft-ietf-httpapi-idempotency-key-header`).
@@ -38,13 +40,44 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// `PUT`, `DELETE`, `OPTIONS` or `TRACE`, or `QUERY`, or it carries an
 /// `Idempotency-Key` — and its body can be sent twice (a streamed body cannot).
 /// What is sent again is a transport failure, a timeout, or a `408`, `429`,
-/// `500`, `502`, `503` or `504`, and each counts as a failure in the breaker;
-/// any other answer is the dependency's answer. A `429`'s or a `503`'s
-/// `Retry-After` is waited whole — in seconds, or an HTTP-date counted from the
-/// answer's own `Date` — and one past the policy's backoff ceiling ends the run
-/// with that answer. The last answer is returned as it came; a
+/// `500`, `502`, `503` or `504`, read off the answer's head, and each counts
+/// as a failure in the breaker; any other answer is the dependency's answer.
+/// The line a retry files and the `warn` of the breaker such a failure opens
+/// say it as their `error`: a transport failure's chain without the URL it was
+/// sent to, and a status by its code alone, never a header or a body. A
+/// `429`'s or a `503`'s `Retry-After` is waited whole — in seconds, or an
+/// HTTP-date counted from the answer's own `Date` — and one past the policy's
+/// backoff ceiling ends the run with that answer. An answer the run sends
+/// again is dropped unread; the last one is returned as it came, and a
 /// refusal of the policy's is a [`reqwest_middleware::Error::Middleware`]
 /// holding a `ResilienceError<Infallible>`, whose `503` every edge answers.
+///
+/// **The policy covers the answer's body, read as it comes and never
+/// buffered.** The response handed back is reqwest's own, with its URL, its
+/// status, its headers and its extensions, its body decoded as the client was
+/// built to; until that body ends it holds the run's slot of the bulkhead, the
+/// breaker's verdict on a head that was no failure, and what is left of the
+/// attempt's timeout, which runs from the send, the head and the body sharing
+/// it:
+///
+/// - read to its end, or dropped before it — a caller reading a status alone
+///   — the answer counts as its head did, and the slot is freed there;
+/// - a read that fails is a failure in the breaker, told as its chain, and
+///   reaches the caller as reqwest's own error;
+/// - a read still waiting for the dependency when the timeout ends is given up
+///   there, a failure counted as a timeout: [`bytes`](Response::bytes),
+///   [`chunk`](Response::chunk) and the others answer reqwest's error, whose
+///   chain holds the `ResilienceError<Infallible>` a request given up before
+///   its head answers, the [`TimedOut`](crate::ResilienceError::TimedOut) that
+///   tells the policy's cut from a transport's. A frame that came is handed on
+///   whenever it is read: a caller slower than the dependency is no failure of
+///   the dependency's.
+///
+/// So a response is read or dropped, never kept: one held unread holds its
+/// slot, and a probe's holds the half-open breaker's one turn. A body longer
+/// than the policy's timeout — a download, an event stream — is cut at it:
+/// such a client is built without this middleware, or under a policy of its
+/// own whose timeout is the transfer's.
 ///
 /// It is added before [`ReqwestMiddleware`](nest_rs_reqwest::ReqwestMiddleware),
 /// so each attempt is a client span of its own, numbered by its
@@ -105,19 +138,59 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
                 .then(|| req.try_clone())
                 .flatten()
             else {
-                let attempted = run
+                let (attempted, outstanding) = run
                     .attempt_once(move |_| sending.run(req, carried), judged)
                     .await;
-                return answered(run.finish(attempted));
+                return self.answered(run, attempted, outstanding);
             };
-            let attempted = run
+            let (attempted, outstanding) = run
                 .attempt_once(move |_| sending.run(copy, carried), judged)
                 .await;
             if !run.again(&attempted).await {
-                return answered(run.finish(attempted));
+                return self.answered(run, attempted, outstanding);
             }
         }
     }
+}
+
+impl<I: Instance> ResilienceMiddleware<I> {
+    /// What `run` answers, over at its last attempt: a response with a body
+    /// to read hands that body what the run held of the policy, and what the
+    /// attempt left `outstanding`; any other answer ends them here.
+    fn answered(
+        &self,
+        run: Run<'_, I>,
+        attempted: Attempted<Result<Response>>,
+        outstanding: Outstanding<'_>,
+    ) -> Result<Response> {
+        match run.finish(attempted) {
+            Ok((Ok(response), _)) if response.content_length() != Some(0) => Ok(covered(
+                response,
+                run.hold(outstanding, Arc::clone(&self.policy)),
+            )),
+            Ok((answer, _)) => {
+                // In a run's order: its attempt in the breaker, then its slot.
+                drop(outstanding);
+                answer
+            }
+            Err(refusal) => Err(refused(refusal)),
+        }
+    }
+}
+
+/// `response` as it came, but for its body, read through a
+/// [`ResilienceBody`] holding `held` until it ends.
+fn covered<I: Instance>(response: Response, held: Held<I>) -> Response {
+    // reqwest's own conversions drop the URL one way and read it back the
+    // other off an extension its builder alone writes.
+    let mut url = http::Response::builder().url(response.url().clone());
+    let (mut parts, body) = http::Response::<reqwest::Body>::from(response).into_parts();
+    let Some(url) = url.extensions_mut() else {
+        unreachable!("a builder handed a URL alone holds no error");
+    };
+    parts.extensions.extend(std::mem::take(url));
+    let body = reqwest::Body::wrap(ResilienceBody::new(body, held));
+    http::Response::from_parts(parts, body).into()
 }
 
 /// What the middleware answers, sending nothing, when `ReqwestMiddleware` runs
@@ -129,36 +202,119 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
 )]
 struct TracedOutside;
 
-/// A transport failure and the statuses a retry may cure fail; any other answer
-/// is the dependency's.
+/// A transport failure and the statuses a retry may cure fail, each said as
+/// the lines telling the attempt say it — a transport failure as its chain,
+/// which `nest-rs-reqwest` says without the URL reqwest's sentence quotes; any
+/// other answer is the dependency's.
 fn judged(answer: &Result<Response>) -> Verdict {
-    let Ok(response) = answer else {
-        return Verdict::Failed { asked: None };
+    let response = match answer {
+        Ok(response) => response,
+        Err(error) => {
+            return Verdict::Failed {
+                asked: None,
+                error: error_message(error).into(),
+            };
+        }
     };
-    match response.status() {
-        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => Verdict::Failed {
-            asked: response.headers().get(RETRY_AFTER).and_then(|asked| {
+    let status = response.status();
+    let Some(error) = status_failure(status) else {
+        return Verdict::Succeeded;
+    };
+    let asked = match status {
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => {
+            response.headers().get(RETRY_AFTER).and_then(|asked| {
                 retry_after(
                     asked.as_bytes(),
                     response.headers().get(DATE).map(HeaderValue::as_bytes),
                 )
-            }),
-        },
-        StatusCode::REQUEST_TIMEOUT
-        | StatusCode::INTERNAL_SERVER_ERROR
-        | StatusCode::BAD_GATEWAY
-        | StatusCode::GATEWAY_TIMEOUT => Verdict::Failed { asked: None },
-        _ => Verdict::Succeeded,
+            })
+        }
+        _ => None,
+    };
+    Verdict::Failed {
+        asked,
+        error: error.into(),
     }
 }
 
-fn answered(attempted: Attempted<Result<Response>>) -> Result<Response> {
-    match attempted {
-        Ok((answer, _)) => answer,
-        Err(refusal) => Err(refused(refusal)),
+/// What an answer of `status` failed on, for a status a retry may cure: its
+/// code, the one value of the answer a line says.
+fn status_failure(status: StatusCode) -> Option<&'static str> {
+    match status {
+        StatusCode::REQUEST_TIMEOUT => Some("the dependency answered 408"),
+        StatusCode::TOO_MANY_REQUESTS => Some("the dependency answered 429"),
+        StatusCode::INTERNAL_SERVER_ERROR => Some("the dependency answered 500"),
+        StatusCode::BAD_GATEWAY => Some("the dependency answered 502"),
+        StatusCode::SERVICE_UNAVAILABLE => Some("the dependency answered 503"),
+        StatusCode::GATEWAY_TIMEOUT => Some("the dependency answered 504"),
+        _ => None,
     }
 }
 
 fn refused(refusal: Refusal) -> Error {
     Error::middleware(ResilienceError::<Infallible>::from(refusal))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn answer(status: StatusCode, retry_after: Option<&str>) -> Result<Response> {
+        let mut answer = http::Response::builder().status(status);
+        if let Some(asked) = retry_after {
+            answer = answer.header(RETRY_AFTER, asked);
+        }
+        Ok(answer.body("").expect("an answer").into())
+    }
+
+    /// Each status a retry may cure fails saying its code, a `429` and a `503`
+    /// alone asking the wait their `Retry-After` says; any other answer, a
+    /// client's error included, is the dependency's.
+    #[test]
+    fn a_status_a_retry_may_cure_fails_saying_its_code_and_any_other_is_an_answer() {
+        for (status, asks) in [
+            (StatusCode::REQUEST_TIMEOUT, false),
+            (StatusCode::TOO_MANY_REQUESTS, true),
+            (StatusCode::INTERNAL_SERVER_ERROR, false),
+            (StatusCode::BAD_GATEWAY, false),
+            (StatusCode::SERVICE_UNAVAILABLE, true),
+            (StatusCode::GATEWAY_TIMEOUT, false),
+        ] {
+            assert_eq!(
+                judged(&answer(status, Some("7"))),
+                Verdict::Failed {
+                    asked: asks.then_some(Duration::from_secs(7)),
+                    error: format!("the dependency answered {}", status.as_str()).into(),
+                },
+                "{status}"
+            );
+        }
+        for status in [
+            StatusCode::OK,
+            StatusCode::SEE_OTHER,
+            StatusCode::NOT_FOUND,
+            StatusCode::NOT_IMPLEMENTED,
+        ] {
+            assert_eq!(
+                judged(&answer(status, Some("7"))),
+                Verdict::Succeeded,
+                "{status}"
+            );
+        }
+    }
+
+    /// A failure an inner middleware answers is told as its own chain.
+    #[test]
+    fn a_middlewares_failure_is_told_as_its_chain() {
+        let failed = Err(Error::middleware(std::io::Error::other("no route to host")));
+        assert_eq!(
+            judged(&failed),
+            Verdict::Failed {
+                asked: None,
+                error: "no route to host".into(),
+            }
+        );
+    }
 }

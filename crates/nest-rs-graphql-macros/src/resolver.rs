@@ -16,18 +16,19 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, SiteGuards, SiteItems,
-    SitePosture, TailParam, VersionedEdge, ambient_type_ids, answer_span, authorized_entity,
-    await_if_async, build_injectable_body, camel_case, cfg_attrs, concrete_signature,
-    delegated_attrs, exception_filter_specs, force_guard_typeids, forwarded_arg_idents,
-    forwarded_idents, from_container_method, guard_capability_bounds, handler_const, host_meta_fn,
-    host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
-    injected_names_with_layers, injected_optional_fns, injected_remedies_fn, injects_impls,
-    interceptor_specs, is_resilient, key_as_written, layer_deps, mixed_site_ident, no_row_answered,
-    no_tail_decoded, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
-    reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_items, site_ref,
-    spelled, tail_param, take_posture, takes_value, type_label, unit_of_work_required,
-    unknown_argument, validate_argument, withheld,
+    HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, ResilientParted, SiteGuards,
+    SiteItems, SitePosture, TailParam, VersionedEdge, ambient_type_ids, answer_span,
+    authorized_entity, await_if_async, build_injectable_body, camel_case, cfg_attrs,
+    concrete_signature, delegated_attrs, exception_filter_specs, force_guard_typeids,
+    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
+    handler_const, host_meta_fn, host_runtime_entry, impl_self_ident, injected_keys_with_layers,
+    injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
+    injected_remedies_fn, injects_impls, interceptor_specs, key_as_written, layer_deps,
+    mixed_site_ident, no_row_answered, no_tail_decoded, normalize_forwarded_args, nth_generic_type,
+    one_role_per_method, operation_field_mark, piped_input, reject_meta_on_operations,
+    resilient_parted, return_type, scoped_specs, shared_receiver, site_items, site_ref, spelled,
+    tail_param, take_posture, takes_value, type_label, unit_of_work_required, unknown_argument,
+    validate_argument, withheld,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -1058,8 +1059,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 .iter()
                 // All but `#[resilient]` go on the field: one naming the field's own
                 // parameters compiles only there, so moving any is a break.
-                .filter(|attr| !kept_on_the_method(attr))
-                .cloned()
+                .filter_map(|attr| placed(attr).handed)
                 .collect::<Vec<_>>(),
         );
         let mut field = camel_case(&method.sig.ident.unraw().to_string());
@@ -1521,10 +1521,12 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let site_kind = chain_site.path();
             // async-graphql's `#[Subscription]` awaits the method it is given.
             gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
+            let field_mark = field_mark();
             let delegating = quote! {
                 #(#deleg_attrs)*
                 #entity_attr
                 #gsig {
+                    #field_mark
                     #run(#site, #gctx, #site_kind, move || async move {
                         #(#tail_prelude)*
                         #(#validate_prelude)*
@@ -1546,12 +1548,18 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         // The developer's method keeps its docs, its `allow`s and `expect`s and its
         // `#[cfg]`s, and `#[resilient]`, which runs the body the method is.
-        method.attrs.retain(|a| {
-            a.path().is_ident("doc")
-                || a.path().is_ident("allow")
-                || a.path().is_ident("expect")
-                || kept_on_the_method(a)
-        });
+        method.attrs = std::mem::take(&mut method.attrs)
+            .into_iter()
+            .filter_map(|a| {
+                if a.path().is_ident("doc")
+                    || a.path().is_ident("allow")
+                    || a.path().is_ident("expect")
+                {
+                    return Some(a);
+                }
+                placed(&a).kept
+            })
+            .collect();
         for condition in &cfgs {
             method.attrs.extend(syn::parse::Parser::parse2(
                 Attribute::parse_outer,
@@ -1899,6 +1907,7 @@ fn field_method(
         ),
         RootKind::Query,
     );
+    let field_mark = field_mark();
     let method = quote! {
         #(#deleg_attrs)*
         async fn #method_name #generics (
@@ -1906,6 +1915,7 @@ fn field_method(
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>
             #(, #gql_args)*
         ) #output #where_clause {
+            #field_mark
             {
                 #[allow(unused_imports)]
                 use ::nest_rs_graphql::__private::ParentProbeFallback as _;
@@ -1940,33 +1950,55 @@ fn field_parent_label(sig: &Signature) -> String {
     }
 }
 
-/// Whether `attr` is `#[resilient]`, which runs the body the developer's method
-/// is and so stays on it: an attribute read by its last segment, so an app's own
-/// of that name stays there too, failing to compile or applying to the method
-/// alone, and only in a build where any crate enables the resilience capability
-/// — Cargo unifies a package's features across a build — since 7.0.0 placed one
-/// of that name on the field like every other.
-fn kept_on_the_method(attr: &Attribute) -> bool {
-    cfg!(feature = "resilience") && is_resilient(attr)
+/// Where `attr`, an operation's, goes: `#[resilient]`, which runs the body the
+/// developer's method is, stays on it, written plain or as an entry of a
+/// `#[cfg_attr]`, and everything else is handed to the field. It is read by its
+/// last segment, so an app's own of that name stays there too, failing to
+/// compile or applying to the method alone, and only in a build where any crate
+/// enables the resilience capability — Cargo unifies a package's features
+/// across a build — since 7.0.0 placed one of that name on the field like every
+/// other.
+fn placed(attr: &Attribute) -> ResilientParted {
+    if cfg!(feature = "resilience") {
+        resilient_parted(attr)
+    } else {
+        ResilientParted {
+            kept: None,
+            handed: Some(attr.clone()),
+        }
+    }
 }
 
-/// Refuse a `#[resilient]` operation whose answer is not spelled `Result<…>`:
-/// the field's answer is read by that spelling, so under another name the whole
-/// `Result` would be the field's GraphQL type, which no `ResilienceError` is —
-/// unmet bounds deep in the expansion, where this is one sentence.
+/// What a generated field's body opens on: the mark `#[resilient]` knows the
+/// field by when the decorator, imported under another name, is handed to it —
+/// written in a build that reads the decorator by name alone, so one without
+/// the resilience capability expands as 7.0.0 did.
+fn field_mark() -> Option<TokenStream2> {
+    cfg!(feature = "resilience").then(operation_field_mark)
+}
+
+/// Refuse an operation carrying an attribute read as `#[resilient]` whose
+/// answer is not spelled `Result<…>`: the field's answer is read by that
+/// spelling, so under another name the whole `Result` would be the field's
+/// GraphQL type, which no `ResilienceError` is — unmet bounds deep in the
+/// expansion, where this is one sentence. An app's own attribute of that name
+/// reads it too, so the sentence says what such an app writes.
 fn refuse_a_resilient_answer_spelled_otherwise(
     attrs: &[Attribute],
     sig: &Signature,
 ) -> syn::Result<()> {
-    if !attrs.iter().any(kept_on_the_method) || matches!(returned(sig), Returned::Fallible(_)) {
+    if matches!(returned(sig), Returned::Fallible(_))
+        || !attrs.iter().any(|attr| placed(attr).kept.is_some())
+    {
         return Ok(());
     }
     Err(syn::Error::new(
         answer_span(sig),
-        "a `#[resilient]` operation returns `Result<T, ResilienceError<E>>`, spelled \
-         `Result<…>`: `#[operations]` reads a field's `Result` by its last path segment and any \
-         other answer, an alias of one included, as the field's GraphQL type, which a \
-         `ResilienceError` is not",
+        "`#[operations]` reads an attribute named `resilient` as the resilience decorator, whose \
+         operation returns `Result<T, ResilienceError<E>>`, spelled `Result<…>`: any other \
+         answer, an alias of one included, is read as the field's GraphQL type — spell the \
+         `Result` out, or, where `resilient` is an attribute of the app's own, import it under \
+         another name, which goes on the field as every other attribute does",
     ))
 }
 
@@ -2273,6 +2305,113 @@ mod tests {
             !expanded.contains(". expect ("),
             "no request-path panic in a wrapper: {expanded}",
         );
+    }
+
+    /// The mark `#[resilient]` knows a generated field by opens every field's
+    /// body, whatever its role, in a build reading the decorator by name; one
+    /// that does not expands as 7.0.0 did.
+    #[test]
+    fn every_generated_field_opens_on_its_mark_where_the_decorator_is_read_by_name() {
+        let item: ItemImpl = parse_quote! {
+            impl DemoResolver {
+                #[query]
+                #[public]
+                async fn count(&self) -> i32 { 0 }
+
+                #[mutation]
+                #[public]
+                async fn bump(&self) -> Result<i32, Declined> { Ok(1) }
+
+                #[subscription]
+                #[public]
+                async fn ticks(&self) -> impl Stream<Item = i32> { stream() }
+
+                #[entity]
+                #[public]
+                async fn thing(&self, id: i32) -> Thing { Thing }
+
+                #[field_resolver]
+                async fn label(&self, parent: &Thing) -> String { String::new() }
+            }
+        };
+        let expanded = resolver_impl_inner(item)
+            .expect("every role expands")
+            .to_string();
+        let marked = expanded
+            .matches("{ fn __nestrs_operation_field () { }")
+            .count();
+        let fields = if cfg!(feature = "resilience") { 5 } else { 0 };
+        assert_eq!(marked, fields, "{expanded}");
+        assert_eq!(
+            expanded.matches("__nestrs_operation_field").count(),
+            fields,
+            "the mark opens a field's body and stands nowhere else: {expanded}"
+        );
+    }
+
+    /// A `#[cfg_attr]` is split by entry: the decorator stays on the developer's
+    /// method under its condition, in a build reading it by name, and every other
+    /// entry goes on the field, where a build without the capability hands both.
+    #[test]
+    fn a_resilient_inside_a_cfg_attr_stays_on_the_method_under_its_condition() {
+        let item: ItemImpl = parse_quote! {
+            impl DemoResolver {
+                #[query]
+                #[public]
+                #[cfg_attr(feature = "shielded", resilient(upstream, idempotent), traced(skip_all))]
+                async fn rates(&self) -> Result<i32, ResilienceError<Declined>> { Ok(1) }
+            }
+        };
+        let expanded = resolver_impl_inner(item).expect("expands").to_string();
+        let kept = "# [cfg_attr (feature = \"shielded\" , resilient (upstream , idempotent))] \
+                    async fn rates (& self)";
+        let handed_decorator =
+            "# [cfg_attr (all (feature = \"shielded\") , resilient (upstream , idempotent))]";
+        let handed_neighbour = "# [cfg_attr (all (feature = \"shielded\") , traced (skip_all))]";
+        assert!(expanded.contains(handed_neighbour), "{expanded}");
+        assert_eq!(
+            expanded.contains(kept),
+            cfg!(feature = "resilience"),
+            "{expanded}"
+        );
+        assert_eq!(
+            expanded.contains(handed_decorator),
+            !cfg!(feature = "resilience"),
+            "{expanded}"
+        );
+    }
+
+    /// An operation read as decorated answers a `Result` spelled out, whether
+    /// the decorator is written plain or under a condition; without the
+    /// capability the attribute is the app's own, and nothing is asked of it.
+    #[test]
+    fn an_operation_read_as_resilient_spells_its_result_out() {
+        for decorator in [
+            quote!(#[resilient(upstream)]),
+            quote!(#[cfg_attr(feature = "shielded", resilient(upstream))]),
+        ] {
+            let item: ItemImpl = parse_quote! {
+                impl DemoResolver {
+                    #[query]
+                    #[public]
+                    #decorator
+                    async fn rates(&self) -> Answer<i32> { Ok(1) }
+                }
+            };
+            let refused = resolver_impl_inner(item)
+                .map(|_| ())
+                .map_err(|e| e.to_string());
+            if cfg!(feature = "resilience") {
+                let said = refused.expect_err("an alias is read as the field's type");
+                assert!(
+                    said.contains("spell the `Result` out")
+                        && said.contains("import it under another name"),
+                    "{said}"
+                );
+            } else {
+                assert_eq!(refused, Ok(()));
+            }
+        }
     }
 
     /// The item a subscription's answer wraps is the one async-graphql registers,

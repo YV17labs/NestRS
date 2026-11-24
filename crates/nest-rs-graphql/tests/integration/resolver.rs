@@ -620,6 +620,32 @@ impl ReconciledResolver {
         self.reads.sent.fetch_add(1, Ordering::SeqCst);
         Ok(42)
     }
+
+    /// Decorated under a condition that holds, beside an instrument in the same
+    /// `cfg_attr`, which names the field's own parameter.
+    #[query]
+    #[public]
+    #[cfg_attr(
+        all(),
+        resilient(bank, idempotent),
+        tracing::instrument(skip(self, ctx))
+    )]
+    async fn settled(&self, ctx: &Context<'_>) -> Result<i32, ResilienceError<BankDown>> {
+        if self.reads.sent.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(BankDown);
+        }
+        Ok(i32::try_from(ctx.field().name().len()).unwrap_or(i32::MAX))
+    }
+
+    /// Decorated under a condition that does not hold: the method is the one
+    /// written, its body answering the method's own type under no policy.
+    #[query]
+    #[public]
+    #[cfg_attr(any(), resilient(bank))]
+    async fn pending(&self) -> Result<i32, ResilienceError<BankDown>> {
+        self.reads.sent.fetch_add(1, Ordering::SeqCst);
+        Ok(7)
+    }
 }
 
 #[module(
@@ -658,6 +684,60 @@ async fn a_resilient_operation_runs_its_developers_body_under_the_policy() {
     let answered = crate::graphql_answer(&app, "{ balance }").await;
     assert_eq!(answered["data"]["balance"], 42, "{answered}");
     assert_eq!(reads.sent.load(Ordering::SeqCst), 1, "sent once closed");
+}
+
+/// `#[operations]` splits a `#[cfg_attr]` by entry: the decorator stays on the
+/// developer's method under its condition, so the operation runs under the
+/// policy while it holds, and its neighbour goes on the field, spanning it.
+#[tokio::test(start_paused = true)]
+async fn a_resilient_inside_a_cfg_attr_runs_its_operation_under_the_policy_while_it_holds() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<ReconciledModule>()
+        .await
+        .expect("the schema boots");
+    let bank = app
+        .container()
+        .get::<ResiliencePolicy<Bank>>()
+        .expect("the module built the bank's policy");
+    let reads = app
+        .container()
+        .get::<BalanceReads>()
+        .expect("the module provides the count");
+
+    bank.open_breaker(Duration::from_secs(30))
+        .expect("the policy has a breaker");
+    let refused = crate::graphql_answer(&app, "{ settled }").await;
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "UNAVAILABLE",
+        "{refused}"
+    );
+    assert_eq!(
+        reads.sent.load(Ordering::SeqCst),
+        0,
+        "the breaker refused the body unsent"
+    );
+    let undecorated = crate::graphql_answer(&app, "{ pending }").await;
+    assert_eq!(undecorated["data"]["pending"], 7, "{undecorated}");
+    assert_eq!(
+        reads.sent.swap(0, Ordering::SeqCst),
+        1,
+        "a condition that does not hold leaves the method under no policy"
+    );
+
+    bank.close_breaker().expect("the policy has a breaker");
+    let answered = crate::graphql_answer(&app, "{ settled }").await;
+    assert_eq!(answered["data"]["settled"], 7, "{answered}");
+    assert_eq!(
+        reads.sent.load(Ordering::SeqCst),
+        2,
+        "sent again after its failure, as `idempotent` declares"
+    );
+    let spanned = logs
+        .spans()
+        .into_iter()
+        .filter(|span| span.target == module_path!() && span.name == "settled")
+        .count();
+    assert_eq!(spanned, 2, "the instrument spans the field: once a query");
 }
 
 /// A lint level written on an operation describes the developer's method, where

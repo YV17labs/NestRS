@@ -6,10 +6,11 @@ use nest_rs_codegen::__private::{
     opens_on_operation_field_mark, resilient_policy_setting, resilient_retries, resilient_timeout,
     shared_receiver, site,
 };
-use nest_rs_codegen::{Grammar, Refusals};
+use nest_rs_codegen::{Arg, Grammar, Refusals};
 use proc_macro2::{Group, Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote, quote_spanned};
 use syn::ext::IdentExt;
+use syn::parse::discouraged::Speculative;
 use syn::parse::{ParseStream, Parser};
 use syn::{
     Expr, FnArg, GenericArgument, Ident, ImplItemFn, Pat, PathArguments, ReturnType, Stmt, Token,
@@ -44,29 +45,22 @@ const NEEDS: [Needs; 1] = [Needs {
 /// What `#[resilient(…)]` was given.
 struct Args {
     field: Ident,
-    /// Every key the list read, as written: the replayed closure is spanned at
-    /// `idempotent`, so what rustc says of it points at the declaration.
+    /// Every key of the decorator's the list wrote, whatever its value: the
+    /// replayed closure is spanned at `idempotent`, so what rustc says of it
+    /// points at the declaration.
     keys: Vec<Ident>,
-    /// The list was read to its end. A refused key ends its reading, and a key
-    /// past it is unread, never absent.
-    whole: bool,
     timeout_millis: Option<u64>,
-    /// The value as written, judged beside `idempotent` alone.
-    retries: Option<Expr>,
+    retries: Option<u32>,
 }
 
 impl Args {
-    /// `key` as the list wrote it, when it read one.
+    /// `key` as the list wrote it, when it wrote one.
     fn key(&self, key: &str) -> Option<&Ident> {
         self.keys.iter().find(|written| written.unraw() == key)
     }
 
-    /// Refuse each key written without the one it needs, in a list read whole
-    /// alone: past a refused key, the one needed may stand unread.
+    /// Refuse each key written without the one it needs.
     fn refuse_unmet_needs(&self, refusals: &mut Refusals) {
-        if !self.whole {
-            return;
-        }
         for need in &NEEDS {
             if let Some(key) = self.key(need.key)
                 && self.key(need.needs).is_none()
@@ -163,12 +157,6 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
         unread,
         ..check(&method, args.as_ref(), &mut refusals)
     };
-    let retries = args.as_ref().and_then(|args| {
-        args.refuse_unmet_needs(&mut refusals);
-        let value = args.retries.as_ref()?;
-        args.key(IDEMPOTENT)?;
-        refusals.handle(resilient_retries(value))
-    });
     match (refusals.finish(), args, shape.receiver) {
         (Ok(()), Some(args), Some(receiver)) => {
             let run = match args.key(IDEMPOTENT) {
@@ -181,7 +169,7 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
                 &args.field,
                 &run,
                 args.timeout_millis,
-                retries,
+                args.retries,
             ))
         }
         (Err(refusal), args, _) => {
@@ -238,8 +226,13 @@ fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStre
     }
 }
 
-/// The arguments: the field and every key that read, each refusal kept in
-/// `refusals`; `None` when the field itself is what was refused.
+/// The arguments: the field and every key written after it, each refusal kept
+/// in `refusals`; `None` when the field itself is what was refused.
+///
+/// A refused key does not end the reading, which [`resumes`] after it, so what
+/// one key says of another — the one it needs, `retries`' value beside
+/// `idempotent` — is said of the whole list. Where the reading cannot resume,
+/// a key that may stand in what is left is unread, never absent.
 fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
     let parsed = (|input: ParseStream<'_>| {
         if input.is_empty() {
@@ -254,7 +247,6 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
         let mut args = Args {
             field,
             keys: Vec::new(),
-            whole: true,
             timeout_millis: None,
             retries: None,
         };
@@ -262,8 +254,12 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
             return Ok(args);
         }
         input.parse::<Token![,]>()?;
-        let keys = GRAMMAR.parse(input, |arg| {
-            let written = arg.ident().clone();
+        let mut retries = None;
+        let mut whole = true;
+        while let Err(refusal) = GRAMMAR.parse(input, |arg| {
+            // The grammar knows a key written twice within one reading alone.
+            GRAMMAR.take_all(args.keys.iter().chain([arg.ident()]))?;
+            args.keys.push(arg.ident().clone());
             match arg.key() {
                 IDEMPOTENT => {
                     let rest = arg.input();
@@ -278,8 +274,8 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
                         ));
                     }
                 }
-                TIMEOUT => args.timeout_millis = refusals.handle(resilient_timeout(&arg.expr()?)),
-                RETRIES => args.retries = Some(arg.expr()?),
+                TIMEOUT => args.timeout_millis = refusals.handle(resilient_timeout(&value(&arg)?)),
+                RETRIES => retries = Some(value(&arg)?),
                 unread => {
                     return Err(syn::Error::new_spanned(
                         arg.ident(),
@@ -291,25 +287,70 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
                     ));
                 }
             }
-            args.keys.push(written);
             Ok(())
-        });
-        if let Err(refusal) = keys {
+        }) {
             refusals.push(refusal);
-            args.whole = false;
-            // What follows the refused key is read by nothing.
-            input.step(|cursor| {
-                let mut rest = *cursor;
-                while let Some((_, next)) = rest.token_tree() {
-                    rest = next;
-                }
-                Ok(((), rest))
-            })?;
+            if !resumes(input) {
+                whole = false;
+                // A parser leaving tokens unread is refused in `syn`'s words.
+                input.step(|cursor| {
+                    let mut rest = *cursor;
+                    while let Some((_, next)) = rest.token_tree() {
+                        rest = next;
+                    }
+                    Ok(((), rest))
+                })?;
+            }
+        }
+        if whole {
+            args.refuse_unmet_needs(refusals);
+        }
+        if let Some(value) = retries
+            && args.key(IDEMPOTENT).is_some()
+        {
+            args.retries = refusals.handle(resilient_retries(&value));
         }
         Ok(args)
     })
     .parse2(args);
     refusals.handle(parsed)
+}
+
+/// `arg`'s value, read ahead of the stream, which stays before a value that is
+/// no expression: a parse that fails leaves its stream wherever it gave up,
+/// and [`resumes`] reads on from there.
+fn value(arg: &Arg<'_>) -> syn::Result<Expr> {
+    let input = arg.value()?;
+    let ahead = input.fork();
+    let value = ahead.parse()?;
+    input.advance_to(&ahead);
+    Ok(value)
+}
+
+/// Whether the list reads on past the key just refused, `input` then standing
+/// at the next one: over what is written there as a key's value, `= expression`
+/// or `(…)`, when a comma or the list's end follows it. A value that reads as
+/// no expression, and anything else before that comma, ends the reading.
+///
+/// The next comma is no boundary by itself: `pick::<A, B>` holds one outside
+/// every group, and a key read from `B` would be refused though no one wrote it.
+fn resumes(input: ParseStream<'_>) -> bool {
+    let ahead = input.fork();
+    let value = if ahead.peek(Token![=]) {
+        ahead
+            .parse::<Token![=]>()
+            .and_then(|_| ahead.parse::<Expr>())
+            .map(drop)
+    } else if ahead.peek(syn::token::Paren) {
+        ahead.parse::<TokenTree>().map(drop)
+    } else {
+        Ok(())
+    };
+    if value.is_err() || !(ahead.is_empty() || ahead.parse::<Token![,]>().is_ok()) {
+        return false;
+    }
+    input.advance_to(&ahead);
+    true
 }
 
 /// The field, named first and alone — refused when what leads the list is a
@@ -800,9 +841,17 @@ mod tests {
         assert!(refused[0].starts_with("#[resilient] `retries` needs `idempotent`"));
     }
 
-    /// A refused key ends the list's reading, so `idempotent` after it is
-    /// unread, not absent: the one refusal is the key's, and none says
-    /// `retries` needs what the method wrote.
+    fn track() -> TokenStream {
+        quote!(
+            async fn track(&self) -> Answer {
+                send().await
+            }
+        )
+    }
+
+    /// `idempotent` written after a refused key is read like one before it:
+    /// the one refusal is the key's, and none says `retries` needs what the
+    /// method wrote.
     #[test]
     fn a_refused_key_adds_no_refusal_for_what_the_list_did_not_read() {
         for unread in [
@@ -815,14 +864,7 @@ mod tests {
                 idempotent
             ),
         ] {
-            let refused = refusals(
-                unread.clone(),
-                quote!(
-                    async fn track(&self) -> Answer {
-                        send().await
-                    }
-                ),
-            );
+            let refused = refusals(unread.clone(), track());
             assert_eq!(refused.len(), 1, "#[resilient({unread})]: {refused:#?}");
             assert!(
                 !refused[0].contains("needs `idempotent`"),
@@ -831,25 +873,156 @@ mod tests {
         }
     }
 
-    /// A key needed that was read before the refused one is known written, so
-    /// what stands beside it is still judged; one that may stand past it is not.
+    /// `idempotent` stands on neither side of the refused key, so the need it
+    /// leaves unmet is refused beside that key.
     #[test]
-    fn a_need_met_before_a_refused_key_is_judged_and_one_unread_is_not() {
-        let item = quote!(
-            async fn track(&self) -> Answer {
-                send().await
+    fn a_refused_key_keeps_the_need_the_whole_list_leaves_unmet() {
+        for args in [
+            quote!(carrier, retries = 3, retry = 1),
+            quote!(carrier, retries = 3, timeout),
+            quote!(carrier, retries = 3, concurrency = 4),
+            quote!(carrier, retry = 1, retries = 0),
+        ] {
+            let refused = refusals(args.clone(), track());
+            assert_eq!(refused.len(), 2, "#[resilient({args})]: {refused:#?}");
+            assert!(
+                refused[1].starts_with("#[resilient] `retries` needs `idempotent`"),
+                "#[resilient({args})]: {refused:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_is_judged_on_either_side_of_a_refused_key() {
+        for (args, said) in [
+            (
+                quote!(carrier, retries = 11, retry = 1, idempotent),
+                "#[resilient] `retries`: must be at most 10",
+            ),
+            (
+                quote!(carrier, idempotent, retries = 11, retry = 1),
+                "#[resilient] `retries`: must be at most 10",
+            ),
+            (
+                quote!(carrier, idempotent, retry = 1, retries = 0),
+                "#[resilient] `retries`: `0` turns retries off",
+            ),
+            (
+                quote!(carrier, timeout = "11m", retry = 1),
+                "#[resilient] `timeout`: must be at most 600000 milliseconds",
+            ),
+            (
+                quote!(carrier, retry = 1, timeout = "11m"),
+                "#[resilient] `timeout`: must be at most 600000 milliseconds",
+            ),
+        ] {
+            let refused = refusals(args.clone(), track());
+            assert_eq!(refused.len(), 2, "#[resilient({args})]: {refused:#?}");
+            for sentence in ["unknown #[resilient] argument `retry`", said] {
+                assert!(
+                    refused.iter().any(|refused| refused.starts_with(sentence)),
+                    "#[resilient({args})]: {refused:#?}"
+                );
             }
+        }
+    }
+
+    /// The reading resumes after the refused key's value, the commas that
+    /// value holds outside a group included, never inside it.
+    #[test]
+    fn the_list_is_read_on_after_a_refused_keys_value() {
+        for args in [
+            quote!(carrier, retries = 3, retry = pick::<A, B>, idempotent),
+            quote!(carrier, retries = 3, retry = |a, b| a < b, idempotent),
+            quote!(carrier, retries = 3, retry(1, 2), idempotent),
+            quote!(carrier, retries = 3, retry, idempotent),
+            quote!(carrier, retries = 3, "2s", idempotent),
+            quote!(carrier, retries = 3, timeout, idempotent),
+            quote!(carrier, retries = 3, idempotent = true),
+            quote!(carrier, retries = 3, idempotent(true), timeout = "2s"),
+        ] {
+            let refused = refusals(args.clone(), track());
+            assert_eq!(refused.len(), 1, "#[resilient({args})]: {refused:#?}");
+            assert!(
+                !refused[0].contains("needs `idempotent`"),
+                "#[resilient({args})]: {refused:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_written_on_both_sides_of_a_refused_one_is_written_twice() {
+        for (args, refusals_expected) in [
+            (
+                quote!(carrier, timeout = "1s", retry = 1, timeout = "2s"),
+                2,
+            ),
+            (quote!(carrier, timeout, retry = 1, timeout = "2s"), 3),
+        ] {
+            let refused = refusals(args.clone(), track());
+            assert_eq!(
+                refused.len(),
+                refusals_expected,
+                "#[resilient({args})]: {refused:#?}"
+            );
+            assert_eq!(
+                refused.last().map(String::as_str),
+                Some("#[resilient] takes at most one `timeout`"),
+                "#[resilient({args})]: {refused:#?}"
+            );
+        }
+    }
+
+    /// `idempotent` refused for the value it was given is still declared, so
+    /// what it asks of the method is refused beside it.
+    #[test]
+    fn a_key_refused_for_its_value_is_still_written() {
+        let refused = refusals(
+            quote!(carrier, idempotent = true),
+            quote!(
+                async fn ship(&self, mut order: Order) -> Answer {
+                    send(order).await
+                }
+            ),
         );
-        let met = refusals(
-            quote!(carrier, idempotent, retries = 11, retry = 1),
-            item.clone(),
+        assert_eq!(refused.len(), 2, "{refused:#?}");
+        assert!(
+            refused[0].starts_with("#[resilient] `idempotent` takes no value"),
+            "{refused:#?}"
         );
-        assert_eq!(met.len(), 2, "{met:#?}");
-        assert!(met[0].starts_with("unknown #[resilient] argument `retry`"));
-        assert!(met[1].starts_with("#[resilient] `retries`: must be at most 10"));
-        let unread = refusals(quote!(carrier, retries = 0, retry = 1), item);
-        assert_eq!(unread.len(), 1, "{unread:#?}");
-        assert!(unread[0].starts_with("unknown #[resilient] argument `retry`"));
+        assert!(refused[1].contains("bound `mut`"), "{refused:#?}");
+    }
+
+    /// A value that reads as no expression, or tokens between a value and its
+    /// comma: the reading ends there, and `idempotent`, which may stand in
+    /// what is left, is neither missed nor judged beside.
+    #[test]
+    fn a_list_read_no_further_derives_nothing_from_what_it_left_unread() {
+        for args in [
+            quote!(carrier, retries = 3, timeout = "1s" "2s", idempotent),
+            quote!(carrier, retries = 3, timeout = 1 +, idempotent),
+            quote!(carrier, retries = 3, retry = 1 +, idempotent),
+            quote!(carrier, retries = 3, timeout = match a, b),
+            quote!(carrier, retries = 3, retry = match a, b),
+            quote!(carrier, retries = 3, retry::key = 1, idempotent),
+            quote!(carrier, retries = 0, retry 1),
+        ] {
+            let refused = refusals(args.clone(), track());
+            assert_eq!(refused.len(), 1, "#[resilient({args})]: {refused:#?}");
+            assert!(
+                !refused[0].contains("needs `idempotent`"),
+                "#[resilient({args})]: {refused:#?}"
+            );
+        }
+        let read = refusals(
+            quote!(carrier, idempotent, retries = 11, timeout = "1s" "2s"),
+            track(),
+        );
+        assert_eq!(read.len(), 2, "{read:#?}");
+        assert!(
+            read[1].starts_with("#[resilient] `retries`: must be at most 10"),
+            "what was read is judged: {read:#?}"
+        );
     }
 
     /// Every key that needs another is refused in one sentence, naming both.

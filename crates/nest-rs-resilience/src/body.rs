@@ -1,47 +1,67 @@
 //! [`ResilienceBody`] — the body of a response [`ResilienceMiddleware`] hands
 //! back: read as it comes, never buffered, holding what its run held of the
-//! policy until it ends.
+//! policy until it ends, and bounding how long its reader waits for the
+//! dependency, never how long its reader takes.
 //!
 //! [`ResilienceMiddleware`]: crate::ResilienceMiddleware
 
 use std::convert::Infallible;
 use std::error::Error;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+use std::time::Duration;
 
 use http_body::{Body, Frame, SizeHint};
-use nest_rs_core::{Instance, error_message};
+use nest_rs_core::Instance;
+use parking_lot::Mutex;
 use tokio::time::{Instant, Sleep};
 
 use crate::error::{ResilienceError, TIMED_OUT};
 use crate::policy::Held;
+use crate::told::told;
 
 pin_project_lite::pin_project! {
     /// A response's body under the policy its request ran under: until it
     /// ends, it holds the run's slot of the bulkhead, the breaker's verdict on
-    /// an answer whose head was judged a success, and what is left of the
-    /// attempt's bound, which runs from the send.
+    /// an answer whose head was judged a success, and what the head left of
+    /// the attempt's bound, a budget its reads may wait in all.
     ///
-    /// Read to its end, or dropped before it, the answer stands as its head
-    /// was judged. A read that fails is a failure, and so is one still waiting
-    /// for the dependency when the bound ends, which is given up there,
-    /// answering a [`ResilienceError::TimedOut`]: a frame that came is handed
-    /// on whenever it is read, so a reader slower than the dependency is no
-    /// failure of the dependency's.
+    /// Only a wait for the dependency is taken from that budget: from the read
+    /// that found nothing to the transport's signal that something came. A
+    /// frame that came is handed on whenever it is read, so the time its reader
+    /// takes between two reads, or away from a read it abandoned, is never the
+    /// dependency's. A read still waiting once the budget is spent is given up
+    /// there, answering a [`ResilienceError::TimedOut`]: a failure counted as a
+    /// timeout. A read that fails is a failure told as its chain, and one that
+    /// panics a failure counted before the unwind goes on, as a panic in an
+    /// attempt's call is.
+    ///
+    /// Read to its end, the answer stands as its head was judged. Dropped
+    /// before it, it is judged by what the dependency owes then: nothing while
+    /// no read waits or the budget is not spent, and past it what one more
+    /// read finds — a frame or the end stands as the head was judged, a
+    /// failure counts as itself, and only a body still waiting has timed out.
     pub(crate) struct ResilienceBody<I>
     where
         I: Instance,
     {
         #[pin]
         body: reqwest::Body,
-        // Armed at the first read that waits.
+        // Armed while a read waits, due when the budget is spent.
         #[pin]
-        bound: Option<Sleep>,
+        cut: Option<Sleep>,
         // `None` once the answer is settled.
         held: Option<Held<I>>,
-        // Whether the last read was left waiting for the dependency.
-        waiting: bool,
+        // How long the reads may still wait for the dependency in all.
+        left: Duration,
+        // When the read still believed waiting found nothing.
+        waiting: Option<Instant>,
+        signal: Arc<Signal>,
+        // `signal` as the waker the inner body is polled with, built once.
+        waker: Waker,
     }
 
     impl<I> PinnedDrop for ResilienceBody<I>
@@ -49,27 +69,96 @@ pin_project_lite::pin_project! {
         I: Instance,
     {
         fn drop(this: Pin<&mut Self>) {
-            let this = this.project();
-            // A read cut at the instant the bound ends at, by a timer the reader
-            // armed there, may be dropped before the body's own timer is polled.
-            if *this.waiting
-                && let Some(held) = this.held
-                && Instant::now() >= held.ends()
-            {
-                held.settle(Some(TIMED_OUT));
+            let mut this = this.project();
+            let (Some(held), Some(since)) = (this.held.as_mut(), *this.waiting) else {
+                return;
+            };
+            if since.elapsed() < *this.left {
+                return;
+            }
+            // An edge cutting its unit as the budget is spent may drop the body
+            // before its timer is polled, and an abandoned read is never polled again.
+            let mut unheard = Context::from_waker(Waker::noop());
+            let owed = catch_unwind(AssertUnwindSafe(|| {
+                this.body.as_mut().poll_frame(&mut unheard)
+            }));
+            match owed {
+                Ok(Poll::Pending) => held.settle(Some(TIMED_OUT)),
+                Ok(Poll::Ready(Some(Err(error)))) => failed(held, &error),
+                Ok(Poll::Ready(Some(Ok(_)) | None)) => {}
+                // A destructor does not unwind: the panic is counted here, and the
+                // process hook has filed it.
+                Err(_unwound) => held.panicked(),
             }
         }
     }
 }
 
+/// What the transport says of a read left waiting, whether or not its reader
+/// is there to hear it: the inner body is polled with this as its waker, which
+/// keeps the instant something came and wakes the reader of the latest read.
+#[derive(Default)]
+struct Signal {
+    heard: Mutex<Heard>,
+}
+
+#[derive(Default)]
+struct Heard {
+    /// When the transport first signalled since the latest read.
+    at: Option<Instant>,
+    reader: Option<Waker>,
+}
+
+impl Signal {
+    /// When the transport signalled since the read before this one, if it
+    /// did, `reader` being the one it wakes from now on.
+    fn listen(&self, reader: &Waker) -> Option<Instant> {
+        let mut heard = self.heard.lock();
+        if !heard
+            .reader
+            .as_ref()
+            .is_some_and(|known| known.will_wake(reader))
+        {
+            heard.reader = Some(reader.clone());
+        }
+        heard.at.take()
+    }
+}
+
+impl Wake for Signal {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let reader = {
+            let mut heard = self.heard.lock();
+            heard.at.get_or_insert_with(Instant::now);
+            heard.reader.take()
+        };
+        if let Some(reader) = reader {
+            reader.wake();
+        }
+    }
+}
+
+/// A read of the answer's body failed on `error`: a failure, told as its chain.
+fn failed<I>(held: &mut Held<I>, error: &reqwest::Error) {
+    held.settle(Some(&told(error)));
+}
+
 impl<I: Instance> ResilienceBody<I> {
     /// `body`, holding `held` until it ends.
-    pub(crate) const fn new(body: reqwest::Body, held: Held<I>) -> Self {
+    pub(crate) fn new(body: reqwest::Body, held: Held<I>) -> Self {
+        let signal = Arc::new(Signal::default());
         Self {
             body,
-            bound: None,
+            cut: None,
+            left: held.left(),
             held: Some(held),
-            waiting: false,
+            waiting: None,
+            waker: Waker::from(Arc::clone(&signal)),
+            signal,
         }
     }
 }
@@ -83,41 +172,59 @@ impl<I: Instance> Body for ResilienceBody<I> {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let mut this = self.project();
-        let read = this.body.as_mut().poll_frame(cx);
         let Some(held) = this.held.as_mut() else {
-            return read.map_err(Into::into);
+            return this.body.poll_frame(cx).map_err(Into::into);
         };
-        match read {
-            Poll::Ready(Some(Ok(frame))) => {
-                *this.waiting = false;
-                Poll::Ready(Some(Ok(frame)))
+        // The reader's waker first: a signal between the two would wake no one.
+        let signalled = this.signal.listen(cx.waker());
+        let mut heard = Context::from_waker(this.waker);
+        let read = match catch_unwind(AssertUnwindSafe(|| {
+            this.body.as_mut().poll_frame(&mut heard)
+        })) {
+            Ok(read) => read,
+            Err(unwound) => {
+                held.panicked();
+                *this.held = None;
+                resume_unwind(unwound)
             }
-            Poll::Ready(None) => {
+        };
+        let Poll::Ready(read) = read else {
+            if this.waiting.is_none() {
+                let now = Instant::now();
+                *this.waiting = Some(now);
+                this.cut
+                    .set(Some(tokio::time::sleep_until(now + *this.left)));
+            }
+            let cut = this.cut.as_mut().as_pin_mut();
+            if cut.is_some_and(|cut| cut.poll(cx).is_pending()) {
+                return Poll::Pending;
+            }
+            let refusal = held.timed_out();
+            *this.held = None;
+            // Let go here, not when the response is dropped: its connection is
+            // the one that stalled.
+            this.body.set(reqwest::Body::default());
+            return Poll::Ready(Some(Err(
+                ResilienceError::<Infallible>::from(refusal).into()
+            )));
+        };
+        if let Some(since) = this.waiting.take() {
+            let came = signalled.unwrap_or_else(Instant::now);
+            *this.left = this
+                .left
+                .saturating_sub(came.saturating_duration_since(since));
+            this.cut.set(None);
+        }
+        match read {
+            Some(Ok(frame)) => Poll::Ready(Some(Ok(frame))),
+            None => {
                 *this.held = None;
                 Poll::Ready(None)
             }
-            Poll::Ready(Some(Err(error))) => {
-                held.settle(Some(&error_message(&error)));
+            Some(Err(error)) => {
+                failed(held, &error);
                 *this.held = None;
                 Poll::Ready(Some(Err(error.into())))
-            }
-            Poll::Pending => {
-                if this.bound.is_none() {
-                    this.bound.set(Some(tokio::time::sleep_until(held.ends())));
-                }
-                let bound = this.bound.as_mut().as_pin_mut();
-                if bound.is_some_and(|bound| bound.poll(cx).is_pending()) {
-                    *this.waiting = true;
-                    return Poll::Pending;
-                }
-                let refusal = held.timed_out();
-                *this.held = None;
-                // The read is given up, and the connection it waited on with it.
-                this.body.set(reqwest::Body::default());
-                this.bound.set(None);
-                Poll::Ready(Some(Err(
-                    ResilienceError::<Infallible>::from(refusal).into()
-                )))
             }
         }
     }
@@ -134,7 +241,8 @@ impl<I: Instance> Body for ResilienceBody<I> {
 #[cfg(test)]
 mod tests {
     use std::io;
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::ready;
     use std::time::Duration;
 
     use nest_rs_core::Unnamed;
@@ -143,7 +251,7 @@ mod tests {
 
     use super::*;
     use crate::error::Refusal;
-    use crate::policy::{ResiliencePolicy, Verdict};
+    use crate::policy::{PANICKED, ResiliencePolicy, Verdict};
     use crate::{BreakerState, ResilienceConfig, TARGET};
 
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -177,12 +285,22 @@ mod tests {
         policy
     }
 
-    /// What feeds a body its frames, or the failure its read ends on; dropped,
-    /// the body ends.
-    type Feed = mpsc::UnboundedSender<Result<&'static [u8], io::Error>>;
+    /// What the dependency does next, as a test scripts it.
+    #[derive(Clone, Copy, Debug)]
+    enum Part {
+        Frame(&'static [u8]),
+        /// The read fails on [`RESET`].
+        Fails,
+        /// The transport panics as it is read.
+        Panics,
+    }
+
+    /// What feeds a body its script, each part as the test sends it; dropped,
+    /// the body ends, and held with nothing sent, the dependency stalls.
+    type Feed = mpsc::UnboundedSender<Part>;
 
     /// A body read as its test feeds it.
-    struct Fed(mpsc::UnboundedReceiver<Result<&'static [u8], io::Error>>);
+    struct Fed(mpsc::UnboundedReceiver<Part>);
 
     impl Body for Fed {
         type Data = &'static [u8];
@@ -192,9 +310,12 @@ mod tests {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-            self.0
-                .poll_recv(cx)
-                .map(|fed| fed.map(|fed| fed.map(Frame::data)))
+            Poll::Ready(match ready!(self.0.poll_recv(cx)) {
+                Some(Part::Frame(data)) => Some(Ok(Frame::data(data))),
+                Some(Part::Fails) => Some(Err(io::Error::other(RESET))),
+                Some(Part::Panics) => panic!("the transport panicked"),
+                None => None,
+            })
         }
     }
 
@@ -241,9 +362,38 @@ mod tests {
         }))
     }
 
-    /// Whether a read of `body` waits for the dependency.
+    /// Whether a read of `body` finds nothing, its reader not staying for
+    /// what comes: a read abandoned as it is made.
     async fn waits(body: &mut Covered) -> bool {
         std::future::poll_fn(|cx| Poll::Ready(body.as_mut().poll_frame(cx).is_pending())).await
+    }
+
+    /// A read of `body` its reader stays in, which the dependency answers
+    /// with a frame after `wait`.
+    async fn waited(body: &mut Covered, feed: &Feed, wait: Duration) {
+        let (read, ()) = tokio::join!(read(body), async {
+            tokio::time::sleep(wait).await;
+            feed.send(Part::Frame(b"part")).expect("the body is read");
+        });
+        assert!(
+            matches!(read, Some(Ok(_))),
+            "the frame it waited for: {read:?}"
+        );
+    }
+
+    /// How long a read of `body` waits, the dependency sending nothing,
+    /// before it is given up as timed out.
+    async fn given_up_after(body: &mut Covered) -> Duration {
+        let started = Instant::now();
+        let given_up = read(body).await.and_then(Result::err).expect("given up");
+        let refusal = given_up
+            .downcast_ref::<ResilienceError<Infallible>>()
+            .expect("the policy's refusal");
+        assert!(
+            matches!(refusal, ResilienceError::TimedOut { timeout, .. } if *timeout == TIMEOUT),
+            "{refusal:?}"
+        );
+        started.elapsed()
     }
 
     /// Each transition `lines` holds, by the state it entered.
@@ -255,7 +405,7 @@ mod tests {
             .collect()
     }
 
-    /// What the breaker's one opening by a failure says it failed on.
+    /// What each opening of the breaker by a failure says it failed on.
     fn opened_on(lines: &LogCapture) -> Vec<String> {
         lines
             .find(TARGET, "circuit breaker changed state")
@@ -270,6 +420,10 @@ mod tests {
         policy.begin(None).await.err() == Some(Refusal::Full)
     }
 
+    fn is_open(policy: &ResiliencePolicy) -> bool {
+        matches!(policy.breaker_state(), Some(BreakerState::Open { .. }))
+    }
+
     /// The breaker's verdict and the slot wait for the body's end: a probe
     /// whose head answered keeps its turn while its body is read, closes the
     /// breaker at the end, once, and frees the slot there, the body not
@@ -279,7 +433,7 @@ mod tests {
         let lines = LogCapture::install();
         let policy = probing().await;
         let (mut body, feed) = succeeded(&policy).await;
-        feed.send(Ok(b"half")).expect("the body is read");
+        feed.send(Part::Frame(b"half")).expect("the body is read");
         assert_eq!(
             read(&mut body).await.and_then(Result::ok),
             Some(b"half".to_vec())
@@ -311,7 +465,7 @@ mod tests {
             let policy = probing().await;
             let (mut body, feed) = succeeded(&policy).await;
             if half_read {
-                feed.send(Ok(b"half")).expect("the body is read");
+                feed.send(Part::Frame(b"half")).expect("the body is read");
                 assert!(read(&mut body).await.is_some());
                 assert!(waits(&mut body).await, "the rest has not come");
             }
@@ -339,8 +493,7 @@ mod tests {
         assert!(slot_taken(&policy).await, "the unread body holds the slot");
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
 
-        feed.send(Err(io::Error::other(RESET)))
-            .expect("the body is read");
+        feed.send(Part::Fails).expect("the body is read");
         let failed = read(&mut body)
             .await
             .and_then(Result::err)
@@ -354,10 +507,7 @@ mod tests {
                 .is_none(),
             "no refusal of the policy's: {failed:?}"
         );
-        assert!(matches!(
-            policy.breaker_state(),
-            Some(BreakerState::Open { .. })
-        ));
+        assert!(is_open(&policy));
         let opened = opened_on(&lines);
         assert_eq!(opened.len(), 1, "{opened:?}");
         assert!(opened[0].ends_with(RESET), "{opened:?}");
@@ -365,73 +515,86 @@ mod tests {
         assert!(!slot_taken(&policy).await, "freed at the failure");
     }
 
-    /// The bound runs from the send, the head and the body sharing it: a read
-    /// still waiting when it ends is given up there, a failure counted as a
-    /// timeout, its reader told the policy's own refusal with the bound it was
-    /// given up at, and the slot is freed.
+    /// What the head left of the attempt's bound is what the body's reads may
+    /// wait in all, whenever they are made: a read still waiting once it is
+    /// spent is given up there, a failure counted as a timeout, its reader
+    /// told the policy's own refusal with the attempt's bound, and the slot
+    /// is freed.
     #[tokio::test(start_paused = true)]
-    async fn a_body_still_waiting_at_its_attempts_bound_is_given_up_as_timed_out() {
+    async fn a_read_still_waiting_once_the_bounds_rest_is_spent_is_given_up_as_timed_out() {
         let lines = LogCapture::install();
         let policy = policy(1);
         let sent = Instant::now();
         let head = Duration::from_secs(2);
         let (mut body, feed) = answered(&policy, head, Verdict::Succeeded).await;
         assert_eq!(sent.elapsed(), head);
+        tokio::time::advance(2 * TIMEOUT).await;
 
-        let given_up = read(&mut body)
-            .await
-            .and_then(Result::err)
-            .expect("given up");
         assert_eq!(
-            sent.elapsed(),
-            TIMEOUT,
-            "at the bound, counted from the send"
-        );
-        let refusal = given_up
-            .downcast_ref::<ResilienceError<Infallible>>()
-            .expect("the policy's refusal");
-        assert!(
-            matches!(refusal, ResilienceError::TimedOut { timeout, .. } if *timeout == TIMEOUT),
-            "{refusal:?}"
+            given_up_after(&mut body).await,
+            TIMEOUT - head,
+            "what the head left, counted from the read"
         );
         assert_eq!(opened_on(&lines), [TIMED_OUT]);
         policy.close_breaker().expect("a breaker");
         assert!(!slot_taken(&policy).await, "freed as the read is given up");
 
-        feed.send(Ok(b"late")).ok();
+        feed.send(Part::Frame(b"late")).ok();
         assert!(read(&mut body).await.is_none(), "the body was let go");
     }
 
-    /// A read its reader cuts at the instant the bound ends at — an edge's
-    /// timer, due with the body's own and polled first — has timed out all the
-    /// same; one dropped while it waits before that instant has not.
+    /// The waits of every read are taken from one budget, and nothing else
+    /// is: two reads each kept waiting two seconds, their reader away longer
+    /// than the bound after each, leave the next one the fifth second.
     #[tokio::test(start_paused = true)]
-    async fn a_read_dropped_while_it_waits_has_timed_out_only_at_its_bounds_end() {
-        for (waited, timed_out) in [(TIMEOUT - Duration::from_millis(1), false), (TIMEOUT, true)] {
-            let lines = LogCapture::install();
-            let policy = policy(1);
-            let (mut body, _feed) = succeeded(&policy).await;
-            assert!(waits(&mut body).await);
-            tokio::time::advance(waited).await;
-            drop(body);
-
-            assert_eq!(
-                matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
-                timed_out,
-                "dropped after {waited:?}"
-            );
-            assert_eq!(opened_on(&lines).len(), usize::from(timed_out));
-            policy.close_breaker().expect("a breaker");
-            assert!(!slot_taken(&policy).await, "dropped after {waited:?}");
+    async fn the_waits_of_every_read_are_taken_from_one_budget() {
+        let policy = policy(1);
+        let (mut body, feed) = succeeded(&policy).await;
+        for _ in 0..2 {
+            waited(&mut body, &feed, Duration::from_secs(2)).await;
+            tokio::time::advance(2 * TIMEOUT).await;
         }
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+
+        assert_eq!(
+            given_up_after(&mut body).await,
+            TIMEOUT - Duration::from_secs(4)
+        );
+        assert!(is_open(&policy));
     }
 
-    /// The bound is the dependency's, never its reader's: a frame that came
-    /// is handed on however late it is read, and an answer held unread past
-    /// its bound, then dropped, stands as its head was judged. Only a read
-    /// left waiting past the bound is given up, at once.
+    /// A reader slower than a prompt dependency is never cut: under a
+    /// transport's flow control the dependency sends the next part only once
+    /// its reader made room, so a read made long after the bound's instant
+    /// waits a round trip, which is all it is charged.
     #[tokio::test(start_paused = true)]
-    async fn a_frame_that_came_is_handed_on_past_the_bound_and_a_wait_past_it_is_given_up() {
+    async fn a_reader_slower_than_a_prompt_dependency_is_never_cut() {
+        const ROUND_TRIP: Duration = Duration::from_millis(1);
+        const ROUNDS: u32 = 8;
+        let lines = LogCapture::install();
+        let policy = policy(1);
+        let (mut body, feed) = succeeded(&policy).await;
+        for _ in 0..ROUNDS {
+            feed.send(Part::Frame(b"buffered"))
+                .expect("the body is read");
+            assert!(matches!(read(&mut body).await, Some(Ok(_))));
+            waited(&mut body, &feed, ROUND_TRIP).await;
+            tokio::time::advance(TIMEOUT).await;
+        }
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+        assert!(opened_on(&lines).is_empty());
+
+        assert_eq!(
+            given_up_after(&mut body).await,
+            TIMEOUT - ROUNDS * ROUND_TRIP,
+            "charged its round trips alone"
+        );
+    }
+
+    /// An answer held unread, and a frame read long after it came, cost the
+    /// dependency nothing: the reader's own time is no wait.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_held_unread_and_a_frame_read_late_cost_the_dependency_nothing() {
         let policy = policy(1);
         let (unread, _feed) = succeeded(&policy).await;
         tokio::time::advance(2 * TIMEOUT).await;
@@ -439,21 +602,258 @@ mod tests {
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
 
         let (mut body, feed) = succeeded(&policy).await;
-        feed.send(Ok(b"in time")).expect("the body is read");
+        feed.send(Part::Frame(b"in time"))
+            .expect("the body is read");
         tokio::time::advance(2 * TIMEOUT).await;
         assert_eq!(
             read(&mut body).await.and_then(Result::ok),
             Some(b"in time".to_vec())
         );
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+        assert_eq!(
+            given_up_after(&mut body).await,
+            TIMEOUT,
+            "nothing was taken"
+        );
+    }
 
-        let late = Instant::now();
-        assert!(matches!(read(&mut body).await, Some(Err(_))));
-        assert_eq!(late.elapsed(), Duration::ZERO, "given up at once");
+    /// A frame read ends its read's wait: the body dropped long after stands
+    /// as its head was judged, however long that read had waited.
+    #[tokio::test(start_paused = true)]
+    async fn a_frame_read_after_a_wait_ends_the_wait() {
+        let lines = LogCapture::install();
+        let policy = policy(1);
+        let (mut body, feed) = succeeded(&policy).await;
+        waited(&mut body, &feed, Duration::from_secs(1)).await;
+        tokio::time::advance(2 * TIMEOUT).await;
+        drop(body);
+
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+        assert!(opened_on(&lines).is_empty());
+        drop(feed);
+    }
+
+    /// How many times a reader was woken.
+    #[derive(Default)]
+    struct Wakes(AtomicUsize);
+
+    impl Wake for Wakes {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// A read left waiting is woken once, by the frame it waited for: the
+    /// wait over, no timer of the body's is left to wake its reader.
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_that_ended_leaves_no_timer_to_wake_its_reader() {
+        let policy = policy(1);
+        let (mut body, feed) = succeeded(&policy).await;
+        let wakes = Arc::new(Wakes::default());
+        let reader = Waker::from(Arc::clone(&wakes));
+        let mut cx = Context::from_waker(&reader);
+
+        assert!(body.as_mut().poll_frame(&mut cx).is_pending());
+        feed.send(Part::Frame(b"part")).expect("the body is read");
+        assert_eq!(wakes.0.load(Ordering::Relaxed), 1, "woken for the frame");
         assert!(matches!(
-            policy.breaker_state(),
-            Some(BreakerState::Open { .. })
+            body.as_mut().poll_frame(&mut cx),
+            Poll::Ready(Some(Ok(_)))
         ));
+        tokio::time::advance(2 * TIMEOUT).await;
+        assert_eq!(wakes.0.load(Ordering::Relaxed), 1, "and by nothing since");
+    }
+
+    /// The first signal since a read is the one kept: a transport signalling
+    /// twice before its reader comes back says when something first came.
+    #[tokio::test(start_paused = true)]
+    async fn the_first_signal_since_a_read_is_the_one_kept() {
+        let signal = Arc::new(Signal::default());
+        assert_eq!(signal.listen(Waker::noop()), None);
+        let first = Instant::now();
+        signal.wake_by_ref();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        Arc::clone(&signal).wake();
+
+        assert_eq!(signal.listen(Waker::noop()), Some(first));
+        assert_eq!(signal.listen(Waker::noop()), None, "told once");
+    }
+
+    /// A read dropped while it waits has timed out once its wait reached what
+    /// was left of the budget — at that instant, where an edge's timer due
+    /// with the body's own may be polled first, and at any later one — and
+    /// not before, whether the budget is whole or partly spent.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_dropped_while_it_waits_has_timed_out_only_once_its_budget_is_spent() {
+        const TICK: Duration = Duration::from_millis(1);
+        for spent in [Duration::ZERO, Duration::from_secs(4)] {
+            let left = TIMEOUT - spent;
+            for (waited_for, timed_out) in [(left - TICK, false), (left, true), (3 * TIMEOUT, true)]
+            {
+                let lines = LogCapture::install();
+                let policy = policy(1);
+                let (mut body, feed) = succeeded(&policy).await;
+                if !spent.is_zero() {
+                    waited(&mut body, &feed, spent).await;
+                    tokio::time::advance(2 * TIMEOUT).await;
+                }
+                assert!(waits(&mut body).await);
+                tokio::time::advance(waited_for).await;
+                drop(body);
+
+                let said = format!("{spent:?} spent, dropped after {waited_for:?}");
+                assert_eq!(is_open(&policy), timed_out, "{said}");
+                let expected: &[&str] = if timed_out { &[TIMED_OUT] } else { &[] };
+                assert_eq!(opened_on(&lines), expected, "{said}");
+                policy.close_breaker().expect("a breaker");
+                assert!(!slot_taken(&policy).await, "{said}");
+                drop(feed);
+            }
+        }
+    }
+
+    /// A read its reader abandoned, the response dropped long after: the
+    /// answer is judged by what the dependency owes at the drop, never by
+    /// the read left behind. A frame or the body's end that came since, in
+    /// time or late, stands as the head was judged, and a failure that came
+    /// counts as itself.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_abandoned_then_dropped_late_is_judged_by_what_the_dependency_owes_then() {
+        let in_time = Duration::from_secs(1);
+        for (came, after, failed) in [
+            (Some(Part::Frame(b"whole")), in_time, false),
+            (Some(Part::Frame(b"whole")), 2 * TIMEOUT, false),
+            (None, in_time, false),
+            (Some(Part::Fails), in_time, true),
+        ] {
+            let lines = LogCapture::install();
+            let policy = policy(1);
+            let (mut body, feed) = succeeded(&policy).await;
+            assert!(waits(&mut body).await, "a read its reader abandons");
+            tokio::time::advance(after).await;
+            let feed = came.map(|part| {
+                feed.send(part).expect("the body is held");
+                feed
+            });
+            tokio::time::advance(3 * TIMEOUT).await;
+            drop(body);
+
+            let said = format!("{came:?} after {after:?}");
+            assert_eq!(is_open(&policy), failed, "{said}");
+            let opened = opened_on(&lines);
+            assert_eq!(opened.len(), usize::from(failed), "{said}: {opened:?}");
+            assert!(opened.iter().all(|error| error.ends_with(RESET)), "{said}");
+            policy.close_breaker().expect("a breaker");
+            assert!(!slot_taken(&policy).await, "{said}");
+            drop(feed);
+        }
+    }
+
+    /// A read abandoned and taken up again later is charged what the
+    /// dependency took, never the time its reader was away: the frame that
+    /// came a second into the read, read three seconds after that, took one
+    /// second of the budget.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_abandoned_and_taken_up_again_is_charged_what_the_dependency_took() {
+        let took = Duration::from_secs(1);
+        let policy = policy(1);
+        let (mut body, feed) = succeeded(&policy).await;
+        assert!(waits(&mut body).await, "a read its reader abandons");
+        tokio::time::advance(took).await;
+        feed.send(Part::Frame(b"part")).expect("the body is read");
+        tokio::time::advance(Duration::from_secs(3)).await;
+        assert!(matches!(read(&mut body).await, Some(Ok(_))));
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+
+        assert_eq!(given_up_after(&mut body).await, TIMEOUT - took);
+    }
+
+    /// A read abandoned and taken up again past the budget finds what the
+    /// dependency owes then: a frame that came, however late, is handed on,
+    /// and a body still waiting is given up at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_taken_up_again_past_the_budget_is_handed_what_came_or_given_up_at_once() {
+        for came in [false, true] {
+            let policy = policy(1);
+            let (mut body, feed) = succeeded(&policy).await;
+            assert!(waits(&mut body).await, "a read its reader abandons");
+            tokio::time::advance(2 * TIMEOUT).await;
+            if came {
+                feed.send(Part::Frame(b"late")).expect("the body is read");
+                tokio::time::advance(TIMEOUT).await;
+                assert_eq!(
+                    read(&mut body).await.and_then(Result::ok),
+                    Some(b"late".to_vec())
+                );
+                assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+            }
+
+            assert_eq!(
+                given_up_after(&mut body).await,
+                Duration::ZERO,
+                "came: {came}"
+            );
+            assert!(is_open(&policy), "came: {came}");
+        }
+    }
+
+    /// A panic while the body is read is a failure, as a panic in an
+    /// attempt's call is: a probe's opens the breaker again, once, and the
+    /// slot is freed. At a read it is counted and unwinds on; at the read a
+    /// drop past the budget makes it is counted and goes no further, a
+    /// destructor never unwinding.
+    #[tokio::test(start_paused = true)]
+    async fn a_body_whose_read_panics_is_a_failure_counted_before_the_unwind_goes_on() {
+        for at_its_drop in [false, true] {
+            let lines = LogCapture::install();
+            let policy = probing().await;
+            let (mut body, feed) = succeeded(&policy).await;
+            feed.send(Part::Frame(b"half")).expect("the body is read");
+            assert!(matches!(read(&mut body).await, Some(Ok(_))));
+
+            if at_its_drop {
+                assert!(waits(&mut body).await);
+                tokio::time::advance(TIMEOUT).await;
+                feed.send(Part::Panics).expect("the body is held");
+            } else {
+                feed.send(Part::Panics).expect("the body is read");
+                let unwound = nest_rs_core::panic::contain(read(&mut body)).await;
+                assert!(unwound.is_err(), "the unwind goes on");
+            }
+            drop(body);
+
+            assert_eq!(
+                states(&lines),
+                ["open", "half_open", "open"],
+                "at its drop: {at_its_drop}"
+            );
+            assert_eq!(
+                opened_on(&lines).last().map(String::as_str),
+                Some(PANICKED),
+                "at its drop: {at_its_drop}"
+            );
+            policy.close_breaker().expect("a breaker");
+            assert!(!slot_taken(&policy).await, "at its drop: {at_its_drop}");
+        }
+    }
+
+    /// A panic of the reader's own code while it holds a response is no
+    /// failure of the dependency's: the answer stands as its head was judged.
+    #[tokio::test(start_paused = true)]
+    async fn a_panic_of_the_readers_own_code_charges_the_dependency_nothing() {
+        let lines = LogCapture::install();
+        let policy = probing().await;
+        let (mut body, feed) = succeeded(&policy).await;
+        feed.send(Part::Frame(b"half")).expect("the body is read");
+
+        let reading = async move {
+            let read = read(&mut body).await;
+            assert!(read.is_none(), "the reader's own code panics on {read:?}");
+        };
+        assert!(nest_rs_core::panic::contain(reading).await.is_err());
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+        assert_eq!(states(&lines), ["open", "half_open", "closed"]);
+        assert!(!slot_taken(&policy).await);
     }
 
     /// A manual switch of the breaker while a body is read leaves that body's
@@ -463,15 +863,14 @@ mod tests {
         let policy = policy(1);
         let (mut body, feed) = succeeded(&policy).await;
         policy.close_breaker().expect("a breaker");
-        feed.send(Err(io::Error::other(RESET)))
-            .expect("the body is read");
+        feed.send(Part::Fails).expect("the body is read");
         assert!(matches!(read(&mut body).await, Some(Err(_))));
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
         assert!(!slot_taken(&policy).await, "the slot is freed all the same");
     }
 
     /// A head judged a failure counted when it came: its body holds the slot
-    /// and the bound, and whatever its read ends on counts nothing more.
+    /// and the budget, and whatever its read ends on counts nothing more.
     #[tokio::test(start_paused = true)]
     async fn a_head_judged_a_failure_counts_once_whatever_its_body_ends_on() {
         let policy = policy(2);
@@ -481,8 +880,7 @@ mod tests {
         };
         let (mut body, feed) = answered(&policy, Duration::ZERO, failed).await;
         assert!(slot_taken(&policy).await, "the unread body holds the slot");
-        feed.send(Err(io::Error::other(RESET)))
-            .expect("the body is read");
+        feed.send(Part::Fails).expect("the body is read");
         assert!(matches!(read(&mut body).await, Some(Err(_))));
         assert_eq!(
             policy.breaker_state(),

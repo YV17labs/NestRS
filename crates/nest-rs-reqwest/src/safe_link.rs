@@ -1,7 +1,11 @@
 //! The [`SafeLink`] saying reqwest's errors: reqwest's own sentence quotes the
 //! URL the request was sent to, whose path and query hold what the caller sent
 //! — an identifier, a token — so the crate that knows reqwest's errors claims
-//! them for every reader of a chain, an app's own error wrapping one included.
+//! them wherever one is a link of a chain, in a program linking this crate:
+//! read alone, or beneath an app's error naming it as its source. An error
+//! handing reqwest's sentence on as its own (`#[error(transparent)]`) holds it
+//! as no link, so nothing here reads it — reqwest-middleware's apart, which
+//! this crate knows — and that sentence's URL is its reader's to cut.
 
 use std::error::Error;
 
@@ -113,6 +117,31 @@ mod tests {
             error_message(&error),
             "builder error: URL scheme is not allowed"
         );
+    }
+
+    /// What `#[error(transparent)]` expands to: reqwest's sentence as its own,
+    /// and reqwest's cause as its source.
+    #[derive(Debug)]
+    struct HandedOn(reqwest::Error);
+
+    impl std::fmt::Display for HandedOn {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Display::fmt(&self.0, f)
+        }
+    }
+
+    impl Error for HandedOn {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.0.source()
+        }
+    }
+
+    /// The limit this file's `//!` states: such an error's chain holds no
+    /// reqwest error to claim, and says the URL.
+    #[tokio::test]
+    async fn an_error_handing_reqwests_sentence_on_is_no_link_this_crate_reads() {
+        let said = error_message(&HandedOn(refused().await));
+        assert!(said.contains(SENT), "{said}");
     }
 
     /// reqwest-middleware's error displays the error it holds and hands out

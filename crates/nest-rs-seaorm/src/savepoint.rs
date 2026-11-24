@@ -147,6 +147,15 @@ impl Savepoint {
     /// Take the enclosing unit's turn for as long as the block is open, and
     /// send its `SAVEPOINT` there: a refused one poisons the enclosing unit,
     /// whose transaction Postgres has just aborted.
+    ///
+    /// Dropped before the `SAVEPOINT` answered, this leaves the block unopened
+    /// and its unit as it was, since no statement of the block's ran: waiting
+    /// for the turn or a connection, nothing was sent; a `BEGIN` dropped
+    /// unanswered is rolled back by the pool before it lends the connection
+    /// again, and the unit begins another; and a `SAVEPOINT` dropped unanswered
+    /// still runs on the server, as any statement dropped mid-flight does,
+    /// where it holds nothing — the next `SAVEPOINT` of its name hides it, and
+    /// the enclosing block's release or the unit's commit ends it.
     async fn send_savepoint(&self) -> Result<(), DbErr> {
         if !self.holds_turn.load(Ordering::Acquire) {
             self.enclosing.turn().for_block().await?;
@@ -156,12 +165,10 @@ impl Savepoint {
             self.root().pool().get_database_backend(),
             format!("SAVEPOINT {}", self.name()),
         );
-        let mut unsettled = Unsettled::armed(&self.enclosing, self.transport());
         let sent = self
             .enclosing
             .run_unturned(|txn| txn.execute_raw(statement))
             .await;
-        unsettled.disarm();
         if sent.is_err() {
             self.give_back_turn();
         }
@@ -251,9 +258,11 @@ impl Savepoint {
 }
 
 impl Drop for Savepoint {
-    /// A block dropped before it settled — its future cancelled — leaves its
-    /// savepoint open on the connection: nothing can vouch for what its unit
-    /// writes next, so that unit no longer commits.
+    /// A block dropped once it opened and before it settled — its future
+    /// cancelled — leaves its savepoint open on the connection with what it
+    /// wrote inside: nothing can vouch for what its unit writes next, so that
+    /// unit no longer commits. One dropped unopened ran no statement of its
+    /// own, and leaves its unit as it was.
     fn drop(&mut self) {
         let transport = self.transport();
         report_discarded(transport, still_held(&mut self.after_commit));
@@ -302,9 +311,9 @@ impl Enclosing {
     }
 }
 
-/// Poisons the enclosing unit when the future sending a block's `SAVEPOINT`,
-/// `RELEASE` or `ROLLBACK TO` is dropped before the database answered: the
-/// savepoint is then in a state nothing can vouch for.
+/// Poisons the enclosing unit when the future settling a block, sending its
+/// `RELEASE` or its `ROLLBACK TO`, is dropped before the database answered:
+/// what the block wrote is then kept or not, and nothing can vouch for which.
 struct Unsettled<'a> {
     enclosing: &'a Enclosing,
     transport: &'static str,

@@ -7,8 +7,9 @@
 //! its unit's deadline, and tells what an attempt failed on in the retry's
 //! line and the breaker's opening: a status by its code, a transport failure
 //! without the URL it was sent to. The response it hands back is reqwest's
-//! own, its body read as it comes and holding the run's slot, the attempt's
-//! bound and the breaker's verdict until it ends.
+//! own, its body read as it comes and holding the run's slot, the breaker's
+//! verdict and what its head left of the attempt's bound until it ends: the
+//! time its reads wait for the dependency, never the time its caller takes.
 
 use std::convert::Infallible;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -567,7 +568,6 @@ async fn an_answer_counted_as_a_failure_is_told_by_its_status_code_alone() {
 #[tokio::test]
 async fn a_transport_failure_is_told_as_its_chain_without_the_url_it_was_sent_to() {
     const SENT: &str = "s3cr3t";
-    // A peer closing every connection it accepts, before any handshake.
     let closing = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("a loopback port");
@@ -771,6 +771,79 @@ async fn an_answers_body_is_read_as_it_comes_never_buffered() {
     peer.release();
     let rest = answered.text().await.expect("the rest");
     assert_eq!(rest, SECOND);
+}
+
+/// The timeout the body tests below read under, which each of them outlasts
+/// on purpose before it reads or drops: long enough for a part the peer then
+/// writes to cross loopback on a loaded machine, the one wait it bounds.
+const BODY_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// A policy of [`BODY_TIMEOUT`] whose breaker one failure opens.
+fn opening_on_one_failure() -> ResilienceConfig {
+    ResilienceConfig {
+        timeout: BODY_TIMEOUT,
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..quiet()
+    }
+}
+
+/// The bound is the dependency's, never its caller's: a caller that takes
+/// longer than the timeout between two reads, then waits for a part still on
+/// its way — as every read does once a transport's buffers are drained — is
+/// handed that part, and the breaker counts nothing.
+#[tokio::test]
+async fn a_caller_slower_than_the_dependency_is_handed_a_part_that_comes_past_the_bounds_instant() {
+    const FIRST: &str = "the first part, ";
+    const SECOND: &str = "then the second";
+    let peer = answering([PeerAnswer::parted(200, FIRST, SECOND)]).await;
+    let (_app, policy) = policy(opening_on_one_failure()).await;
+
+    let mut answered = client(Arc::clone(&policy))
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    let mut read = Vec::new();
+    while read.len() < FIRST.len() {
+        let chunk = answered.chunk().await.expect("a chunk");
+        read.extend_from_slice(&chunk.expect("the first part"));
+    }
+    tokio::time::sleep(BODY_TIMEOUT + Duration::from_millis(50)).await;
+
+    peer.release();
+    let rest = answered.text().await.expect("the part the read waited for");
+    assert_eq!(rest, SECOND);
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+}
+
+/// A read its caller abandons, the response dropped past the bound: the
+/// answer is judged by what the transport holds at the drop, so a part the
+/// dependency delivered meanwhile, which no read was there to take, counts as
+/// the head did.
+#[tokio::test]
+async fn a_read_abandoned_then_dropped_past_the_bound_counts_what_the_dependency_delivered() {
+    const FIRST: &str = "the first part, ";
+    let peer = answering([PeerAnswer::parted(200, FIRST, "then the second")]).await;
+    let (_app, policy) = policy(opening_on_one_failure()).await;
+
+    let mut answered = client(Arc::clone(&policy))
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answered");
+    let mut read = 0;
+    while read < FIRST.len() {
+        let chunk = answered.chunk().await.expect("a chunk");
+        read += chunk.expect("the first part").len();
+    }
+    let abandoned = tokio::time::timeout(Duration::from_millis(10), answered.chunk()).await;
+    assert!(abandoned.is_err(), "the second part is held back");
+
+    peer.release();
+    tokio::time::sleep(BODY_TIMEOUT + Duration::from_millis(50)).await;
+    drop(answered);
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
 }
 
 /// A body the policy gives up at the attempt's bound reaches the caller as

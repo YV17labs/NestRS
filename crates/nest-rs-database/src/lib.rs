@@ -86,7 +86,8 @@ pub mod __private {
     //! release.
 
     pub use crate::executor::{
-        installed_scope, with_executor, with_job_executor, with_request_executor,
+        InstalledSavepoint, installed_scope, with_executor, with_job_executor,
+        with_request_executor,
     };
     pub use crate::unit::run_unit_bounded;
 }

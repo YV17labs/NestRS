@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use nest_rs_config::{ConfigError, Namespaced, instance_namespace};
 use nest_rs_core::__private::WithinHeld;
-use nest_rs_core::{Backoff, Instance, Problem, Unanswered, Unnamed, error_message, process_seed};
+use nest_rs_core::{Backoff, Instance, Problem, Unanswered, Unnamed, process_seed};
 use nest_rs_database::AtomicError;
 use tokio::sync::SemaphorePermit;
 use tokio::time::{Instant, Sleep};
@@ -25,7 +25,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::TARGET;
 #[cfg(feature = "reqwest")]
-use crate::breaker::Unsettled;
+use crate::breaker::HeldAttempt;
 use crate::breaker::{Breaker, BreakerState, Pass, Sent};
 use crate::bulkhead::Bulkhead;
 #[cfg(feature = "reqwest")]
@@ -38,6 +38,7 @@ use crate::millis::millis;
 use crate::rate::Rate;
 use crate::resilient::{ResilientAnswer, ResilientMethod};
 use crate::savepoint::{Ended, Savepoint, Settling};
+use crate::told::told;
 
 /// The calls to one dependency — a payment provider, a carrier's API, a
 /// language model — run under one policy, by every caller in the process.
@@ -78,7 +79,9 @@ use crate::savepoint::{Ended, Savepoint, Settling};
 /// [`std::error::Error`]: its chain is the `error` of the line a retry files,
 /// at `debug`, and of the `warn` the breaker files when that failure opens it,
 /// where an operator reads what the dependency answered once every caller is
-/// told the breaker is open.
+/// told the breaker is open. A URL in that chain is told by its scheme and
+/// authority alone, never the path, the query or the userinfo a request
+/// carried; a value an error quotes otherwise is the error's to keep out.
 ///
 /// The breaker's state is read through [`breaker_state`](Self::breaker_state),
 /// and switched by hand — an operator taking a dependency out for its
@@ -140,13 +143,14 @@ pub(crate) enum Verdict {
     Failed {
         asked: Option<Duration>,
         /// What it failed on, as the lines telling the attempt say it, said
-        /// once where the answer is judged: an error's whole chain.
+        /// once where the answer is judged: an error's chain as the policy
+        /// tells one ([`told`]).
         error: Cow<'static, str>,
     },
 }
 
 /// What an attempt whose call unwound failed on; its payload is its unit's to file.
-const PANICKED: &str = "the call panicked";
+pub(crate) const PANICKED: &str = "the call panicked";
 
 /// One attempt's answer and how it counts, or the policy's refusal.
 pub(crate) type Attempted<T> = Result<(T, Verdict), Refusal>;
@@ -310,10 +314,18 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// savepoint holds the unit until it settles, so another statement of that
     /// unit, issued beside the run, waits for it; an attempt given up while one
     /// of its statements runs is rolled back once that statement ends, which
-    /// the next attempt and the run's answer wait for; and a run dropped
-    /// mid-attempt leaves its unit unable to commit, as an atomic block dropped
-    /// does. A savepoint the database cannot settle ends the run on
+    /// the next attempt and the run's answer wait for, and one given up before
+    /// its first statement was sent — its unit waiting for a connection —
+    /// leaves the unit as it was; and a run dropped mid-attempt, once it sent
+    /// a statement, leaves its unit unable to commit, as an atomic block
+    /// dropped does. A savepoint the database cannot settle ends the run on
     /// [`ResilienceError::Unsettled`].
+    ///
+    /// An attempt's wait for its unit counts against its bound: of two such
+    /// calls joined in one transaction, the second's first statement waits
+    /// for the first's whole attempt, and may be given up at its timeout and
+    /// counted as its dependency's failure — send them one after the other,
+    /// or outside the transaction.
     pub fn run_idempotent<T, E, F, Fut>(
         &self,
         call: F,
@@ -618,11 +630,11 @@ impl<'p, I: Instance> Run<'p, I> {
             "a run's slot and its attempt are held for the policy they were taken from"
         );
         Held {
-            unsettled: outstanding.sent.take().map(Sent::hold),
+            attempt: outstanding.sent.take().map(Sent::hold),
             slot: slot
                 .zip(policy.bulkhead.as_ref())
                 .map(|(slot, bulkhead)| bulkhead.hold(slot)),
-            ends: outstanding.ends,
+            left: outstanding.ends.saturating_duration_since(Instant::now()),
             bound: outstanding.bound,
             policy,
         }
@@ -651,24 +663,46 @@ impl<'p, I: Instance> Run<'p, I> {
         }
     }
 
-    /// How long to wait before attempting the call again after `attempted`, its
-    /// line filed, or `None` when the run ends there: after a failure or a
-    /// timeout, within the run's retries, unless the dependency asked a wait
-    /// past the backoff's ceiling. Each line a retry files, made or given up,
-    /// says what the attempt failed on: its error's chain, or the timeout's
-    /// sentence.
+    /// How long to wait before attempting the call again after `attempted`, the
+    /// retry's line filed, or `None` when the run ends there: [`retry`]'s
+    /// decision for a run opening no savepoint, whose retry is certain as it
+    /// is decided.
     ///
     /// It reads nothing of the answer past it, so no wait holds the answer,
     /// and a run is `Send` for an answer that is `Send` and not `Sync`, a
     /// stream's.
+    ///
+    /// [`retry`]: Self::retry
+    #[cfg(any(feature = "reqwest", test))]
     fn next_wait<T>(&mut self, attempted: &Attempted<T>) -> Option<Duration> {
-        let (asked, error) = match attempted {
-            Ok((_, Verdict::Failed { asked, error })) => (*asked, error.as_ref()),
-            Err(Refusal::TimedOut(_)) => (None, TIMED_OUT),
-            Ok((_, Verdict::Succeeded))
-            | Err(Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => return None,
-        };
+        let (asked, error) = failed(attempted)?;
         let wait = self.retry_wait(asked, error)?;
+        self.retrying(wait, error);
+        Some(wait)
+    }
+
+    /// The retry the run makes after `attempted`, or `None` when it ends
+    /// there: after a failure or a timeout, as [`retry_wait`] decides. Its
+    /// line is left to file once the retry is certain ([`retrying`]): at once
+    /// for an attempt that opened no savepoint, else once that savepoint was
+    /// rolled back. What the attempt failed on is taken out of `attempted`,
+    /// which the run lets go before it waits.
+    ///
+    /// [`retry_wait`]: Self::retry_wait
+    /// [`retrying`]: Self::retrying
+    fn retry<T>(&mut self, attempted: &mut Attempted<T>) -> Option<Retry> {
+        let (asked, error) = failed(attempted)?;
+        let wait = self.retry_wait(asked, error)?;
+        let error = match attempted {
+            Ok((_, Verdict::Failed { error, .. })) => std::mem::take(error),
+            _ => Cow::Borrowed(TIMED_OUT),
+        };
+        Some(Retry { wait, error })
+    }
+
+    /// The line of a retry that is certain, saying what the attempt before it
+    /// failed on: its error's chain, or the timeout's sentence.
+    fn retrying(&self, wait: Duration, error: &str) {
         tracing::debug!(
             target: TARGET,
             instance = I::NAME,
@@ -679,11 +713,13 @@ impl<'p, I: Instance> Run<'p, I> {
             error,
             "attempt failed; retrying the call",
         );
-        Some(wait)
     }
 
     /// How long to wait before the next attempt, after one that failed on
-    /// `error` asking `asked`, or `None` when the run ends there.
+    /// `error` asking `asked`, or `None` when the run ends there: its retries
+    /// spent, or a retry left that is given up, whose line says why with
+    /// `error` — the dependency asked a wait past the backoff's ceiling, or
+    /// the wait ends past the unit's deadline.
     fn retry_wait(&mut self, asked: Option<Duration>, error: &str) -> Option<Duration> {
         let terms = self.terms;
         let policy = terms.policy;
@@ -732,9 +768,9 @@ impl<'p, I: Instance> Run<'p, I> {
 }
 
 /// What an attempt whose call answered leaves outstanding with its policy:
-/// the attempt in the breaker, unsettled when its answer was judged a success,
-/// and its bound, which runs from its send. Dropped, the answer stands as it
-/// was judged; [`Run::hold`] hands it to what the answer still owes.
+/// the attempt in the breaker, still to settle when its answer was judged a
+/// success, and its bound, which runs from its send. Dropped, the answer stands
+/// as it was judged; [`Run::hold`] hands it to what the answer still owes.
 #[cfg(feature = "reqwest")]
 pub(crate) struct Outstanding<'p> {
     sent: Option<Sent<'p>>,
@@ -755,22 +791,24 @@ impl Drop for Outstanding<'_> {
 /// What a run's answer holds of its policy once the run is over, while a part
 /// of it is still to come — a response's body: the run's slot of the bulkhead,
 /// its last attempt in the breaker when its answer was judged a success, and
-/// that attempt's bound. It borrows nothing, so it lives as long as what it
-/// covers; dropped unsettled, the answer stands as it was judged.
+/// what that attempt's bound had left as the run ended. It borrows nothing, so
+/// it lives as long as what it covers; dropped before it is settled, the
+/// answer stands as it was judged.
 #[cfg(feature = "reqwest")]
 pub(crate) struct Held<I> {
     policy: Arc<ResiliencePolicy<I>>,
-    unsettled: Option<Unsettled>,
+    attempt: Option<HeldAttempt>,
     slot: Option<HeldSlot>,
-    ends: Instant,
+    left: Duration,
     bound: Duration,
 }
 
 #[cfg(feature = "reqwest")]
 impl<I> Held<I> {
-    /// The instant the attempt's bound ends at, counted from its send.
-    pub(crate) const fn ends(&self) -> Instant {
-        self.ends
+    /// What the attempt's bound, counted from its send, had left as the run
+    /// ended: how long the rest of the answer may still be waited for.
+    pub(crate) const fn left(&self) -> Duration {
+        self.left
     }
 
     /// The answer's outcome now that it is whole, or will never be: `failure`
@@ -780,8 +818,8 @@ impl<I> Held<I> {
     pub(crate) fn settle(&mut self, failure: Option<&str>) {
         let policy = &*self.policy;
         // The breaker first, as a run's drop hands a probe's turn on before its slot.
-        if let Some((unsettled, breaker)) = self.unsettled.take().zip(policy.breaker.as_ref()) {
-            breaker.resume(unsettled).settle(failure);
+        if let Some((attempt, breaker)) = self.attempt.take().zip(policy.breaker.as_ref()) {
+            breaker.resume(attempt).settle(failure);
         }
         if let Some((slot, bulkhead)) = self.slot.take().zip(policy.bulkhead.as_ref()) {
             bulkhead.free(slot);
@@ -791,11 +829,21 @@ impl<I> Held<I> {
 
 #[cfg(feature = "reqwest")]
 impl<I: Instance> Held<I> {
-    /// The answer given up at its attempt's bound, the rest of it not come: a
-    /// failure, timed out, and the refusal its reader is told, counted.
+    /// The answer given up, its reader having waited for the rest of it all
+    /// its attempt's bound had left: a failure, timed out, and the refusal its
+    /// reader is told, counted.
     pub(crate) fn timed_out(&mut self) -> Refusal {
         self.settle(Some(TIMED_OUT));
         self.policy.refused(Refusal::TimedOut(self.bound))
+    }
+}
+
+#[cfg(feature = "reqwest")]
+impl<I> Held<I> {
+    /// Reading the rest of the answer panicked: a failure, as a panic in an
+    /// attempt's call is.
+    pub(crate) fn panicked(&mut self) {
+        self.settle(Some(PANICKED));
     }
 }
 
@@ -820,32 +868,48 @@ impl<I> Run<'_, I> {
 
 impl<I: Instance> Terms<'_, I> {
     /// What the run does once an attempt's savepoint settled, `ended` being
-    /// what the attempt ended on: its answer to answer, `None` to send its
-    /// call again, its panic unwinding on. A savepoint the database could not
-    /// settle ends the run there, whatever the attempt answered, filed at
-    /// `warn` with what the port said: nothing that attempt wrote stands.
+    /// what the attempt ended on: its answer to answer, its call to send
+    /// again, its panic unwinding on. A savepoint the database could not
+    /// settle ends the run there, whatever the attempt answered: nothing that
+    /// attempt wrote stands. The driver filed why and the run's caller holds
+    /// it, so the line says the policy's part alone.
     fn after_savepoint<T, E>(
         &self,
         ended: Ended<Attempted<Result<T, E>>>,
         settled: Result<(), AtomicError>,
-    ) -> Result<Option<Attempted<Result<T, E>>>, ResilienceError<E>> {
-        if let Err(cause) = &settled {
-            tracing::warn!(
+    ) -> Result<Next<Attempted<Result<T, E>>>, ResilienceError<E>> {
+        if settled.is_err() {
+            tracing::debug!(
                 target: TARGET,
                 instance = I::NAME,
                 host = self.host().as_deref(),
                 method = self.method_name(),
-                error = %error_message(cause),
                 "an attempt's savepoint could not be settled; not attempted again",
             );
         }
         match (ended, settled) {
             (Ended::Unwound(unwound), _) => std::panic::resume_unwind(unwound),
             (_, Err(cause)) => Err(ResilienceError::unsettled(cause)),
-            (Ended::Answer(attempted), Ok(())) => Ok(Some(attempted)),
-            (Ended::Again, Ok(())) => Ok(None),
+            (Ended::Answer(attempted), Ok(())) => Ok(Next::Answer(attempted)),
+            (Ended::Again(retry), Ok(())) => Ok(Next::Again(retry)),
         }
     }
+}
+
+/// What a run goes on with once its attempt's savepoint settled.
+enum Next<T> {
+    /// The attempt's answer, which the run answers.
+    Answer(T),
+    /// The retry decided as the attempt failed, certain now.
+    Again(Retry),
+}
+
+/// A retry decided after a failed attempt: how long the run waits before it,
+/// counted from that attempt's answer, and what the attempt failed on, which
+/// the retry's line says.
+pub(crate) struct Retry {
+    wait: Duration,
+    error: Cow<'static, str>,
 }
 
 /// How long an attempt sent now may run, and, under a unit's deadline, the
@@ -1076,7 +1140,7 @@ impl<I, B> Wait<'_, I, B> {
 /// bound, counted in the breaker once it answers and its token cancelled when
 /// it is given up. Each step writes its fields where they are.
 ///
-/// A `HOLDS` attempt leaves an answer judged a success unsettled in the
+/// A `HOLDS` attempt leaves an answer judged a success still to settle in the
 /// breaker, its `sent` for what holds the attempt to take: what the call
 /// answered may still undo it.
 pub(crate) struct Attempt<'p, const HOLDS: bool = false> {
@@ -1433,8 +1497,8 @@ where
                 let (ended, settled_as) = ready!(settling.poll(cx));
                 *this.settling = None;
                 break match run.terms.after_savepoint(ended, settled_as) {
-                    Ok(Some(attempted)) => settled(run.finish(attempted)),
-                    Ok(None) => unreachable!("a call sent once is not sent again"),
+                    Ok(Next::Answer(attempted)) => settled(run.finish(attempted)),
+                    Ok(Next::Again(_)) => unreachable!("a call sent once is not sent again"),
                     Err(unsettled) => Err(unsettled),
                 };
             }
@@ -1531,14 +1595,12 @@ where
             unreachable!("a run is polled after it answered");
         };
         let ran = loop {
-            // Before the backoff is waited: the next attempt is let through
-            // only once the last one's savepoint settled.
             if let Some(settling) = this.settling.as_mut() {
                 let (ended, settled_as) = ready!(settling.poll(cx));
                 *this.settling = None;
                 match run.terms.after_savepoint(ended, settled_as) {
-                    Ok(Some(attempted)) => break settled(run.finish(attempted)),
-                    Ok(None) => {}
+                    Ok(Next::Answer(attempted)) => break settled(run.finish(attempted)),
+                    Ok(Next::Again(retry)) => run.retrying(retry.wait, &retry.error),
                     Err(unsettled) => break Err(unsettled),
                 }
             }
@@ -1556,7 +1618,7 @@ where
                 cx
             ));
             let savepoint = this.attempt.take_savepoint();
-            let attempted = match ended {
+            let mut attempted = match ended {
                 Ok(attempted) => attempted,
                 Err(unwound) => match savepoint {
                     Some(savepoint) => {
@@ -1566,25 +1628,24 @@ where
                     None => std::panic::resume_unwind(unwound),
                 },
             };
-            let ended = match run.next_wait(&attempted) {
-                Some(wait) => {
-                    // Dropped before the backoff, so no wait holds the answer;
-                    // the backoff counts from here, the rollback inside it.
-                    drop(attempted);
-                    this.wait.set(Wait::BackingOff {
-                        backoff: tokio::time::sleep(wait),
-                    });
-                    Ended::Again
+            let retry = run.retry(&mut attempted);
+            if let Some(retry) = &retry {
+                // Armed as the retry is decided: the backoff counts from the
+                // attempt's answer, its rollback inside it.
+                this.wait.set(Wait::BackingOff {
+                    backoff: tokio::time::sleep(retry.wait),
+                });
+            }
+            match (savepoint, retry) {
+                (Some(savepoint), Some(retry)) => {
+                    *this.settling = Some(savepoint.settle(false, Ended::Again(retry)));
                 }
-                None => Ended::Answer(attempted),
-            };
-            match (savepoint, ended) {
-                (Some(savepoint), ended) => {
-                    let keep = matches!(ended, Ended::Answer(Ok((Ok(_), _))));
-                    *this.settling = Some(savepoint.settle(keep, ended));
+                (Some(savepoint), None) => {
+                    let keep = matches!(attempted, Ok((Ok(_), _)));
+                    *this.settling = Some(savepoint.settle(keep, Ended::Answer(attempted)));
                 }
-                (None, Ended::Answer(attempted)) => break settled(run.finish(attempted)),
-                (None, _) => {}
+                (None, Some(retry)) => run.retrying(retry.wait, &retry.error),
+                (None, None) => break settled(run.finish(attempted)),
             }
         };
         *this.run = None;
@@ -1677,13 +1738,14 @@ fn refused_by_the_rate(instance: &'static str, method: Option<&ResilientMethod>,
     );
 }
 
-/// An `Err` is the dependency failing, said as its chain; an `Ok` says nothing.
+/// An `Err` is the dependency failing, said as the policy tells an error
+/// ([`told`]); an `Ok` says nothing.
 fn judged<T, E: Error + 'static>(answer: &Result<T, E>) -> Verdict {
     match answer {
         Ok(_) => Verdict::Succeeded,
         Err(error) => Verdict::Failed {
             asked: None,
-            error: error_message(error).into(),
+            error: told(error).into(),
         },
     }
 }
@@ -1696,8 +1758,20 @@ fn judged_asking<T, E: Error + 'static>(answer: &Result<T, E>) -> Verdict {
             asked: nest_rs_core::__private::find_in_chain::<Problem>(error)
                 .and_then(Problem::retry_after)
                 .map(|seconds| Duration::from_secs(seconds.into())),
-            error: error_message(error).into(),
+            error: told(error).into(),
         },
+    }
+}
+
+/// What an attempt a run may send again failed on, and the wait its
+/// dependency asked before a retry: a failure or a timeout, never an answer
+/// judged a success, nor a refusal that sent nothing.
+fn failed<T>(attempted: &Attempted<T>) -> Option<(Option<Duration>, &str)> {
+    match attempted {
+        Ok((_, Verdict::Failed { asked, error })) => Some((*asked, error.as_ref())),
+        Err(Refusal::TimedOut(_)) => Some((None, TIMED_OUT)),
+        Ok((_, Verdict::Succeeded))
+        | Err(Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => None,
     }
 }
 
@@ -1715,7 +1789,7 @@ mod tests {
     use std::sync::atomic::AtomicU32;
 
     use nest_rs_config::{Config, ConfigService};
-    use nest_rs_core::{CarriesRemedy, instance};
+    use nest_rs_core::{CarriesRemedy, error_message, instance};
 
     use super::*;
 
@@ -3772,11 +3846,11 @@ mod tests {
     }
 
     /// An attempt holding its call counts a failure as its answer comes, and
-    /// leaves a success unsettled: a probe keeps its turn until what the
+    /// leaves a success still to settle: a probe keeps its turn until what the
     /// attempt left outstanding is dropped, the answer standing as judged, or
     /// is held past the run and settled there.
     #[tokio::test(start_paused = true)]
-    async fn an_attempt_holding_its_call_leaves_a_success_unsettled_and_counts_a_failure_at_once() {
+    async fn an_attempt_holding_its_call_leaves_a_success_to_settle_and_counts_a_failure_at_once() {
         let policy = Arc::new(probing_after_one_failure());
         let answering = |_| async { Ok::<_, Refused>("answered") };
 
@@ -3825,6 +3899,51 @@ mod tests {
             matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
             "settled once: a second verdict and the drop change nothing"
         );
+    }
+
+    /// What a run's answer holds past the run settles in a run's order, the
+    /// probe's turn before the slot of the bulkhead: the call waiting for that
+    /// slot, polled as soon as the freed slot wakes it, takes the turn the
+    /// probe already handed on.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_held_past_its_run_hands_its_probes_turn_on_before_its_slot() {
+        let policy = Arc::new(policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(10)),
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(1),
+            ..ResilienceConfig::default()
+        }));
+        let run = policy.begin(None).await.expect("the one slot");
+        let next = Arc::clone(&policy);
+        let waiting =
+            PollsOnWake::new(async move { next.run(|_| async { Ok::<_, Refused>("sent") }).await });
+        waiting.poll_now();
+        assert!(
+            waiting.answered().is_none(),
+            "it waits for the slot the run holds"
+        );
+        let (failed, _) = run
+            .attempt_once(|_| async { Err::<(), _>(Refused) }, judged)
+            .await;
+        assert!(matches!(failed, Ok((Err(Refused), Verdict::Failed { .. }))));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let (_, outstanding) = run
+            .attempt_once(|_| async { Ok::<_, Refused>(()) }, judged)
+            .await;
+        let held = run.hold(outstanding, Arc::clone(&policy));
+        assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
+
+        drop(held);
+        let answer = waiting.answered();
+        assert!(
+            matches!(answer, Some(Ok("sent"))),
+            "woken by the slot the answer freed, it met the breaker its probe had closed: \
+             {answer:?}"
+        );
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
     }
 
     /// What an attempt holding its call answers of its own is what any attempt

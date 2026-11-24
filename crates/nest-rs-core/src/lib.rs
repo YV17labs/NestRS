@@ -319,7 +319,9 @@ pub mod __private {
     pub use crate::problem::__private::{Withheld, retry_after_secs, withheld, withheld_over};
     pub use crate::process_start::ProcessStart;
     pub use crate::remedy::{RemedyProbe, RemedyProbeCarries, RemedyProbeFallback};
-    pub use crate::request_scope::__private::{RequestScopes, nested_continuation};
+    pub use crate::request_scope::__private::{
+        ExtendedContext, RequestScopes, nested_continuation,
+    };
     pub use crate::request_scope::AnswerContext;
     pub use crate::row_probe::{CrossesAWire, RowProbe, RowProbeFallback};
     pub use crate::site::{

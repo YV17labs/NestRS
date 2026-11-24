@@ -68,15 +68,26 @@ it, it refuses every request, unsent, with an error saying so.
 
 The policy covers the body too, read as it comes and never buffered. The
 response is reqwest's own; until its body ends it holds the run's slot of the
-bulkhead, the breaker's verdict and what is left of the attempt's timeout, which
-runs from the send.
+bulkhead, the breaker's verdict and what the head left of the attempt's timeout.
 
-- Read to its end, or dropped before it, the answer counts as its head did.
+That rest is a budget of waiting, shared by every read of the body. A read
+counts against it only while it waits for a part that has not come, until the
+transport signals one. The time you take between two reads counts for nothing,
+so a reader slower than the dependency is never cut.
+
+- Read to its end, the answer counts as its head did.
 - A read that fails counts as a failure in the breaker.
-- A read still waiting for the dependency when the timeout ends is given up
-  there. `bytes()`, `chunk()` and the others answer reqwest's error, whose chain
-  holds the `ResilienceError::TimedOut` a request given up before its head
-  carries.
+- A read still waiting once the budget is spent is given up there, and counts
+  as a timeout in the breaker. `bytes()`, `chunk()` and the others answer
+  reqwest's error, whose chain holds the `ResilienceError::TimedOut` a request
+  given up before its head carries.
+- Dropped before its end, the answer counts as its head did. One case differs:
+  a read you abandoned, in a `select!` or under a timeout of your own, that has
+  waited past the budget. The body is read once more as you drop it: a part
+  that came counts as the head did, a failure as a failure, and a part the
+  dependency still owes as a timeout.
+- A panic while the body is read counts as a failure in the breaker, then
+  unwinds on.
 
 ## Test it
 
@@ -88,10 +99,13 @@ what was sent again and what each attempt carried.
 
 ## Limits
 
-- A body longer than `TIMEOUT_MS` is cut at it. Build the client of a download
-  or an event stream without this middleware, or under a policy of its own.
-- A response you keep unread keeps its slot, and a probe's keeps the half-open
-  breaker's one turn: read it or drop it.
+- A body whose reads wait for the dependency longer than `TIMEOUT_MS` in all is
+  cut there, and the cut counts against the dependency. An event stream idles
+  between events, and a slow origin trickles a download: build such a client
+  without this middleware, or under a policy of its own.
+- The timeout bounds the dependency, never you. A response you keep unread, or
+  read slowly, keeps its slot for as long as you take, and a probe's keeps the
+  half-open breaker's one turn: read it or drop it.
 
 ## Going further
 

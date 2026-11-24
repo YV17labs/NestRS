@@ -7,7 +7,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use http::Extensions;
-use nest_rs_core::{Instance, Unnamed, error_message};
+use nest_rs_core::{Instance, Unnamed};
 use nest_rs_reqwest::__private::{Resent, Traced, retry_after};
 use reqwest::header::{DATE, HeaderName, HeaderValue, RETRY_AFTER};
 use reqwest::{Request, Response, ResponseBuilderExt, StatusCode};
@@ -16,6 +16,7 @@ use reqwest_middleware::{Error, Middleware, Next, Result};
 use crate::body::ResilienceBody;
 use crate::error::{Refusal, ResilienceError};
 use crate::policy::{Attempted, Held, Outstanding, ResiliencePolicy, Run, Verdict};
+use crate::told::told;
 
 /// The header a client sends to make a request it could not otherwise replay
 /// safe to send again (`draft-ietf-httpapi-idempotency-key-header`).
@@ -56,28 +57,43 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// buffered.** The response handed back is reqwest's own, with its URL, its
 /// status, its headers and its extensions, its body decoded as the client was
 /// built to; until that body ends it holds the run's slot of the bulkhead, the
-/// breaker's verdict on a head that was no failure, and what is left of the
-/// attempt's timeout, which runs from the send, the head and the body sharing
-/// it:
+/// breaker's verdict on a head that was no failure, and what the head left of
+/// the attempt's timeout, which runs from the send. That rest bounds how long
+/// the caller waits for the dependency, over every read of the body, never how
+/// long the caller takes: a read counts against it only while it waits for a
+/// part that has not come, until the transport signals one, and the time
+/// between two reads, or away from a read the caller abandoned, counts for
+/// nothing.
 ///
-/// - read to its end, or dropped before it — a caller reading a status alone
-///   — the answer counts as its head did, and the slot is freed there;
+/// - read to its end, the answer counts as its head did, and the slot is
+///   freed there;
 /// - a read that fails is a failure in the breaker, told as its chain, and
 ///   reaches the caller as reqwest's own error;
-/// - a read still waiting for the dependency when the timeout ends is given up
-///   there, a failure counted as a timeout: [`bytes`](Response::bytes),
+/// - a read still waiting once that rest is spent is given up there, a
+///   failure counted as a timeout: [`bytes`](Response::bytes),
 ///   [`chunk`](Response::chunk) and the others answer reqwest's error, whose
 ///   chain holds the `ResilienceError<Infallible>` a request given up before
 ///   its head answers, the [`TimedOut`](crate::ResilienceError::TimedOut) that
-///   tells the policy's cut from a transport's. A frame that came is handed on
-///   whenever it is read: a caller slower than the dependency is no failure of
-///   the dependency's.
+///   tells the policy's cut from a transport's. A part that came is handed on
+///   whenever it is read, so a caller slower than the dependency is never cut,
+///   and is charged only the round trip a transport's flow control makes the
+///   next part wait for;
+/// - dropped before its end — a caller reading a status alone — the answer
+///   counts as its head did, and the slot is freed there. One left with a read
+///   that has waited past that rest — a read the caller abandoned, or one an
+///   edge cut with its unit — is read once more as it is dropped: a part or
+///   the end that came since counts as the head did, a failure as itself, and
+///   a body still waiting as a timeout;
+/// - a panic while the body is read is a failure in the breaker, as a panic in
+///   the request's own send is, and unwinds on.
 ///
 /// So a response is read or dropped, never kept: one held unread holds its
-/// slot, and a probe's holds the half-open breaker's one turn. A body longer
-/// than the policy's timeout — a download, an event stream — is cut at it:
-/// such a client is built without this middleware, or under a policy of its
-/// own whose timeout is the transfer's.
+/// slot, and a probe's holds the half-open breaker's one turn, for as long as
+/// its caller takes. A body whose reads wait for the dependency longer than
+/// the policy's timeout in all — an event stream idling between events, a
+/// download an origin trickles — is cut there, and the cut counts against the
+/// dependency: such a client is built without this middleware, or under a
+/// policy of its own whose timeout is the transfer's.
 ///
 /// It is added before [`ReqwestMiddleware`](nest_rs_reqwest::ReqwestMiddleware),
 /// so each attempt is a client span of its own, numbered by its
@@ -204,15 +220,15 @@ struct TracedOutside;
 
 /// A transport failure and the statuses a retry may cure fail, each said as
 /// the lines telling the attempt say it — a transport failure as its chain,
-/// which `nest-rs-reqwest` says without the URL reqwest's sentence quotes; any
-/// other answer is the dependency's.
+/// the URL it was sent to cut to its origin; any other answer is the
+/// dependency's.
 fn judged(answer: &Result<Response>) -> Verdict {
     let response = match answer {
         Ok(response) => response,
         Err(error) => {
             return Verdict::Failed {
                 asked: None,
-                error: error_message(error).into(),
+                error: told(error).into(),
             };
         }
     };

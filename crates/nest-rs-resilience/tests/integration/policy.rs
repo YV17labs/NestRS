@@ -418,10 +418,10 @@ impl nest_rs_database::AtomicBlock for InSavepoint {
 }
 
 /// What a savepoint costs the attempt running in it, beside what its driver
-/// allocates to open and settle it: the port's install at each poll of the
-/// call, and one box holding the answer while the savepoint settles — the same
-/// for a call declared idempotent whether or not its policy has retries. A
-/// call sent once reads nothing of its unit and allocates nothing for it.
+/// allocates to open and settle it: the port's install, made as the savepoint
+/// is opened, and one box holding the answer while the savepoint settles — the
+/// same for a call declared idempotent whether or not its policy has retries.
+/// A call sent once reads nothing of its unit and allocates nothing for it.
 #[tokio::test]
 #[cfg_attr(
     not(target_os = "linux"),
@@ -443,9 +443,9 @@ async fn inside_a_transaction_an_idempotent_calls_attempt_allocates_its_savepoin
     let (_, installed) =
         crate::allocations(|| with_request_executor(unit(), std::future::ready(())));
 
-    // The double's savepoint and its settling, then the port's install at the
-    // call's one poll (the executor as the unit carries it, and the unit's
-    // context), then the box the answer waits in.
+    // The double's savepoint and its settling, then the port's install (the
+    // executor as the unit carries it, and the unit's context), then the box
+    // the answer waits in.
     const DRIVER: usize = 2;
     const INSTALL: usize = 2;
     const SETTLING: usize = 1;
@@ -484,6 +484,88 @@ async fn inside_a_transaction_an_idempotent_calls_attempt_allocates_its_savepoin
             installed + token + boxed + own,
             "inside a transaction, a call {shape} allocates its unit's install, {installed}, its \
              token, {token}, in a debug build its future's box, and {own} for its savepoint"
+        );
+    }
+}
+
+/// Waits `polls` times, allocating nothing, before it answers.
+struct Waits(usize);
+
+impl Future for Waits {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        match self.0.checked_sub(1) {
+            Some(left) => {
+                self.0 = left;
+                std::task::Poll::Pending
+            }
+            None => std::task::Poll::Ready(()),
+        }
+    }
+}
+
+/// What the future `make` builds answers, polled on this thread until it
+/// does, and how many allocations building and polling it made.
+fn allocations_until_answered<F: Future>(make: impl FnOnce() -> F) -> (F::Output, usize) {
+    crate::COUNTED.set(Some(0));
+    let mut fut = std::pin::pin!(make());
+    let cx = &mut std::task::Context::from_waker(std::task::Waker::noop());
+    let answer = loop {
+        if let std::task::Poll::Ready(answer) = fut.as_mut().poll(cx) {
+            break answer;
+        }
+    };
+    (answer, crate::COUNTED.replace(None).unwrap_or_default())
+}
+
+/// The savepoint is installed once per attempt, never per poll: a call that
+/// waits, polled again and again, allocates for its savepoint what one
+/// answering at its first poll does, over what the same call allocates sent
+/// once, which opens none.
+#[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
+)]
+async fn inside_a_transaction_an_attempt_polled_many_times_allocates_its_savepoints_install_once() {
+    use nest_rs_database::__private::with_request_executor;
+
+    let (_app, policy) = crate::policy(crate::quiet()).await;
+    let unit = || Arc::new(InTransaction) as Arc<dyn nest_rs_database::Executor>;
+
+    // As the test above counts them.
+    const DRIVER: usize = 2;
+    const INSTALL: usize = 2;
+    const SETTLING: usize = 1;
+    for polls in [1, 2, 9] {
+        let (once, without) = allocations_until_answered(|| {
+            with_request_executor(
+                unit(),
+                policy.run(move |_| async move {
+                    Waits(polls).await;
+                    Ok::<_, Silent>(7)
+                }),
+            )
+        });
+        let (again, within) = allocations_until_answered(|| {
+            with_request_executor(
+                unit(),
+                policy.run_idempotent(move |_| async move {
+                    Waits(polls).await;
+                    Ok::<_, Silent>(7)
+                }),
+            )
+        });
+        assert!(matches!((once, again), (Ok(7), Ok(7))));
+        assert_eq!(
+            within,
+            without + DRIVER + INSTALL + SETTLING,
+            "a call waiting {polls} time(s) allocates {without} sent once, and for its \
+             savepoint what a call answering at its first poll does"
         );
     }
 }

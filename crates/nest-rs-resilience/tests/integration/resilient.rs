@@ -3024,6 +3024,84 @@ mod told {
             "one failure, said the same in both"
         );
     }
+
+    /// An app's error handing reqwest's sentence on as its own: reqwest's
+    /// error is then no link of its chain, and no driver's `SafeLink` reads it.
+    #[derive(Debug, thiserror::Error)]
+    enum TrackError {
+        #[error(transparent)]
+        Http(#[from] reqwest::Error),
+    }
+
+    #[injectable]
+    struct HandingOnService {
+        #[inject]
+        courier: Arc<ResiliencePolicy<Courier>>,
+    }
+
+    impl HandingOnService {
+        /// A call to a port nothing listens on.
+        #[resilient(courier, idempotent)]
+        async fn track(&self) -> Result<String, ResilienceError<TrackError>> {
+            let url = format!("https://user:{SENT}@127.0.0.1:1/parcels/{SENT}?token={SENT}");
+            Ok(reqwest::get(url).await?.text().await?)
+        }
+    }
+
+    #[module(
+        imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+            retries: Some(1),
+            backoff_first: Duration::from_millis(1),
+            backoff_ceiling: Duration::from_millis(2),
+            breaker_window: Some(2),
+            breaker_failures: 2,
+            ..ResilienceConfig::default()
+        }))],
+        providers = [HandingOnService],
+    )]
+    struct HandingOnModule;
+
+    /// Whatever wrote the sentence, the retry's line and the breaker's opening
+    /// tell a URL by its origin alone: the dependency reached, never the path,
+    /// the query or the userinfo its request carried.
+    #[tokio::test]
+    async fn a_url_an_apps_error_hands_on_as_its_own_sentence_is_told_by_its_origin() {
+        let app = boot::<HandingOnModule>().await;
+        let tracking = app
+            .container()
+            .get::<HandingOnService>()
+            .expect("the module provides it");
+        let logs = LogCapture::install();
+
+        let answered = tracking.track().await;
+        let Err(ResilienceError::Failed(failed)) = &answered else {
+            panic!("both attempts are refused the connection: {answered:?}");
+        };
+        assert!(
+            nest_rs_core::error_message(failed).contains(SENT),
+            "the error's chain quotes its URL: {failed}"
+        );
+
+        let retried = logs.expect_one(
+            nest_rs_resilience::TARGET,
+            "attempt failed; retrying the call",
+        );
+        let opened = logs
+            .find(nest_rs_resilience::TARGET, "circuit breaker changed state")
+            .into_iter()
+            .find(|line| line.field("state").as_deref() == Some("open"))
+            .expect("the second failure opened the breaker");
+        for line in [&retried, &opened] {
+            let error = line.field("error").unwrap_or_default();
+            assert!(
+                error.starts_with("error sending request for url (https://127.0.0.1:1): "),
+                "reqwest's sentence, its URL cut to its origin, then its causes: {line:?}"
+            );
+            for quoted in [SENT, "/parcels", "token", "user"] {
+                assert!(!line.quotes(quoted), "`{quoted}` in {line:?}");
+            }
+        }
+    }
 }
 
 /// `#[tracing::instrument]` beside `#[resilient]`, in either order: written

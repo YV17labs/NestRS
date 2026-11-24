@@ -256,9 +256,9 @@ impl Drop for Pass<'_> {
 
 /// One admitted attempt whose call was sent, settled once with its outcome:
 /// what it failed on, said before the breaker is asked, or `None` for an
-/// answer. Dropped unsettled before its bound ends — its caller dropped the
-/// call — it counts for nothing, and a probe hands its turn to the next call.
-/// Dropped unsettled at or past the instant its bound ends at, it has timed
+/// answer. Dropped before it is settled and before its bound ends — its caller
+/// dropped the call — it counts for nothing, and a probe hands its turn to the
+/// next call. Dropped so at or past the instant its bound ends at, it has timed
 /// out, as its own timer due there would have said: an edge cutting its unit
 /// at that deadline may be polled first, tokio firing one instant's timers in
 /// batches that another worker runs between.
@@ -281,21 +281,22 @@ impl Sent<'_> {
     /// The attempt held past its run, with no borrow of the breaker, by what
     /// its call answered: a response whose body is still to read.
     #[cfg(feature = "reqwest")]
-    pub(crate) fn hold(mut self) -> Unsettled {
+    pub(crate) fn hold(mut self) -> HeldAttempt {
         self.until = None;
-        Unsettled {
+        HeldAttempt {
             probe: std::mem::take(&mut self.probe),
             epoch: self.epoch,
         }
     }
 }
 
-/// A [`Sent`] attempt held past its run, its outcome not settled yet: taken up
-/// again through [`Breaker::resume`], and settled then. Dropped, a probe would
-/// keep its turn for good, so what holds it resumes it at its own drop.
+/// A [`Sent`] attempt held past its run, with no borrow of the breaker, its
+/// outcome still to come: taken up again through [`Breaker::resume`], and
+/// settled then. Dropped, a probe would keep its turn for good, so what holds
+/// it resumes it at its own drop.
 #[cfg(feature = "reqwest")]
-#[must_use = "an attempt held unsettled is taken up again through `Breaker::resume`"]
-pub(crate) struct Unsettled {
+#[must_use = "a held attempt is settled through `Breaker::resume` alone"]
+pub(crate) struct HeldAttempt {
     probe: bool,
     epoch: u64,
 }
@@ -386,7 +387,7 @@ impl Breaker {
     /// in the epoch it was admitted in, so a manual switch since leaves it
     /// nothing to change. It ends when it is settled, at no instant of its own.
     #[cfg(feature = "reqwest")]
-    pub(crate) fn resume(&self, held: Unsettled) -> Sent<'_> {
+    pub(crate) fn resume(&self, held: HeldAttempt) -> Sent<'_> {
         Sent {
             breaker: self,
             probe: held.probe,
@@ -1335,12 +1336,12 @@ mod tests {
         assert_eq!(states(&lines), ["open", "half_open", "closed"]);
     }
 
-    /// An attempt sent under a bound ending at an instant and dropped
-    /// unsettled at or past it has timed out: a failure in the window, a
+    /// An attempt sent under a bound ending at an instant and dropped, never
+    /// settled, at or past it has timed out: a failure in the window, a
     /// failed probe opening the breaker again for its whole open time. One
     /// dropped before that instant counts for nothing, its probe handed on.
     #[tokio::test(start_paused = true)]
-    async fn an_attempt_dropped_unsettled_at_its_bounds_end_has_timed_out() {
+    async fn an_attempt_dropped_before_it_is_settled_has_timed_out_at_its_bounds_end() {
         let lines = nest_rs_testing::LogCapture::install();
         let breaker = probing(2);
         let until = || Some(Instant::now() + BOUND);
@@ -1531,12 +1532,12 @@ mod tests {
         );
     }
 
-    /// An attempt held unsettled past its run counts when it is taken up again
-    /// and settled, never before: a failure then opens the breaker, saying what
-    /// it failed on.
+    /// An attempt held past its run counts when it is taken up again and
+    /// settled, never before: a failure then opens the breaker, saying what it
+    /// failed on.
     #[cfg(feature = "reqwest")]
     #[tokio::test(start_paused = true)]
-    async fn an_attempt_held_unsettled_counts_once_it_is_taken_up_again_and_settled() {
+    async fn an_attempt_held_past_its_run_counts_once_it_is_taken_up_again_and_settled() {
         let lines = nest_rs_testing::LogCapture::install();
         let breaker = breaker(2, 2);
         let admitted = || breaker.admit(BOUND).expect("closed");
@@ -1563,12 +1564,12 @@ mod tests {
         assert_eq!(opened[0].field("error").as_deref(), Some(DOWN));
     }
 
-    /// A probe held unsettled keeps its turn until it is taken up again, then
-    /// hands it on exactly once: by its answer, closing the breaker or opening
-    /// it again, or dropped unsettled, to the next call.
+    /// A probe held past its run keeps its turn until it is taken up again,
+    /// then hands it on exactly once: by its answer, closing the breaker or
+    /// opening it again, or dropped with no answer, to the next call.
     #[cfg(feature = "reqwest")]
     #[tokio::test(start_paused = true)]
-    async fn a_probe_held_unsettled_keeps_its_turn_until_it_is_taken_up_again() {
+    async fn a_probe_held_past_its_run_keeps_its_turn_until_it_is_taken_up_again() {
         let lines = nest_rs_testing::LogCapture::install();
         let breaker = breaker(1, 1);
         attempt(&breaker, true);
@@ -1604,13 +1605,13 @@ mod tests {
         );
     }
 
-    /// A manual switch while an attempt is held unsettled leaves it nothing to
-    /// change once it is taken up again: a failure opens nothing after a manual
-    /// closing, and a probe's success closes nothing after a manual opening,
-    /// nor takes the turn of the probe after it.
+    /// A manual switch while an attempt is held past its run leaves it nothing
+    /// to change once it is taken up again: a failure opens nothing after a
+    /// manual closing, and a probe's success closes nothing after a manual
+    /// opening, nor takes the turn of the probe after it.
     #[cfg(feature = "reqwest")]
     #[tokio::test(start_paused = true)]
-    async fn an_attempt_held_unsettled_across_a_manual_switch_changes_nothing() {
+    async fn an_attempt_held_across_a_manual_switch_changes_nothing() {
         let breaker = breaker(1, 1);
         let held = breaker
             .admit(BOUND)

@@ -53,6 +53,7 @@ mod policy;
 mod rate;
 mod resilient;
 mod savepoint;
+mod told;
 
 pub use breaker::BreakerState;
 pub use config::ResilienceConfig;

@@ -13,31 +13,33 @@
 use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
-use nest_rs_database::__private::with_executor;
-use nest_rs_database::{AtomicBlock, AtomicError, Executor, current_executor};
+use nest_rs_database::__private::InstalledSavepoint;
+use nest_rs_database::AtomicError;
+
+use crate::policy::Retry;
 
 /// One attempt's savepoint, of the transaction the ambient executor holds.
-pub(crate) struct Savepoint {
-    block: Arc<dyn AtomicBlock>,
-}
+pub(crate) struct Savepoint(InstalledSavepoint);
 
 impl Savepoint {
     /// A savepoint of the ambient executor's transaction, read where the
     /// attempt is sent, or `None` where there is none to open. Nothing is sent
     /// to the database until the attempt's first statement.
     pub(crate) fn open() -> Option<Self> {
-        let block = current_executor()?.savepoint()?;
-        Some(Self { block })
+        InstalledSavepoint::open().map(Self)
     }
 
     /// `call` polled with the savepoint as the ambient executor, so what it
-    /// reads and writes through the data layer runs inside.
-    pub(crate) fn around<F: Future>(&self, call: F) -> impl Future<Output = F::Output> + use<F> {
-        let installed: Arc<dyn Executor> = self.block.clone();
-        with_executor(installed, call)
+    /// reads and writes through the data layer runs inside. Built at each poll
+    /// of the attempt, it derives nothing: the savepoint was installed once, as
+    /// it was opened.
+    pub(crate) fn around<'a, F: Future>(&'a self, call: Pin<&'a mut F>) -> Around<'a, F> {
+        Around {
+            savepoint: &self.0,
+            call,
+        }
     }
 
     /// The savepoint settling, released when `keep` and rolled back otherwise,
@@ -45,9 +47,25 @@ impl Savepoint {
     /// every handle it took on the savepoint.
     pub(crate) fn settle<T>(self, keep: bool, ended: Ended<T>) -> Box<Settling<T>> {
         Box::new(Settling {
-            settle: self.block.settle(keep),
+            settle: self.0.settle(keep),
             ended: Some(ended),
         })
+    }
+}
+
+/// What [`Savepoint::around`] answers: one poll of an attempt's call inside
+/// its savepoint.
+pub(crate) struct Around<'a, F> {
+    savepoint: &'a InstalledSavepoint,
+    call: Pin<&'a mut F>,
+}
+
+impl<F: Future> Future for Around<'_, F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        let this = &mut *self;
+        this.savepoint.enter(|| this.call.as_mut().poll(cx))
     }
 }
 
@@ -55,8 +73,9 @@ impl Savepoint {
 pub(crate) enum Ended<T> {
     /// What the run answers.
     Answer(T),
-    /// A failure the run goes on after: its call is sent again.
-    Again,
+    /// A failure the run goes on after: its call is sent again, as the retry
+    /// decided then says.
+    Again(Retry),
     /// A panic, which unwinds on once the savepoint is rolled back.
     Unwound(Box<dyn Any + Send>),
 }
@@ -84,12 +103,13 @@ impl<T> Settling<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use nest_rs_core::instance;
     use nest_rs_database::__private::with_request_executor;
+    use nest_rs_database::{AtomicBlock, Executor, current_executor};
 
     use super::*;
     use crate::resilient::resilient_method;
@@ -630,12 +650,15 @@ mod tests {
     }
 
     const UNSETTLED: &str = "an attempt's savepoint could not be settled; not attempted again";
+    const RETRYING: &str = "attempt failed; retrying the call";
 
     /// A savepoint the database could not settle ends the run whatever its
     /// attempt answered: an `Ok` whose writes are not kept is no answer, and a
-    /// failure whose writes may still stand is not sent again over them.
+    /// failure whose writes may still stand is not sent again over them. The
+    /// run's caller holds the cause, which the driver filed; the policy says
+    /// its own fact, once, and announces no retry it does not make.
     #[tokio::test(start_paused = true)]
-    async fn a_savepoint_that_cannot_be_settled_ends_the_run_there_and_is_told_with_its_chain() {
+    async fn a_savepoint_that_cannot_be_settled_ends_the_run_there_on_its_cause() {
         for (answers, attempted) in [(&[Ok(7)][..], Saw::Kept), (&[][..], Saw::RolledBack)] {
             let lines = nest_rs_testing::LogCapture::install();
             let policy = retrying(Some(2));
@@ -644,9 +667,15 @@ mod tests {
             let ran =
                 with_request_executor(unit, policy.run_idempotent(answering(&seen, answers))).await;
 
+            let unsettled = ran.expect_err("the run ends on its savepoint");
             assert!(
-                matches!(ran, Err(ResilienceError::Unsettled { .. })),
-                "{ran:?}"
+                matches!(unsettled, ResilienceError::Unsettled { .. }),
+                "{unsettled:?}"
+            );
+            assert_eq!(
+                nest_rs_core::error_message(&unsettled),
+                "an attempt's savepoint could not be settled: the atomic block could not be \
+                 settled: ROLLBACK TO refused"
             );
             assert_eq!(
                 seen.all(),
@@ -659,16 +688,48 @@ mod tests {
                 "not attempted again"
             );
             let line = lines.expect_one(crate::TARGET, UNSETTLED);
-            assert_eq!(line.level, "warn");
+            assert_eq!(line.level, "debug", "as every retry given up");
             assert_eq!(line.field("instance").as_deref(), Some("ledger"));
             assert_eq!(
-                line.field("error").as_deref(),
-                Some("the atomic block could not be settled: ROLLBACK TO refused")
+                line.field("error"),
+                None,
+                "the cause is the driver's to file"
             );
+            lines.expect_none(crate::TARGET, RETRYING);
         }
     }
 
-    /// The warn names the decorated method the run came from, and a panic
+    /// The retry's line says a retry that is certain: filed once the failed
+    /// attempt's savepoint was rolled back, never while that is awaited.
+    #[tokio::test(start_paused = true)]
+    async fn the_retrys_line_is_filed_once_its_attempts_savepoint_was_rolled_back() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let policy = retrying(Some(2));
+        let (unit, seen) = Unit::settling(settles);
+        let mut run = std::pin::pin!(with_request_executor(
+            unit,
+            policy.run_idempotent(answering(&seen, &[Err(Refused), Ok(7)])),
+        ));
+
+        let rolling_back = tokio::time::timeout(SETTLES_IN / 2, run.as_mut()).await;
+        assert!(rolling_back.is_err(), "the rollback is still awaited");
+        assert_eq!(
+            seen.all(),
+            [Saw::Opened, Saw::Called { inside: true }, Saw::Spent]
+        );
+        lines.expect_none(crate::TARGET, RETRYING);
+
+        let ran = run.await;
+        assert!(matches!(ran, Ok(7)), "{ran:?}");
+        let line = lines.expect_one(crate::TARGET, RETRYING);
+        assert_eq!(line.field("attempt").as_deref(), Some("1"));
+        assert_eq!(
+            line.field("error").as_deref(),
+            Some("the ledger refused the entry")
+        );
+    }
+
+    /// The line names the decorated method the run came from, and a panic
     /// still unwinds on over a savepoint left unsettled.
     #[tokio::test(start_paused = true)]
     async fn an_unsettled_savepoint_names_its_method_and_never_holds_a_panic_back() {

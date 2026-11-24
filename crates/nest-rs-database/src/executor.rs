@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
 use futures_util::future::BoxFuture;
+use nest_rs_core::__private::ExtendedContext;
 use nest_rs_core::{AmbientValue, Continuation};
 
 use crate::atomic::AtomicBlock;
@@ -209,6 +210,9 @@ struct AmbientExecutor {
 /// The executor itself, or the pool a continuation opens on its first touch.
 enum Handle {
     Installed(Arc<dyn Executor>),
+    /// The savepoint an [`InstalledSavepoint`] opened, kept as the block it
+    /// settles.
+    Block(Arc<dyn AtomicBlock>),
     /// A continuation of a bound unit: a [`Pool`](crate::TransactionPolicy::Pool)
     /// unit of the same binding, opened when something reads it, so carrying
     /// one costs nothing until it is used.
@@ -219,6 +223,7 @@ impl AmbientExecutor {
     fn executor(&self) -> Option<Arc<dyn Executor>> {
         match &self.executor {
             Handle::Installed(executor) => Some(Arc::clone(executor)),
+            Handle::Block(block) => Some(Arc::clone(block) as Arc<dyn Executor>),
             Handle::Pool(pool) => pool
                 .get_or_init(|| {
                     let bound = self.bound.as_ref()?;
@@ -262,6 +267,7 @@ impl AmbientValue for AmbientExecutor {
         Some(Arc::new(Self {
             executor: match &self.executor {
                 Handle::Installed(executor) => Handle::Installed(Arc::clone(executor)),
+                Handle::Block(block) => Handle::Block(Arc::clone(block)),
                 // Its pool opens under the scope it now runs under.
                 Handle::Pool(_) => Handle::Pool(OnceLock::new()),
             },
@@ -321,6 +327,56 @@ pub fn with_executor<F: Future>(
         },
         fut,
     )
+}
+
+/// A savepoint of the transaction the ambient executor holds, installed as the
+/// ambient executor of what its holder polls under it: what [`with_executor`]
+/// derives around a future, derived once, where the savepoint is opened, and
+/// entered around each poll — for a caller polling in place a future it cannot
+/// move under an install.
+pub struct InstalledSavepoint(ExtendedContext);
+
+impl InstalledSavepoint {
+    /// A savepoint of the ambient executor's transaction
+    /// ([`Executor::savepoint`]), under the scope and the binding installed
+    /// here, or `None` where it holds none. Nothing is sent to the database
+    /// until a statement runs under it.
+    pub fn open() -> Option<Self> {
+        let running = nest_rs_core::ambient::<AmbientExecutor>()?;
+        let block = running.executor()?.savepoint()?;
+        Some(Self(ExtendedContext::with(Arc::new(AmbientExecutor {
+            executor: Handle::Block(block),
+            scope: running.scope,
+            bound: running.bound.clone(),
+        }))))
+    }
+
+    /// Run `poll` with the savepoint as the ambient executor: synchronous, for
+    /// one poll of what runs inside it.
+    pub fn enter<R>(&self, poll: impl FnOnce() -> R) -> R {
+        self.0.enter(poll)
+    }
+
+    /// The savepoint settling, as [`AtomicBlock::settle`] says. What ran under
+    /// it is gone by then: the context goes first, so a handle on the block
+    /// still held past here is one that escaped.
+    pub fn settle(
+        self,
+        keep: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), crate::AtomicError>> + Send>> {
+        let block =
+            self.0
+                .get::<AmbientExecutor>()
+                .and_then(|installed| match &installed.executor {
+                    Handle::Block(block) => Some(Arc::clone(block)),
+                    Handle::Installed(_) | Handle::Pool(_) => None,
+                });
+        drop(self);
+        let Some(block) = block else {
+            unreachable!("an installed savepoint's context carries the block it was opened with");
+        };
+        block.settle(keep)
+    }
 }
 
 /// Install `executor` and tag the scope as a request — the path on which a
@@ -426,6 +482,75 @@ mod tests {
     fn a_driver_that_overrides_neither_offers_no_block_and_no_savepoint() {
         assert!(StubExecutor.atomic().is_none());
         assert!(StubExecutor.savepoint().is_none());
+    }
+
+    /// A unit holding a transaction: its savepoint says how it was settled,
+    /// and how many handles were on it then.
+    struct InTransaction(Arc<std::sync::Mutex<Vec<(bool, usize)>>>);
+
+    impl Executor for InTransaction {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
+            Some(Arc::new(InSavepoint(Arc::clone(&self.0))))
+        }
+    }
+
+    struct InSavepoint(Arc<std::sync::Mutex<Vec<(bool, usize)>>>);
+
+    impl Executor for InSavepoint {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    impl AtomicBlock for InSavepoint {
+        fn settle(
+            self: Arc<Self>,
+            ok: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::AtomicError>> + Send>> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((ok, Arc::strong_count(&self)));
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    #[tokio::test]
+    async fn an_installed_savepoint_is_entered_under_its_units_scope_and_settles_with_no_handle_left()
+     {
+        let settled = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let unit: Arc<dyn Executor> = Arc::new(InTransaction(Arc::clone(&settled)));
+
+        assert!(InstalledSavepoint::open().is_none(), "outside every unit");
+        let on_pool = with_job_executor(stub(), async { InstalledSavepoint::open().is_none() });
+        assert!(on_pool.await, "a handle holding no transaction");
+
+        let savepoint = with_job_executor(unit, async { InstalledSavepoint::open() })
+            .await
+            .expect("the unit holds a transaction");
+        assert!(
+            current_executor().is_none(),
+            "nothing is installed between two polls"
+        );
+        for _poll in 0..2 {
+            savepoint.enter(|| {
+                assert!(current_executor().is_some_and(|e| e.as_any().is::<InSavepoint>()));
+                assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
+            });
+        }
+
+        assert!(savepoint.settle(true).await.is_ok());
+        assert_eq!(
+            *settled
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            [(true, 1)],
+            "the context holding the block is gone before it settles"
+        );
     }
 
     #[tokio::test]

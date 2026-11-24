@@ -1,6 +1,6 @@
-//! A key `#[resilient]` does not take, one written twice, one written before
-//! the field, a field written as an expression, `idempotent` given a value and
-//! a pin given none: each refused at what was written, in the grammar's words.
+//! A key `#[resilient]` does not take, one written twice or before the field, a
+//! field written as an expression, `idempotent` given a value, a pin given none:
+//! each refused where it is written, and the keys around a refused one read.
 
 use std::sync::Arc;
 
@@ -54,6 +54,16 @@ impl ShipmentsService {
 
     #[resilient(carrier, timeout)]
     async fn bare(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
+    async fn several(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, retries = 3, retry = 3)]
+    async fn once(&self) -> Answer {
         Err(CarrierDown)
     }
 }

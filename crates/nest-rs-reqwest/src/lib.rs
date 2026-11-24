@@ -10,8 +10,11 @@
 //!
 //! In a program linking this crate, [`nest_rs_core::error_message`] says a
 //! reqwest error — and reqwest-middleware's, under `middleware` — without the
-//! URL its own sentence quotes, wherever a chain holds one: a log line names
-//! what failed and why, never the path and the query a request carried.
+//! URL its own sentence quotes, where that error is a link of the chain: a log
+//! line names what failed and why, never the path and the query a request
+//! carried. An error handing reqwest's sentence on as its own
+//! (`#[error(transparent)]`) hides it from the chain, and is built from
+//! `reqwest::Error::without_url`.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

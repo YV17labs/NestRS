@@ -11,14 +11,18 @@ mod resilient;
 /// `#[resilient(field)]` sends the call once, `#[resilient(field, idempotent)]`
 /// again after a failure or a timeout.
 ///
-/// The field is the method's own `#[inject]` of an `Arc<ResiliencePolicy<I>>`,
-/// so the boot refuses an app whose modules do not import the policy's
-/// `ResilienceModule<I>`. The method answers `Result<T, ResilienceError<E>>` —
-/// read by its type, so an alias reads as the literal does — and its body is
-/// written as if it answered `Result<T, E>`: `?`, `Ok(..)`, `Err(e)` and an
-/// early `return` answer one attempt, each answer coerced as the undecorated
-/// method's would be — a `&String` into the `&str` it returns, a box into its
-/// `Box<dyn …>` — and each `?` converting its error into `E`.
+/// The field holds an `Arc<ResiliencePolicy<I>>`, which a provider takes
+/// under `#[inject]`, so the boot refuses an app whose modules do not import
+/// the policy's `ResilienceModule<I>`. The method answers
+/// `Result<T, ResilienceError<E>>` — read by its type, so an alias reads as the
+/// literal does — and its body is written as if it answered `Result<T, E>`:
+/// `?`, `Ok(..)`, `Err(e)` and an early `return` answer one attempt, each
+/// answer coerced as the undecorated method's would be — a `&String` into the
+/// `&str` it returns, a box into its `Box<dyn …>` — and each `?` converting its
+/// error into `E`. That `E` is a `std::error::Error`, run once or again: its
+/// chain is the `error` of the `warn` the breaker files when that failure opens
+/// it and of the line each retry files, and a retry reads it for the
+/// `Retry-After` of a `Problem` it carries.
 ///
 /// - `idempotent` — the call is sent again after a failure or a timeout, up to
 ///   its retries. Only the developer declares it: sending again a call that is
@@ -29,8 +33,7 @@ mod resilient;
 ///   help shows the clone. Every attempt borrows the arguments across its
 ///   waits, so the method's future is `Send` only where each argument taken by
 ///   value is `Sync`; run once, the method moves them, and its future is `Send`
-///   as the undecorated method's is. Its error is a `std::error::Error`, whose
-///   chain a retry reads for a `Retry-After`.
+///   as the undecorated method's is.
 /// - `timeout = "2s"` — how long each attempt of this method waits, in place
 ///   of the policy's, from `"1ms"` to `"10m"`. The unit's deadline still ends
 ///   every attempt.
@@ -42,6 +45,20 @@ mod resilient;
 /// rate limit's — so a method pins none: a key naming one, before the field
 /// or after it, is refused with the variable and the `ResilienceConfig` field
 /// that set it.
+///
+/// Inside a unit of work holding a transaction, each attempt of an
+/// `idempotent` method runs in a savepoint of that transaction, whatever its
+/// retries, none included: what the body writes through the data layer is kept
+/// only when the method answers that attempt's `Ok`, and rolled back
+/// otherwise, so a failed attempt leaves no write for the next to repeat, nor
+/// beside the error the method answers. Once an attempt sent a statement,
+/// another statement of that unit, issued beside the method, waits until the
+/// savepoint settles; the method's future dropped mid-attempt leaves its unit
+/// unable to commit, as an atomic block dropped does; and a savepoint the
+/// database cannot settle ends the method on `ResilienceError::Unsettled`,
+/// attempted no further. A method run once opens none, nor does an
+/// `idempotent` one outside a transaction — no unit of work, or one on the
+/// pool: an `Err` there leaves what the body wrote, as it does with no policy.
 ///
 /// Everything else on the method stays as written: its visibility, generics,
 /// lifetimes, docs, `#[cfg]`s and other attributes, and its body's tokens and
@@ -75,8 +92,9 @@ mod resilient;
 /// decorator reads the body as tracing-attributes 0.1 wraps it, and refuses one
 /// wrapped otherwise saying to write `#[resilient]` above.
 ///
-/// A run of a decorated method names it: the `debug` lines a retry, a full
-/// bulkhead or a reached rate limit files carry its `host` and `method`.
+/// A run of a decorated method names it: the `debug` lines a retry made or
+/// given up, a savepoint left unsettled, a full bulkhead or a reached rate
+/// limit files carry its `host` and `method`.
 #[proc_macro_attribute]
 pub fn resilient(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(resilient::resilient(args.into(), item.into())).into()

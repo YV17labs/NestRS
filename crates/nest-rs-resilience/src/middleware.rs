@@ -84,9 +84,10 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// - dropped before its end — a caller reading a status alone — the answer
 ///   counts as its head did, and the slot is freed there. One left with a read
 ///   that has waited past that rest — a read the caller abandoned, or one an
-///   edge cut with its unit — is read once more as it is dropped: a part or
-///   the end that came since counts as the head did, a failure as itself, and
-///   a body still waiting as a timeout;
+///   edge cut with its unit — or with a read still waiting as the timeout of
+///   another policy, the one its reader runs under, drops it, is read once
+///   more as it is dropped: a part or the end that came since counts as the
+///   head did, a failure as itself, and a body still waiting as a timeout;
 /// - a panic while the body is read is a failure in the breaker, as a panic in
 ///   the request's own send is, and unwinds on.
 ///
@@ -509,5 +510,85 @@ mod tests {
             "the slot is the run's, kept through its retries and their waits"
         );
         sending.abort();
+    }
+
+    /// A dependency that never sends what is waited for: with `head`, its
+    /// answer's head comes at once, `200` over a body no part of which
+    /// follows, and without it nothing comes. A middleware after the policy's.
+    struct Stalling {
+        head: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl Middleware for Stalling {
+        async fn handle(
+            &self,
+            _req: Request,
+            _extensions: &mut Extensions,
+            _next: Next<'_>,
+        ) -> Result<Response> {
+            if !self.head {
+                return std::future::pending().await;
+            }
+            let unread = reqwest::Body::wrap(Unread(Arc::default()));
+            Ok(http::Response::builder()
+                .body(unread)
+                .expect("an answer")
+                .into())
+        }
+    }
+
+    /// A request sent from a call under another policy's shorter timeout is
+    /// cut there, before its own bound: it has timed out in the breaker of the
+    /// policy on its client, while its head is waited for and while a read of
+    /// its body is, so a dependency that stalls opens the breaker naming it
+    /// however short the timeout its caller runs under.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_the_timeout_of_a_policy_around_its_caller_drops_has_timed_out() {
+        let short = Duration::from_secs(2);
+        let around = ResiliencePolicy::<Unnamed>::new(&crate::ResilienceConfig {
+            timeout: short,
+            retries: None,
+            breaker_window: None,
+            ..crate::ResilienceConfig::default()
+        })
+        .expect("a valid policy");
+        assert!(short < crate::ResilienceConfig::default().timeout);
+
+        for head in [false, true] {
+            let config = crate::ResilienceConfig {
+                retries: None,
+                breaker_window: Some(1),
+                breaker_failures: 1,
+                concurrency: Some(1),
+                ..crate::ResilienceConfig::default()
+            };
+            let policy =
+                Arc::new(ResiliencePolicy::<Unnamed>::new(&config).expect("a valid policy"));
+            let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+                .with(ResilienceMiddleware::new(Arc::clone(&policy)))
+                .with(Stalling { head })
+                .build();
+
+            let cut = around
+                .run(|_| async {
+                    let answered = client.get("https://upstream.example/").send().await?;
+                    Ok::<_, Error>(answered.bytes().await?)
+                })
+                .await;
+            assert!(
+                matches!(cut, Err(ResilienceError::TimedOut { timeout, .. }) if timeout == short),
+                "head: {head}: {cut:?}"
+            );
+            assert!(
+                matches!(
+                    policy.breaker_state(),
+                    Some(crate::BreakerState::Open { .. })
+                ),
+                "head: {head}: {:?}",
+                policy.breaker_state()
+            );
+            assert_eq!(policy.concurrency_running(), Some(0), "head: {head}");
+        }
     }
 }

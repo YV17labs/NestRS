@@ -3,9 +3,12 @@
 //! `503` with the wait it knows — and [`BreakerError`], what a manual switch
 //! of its breaker answers when it changes nothing.
 
+use std::convert::Infallible;
+use std::error::Error;
 use std::time::Duration;
 
-use nest_rs_core::{Problem, ToProblem, code};
+use nest_rs_core::__private::link_as;
+use nest_rs_core::{Problem, SafeLink, ToProblem, code};
 use nest_rs_database::AtomicError;
 
 use crate::config::{LONGEST_OPEN, ResilienceConfig};
@@ -143,6 +146,29 @@ impl<E> ResilienceError<E> {
     pub(crate) const fn unsettled(cause: AtomicError) -> Self {
         Self::Unsettled { __cause: cause }
     }
+}
+
+nest_rs_core::inventory::submit! { SafeLink::new(say) }
+
+/// A refusal no call's error type carries — the `ResilienceError<Infallible>`
+/// the middleware answers, and ends a read of the body it covers with, inside
+/// reqwest's own error — said as `error_message` says any refusal: its
+/// sentence and the problem it answers, constants both. A sayer reading a
+/// chain says a cause of another crate's only where that crate claims it:
+/// unclaimed, a body the policy gave up reads as one that did not decode.
+///
+/// An unsettled savepoint is not claimed: its chain is the database's to say.
+fn say(link: &(dyn Error + 'static)) -> Option<String> {
+    let refused = link_as::<ResilienceError<Infallible>>(link)?;
+    let problem = match refused {
+        ResilienceError::TimedOut { __problem, .. }
+        | ResilienceError::Open { __problem, .. }
+        | ResilienceError::Full { __problem }
+        | ResilienceError::Limited { __problem, .. } => __problem,
+        ResilienceError::Failed(never) => match *never {},
+        ResilienceError::Unsettled { .. } => return None,
+    };
+    Some(format!("{refused}: {problem}"))
 }
 
 /// Why [`ResiliencePolicy::open_breaker`](crate::ResiliencePolicy::open_breaker)
@@ -361,6 +387,63 @@ mod tests {
             "an attempt's savepoint could not be settled: a statement failed inside the atomic \
              block; nothing it wrote stands"
         );
+    }
+
+    /// A sayer reading the chain beneath an error of its own asks for a link
+    /// another crate claims: the refusal no call's error type carries says
+    /// what `error_message` says of any refusal, alone or behind a pointer.
+    #[test]
+    fn a_refusal_carrying_no_calls_error_is_claimed_and_said_with_its_problem() {
+        use nest_rs_core::__private::claimed_link;
+
+        let refusals = [
+            (
+                Refusal::TimedOut(Duration::from_secs(5)),
+                "the call did not answer within its timeout: 503 UNAVAILABLE",
+            ),
+            (
+                Refusal::Open(Duration::from_secs(30)),
+                "the circuit breaker is open: 503 UNAVAILABLE",
+            ),
+            (
+                Refusal::Full,
+                "the bulkhead has no free slot: 503 UNAVAILABLE",
+            ),
+            (
+                Refusal::Limited(Duration::from_secs(12)),
+                "the rate limit is reached: 503 UNAVAILABLE",
+            ),
+        ];
+        for (refusal, said) in refusals {
+            let bare: ResilienceError<Infallible> = refusal.into();
+            assert_eq!(claimed_link(&bare).as_deref(), Some(said));
+            assert_eq!(error_message(&bare), said);
+            let carried: ResilienceError<Upstream> = refusal.into();
+            assert_eq!(
+                error_message(&carried),
+                said,
+                "as a call's own refusal is said"
+            );
+            assert_eq!(
+                claimed_link(&std::sync::Arc::new(bare)).as_deref(),
+                Some(said)
+            );
+        }
+    }
+
+    /// A run's own error is no link the crate claims — its chain is the
+    /// call's, and an unsettled savepoint's the database's — so each is said
+    /// link by link, by whoever claims one.
+    #[test]
+    fn a_calls_own_failure_and_an_unsettled_savepoint_are_claimed_by_no_one() {
+        use nest_rs_core::__private::claimed_link;
+
+        assert_eq!(claimed_link(&ResilienceError::Failed(Upstream)), None);
+        let refused: ResilienceError<Upstream> = Refusal::Full.into();
+        assert_eq!(claimed_link(&refused), None);
+        let unsettled: ResilienceError<Infallible> =
+            ResilienceError::unsettled(AtomicError::Poisoned { retryable: false });
+        assert_eq!(claimed_link(&unsettled), None);
     }
 
     /// The call's error is read as itself before its chain: a domain error's

@@ -10,14 +10,17 @@
 //!
 //! In a program linking this crate, [`nest_rs_core::error_message`] says a
 //! reqwest error — and reqwest-middleware's, under `middleware` — where that
-//! error is a link of the chain, by what this crate reads of it: its kind, a
-//! status by its class and its code, a decode failure without its value, an
-//! I/O error by its OS's sentence or its kind, and a timeout, a failed lookup,
-//! a closed connection or a refused certificate by a constant sentence. A log
-//! line names what failed and why, never the URL a request carried, the reason
-//! phrase a peer wrote on its status line, a value its answer held or the
-//! names in its certificate; a cause this crate cannot read — hyper's, a
-//! redirect policy's, a serializer's — is not said. An error handing reqwest's
+//! error is a link of the chain, bare, behind an `Arc` or a `Box`, or inside
+//! the I/O error a reader over a body's stream makes of it, by what this crate
+//! reads of it: its kind, a status by its class and its code, a decode failure
+//! without its value, an I/O error by its OS's sentence or its kind, and a
+//! timeout, a failed lookup, a closed connection or a refused certificate by a
+//! constant sentence. A log line names what failed and why, never the URL a
+//! request carried, the reason phrase a peer wrote on its status line, a value
+//! its answer held or the names in its certificate; a cause this crate cannot
+//! read — hyper's, a redirect policy's, a serializer's — is not said, but one
+//! another crate's `SafeLink` claims, which that crate says: a body a
+//! resilience policy gave up says its timeout. An error handing reqwest's
 //! sentence on as its own (`#[error(transparent)]`) hides it from the chain
 //! and is said as reqwest writes it: built from `reqwest::Error::without_url`
 //! it holds no URL, and still a status's reason phrase and its causes' own

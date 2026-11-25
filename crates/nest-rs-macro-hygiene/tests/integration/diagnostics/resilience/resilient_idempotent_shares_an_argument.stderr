@@ -36,6 +36,7 @@ note: required by a bound in `sent`
    |
 43 | fn sent<F: Future + Send>(_: F) {}
    |                     ^^^^ required by this bound in `sent`
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
 help: consider removing this method call, as the receiver has type `&Parcels` and `&Parcels: Sync` trivially holds
    |
 49 -         sent(parcels.track(Cell::new(1)));

@@ -1524,19 +1524,29 @@ fn answer(method: &ImplItemFn) -> (TokenStream, Span) {
 /// own block, where an item it declares — a `use … as Error`, a `type` of the
 /// answer's name — is in scope of every statement, the expansion's included.
 ///
+/// The expansion's block is of this crate's edition, 2024, whatever the
+/// method's: what the body's tail expression leaves drops there ahead of the
+/// expansion's own locals, and after the body's or ahead of them as the
+/// edition its braces were written in says.
+///
 /// A body `#[tracing::instrument]` wrapped answers the attempt's type inside
 /// the future it built too, and where each attempt `borrows` the arguments,
-/// that future borrows them as the body it holds would. `bound`, the `let`
-/// naming the attempt's token where the closure's parameter cannot, leads the
-/// expansion's block.
+/// that future borrows them as the body it holds would. `captured`, the
+/// statement fixing the order an attempt owning the arguments drops them in,
+/// leads the expansion's block — left out under an instrument, whose own future
+/// takes them from the attempt's in the order tracing's does with no policy —
+/// then `bound`, the `let` naming the attempt's token where the closure's
+/// parameter cannot.
 fn body(
     method: &mut ImplItemFn,
     answer: &TokenStream,
     at: Span,
     borrows: bool,
+    captured: Option<Stmt>,
     bound: Option<Stmt>,
 ) -> syn::Block {
     let mut stmts = std::mem::take(&mut method.block.stmts);
+    let mut wrapped = false;
     // `expansion` refused a shape this stops at, and `kept` gave it no body to type.
     instrumented(&mut stmts, &mut |part| match part {
         Part::Answer(ty) => {
@@ -1544,12 +1554,18 @@ fn body(
                 <#answer as ::nest_rs_resilience::__private::ResilientAnswer>::Attempt
             });
         }
-        Part::Future(future) if borrows => future.capture = None,
-        Part::Future(_) | Part::Written(_) => {}
+        Part::Future(future) => {
+            wrapped = true;
+            if borrows {
+                future.capture = None;
+            }
+        }
+        Part::Written(_) => {}
     })
     .unwrap_or_default();
-    let brace_token = method.block.brace_token;
-    let mut around: Vec<Stmt> = bound.into_iter().collect();
+    let written = method.block.brace_token;
+    let mut around: Vec<Stmt> = captured.filter(|_| !wrapped).into_iter().collect();
+    around.extend(bound);
     around.push(Stmt::Expr(
         Expr::Verbatim(quote_spanned! {at=>
             if false {
@@ -1558,27 +1574,165 @@ fn body(
         }),
         None,
     ));
-    around.push(as_written(brace_token, stmts));
+    around.push(as_written(written, stmts));
     syn::Block {
-        brace_token,
+        brace_token: syn::token::Brace(Span::mixed_site().located_at(written.span.join())),
         stmts: around,
     }
 }
 
 /// `stmts`, a method's body, as the last expression of a block the expansion
-/// writes its own statements ahead of: in braces at those the body was written
-/// in, and the expansion's own, as tracing's are around a body it wraps —
-/// rustc reports braces a developer wrote around one expression as unneeded.
+/// writes its own statements ahead of: in the braces it was `written` in,
+/// whose span carries the edition its tail expression's temporaries drop by,
+/// inside parentheses of the expansion's own — rustc reports braces a
+/// developer wrote around one expression as unneeded where they end a block,
+/// and neither them nor the parentheses where a macro wrote those.
 fn as_written(written: syn::token::Brace, stmts: Vec<Stmt>) -> Stmt {
-    let brace_token = syn::token::Brace(Span::mixed_site().located_at(written.span.join()));
+    let block = Expr::Block(syn::ExprBlock {
+        attrs: Vec::new(),
+        label: None,
+        block: syn::Block {
+            brace_token: written,
+            stmts,
+        },
+    });
     Stmt::Expr(
-        Expr::Block(syn::ExprBlock {
+        Expr::Paren(syn::ExprParen {
             attrs: Vec::new(),
-            label: None,
-            block: syn::Block { brace_token, stmts },
+            paren_token: syn::token::Paren(Span::mixed_site()),
+            expr: Box::new(block),
         }),
         None,
     )
+}
+
+/// The statement an attempt owning the arguments opens on: each argument its
+/// body names, by reference, last declared first, a pattern's names last bound
+/// first. A closure and the future it answers drop what they captured in the
+/// order their tokens first name it, where an `async fn` drops its parameters
+/// last declared first: read here first, the arguments drop as the undecorated
+/// method's do, whether the attempt answered, panicked, was dropped or was
+/// never sent.
+///
+/// It reads no argument the body does not, which rustc then still reports
+/// unused; none of a reference's type or bound by reference, which drops
+/// nothing; and none named with a leading `_`, a read clippy reports of a
+/// binding so named wherever it is: one the body names is captured where the
+/// body first does, after those read here. It is written where the body names
+/// two arguments or more, one having no order.
+fn captured(method: &ImplItemFn) -> Option<Stmt> {
+    let written: TokenStream = method
+        .block
+        .stmts
+        .iter()
+        .map(ToTokens::to_token_stream)
+        .collect();
+    let own = Span::mixed_site();
+    let (mut read, mut captured_later) = (Vec::new(), false);
+    for typed in typed_inputs(method) {
+        if is_reference(&typed.ty) {
+            continue;
+        }
+        let cfgs = cfg_attrs(&typed.attrs);
+        let mut bound = Bound::default();
+        bound.read(&typed.pat);
+        for binding in bound.names {
+            let name = binding.ident.unraw().to_string();
+            if binding.by_ref.is_some() || !names(written.clone(), &name) {
+                continue;
+            }
+            if name.starts_with('_') {
+                captured_later = true;
+                continue;
+            }
+            let argument = &binding.ident;
+            read.push(quote_spanned!(own=> #(#cfgs)* &#argument));
+        }
+    }
+    let ordered = read.len() > 1 || (captured_later && !read.is_empty());
+    let read = read.iter().rev();
+    ordered.then(|| syn::parse_quote_spanned!(own=> let _ = (#(#read,)*);))
+}
+
+/// Whether `ty` is a reference, read through parentheses and an invisible
+/// group, by spelling: an alias of one is read as owning.
+fn is_reference(ty: &Type) -> bool {
+    match ty {
+        Type::Reference(_) => true,
+        Type::Paren(paren) => is_reference(&paren.elem),
+        Type::Group(group) => is_reference(&group.elem),
+        _ => false,
+    }
+}
+
+/// Whether `tokens`, a body, name `name`: as a word of their own at any depth,
+/// a macro's arguments included, or as an argument a string literal's format
+/// captures. A word after a `.`, a `::` or a `'` is a member, a path's segment
+/// or a lifetime, never an argument. Read by tokens, so any other word of that
+/// spelling — a local shadowing the argument, a field a struct literal sets —
+/// reads as the argument.
+fn names(tokens: TokenStream, name: &str) -> bool {
+    let mut before = [None, None];
+    for tree in tokens {
+        let punct = match &tree {
+            TokenTree::Punct(punct) => Some(punct.as_char()),
+            _ => None,
+        };
+        let named = match tree {
+            TokenTree::Ident(word) => {
+                let another = match before {
+                    [_, Some('\'')] | [Some(':'), Some(':')] => true,
+                    [earlier, Some('.')] => earlier != Some('.'),
+                    _ => false,
+                };
+                !another && word.unraw() == name
+            }
+            TokenTree::Group(group) => names(group.stream(), name),
+            TokenTree::Literal(literal) => formats(&literal.to_string(), name),
+            TokenTree::Punct(_) => false,
+        };
+        if named {
+            return true;
+        }
+        before = [before[1], punct];
+    }
+    false
+}
+
+/// Whether `literal`, a token as written, is a string whose format captures
+/// `name`: in an argument's position (`{name}`, `{name:?}`) or as a width or a
+/// precision (`{:name$}`, `{:.name$}`). `{{` writes a brace, and `\u{…}` a
+/// character.
+fn formats(literal: &str, name: &str) -> bool {
+    if !literal.starts_with(['"', 'r']) {
+        return false;
+    }
+    let mut rest = literal;
+    while let Some((before, after)) = rest.split_once('{') {
+        if let Some(escaped) = after.strip_prefix('{') {
+            rest = escaped;
+            continue;
+        }
+        let Some((placeholder, after)) = after.split_once('}') else {
+            return false;
+        };
+        rest = after;
+        if before.ends_with("\\u") && literal.starts_with('"') {
+            continue;
+        }
+        let (argument, spec) = placeholder.split_once(':').unwrap_or((placeholder, ""));
+        let mut counts = spec.rsplit('$').skip(1);
+        if argument.trim() == name || counts.any(|count| ends_on_word(count, name)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the word `text` ends on is `name`.
+fn ends_on_word(text: &str, name: &str) -> bool {
+    text.strip_suffix(name)
+        .is_some_and(|before| !before.ends_with(|last: char| last.is_alphanumeric() || last == '_'))
 }
 
 /// `method` with its body run as `plan` says, the policy's field and the
@@ -1591,7 +1745,9 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
     let this = |at: Span| Token![self](receiver.span.located_at(at));
     let policy = {
         let receiver = this(field.span());
-        quote_spanned!(field.span()=>
+        // The expansion's own, located at the field: a lint reading the path as one
+        // the developer wrote would report it at a name they cannot change.
+        quote_spanned!(Span::mixed_site().located_at(field.span())=>
             ::nest_rs_resilience::__private::policy(&#receiver.#field)
         )
     };
@@ -1624,7 +1780,11 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
         .fallback
         .as_ref()
         .map(|fallback| arguments(&method, fallback.key.span()));
-    let block = body(&mut method, &answer, at, lends.is_some(), bound);
+    let captured = match (lends, plan.reads) {
+        (None, false) => captured(&method),
+        _ => None,
+    };
+    let block = body(&mut method, &answer, at, lends.is_some(), captured, bound);
     let every = quote_spanned!(at=> ::nest_rs_resilience::__private::every);
     let written = |predicate: Option<&Expr>| match predicate {
         Some(predicate) => predicate.to_token_stream(),
@@ -1639,10 +1799,13 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
     let judging = quote! {
         ::nest_rs_resilience::__private::judging(#named, #retry_if, #retry_ok_if, #record_if)
     };
-    // Spanned at the key that has every attempt borrow, where rustc's own words for a
-    // body consuming an argument then point, and for a future not `Send` under `idempotent`.
+    // Spanned at the key lending the arguments, where rustc's words for a body consuming
+    // one point; its head alone is the expansion's, or a lint offers `async` in the key.
     let attempt = match lends {
-        Some(key) => quote_spanned!(key.span()=> |#token| async #block),
+        Some(key) => {
+            let taking = quote_spanned!(Span::mixed_site().located_at(key.span())=> |#token|);
+            quote_spanned!(key.span()=> #taking async #block)
+        }
         None => quote!(move |#token| async move #block),
     };
     let run = match plan.idempotent {
@@ -1661,7 +1824,9 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
             let receiver = this(method.span());
             let error = Ident::new("__error", Span::mixed_site().located_at(method.span()));
             let when = written(*when);
-            let bound = handed.iter().map(|Handed { name, under, cfgs }| {
+            // Last declared first: a fallback never called drops what its closure
+            // took in the order these name it, as the method would its arguments.
+            let bound = handed.iter().rev().map(|Handed { name, under, cfgs }| {
                 quote_spanned!(method.span()=> #(#cfgs)* let #under = #name;)
             });
             let passed = handed
@@ -1744,7 +1909,7 @@ fn stand_in(
     (answer, at): (TokenStream, Span),
 ) -> TokenStream {
     let read = reads(&method, Read::BesideItsBody);
-    let block = body(&mut method, &answer, at, false, None);
+    let block = body(&mut method, &answer, at, false, None, None);
     let token = match cancel {
         Some(name) => name.to_token_stream(),
         None => quote!(_),
@@ -1825,7 +1990,7 @@ mod tests {
             "resilient_method (:: core :: any :: type_name :: < Self > , \"rates\" , :: core \
              :: option :: Option :: Some (2000u64) , :: core :: option :: Option :: Some (3u32) ,)",
             "| _ | async { if false { return :: nest_rs_resilience :: __private :: attempt :: < \
-             Result < u32 , ResilienceError < E > > > () ; } { quote (zone) . await } }",
+             Result < u32 , ResilienceError < E > > > () ; } ({ quote (zone) . await }) }",
         ] {
             assert!(expanded.contains(written), "{written} in {expanded}");
         }
@@ -1849,11 +2014,191 @@ mod tests {
         assert!(
             expanded.contains(
                 "move | _ | async move { if false { return :: nest_rs_resilience :: __private :: \
-                 attempt :: < Result < () , ResilienceError < E > > > () ; } { send (order) . await \
-                 } }"
+                 attempt :: < Result < () , ResilienceError < E > > > () ; } ({ send (order) . await \
+                 }) }"
             ),
             "{expanded}"
         );
+    }
+
+    /// The attempt owning the arguments reads first, last declared first, each
+    /// one its body names: its closure and its future capture them in that
+    /// order, the one an `async fn` drops its parameters in.
+    #[test]
+    fn an_attempt_owning_the_arguments_reads_those_its_body_names_last_declared_first() {
+        let arguments = quote! {
+            &self,
+            held: Guard,
+            (first, ref borrowed, Pair { second, .. }): (Label, Label, Pair),
+            zone: &str,
+            _kept: Guard,
+            unread: Guard,
+            #[cfg(unix)] mut r#type: Kind,
+            out: Writer
+        };
+        let item = quote! {
+            async fn append(#arguments) -> Answer {
+                let line = format!("{first:>width$}", width = zone.len());
+                r#type.push(second);
+                send(_kept, borrowed, self.unread(), line, &held).await?;
+                out.flush().await
+            }
+        };
+        let read = "let _ = (& out , # [cfg (unix)] & r#type , & second , & first , & held ,) ;";
+        let once = resilient(quote!(carrier), item.clone()).to_string();
+        assert!(
+            once.contains(&format!("move | _ | async move {{ {read} if false {{")),
+            "{once}"
+        );
+        let named = resilient(quote!(carrier, cancel = token), item.clone()).to_string();
+        assert!(
+            named.contains(&format!("move | token | async move {{ {read} if false {{")),
+            "{named}"
+        );
+        let read_only = quote! {
+            async fn append(&self, held: Guard, out: Writer) -> Answer {
+                out.write(&held).await
+            }
+        };
+        for lending in [
+            quote!(carrier, idempotent),
+            quote!(carrier, record_if = counts),
+            quote!(carrier, fallback = stale),
+        ] {
+            let lent = resilient(lending.clone(), read_only.clone()).to_string();
+            assert!(
+                !lent.contains("let _ ="),
+                "#[resilient({lending})] leaves the arguments in the method's frame: {lent}"
+            );
+        }
+        let refused = kept(quote!(carrier, retries = 2), item);
+        assert_eq!(
+            refused.matches("let _ =").count(),
+            1,
+            "a kept form reads every argument once, ahead of its run: {refused}"
+        );
+
+        for (arguments, body) in [
+            (
+                quote!(held: Guard, out: &mut Writer),
+                quote!(out.write(&held).await),
+            ),
+            (
+                quote!(held: Guard, out: Writer),
+                quote!(self.out.write(held).await),
+            ),
+            (
+                quote!(&(held, out): &(Guard, Writer)),
+                quote!(out.write(held).await),
+            ),
+            (
+                quote!(held: Guard, out: Writer),
+                quote!(self.flush("{{held}} {out:?}", out).await),
+            ),
+        ] {
+            let one = resilient(
+                quote!(carrier),
+                quote!(async fn append(&self, #arguments) -> Answer { #body }),
+            )
+            .to_string();
+            assert!(
+                !one.contains("let _ ="),
+                "fewer than two arguments drop in an order of their own: {one}"
+            );
+        }
+
+        let underscored = resilient(
+            quote!(carrier),
+            quote! {
+                async fn append(&self, _first: Guard, held: Guard, _out: Writer) -> Answer {
+                    _out.write(&held).await
+                }
+            },
+        )
+        .to_string();
+        assert!(
+            underscored.contains("move | _ | async move { let _ = (& held ,) ; if false {"),
+            "read first, `held` is captured ahead of the one named with a `_`: {underscored}"
+        );
+
+        let wrapped = resilient(
+            quote!(carrier),
+            quote! {
+                #[allow(unused)]
+                async fn ship(&self, order: Order, label: Label) -> Answer {
+                    {}
+                    let __tracing_attr_span = ::tracing::span!(::tracing::Level::INFO, "ship");
+                    let __tracing_instrument_future = async move {
+                        if false {
+                            let __tracing_attr_fake_return: Answer = loop {};
+                            return __tracing_attr_fake_return;
+                        }
+                        { send(order, label).await }
+                    };
+                    __tracing_instrument_future.await
+                }
+            },
+        )
+        .to_string();
+        assert!(
+            wrapped.contains("move | _ | async move { if false {"),
+            "tracing's own future takes the arguments from the attempt's: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn a_format_string_names_the_arguments_it_captures() {
+        for literal in [
+            r#""{held}""#,
+            r#""sent {held:?} once""#,
+            r#""{ held }""#,
+            r#""{0:held$}""#,
+            r#""{:>held$.2}""#,
+            r#""{:.held$}""#,
+            r#""{out:>7.held$}""#,
+            r#""{{{held}}}""#,
+            r##"r#"{held}"#"##,
+            r#"r"\u{held}""#,
+        ] {
+            assert!(formats(literal, "held"), "{literal}");
+        }
+        for literal in [
+            r#""held""#,
+            r#""{{held}}""#,
+            r#""{upheld}""#,
+            r#""{held_back}""#,
+            r#""{:upheld$}""#,
+            r#""{0:held}""#,
+            r#""{out:held}""#,
+            r#""\u{held}""#,
+            r#"b"{held}""#,
+            r#"c"{held}""#,
+            "'h'",
+            "4",
+        ] {
+            assert!(!formats(literal, "held"), "{literal}");
+        }
+        for naming in [
+            quote!(log!(target: "x", "{held}")),
+            quote!(send(|| async { r#held.len() })),
+            quote!(first..held),
+            quote!(first..=held),
+            quote!(Sent { at: held }),
+            quote!(Sent { held }),
+        ] {
+            assert!(names(naming.clone(), "held"), "{naming}");
+        }
+        for another in [
+            quote!(send(upheld, "held")),
+            quote!(self.held.lock().await),
+            quote!(order.0.held()),
+            quote!(Kind::held(order)),
+            quote!('held: loop {
+                break 'held;
+            }),
+        ] {
+            assert!(!names(another.clone(), "held"), "{another}");
+        }
     }
 
     /// A predicate may read an argument once the one attempt answered: under
@@ -1913,7 +2258,7 @@ mod tests {
         assert!(
             expanded.contains(
                 "async move { if false { return :: nest_rs_resilience :: __private :: attempt :: < \
-                 Answer > () ; } { use std :: fmt :: Write as _ ; const LABEL : & str = \"parcel\" \
+                 Answer > () ; } ({ use std :: fmt :: Write as _ ; const LABEL : & str = \"parcel\" \
                  ; let label = LABEL ;"
             ),
             "{expanded}"
@@ -2226,8 +2571,8 @@ mod tests {
             "run :: < Answer , _ , _ , _ , _ >",
             "| _ | async { if false",
             "Fallback :: in_place_of (:: nest_rs_resilience :: __private :: fall_back (",
-            ":: nest_rs_resilience :: __private :: every) , | __error | { let __handed_0 = zone \
-             ; let __handed_1 = weight ; self . stale (__handed_0 , __handed_1 , __error) })) . \
+            ":: nest_rs_resilience :: __private :: every) , | __error | { let __handed_1 = weight \
+             ; let __handed_0 = zone ; self . stale (__handed_0 , __handed_1 , __error) })) . \
              await",
         ] {
             assert!(once.contains(written), "{written} in {once}");
@@ -2241,7 +2586,7 @@ mod tests {
         .to_string();
         for written in [
             "run_idempotent :: < Answer , _ , _ , _ , _ >",
-            ", refused) , | __error | { let __handed_0 = zone ; let __handed_1 = weight ; self . \
+            ", refused) , | __error | { let __handed_1 = weight ; let __handed_0 = zone ; self . \
              stale (__handed_0 , __handed_1 , __error) })) . await",
         ] {
             assert!(again.contains(written), "{written} in {again}");
@@ -2267,8 +2612,8 @@ mod tests {
         let weights = "# [cfg_attr (unix , cfg (feature = \"weights\"))]";
         let handed = resilient(quote!(carrier, fallback = stale), item.clone()).to_string();
         let answering = format!(
-            "| __error | {{ {zones} let __handed_0 = zone ; {weights} let __handed_1 = weight ; \
-             let __handed_2 = parcel ; self . stale ({zones} __handed_0 , {weights} __handed_1 , \
+            "| __error | {{ let __handed_2 = parcel ; {weights} let __handed_1 = weight ; {zones} \
+             let __handed_0 = zone ; self . stale ({zones} __handed_0 , {weights} __handed_1 , \
              __handed_2 , __error) }}"
         );
         assert!(handed.contains(&answering), "{answering} in {handed}");
@@ -2324,7 +2669,7 @@ mod tests {
         assert!(
             once.contains(
                 "move | token | async move { if false { return :: nest_rs_resilience :: __private \
-                 :: attempt :: < Answer > () ; } { use std :: fmt :: Write as _ ;"
+                 :: attempt :: < Answer > () ; } ({ use std :: fmt :: Write as _ ;"
             ),
             "{once}"
         );
@@ -2336,7 +2681,7 @@ mod tests {
             assert!(
                 lent.contains(
                     "| __cancel | async { let token = __cancel ; if false { return :: \
-                     nest_rs_resilience :: __private :: attempt :: < Answer > () ; } { use std :: \
+                     nest_rs_resilience :: __private :: attempt :: < Answer > () ; } ({ use std :: \
                      fmt :: Write as _ ;"
                 ),
                 "{lent}"
@@ -2748,7 +3093,7 @@ mod tests {
             }
         };
         let as_written = "async fn opaque (& self , token : String) -> impl Quoted { fn \
-                          __nestrs_resilient_run () { } let _ = (& token ,) ; { token } }";
+                          __nestrs_resilient_run () { } let _ = (& token ,) ; ({ token }) }";
         for args in [
             quote!(carrier),
             quote!(carrier, cancel = token),
@@ -2780,7 +3125,7 @@ mod tests {
             },
         );
         assert!(
-            unread.ends_with("let _entered = __tracing_attr_span . enter () ; order } }"),
+            unread.ends_with("let _entered = __tracing_attr_span . enter () ; order }) }"),
             "an instrument's body the decorator cannot read: {unread}"
         );
         for (written, kept_as) in [
@@ -2794,8 +3139,8 @@ mod tests {
                 },
                 "async fn opaque (& self , order : Order) -> impl Quoted { fn \
                  __nestrs_resilient_run () { } let _ = (& order ,) ; let stop = :: \
-                 nest_rs_resilience :: CancellationToken :: new () ; { use std :: fmt :: Write as \
-                 _ ; stop . cancelled () . await ; order } }",
+                 nest_rs_resilience :: CancellationToken :: new () ; ({ use std :: fmt :: Write as \
+                 _ ; stop . cancelled () . await ; order }) }",
             ),
             (
                 quote! {
@@ -2804,8 +3149,8 @@ mod tests {
                     }
                 },
                 "fn boxed (& self) -> impl Quoted { fn __nestrs_resilient_run () { } let stop = \
-                 :: nest_rs_resilience :: CancellationToken :: new () ; { Box :: pin (async move { \
-                 stop . is_cancelled () }) } }",
+                 :: nest_rs_resilience :: CancellationToken :: new () ; ({ Box :: pin (async move { \
+                 stop . is_cancelled () }) }) }",
             ),
         ] {
             assert_eq!(kept(quote!(carrier, cancel = stop), written), kept_as);
@@ -3156,7 +3501,7 @@ mod tests {
         assert!(
             stood_in.contains(
                 "move | _ | async move { if false { return :: nest_rs_resilience :: __private :: \
-                 attempt :: < Answer > () ; } { send (order) . await } }"
+                 attempt :: < Answer > () ; } ({ send (order) . await }) }"
             ),
             "the stand-in checks the body against the attempt's type: {stood_in}"
         );
@@ -3256,8 +3601,8 @@ mod tests {
         assert!(
             opaque.ends_with(&format!(
                 "-> impl Quoted {{ fn __nestrs_resilient_run () {{ }} {read} let stop = :: \
-                 nest_rs_resilience :: CancellationToken :: new () ; {{ use std :: fmt :: Write as \
-                 _ ; send () . await }} }}"
+                 nest_rs_resilience :: CancellationToken :: new () ; ({{ use std :: fmt :: Write as \
+                 _ ; send () . await }}) }}"
             )),
             "as written: {opaque}"
         );
@@ -3697,7 +4042,7 @@ mod tests {
                 },
             );
             assert!(
-                kept.ends_with("{ fn __nestrs_resilient_run () { } { send () . await } }"),
+                kept.ends_with("{ fn __nestrs_resilient_run () { } ({ send () . await }) }"),
                 "as written: {kept}"
             );
         }
@@ -3735,7 +4080,7 @@ mod tests {
             ),
         ] {
             let expanded = resilient(keys.clone(), item.clone()).to_string();
-            let attempted = format!("{opens} if false {{ return {attempt} ; }} {written} }}");
+            let attempted = format!("{opens} if false {{ return {attempt} ; }} ({written}) }}");
             assert!(
                 expanded.contains(&attempted),
                 "#[resilient({keys})]: {attempted} in {expanded}"
@@ -3744,7 +4089,7 @@ mod tests {
         let stood_in = kept(quote!(), item.clone());
         assert!(
             stood_in.contains(&format!(
-                "move | _ | async move {{ if false {{ return {attempt} ; }} {written} }}"
+                "move | _ | async move {{ if false {{ return {attempt} ; }} ({written}) }}"
             )),
             "{stood_in}"
         );
@@ -3754,7 +4099,7 @@ mod tests {
         )
         .to_string();
         assert!(
-            wrapped.contains("() ; } { { } let __tracing_attr_span")
+            wrapped.contains("() ; } ({ { } let __tracing_attr_span")
                 && wrapped.contains(&format!(
                     "__tracing_attr_fake_return ; }} {written} }} ; if !"
                 )),
@@ -3769,7 +4114,7 @@ mod tests {
         assert!(
             as_written.ends_with(&format!(
                 "{{ fn __nestrs_resilient_run () {{ }} let _ = (& zone ,) ; let stop = :: \
-                 nest_rs_resilience :: CancellationToken :: new () ; {written} }}"
+                 nest_rs_resilience :: CancellationToken :: new () ; ({written}) }}"
             )),
             "{as_written}"
         );

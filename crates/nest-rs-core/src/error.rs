@@ -1098,13 +1098,15 @@ impl DecodeError {
     }
 
     /// `link` as the report it is, when it is a decode failure — serde_json's
-    /// error, or serde's own value error.
+    /// error, or serde's own value error — or a pointer handed out as the link
+    /// holds one.
     pub(crate) fn of(link: &(dyn std::error::Error + 'static)) -> Option<Self> {
-        if let Some(error) = link.downcast_ref::<serde_json::Error>() {
+        use crate::error_message::__private::link_as;
+
+        if let Some(error) = link_as::<serde_json::Error>(link) {
             return Some(Self::new(error));
         }
-        link.downcast_ref::<serde::de::value::Error>()
-            .map(Self::from)
+        link_as::<serde::de::value::Error>(link).map(Self::from)
     }
 
     /// `text` said without the values a decode failure quotes in it — a reply's

@@ -22,7 +22,9 @@ pub(crate) const TRANSITIONS: &str = "nestrs.resilience.breaker.transitions";
 #[cfg(feature = "opentelemetry")]
 pub(crate) const RETRIES: &str = "nestrs.resilience.retries";
 
-/// Each run a policy ended on its own refusal, by the refusal.
+/// Each run over at its policy's own refusal, by the refusal: the one the run
+/// answers, but for a timeout whose savepoint cannot be rolled back, counted
+/// as the attempt ends, its run then answering `Unsettled`.
 #[cfg(feature = "opentelemetry")]
 pub(crate) const REFUSALS: &str = "nestrs.resilience.refusals";
 
@@ -778,6 +780,68 @@ mod tests {
                 .iter()
                 .all(|(_, instance, ..)| instance == "quotes"),
             "the carrier's policy is gone, and its instruments observe nothing"
+        );
+    }
+
+    /// A counter panicking at every record, as a meter's pipeline may.
+    struct PanickingCounter;
+
+    impl opentelemetry::metrics::SyncInstrument<u64> for PanickingCounter {
+        fn measure(&self, _count: u64, _attributes: &[opentelemetry::KeyValue]) {
+            panic!("the meter fails");
+        }
+    }
+
+    /// A counter panicking as a transition is counted unwinds what moved the
+    /// breaker, as a line does: the breaker is in the phase it entered, and a
+    /// probe whose send it unwound hands its turn on — from a destructor as
+    /// the thread unwinds, where the second panic ends.
+    #[tokio::test(start_paused = true)]
+    async fn a_counter_panicking_out_of_a_transition_leaves_the_breaker_moved() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use crate::BreakerState;
+
+        const BOUND: Duration = Duration::from_secs(5);
+        const OPEN_FOR: Duration = Duration::from_secs(30);
+
+        let counters = Counters::new("quotes");
+        let panicking = opentelemetry::metrics::Counter::new(Arc::new(PanickingCounter));
+        counters
+            .transitions
+            .set(panicking)
+            .expect("no transition was counted yet");
+        let breaker = Breaker::new(
+            "quotes",
+            1,
+            1,
+            OPEN_FOR,
+            None,
+            1,
+            Arc::new(counters),
+            Arc::default(),
+        );
+
+        let sent = breaker
+            .admit(BOUND)
+            .expect("a closed breaker admits")
+            .send(BOUND, None);
+        let failing = catch_unwind(AssertUnwindSafe(|| sent.settle(Some("down"))));
+        assert!(failing.is_err(), "the opening's count");
+        assert_eq!(
+            breaker.read(),
+            BreakerState::Open {
+                retry_after: OPEN_FOR
+            }
+        );
+
+        tokio::time::advance(OPEN_FOR).await;
+        let probe = breaker.admit(BOUND).expect("the open time passed");
+        let probing = catch_unwind(AssertUnwindSafe(|| probe.send(BOUND, None).settle(None)));
+        assert!(probing.is_err(), "the half-opening's count");
+        assert!(
+            breaker.admit(BOUND).is_ok(),
+            "the probe's turn is free for the next call"
         );
     }
 }

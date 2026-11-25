@@ -128,9 +128,10 @@ pub enum AtomicError {
     /// The database refused to settle the block — its `RELEASE` or
     /// `ROLLBACK TO`, or the `COMMIT` of a block that is a transaction of its
     /// own — and nothing it wrote stands. Inside a unit of work, that unit is
-    /// left unable to commit. A refused `SAVEPOINT` is not this: the block's
-    /// first statement fails with the database's error. The driver's error stays
-    /// for its own `match`, read as [`OutboxError::Database`]'s is.
+    /// left unable to commit; nested in another block, that block alone, which
+    /// can only roll back. A refused `SAVEPOINT` is not this: the block's first
+    /// statement fails with the database's error. The driver's error stays for
+    /// its own `match`, read as [`OutboxError::Database`]'s is.
     Database(Box<dyn std::error::Error + Send + Sync>),
     /// The work returned `Ok` over a statement that failed inside it: nothing
     /// it wrote stands.

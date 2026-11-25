@@ -282,3 +282,39 @@
   count made the release one's. An hour.
 - **Ticket** — none to file: stabilising `generic_const_exprs` is the tracking
   issue's.
+
+## A closure's and an `async` block's captures drop in an order left unspecified
+
+- **Seen** — 1.100.0 (`0ef1bc386 2026-11-09`), editions 2021 and 2024, debug and
+  release: a `move` closure, and the `async move` block it answers, drop what
+  they captured in the order their bodies first name it, where an `async fn`
+  drops its parameters last declared first. The Reference's *Destructors* says
+  the second and leaves the order of a closure's captures unspecified.
+  `nest-rs-resilience`'s `dropped` module (`tests/integration/resilient.rs`)
+  runs each decorated method beside an undecorated twin written from the same
+  tokens.
+- **Effect** — a method whose body an expansion moves into a closure drops its
+  arguments in the order the body happens to name them: a lock guard taken as
+  an argument is released before the writer it guards has flushed, with no
+  warning.
+- **Our side** — the attempt owning the arguments opens on a statement naming,
+  last declared first, each one its body names (`captured` in
+  `crates/nest-rs-resilience-macros/src/resilient.rs`), which rests on the order
+  rustc has today. What it cannot name is a limit the decorator's rustdoc says.
+- **Canary** — `nest-rs-resilience`'s `dropped` module, which fails on a
+  toolchain dropping captures in another order.
+- **Upstream** — not filed. A search of rust-lang/reference's issues on captures
+  comes before filing.
+- **When fixed** — the order specified as first mentioned, this entry closes and
+  nothing changes; specified otherwise, the statement is rewritten for it. An
+  hour.
+- **Ticket** —
+
+  > **Specify the order in which a closure's and an `async` block's captures drop**
+  >
+  > *Destructors* says that the variables a closure captures by move drop in an
+  > unspecified order. A macro that moves an `async fn`'s body into
+  > `move || async move { … }` then cannot promise the order in which the
+  > function's parameters drop, which the same chapter specifies. rustc drops
+  > captures in the order the body first mentions them. Could that be specified,
+  > for closures and for `async` blocks?

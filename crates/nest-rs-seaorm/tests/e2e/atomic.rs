@@ -414,6 +414,116 @@ async fn a_block_dropped_before_it_settles_leaves_its_unit_unable_to_commit() {
     assert!(!stored(&conn, inside).await);
 }
 
+/// A block dropped inside another poisons that block alone: it rolls back,
+/// told to whoever kept an `Ok` over it, and the unit commits what it wrote
+/// beside it. The line says so, and not that the unit cannot commit.
+#[tokio::test]
+async fn a_block_dropped_inside_another_leaves_that_block_to_roll_back_and_its_unit_to_commit() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = db().await;
+    let (before, outer, inside) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+
+    let lazy = boundary(&conn);
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
+        insert(before).await.expect("the unit writes first");
+        let outcome = atomic(async {
+            insert(outer).await?;
+            let (wrote, written) = tokio::sync::oneshot::channel();
+            let inner = atomic(async {
+                insert(inside).await?;
+                let _ = wrote.send(());
+                std::future::pending::<()>().await;
+                Ok::<_, Failure>(())
+            });
+            tokio::select! {
+                _ = inner => panic!("the block never ends on its own"),
+                _ = written => {}
+            }
+            Ok::<_, Failure>(())
+        })
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                Err(Failure::Atomic(AtomicError::Poisoned { retryable: false }))
+            ),
+            "an `Ok` kept over the dropped block is refused: {outcome:?}"
+        );
+    })
+    .await;
+    committed(lazy).await;
+
+    assert!(stored(&conn, before).await);
+    assert!(!stored(&conn, outer).await);
+    assert!(!stored(&conn, inside).await);
+    let line = logs.expect_one(
+        nest_rs_seaorm::target::ORM,
+        "atomic block abandoned before it settled; the block it is nested in can only roll back",
+    );
+    assert_eq!(
+        (line.level.as_str(), line.field("outcome").as_deref()),
+        ("debug", Some("abandoned"))
+    );
+    logs.expect_none(
+        nest_rs_seaorm::target::ORM,
+        "atomic block abandoned before it settled; its unit cannot commit",
+    );
+}
+
+/// A nested block the database cannot settle poisons the block it is nested
+/// in, and says that; the unit is said unable to commit by the block sitting
+/// in it, whose own rollback the closed session refuses in turn.
+#[tokio::test]
+async fn a_nested_block_the_database_cannot_settle_says_what_it_was_nested_in() {
+    const UNSETTLED_IN_A_BLOCK: &str = "an atomic block's savepoint could not be settled; the \
+                                        block it is nested in can only roll back";
+    const UNSETTLED: &str =
+        "an atomic block's savepoint could not be settled; its unit cannot commit";
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = db().await;
+    let killer = crate::harness::connect().await;
+    let (outer, inside) = (Uuid::now_v7(), Uuid::now_v7());
+
+    let lazy = boundary(&conn);
+    let outcome = with_request_executor(
+        SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
+        atomic(async {
+            insert(outer).await?;
+            atomic(async {
+                insert(inside).await?;
+                let executor = current_executor().expect("the block's executor");
+                let pid = crate::harness::backend_pid(&executor).await;
+                crate::harness::terminate_backend(&killer, pid).await;
+                Ok::<_, Failure>(())
+            })
+            .await
+        }),
+    )
+    .await;
+    assert!(
+        matches!(outcome, Err(Failure::Atomic(AtomicError::Database(_)))),
+        "{outcome:?}"
+    );
+    let finalized = lazy.finalize(true).await;
+    assert!(
+        matches!(finalized, FinalizeOutcome::Poisoned { .. }),
+        "{finalized:?}"
+    );
+
+    assert!(!stored(&conn, outer).await);
+    assert!(!stored(&conn, inside).await);
+    let events = logs.find(nest_rs_seaorm::target::ORM, UNSETTLED_IN_A_BLOCK);
+    assert_eq!(events.len(), 1, "the nested block's: {events:?}");
+    assert_eq!(events[0].level, "error");
+    let events = logs.find(nest_rs_seaorm::target::ORM, UNSETTLED);
+    assert_eq!(
+        events.len(),
+        1,
+        "the block's sitting in the unit: {events:?}"
+    );
+    assert_eq!(events[0].level, "error");
+}
+
 /// What an event's listener saw, in order.
 #[nest_rs_core::injectable]
 #[derive(Default)]

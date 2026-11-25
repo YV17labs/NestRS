@@ -10,3 +10,5 @@ error[E0502]: cannot borrow `order` as mutable because it is also borrowed as im
    |                                                ------ immutable borrow later used by call
 38 |         order.push('!');
    |         ----- second borrow occurs due to use of `order` in closure
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)

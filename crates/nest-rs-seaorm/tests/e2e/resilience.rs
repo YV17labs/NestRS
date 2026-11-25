@@ -8,9 +8,11 @@
 //! transaction, or its filter hands the error back; an attempt answering `Ok`
 //! over a statement that failed ends its run unsettled, the policy's line
 //! saying why; an attempt cut before its savepoint answered leaves its unit as
-//! it was; two calls joined in one unit take its turn one after the other; and
-//! nothing is sent for a call that never queries, nor on the pool, which holds
-//! no transaction.
+//! it was, and one cut with a block of its own open — an atomic block, or the
+//! savepoint of a call it makes — rolls that block back with it, the unit
+//! free to commit and no line saying otherwise; two calls joined in one unit
+//! take its turn one after the other; and nothing is sent for a call that
+//! never queries, nor on the pool, which holds no transaction.
 //!
 //! The clock is the real one, so no test here holds on an attempt meeting its
 //! bound: a call bounded at 200 ms is cut there while its test withholds what
@@ -51,6 +53,10 @@ enum Failure {
     Db(#[from] DbErr),
     #[error("the ledger refused the entry")]
     Refused,
+    #[error("the ledger's block kept nothing")]
+    Block(#[from] nest_rs_database::AtomicError),
+    #[error("the call the ledger's own makes failed")]
+    Inside(#[source] Box<ResilienceError<Failure>>),
 }
 
 /// A service writing its ledger under the policy, as an app's does: through
@@ -104,6 +110,45 @@ impl LedgerService {
     async fn post_quickly(&self, entry: Uuid) -> Result<(), ResilienceError<Failure>> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         write(entry).await?;
+        Ok(())
+    }
+
+    /// One row of `entry`, then another in an atomic block of the attempt's
+    /// own, which the first attempt to write it never leaves: that attempt is
+    /// given up at 200 ms, its block open.
+    #[resilient(ledger, idempotent, timeout = "200ms", retries = 10)]
+    async fn post_in_a_block(&self, entry: Uuid) -> Result<(), ResilienceError<Failure>> {
+        write(entry).await?;
+        nest_rs_database::atomic(async {
+            write(entry).await?;
+            if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                std::future::pending::<()>().await;
+            }
+            Ok::<_, Failure>(())
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// One row of `entry`, then [`post_inside`](Self::post_inside)'s: an
+    /// attempt given up at 200 ms while the call it makes runs its own.
+    #[resilient(ledger, idempotent, timeout = "200ms", retries = 10)]
+    async fn post_through(&self, entry: Uuid) -> Result<(), ResilienceError<Failure>> {
+        write(entry).await?;
+        self.post_inside(entry)
+            .await
+            .map_err(|inside| Failure::Inside(Box::new(inside)))?;
+        Ok(())
+    }
+
+    /// One row of `entry` under the archive's policy, which the first attempt
+    /// to write it never answers after.
+    #[resilient(archive, idempotent)]
+    async fn post_inside(&self, entry: Uuid) -> Result<(), ResilienceError<Failure>> {
+        write(entry).await?;
+        if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+            std::future::pending::<()>().await;
+        }
         Ok(())
     }
 
@@ -708,6 +753,84 @@ async fn on_the_pool_an_attempt_opens_no_transaction_and_its_writes_commit_as_th
 }
 
 const ABANDONED: &str = "atomic block abandoned before it settled; its unit cannot commit";
+
+/// What a block abandoned inside another block files: that block rolls back,
+/// and its unit commits or not by what settles it.
+const ABANDONED_IN_A_BLOCK: &str =
+    "atomic block abandoned before it settled; the block it is nested in can only roll back";
+
+/// A block was said abandoned inside another, at `debug`, and no line says a
+/// unit cannot commit.
+fn abandoned_in_a_block_alone(logs: &nest_rs_testing::LogCapture) {
+    logs.expect_none(nest_rs_seaorm::target::ORM, ABANDONED);
+    let nested = logs.find(nest_rs_seaorm::target::ORM, ABANDONED_IN_A_BLOCK);
+    assert!(!nested.is_empty(), "the block open at the cut is said");
+    for line in nested {
+        assert_eq!(
+            (line.level.as_str(), line.field("outcome").as_deref()),
+            ("debug", Some("abandoned"))
+        );
+    }
+}
+
+/// An attempt given up at its timeout while an atomic block of its own is
+/// open drops that block inside the attempt's savepoint, which the run then
+/// rolls back: the unit commits what it wrote before and what the retry
+/// writes, and no line says it cannot.
+#[tokio::test]
+async fn a_block_open_in_an_attempt_given_up_rolls_back_with_it_and_the_unit_commits() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = db().await;
+    let (_app, service) = service().await;
+    let (before, entry) = (Uuid::now_v7(), Uuid::now_v7());
+
+    let lazy = unit(&conn);
+    let ran = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
+        write(before)
+            .await
+            .expect("the unit writes before the call");
+        service.post_in_a_block(entry).await
+    })
+    .await;
+    assert!(ran.is_ok(), "an attempt after the cut one answers: {ran:?}");
+    committed(lazy).await;
+
+    assert_eq!(
+        (written(&conn, before).await, written(&conn, entry).await),
+        (1, 2),
+        "the unit's own row, and the two of the attempt that answered"
+    );
+    abandoned_in_a_block_alone(&logs);
+}
+
+/// An idempotent method called from another's attempt runs its own in a
+/// savepoint nested in that attempt's: given up with it, it is dropped inside
+/// a block the outer run rolls back, and the unit commits.
+#[tokio::test]
+async fn a_run_dropped_inside_an_attempt_given_up_rolls_back_with_it_and_the_unit_commits() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = db().await;
+    let (_app, service) = service().await;
+    let (before, entry) = (Uuid::now_v7(), Uuid::now_v7());
+
+    let lazy = unit(&conn);
+    let ran = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
+        write(before)
+            .await
+            .expect("the unit writes before the call");
+        service.post_through(entry).await
+    })
+    .await;
+    assert!(ran.is_ok(), "an attempt after the cut one answers: {ran:?}");
+    committed(lazy).await;
+
+    assert_eq!(
+        (written(&conn, before).await, written(&conn, entry).await),
+        (1, 2),
+        "the unit's own row, and the two of the attempt that answered"
+    );
+    abandoned_in_a_block_alone(&logs);
+}
 
 /// Once `service` made its attempt number `number`: the one before it was
 /// given up at its timeout, whatever it waited on still withheld.

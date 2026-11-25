@@ -6,7 +6,10 @@
 //! nor been switched by hand since its attempt was let through. Its state
 //! lives in the process.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
+use std::mem::ManuallyDrop;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,7 +64,9 @@ pub enum BreakerState {
     /// - while the probe's call is sent, or still waits for its token of the
     ///   rate limit, what is left of its bound, when it has answered at the
     ///   latest — and a millisecond once that has passed, its own timer giving
-    ///   it up at any moment;
+    ///   it up at any moment. The timeout of another policy, the one its
+    ///   caller runs under, may give it up sooner: it has failed then as at
+    ///   its own, and the breaker is open again;
     /// - once the probe's answer is a response its caller holds
     ///   ([`ResilienceMiddleware`](crate::ResilienceMiddleware)), that probe's
     ///   whole bound, however long it has been held: no timer gives a held
@@ -404,11 +409,11 @@ pub(crate) struct Breaker {
 }
 
 /// One attempt the breaker admitted, its call not sent yet. Dropped so — the
-/// rate refused it, the unit ran out of time, its caller dropped it — it
-/// counts for nothing, and a probe hands its turn to the next call with no
-/// transition, the dependency never called. It carries the epoch it was
-/// admitted in, so an opening or a manual switch since leaves it nothing to
-/// change or count.
+/// rate refused it, the unit ran out of time, its caller dropped it or the
+/// timeout of a policy around it did — it counts for nothing, and a probe
+/// hands its turn to the next call with no transition, the dependency never
+/// called. It carries the epoch it was admitted in, so an opening or a manual
+/// switch since leaves it nothing to change or count.
 pub(crate) struct Pass<'b> {
     breaker: &'b Breaker,
     probe: bool,
@@ -439,15 +444,18 @@ impl<'b> Pass<'b> {
     #[inline]
     pub(crate) fn send(mut self, bound: Duration, until: Option<Instant>) -> Sent<'b> {
         let probe = std::mem::take(&mut self.probe);
-        if probe {
-            self.breaker.probe_sent(self.epoch, bound);
-        }
-        Sent {
+        // Built before the breaker is told: a line panicking out of the half-opening
+        // drops it, handing the turn on, where a turn nothing holds is never free again.
+        let sent = Sent {
             breaker: self.breaker,
             probe,
             epoch: self.epoch,
             until,
+        };
+        if probe {
+            self.breaker.probe_sent(self.epoch, bound);
         }
+        sent
     }
 }
 
@@ -463,16 +471,24 @@ impl Drop for Pass<'_> {
 /// One admitted attempt whose call was sent, settled once with its outcome:
 /// what it failed on, said before the breaker is asked, or `None` for a
 /// success — or ignored, when its answer counts in neither direction. Dropped
-/// before it is settled and before its bound ends — its caller dropped the
-/// call — it counts for nothing, and a probe hands its turn to the next call.
-/// Dropped so at or past the instant its bound ends at, it has timed out, as
-/// its own timer due there would have said: an edge cutting its unit at that
-/// deadline may be polled first, tokio firing one instant's timers in batches
-/// that another worker runs between. A bound ends at an instant under a unit's
-/// deadline alone ([`until`](Self::until)): sent under none, an attempt
-/// dropped past its timeout counts for nothing too, and a probe hands its
-/// turn on. However it ends, it changes and counts nothing once the breaker
-/// opened or was switched by hand since it was admitted.
+/// before it is settled, it is judged by what dropped it:
+///
+/// - its caller, before its bound ends — a `select!` another branch won, a
+///   join dropped: it counts for nothing, and a probe hands its turn to the
+///   next call;
+/// - a policy around it, giving up at its own bound the attempt this one's
+///   call runs in ([`Cut`]): it has timed out, as its own timer would have
+///   said had the one around it waited that long;
+/// - anything, at or past the instant its bound ends at: it has timed out, as
+///   its own timer due there would have said — an edge cutting its unit at
+///   that deadline may be polled first, tokio firing one instant's timers in
+///   batches that another worker runs between. A bound ends at an instant
+///   under a unit's deadline alone ([`until`](Self::until)): sent under none,
+///   an attempt its caller drops past its timeout counts for nothing too, and
+///   a probe hands its turn on.
+///
+/// However it ends, it changes and counts nothing once the breaker opened or
+/// was switched by hand since it was admitted.
 pub(crate) struct Sent<'b> {
     breaker: &'b Breaker,
     probe: bool,
@@ -484,10 +500,11 @@ pub(crate) struct Sent<'b> {
 
 impl Sent<'_> {
     #[inline]
-    pub(crate) fn settle(mut self, failure: Option<&str>) {
-        let probe = std::mem::take(&mut self.probe);
-        self.until = None;
-        self.breaker.record(self.epoch, probe, failure);
+    pub(crate) fn settle(self, failure: Option<&str>) {
+        // Settled, it is dropped no more: its drop is an attempt given up
+        // unanswered, and reads what gave it up.
+        let sent = ManuallyDrop::new(self);
+        sent.breaker.record(sent.epoch, sent.probe, failure);
     }
 
     /// The attempt answered what counts in neither direction — an `Err` its
@@ -497,12 +514,10 @@ impl Sent<'_> {
     /// transition — where a probe its caller dropped, the dependency saying
     /// nothing, leaves the breaker open again on no success yet.
     #[inline]
-    pub(crate) fn ignore(mut self) {
-        // Dropped holding its probe's turn, it would abandon it; holding the
-        // instant its bound ends at, it would time out there.
-        self.until = None;
-        if std::mem::take(&mut self.probe) {
-            self.breaker.probe_ignored(self.epoch);
+    pub(crate) fn ignore(self) {
+        let sent = ManuallyDrop::new(self);
+        if sent.probe {
+            sent.breaker.probe_ignored(sent.epoch);
         }
     }
 
@@ -511,15 +526,14 @@ impl Sent<'_> {
     /// gives it up from here, so a call refused beside a probe held is told
     /// `bound`, the one the attempt was sent under.
     #[cfg(feature = "reqwest")]
-    pub(crate) fn hold(mut self, bound: Duration) -> HeldAttempt {
-        self.until = None;
-        let probe = std::mem::take(&mut self.probe);
-        if probe {
-            self.breaker.probe_held(self.epoch, bound);
+    pub(crate) fn hold(self, bound: Duration) -> HeldAttempt {
+        let sent = ManuallyDrop::new(self);
+        if sent.probe {
+            sent.breaker.probe_held(sent.epoch, bound);
         }
         HeldAttempt {
-            probe,
-            epoch: self.epoch,
+            probe: sent.probe,
+            epoch: sent.epoch,
         }
     }
 }
@@ -538,11 +552,55 @@ pub(crate) struct HeldAttempt {
 impl Drop for Sent<'_> {
     #[inline]
     fn drop(&mut self) {
-        if self.until.is_some_and(|until| Instant::now() >= until) {
+        if Cut::encloses() || self.until.is_some_and(|until| Instant::now() >= until) {
             self.breaker.record(self.epoch, self.probe, Some(TIMED_OUT));
         } else if self.probe {
             self.breaker.abandon_probe(self.epoch);
         }
+    }
+}
+
+thread_local! {
+    /// Whether this thread is inside a [`Cut`].
+    static CUT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The extent of one thread dropping what an attempt given up at its bound
+/// held — the future its call made, or the body its answer left to read. An
+/// attempt of any policy in flight in there is dropped by that timeout, not
+/// by its caller: it counts as timed out in its own breaker
+/// ([`Sent`]), so a dependency that never answers opens the breaker naming
+/// it, however short the timeout of the policy its caller runs under.
+///
+/// It is the drop's extent and no more: a future its caller drops sets
+/// nothing, and an attempt on a task the call spawned is not dropped in it.
+/// One inside another ends as the outer goes on, and a panic out of the drop
+/// ends it as it unwinds.
+pub(crate) struct Cut {
+    /// Whether the thread was inside one already.
+    around: bool,
+}
+
+impl Cut {
+    /// `dropping` run as the drop of what an attempt given up at its bound
+    /// held.
+    pub(crate) fn dropping<R>(dropping: impl FnOnce() -> R) -> R {
+        let _ended = Self {
+            around: CUT.replace(true),
+        };
+        dropping()
+    }
+
+    /// Whether what is dropped now is dropped by an attempt's bound passing.
+    #[inline]
+    pub(crate) fn encloses() -> bool {
+        CUT.get()
+    }
+}
+
+impl Drop for Cut {
+    fn drop(&mut self) {
+        CUT.set(self.around);
     }
 }
 
@@ -800,9 +858,11 @@ impl Breaker {
 
     /// A probe its caller dropped once its call was sent, before it answered
     /// and before its bound ended — or whenever, where it was sent under no
-    /// unit's deadline: the next call probes instead, the series
-    /// keeping what it counted — and the breaker, half-open on no success yet,
-    /// open again, saying so.
+    /// unit's deadline — and one dropped as the line of its own half-opening
+    /// panicked: the next call probes instead, the series keeping what it
+    /// counted — and the breaker, half-open on no success yet, open again,
+    /// saying so. A probe the timeout of a policy around it dropped is none
+    /// of them: it has failed ([`Cut`]).
     fn abandon_probe(&self, epoch: u64) {
         let Some(mut held) = self.held_since(epoch) else {
             return;
@@ -853,6 +913,13 @@ impl Breaker {
     /// switch this breaker. The queue is filled under that lock and told by
     /// one thread at a time, so the lines, the counts and the events say the
     /// transitions in the order they took effect, each once.
+    ///
+    /// A line, a count or a wake that panics unwinds out of here, the breaker
+    /// already in the phase it entered and the turn to tell given back
+    /// ([`Telling`]) — but from a destructor run as its thread unwinds, an
+    /// attempt dropped by a panic, where it ends here: the transition it was
+    /// telling is lost as any other it panics out of, and those behind it are
+    /// told with the next one made.
     #[inline(never)]
     fn entered(&self, mut held: MutexGuard<'_, Held>, from: Phase, moved: Moved<'_>) {
         let (failed, error, open_for, manual) = match moved {
@@ -875,7 +942,13 @@ impl Breaker {
             return;
         }
         drop(held);
-        self.tell();
+        if std::thread::panicking() {
+            // Reached from a destructor as the thread unwinds: a second panic
+            // out of it would abort the process. The hook has filed it.
+            let _contained = catch_unwind(AssertUnwindSafe(|| self.tell()));
+        } else {
+            self.tell();
+        }
     }
 
     /// Tell each transition still to tell, oldest first, as the one thread
@@ -3302,5 +3375,373 @@ mod tests {
         breaker.open_manually(OPEN_FOR);
         assert_eq!(*said.lock(), ["closed manual", "open manual"]);
         assert!(all_told(&breaker));
+    }
+
+    /// A subscriber panicking out of every transition's line.
+    struct Failing;
+
+    impl tracing::Subscriber for Failing {
+        taking_events_alone!();
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            assert!(
+                Line::of(event).is_none(),
+                "the subscriber fails on every transition's line"
+            );
+        }
+    }
+
+    /// Whether `moving` unwinds.
+    fn unwinds(moving: impl FnOnce()) -> bool {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(moving)).is_err()
+    }
+
+    /// The breaker's lines failing no more, the calls from now on leave the
+    /// state it is in: what is left of an open time waited, the next is let
+    /// through, and its success closes the breaker, nothing left to tell.
+    async fn a_later_call_closes(breaker: &Breaker) {
+        if let Err(wait) = breaker.admit(BOUND).map(drop) {
+            tokio::time::advance(wait).await;
+        }
+        breaker
+            .admit(BOUND)
+            .expect("the call is let through")
+            .send(BOUND, None)
+            .settle(None);
+        assert_eq!(breaker.state(), "closed");
+        assert!(all_told(breaker));
+    }
+
+    /// A breaker one failure opened, its open time passed: the next call probes.
+    async fn probe_due(breaker: &Breaker) {
+        attempt(breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+    }
+
+    /// A line panicking out of the first probe's half-opening unwinds its
+    /// send with the probe's turn handed on, the breaker open again for the
+    /// next call to probe: left half-open on a probe nothing holds, it would
+    /// refuse every call until a switch by hand. The line of that handing on
+    /// panics too, from a destructor as the thread unwinds, and ends there.
+    #[tokio::test(start_paused = true)]
+    async fn a_line_panicking_as_the_first_probe_is_sent_hands_the_probes_turn_on() {
+        let breaker = breaker(1, 1);
+        probe_due(&breaker).await;
+        let probe = breaker.admit(BOUND).expect("the open time passed");
+        let lines = tracing::subscriber::set_default(Failing);
+        assert!(unwinds(|| probe.send(BOUND, None).settle(None)));
+        drop(lines);
+
+        assert_eq!(breaker.state(), "open", "the probe's turn is free");
+        assert!(all_told(&breaker), "neither line is told again");
+        a_later_call_closes(&breaker).await;
+    }
+
+    /// A line panicking out of an opening leaves the breaker open for its
+    /// open time, whatever opened it: the failures of its window, a failed
+    /// probe, or a switch by hand.
+    #[tokio::test(start_paused = true)]
+    async fn a_line_panicking_out_of_an_opening_leaves_the_breaker_open_for_its_open_time() {
+        let by_failures = breaker(1, 1);
+        let by_a_probe = breaker(1, 1);
+        probe_due(&by_a_probe).await;
+        let probe = by_a_probe
+            .admit(BOUND)
+            .expect("the open time passed")
+            .send(BOUND, None);
+        let by_hand = breaker(1, 1);
+
+        let lines = tracing::subscriber::set_default(Failing);
+        assert!(unwinds(|| attempt(&by_failures, true)));
+        assert!(unwinds(|| probe.settle(Some(DOWN))));
+        assert!(unwinds(|| by_hand.open_manually(OPEN_FOR)));
+        drop(lines);
+
+        let opened = [by_failures, by_a_probe, by_hand];
+        for breaker in &opened {
+            assert_eq!((breaker.state(), refused_for(breaker)), ("open", OPEN_FOR));
+        }
+        for breaker in &opened {
+            a_later_call_closes(breaker).await;
+        }
+    }
+
+    /// A line panicking out of a closing leaves the breaker closed and
+    /// counting: by the last probe of its series, or by hand.
+    #[tokio::test(start_paused = true)]
+    async fn a_line_panicking_out_of_a_closing_leaves_the_breaker_closed() {
+        let by_a_probe = breaker(1, 1);
+        probe_due(&by_a_probe).await;
+        let probe = by_a_probe
+            .admit(BOUND)
+            .expect("the open time passed")
+            .send(BOUND, None);
+        let by_hand = breaker(1, 1);
+        attempt(&by_hand, true);
+
+        let lines = tracing::subscriber::set_default(Failing);
+        assert!(unwinds(|| probe.settle(None)));
+        assert!(unwinds(|| by_hand.close_manually()));
+        drop(lines);
+
+        for breaker in [by_a_probe, by_hand] {
+            assert_eq!(breaker.state(), "closed");
+            attempt(&breaker, false);
+            assert_eq!(breaker.stats().outcomes, 1, "it counts again");
+            assert!(all_told(&breaker));
+        }
+    }
+
+    /// A probe abandoned once sent files the breaker open again from its
+    /// drop: a line panicking out of it leaves the probe's turn free, as the
+    /// drop of a probe never sent and an ignored answer do, which file
+    /// nothing and so never unwind.
+    #[tokio::test(start_paused = true)]
+    async fn a_line_panicking_as_a_probes_turn_is_handed_on_leaves_the_turn_free() {
+        let abandoned = breaker(1, 1);
+        probe_due(&abandoned).await;
+        let sent = abandoned
+            .admit(BOUND)
+            .expect("the open time passed")
+            .send(BOUND, None);
+        let withdrawn = breaker(1, 1);
+        probe_due(&withdrawn).await;
+        let pass = withdrawn.admit(BOUND).expect("the open time passed");
+        let ignored = breaker(1, 1);
+        probe_due(&ignored).await;
+        let answered = ignored
+            .admit(BOUND)
+            .expect("the open time passed")
+            .send(BOUND, None);
+
+        let lines = tracing::subscriber::set_default(Failing);
+        assert!(unwinds(|| drop(sent)), "the breaker says it is open again");
+        assert!(!unwinds(|| drop(pass)));
+        assert!(!unwinds(|| answered.ignore()));
+        drop(lines);
+
+        assert_eq!(
+            (abandoned.state(), withdrawn.state(), ignored.state()),
+            ("open", "open", "half_open")
+        );
+        for breaker in [abandoned, withdrawn, ignored] {
+            assert!(breaker.admit(BOUND).is_ok(), "the next call probes at once");
+            a_later_call_closes(&breaker).await;
+        }
+    }
+
+    /// An attempt dropped as its caller's own panic unwinds tells its
+    /// transition from a destructor: a line panicking there ends there, where
+    /// a second panic out of a destructor would abort the process — a probe
+    /// abandoned, and an attempt past its bound whose timeout opens the
+    /// breaker.
+    #[tokio::test(start_paused = true)]
+    async fn a_line_panicking_as_an_attempt_is_dropped_by_a_panic_ends_in_its_drop() {
+        let probed = breaker(1, 1);
+        probe_due(&probed).await;
+        let probe = probed
+            .admit(BOUND)
+            .expect("the open time passed")
+            .send(BOUND, None);
+        let timed_out = breaker(1, 1);
+        let late = timed_out
+            .admit(BOUND)
+            .expect("a closed breaker admits")
+            .send(BOUND, Some(Instant::now()));
+
+        let lines = tracing::subscriber::set_default(Failing);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _dropped = (probe, late);
+            panic!("the caller's own");
+        }));
+        drop(lines);
+
+        let payload = unwound.expect_err("the caller's panic unwinds on");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"the caller's own"),
+            "its own panic, and no line's"
+        );
+        assert_eq!((probed.state(), timed_out.state()), ("open", "open"));
+        for breaker in [probed, timed_out] {
+            a_later_call_closes(&breaker).await;
+        }
+    }
+
+    /// A subscriber that has another thread close the breaker by hand from
+    /// inside the first transition's line it files, and panics out of the
+    /// next: that thread's transition, queued behind the line and told here.
+    struct FailingOnAnothers {
+        breaker: Arc<Breaker>,
+        filed: AtomicUsize,
+    }
+
+    impl tracing::Subscriber for FailingOnAnothers {
+        taking_events_alone!();
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            if Line::of(event).is_none() {
+                return;
+            }
+            assert_eq!(
+                self.filed.fetch_add(1, Ordering::SeqCst),
+                0,
+                "the subscriber fails on the other thread's line"
+            );
+            let breaker = Arc::clone(&self.breaker);
+            std::thread::spawn(move || breaker.close_manually())
+                .join()
+                .expect("the other thread queues its transition and returns");
+        }
+    }
+
+    /// A line panicking on a transition another thread made, told by the
+    /// thread sending a probe, unwinds that probe's send: the breaker is in
+    /// the phase the other thread's switch put it in, which voided the
+    /// probe's turn, and nothing is left to tell.
+    #[tokio::test(start_paused = true)]
+    async fn a_line_panicking_on_another_threads_transition_unwinds_the_thread_telling_it() {
+        let breaker = Arc::new(breaker(1, 1));
+        probe_due(&breaker).await;
+        let probe = breaker.admit(BOUND).expect("the open time passed");
+        let lines = tracing::subscriber::set_default(FailingOnAnothers {
+            breaker: Arc::clone(&breaker),
+            filed: AtomicUsize::new(0),
+        });
+        assert!(unwinds(|| probe.send(BOUND, None).settle(None)));
+        drop(lines);
+
+        assert_eq!(breaker.state(), "closed", "closed by the other thread");
+        assert!(all_told(&breaker));
+        attempt(&breaker, false);
+        assert_eq!(breaker.stats().outcomes, 1, "it counts again");
+    }
+
+    /// A reader's waker panicking as it is woken, as an executor's own may.
+    struct PanickingWaker;
+
+    impl std::task::Wake for PanickingWaker {
+        fn wake(self: Arc<Self>) {
+            panic!("the reader's waker fails");
+        }
+    }
+
+    /// A subscription's waker panicking out of a transition's event unwinds
+    /// what moved the breaker, as a line does: the breaker is in the phase it
+    /// entered, the event is the subscription's to read, and the probe whose
+    /// send it unwound hands its turn on.
+    #[tokio::test(start_paused = true)]
+    async fn a_waker_panicking_out_of_a_transitions_event_leaves_the_breaker_moved() {
+        use std::task::{Context, Poll, Waker};
+
+        use BreakerPhase::{Closed, HalfOpen, Open};
+
+        let subscribers = Arc::<Subscribers>::default();
+        let breaker = Breaker::new(
+            "upstream",
+            1,
+            1,
+            OPEN_FOR,
+            None,
+            1,
+            Arc::new(Counters::new("upstream")),
+            Arc::clone(&subscribers),
+        );
+        let mut events = subscribers.subscribe();
+        let waker = Waker::from(Arc::new(PanickingWaker));
+        let mut reader = Context::from_waker(&waker);
+        let transition = |from, to| {
+            Poll::Ready(Some(ResilienceEvent::Transition {
+                from,
+                to,
+                manual: false,
+            }))
+        };
+
+        let mut next = Box::pin(events.next());
+        assert!(next.as_mut().poll(&mut reader).is_pending());
+        assert!(unwinds(|| attempt(&breaker, true)));
+        assert_eq!(breaker.state(), "open");
+        assert_eq!(next.as_mut().poll(&mut reader), transition(Closed, Open));
+        drop(next);
+
+        tokio::time::advance(OPEN_FOR).await;
+        let mut next = Box::pin(events.next());
+        assert!(next.as_mut().poll(&mut reader).is_pending());
+        let probe = breaker.admit(BOUND).expect("the open time passed");
+        assert!(unwinds(|| probe.send(BOUND, None).settle(None)));
+        assert_eq!(breaker.state(), "open", "the probe's turn is free");
+        assert_eq!(next.as_mut().poll(&mut reader), transition(Open, HalfOpen));
+        drop(next);
+        let mut next = Box::pin(events.next());
+        assert_eq!(next.as_mut().poll(&mut reader), transition(HalfOpen, Open));
+        drop(next);
+
+        assert!(all_told(&breaker));
+        a_later_call_closes(&breaker).await;
+    }
+
+    /// What a [`Cut`] encloses: its own extent, one inside another ending as
+    /// the outer goes on, and one a panic unwinds out of ending there.
+    #[test]
+    fn a_cut_encloses_its_own_extent_and_ends_as_it_unwinds() {
+        assert!(!Cut::encloses());
+        Cut::dropping(|| {
+            assert!(Cut::encloses());
+            Cut::dropping(|| assert!(Cut::encloses()));
+            assert!(Cut::encloses(), "the outer one goes on");
+        });
+        assert!(!Cut::encloses());
+        assert!(unwinds(|| Cut::dropping(|| panic!("the drop panics"))));
+        assert!(!Cut::encloses(), "ended as it unwound");
+    }
+
+    /// An attempt in flight dropped inside a [`Cut`] has timed out, whatever
+    /// its own bound: a failure in the window, and a probe failing — where
+    /// its caller's drop counts for nothing and hands a probe's turn on. One
+    /// settled, ignored or admitted and not sent counts as it did.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_dropped_inside_a_cut_has_timed_out() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let breaker = breaker(2, 2);
+        let admit = || breaker.admit(BOUND).expect("a closed breaker admits");
+
+        drop(admit().send(BOUND, None));
+        assert_eq!(breaker.stats().outcomes, 0, "its caller's drop");
+        Cut::dropping(|| drop(admit()));
+        assert_eq!(breaker.stats().outcomes, 0, "never sent");
+        let (settled, ignored) = (admit().send(BOUND, None), admit().send(BOUND, None));
+        Cut::dropping(|| {
+            settled.settle(None);
+            ignored.ignore();
+        });
+        assert_eq!(
+            (breaker.stats().outcomes, breaker.stats().failures),
+            (1, 0),
+            "each counted as it answered"
+        );
+
+        let far = Instant::now() + Duration::from_secs(3600);
+        let (unbounded, bounded) = (admit().send(BOUND, None), admit().send(BOUND, Some(far)));
+        Cut::dropping(|| drop(unbounded));
+        assert_eq!(breaker.stats().failures, 1);
+        Cut::dropping(|| drop(bounded));
+        assert_eq!(breaker.state(), "open", "two timeouts opened it");
+        let opened = lines.find(TARGET, MOVED).pop().expect("the opening");
+        assert_eq!(opened.field("error").as_deref(), Some(TIMED_OUT));
+
+        tokio::time::advance(OPEN_FOR).await;
+        let pass = breaker.admit(BOUND).expect("the open time passed");
+        Cut::dropping(|| drop(pass));
+        let probe = breaker
+            .admit(BOUND)
+            .expect("a probe never sent hands its turn on")
+            .send(BOUND, None);
+        Cut::dropping(|| drop(probe));
+        assert_eq!(
+            (breaker.state(), refused_for(&breaker)),
+            ("open", OPEN_FOR),
+            "the probe failed, and the breaker is open for its whole open time"
+        );
     }
 }

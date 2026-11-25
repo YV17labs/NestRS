@@ -1,7 +1,9 @@
 //! Covers `src/safe_link.rs` against real answers: what `error_message` says
 //! of each kind of error reqwest raises on an exchange with a TLS peer — its
-//! kind, a status by its code, a cause by what its type tells — and never a
-//! word the peer wrote, nor the URL the request was sent to.
+//! kind, a status by its code, a cause by what its type tells or its own
+//! `SafeLink` says — and never a word the peer wrote, nor the URL the request
+//! was sent to, wherever an error holds reqwest's: named bare, behind a
+//! pointer or inside an I/O error.
 
 use std::error::Error;
 use std::time::Duration;
@@ -188,6 +190,50 @@ async fn a_cause_of_a_type_this_crate_cannot_read_is_not_said() {
     assert_eq!(said(&error), "error following redirect");
 }
 
+/// An error another crate's `SafeLink` claims, saying what it is made with and
+/// naming a cause that says the same.
+#[derive(Debug)]
+struct Coded(String, Option<Quoting>);
+
+impl std::fmt::Display for Coded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Error for Coded {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.1.as_ref().map(|cause| cause as _)
+    }
+}
+
+nest_rs_core::inventory::submit! {
+    nest_rs_core::SafeLink::new(|link| link.is::<Coded>().then(|| "refused R42".to_owned()))
+}
+
+/// A cause another crate's `SafeLink` claims is said as that crate says it,
+/// with nothing beneath it: the driver's sentence is the whole of its meaning.
+#[tokio::test]
+async fn a_cause_another_crates_safe_link_claims_is_said_by_it_and_nothing_below_it() {
+    let error = refused_with(|location| {
+        Box::new(Coded(
+            format!("no redirect to {location}"),
+            Some(Quoting(format!("operation timed out at {location}"))),
+        ))
+    })
+    .await;
+    assert_eq!(said(&error), "error following redirect: refused R42");
+
+    let held = refused_with(|location| {
+        Box::new(std::io::Error::other(Coded(
+            format!("no redirect to {location}"),
+            None,
+        )))
+    })
+    .await;
+    assert_eq!(said(&held), "error following redirect: refused R42");
+}
+
 /// hyper's shape for a trailer it refuses: an I/O error whose sentence is the
 /// held error's, quoting what the peer sent.
 #[tokio::test]
@@ -316,5 +362,131 @@ async fn a_certificate_for_another_name_is_said_without_the_names_it_holds() {
     assert_eq!(
         said(&error),
         "error sending request: invalid peer certificate: certificate not valid for name"
+    );
+}
+
+/// What thiserror's `#[source]` makes of a field: a sentence of the error's
+/// own, and the field handed out as the link — the pointer itself where the
+/// field is one, which `std` makes an error displaying what it holds.
+#[derive(Debug)]
+struct Naming<S>(S);
+
+impl<S> std::fmt::Display for Naming<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the carrier failed")
+    }
+}
+
+impl<S: Error + 'static> Error for Naming<S> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+type Shared = std::sync::Arc<dyn Error + Send + Sync>;
+
+/// Each way an error names reqwest's as its source without holding it bare:
+/// shared, since reqwest's error is no `Clone`; boxed, to stay small; erased;
+/// beneath reqwest-middleware's; and inside the I/O error a reader over a
+/// body's stream makes of it.
+fn named(error: reqwest::Error, shape: usize) -> Option<Box<dyn Error>> {
+    use std::io::Error as Io;
+    use std::sync::Arc;
+
+    use reqwest_middleware::Error as Middleware;
+
+    Some(match shape {
+        0 => Box::new(Naming(error)),
+        1 => Box::new(Naming(Arc::new(error))),
+        2 => Box::new(Naming(Box::new(error))),
+        3 => Box::new(Naming(Arc::new(error) as Shared)),
+        4 => Box::new(Naming(Arc::new(Box::new(error)) as Shared)),
+        5 => Box::new(Naming(Arc::new(Arc::new(error) as Shared) as Shared)),
+        6 => Box::new(Naming(Arc::new(Middleware::Reqwest(error)))),
+        7 => Box::new(Naming(Box::new(Middleware::Reqwest(error)))),
+        8 => Box::new(Naming(Arc::new(Middleware::middleware(error)))),
+        9 => Box::new(Naming(Arc::new(Middleware::middleware(Arc::new(error))))),
+        10 => Box::new(Naming(Io::other(error))),
+        11 => Box::new(Naming(Io::other(Arc::new(error)))),
+        12 => Box::new(Naming(Io::other(Io::other(Box::new(error))))),
+        13 => Box::new(Naming(Arc::new(Io::other(error)))),
+        14 => Box::new(Naming(Io::other(Middleware::Reqwest(error)))),
+        _ => return None,
+    })
+}
+
+/// A pointer to reqwest's error handed out as the link is said as the error
+/// it holds: its downcast would fail, and its `Display` is reqwest's whole.
+#[tokio::test]
+async fn a_reqwest_error_named_as_a_source_behind_a_pointer_is_said_as_one_named_bare() {
+    let peer = peer([PeerAnswer::status(503)]).await;
+    let client = trusting().build().expect("a client");
+    for shape in 0.. {
+        let error = client
+            .get(peer.url(PARCEL))
+            .send()
+            .await
+            .expect("the peer answers")
+            .error_for_status()
+            .expect_err("no success");
+        let Some(named) = named(error, shape) else {
+            assert!(shape > 14, "every shape was read");
+            break;
+        };
+        assert!(
+            named
+                .source()
+                .is_some_and(|link| link.to_string().contains(SENT)),
+            "the link's own sentence quotes the URL: {named:?}"
+        );
+
+        assert_eq!(
+            error_message(&*named),
+            "the carrier failed: HTTP status server error (503)",
+            "shape {shape}"
+        );
+    }
+}
+
+/// The causes beneath a reqwest error held behind a pointer are said as
+/// beneath one held bare: rustls names the certificate it refuses by the
+/// names its issuer wrote.
+#[tokio::test]
+async fn the_causes_of_a_reqwest_error_behind_a_pointer_are_said_without_a_certificates_names() {
+    let other = AUTHORITY.server(&["ledger.internal"]);
+    let peer = HttpsPeer::answering(&other, [PeerAnswer::status(200)]).await;
+    let client = trusting().build().expect("a client");
+    for shape in 0.. {
+        let error = client
+            .get(peer.url(PARCEL))
+            .send()
+            .await
+            .expect_err("not this host's certificate");
+        let Some(named) = named(error, shape) else {
+            break;
+        };
+
+        assert_eq!(
+            error_message(&*named),
+            "the carrier failed: error sending request: invalid peer certificate: certificate \
+             not valid for name",
+            "shape {shape}"
+        );
+    }
+}
+
+/// An I/O error holding no reqwest error is no link this crate claims: it is
+/// said as `error_message` says any other.
+#[tokio::test]
+async fn an_io_error_holding_no_reqwest_error_stays_its_own() {
+    let own = Naming(std::io::Error::other(Quoting(
+        "the disk is full".to_owned(),
+    )));
+    assert_eq!(said(&own), "the carrier failed: the disk is full");
+
+    let os = Naming(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+    assert_eq!(
+        said(&os),
+        format!("the carrier failed: {}", std::io::ErrorKind::BrokenPipe)
     );
 }

@@ -53,3 +53,34 @@
   > another type than the function's has nothing stable to read. Could the
   > expansion mark the body and its ascribed type in a documented way, or
   > `#[instrument]` take the type to ascribe?
+
+## `#[instrument]` changes the order an `async fn` drops its arguments in
+
+- **Seen** — 0.1.31: `gen_block` (`src/expand.rs`) moves an `async fn`'s body
+  into `async move { … }`, whose captures drop in the order the body first names
+  them (`rustc.md`), where the same function without the attribute drops its
+  parameters last declared first. `nest-rs-resilience`'s
+  `dropped::beside_an_instrument_the_arguments_drop_in_the_order_its_future_takes_them`
+  runs the instrumented method with no policy.
+- **Effect** — writing `#[tracing::instrument]` on a method taking a guard and
+  what it guards can release the guard first.
+- **Our side** — none for an instrumented method with no policy. Under one, a
+  method run once drops its arguments in the instrument's order where the
+  instrument is written above `#[resilient]`, sent or refused unsent, and last
+  declared first where it is written below; the same test pins both.
+- **Canary** — that test: its instrumented method drops last declared first the
+  day the attribute keeps the order.
+- **Upstream** — not filed.
+- **When fixed** — `captured` in
+  `crates/nest-rs-resilience-macros/src/resilient.rs` no longer leaves out a
+  method an instrument sits above. An hour.
+- **Ticket** —
+
+  > **`#[instrument]` changes an `async fn`'s drop order**
+  >
+  > An `async fn` drops its parameters in the reverse of their declaration. The
+  > attribute moves the body into `async move { … }`, which drops its captures
+  > in the order the body first mentions them, so a guard taken by value can be
+  > released before the value declared after it. Opening the block on
+  > `let _ = (&last, …, &first);` restores the order for the parameters the body
+  > names.

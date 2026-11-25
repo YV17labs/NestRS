@@ -26,7 +26,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use crate::TARGET;
 #[cfg(feature = "reqwest")]
 use crate::breaker::HeldAttempt;
-use crate::breaker::{Breaker, BreakerState, BreakerStats, Pass, Sent};
+use crate::breaker::{Breaker, BreakerState, BreakerStats, Cut, Pass, Sent};
 #[cfg(feature = "reqwest")]
 use crate::bulkhead::HeldSlot;
 use crate::bulkhead::{Bulkhead, Slot};
@@ -57,7 +57,14 @@ use crate::told::told;
 /// Each attempt is given up past the policy's timeout or the deadline of the
 /// unit it runs in (`nest_rs_core::Deadline`), whichever comes first, and its
 /// [`CancellationToken`] cancelled, so work the call handed to another task
-/// stops with it; no retry starts whose wait ends past that deadline. A call is attempted again only when it is declared
+/// stops with it; no retry starts whose wait ends past that deadline. A call
+/// under one policy made from an attempt of another — a decorated method
+/// calling a second dependency's — is given up with that attempt, when that
+/// one's bound ends first: its own attempt, in flight there, counts as timed
+/// out in its own breaker, so a dependency that never answers opens the
+/// breaker naming it however short the timeout its caller runs under, and
+/// what its run held unsent — a slot, a token, a probe's turn — is given
+/// back, counted for nothing. A call is attempted again only when it is declared
 /// idempotent, through [`run_idempotent`](Self::run_idempotent): replaying one
 /// that is not would charge a card twice. An attempt's success or failure
 /// counts in the circuit breaker, which refuses every call at once while it is
@@ -428,9 +435,12 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// the next attempt and the run's answer wait for, and one given up before
     /// its savepoint was answered — its unit waiting for a connection, or for
     /// that answer — leaves the unit as it was; and a run dropped mid-attempt,
-    /// once its savepoint was answered, leaves its unit unable to commit, as an
-    /// atomic block dropped does. A savepoint the database cannot settle ends
-    /// the run on [`ResilienceError::Unsettled`].
+    /// once its savepoint was answered, leaves what holds that savepoint
+    /// unable to commit, as an atomic block dropped does: its unit — or, for a
+    /// run nested in another run's attempt or in an atomic block, that
+    /// attempt's savepoint or that block alone, which is rolled back while
+    /// the unit goes on to commit. A savepoint the database cannot settle
+    /// ends the run on [`ResilienceError::Unsettled`].
     ///
     /// An attempt's wait for its unit counts against its bound: of two such
     /// calls joined in one transaction, the second's first statement waits
@@ -865,7 +875,10 @@ impl<'p, I: Instance> Run<'p, I> {
         }
     }
 
-    /// The run's last attempt, its refusal counted when it ended on one.
+    /// The run's last attempt, its refusal counted and told when it ended on
+    /// one — as the attempt ends, before its savepoint settles: an edge
+    /// cutting the unit at the deadline the attempt was given up at drops the
+    /// run while it rolls back, and the breaker has counted that timeout.
     pub(crate) fn finish<T>(&self, attempted: Attempted<T>) -> Attempted<T> {
         let terms = &self.terms;
         attempted.map_err(|refusal| terms.policy.refused(terms.method.as_ref(), refusal))
@@ -1084,12 +1097,15 @@ impl<I> Held<I> {
     /// changes nothing.
     pub(crate) fn settle(&mut self, failure: Option<&str>) {
         let policy = &*self.policy;
-        // The breaker first, as a run's drop hands a probe's turn on before its slot.
+        // Freed after the breaker, as a run's drop hands a probe's turn on before
+        // its slot — and as the breaker's telling unwinds, should a line panic.
+        let _slot = self
+            .slot
+            .take()
+            .zip(policy.bulkhead.as_deref())
+            .map(|(slot, bulkhead)| bulkhead.resume(slot));
         if let Some((attempt, breaker)) = self.attempt.take().zip(policy.breaker.as_deref()) {
             breaker.resume(attempt).settle(failure);
-        }
-        if let Some((slot, bulkhead)) = self.slot.take().zip(policy.bulkhead.as_deref()) {
-            bulkhead.free(slot);
         }
     }
 }
@@ -1137,9 +1153,10 @@ impl<I: Instance> Terms<'_, I> {
     /// What the run does once an attempt's savepoint settled, `ended` being
     /// what the attempt ended on: its answer to answer, its call to send
     /// again, its panic unwinding on. A savepoint the database could not
-    /// settle ends the run there, whatever the attempt answered: nothing that
-    /// attempt wrote stands. Its line tells why, the cause's chain as its
-    /// `error`: a driver owes no line of its own for it, and the
+    /// settle ends the run there, whatever the attempt answered — a timeout
+    /// it was given up at counted and told already, as the attempt's:
+    /// nothing that attempt wrote stands. Its line tells why, the cause's
+    /// chain as its `error`: a driver owes no line of its own for it, and the
     /// [`Unsettled`](ResilienceError::Unsettled) holding it reaches the run's
     /// caller alone, never past a panic unwinding on.
     fn after_savepoint<T, E>(
@@ -1186,8 +1203,10 @@ pub(crate) struct Retry {
 /// instant that ends at: its timer is armed at that instant, so it is due with
 /// the edge's cut at the deadline however long the call takes to first wait,
 /// and an attempt the edge cuts there first has timed out all the same
-/// ([`Sent`]). Under no deadline it ends at no instant, and an attempt
-/// dropped past it counts for nothing.
+/// ([`Sent`]). Under no deadline it ends at no instant, and an attempt its
+/// caller drops past it counts for nothing. Under either, an attempt dropped
+/// by the timeout of a policy around it has timed out, whatever its own bound
+/// has left ([`Cut`]).
 #[derive(Clone, Copy)]
 pub(crate) struct Bound {
     wait: Duration,
@@ -1628,7 +1647,12 @@ impl<'p, const HOLDS: bool> Attempt<'p, HOLDS> {
     {
         self.stage = AttemptStage::Answered;
         self.cancel = None;
-        call.spend();
+        match &answered {
+            Ok(_) | Err(Unanswered::Panicked(_)) => call.spend(),
+            // An attempt of another policy in flight in the call is dropped by
+            // this timeout, never by its caller.
+            Err(_elapsed) => Cut::dropping(|| call.spend()),
+        }
         let answered = answered.and_then(|attempt| {
             let answer = R::split(attempt);
             match catch_unwind(AssertUnwindSafe(|| judge(&answer))) {
@@ -1798,7 +1822,7 @@ where
                 let (ended, settled_as) = ready!(settling.poll(cx));
                 *this.settling = None;
                 break match run.terms.after_savepoint(ended, settled_as) {
-                    Ok(Next::Answer(attempted)) => settled(run.finish(attempted)),
+                    Ok(Next::Answer(attempted)) => settled(attempted),
                     Ok(Next::Again(_)) => unreachable!("a call sent once is not sent again"),
                     Err(unsettled) => Err(unsettled),
                 };
@@ -1821,8 +1845,9 @@ where
                     None => std::panic::resume_unwind(unwound),
                 },
             };
+            let attempted = run.finish(attempted);
             let Some(savepoint) = savepoint else {
-                break settled(run.finish(attempted));
+                break settled(attempted);
             };
             let keep = matches!(attempted, Ok((Ok(_), _)));
             *this.settling = Some(savepoint.settle(keep, Ended::Answer(attempted)));
@@ -1900,7 +1925,7 @@ where
                 let (ended, settled_as) = ready!(settling.poll(cx));
                 *this.settling = None;
                 match run.terms.after_savepoint(ended, settled_as) {
-                    Ok(Next::Answer(attempted)) => break settled(run.finish(attempted)),
+                    Ok(Next::Answer(attempted)) => break settled(attempted),
                     Ok(Next::Again(retry)) => run.retrying(retry.wait, retry.error.as_deref()),
                     Err(unsettled) => break Err(unsettled),
                 }
@@ -1942,6 +1967,7 @@ where
                     *this.settling = Some(savepoint.settle(false, Ended::Again(retry)));
                 }
                 (Some(savepoint), None) => {
+                    let attempted = run.finish(attempted);
                     let keep = matches!(attempted, Ok((Ok(_), _)));
                     *this.settling = Some(savepoint.settle(keep, Ended::Answer(attempted)));
                 }
@@ -2122,6 +2148,7 @@ fn settled<T, E>(attempted: Attempted<Result<T, E>>) -> Result<T, ResilienceErro
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicU32;
+    use std::task::Waker;
 
     use nest_rs_config::{Config, ConfigService};
     use nest_rs_core::{CarriesRemedy, error_message, instance};
@@ -7103,5 +7130,505 @@ mod tests {
         );
         assert!(policy.run(|_| answering()).await.is_ok());
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+    }
+
+    /// Every event `events` was told and has not answered yet, waiting for none.
+    fn heard(events: &mut ResilienceEvents) -> Vec<ResilienceEvent> {
+        let mut heard = Vec::new();
+        loop {
+            // Outside tokio's budget, which would end a long read as if it waited.
+            let mut next = pin!(tokio::task::unconstrained(events.next()));
+            match next.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+                Poll::Ready(Some(event)) => heard.push(event),
+                Poll::Ready(None) | Poll::Pending => return heard,
+            }
+        }
+    }
+
+    /// A token brought forward to a probe waiting for it moves when that
+    /// probe has answered at the latest: a call refused beside it is told the
+    /// wait to the nearer token, then the probe's bound.
+    #[tokio::test(start_paused = true)]
+    async fn a_token_brought_forward_to_a_waiting_probe_moves_what_a_refused_call_is_told() {
+        let policy = policy(ResilienceConfig {
+            rate_limit: Some(1),
+            rate_window: Duration::from_secs(10),
+            rate_wait: Some(Duration::from_secs(60)),
+            ..probing(Duration::from_secs(5))
+        });
+        assert!(policy.run(|_| answering()).await.is_ok());
+        let mut ahead = Box::pin(policy.run(|_| answering()));
+        park(&mut ahead).await;
+        policy
+            .open_breaker(Duration::from_secs(1))
+            .expect("a breaker");
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let mut probe = Box::pin(policy.run(|_| answering()));
+        park(&mut probe).await;
+        let told = async || match policy.run(|_| answering()).await {
+            Err(ResilienceError::Open { retry_after, .. }) => retry_after.as_secs(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(told().await, 24, "its token at 20 s, then 5 s");
+        drop(ahead);
+        park(&mut probe).await;
+        assert_eq!(told().await, 14, "its token at 10 s, then 5 s");
+    }
+
+    /// A policy with no breaker and no retry, each attempt given up past
+    /// `timeout`: the one a call to another dependency's policy is made under.
+    fn around(timeout: Duration) -> ResiliencePolicy<Upstream> {
+        policy(ResilienceConfig {
+            timeout,
+            retries: None,
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        })
+    }
+
+    /// A dependency's policy: each attempt given up past five seconds, sent
+    /// once, and two failures of its latest two attempts opening its breaker
+    /// for a second.
+    fn guarding() -> ResilienceConfig {
+        ResilienceConfig {
+            timeout: Duration::from_secs(5),
+            retries: None,
+            breaker_window: Some(2),
+            breaker_failures: 2,
+            breaker_open: Duration::from_secs(1),
+            ..ResilienceConfig::default()
+        }
+    }
+
+    /// A call to a dependency that never answers.
+    fn silent() -> std::future::Pending<Result<(), Refused>> {
+        std::future::pending()
+    }
+
+    /// The outcomes `policy`'s breaker counts, and the failures among them.
+    fn counted(policy: &ResiliencePolicy<Upstream>) -> (usize, usize) {
+        let stats = policy.breaker_stats().expect("a breaker");
+        (stats.outcomes, stats.failures)
+    }
+
+    /// Whether `cut` is the timeout of the policy around, given up past `timeout`.
+    fn timed_out_at<T: fmt::Debug, E: fmt::Debug>(
+        cut: &Result<T, ResilienceError<E>>,
+        timeout: Duration,
+    ) -> bool {
+        matches!(cut, Err(ResilienceError::TimedOut { timeout: at, .. }) if *at == timeout)
+    }
+
+    /// An attempt in flight as the timeout of a policy around it drops it has
+    /// timed out: its own breaker counts it, sent once or again, under a
+    /// unit's deadline or none, and opens on a dependency that never answers
+    /// however short the timeout of the policy its caller runs under. No
+    /// event tells it and no refusal counts it, no caller being left to
+    /// answer: the opening alone is told.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_the_timeout_of_a_policy_around_it_drops_has_timed_out_in_its_own_breaker() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let short = Duration::from_secs(2);
+        let outer = around(short);
+        for (idempotent, deadline) in [
+            (false, None),
+            (true, None),
+            (false, Some(60)),
+            (true, Some(60)),
+        ] {
+            let inner = policy(ResilienceConfig {
+                retries: Some(1),
+                ..guarding()
+            });
+            let mut events = inner.events();
+            for hung in 1..=2 {
+                let deadline = deadline.map(|secs| Instant::now() + Duration::from_secs(secs));
+                let cut = nest_rs_core::__private::with_deadline(
+                    deadline,
+                    outer.run(|_| async {
+                        if idempotent {
+                            inner.run_idempotent(|_| silent()).await
+                        } else {
+                            inner.run(|_| silent()).await
+                        }
+                    }),
+                )
+                .await;
+                assert!(timed_out_at(&cut, short), "{cut:?}");
+                if hung == 1 {
+                    assert_eq!(counted(&inner), (1, 1), "idempotent: {idempotent}");
+                }
+            }
+            assert!(
+                matches!(inner.breaker_state(), Some(BreakerState::Open { .. })),
+                "idempotent: {idempotent}, deadline: {deadline:?}: {:?}",
+                inner.breaker_state()
+            );
+            assert_eq!(
+                heard(&mut events),
+                [ResilienceEvent::Transition {
+                    from: crate::BreakerPhase::Closed,
+                    to: crate::BreakerPhase::Open,
+                    manual: false,
+                }],
+                "the opening, and no timeout of a run no caller waits for"
+            );
+        }
+        let openings = lines.find(TARGET, BREAKER_MOVED);
+        assert_eq!(openings.len(), 4);
+        for opening in openings {
+            assert_eq!(
+                (opening.field("failed"), opening.field("error")),
+                (Some("2".to_owned()), Some(TIMED_OUT.to_owned())),
+                "{opening:?}"
+            );
+        }
+    }
+
+    /// Under one unit's deadline, sooner than either timeout, an attempt and
+    /// the one of the policy around it end at the same instant: each counts
+    /// once, whichever timer the runtime polls first — the inner attempt's
+    /// own, the outer's, or the edge's.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_cut_with_the_one_around_it_at_their_units_deadline_counts_once() {
+        let soon = Duration::from_millis(300);
+        for edge_first in [false, true] {
+            let (outer, inner) = (policy(guarding()), policy(guarding()));
+            let nested = outer.run(|_| inner.run(|_| silent()));
+            let deadline = Instant::now() + soon;
+            if edge_first {
+                let cut = cut_first_at(deadline, nested).await;
+                assert!(cut.is_none(), "the edge cut the unit first: {cut:?}");
+            } else {
+                let cut = nest_rs_core::__private::with_deadline(Some(deadline), nested).await;
+                assert!(
+                    matches!(
+                        cut,
+                        Err(ResilienceError::Failed(ResilienceError::TimedOut { timeout, .. }))
+                            if timeout == soon
+                    ),
+                    "the inner attempt's own timer, polled first: {cut:?}"
+                );
+            }
+            assert_eq!(
+                (counted(&outer), counted(&inner)),
+                ((1, 1), (1, 1)),
+                "the edge first: {edge_first}"
+            );
+        }
+    }
+
+    /// A probe in flight as the timeout of a policy around it drops it has
+    /// failed: the breaker opens again for its whole open time, filed as a
+    /// failed probe that timed out, rather than handing the turn to the next
+    /// call at once as a probe its caller dropped does.
+    #[tokio::test(start_paused = true)]
+    async fn a_probe_the_timeout_of_a_policy_around_it_drops_has_failed() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let short = Duration::from_secs(2);
+        let outer = around(short);
+        let inner = policy(probing(Duration::from_secs(5)));
+        probe_due(&inner).await;
+        let cut = outer.run(|_| inner.run(|_| silent())).await;
+        assert!(timed_out_at(&cut, short), "{cut:?}");
+        assert_eq!(
+            inner.breaker_state(),
+            Some(BreakerState::Open {
+                retry_after: Duration::from_secs(1)
+            }),
+            "open again for its whole open time"
+        );
+        let reopened = lines
+            .find(TARGET, BREAKER_MOVED)
+            .pop()
+            .expect("the probe's transition");
+        assert_eq!(
+            (
+                reopened.field("state"),
+                reopened.field("failed"),
+                reopened.field("error")
+            ),
+            (
+                Some("open".to_owned()),
+                Some("1".to_owned()),
+                Some(TIMED_OUT.to_owned())
+            ),
+            "{reopened:?}"
+        );
+    }
+
+    /// A run that sent nothing as the timeout of a policy around it drops it
+    /// counts nothing and gives back what it holds: its place among the calls
+    /// waiting for a slot, the token it reserved and the probe's turn it
+    /// waited with, and nothing more than its failed attempt while it backs
+    /// off.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_waiting_as_the_timeout_of_a_policy_around_it_drops_it_counts_nothing() {
+        let short = Duration::from_secs(2);
+        let outer = around(short);
+
+        let for_a_slot = policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(10)),
+            ..guarding()
+        });
+        let slot = for_a_slot.begin(None).await.expect("the one slot");
+        let cut = outer.run(|_| for_a_slot.run(|_| answering())).await;
+        assert!(timed_out_at(&cut, short), "{cut:?}");
+        assert_eq!(counted(&for_a_slot), (0, 0));
+        assert_eq!(for_a_slot.concurrency_waiting(), Some(0));
+        drop(slot);
+
+        let for_a_token = policy(ResilienceConfig {
+            rate_limit: Some(1),
+            rate_window: Duration::from_secs(10),
+            rate_wait: Some(Duration::from_secs(60)),
+            ..probing(Duration::from_secs(5))
+        });
+        let started = Instant::now();
+        let failed = for_a_token.run(|_| async { Err::<(), _>(Refused) }).await;
+        assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let cut = outer.run(|_| for_a_token.run(|_| answering())).await;
+        assert!(timed_out_at(&cut, short), "{cut:?}");
+        assert_eq!(
+            for_a_token.breaker_state(),
+            Some(BreakerState::HalfOpen),
+            "the probe's turn is free, nothing counted against it"
+        );
+        let probed = for_a_token.run(|_| answering()).await;
+        assert!(matches!(probed, Ok(())), "{probed:?}");
+        assert_eq!(
+            started.elapsed(),
+            Duration::from_secs(10),
+            "sent at the token the dropped run gave back, the next one"
+        );
+        assert_eq!(for_a_token.breaker_state(), Some(BreakerState::Closed));
+
+        let backing_off = policy(ResilienceConfig {
+            retries: Some(1),
+            ..guarding()
+        });
+        let cut = around(Duration::from_millis(100))
+            .run(|_| backing_off.run_idempotent(|_| async { Err::<(), _>(Refused) }))
+            .await;
+        assert!(timed_out_at(&cut, Duration::from_millis(100)), "{cut:?}");
+        assert_eq!(counted(&backing_off), (1, 1), "its one failed attempt");
+    }
+
+    /// The timeout of a policy around drops what its own call holds, and
+    /// nothing else: an attempt on a task that call spawned goes on to its
+    /// own bound, and an attempt its caller drops afterwards counts for
+    /// nothing, as before.
+    #[tokio::test(start_paused = true)]
+    async fn the_timeout_of_a_policy_around_reaches_what_its_call_holds_and_no_further() {
+        let short = Duration::from_secs(2);
+        let outer = around(short);
+        let inner = Arc::new(policy(guarding()));
+        let spawned = Arc::clone(&inner);
+        let cut = outer
+            .run(|_| async move {
+                let task = tokio::spawn(async move { spawned.run(|_| silent()).await });
+                task.await.expect("the task is not cancelled")
+            })
+            .await;
+        assert!(timed_out_at(&cut, short), "{cut:?}");
+        assert_eq!(counted(&inner), (0, 0), "the task's attempt goes on");
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert_eq!(counted(&inner), (1, 1), "given up at its own bound, at 5 s");
+
+        let dropped = tokio::time::timeout(short, inner.run(|_| silent())).await;
+        assert!(dropped.is_err(), "its caller dropped it");
+        assert_eq!(
+            counted(&inner),
+            (1, 1),
+            "a caller's drop counts for nothing"
+        );
+    }
+
+    /// The attempts of two policies in flight together in a call the timeout
+    /// of a third drops have each timed out, as have the ones of two nested
+    /// one in the other's — and one of the same policy nested in its own
+    /// attempt, counted before the attempt around it: two timeouts, which
+    /// open the breaker.
+    #[tokio::test(start_paused = true)]
+    async fn every_attempt_in_flight_in_a_call_given_up_at_its_bound_has_timed_out() {
+        let short = Duration::from_secs(2);
+        let (first, second) = (policy(guarding()), policy(guarding()));
+        let cut = around(short)
+            .run(|_| async {
+                let (first, second) =
+                    tokio::join!(first.run(|_| silent()), second.run(|_| silent()));
+                first.and(second)
+            })
+            .await;
+        assert!(timed_out_at(&cut, short), "{cut:?}");
+        assert_eq!((counted(&first), counted(&second)), ((1, 1), (1, 1)));
+
+        let (middle, innermost) = (policy(guarding()), policy(guarding()));
+        let cut = around(short)
+            .run(|_| middle.run(|_| innermost.run(|_| silent())))
+            .await;
+        assert!(timed_out_at(&cut, short), "{cut:?}");
+        assert_eq!((counted(&middle), counted(&innermost)), ((1, 1), (1, 1)));
+
+        let lines = nest_rs_testing::LogCapture::install();
+        let nested = policy(guarding());
+        let cut = nested
+            .run(|_| async {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                nested.run(|_| silent()).await
+            })
+            .await;
+        assert!(timed_out_at(&cut, Duration::from_secs(5)), "{cut:?}");
+        let opened = lines.find(TARGET, BREAKER_MOVED);
+        assert_eq!(opened.len(), 1, "{opened:?}");
+        assert_eq!(
+            (opened[0].field("failed"), opened[0].field("error")),
+            (Some("2".to_owned()), Some(TIMED_OUT.to_owned())),
+            "the inner attempt, due a second later, then the one around it"
+        );
+    }
+
+    /// An attempt holding its call, as the middleware sends a request, is cut
+    /// by the timeout of a policy around it as a run's is: timed out in its
+    /// own breaker.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_holding_its_call_the_timeout_of_a_policy_around_it_drops_has_timed_out() {
+        let short = Duration::from_secs(2);
+        let inner = policy(guarding());
+        let cut = around(short)
+            .run(|_| async {
+                let run = inner.begin(None).await.expect("the request is let through");
+                let (attempted, _outstanding) = run.attempt_once(|_| silent(), judged).await;
+                attempted
+                    .map(drop)
+                    .map_err(ResilienceError::<Refused>::from)
+            })
+            .await;
+        assert!(timed_out_at(&cut, short), "{cut:?}");
+        assert_eq!(counted(&inner), (1, 1));
+    }
+
+    /// A unit of work whose transaction settles the savepoints it opens after
+    /// a wait, as a round trip to the database takes one, or never can.
+    struct Settling(Result<Duration, ()>);
+
+    impl nest_rs_database::Executor for Settling {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
+            Some(Arc::new(Self(self.0)))
+        }
+    }
+
+    impl nest_rs_database::AtomicBlock for Settling {
+        fn settle(
+            self: Arc<Self>,
+            _ok: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), AtomicError>> + Send>> {
+            let settles = self.0;
+            Box::pin(async move {
+                let Ok(wait) = settles else {
+                    return Err(AtomicError::Poisoned { retryable: false });
+                };
+                tokio::time::sleep(wait).await;
+                Ok(())
+            })
+        }
+    }
+
+    /// The run of a call that never answers, in a unit holding `transaction`:
+    /// declared idempotent, or sent once by a method declaring a fallback,
+    /// each of which opens a savepoint.
+    fn silent_in<'p>(
+        policy: &'p ResiliencePolicy<Upstream>,
+        transaction: Settling,
+        idempotent: bool,
+    ) -> Pin<Box<dyn Future<Output = Ran> + 'p>> {
+        let falling_back =
+            crate::resilient::resilient_method(|| "QuotesService", "quote", None, None)
+                .with_fallback();
+        let run: Pin<Box<dyn Future<Output = Ran> + 'p>> = if idempotent {
+            Box::pin(policy.run_idempotent(|_| silent()))
+        } else {
+            Box::pin(policy.run_once::<Ran, _, _, _>(
+                Some(falling_back),
+                judging_by_default(),
+                |_| silent(),
+            ))
+        };
+        Box::pin(nest_rs_database::__private::with_request_executor(
+            Arc::new(transaction),
+            run,
+        ))
+    }
+
+    /// An attempt given up at its unit's deadline is counted and told as it
+    /// ends, before its savepoint is rolled back: the edge cuts the unit at
+    /// that instant and drops the run while it settles, and the timeout the
+    /// breaker counted is told by its event all the same, once.
+    #[tokio::test(start_paused = true)]
+    async fn a_timeout_at_the_units_deadline_is_told_before_its_savepoint_settles() {
+        let second = Duration::from_secs(1);
+        for idempotent in [false, true] {
+            for round_trip in [Duration::ZERO, Duration::from_millis(1)] {
+                let policy = policy(guarding());
+                let mut events = policy.events();
+                let deadline = Instant::now() + second;
+                let cut = tokio::time::timeout_at(
+                    deadline,
+                    nest_rs_core::__private::with_deadline(
+                        Some(deadline),
+                        silent_in(&policy, Settling(Ok(round_trip)), idempotent),
+                    ),
+                )
+                .await;
+                if round_trip.is_zero() {
+                    assert!(
+                        matches!(&cut, Ok(answer) if timed_out_at(answer, second)),
+                        "{cut:?}"
+                    );
+                } else {
+                    assert!(cut.is_err(), "cut while its savepoint settles: {cut:?}");
+                }
+                assert_eq!(counted(&policy), (1, 1));
+                let heard = heard(&mut events);
+                assert!(
+                    matches!(
+                        heard[..],
+                        [ResilienceEvent::Timeout { timeout, .. }] if timeout == second
+                    ),
+                    "idempotent: {idempotent}, settled in {round_trip:?}: {heard:?}"
+                );
+            }
+        }
+    }
+
+    /// A savepoint the database cannot settle ends the run on `Unsettled`
+    /// though its attempt timed out: that timeout is the attempt's, counted
+    /// and told as it ended, and the run's answer says what its unit holds.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_attempt_whose_savepoint_cannot_settle_is_told_then_ends_unsettled() {
+        for idempotent in [false, true] {
+            let policy = policy(guarding());
+            let mut events = policy.events();
+            let unsettled = silent_in(&policy, Settling(Err(())), idempotent).await;
+            assert!(
+                matches!(unsettled, Err(ResilienceError::Unsettled { .. })),
+                "{unsettled:?}"
+            );
+            assert_eq!(counted(&policy), (1, 1));
+            let heard = heard(&mut events);
+            assert!(
+                matches!(
+                    heard[..],
+                    [ResilienceEvent::Timeout { timeout, .. }] if timeout == Duration::from_secs(5)
+                ),
+                "idempotent: {idempotent}: {heard:?}"
+            );
+        }
     }
 }

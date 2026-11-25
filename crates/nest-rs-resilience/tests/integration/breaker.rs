@@ -1829,3 +1829,72 @@ async fn off_them_an_age_of_nine_tenths_differs_only_where_the_reference_is_the_
         "both are drawn: {alike} alike, {forgotten} on a failure forgotten first"
     );
 }
+
+/// A `tracing` subscriber panicking out of the line that says a breaker
+/// half-open, as a layer of the app's may.
+struct PanickingAtHalfOpen;
+
+/// Whether an event says the breaker half-open.
+#[derive(Default)]
+struct SaysHalfOpen(bool);
+
+impl tracing::field::Visit for SaysHalfOpen {
+    fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0 |= format!("{value:?}").contains("half_open");
+    }
+}
+
+impl tracing::Subscriber for PanickingAtHalfOpen {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut says = SaysHalfOpen::default();
+        event.record(&mut says);
+        assert!(!says.0, "the layer fails on this line");
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A layer panicking out of the line a probe's send files unwinds the probe's
+/// run and leaves the probe's turn to the next call: the breaker is never left
+/// half-open on a probe no call holds, which only a switch by hand would end.
+#[tokio::test(start_paused = true)]
+async fn a_layer_panicking_as_a_probe_is_sent_leaves_the_probes_turn_to_the_next_call() {
+    let (_app, policy) = crate::policy(ResilienceConfig {
+        retries: None,
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        breaker_open: OPEN,
+        ..ResilienceConfig::default()
+    })
+    .await;
+    let failed = policy.run(|_| async { Err::<(), _>(Down) }).await;
+    assert!(matches!(failed, Err(ResilienceError::Failed(Down))));
+    tokio::time::advance(OPEN).await;
+
+    let unwound = {
+        let _layer = tracing::subscriber::set_default(PanickingAtHalfOpen);
+        nest_rs_core::panic::contain(policy.run(|_| async { Ok::<_, Down>(()) })).await
+    };
+    assert!(
+        unwound.is_err(),
+        "the layer's panic unwinds the probe's run"
+    );
+
+    let probed = policy.run(|_| async { Ok::<_, Down>(()) }).await;
+    assert!(matches!(probed, Ok(())), "the next call probes: {probed:?}");
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+}

@@ -415,8 +415,9 @@ How each holds:
   refuses 7.0 programs whose attribute names a parameter the field leaves out —
   `#[tracing::instrument(skip(self, ctx))]` beside a `Scoped<T>`, which is no
   `Debug` — a break inside a major. `#[resilient]`, new in 7.1, is the one kept
-  there, in a build where any crate enables its capability, which no 7.0 build
-  can: 7.0 has no such feature.
+  there, in a build where any crate enables its capability: a crate asking for
+  it, which none written against 7.0 does, or for the umbrella's `full`, which
+  takes every capability and which such a crate may write.
 - **`#[resilient]` read by its full path**: the docs import it under its short
   name, as every decorator is.
 - **A call sent once holding its closure in place whatever its size, or its
@@ -521,13 +522,13 @@ How each holds:
   it, which safe Rust cannot write.
 - **An app's own attribute named `resilient` on an operation** is read as the
   framework's in a build where any crate enables the resilience capability:
-  Cargo unifies a package's features across a build, so a dependency, or a
-  workspace member built beside the crate, turns it on for a crate that never
-  asked. The attribute then goes on the developer's method instead of the field,
-  the operation refused unless it spells its `Result<…>` out: there it fails to
-  compile, or compiles and applies to the method alone with no error or warning,
-  an instrument then spanning the method's body and not the field's guards and
-  pipes. The reading is by the path's last segment, so a full path ending in
+  the umbrella's `full` does, and Cargo unifies a package's features across a
+  build, so a dependency, or a workspace member built beside the crate, turns
+  it on for a crate that never asked. The attribute then goes on the
+  developer's method instead of the field, the operation refused unless it
+  spells its `Result<…>` out: there it fails to compile, or compiles and
+  applies to the method alone with no error or warning, an instrument then
+  spanning the method's body and not the field's guards and pipes. The reading is by the path's last segment, so a full path ending in
   `resilient` is read too; the crate imports its attribute under another name,
   which goes on the field as 7.0.0 placed it. Closing it is reading the
   decorator by its path, which its short-name import defeats.
@@ -600,19 +601,19 @@ reference's word first:
 | `ResiliencePolicy.wrap(…)`, any order | one order: a call out of time or meeting an open breaker is refused before any wait for a slot, and the rate is read there; then the bulkhead's slot, held for the whole run; then per attempt the unit's deadline, the breaker, the rate, the timeout; the fallback once the run is over | no second order |
 | `retry.attempts` (total, default 3, `Infinity`) | `RETRIES` (after the first, 0 to 10, default 2, 0 for none); `retries = N` on a method, 1 to 10 | bounded: ten at most; a method wanting none drops `idempotent` |
 | `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS`; doubling, ±20 % | the curve is the framework's one; a `Retry-After` the dependency asks is waited whole |
-| `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips a client error: an `HttpException` under `500`, and any other error carrying a 4xx status but `408` and `429`); no attempt number; a timeout is sent again and read by none |
+| `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips a client error: an `HttpException` under `500`, and any other error carrying a 4xx status but `408` and `429`); no attempt number; a timeout is sent again and read by none; the reference never retries a refusal, where one an inner policy answers is here an `Err` like any other, for `retry_if` to refuse |
 | `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, `F: Fn(&T) -> bool` | a key of any method declared `idempotent`, a handler included, where the reference keeps it off its entrypoints; the retries spent, the last `Ok` answers |
 | `idempotent`, else `GET`/`HEAD`/`OPTIONS` and GraphQL queries | `idempotent`, always written; `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods, `QUERY` and `Idempotency-Key` | never inferred for a method |
 | a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body, each attempt in a savepoint of the unit's transaction | the unit is not replayed |
-| `@Timeout(d)` per attempt | `TIMEOUT_MS`, `timeout = "2s"` | every policy has one; the unit's deadline ends an attempt sooner |
+| `@Timeout(d)` per attempt | `TIMEOUT_MS`, `timeout = "2s"` | every policy has one; the unit's deadline ends an attempt sooner; one an enclosing policy's timeout cuts counts as a timeout in its own breaker, as there |
 | `@Signal()`, `AttemptContext.signal`, `ResilienceContext.signal` | `cancel = token` in a decorated body; the closure's argument in `run` | the attempt's future is dropped at its bound, so the token is for work handed to another task |
 | `AttemptContext.attempt`, `ResilienceContext.attempt` | — | not handed: the 2026-11-21 refusal stands; a closure counts its own calls |
 | `circuitBreaker.slidingWindow` `count` | `BREAKER_WINDOW` | — |
 | `circuitBreaker.slidingWindow` `time` of `A` | `BREAKER_AGE_SECS` of `A` over a `BREAKER_WINDOW` of twice `minimumCalls` or more | an outcome is forgotten at its own age, not by tenths of the window; whole seconds in the environment |
 | `failureRateThreshold` `T`, `minimumCalls` `M` | `BREAKER_FAILURES` of `⌈T × M / 100⌉`, the fewest failures the reference opens on | a count, read when a failure is counted: it opens at that many failures whatever the answers between them |
-| `openDuration` | `BREAKER_OPEN_SECS` | — |
+| `openDuration` | `BREAKER_OPEN_SECS` | whole seconds in the environment, an hour at most |
 | `halfOpenMaxCalls` (together, judged by their rate) | `BREAKER_PROBES` (in a row, one at a time) | one failed probe opens again |
-| `recordIf(error)` | `record_if = F`, `F: Fn(&E) -> bool` | — : an `Err` it refuses is counted in neither direction, and a probe hands its turn on |
+| `recordIf(error)` | `record_if = F`, `F: Fn(&E) -> bool` | an `Err` it refuses is counted in neither direction, and a probe hands its turn on, as there; the reference never records an inner policy's refusal, where it is here an `Err` like any other, for `record_if` to refuse |
 | `breaker.state`, `breaker.stats` | `breaker_state()`, `breaker_stats()` (`outcomes`, `failures`, `failure_rate()` from 0 to 1) | the age is applied at the read |
 | `breaker.trip()`, `breaker.reset()` | `open_breaker(duration)`, `close_breaker()` | an opening says how long |
 | `bulkhead.maxConcurrent`, `maxQueue`, `queueTimeout` | `CONCURRENCY`, `CONCURRENCY_WAITERS`, `CONCURRENCY_WAIT_MS` | the slot is held for the whole run, its retries included; a call waits for one only where `CONCURRENCY_WAIT_MS` is set — none by default, sixty seconds at most — and `CONCURRENCY_WAITERS` bounds how many wait, `0` for no bound, where the reference's `maxQueue` of `0` is no queue and its wait has no limit by default |
@@ -620,7 +621,7 @@ reference's word first:
 | `outboundRateLimit.limit`, `interval`, `maxWait` (token bucket) | `RATE_LIMIT`, `RATE_WINDOW_SECS`, `RATE_WAIT_MS` (token bucket) | counts attempts, a retry included; a token is waited for only when it comes before the unit's deadline; one given back goes to the next in line |
 | `limiter.available` | `rate_available()` | — |
 | `@Fallback(method \| fn, { handleIf })` | `fallback = method`, `fallback_if = F` | a method of `Self` alone, its signature checked: handed the method's arguments, then the error by value; default: every error (the reference's skips a client error, as its retry does); the failed attempt's savepoint is rolled back first |
-| `preset.fallback` for `execute()` | the `Result` a run answers: `.or_else(…)` | — |
+| `preset.fallback` for `execute()` | the `Result` a run answers: `.or_else(…)` | written at each call, its filter a `match`; no line, event or counter says a fallback answered |
 | `ResilienceEvents.events$`, `nestjs:resilience:<type>` channels | `ResiliencePolicy::events()`, beside the lines on `nest_rs::resilience` and the counters | per policy; bounded, a subscription behind is told how many it missed; a send never runs a subscriber; a line, an event and a counter each say their own fact (below) |
 | `retry`, `timeout`, `circuit-open` / `-half-open` / `-closed`, `circuit-rejected`, `bulkhead-rejected`, `rate-limited`, `fallback` | `ResilienceEvent`'s `Retry`, `Timeout`, `Transition`, `Refusal`, `Fallback` | one transition and one refusal event, each saying which; the error as its chain in text, never the value |
 | `ResilienceService.circuitBreaker(name)`, `bulkhead(name)`, `circuitBreakers()`, `bulkheads()`, for an app to export | each policy injected by its type; its reads observed on the meter under `opentelemetry` | none is looked up by a name or enumerated; the export is built |
@@ -666,7 +667,23 @@ reference's word first:
   one returns: the transitions' counter built under that lock, while a metrics
   export ran the breaker's observed reads under its own, was a deadlock at a
   process's first transition. Across threads a call can meet the new phase,
-  and have its refusal told, before the transition that caused it.
+  and have its refusal told, before the transition that caused it. The phase is
+  entered before it is told, and a probe holds its turn before its half-opening
+  is told, so what panics out of a telling leaves the breaker in the phase it
+  entered and no turn held by a probe that is gone; a telling reached while its
+  thread unwinds is caught, where a second panic would abort the process.
+- **The framework's own cut counts, a caller's drop does not.** An attempt in
+  flight when the timeout of a policy around it gives up the call it runs in
+  has timed out in its own breaker, as the reference records it, so a
+  dependency that never answers opens the breaker naming it however short its
+  caller's timeout. The cut reaches what that call's future holds, as it is
+  dropped — a body still read through the middleware included — and no task the
+  call spawned, whose attempt goes to its own bound. The inner policy tells no
+  `Timeout` and counts no refusal of it: none of its runs is left to answer.
+- **A refusal is counted and told as its attempt ends**, before its savepoint
+  settles: at the unit's deadline the edge drops the run while the rollback is
+  in flight, and the timeout was told by nothing. A run whose savepoint then
+  cannot settle answers `Unsettled`, its timeout told and counted all the same.
 - **A told error never tells a byte of a userinfo, nor a word a dependency
   wrote in a status.** The chain a line or an event carries is cut wherever
   `://` is written to the scheme, the host and a numeric port, in one pass
@@ -676,9 +693,19 @@ reference's word first:
   dependency's own text stalling the worker, and told a username as a host. A
   reqwest error is said by `nest-rs-reqwest`'s `SafeLink` — its kind, a status
   by its class and its code, and beneath it only what a type that crate reads
-  tells or a constant opening it knows — since reqwest's own sentence quotes
-  the reason phrase the dependency answered, and its causes a trailer hyper
-  refuses, HTTP/2's debug data and a certificate's names.
+  tells, a constant opening it knows or what another crate's `SafeLink` claims
+  — since reqwest's own sentence quotes the reason phrase the dependency
+  answered, and its causes a trailer hyper refuses, HTTP/2's debug data and a
+  certificate's names. This crate claims its own refusals there, so a body the
+  policy gave up says its timeout.
+- **A `SafeLink` reads its error behind a pointer**: `std` makes an `Arc` and a
+  `Box` of an error an error displaying the one held, so an error naming a
+  driver's as its `#[source]` behind one handed the line the driver's own
+  sentence, values included. `error_message` reads through an `Arc<dyn Error>`
+  for every sayer, and each sayer of the workspace reads its type through
+  `link_as`, an `Arc` or a `Box` of it included — reqwest's, sea-orm's, sqlx's,
+  object_store's, rmcp's, h2's, and core's own of serde's and tokio's: a
+  security fix ships at every member reaching the data.
 - **A call its unit had no time to send is no attempt**: it files no line, in
   any configuration, and is told as a timeout of none.
 - **No attempt outlives a health indicator's check either**: the probe cuts
@@ -693,7 +720,18 @@ reference's word first:
 - **The attempt's type is read where the signature is**: the body is kept whole
   in a block of its own inside the attempt's, so an item it declares under a
   name of its answer — a `use … as Error`, a `type` — shadows nothing the
-  expansion names.
+  expansion names. It keeps the braces the developer wrote, in parentheses of
+  the expansion's own, so what its tail leaves drops by the edition of the
+  crate writing it; a label in their place either keeps the expansion's edition
+  or is a name the body can break to.
+- **A decorated method drops its arguments as the undecorated one does**, last
+  declared first, however its run ends. The attempt of a method run once owns
+  them, and a closure's captures drop in the order its body first names them
+  (`.claude/upstream/rustc.md`): the attempt opens on a statement naming those
+  the body names, last declared first. A guard argument was released before the
+  writer it guards had flushed. Under an instrument written above it the method
+  keeps the order that instrument gives it with no policy
+  (`.claude/upstream/tracing-attributes.md`).
 - **The fallback answers after the run**, for the call's own error once its
   attempts are spent and for a refusal that sent nothing; `fallback_if` is
   asked first. It is a method of `Self` named by the key, handed the method's
@@ -801,6 +839,34 @@ lock" and the limit it left, a transition being told once the lock is let go.
   one after the other; closing it is the driver telling the policy an attempt
   waits for its own unit. Pinned as it stands by
   `two_calls_joined_in_one_unit_take_its_turn_in_order_and_the_one_waiting_is_charged_the_wait`.
+- **A method calling another under the same policy** keeps its breaker from
+  closing once it opened: its own probe refuses the inner call, whose refusal
+  fails the probe and opens it again. A method calls another under another
+  policy, or the body both share.
+- **An error is `'static`**: one borrowing an argument, or generic without that
+  bound, is rustc's lifetime error at the answer, naming neither the policy nor
+  the remedy — an error owning what it says. Its chain is read as one
+  (`&(dyn Error + 'static)`), and no attribute words a region error.
+- **What the body of a method run once does not name drops after the
+  attempt** — an argument it reads nowhere, the part of a pattern left unbound:
+  it stays in the method's frame. One it names under a leading `_` drops with
+  the attempt after the others, a read of it being
+  `clippy::used_underscore_binding`'s. Names are read by tokens, so a word of an
+  argument's spelling reads as that argument, which can cost an
+  `unused variable` warning. Closing it is the parameters rebound inside the
+  attempt, a signature other than the one written, and an ident an attribute
+  can mark as its own.
+- **`E0507` under a key lending the arguments says "cannot move out of value"**,
+  the argument underlined: rustc names the variable only where the closure's
+  head is the developer's, and there `closure_returning_async_block` fires at a
+  closure they did not write, so a crate forbidding it compiled no such method.
+- **A fallback at its unit's deadline answers only where its attempt's savepoint
+  settles at once**: the rollback comes first, and once it is a round trip the
+  edge cuts the unit before the fallback is asked. Closing it is the fallback
+  writing above the failed attempt's writes.
+- **A policy's breaker times a dependency out at its tightest caller's bound**:
+  a caller at two seconds over a policy at five counts a three-second answer a
+  failure there, as the reference does.
 - **A probe whose run is kept and never polled again holds the half-open
   turn**: only its own timer or its drop gives the turn back, and both need
   its future polled or dropped. A stream that stops being read while it awaits
@@ -839,9 +905,14 @@ lock" and the limit it left, a transition being told once the lock is let go.
   none. An address written with no `://` is left as written.
 - **A cause `nest-rs-reqwest` cannot read is not said**: hyper's reasons but
   one, HTTP/2's codes, rustls's alerts, a redirect policy's and a serializer's
-  error are lost to every line, an operator reading the kind alone. Saying them
-  safely takes `hyper`, `h2` and `rustls` as dependencies of that crate, and a
-  reader of each type.
+  error are lost to every line, an operator reading the kind alone, but for an
+  HTTP/2 GOAWAY in a program linking `nest-rs-http`, whose `SafeLink` says it.
+  Saying them safely takes `hyper`, `h2` and `rustls` as dependencies of that
+  crate, and a reader of each type.
+- **A pointer to a pointer is not read** (`Arc<Box<reqwest::Error>>`), nor a
+  reference handed out as the link: each is said as `std` displays it, a type
+  per depth having no end. A package's own `SafeLink` reads its pointers
+  itself, `link_as` being tier 2.
 - **An error handing reqwest's sentence on as its own** (`#[error(transparent)]`)
   hides it from the chain, so no `SafeLink` reads it: on the policy's lines its
   URL is cut to its origin and its status to its code, its causes are said as

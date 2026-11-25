@@ -3,6 +3,118 @@
 //! checked as, the two runs that body goes through, each handed the predicates
 //! its keys name, the fallback answering in place of a run's error, and the
 //! stand-in a refused method's body is checked against.
+//!
+//! A body stays in the braces it was written in, so what its tail expression
+//! leaves drops as its own crate's edition says: in a crate of edition 2021
+//! after the body's locals, as it does with no policy. The example is that
+//! crate, a local of each body reading, as it drops, whether the lock the
+//! tail expression took is still held:
+//!
+//! ```edition2021
+//! use std::sync::atomic::{AtomicBool, Ordering};
+//! use std::sync::{Arc, Mutex};
+//!
+//! use nest_rs_core::{App, injectable, module};
+//! use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
+//!
+//! #[derive(Debug, thiserror::Error)]
+//! #[error("the hall did not answer")]
+//! pub struct HallDown;
+//!
+//! struct Publish<'a>(&'a Mutex<u32>, &'a AtomicBool);
+//!
+//! impl Drop for Publish<'_> {
+//!     fn drop(&mut self) {
+//!         self.1.store(self.0.try_lock().is_err(), Ordering::Relaxed);
+//!     }
+//! }
+//!
+//! fn seated(seats: u32) -> Result<u32, HallDown> {
+//!     Ok(seats)
+//! }
+//!
+//! #[injectable]
+//! pub struct SeatsService {
+//!     #[inject]
+//!     hall: Arc<ResiliencePolicy>,
+//!     seats: Mutex<u32>,
+//!     locked: AtomicBool,
+//! }
+//!
+//! impl SeatsService {
+//!     async fn undecorated(&self) -> Result<u32, HallDown> {
+//!         let _publish = Publish(&self.seats, &self.locked);
+//!         seated(*self.seats.lock().expect("unpoisoned"))
+//!     }
+//!
+//!     #[resilient(hall)]
+//!     async fn once(&self) -> Result<u32, ResilienceError<HallDown>> {
+//!         let _publish = Publish(&self.seats, &self.locked);
+//!         seated(*self.seats.lock().expect("unpoisoned"))
+//!     }
+//!
+//!     #[resilient(hall, idempotent, fallback = unseated, cancel = token)]
+//!     async fn again(&self) -> Result<u32, ResilienceError<HallDown>> {
+//!         let _publish = Publish(&self.seats, &self.locked);
+//!         drop(token);
+//!         seated(*self.seats.lock().expect("unpoisoned"))
+//!     }
+//!
+//!     async fn unseated(
+//!         &self,
+//!         _error: ResilienceError<HallDown>,
+//!     ) -> Result<u32, ResilienceError<HallDown>> {
+//!         Ok(0)
+//!     }
+//!
+//!     /// Whether the last body's local dropped with the seats still locked.
+//!     fn dropped_locked(&self) -> bool {
+//!         self.locked.swap(false, Ordering::Relaxed)
+//!     }
+//! }
+//!
+//! #[module(imports = [ResilienceModule], providers = [SeatsService])]
+//! pub struct SeatsModule;
+//!
+//! # #[nest_rs_core::main]
+//! # async fn main() -> anyhow::Result<()> {
+//! let app = App::builder().module::<SeatsModule>().build().await?;
+//! let seats = app.container().get::<SeatsService>().expect("provided");
+//! seats.undecorated().await?;
+//! assert!(seats.dropped_locked());
+//! seats.once().await?;
+//! assert!(seats.dropped_locked());
+//! seats.again().await?;
+//! assert!(seats.dropped_locked());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! A tail expression borrowing a local of the body is refused there for the
+//! same reason, `E0597`, under a policy as with none:
+//!
+//! ```edition2021,compile_fail,E0597
+//! use std::cell::RefCell;
+//! use std::sync::Arc;
+//!
+//! use nest_rs_resilience::{ResilienceError, ResiliencePolicy, resilient};
+//!
+//! #[derive(Debug, thiserror::Error)]
+//! #[error("the hall did not answer")]
+//! pub struct HallDown;
+//!
+//! pub struct Seats {
+//!     hall: Arc<ResiliencePolicy>,
+//! }
+//!
+//! impl Seats {
+//!     #[resilient(hall)]
+//!     pub async fn counted(&self) -> Result<u32, ResilienceError<HallDown>> {
+//!         let seats = RefCell::new(4);
+//!         Ok(*seats.borrow())
+//!     }
+//! }
+//! ```
 
 use std::error::Error;
 use std::future::{Future, Ready, ready};
@@ -161,7 +273,10 @@ impl<T, E> ResilientAnswer for Result<T, ResilienceError<E>> {
 }
 
 /// The error a `#[resilient]` method answers: one whose chain the policy
-/// tells, and reads before a retry.
+/// tells, and reads before a retry. That chain is read as one of
+/// `dyn Error + 'static`, so the error owns what it says: one borrowing an
+/// argument is refused by rustc's own lifetime error at the answer, which no
+/// sentence here reaches.
 #[diagnostic::on_unimplemented(
     message = "a `#[resilient]` method's error is a `std::error::Error`, and `{Self}` is not one",
     label = "what the method answers",

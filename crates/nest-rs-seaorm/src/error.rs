@@ -12,7 +12,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use nest_rs_core::__private::OpaqueCause;
+use nest_rs_core::__private::{OpaqueCause, link_as};
 use nest_rs_core::DecodeError;
 use nest_rs_database::AtomicError;
 use ref_cast::RefCast;
@@ -598,13 +598,13 @@ nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
 /// its SQLSTATE and the names it reported; a variant whose text can hold a value
 /// by its kind alone; every other by its own sentence, which holds none.
 fn say(link: &(dyn std::error::Error + 'static)) -> Option<String> {
-    if let Some(err) = link.downcast_ref::<DbErr>() {
+    if let Some(err) = link_as::<DbErr>(link) {
         return Some(said_db(err));
     }
-    if let Some(err) = link.downcast_ref::<RuntimeErr>() {
+    if let Some(err) = link_as::<RuntimeErr>(link) {
         return Some(said_runtime(err));
     }
-    link.downcast_ref::<SqlxError>().map(said_sqlx)
+    link_as::<SqlxError>(link).map(said_sqlx)
 }
 
 fn said_db(err: &DbErr) -> String {
@@ -1998,6 +1998,40 @@ pub(crate) mod tests {
         assert!(displayed.contains("secret-123"), "{displayed}");
         let redacted = nest_rs_core::DecodeError::redact(&displayed, Some(&error));
         assert_eq!(redacted, "Execution Error: database error 22P02");
+    }
+
+    /// `std` makes a pointer to an error an error displaying the one it
+    /// holds: an error naming a database error as its source behind one hands
+    /// out the pointer, said as the error it holds.
+    #[test]
+    fn a_database_error_named_as_a_source_behind_a_pointer_is_said_the_same_way() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the import failed")]
+        struct Naming<S: std::error::Error + 'static>(#[source] S);
+
+        const SAID: &str = "the import failed: Execution Error: database error 22P02";
+        assert_eq!(error_message(&Naming(bad_uuid())), SAID);
+        assert_eq!(error_message(&Naming(Arc::new(bad_uuid()))), SAID);
+        assert_eq!(error_message(&Naming(Box::new(bad_uuid()))), SAID);
+        let erased: Arc<dyn std::error::Error + Send + Sync> = Arc::new(bad_uuid());
+        assert_eq!(error_message(&Naming(erased)), SAID);
+
+        let typed = || DbErr::Type("secret-123 is no uuid".to_owned());
+        assert!(typed().to_string().contains("secret-123"), "{}", typed());
+        for said in [
+            error_message(&Naming(typed())),
+            error_message(&Naming(Arc::new(typed()))),
+            error_message(&Naming(Box::new(typed()))),
+        ] {
+            assert_eq!(said, "the import failed: Type Error");
+        }
+        let DbErr::Exec(runtime) = bad_uuid() else {
+            panic!("an execution error");
+        };
+        assert_eq!(
+            error_message(&Naming(Arc::new(runtime))),
+            "the import failed: database error 22P02"
+        );
     }
 
     /// A rule's failure as `validator` hands it over: its parameters holding the

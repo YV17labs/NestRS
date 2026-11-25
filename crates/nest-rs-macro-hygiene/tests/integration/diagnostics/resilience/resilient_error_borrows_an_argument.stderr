@@ -1,0 +1,55 @@
+error: lifetime may not live long enough
+  --> tests/integration/diagnostics/resilience/resilient_error_borrows_an_argument.rs:44:51
+   |
+43 |     #[resilient(carrier)]
+   |     --------------------- in this attribute macro expansion
+44 |     async fn weigh<'a>(&self, weight: &'a str) -> Result<u32, ResilienceError<Unparsed<'a>>> {
+   |                    -- lifetime `'a` defined here  ^^^^^^ requires that `'a` must outlive `'static`
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: lifetime may not live long enough
+  --> tests/integration/diagnostics/resilience/resilient_error_borrows_an_argument.rs:49:57
+   |
+48 |     #[resilient(carrier, idempotent)]
+   |     --------------------------------- in this attribute macro expansion
+49 |     async fn weigh_again<'a>(&self, weight: &'a str) -> Result<u32, ResilienceError<Unparsed<'a>>> {
+   |                          -- lifetime `'a` defined here  ^^^^^^ requires that `'a` must outlive `'static`
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0310]: the parameter type `T` may not live long enough
+  --> tests/integration/diagnostics/resilience/resilient_error_borrows_an_argument.rs:57:10
+   |
+53 |     #[resilient(carrier)]
+   |     --------------------- in this attribute macro expansion
+...
+57 |     ) -> Result<(), ResilienceError<Refused<T>>> {
+   |          ^^^^^^
+   |          |
+   |          the parameter type `T` must be valid for the static lifetime...
+   |          ...so that the type `T` will meet its required lifetime bounds
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider adding an explicit lifetime bound
+   |
+54 |     async fn label<T: Debug + Send + Sync + 'static>(
+   |                                           +++++++++
+
+error[E0310]: the parameter type `T` may not live long enough
+  --> tests/integration/diagnostics/resilience/resilient_error_borrows_an_argument.rs:57:10
+   |
+53 |     #[resilient(carrier)]
+   |     --------------------- in this attribute macro expansion
+...
+57 |     ) -> Result<(), ResilienceError<Refused<T>>> {
+   |          ^^^^^^
+   |          |
+   |          the parameter type `T` must be valid for the static lifetime...
+   |          ...so that the type `T` will meet its required lifetime bounds
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider adding an explicit lifetime bound
+   |
+54 |     async fn label<T: Debug + Send + Sync + 'static>(
+   |                                           +++++++++

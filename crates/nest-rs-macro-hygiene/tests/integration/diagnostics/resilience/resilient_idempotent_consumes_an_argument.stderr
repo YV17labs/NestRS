@@ -1,16 +1,16 @@
-error[E0507]: cannot move out of `order`, a captured variable in an `FnMut` closure
+error[E0507]: cannot move out of value, a captured variable in an `FnMut` closure
   --> tests/integration/diagnostics/resilience/resilient_idempotent_consumes_an_argument.rs:35:26
    |
 35 |     #[resilient(carrier, idempotent)]
    |                          ^^^^^^^^^^
    |                          |
    |                          captured by this `FnMut` closure
-   |                          `order` is moved here
+   |                          value is moved here
 36 |     async fn ship(&self, order: String) -> Answer {
    |                          -----
    |                          |
    |                          captured outer variable
-   |                          move occurs because `order` has type `std::string::String`, which does not implement the `Copy` trait
+   |                          move occurs because value has type `std::string::String`, which does not implement the `Copy` trait
 37 |         send(order).await?;
    |              ----- variable moved due to use in coroutine
    |

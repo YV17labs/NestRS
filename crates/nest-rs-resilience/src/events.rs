@@ -88,17 +88,27 @@ pub enum ResilienceEvent {
         /// timeout's sentence, and `None` for an `Ok` sent again.
         error: Option<String>,
     },
-    /// An attempt was given up at its bound, unanswered. A retry follows it
-    /// when the run sends its call again, and it counts among the refusals on
-    /// the meter only when the run ends on it.
+    /// An attempt was given up at its bound, unanswered: told as it ends, by
+    /// the run that gave it up. A retry follows it when the run sends its
+    /// call again; when none does the run is over at it, and it counts among
+    /// the refusals on the meter — the run answering it, or
+    /// [`Unsettled`](crate::ResilienceError::Unsettled) when the savepoint the
+    /// attempt ran in cannot be rolled back.
     ///
-    /// One timeout is told by no event. A response of
-    /// [`ResilienceMiddleware`](crate::ResilienceMiddleware) its caller drops
-    /// while a read of its body has waited past the bound counts as a timeout
-    /// in the breaker, the dependency having delivered nothing in time, and
-    /// no caller is left to answer: nothing tells it and no refusal counts
-    /// it, but the breaker's [`Transition`](Self::Transition) when that
-    /// failure opens it.
+    /// Three timeouts are told by no event. Each counts as a timeout in the
+    /// breaker, the dependency having delivered nothing in time, and leaves
+    /// no caller to answer: nothing tells it and no refusal counts it, but
+    /// the breaker's [`Transition`](Self::Transition) when that failure opens
+    /// it:
+    ///
+    /// - a response of [`ResilienceMiddleware`](crate::ResilienceMiddleware)
+    ///   its caller drops while a read of its body has waited past the bound;
+    /// - an attempt its caller, or the edge cutting its unit, drops at or past
+    ///   the instant its bound ends at, inside a unit whose edge set a
+    ///   deadline;
+    /// - an attempt, or such a response while a read of its body waits,
+    ///   dropped by the timeout of another policy — the one the method
+    ///   calling it runs under, whose own run tells its timeout.
     #[non_exhaustive]
     Timeout {
         /// The decorated method's host.

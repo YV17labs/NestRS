@@ -5,27 +5,36 @@
 //! peer answered — a trailer hyper refuses, HTTP/2's debug data, the names of
 //! a certificate. So the crate that knows reqwest's errors claims them
 //! wherever one is a link of a chain, in a program linking this crate — read
-//! alone, or beneath an app's error naming it as its source — and says of each
-//! only what a type it can read tells, or a sentence it knows the constant
-//! opening of:
+//! alone, or beneath an app's error naming it as its source, bare or behind
+//! the pointer `std` makes an error of (an `Arc`, a `Box`, an `Arc<dyn
+//! Error>`), or inside an I/O error holding one, what a reader over a body's
+//! stream makes of it — and says of each only what a type it can read tells,
+//! or a sentence it knows the constant opening of:
 //!
 //! - its kind, in reqwest's words, and of a status its class and its code:
 //!   never the URL, never the peer's phrase;
-//! - beneath it, a reqwest error the same way; a decode failure as
-//!   [`DecodeError`] reports it, without the value; an I/O error by the
-//!   sentence its OS or `std` gives it, and one holding another error by what
-//!   that one tells, or else by its kind;
+//! - beneath it, a link another crate's [`SafeLink`] claims as that crate
+//!   says it — the policy's own cut of a body, `nest-rs-resilience`'s — and
+//!   a reqwest error the same way; a decode failure as [`DecodeError`]
+//!   reports it, without the value; an I/O error by the sentence its OS or
+//!   `std` gives it, and one holding another error by what that one tells, or
+//!   else by its kind;
 //! - a cause of any other type by the opening of its sentence when that is
 //!   one of [`KNOWN`], and by nothing otherwise — hyper's, HTTP/2's, a
 //!   redirect policy's, a serializer's — the chain being read on beneath it.
 //!
 //! An error handing reqwest's sentence on as its own (`#[error(transparent)]`)
-//! holds it as no link, so nothing here reads it — reqwest-middleware's apart,
-//! which this crate knows — and that sentence's URL and phrase, with every
-//! cause beneath it, are its reader's to cut.
+//! holds it as no link, so nothing here reads it — reqwest-middleware's and
+//! an I/O error's apart, which this crate knows — and that sentence's URL and
+//! phrase, with every cause beneath it, are its reader's to cut. A pointer to
+//! a pointer of a type of its own (`Arc<Box<reqwest::Error>>`) and a
+//! reference (`&'static reqwest::Error`) are types this crate does not name:
+//! one handed out as a link is said as `std` displays it, reqwest's sentence
+//! whole.
 
 use std::error::Error;
 
+use nest_rs_core::__private::{claimed_link, link_as};
 use nest_rs_core::{DecodeError, SafeLink};
 
 nest_rs_core::inventory::submit! { SafeLink::new(say) }
@@ -56,13 +65,15 @@ const KNOWN: [&str; 11] = [
 ];
 
 /// A reqwest error, and reqwest-middleware's, said by what this crate reads of
-/// it; any other link is its own driver's to say.
+/// it — the one `link` is, or holds: behind a pointer, or inside an I/O error,
+/// which displays the error it holds whole and hands out that error's source.
+/// Any other link, an I/O error holding none included, is its own driver's.
 fn say(link: &(dyn Error + 'static)) -> Option<String> {
-    if let Some(error) = link.downcast_ref::<reqwest::Error>() {
+    if let Some(error) = link_as::<reqwest::Error>(link) {
         return Some(said(error));
     }
     #[cfg(feature = "middleware")]
-    if let Some(error) = link.downcast_ref::<reqwest_middleware::Error>() {
+    if let Some(error) = link_as::<reqwest_middleware::Error>(link) {
         // Both variants are transparent: they display the error they hold, URL
         // included, and `source()` skips it.
         return Some(match error {
@@ -72,7 +83,7 @@ fn say(link: &(dyn Error + 'static)) -> Option<String> {
             }
         });
     }
-    None
+    say(link_as::<std::io::Error>(link)?.get_ref()?)
 }
 
 /// `error` by its kind, then what the causes beneath it tell.
@@ -113,7 +124,9 @@ fn kind(error: &reqwest::Error) -> String {
 }
 
 /// Adds to `sentence` what the links from `link` down tell, each after a
-/// colon, and answers whether any told something.
+/// colon, and answers whether any told something. A link a [`SafeLink`] claims
+/// — this crate's own, for a reqwest error, or another driver's — is said by
+/// it, causes included: the reading ends there.
 fn below(mut link: Option<&(dyn Error + 'static)>, sentence: &mut String) -> bool {
     fn tell(part: &str, sentence: &mut String) {
         sentence.push_str(": ");
@@ -121,11 +134,11 @@ fn below(mut link: Option<&(dyn Error + 'static)>, sentence: &mut String) -> boo
     }
     let mut told = false;
     while let Some(cause) = link {
-        if let Some(error) = cause.downcast_ref::<reqwest::Error>() {
-            tell(&said(error), sentence);
+        if let Some(claimed) = claimed_link(cause) {
+            tell(&claimed, sentence);
             return true;
         }
-        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+        if let Some(io) = link_as::<std::io::Error>(cause) {
             match io.get_ref() {
                 // The OS's sentence, or `std`'s own: no library wrote it.
                 None => tell(&io.to_string(), sentence),
@@ -278,6 +291,36 @@ mod tests {
     async fn an_error_handing_reqwests_sentence_on_is_no_link_this_crate_reads() {
         let said = error_message(&HandedOn(refused().await));
         assert!(said.contains(SENT), "{said}");
+    }
+
+    /// What `#[source]` makes of a field: the field handed out as the link.
+    #[derive(Debug)]
+    struct Naming<S>(S);
+
+    impl<S> std::fmt::Display for Naming<S> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the carrier failed")
+        }
+    }
+
+    impl<S: Error + 'static> Error for Naming<S> {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    /// The other limit this file's `//!` states: one pointer is read through,
+    /// a pointer to a pointer is a type this crate does not name.
+    #[tokio::test]
+    async fn a_pointer_to_a_pointer_is_no_link_this_crate_reads() {
+        use std::sync::Arc;
+
+        let once = error_message(&Naming(Arc::new(refused().await)));
+        assert!(!once.contains(SENT), "{once}");
+        assert_eq!(once, error_message(&Naming(Box::new(refused().await))));
+
+        let twice = error_message(&Naming(Arc::new(Box::new(refused().await))));
+        assert!(twice.contains(SENT), "{twice}");
     }
 
     /// reqwest-middleware's error displays the error it holds and hands out

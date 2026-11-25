@@ -284,14 +284,16 @@ pub struct ResilienceConfig {
     /// time, and a failed one opens the breaker again for its whole open time,
     /// the series starting over: a probe whose call is cut at its timeout or
     /// its unit's deadline has failed, whether the policy or the unit's edge
-    /// cut it there. A probe whose call is never sent — refused by the rate,
-    /// or its unit out of time before it — whose caller drops it unanswered
-    /// before then, or which answers an `Err` its method's `record_if`
-    /// refuses, counts as neither a success nor a failure, and the series
-    /// keeps its count. A caller's drop past the timeout counts as that
-    /// timeout only inside a unit whose edge set a deadline — a request, a
-    /// job, a tick, a health indicator's check; outside one, as on a task the
-    /// app spawned or in a streamed body, it counts as neither.
+    /// cut it there, and so has one cut sooner by the timeout of another
+    /// policy, the one the method calling it runs under. A probe whose call is
+    /// never sent — refused by the rate, or its unit out of time before it —
+    /// whose caller drops it unanswered before then, or which answers an `Err`
+    /// its method's `record_if` refuses, counts as neither a success nor a
+    /// failure, and the series keeps its count. A caller's drop past the
+    /// timeout counts as that timeout only inside a unit whose edge set a
+    /// deadline — a request, a job, a tick, a health indicator's check;
+    /// outside one, as on a task the app spawned or in a streamed body, it
+    /// counts as neither.
     #[config(bounds = BREAKER_PROBES)]
     pub breaker_probes: usize,
     /// How many calls run inside the policy at once, the bulkhead,

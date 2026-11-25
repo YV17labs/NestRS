@@ -10,3 +10,5 @@ error[E0500]: closure requires unique access to `*crates` but it is already borr
    |                                                       ------ first borrow later used by call
 34 |         crates.push(String::new());
    |         ------ second borrow occurs due to use of `*crates` in closure
+   |
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)

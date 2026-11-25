@@ -7,7 +7,9 @@
 //! the client follows inside the attempt that met it. It gives each attempt up
 //! at its unit's deadline, and tells what an attempt failed on in the retry's
 //! line and the breaker's opening: a status by its code, a transport failure
-//! without the URL it was sent to. The response it hands back is reqwest's
+//! without the URL it was sent to, a reqwest error an app's error holds behind
+//! a pointer as one it names bare, and a body the client's policy gave up as
+//! that policy's timeout. The response it hands back is reqwest's
 //! own, its body read as it comes and holding the run's slot, the breaker's
 //! verdict and what its head left of the attempt's bound until it ends: the
 //! time its reads wait for the dependency, never the time its caller takes.
@@ -17,21 +19,24 @@
 //! caller with a read waiting past the bound, by the breaker's opening alone.
 
 use std::convert::Infallible;
+use std::future::Future;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use nest_rs_core::client_operation::{ClientOperation, HTTP_REQUEST_RESEND_COUNT, SERVER_PORT};
-use nest_rs_core::{Correlation, Problem, code};
+use nest_rs_core::{Correlation, Problem, code, instance, module};
 use nest_rs_reqwest::ReqwestMiddleware;
 use nest_rs_resilience::{
     BreakerPhase, BreakerState, ResilienceConfig, ResilienceError, ResilienceEvent,
-    ResilienceMiddleware, ResiliencePolicy, TARGET,
+    ResilienceMiddleware, ResilienceModule, ResiliencePolicy, TARGET, resilient,
 };
-use nest_rs_testing::{HttpsPeer, LogCapture, PeerAnswer, TestAuthority, TestCertificate};
+use nest_rs_testing::{
+    HeadlessApp, HttpsPeer, LogCapture, PeerAnswer, TestAuthority, TestCertificate,
+};
 use reqwest::StatusCode;
 use reqwest_middleware::ClientWithMiddleware;
 
-use crate::{policy, quiet, told};
+use crate::{held, policy, quiet, told};
 
 /// The authority the peer's certificate chains to, and the client trusts.
 static AUTHORITY: LazyLock<TestAuthority> = LazyLock::new(TestAuthority::new);
@@ -901,6 +906,100 @@ async fn a_retrys_event_says_its_failures_chain_with_no_url_past_its_origin() {
     );
 }
 
+/// An app's error naming reqwest's as its source behind the pointer that
+/// shares it, reqwest's error being no `Clone`: the link it hands out is the
+/// pointer, which `std` displays as reqwest's whole sentence.
+#[derive(Debug, thiserror::Error)]
+#[error("the carrier failed")]
+struct Shared(#[source] Arc<reqwest::Error>);
+
+/// An app's error holding the I/O error a reader over a body's stream makes
+/// of reqwest's, which displays it whole too.
+#[derive(Debug, thiserror::Error)]
+#[error("the download failed")]
+struct Unread(#[from] std::io::Error);
+
+/// What a run tells of two attempts each failing with what `attempt` makes:
+/// the `error` of its retry's line, of the opening of the breaker the second
+/// failure opens, and of its retry's event, none of which quotes `never`.
+async fn told_of_two_failures<E, Fut>(attempt: impl Fn() -> Fut, never: &[&str]) -> [Vec<String>; 3]
+where
+    E: std::error::Error + 'static,
+    Fut: Future<Output = E>,
+{
+    let (_app, policy) = policy(ResilienceConfig {
+        retries: Some(1),
+        breaker_window: Some(2),
+        breaker_failures: 2,
+        ..retrying()
+    })
+    .await;
+    let logs = LogCapture::install();
+    let mut events = policy.events();
+
+    let failed = policy
+        .run_idempotent(|_cancel| async { Err::<(), _>(attempt().await) })
+        .await
+        .expect_err("each attempt fails");
+    assert!(matches!(failed, ResilienceError::Failed(_)), "{failed:?}");
+
+    let retried = told(&mut events)
+        .into_iter()
+        .filter_map(|event| match event {
+            ResilienceEvent::Retry { error, .. } => error,
+            _ => None,
+        })
+        .collect();
+    [
+        filed(&logs, RETRYING, never),
+        filed(&logs, "circuit breaker changed state", never),
+        retried,
+    ]
+}
+
+/// A reqwest error an app's error holds behind a pointer, or inside an I/O
+/// error, is told as one it names bare: by its kind and what its causes'
+/// types tell, never the URL's path, nor the names rustls quotes of the
+/// certificate it refuses, in the retry's line, its event and the breaker's
+/// opening.
+#[tokio::test]
+async fn a_reqwest_error_held_behind_a_pointer_is_told_without_its_url_or_a_certificates_names() {
+    const SENT: &str = "s3cr3t";
+    const CAUSE: &str =
+        "error sending request: invalid peer certificate: certificate not valid for name";
+    let other = AUTHORITY.server(&["ledger.internal"]);
+    let peer = HttpsPeer::answering(&other, [PeerAnswer::status(200)]).await;
+    let url = peer.url(&format!("/parcels/{SENT}?token={SENT}"));
+    let authority =
+        reqwest::Certificate::from_pem(AUTHORITY.pem().as_bytes()).expect("the authority");
+    let http = reqwest::Client::builder()
+        .tls_certs_only([authority])
+        .build()
+        .expect("a client");
+    let refused = || async { http.get(&url).send().await.expect_err("another name's") };
+    let own = Shared(Arc::new(refused().await)).to_string();
+    let handed_out = std::error::Error::source(&Shared(Arc::new(refused().await)))
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    assert!(
+        !own.contains(SENT) && handed_out.contains(SENT),
+        "the link is the pointer, displaying reqwest's own sentence: {handed_out}"
+    );
+    let never = [SENT, "/parcels", "for url", "ledger.internal", "DnsName"];
+
+    let shared = told_of_two_failures(|| async { Shared(Arc::new(refused().await)) }, &never).await;
+    let said = format!("the carrier failed: {CAUSE}");
+    assert_eq!(shared, [vec![said.clone()], vec![said.clone()], vec![said]]);
+
+    let read = told_of_two_failures(
+        || async { Unread(std::io::Error::other(refused().await)) },
+        &never,
+    )
+    .await;
+    let said = format!("the download failed: {CAUSE}");
+    assert_eq!(read, [vec![said.clone()], vec![said.clone()], vec![said]]);
+}
+
 /// What an answer's head starts, its body ends: a peer answering `200` and
 /// stalling mid-body holds the caller as one that never answered would, so the
 /// response the middleware hands back keeps the attempt's bound, the breaker's
@@ -1306,6 +1405,136 @@ async fn a_body_given_up_at_its_bound_is_told_as_a_timeout_once() {
                 },
                 ResilienceEvent::Timeout { host: None, method: None, timeout, .. },
             ] if *timeout == Duration::from_millis(200)
+        ),
+        "{told:?}"
+    );
+}
+
+/// What a line says of a body the policy gave up: reqwest's kinds, then the
+/// policy's own sentence and the `503` it answers, constants of the framework.
+const BODY_GIVEN_UP: &str = "error decoding response body: request or response body error: the \
+                             call did not answer within its timeout: 503 UNAVAILABLE";
+
+/// A body the policy gives up says so wherever its error is said: the line an
+/// edge files for it reads the policy's timeout, never a body that did not
+/// decode with its cause left out.
+#[tokio::test]
+async fn a_body_the_policy_gave_up_says_so_on_a_line() {
+    let peer = answering([PeerAnswer::stalling(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        timeout: Duration::from_millis(200),
+        ..quiet()
+    })
+    .await;
+
+    let given_up = client(policy)
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect("the head answers")
+        .bytes()
+        .await
+        .expect_err("given up");
+
+    assert_eq!(nest_rs_core::error_message(&given_up), BODY_GIVEN_UP);
+    assert_eq!(
+        nest_rs_core::error_message(&CarrierFailed::Unread(given_up)),
+        format!("the carrier's answer could not be read: {BODY_GIVEN_UP}")
+    );
+}
+
+/// The policy a decorated method reading a body under the client's own runs
+/// under.
+#[instance]
+struct Reading;
+
+/// What a call to the carrier fails with, naming the client's error as its
+/// source.
+#[derive(Debug, thiserror::Error)]
+enum CarrierFailed {
+    #[error("the carrier did not answer")]
+    Unanswered(#[from] reqwest_middleware::Error),
+    #[error("the carrier's answer could not be read")]
+    Unread(#[from] reqwest::Error),
+}
+
+/// A host the test builds itself: the policy its method runs under, and a
+/// client under a policy of its own.
+struct Carrier {
+    reading: Arc<ResiliencePolicy<Reading>>,
+    http: ClientWithMiddleware,
+    parcel: String,
+}
+
+impl Carrier {
+    #[resilient(reading, idempotent)]
+    async fn parcel(&self) -> Result<String, ResilienceError<CarrierFailed>> {
+        let answered = self.http.get(&self.parcel).send().await?;
+        Ok(answered.text().await?)
+    }
+}
+
+#[module(imports = [
+    ResilienceModule::for_root(ResilienceConfig {
+        timeout: Duration::from_millis(200),
+        ..quiet()
+    }),
+    ResilienceModule::for_root((Reading, ResilienceConfig {
+        retries: Some(1),
+        backoff_first: Duration::from_millis(1),
+        backoff_ceiling: Duration::from_millis(2),
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..ResilienceConfig::default()
+    })),
+])]
+struct ReadingModule;
+
+/// A decorated method reading a body the client's policy gives up tells that
+/// timeout as what its attempt failed on: in the line of the retry it earns,
+/// in that retry's event and in the opening of its own breaker.
+#[tokio::test]
+async fn a_body_the_clients_policy_gave_up_is_told_as_its_timeout_by_the_method_reading_it() {
+    let peer = answering([PeerAnswer::stalling(200)]).await;
+    let app = HeadlessApp::builder()
+        .module::<ReadingModule>()
+        .build_headless()
+        .await
+        .expect("both policies boot");
+    let carrier = Carrier {
+        reading: held::<Reading>(&app),
+        http: client(held::<nest_rs_core::Unnamed>(&app)),
+        parcel: peer.url(PARCEL),
+    };
+    let logs = LogCapture::install();
+    let mut events = carrier.reading.events();
+
+    let refused = carrier.parcel().await.expect_err("its breaker opened");
+    assert!(
+        matches!(refused, ResilienceError::Open { .. }),
+        "{refused:?}"
+    );
+
+    let said = format!("the carrier's answer could not be read: {BODY_GIVEN_UP}");
+    let never = [PARCEL, "127.0.0.1"];
+    assert_eq!(filed(&logs, RETRYING, &never), [said.as_str()]);
+    assert_eq!(
+        filed(&logs, "circuit breaker changed state", &never),
+        [said.as_str()]
+    );
+    let told = told(&mut events);
+    assert!(
+        matches!(
+            &told[..],
+            [
+                ResilienceEvent::Transition { .. },
+                ResilienceEvent::Retry {
+                    method: Some("parcel"),
+                    error: Some(error),
+                    ..
+                },
+                ResilienceEvent::Refusal { .. },
+            ] if *error == said
         ),
         "{told:?}"
     );

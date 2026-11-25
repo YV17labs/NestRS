@@ -53,9 +53,12 @@ use crate::executor::{Executor, current_executor, with_executor};
 /// its whole length.
 ///
 /// A block dropped before it settles — cancelled by a timeout or a `select!` —
-/// rolls back; inside a unit of work it leaves that unit unable to commit once
-/// its savepoint was answered, which its first statement sends, so nothing the
-/// unit wrote stands, and dropped sooner it leaves the unit as it was. A block
+/// rolls back. Once its savepoint was answered, which its first statement
+/// sends, what it sits in keeps nothing either: a unit of work it sits in
+/// directly can no longer commit, so nothing that unit wrote stands; a block
+/// it is nested in can only roll back — an `Ok` kept over it answers
+/// [`AtomicError::Poisoned`] — and the unit around that block commits what it
+/// wrote beside it. Dropped sooner, it leaves what it sits in as it was. A block
 /// of its own on a pool unit dropped while it commits leaves the `COMMIT` to
 /// finish on its driver's task, and a unit whose body failed without seeing its
 /// answer is in doubt ([`Unhonoured::IN_DOUBT`](crate::Unhonoured::IN_DOUBT)).

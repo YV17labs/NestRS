@@ -15,7 +15,8 @@
 //! [`ResiliencePolicy::run`] or
 //! [`ResiliencePolicy::run_idempotent`], its closure handed the token. Every
 //! attempt is bounded by the policy's timeout and the unit's deadline,
-//! whichever ends first, and counted in its circuit breaker; the bulkhead
+//! whichever ends first — and, made from an attempt of another policy, by
+//! that one's — and counted in its circuit breaker; the bulkhead
 //! bounds how many run at once and how many wait for a slot, and the rate
 //! limit how many attempts are sent per window, a retry included. Every `Err`
 //! a call answers is its dependency failing — counted in the breaker, and sent
@@ -65,7 +66,7 @@
 //! breaker that opened, a rate with no token — is told, and counted as the
 //! refusal its run ends on, never as a retry; and a timeout the run sends its
 //! call again after is told and counts on no counter, where the one a run
-//! ends on counts among the refusals.
+//! is over at counts among the refusals.
 //!
 //! **A policy's state lives in its process.** Each replica keeps its own
 //! breaker, bulkhead and rate, so a dependency failing for one replica is

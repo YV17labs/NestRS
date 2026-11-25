@@ -31,12 +31,15 @@ mod resilient;
 /// `?`, `Ok(..)`, `Err(e)` and an early `return` answer one attempt, each
 /// answer coerced as the undecorated method's would be — a `&String` into the
 /// `&str` it returns, a box into its `Box<dyn …>` — and each `?` converting its
-/// error into `E`. That `E` is a `std::error::Error`, run once or again: its
-/// chain is the `error` of the `warn` the breaker files when that failure opens
-/// it and of the line each retry files, and a retry reads it for the
-/// `Retry-After` of a `Problem` it carries. An error that is none —
-/// `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own
-/// that is, which each `?` converts into.
+/// error into `E`. That `E` is a `std::error::Error` owning what it says
+/// (`'static`), run once or again: its chain, read as one, is the `error` of
+/// the `warn` the breaker files when that failure opens it and of the line
+/// each retry files, and a retry reads it for the `Retry-After` of a `Problem`
+/// it carries. An error that is none — `anyhow::Error`, a `Box<dyn Error>` —
+/// is held in a type of the app's own that is, which each `?` converts into.
+/// One borrowing an argument, or generic over a type that is not `'static`, is
+/// rustc's lifetime error at the answer — `E0310` for the generic one, whose
+/// help adds the bound — and owns the value instead.
 ///
 /// - `idempotent` — the call is sent again after an `Err` or a timeout, up to
 ///   its retries. Only the developer declares it: sending again a call that is
@@ -164,21 +167,33 @@ mod resilient;
 /// error `fallback_if` refused. Once an attempt sent a statement, another
 /// statement of that unit, issued beside the method, waits until the savepoint
 /// settles; the method's future dropped mid-attempt, once that attempt's
-/// savepoint was answered, leaves its unit unable to commit, as an atomic
-/// block dropped does — dropped sooner, its unit waiting for a connection, its
-/// `BEGIN` or that answer, it leaves the unit as it was; and a savepoint the
-/// database cannot settle ends the method on `ResilienceError::Unsettled`,
-/// attempted no further and handed to no fallback. A method run once with no
-/// fallback opens none, nor does any outside a transaction — no unit of work,
-/// or one on the pool: an `Err` there leaves what the body wrote, as it does
-/// with no policy.
+/// savepoint was answered, leaves what holds that savepoint unable to commit,
+/// as an atomic block dropped does: its unit — or, nested in another attempt's
+/// savepoint or in an atomic block, that savepoint or that block alone, the
+/// unit going on to commit what it wrote beside it. Dropped sooner, its unit
+/// waiting for a connection, its `BEGIN` or that answer, it leaves the unit as
+/// it was; and a savepoint the database cannot settle ends the method on
+/// `ResilienceError::Unsettled`, attempted no further and handed to no
+/// fallback. A method run once with no fallback opens none, nor does any
+/// outside a transaction — no unit of work, or one on the pool: an `Err` there
+/// leaves what the body wrote, as it does with no policy.
 ///
 /// Everything else on the method stays as written: its visibility, generics,
 /// lifetimes, docs, `#[cfg]`s and other attributes, and its body's tokens and
-/// spans. It takes `&self` or `self: &Arc<Self>`, on any host holding its
-/// policy in a named field — a provider, a struct built by hand, a native
-/// `async fn` in a trait impl, a handler of every impl half, a scheduled tick
-/// included. A trait's own method carries none: its declaration is refused
+/// spans, the braces it is written in included: what its tail expression
+/// leaves drops as the edition of the crate writing it says, ahead of the
+/// body's locals in edition 2024 and after them before it. Its arguments drop
+/// as the undecorated method's do, last declared first, however its run ends:
+/// answered, failed, panicked, dropped, or refused unsent. Run once under no
+/// `record_if` and no `fallback`, the one attempt owns the arguments its body
+/// names, so what the body does not name — an argument it reads nowhere, the
+/// part of a pattern it leaves unbound — stays in the method's frame and
+/// drops once the attempt has, and an argument the body names under a leading
+/// `_` drops with the attempt, after the others. It takes `&self` or
+/// `self: &Arc<Self>`, on any host holding its policy in a named field — a
+/// provider, a struct built by hand, a native `async fn` in a trait impl, a
+/// handler of every impl half, a scheduled tick included. A trait's own
+/// method carries none: its declaration is refused
 /// saying to decorate each impl's, and a default body, whose `Self` has no
 /// field, is rustc's `E0609` at the field named. A method carries it once: a
 /// second, under whatever name it is imported, is refused.
@@ -214,11 +229,16 @@ mod resilient;
 /// orders hold under every key: below, the span also covers the fallback and
 /// records what it answers; above, the fallback runs outside every attempt's
 /// span. The token `cancel` names is no argument of the method, so no span
-/// records it. On a GraphQL operation the order says nothing: `#[operations]`
+/// records it. The future tracing builds owns the arguments, and drops them in
+/// the order its tokens first name them, as on a method with no policy:
+/// written above a method run once, the order its body names them in; written
+/// below, the order the expansion does, last declared first when the method is
+/// run once. On a GraphQL operation the order says nothing: `#[operations]`
 /// hands the instrument to the field it generates, so one span covers the whole
-/// field, its guards and every attempt, and `err` and `ret` record what the
-/// field answers; a span per attempt there is that of a provider's decorated
-/// method the operation calls.
+/// field, its guards and every attempt. Its `err` is written `err(Debug)`, the
+/// field's error having a `Debug` and no `Display`, and `ret` not at all, the
+/// field's answer having neither; a span per attempt there is that of a
+/// provider's decorated method the operation calls.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry made or
 /// given up, a savepoint left unsettled, a full bulkhead or a reached rate

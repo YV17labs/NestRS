@@ -1,8 +1,10 @@
 //! Covers `src/policy.rs`: through the HTTP edge, an attempt ends by the
 //! request's deadline, before the policy's own timeout, so its client is told
 //! by the policy and its breaker counts the attempt; through the health edge,
-//! by the cut of the indicator sending it, a probe's turn included; and, under
-//! no edge, what a
+//! by the cut of the indicator sending it, a probe's turn included; under a
+//! method of another dependency's policy, by that one's timeout, which a
+//! fallback runs outside; at its unit's deadline, told before its savepoint
+//! settles; and, under no edge, what a
 //! run's future holds — its size against its call's, what it allocates, alone,
 //! through every mechanism its policy takes and inside a unit of work whose
 //! transaction each attempt opens a savepoint of, and a large one run on a
@@ -12,13 +14,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http::StatusCode;
-use nest_rs_core::{Problem, ToProblem, injectable, module};
+use nest_rs_core::{Problem, ToProblem, injectable, instance, module};
 use nest_rs_health::{
     HealthConfig, HealthModule, HealthService, IndicatorStatus, ProbeKind, indicators,
 };
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_resilience::{
-    BreakerState, ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+    BreakerState, ResilienceConfig, ResilienceError, ResilienceEvent, ResilienceModule,
+    ResiliencePolicy, resilient,
 };
 use nest_rs_testing::{HeadlessApp, TestApp};
 
@@ -184,6 +187,280 @@ async fn an_attempt_ends_by_its_indicators_cut_and_its_breaker_counts_it() {
         matches!(reopened, Some(BreakerState::Open { retry_after, .. }) if retry_after == OPEN),
         "the probe its indicator cut has failed: {reopened:?}"
     );
+}
+
+#[instance]
+struct Haulier;
+
+#[instance]
+struct Broker;
+
+/// What a call to the broker fails on when the haulier's policy did.
+#[derive(Debug, thiserror::Error)]
+#[error("the haulier's call failed")]
+struct Forwarded(#[from] ResilienceError<Silent>);
+
+/// A service whose methods under the broker's policy call the ones under the
+/// haulier's, a dependency that accepts and never answers.
+#[injectable]
+struct Shipments {
+    #[inject]
+    haulier: Arc<ResiliencePolicy<Haulier>>,
+    #[inject]
+    broker: Arc<ResiliencePolicy<Broker>>,
+}
+
+impl Shipments {
+    #[resilient(haulier)]
+    async fn track(&self) -> Result<u32, ResilienceError<Silent>> {
+        std::future::pending().await
+    }
+
+    #[resilient(broker, timeout = "2s")]
+    async fn forward(&self) -> Result<u32, ResilienceError<Forwarded>> {
+        Ok(self.track().await?)
+    }
+
+    #[resilient(broker, timeout = "2s", fallback = last_known)]
+    async fn tracked(&self) -> Result<u32, ResilienceError<Forwarded>> {
+        Ok(self.track().await?)
+    }
+
+    /// The fallback of [`tracked`](Self::tracked), itself a call under the
+    /// haulier's policy.
+    async fn last_known(
+        &self,
+        _error: ResilienceError<Forwarded>,
+    ) -> Result<u32, ResilienceError<Forwarded>> {
+        self.archived()
+            .await
+            .map_err(|error| ResilienceError::Failed(Forwarded(error)))
+    }
+
+    /// Answers after longer than the broker's attempt may run.
+    #[resilient(haulier)]
+    async fn archived(&self) -> Result<u32, ResilienceError<Silent>> {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        Ok(7)
+    }
+}
+
+#[module(
+    imports = [
+        ResilienceModule::for_root((Haulier, ResilienceConfig {
+            retries: None,
+            breaker_window: Some(2),
+            breaker_failures: 2,
+            breaker_open: OPEN,
+            ..ResilienceConfig::default()
+        })),
+        ResilienceModule::for_root((Broker, crate::quiet())),
+    ],
+    providers = [Shipments],
+)]
+struct ShipmentsModule;
+
+async fn shipments() -> (HeadlessApp, Arc<Shipments>, Arc<ResiliencePolicy<Haulier>>) {
+    let app = HeadlessApp::builder()
+        .module::<ShipmentsModule>()
+        .build_headless()
+        .await
+        .expect("two policies boot");
+    let shipments = app.container().get::<Shipments>().expect("provided");
+    let haulier = crate::held::<Haulier>(&app);
+    (app, shipments, haulier)
+}
+
+/// A decorated method called from one under another policy's shorter timeout
+/// is cut there, before its own five seconds: its attempt has timed out, so a
+/// dependency that never answers opens its own breaker, and the calls after
+/// it are refused at once rather than each waiting its caller's timeout out.
+#[tokio::test(start_paused = true)]
+async fn a_dependency_hanging_under_its_callers_shorter_timeout_opens_its_own_breaker() {
+    let (_app, shipments, haulier) = shipments().await;
+    let short = Duration::from_secs(2);
+    assert!(short < ResilienceConfig::default().timeout);
+
+    for _hung in 0..2 {
+        let forwarded = shipments.forward().await;
+        assert!(
+            matches!(forwarded, Err(ResilienceError::TimedOut { timeout, .. }) if timeout == short),
+            "{forwarded:?}"
+        );
+    }
+    let opened = haulier.breaker_state();
+    assert!(
+        matches!(opened, Some(BreakerState::Open { retry_after, .. }) if retry_after == OPEN),
+        "two timeouts of two: {opened:?}"
+    );
+
+    let started = tokio::time::Instant::now();
+    let refused = shipments.forward().await;
+    assert!(
+        matches!(
+            refused,
+            Err(ResilienceError::Failed(Forwarded(
+                ResilienceError::Open { .. }
+            )))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(started.elapsed(), Duration::ZERO, "refused unsent");
+}
+
+/// A fallback runs once its run has answered, outside its attempt's timeout:
+/// a call it makes under another policy is cut by nothing but its own bound,
+/// and answers after longer than the attempt it replaces was given.
+#[tokio::test(start_paused = true)]
+async fn a_call_its_fallback_makes_is_not_cut_by_the_timeout_of_the_run_it_answers_for() {
+    let (_app, shipments, haulier) = shipments().await;
+    let started = tokio::time::Instant::now();
+    let answered = shipments.tracked().await;
+    assert!(matches!(answered, Ok(7)), "{answered:?}");
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(5),
+        "the attempt's 2 s, then the fallback's call, 3 s"
+    );
+    let counted = haulier.breaker_stats().expect("a breaker");
+    assert_eq!(
+        (counted.outcomes, counted.failures),
+        (2, 1),
+        "the call the broker's timeout cut, then the fallback's, which answered"
+    );
+}
+
+/// A unit of work holding a transaction whose savepoints settle after a round
+/// trip to its database.
+struct RoundTrip(Duration);
+
+impl nest_rs_database::Executor for RoundTrip {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
+        Some(Arc::new(Self(self.0)))
+    }
+}
+
+impl nest_rs_database::AtomicBlock for RoundTrip {
+    fn settle(
+        self: Arc<Self>,
+        _ok: bool,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), nest_rs_database::AtomicError>> + Send>>
+    {
+        let round_trip = self.0;
+        Box::pin(async move {
+            tokio::time::sleep(round_trip).await;
+            Ok(())
+        })
+    }
+}
+
+/// `call` as a unit's body, in a transaction whose savepoints settle in
+/// `round_trip`, cut by its edge at the deadline it is bound by, a second on:
+/// what it answered, or `None` once the edge cut it.
+async fn cut_in_a_second<T>(round_trip: Duration, call: impl Future<Output = T>) -> Option<T> {
+    use nest_rs_database::__private::with_request_executor;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let unit = nest_rs_core::__private::with_deadline(
+        Some(deadline),
+        with_request_executor(Arc::new(RoundTrip(round_trip)), call),
+    );
+    tokio::time::timeout_at(deadline, unit).await.ok()
+}
+
+/// No retry, and a breaker two failures open: one timeout is read in its
+/// window, and tells no transition.
+fn counting() -> ResilienceConfig {
+    ResilienceConfig {
+        retries: None,
+        breaker_window: Some(2),
+        breaker_failures: 2,
+        ..ResilienceConfig::default()
+    }
+}
+
+/// The outcomes `policy`'s breaker counts, and the failures among them.
+fn counted(policy: &ResiliencePolicy) -> (usize, usize) {
+    let stats = policy.breaker_stats().expect("a breaker");
+    (stats.outcomes, stats.failures)
+}
+
+/// An idempotent call given up at its unit's deadline, its savepoint opened,
+/// is told as it ends: the edge cuts the unit at that instant, while the
+/// savepoint is rolled back, and the timeout its breaker counted is told by
+/// its event all the same.
+#[tokio::test(start_paused = true)]
+async fn a_timeout_at_the_units_deadline_is_told_though_its_savepoint_still_settles() {
+    let (_app, policy) = crate::policy(counting()).await;
+    let mut events = policy.events();
+    let call = policy.run_idempotent(|_| std::future::pending::<Result<u32, Silent>>());
+    let cut = cut_in_a_second(Duration::from_millis(1), call).await;
+    assert!(cut.is_none(), "cut while its savepoint settles: {cut:?}");
+    assert_eq!(counted(&policy), (1, 1), "the timeout its breaker counted");
+    let told = crate::told(&mut events);
+    assert!(
+        matches!(told[..], [ResilienceEvent::Timeout { .. }]),
+        "{told:?}"
+    );
+}
+
+/// A host whose method never answers and declares a fallback that does, at once.
+struct Hanging {
+    policy: Arc<ResiliencePolicy>,
+}
+
+impl Hanging {
+    #[resilient(policy, fallback = stale)]
+    async fn live(&self) -> Result<u32, ResilienceError<Silent>> {
+        std::future::pending().await
+    }
+
+    async fn stale(&self, _error: ResilienceError<Silent>) -> Result<u32, ResilienceError<Silent>> {
+        Ok(0)
+    }
+}
+
+/// A limit: a fallback is asked once its attempt's savepoint is rolled back,
+/// so its write never lands above the failed attempt's. At its unit's
+/// deadline, one answering at once answers for the unit only where that
+/// savepoint settles at once; a round trip to the database is past the
+/// deadline, the edge cuts the unit there, and the fallback is never asked —
+/// the timeout told all the same.
+#[tokio::test(start_paused = true)]
+async fn a_fallback_at_its_units_deadline_has_no_time_left_once_its_savepoint_takes_a_round_trip() {
+    for (round_trip, answers) in [(Duration::ZERO, true), (Duration::from_millis(1), false)] {
+        let (_app, policy) = crate::policy(counting()).await;
+        let mut events = policy.events();
+        let host = Hanging {
+            policy: Arc::clone(&policy),
+        };
+        let cut = cut_in_a_second(round_trip, host.live()).await;
+        assert_eq!(counted(&policy), (1, 1), "the timeout its breaker counted");
+        let told = crate::told(&mut events);
+        if answers {
+            assert!(matches!(cut, Some(Ok(0))), "{cut:?}");
+            assert!(
+                matches!(
+                    told[..],
+                    [
+                        ResilienceEvent::Timeout { .. },
+                        ResilienceEvent::Fallback { .. }
+                    ]
+                ),
+                "{told:?}"
+            );
+        } else {
+            assert!(cut.is_none(), "cut while its savepoint settles: {cut:?}");
+            assert!(
+                matches!(told[..], [ResilienceEvent::Timeout { .. }]),
+                "its fallback is never asked: {told:?}"
+            );
+        }
+    }
 }
 
 /// What a body below holds across its `.await`, or its closure moves in: past

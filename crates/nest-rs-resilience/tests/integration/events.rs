@@ -301,6 +301,54 @@ async fn an_attempt_timed_out_is_told_with_its_bound_before_its_retry() {
     );
 }
 
+/// A timeout that leaves no run to answer counts in the breaker and is told
+/// by no event of its policy: an attempt its caller drops past its bound
+/// inside a unit's deadline, and one dropped, before its own bound, by the
+/// timeout of the policy its caller runs under — whose own run tells its
+/// timeout.
+#[tokio::test(start_paused = true)]
+async fn a_timeout_that_leaves_no_run_to_answer_is_told_by_no_event() {
+    let (_app, policy) = crate::policy(ResilienceConfig {
+        timeout: Duration::from_millis(100),
+        retries: None,
+        breaker_window: Some(4),
+        breaker_failures: 4,
+        ..ResilienceConfig::default()
+    })
+    .await;
+    let mut events = policy.events();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    nest_rs_core::__private::with_deadline(Some(deadline), async {
+        let run = parked(policy.run(|_| silent()));
+        tokio::time::advance(Duration::from_millis(200)).await;
+        drop(run);
+    })
+    .await;
+    assert_eq!(stats(&policy), (1, 1, 1.0), "dropped past its bound");
+    assert_eq!(told(&mut events), []);
+
+    let (_app, around) = crate::policy(ResilienceConfig {
+        timeout: Duration::from_millis(50),
+        ..quiet()
+    })
+    .await;
+    let mut told_around = around.events();
+    let cut = around.run(|_| policy.run(|_| silent())).await;
+    assert!(
+        matches!(cut, Err(ResilienceError::TimedOut { timeout, .. })
+            if timeout == Duration::from_millis(50)),
+        "{cut:?}"
+    );
+    assert_eq!(stats(&policy), (2, 2, 1.0), "cut before its bound");
+    assert_eq!(told(&mut events), []);
+    let told_around = told(&mut told_around);
+    assert!(
+        matches!(told_around[..], [ResilienceEvent::Timeout { .. }]),
+        "{told_around:?}"
+    );
+}
+
 /// The phases a transition says it left and entered, and whether by hand.
 fn transitions(events: &mut ResilienceEvents) -> Vec<(BreakerPhase, BreakerPhase, bool)> {
     told(events)

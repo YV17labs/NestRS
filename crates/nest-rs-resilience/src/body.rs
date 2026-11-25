@@ -19,6 +19,7 @@ use nest_rs_core::Instance;
 use parking_lot::Mutex;
 use tokio::time::{Instant, Sleep};
 
+use crate::breaker::Cut;
 use crate::error::{ResilienceError, TIMED_OUT};
 use crate::policy::Held;
 use crate::told::told;
@@ -44,6 +45,9 @@ pin_project_lite::pin_project! {
     /// no read waits or the budget is not spent, and past it what one more
     /// read finds — a frame or the end stands as the head was judged, a
     /// failure counts as itself, and only a body still waiting has timed out.
+    /// A read left waiting is past it too, whatever the budget has left, when
+    /// what drops the body is the timeout of a policy around its reader
+    /// ([`Cut`]).
     pub(crate) struct ResilienceBody<I>
     where
         I: Instance,
@@ -73,7 +77,7 @@ pin_project_lite::pin_project! {
             let (Some(held), Some(since)) = (this.held.as_mut(), *this.waiting) else {
                 return;
             };
-            if since.elapsed() < *this.left {
+            if since.elapsed() < *this.left && !Cut::encloses() {
                 return;
             }
             // An edge cutting its unit as the budget is spent may drop the body
@@ -83,7 +87,11 @@ pin_project_lite::pin_project! {
                 this.body.as_mut().poll_frame(&mut unheard)
             }));
             match owed {
-                Ok(Poll::Pending) => held.settle(Some(TIMED_OUT)),
+                Ok(Poll::Pending) => {
+                    held.settle(Some(TIMED_OUT));
+                    // A body of another policy's this one reads is dropped by this timeout.
+                    Cut::dropping(|| this.body.set(reqwest::Body::default()));
+                }
                 Ok(Poll::Ready(Some(Err(error)))) => failed(held, &error),
                 Ok(Poll::Ready(Some(Ok(_)) | None)) => {}
                 // A destructor does not unwind: the panic is counted here, and the
@@ -208,9 +216,9 @@ impl<I: Instance> Body for ResilienceBody<I> {
             }
             let refusal = held.timed_out();
             *this.held = None;
-            // Let go here, not when the response is dropped: its connection is
-            // the one that stalled.
-            this.body.set(reqwest::Body::default());
+            // Let go here, not when the response is dropped: its connection is the one
+            // that stalled, and a body of another policy's it reads is cut by this timeout.
+            Cut::dropping(|| this.body.set(reqwest::Body::default()));
             return Poll::Ready(Some(Err(
                 ResilienceError::<Infallible>::from(refusal).into()
             )));
@@ -336,6 +344,19 @@ mod tests {
         head: Duration,
         judged: Verdict,
     ) -> (Covered, Feed) {
+        let (feed, fed) = mpsc::unbounded_channel();
+        let body = covering(policy, head, judged, reqwest::Body::wrap(Fed(fed))).await;
+        (body, feed)
+    }
+
+    /// `body` as the body of a response to a request run under `policy`,
+    /// whose head came after `head` and was read as `judged`.
+    async fn covering(
+        policy: &Arc<ResiliencePolicy>,
+        head: Duration,
+        judged: Verdict,
+        body: reqwest::Body,
+    ) -> Covered {
         let run = policy
             .begin(None)
             .await
@@ -348,9 +369,7 @@ mod tests {
         let (head, _) = run.finish(attempted).expect("the request was sent");
         head.expect("the head answered");
         let held = run.hold(outstanding, Arc::clone(policy));
-        let (feed, fed) = mpsc::unbounded_channel();
-        let body = ResilienceBody::new(reqwest::Body::wrap(Fed(fed)), held);
-        (Box::pin(body), feed)
+        Box::pin(ResilienceBody::new(body, held))
     }
 
     /// A body behind a head that came at once and was judged a success.
@@ -926,6 +945,174 @@ mod tests {
             Some(BreakerState::Closed),
             "one failure of the two that open it"
         );
+        assert!(!slot_taken(&policy).await);
+    }
+
+    /// Half the timeout of [`policy`]: what the policy around a reader gives
+    /// its attempt, and what a body over another's has to wait in.
+    const SHORT: Duration = Duration::from_secs(2);
+
+    /// A policy like [`policy`]'s, each attempt given up past [`SHORT`].
+    fn short() -> Arc<ResiliencePolicy> {
+        let config = ResilienceConfig {
+            timeout: SHORT,
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: OPEN_FOR,
+            ..ResilienceConfig::default()
+        };
+        Arc::new(ResiliencePolicy::new(&config).expect("a valid policy"))
+    }
+
+    /// What `policy`'s window counts: its outcomes, and the failures among them.
+    fn counted(policy: &ResiliencePolicy) -> (usize, usize) {
+        let stats = policy.breaker_stats().expect("a breaker");
+        (stats.outcomes, stats.failures)
+    }
+
+    /// A body whose read waits as the timeout of the policy its reader runs
+    /// under drops it has timed out, whatever its own budget has left: a
+    /// dependency that sends a head and stalls opens its own breaker, however
+    /// short the timeout around the call. Held with no read waiting, it
+    /// stands as its head was judged.
+    #[tokio::test(start_paused = true)]
+    async fn a_body_whose_read_waits_as_the_timeout_of_a_policy_around_drops_it_has_timed_out() {
+        let lines = LogCapture::install();
+        let around = short();
+
+        let stalled = policy(1);
+        let (mut body, feed) = succeeded(&stalled).await;
+        let cut = around
+            .run(move |_| async move {
+                let read = read(&mut body).await;
+                Err::<(), _>(io::Error::other(format!("the body answered {read:?}")))
+            })
+            .await;
+        assert!(
+            matches!(cut, Err(ResilienceError::TimedOut { timeout, .. }) if timeout == SHORT),
+            "{cut:?}"
+        );
+        assert!(is_open(&stalled), "{:?}", stalled.breaker_state());
+        assert!(!slot_taken(&stalled).await);
+        drop(feed);
+
+        let unread = policy(1);
+        let (body, _feed) = succeeded(&unread).await;
+        around.close_breaker().expect("a breaker");
+        let cut = around
+            .run(move |_| async move {
+                let _held = body;
+                std::future::pending::<Result<(), io::Error>>().await
+            })
+            .await;
+        assert!(
+            matches!(cut, Err(ResilienceError::TimedOut { .. })),
+            "{cut:?}"
+        );
+        assert_eq!(counted(&unread), (1, 0), "its head's success");
+        assert_eq!(
+            opened_on(&lines),
+            [TIMED_OUT, TIMED_OUT, TIMED_OUT],
+            "the stalled body's policy, and the one around each call"
+        );
+    }
+
+    /// A body read through another policy's — two middlewares on one client —
+    /// is dropped by that one's cut: its read still waiting, it has timed out
+    /// with it, at the cut read and as a body past its budget is dropped;
+    /// dropped with the one over it inside both budgets, each stands as its
+    /// head was judged.
+    #[tokio::test(start_paused = true)]
+    async fn a_body_read_through_another_policys_times_out_with_the_cut_that_drops_it() {
+        /// A body under [`policy`], read through one under [`short`].
+        async fn stacked() -> (Arc<ResiliencePolicy>, Arc<ResiliencePolicy>, Covered, Feed) {
+            let (inner, outer) = (policy(1), short());
+            let (body, feed) = succeeded(&inner).await;
+            let over = covering(
+                &outer,
+                Duration::ZERO,
+                Verdict::Succeeded,
+                reqwest::Body::wrap(body),
+            )
+            .await;
+            (inner, outer, over, feed)
+        }
+
+        let (inner, outer, mut body, _feed) = stacked().await;
+        let started = Instant::now();
+        assert!(matches!(read(&mut body).await, Some(Err(_))), "cut");
+        assert_eq!(started.elapsed(), SHORT);
+        assert!(is_open(&outer) && is_open(&inner), "both timed out");
+        assert!(!slot_taken(&inner).await);
+
+        let (inner, outer, mut body, _feed) = stacked().await;
+        assert!(waits(&mut body).await);
+        tokio::time::advance(SHORT).await;
+        drop(body);
+        assert!(is_open(&outer) && is_open(&inner), "both timed out");
+
+        let (inner, outer, mut body, _feed) = stacked().await;
+        assert!(waits(&mut body).await);
+        tokio::time::advance(SHORT / 2).await;
+        drop(body);
+        assert_eq!(
+            (counted(&outer), counted(&inner)),
+            ((1, 0), (1, 0)),
+            "dropped inside both budgets"
+        );
+    }
+
+    /// A `tracing` subscriber panicking out of each line a breaker's
+    /// transition files.
+    struct Failing;
+
+    /// Whether an event is a breaker's transition.
+    #[derive(Default)]
+    struct Moved(bool);
+
+    impl tracing::field::Visit for Moved {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0 |= field.name() == "message" && format!("{value:?}") == crate::breaker::MOVED;
+        }
+    }
+
+    impl tracing::Subscriber for Failing {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut moved = Moved::default();
+            event.record(&mut moved);
+            assert!(!moved.0, "the subscriber fails on a transition's line");
+        }
+
+        fn enter(&self, _: &tracing::span::Id) {}
+
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// A line panicking out of the transition a body's end makes — a probe's
+    /// closing the breaker — unwinds out of its drop with the slot freed: the
+    /// breaker moved, and no call is refused for a slot nothing holds.
+    #[tokio::test(start_paused = true)]
+    async fn a_line_panicking_as_a_body_is_dropped_leaves_its_slot_free() {
+        let policy = probing().await;
+        let (body, _feed) = succeeded(&policy).await;
+        let lines = tracing::subscriber::set_default(Failing);
+        let dropped = catch_unwind(AssertUnwindSafe(|| drop(body)));
+        drop(lines);
+        assert!(dropped.is_err(), "the closing's line");
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
         assert!(!slot_taken(&policy).await);
     }
 }

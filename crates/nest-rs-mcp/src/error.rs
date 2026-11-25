@@ -895,7 +895,7 @@ nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_session) }
 /// rmcp's session manager error said by its kind: its own sentence names the
 /// session a client named.
 fn say_session(link: &(dyn std::error::Error + 'static)) -> Option<String> {
-    let said = match link.downcast_ref::<LocalSessionManagerError>()? {
+    let said = match nest_rs_core::__private::link_as::<LocalSessionManagerError>(link)? {
         LocalSessionManagerError::SessionNotFound(_) => "session not found",
         LocalSessionManagerError::SessionError(error) => match error {
             SessionError::DuplicatedRequestId(_) => "a request id the session already holds",
@@ -1304,6 +1304,32 @@ mod tests {
         );
         let printed = nest_rs_testing::printed(&io);
         assert!(!printed.contains("sk_live"), "{printed}");
+    }
+
+    /// `std` makes a pointer to an error an error displaying the one it
+    /// holds: an error naming the session manager's as its source behind one
+    /// hands out the pointer, said as the error it holds.
+    #[test]
+    fn a_session_manager_error_named_as_a_source_behind_a_pointer_is_said_by_its_kind() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the session was lost")]
+        struct Naming<S: StdError + 'static>(#[source] S);
+
+        let named = || {
+            LocalSessionManagerError::SessionNotFound(
+                rmcp::transport::streamable_http_server::session::SessionId::from(
+                    "named-by-a-client",
+                ),
+            )
+        };
+        assert!(named().to_string().contains("named-by-a-client"));
+        for said in [
+            nest_rs_core::error_message(&Naming(named())),
+            nest_rs_core::error_message(&Naming(std::sync::Arc::new(named()))),
+            nest_rs_core::error_message(&Naming(Box::new(named()))),
+        ] {
+            assert_eq!(said, "the session was lost: session not found");
+        }
     }
 
     /// What a domain answers when the ledger refuses; it says no problem.

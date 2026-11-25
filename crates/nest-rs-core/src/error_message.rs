@@ -4,9 +4,11 @@
 
 use std::any::Any;
 use std::error::Error;
+use std::sync::Arc;
 
 use tokio::task::JoinError;
 
+use self::__private::link_as;
 use crate::error::{DecodeError, Redactions};
 
 const NO_MESSAGE: &str = "an error with no message";
@@ -19,9 +21,13 @@ const NO_MESSAGE: &str = "an error with no message";
 /// [`DecodeError`], a joined task's panic without its payload, and **a link a
 /// driver claims through a [`SafeLink`] as the driver says it**, with nothing
 /// below it; every other link is passed through [`DecodeError::redact`], which
-/// also says a claimed link wherever a wrapper spells it whole. A wrapper
-/// wording the value its own way (`{0:?}`, a `format!` of the field, part of a
-/// driver's message) is not caught.
+/// also says a claimed link wherever a wrapper spells it whole. A link that is
+/// a pointer `std` makes an error of — what an error naming its source behind
+/// one hands out — is read as the error it holds: an `Arc<dyn Error>` by every
+/// reader, an `Arc` or a `Box` of a type by the reader naming that type, a
+/// decode failure's and a joined task's here, a driver's in its `SafeLink`. A
+/// wrapper wording the value its own way (`{0:?}`, a `format!` of the field,
+/// part of a driver's message) is not caught.
 pub fn error_message(error: &(dyn Error + 'static)) -> String {
     let redactions = Redactions::of(Some(error));
     let mut sentence = String::new();
@@ -49,7 +55,7 @@ pub fn error_message(error: &(dyn Error + 'static)) -> String {
 /// What one link of a chain says, and whether that is the whole of what is
 /// left — a claimed link's driver says its causes too.
 fn said(link: &(dyn Error + 'static), redactions: &Redactions) -> (String, bool) {
-    if let Some(joined) = link.downcast_ref::<JoinError>() {
+    if let Some(joined) = link_as::<JoinError>(link) {
         return (joined_task(joined), false);
     }
     if let Some(sentence) = SafeLink::said(link) {
@@ -74,6 +80,12 @@ fn said(link: &(dyn Error + 'static), redactions: &Redactions) -> (String, bool)
 /// further below it; `None` for any other, which is said as before.
 /// Identifiers — a code, a constraint, a table, a column — are schema, not
 /// payload, and stay in the sentence: they are what an operator searches for.
+///
+/// `std` makes an `Arc` and a `Box` of an error an error of their own, which
+/// displays the error held, so an error naming its source behind one hands out
+/// the pointer as the link. An `Arc<dyn Error>`, `Send` and `Sync` or not, is
+/// read through before `say` is asked; an `Arc<T>` or a `Box<T>` of the
+/// driver's own type is a type only `say` can name, and is its to downcast to.
 ///
 /// ```
 /// use std::error::Error;
@@ -109,13 +121,33 @@ impl SafeLink {
         Self { say }
     }
 
-    /// What the first sayer claiming `link` says of it.
+    /// What the first sayer claiming `link`, or the error an `Arc<dyn Error>`
+    /// handed out as the link holds, says of it.
     pub(crate) fn said(link: &(dyn Error + 'static)) -> Option<String> {
+        let link = pointed(link);
         inventory::iter::<Self>().find_map(|entry| (entry.say)(link))
     }
 }
 
 inventory::collect!(SafeLink);
+
+/// The error `link` is, or the one an `Arc<dyn Error>` handed out as the link
+/// holds, however many hold one another: `std` makes that pointer an error
+/// displaying the one it holds and handing out its source, which no downcast
+/// reads.
+fn pointed<'e>(mut link: &'e (dyn Error + 'static)) -> &'e (dyn Error + 'static) {
+    loop {
+        link = if let Some(shared) = link.downcast_ref::<Arc<dyn Error + Send + Sync>>() {
+            &**shared
+        } else if let Some(shared) = link.downcast_ref::<Arc<dyn Error + Send>>() {
+            &**shared
+        } else if let Some(shared) = link.downcast_ref::<Arc<dyn Error>>() {
+            &**shared
+        } else {
+            return link;
+        };
+    }
+}
 
 /// How a joined task ended, as tokio says it of a panic whose payload is no
 /// string: the panic was filed, redacted, where it was raised.
@@ -154,8 +186,31 @@ where
 pub(crate) mod __private {
     use std::error::Error;
     use std::fmt;
+    use std::sync::Arc;
 
     use ref_cast::RefCast;
+
+    /// The `T` that `link` is, or that a pointer handed out as the link holds:
+    /// an `Arc<T>` or a `Box<T>`, and an `Arc<dyn Error>` holding any of the
+    /// three. How a reader naming `T` reads a link — a
+    /// [`SafeLink`](crate::SafeLink)'s `say` its driver's error, a report its
+    /// decode failure: `std` makes each of those pointers an error displaying
+    /// the one it holds, so an error naming its source behind one hands out
+    /// the pointer, which a downcast to `T` misses.
+    pub fn link_as<'e, T: Error + 'static>(link: &'e (dyn Error + 'static)) -> Option<&'e T> {
+        let link = super::pointed(link);
+        link.downcast_ref::<T>()
+            .or_else(|| link.downcast_ref::<Arc<T>>().map(|held| &**held))
+            .or_else(|| link.downcast_ref::<Box<T>>().map(|held| &**held))
+    }
+
+    /// What the driver claiming `link` says of it, its causes included, and
+    /// `None` for a link no [`SafeLink`](crate::SafeLink) claims: how a sayer
+    /// reading the chain beneath an error of its own says a link that is
+    /// another driver's.
+    pub fn claimed_link(link: &(dyn Error + 'static)) -> Option<String> {
+        crate::SafeLink::said(link)
+    }
 
     /// A failure as every reader of a chain reads it: its `Display` and its
     /// `Debug` are what [`error_message`](fn@crate::error_message) says of it,
@@ -580,6 +635,107 @@ mod tests {
             "upstream answered: row rejected R42"
         );
         assert_eq!(DecodeError::redact(&text, None), text, "no chain, no sayer");
+    }
+
+    /// What thiserror's `#[source]` makes of a field: a sentence of the
+    /// error's own, and the field handed out as the link, a pointer included.
+    #[derive(Debug, thiserror::Error)]
+    #[error("the import failed")]
+    struct Naming<S: Error + 'static>(#[source] S);
+
+    #[test]
+    fn a_claimed_link_behind_an_erased_pointer_is_said_by_its_sayer() {
+        type Shared = Arc<dyn Error + Send + Sync>;
+        let erased: Shared = Arc::new(rejected());
+        assert!(erased.to_string().contains("secret"), "std's own sentence");
+        assert_eq!(
+            error_message(&Naming(Arc::clone(&erased))),
+            "the import failed: row rejected R42"
+        );
+
+        let twice: Shared = Arc::new(erased);
+        assert_eq!(
+            error_message(&Naming(twice)),
+            "the import failed: row rejected R42"
+        );
+        let unsendable: Arc<dyn Error> = Arc::new(rejected());
+        assert_eq!(
+            error_message(&Naming(unsendable)),
+            "the import failed: row rejected R42"
+        );
+        let unshareable: Arc<dyn Error + Send> = Arc::new(rejected());
+        assert_eq!(
+            error_message(&Naming(unshareable)),
+            "the import failed: row rejected R42"
+        );
+
+        let text = format!("upstream answered: {}", rejected());
+        let erased: Shared = Arc::new(rejected());
+        assert_eq!(
+            DecodeError::redact(&text, Some(&Naming(erased))),
+            "upstream answered: row rejected R42"
+        );
+    }
+
+    #[test]
+    fn a_link_is_read_as_its_type_through_the_pointers_handed_out_as_the_link() {
+        use super::__private::link_as;
+
+        let code = |link: &(dyn Error + 'static)| link_as::<Rejected>(link).map(|own| own.code);
+        assert_eq!(code(&rejected()), Some("R42"));
+        assert_eq!(code(&Arc::new(rejected())), Some("R42"));
+        assert_eq!(code(&Box::new(rejected())), Some("R42"));
+        let erased: Arc<dyn Error + Send + Sync> = Arc::new(Box::new(rejected()));
+        assert_eq!(code(&erased), Some("R42"));
+        assert_eq!(code(&Quoted("\"secret\"")), None);
+        assert_eq!(code(&Arc::new(Quoted("\"secret\""))), None);
+    }
+
+    #[test]
+    fn a_link_another_driver_claims_is_said_to_a_sayer_asking_for_it() {
+        use super::__private::claimed_link;
+
+        assert_eq!(
+            claimed_link(&rejected()).as_deref(),
+            Some("row rejected R42")
+        );
+        assert_eq!(claimed_link(&Quoted("\"secret\"")), None);
+    }
+
+    #[tokio::test]
+    async fn a_joined_task_s_panic_behind_a_pointer_is_said_without_its_payload() {
+        let joined =
+            tokio::spawn(async { serde_json::from_str::<u64>(r#""sk_live_secret""#).unwrap() })
+                .await
+                .expect_err("a secret is not a number");
+        let task = joined.id();
+
+        assert_eq!(
+            error_message(&Naming(Arc::new(joined))),
+            format!("the import failed: task {task} panicked")
+        );
+    }
+
+    /// serde_json's error is no `Clone`, so an error sharing one holds it
+    /// behind an `Arc`: a message a `Deserialize` impl wrote, which no shape
+    /// of serde's rebuilds, is read off the type behind the pointer.
+    #[test]
+    fn a_decode_failure_behind_a_pointer_is_said_without_its_value() {
+        let custom = || <serde_json::Error as serde::de::Error>::custom("bad token sk_live_51H");
+        let erased: Arc<dyn Error + Send + Sync> = Arc::new(custom());
+        for said in [
+            error_message(&Naming(custom())),
+            error_message(&Naming(Arc::new(custom()))),
+            error_message(&Naming(Box::new(custom()))),
+            error_message(&Naming(erased)),
+        ] {
+            assert_eq!(said, "the import failed: a value its type does not accept");
+        }
+        assert_eq!(
+            error_message(&Naming(Arc::new(secret()))),
+            format!("the import failed: {REPORT}")
+        );
+        assert!(DecodeError::in_chain(&Naming(Arc::new(secret()))).is_some());
     }
 
     /// Displays its cause whole and returns it as its source — the queue's

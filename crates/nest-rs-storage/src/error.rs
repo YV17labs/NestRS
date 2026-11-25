@@ -280,7 +280,7 @@ fn said_code(code: Option<&str>) -> String {
 /// input — and its HTTP client's the URL. Each link is said by its kind, and
 /// what lies below by the links that quote neither.
 fn say(link: &(dyn Error + 'static)) -> Option<String> {
-    let error = link.downcast_ref::<object_store::Error>()?;
+    let error = nest_rs_core::__private::link_as::<object_store::Error>(link)?;
     let kind = match error {
         object_store::Error::Generic { store, .. } => {
             return Some(below(link.source(), (*store).to_owned()));
@@ -387,6 +387,37 @@ mod tests {
         );
         let printed = nest_rs_testing::printed(&missing);
         assert!(!printed.contains("ada@example.com"), "{printed}");
+    }
+
+    /// `std` makes a pointer to an error an error displaying the one it
+    /// holds: an error naming object_store's as its source behind one hands
+    /// out the pointer, said as the error it holds.
+    #[test]
+    fn an_object_store_error_named_as_a_source_behind_a_pointer_is_said_without_the_key() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the export failed")]
+        struct Naming<S: Error + 'static>(#[source] S);
+
+        let missing = || object_store::Error::NotFound {
+            path: "users/ada@example.com/avatar.png".into(),
+            source: "absent".into(),
+        };
+        assert!(missing().to_string().contains("ada@example.com"));
+        let said = nest_rs_core::error_message(&Naming(missing()));
+        assert!(
+            said.starts_with("the export failed: no object at that key"),
+            "{said}"
+        );
+        assert!(!said.contains("ada@example.com"), "{said}");
+
+        assert_eq!(
+            nest_rs_core::error_message(&Naming(std::sync::Arc::new(missing()))),
+            said
+        );
+        assert_eq!(
+            nest_rs_core::error_message(&Naming(Box::new(missing()))),
+            said
+        );
     }
 
     #[test]

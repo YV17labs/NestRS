@@ -11,7 +11,7 @@ use std::time::Duration;
 use http::{Extensions, StatusCode};
 
 use nest_rs_config::Namespaced as _;
-use nest_rs_core::__private::Withheld;
+use nest_rs_core::__private::{Withheld, link_as};
 use nest_rs_core::{DecodeError, Problem, ServedAddress, ToProblem, code};
 
 use crate::HttpConfig;
@@ -1589,7 +1589,7 @@ nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_h2) }
 /// `Display` appends — the peer's own bytes; every other h2 error says nothing
 /// it was sent.
 fn say_h2(link: &(dyn Error + 'static)) -> Option<String> {
-    let error = link.downcast_ref::<h2::Error>()?;
+    let error = link_as::<h2::Error>(link)?;
     if !error.is_go_away() {
         return None;
     }
@@ -1625,6 +1625,58 @@ mod tests {
     async fn problem_of(response: Response) -> serde_json::Value {
         let bytes = response.into_body().into_bytes().await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// What h2 ends a connection on when its peer says GOAWAY, quoting
+    /// `debug_data`.
+    async fn goaway(debug_data: &[u8]) -> h2::Error {
+        use tokio::io::AsyncWriteExt as _;
+
+        let (mut peer, io) = tokio::io::duplex(1024);
+        let mut frames = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec();
+        // An empty SETTINGS frame, then a GOAWAY: no stream, PROTOCOL_ERROR.
+        frames.extend_from_slice(&[0, 0, 0, 0x4, 0, 0, 0, 0, 0]);
+        let length = u8::try_from(8 + debug_data.len()).expect("one byte of length");
+        frames.extend_from_slice(&[0, 0, length, 0x7, 0, 0, 0, 0, 0]);
+        frames.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0x1]);
+        frames.extend_from_slice(debug_data);
+        peer.write_all(&frames).await.expect("the frames are sent");
+
+        let mut connection = h2::server::handshake(io)
+            .await
+            .expect("the preface is read");
+        let Some(Err(error)) = connection.accept().await else {
+            panic!("the connection ends on the GOAWAY");
+        };
+        error
+    }
+
+    /// `std` makes a pointer to an error an error displaying the one it
+    /// holds: an error naming h2's as its source behind one hands out the
+    /// pointer, said as the error it holds.
+    #[tokio::test]
+    async fn a_goaway_named_as_a_source_behind_a_pointer_is_said_without_its_debug_data() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the call failed")]
+        struct Naming<S: Error + 'static>(#[source] S);
+
+        let quoting = goaway(b"sk_live_quoted").await;
+        assert!(quoting.to_string().contains("sk_live"), "{quoting}");
+        let erased: std::sync::Arc<dyn Error + Send + Sync> =
+            std::sync::Arc::new(goaway(b"sk_live_quoted").await);
+        for said in [
+            nest_rs_core::error_message(&Naming(quoting)),
+            nest_rs_core::error_message(&Naming(std::sync::Arc::new(
+                goaway(b"sk_live_quoted").await,
+            ))),
+            nest_rs_core::error_message(&Naming(Box::new(goaway(b"sk_live_quoted").await))),
+            nest_rs_core::error_message(&Naming(erased)),
+        ] {
+            assert_eq!(
+                said,
+                "the call failed: connection error received: unspecific protocol error detected"
+            );
+        }
     }
 
     /// A handshake refused for the protocol its connection speaks answers

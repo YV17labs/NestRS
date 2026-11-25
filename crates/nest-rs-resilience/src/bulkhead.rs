@@ -70,10 +70,10 @@ impl Drop for Slot<'_> {
 
 /// A slot its run took, held past the run by what the run answered — a
 /// response whose body is still to read — with no borrow of the bulkhead. It
-/// is freed through [`Bulkhead::free`] alone, never by its drop, so what holds
-/// it frees it at its own.
+/// is freed through [`Bulkhead::resume`] alone, never by its drop, so what
+/// holds it resumes it at its own.
 #[cfg(feature = "reqwest")]
-#[must_use = "a held slot is freed through `Bulkhead::free` alone"]
+#[must_use = "a held slot is freed through `Bulkhead::resume` alone"]
 pub(crate) struct HeldSlot(());
 
 impl Bulkhead {
@@ -89,11 +89,12 @@ impl Bulkhead {
         HeldSlot(())
     }
 
-    /// The slot `held` took, free again.
+    /// The slot `held` took, one of this bulkhead's, freed as it is dropped —
+    /// its holder's unwinding included.
     #[cfg(feature = "reqwest")]
-    pub(crate) fn free(&self, held: HeldSlot) {
+    pub(crate) fn resume(&self, held: HeldSlot) -> Slot<'_> {
         let HeldSlot(()) = held;
-        self.release();
+        Slot(self)
     }
 
     /// A bulkhead of `slots`, a call finding none free waiting up to `wait`
@@ -356,7 +357,7 @@ mod tests {
         assert_eq!(bulkhead.enter(None).await.err(), Some(Full::Slots));
         assert_eq!(bulkhead.running(), 2, "the held slot's call still runs");
 
-        bulkhead.free(held);
+        drop(bulkhead.resume(held));
         assert_eq!(bulkhead.running(), 1, "freed, its call is counted out");
         let freed = bulkhead.try_enter().expect("the slot it held");
         assert!(

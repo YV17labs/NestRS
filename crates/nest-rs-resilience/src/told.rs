@@ -48,10 +48,11 @@ use nest_rs_core::error_message;
 /// a reference with no scheme (`//host/path`), a bare `user@host`, a path or a
 /// query quoted alone; and a value an error quotes that is no URL and no
 /// status's phrase — what a cause beneath a sentence handed on says of its
-/// own, which only an error naming its client's as its source leaves to that
-/// client's `SafeLink`. This covers
-/// the lines this crate files; the line an edge files for an error an app
-/// returns is `nest-rs-core`'s to say.
+/// own, which only an error naming its client's as its source — bare, behind
+/// an `Arc` or a `Box`, or inside the I/O error a reader over a body makes of
+/// it — leaves to that client's `SafeLink`. This covers the lines this crate
+/// files; the line an edge files for an error an app returns is
+/// `nest-rs-core`'s to say.
 pub(crate) fn told(error: &(dyn Error + 'static)) -> String {
     let chain = error_message(error);
     let chain = ended_at_a_status(&chain).unwrap_or(chain);
@@ -712,6 +713,71 @@ mod tests {
         assert_eq!(
             told(&HandedOn(answered_503().await.without_url())),
             "HTTP status server error (503)"
+        );
+    }
+
+    /// An error naming reqwest's as its source behind the pointer sharing it,
+    /// which is the link it hands out.
+    #[derive(Debug, thiserror::Error)]
+    #[error("the tracker failed")]
+    struct Shared(#[source] std::sync::Arc<reqwest::Error>);
+
+    /// An error holding the I/O error a reader over a body's stream makes of
+    /// reqwest's.
+    #[derive(Debug, thiserror::Error)]
+    #[error("the download failed")]
+    struct Unread(#[from] std::io::Error);
+
+    /// reqwest's error for a peer presenting another name's certificate,
+    /// whose cause is rustls's, naming the certificate's own names.
+    async fn another_names() -> reqwest::Error {
+        use nest_rs_testing::{HttpsPeer, PeerAnswer, TestAuthority};
+
+        let authority = TestAuthority::new();
+        let peer = HttpsPeer::answering(
+            &authority.server(&["ledger.internal"]),
+            [PeerAnswer::status(200)],
+        )
+        .await;
+        let trusted =
+            reqwest::Certificate::from_pem(authority.pem().as_bytes()).expect("the authority");
+        let error = reqwest::Client::builder()
+            .tls_certs_only([trusted])
+            .build()
+            .expect("a client")
+            .get(peer.url(&format!("/parcels/{SENT}?token={SENT}")))
+            .send()
+            .await
+            .expect_err("not this host's certificate");
+        assert!(
+            format!("{error:?}").contains("ledger.internal"),
+            "its cause names the certificate's names: {error:?}"
+        );
+        error
+    }
+
+    /// reqwest's error held behind a pointer, or inside an I/O error, is the
+    /// link an error naming it hands out: told as one named bare, its causes
+    /// by what their types tell, never rustls's quote of a certificate.
+    #[tokio::test]
+    async fn a_reqwest_error_held_behind_a_pointer_is_told_as_one_named_bare() {
+        const CAUSE: &str =
+            "error sending request: invalid peer certificate: certificate not valid for name";
+        assert_eq!(
+            told(&Named(another_names().await)),
+            format!("the tracker failed: {CAUSE}")
+        );
+        assert_eq!(
+            told(&Shared(std::sync::Arc::new(another_names().await))),
+            format!("the tracker failed: {CAUSE}")
+        );
+        assert_eq!(
+            told(&Unread(std::io::Error::other(another_names().await))),
+            format!("the download failed: {CAUSE}")
+        );
+        assert_eq!(
+            told(&Shared(std::sync::Arc::new(answered_503().await))),
+            "the tracker failed: HTTP status server error (503)"
         );
     }
 

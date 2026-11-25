@@ -19,6 +19,9 @@ use crate::error::TIMED_OUT;
 use crate::events::{ResilienceEvent, Subscribers};
 use crate::millis::millis;
 
+/// The transition's line, the one a policy files at `warn`.
+pub(crate) const MOVED: &str = "circuit breaker changed state";
+
 /// What a call refused beside a probe past its bound is told: one tick of the
 /// timer, the probe being given up at any moment.
 const OVERDUE: Duration = Duration::from_millis(1);
@@ -257,13 +260,36 @@ enum Outcomes {
 
 /// The phase, the window of latest outcomes and how many of them failed, and
 /// the epoch: how many times the breaker opened or was switched by hand, each
-/// voiding what the attempts admitted before it would change or count.
+/// voiding what the attempts admitted before it would change or count — and
+/// the transitions it made that are still to tell.
 #[derive(Debug)]
 struct Held {
     phase: Phase,
     outcomes: Outcomes,
     failed: usize,
     epoch: u64,
+    /// The transitions made and not told yet, oldest first.
+    untold: VecDeque<Transition>,
+    /// Whether a thread is telling them: it took the turn as it queued a
+    /// transition and found it free, and gives it up as it finds none left,
+    /// each in one hold of the lock, so a transition queued meanwhile is its
+    /// to tell.
+    telling: bool,
+}
+
+/// One transition the breaker made, as its line, the counter and its event
+/// say it once the breaker's lock is let go.
+#[derive(Debug)]
+struct Transition {
+    from: BreakerPhase,
+    to: BreakerPhase,
+    /// The failures that opened it, when failures did.
+    failed: Option<usize>,
+    /// What the last of them failed on.
+    error: Option<Box<str>>,
+    /// The time it is open for, when it opened for one of its own.
+    open_for: Option<Duration>,
+    manual: bool,
 }
 
 impl Held {
@@ -525,6 +551,8 @@ impl Breaker {
                 outcomes,
                 failed: 0,
                 epoch: 0,
+                untold: VecDeque::new(),
+                telling: false,
             }),
             counters,
             subscribers,
@@ -620,7 +648,7 @@ impl Breaker {
         let from = held.phase;
         held.phase = phase;
         held.forget();
-        self.entered(&held, from, Moved::Manual { open_for });
+        self.entered(held, from, Moved::Manual { open_for });
     }
 
     /// The breaker's state for an attempt admitted in `epoch`: `None` once
@@ -649,13 +677,13 @@ impl Breaker {
             };
             if let Some(error) = failure {
                 self.open(&mut held);
-                self.entered(&held, from, Moved::Failures { failed: 1, error });
+                self.entered(held, from, Moved::Failures { failed: 1, error });
             } else if passed + 1 < self.probes {
                 held.phase = Phase::BetweenProbes { passed: passed + 1 };
             } else {
                 held.phase = Phase::Closed;
                 held.forget();
-                self.entered(&held, from, Moved::Probe);
+                self.entered(held, from, Moved::Probe);
             }
         } else if held.phase == Phase::Closed {
             let failed = held.count(self.window, failure.is_some(), Instant::now);
@@ -664,7 +692,7 @@ impl Breaker {
             {
                 self.open(&mut held);
                 held.forget();
-                self.entered(&held, Phase::Closed, Moved::Failures { failed, error });
+                self.entered(held, Phase::Closed, Moved::Failures { failed, error });
             }
         }
     }
@@ -692,7 +720,7 @@ impl Breaker {
                 passed: turn.passed(),
             };
             if turn == Turn::First {
-                self.entered(&held, from, Moved::Probe);
+                self.entered(held, from, Moved::Probe);
             }
         }
     }
@@ -730,7 +758,7 @@ impl Breaker {
             held.phase = Phase::Open {
                 until: Instant::now(),
             };
-            self.entered(&held, from, Moved::Probe);
+            self.entered(held, from, Moved::Probe);
         }
     }
 
@@ -755,16 +783,20 @@ impl Breaker {
         };
     }
 
-    /// Say the transition `held` just made out of `from`, count it and tell it:
-    /// what failures opened it when they did, with what the last of them
-    /// failed on, and that it was manual, with the open time it was given,
-    /// when a manual switch moved it.
+    /// The transition `held` just made out of `from`, queued behind the ones
+    /// still to tell — with what failures opened it when they did and what
+    /// the last of them failed on, and that it was manual, with the open time
+    /// it was given, when a manual switch moved it — then the breaker's lock
+    /// let go, and the queue told by this thread unless another is telling it.
     ///
-    /// Filed and told under the breaker's lock, which `held` borrows: no
-    /// transition comes between this one and its line, so the lines and the
-    /// events say the transitions in the order they took effect, and the last
-    /// one the state it is in.
-    fn entered(&self, held: &Held, from: Phase, moved: Moved<'_>) {
+    /// Nothing is told under the breaker's lock: a line runs the app's
+    /// `tracing` subscriber, a counter waits for the meter's pipeline at its
+    /// first record, and an event wakes its readers, any of which may read or
+    /// switch this breaker. The queue is filled under that lock and told by
+    /// one thread at a time, so the lines, the counts and the events say the
+    /// transitions in the order they took effect, each once.
+    #[inline(never)]
+    fn entered(&self, mut held: MutexGuard<'_, Held>, from: Phase, moved: Moved<'_>) {
         let (failed, error, open_for, manual) = match moved {
             Moved::Failures { failed, error } => {
                 (Some(failed), Some(error), Some(self.open_for), false)
@@ -773,6 +805,55 @@ impl Breaker {
             Moved::Manual { open_for } => (None, None, open_for, true),
         };
         let to = held.phase.told();
+        held.untold.push_back(Transition {
+            from: from.told(),
+            to,
+            failed,
+            error: error.map(Box::from),
+            open_for,
+            manual,
+        });
+        if std::mem::replace(&mut held.telling, true) {
+            return;
+        }
+        drop(held);
+        self.tell();
+    }
+
+    /// Tell each transition still to tell, oldest first, as the one thread
+    /// whose turn it is: until none is left, the ones other threads queue
+    /// meanwhile included — and the ones this thread queues from inside a
+    /// line or a wake, which are told once that one is.
+    fn tell(&self) {
+        let turn = Telling(self);
+        while let Some(transition) = self.untold() {
+            self.say(&transition);
+        }
+        // The turn was given up as the queue was found empty: dropped, the
+        // guard would take it from the thread telling since.
+        std::mem::forget(turn);
+    }
+
+    /// The oldest transition still to tell — or none, and the turn to tell
+    /// them given up in the same hold of the lock, so the next one queued
+    /// finds it free.
+    fn untold(&self) -> Option<Transition> {
+        let mut held = self.held.lock();
+        let next = held.untold.pop_front();
+        held.telling = next.is_some();
+        next
+    }
+
+    /// File `transition`'s line, count it and tell its event, no lock held.
+    fn say(&self, transition: &Transition) {
+        let Transition {
+            from,
+            to,
+            failed,
+            ref error,
+            open_for,
+            manual,
+        } = *transition;
         let state = to.as_str();
         tracing::warn!(
             target: TARGET,
@@ -782,21 +863,29 @@ impl Breaker {
             window = failed.map(|_| self.window),
             open_ms = open_for.map(millis),
             manual = manual.then_some(true),
-            error,
-            "circuit breaker changed state",
+            error = error.as_deref(),
+            "{MOVED}",
         );
         self.counters.transition(state, manual);
-        self.subscribers.tell(|| ResilienceEvent::Transition {
-            from: from.told(),
-            to,
-            manual,
-        });
+        self.subscribers
+            .tell(|| ResilienceEvent::Transition { from, to, manual });
+    }
+}
+
+/// The turn to tell a breaker's transitions, given back when a line, a count
+/// or an event panics out of it: the transitions left are told with the next
+/// one made, where a turn never given back would tell none again.
+struct Telling<'b>(&'b Breaker);
+
+impl Drop for Telling<'_> {
+    fn drop(&mut self) {
+        self.0.held.lock().telling = false;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
 
@@ -2435,23 +2524,60 @@ mod tests {
         );
     }
 
-    /// A caller on another thread at the instant a transition's line is filed:
-    /// it switches the breaker by hand when the breaker's lock is free then —
-    /// closing it, or opening it when the line says it closed — and the line
-    /// is taken down after that switch's own.
-    struct Racing {
-        breaker: Arc<Breaker>,
-        /// Set while the racing switch runs, whose own line races nothing.
-        racing: AtomicBool,
-        said: Arc<Mutex<Vec<String>>>,
+    /// What a `tracing` subscriber does at a transition's line, beside taking
+    /// it down: nothing, or switch the breaker by hand from inside the line.
+    #[derive(Clone, Copy)]
+    enum Inside {
+        Nothing,
+        Open,
+        Close,
     }
 
-    /// A transition line's `state`, and whether it is marked `manual`.
+    /// An app's `tracing` subscriber reading the breaker at each transition's
+    /// line, and switching it by hand from inside the line when `inside` says
+    /// so, one line an entry.
+    struct Reading {
+        breaker: Arc<Breaker>,
+        inside: Mutex<VecDeque<Inside>>,
+        /// Each line, as `state`, then `manual` where it is marked so.
+        said: Arc<Mutex<Vec<String>>>,
+        /// How many lines were filed with the breaker's lock held.
+        locked: Arc<AtomicUsize>,
+    }
+
+    impl Reading {
+        fn new(breaker: &Arc<Breaker>) -> Self {
+            Self {
+                breaker: Arc::clone(breaker),
+                inside: Mutex::default(),
+                said: Arc::default(),
+                locked: Arc::default(),
+            }
+        }
+    }
+
+    /// A transition line's `state`, its `open_ms`, and whether it is marked
+    /// `manual`.
     #[derive(Default)]
     struct Line {
         message: String,
         state: String,
+        open_ms: Option<u64>,
         manual: bool,
+    }
+
+    impl Line {
+        /// The transition's line `event` is, when it is one.
+        fn of(event: &tracing::Event<'_>) -> Option<Self> {
+            let mut line = Self::default();
+            event.record(&mut line);
+            (line.message == "circuit breaker changed state").then_some(line)
+        }
+
+        fn said(&self) -> String {
+            let manual = if self.manual { " manual" } else { "" };
+            format!("{}{manual}", self.state)
+        }
     }
 
     impl tracing::field::Visit for Line {
@@ -2467,6 +2593,12 @@ mod tests {
             }
         }
 
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            if field.name() == "open_ms" {
+                self.open_ms = Some(value);
+            }
+        }
+
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
             if field.name() == "message" {
                 self.message = format!("{value:?}");
@@ -2474,63 +2606,85 @@ mod tests {
         }
     }
 
-    impl tracing::Subscriber for Racing {
-        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-
-        fn event(&self, event: &tracing::Event<'_>) {
-            let mut line = Line::default();
-            event.record(&mut line);
-            if line.message != "circuit breaker changed state" {
-                return;
+    /// What a subscriber of these tests answers for all but an event.
+    macro_rules! taking_events_alone {
+        () => {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
             }
-            if !self.racing.swap(true, Ordering::SeqCst) {
-                if self.breaker.held.try_lock().is_some() {
-                    if line.state == "closed" {
-                        self.breaker.open_manually(OPEN_FOR);
-                    } else {
-                        self.breaker.close_manually();
-                    }
-                }
-                self.racing.store(false, Ordering::SeqCst);
+
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
             }
-            let manual = if line.manual { " manual" } else { "" };
-            self.said.lock().push(format!("{}{manual}", line.state));
-        }
 
-        fn enter(&self, _: &tracing::span::Id) {}
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
 
-        fn exit(&self, _: &tracing::span::Id) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+            fn enter(&self, _: &tracing::span::Id) {}
+
+            fn exit(&self, _: &tracing::span::Id) {}
+        };
     }
 
-    /// A transition files its line while it holds the breaker, so a manual
-    /// switch racing it — from another thread, the instant the breaker is free
-    /// — comes after that line, and the last line says the state the breaker
-    /// is in, whatever moved it: failures, a probe sent, abandoned, failed or
-    /// closing it, or another switch.
+    impl tracing::Subscriber for Reading {
+        taking_events_alone!();
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let Some(line) = Line::of(event) else {
+                return;
+            };
+            self.said.lock().push(line.said());
+            // Read or switched under its lock, the breaker would wait for itself.
+            if self.breaker.locked() {
+                self.locked.fetch_add(1, Ordering::SeqCst);
+                return;
+            }
+            let _read = (self.breaker.read(), self.breaker.stats());
+            let inside = self.inside.lock().pop_front();
+            match inside.unwrap_or(Inside::Nothing) {
+                Inside::Nothing => {}
+                Inside::Open => self.breaker.open_manually(OPEN_FOR),
+                Inside::Close => self.breaker.close_manually(),
+            }
+        }
+    }
+
+    /// A transition is told once the breaker's lock is let go, so an app's
+    /// `tracing` subscriber reads the breaker and switches it from inside a
+    /// line. Whatever moved the breaker — failures, a probe sent, abandoned,
+    /// failed or closing it, a switch by hand — and whatever a line switched
+    /// from inside, one switching again from inside its own line too, the
+    /// lines and the events say the transitions in the order they took effect,
+    /// and once the call returns the last line says the state the breaker is
+    /// in.
     #[tokio::test(start_paused = true)]
-    async fn no_switch_comes_between_a_transition_and_its_line() {
-        let breaker = Arc::new(breaker(1, 1));
-        let said = Arc::new(Mutex::new(Vec::new()));
-        let _racing = tracing::subscriber::set_default(Racing {
-            breaker: Arc::clone(&breaker),
-            racing: AtomicBool::new(false),
-            said: Arc::clone(&said),
-        });
+    async fn a_line_is_filed_with_the_breaker_free_and_in_the_order_of_the_transitions() {
+        use BreakerPhase::{Closed, HalfOpen, Open};
+
+        let subscribers = Arc::new(Subscribers::default());
+        let breaker = Arc::new(Breaker::new(
+            "upstream",
+            1,
+            1,
+            OPEN_FOR,
+            None,
+            1,
+            Arc::new(Counters::new("upstream")),
+            Arc::clone(&subscribers),
+        ));
+        let mut events = subscribers.subscribe();
+        let reading = Reading::new(&breaker);
+        let (said, locked) = (Arc::clone(&reading.said), Arc::clone(&reading.locked));
+        let reading = Arc::new(reading);
+        let _reading = tracing::subscriber::set_default(Arc::clone(&reading));
+        let inside = |switches: &[Inside]| reading.inside.lock().extend(switches);
         let last_said = || {
             let said = said.lock();
             let last = said.last().map_or("", String::as_str);
             last.split(' ').next().unwrap_or_default().to_owned()
         };
+
         attempt(&breaker, true);
         assert_eq!(last_said(), breaker.state(), "failures opened it");
         tokio::time::advance(OPEN_FOR).await;
@@ -2543,10 +2697,32 @@ mod tests {
         tokio::time::advance(OPEN_FOR).await;
         probe(&breaker).send(BOUND, None).settle(None);
         assert_eq!(last_said(), breaker.state(), "the probe closing it");
+
+        inside(&[Inside::Close]);
+        attempt(&breaker, true);
+        assert_eq!(
+            (last_said().as_str(), breaker.state()),
+            ("closed", "closed"),
+            "closed from inside the line of its opening"
+        );
+        inside(&[Inside::Close, Inside::Open]);
         breaker.open_manually(OPEN_FOR);
-        assert_eq!(last_said(), breaker.state(), "opened by hand");
+        assert_eq!(
+            (last_said().as_str(), breaker.state()),
+            ("open", "open"),
+            "opened by hand, closed from inside that line, and opened from inside the closing's"
+        );
+        tokio::time::advance(OPEN_FOR).await;
+        inside(&[Inside::Close]);
+        let sent = probe(&breaker).send(BOUND, None);
+        assert_eq!(
+            (last_said().as_str(), breaker.state()),
+            ("closed", "closed"),
+            "closed from inside the line of its probe"
+        );
+        sent.settle(Some(DOWN));
         breaker.close_manually();
-        assert_eq!(last_said(), breaker.state(), "closed by hand");
+
         assert_eq!(
             *said.lock(),
             [
@@ -2557,10 +2733,469 @@ mod tests {
                 "open",
                 "half_open",
                 "closed",
+                "open",
+                "closed manual",
                 "open manual",
                 "closed manual",
+                "open manual",
+                "half_open",
+                "closed manual",
+                "closed manual",
             ],
-            "no switch came between a transition and its line"
+            "each transition's line, a switch made inside a line after that line"
         );
+        assert_eq!(locked.load(Ordering::SeqCst), 0, "no line under the lock");
+        let told = told(&mut events);
+        assert_eq!(
+            told.iter()
+                .map(|&(from, to, _)| (from, to))
+                .collect::<Vec<_>>(),
+            [
+                (Closed, Open),
+                (Open, HalfOpen),
+                (HalfOpen, Open),
+                (Open, HalfOpen),
+                (HalfOpen, Open),
+                (Open, HalfOpen),
+                (HalfOpen, Closed),
+                (Closed, Open),
+                (Open, Closed),
+                (Closed, Open),
+                (Open, Closed),
+                (Closed, Open),
+                (Open, HalfOpen),
+                (HalfOpen, Closed),
+                (Closed, Closed),
+            ],
+            "one event a line, each leaving the phase the one before it entered"
+        );
+    }
+
+    /// Whether every transition `breaker` made was told, and no thread holds
+    /// the turn to tell them.
+    fn all_told(breaker: &Breaker) -> bool {
+        let held = breaker.held.lock();
+        held.untold.is_empty() && !held.telling
+    }
+
+    /// A subscriber stopping the first transition's line it files until it is
+    /// let go on, the thread filing it holding the turn to tell meanwhile.
+    struct Stopped {
+        said: Arc<Mutex<Vec<String>>>,
+        stopped: AtomicBool,
+        filing: std::sync::mpsc::Sender<()>,
+        go_on: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl tracing::Subscriber for Stopped {
+        taking_events_alone!();
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let Some(line) = Line::of(event) else {
+                return;
+            };
+            self.said.lock().push(line.said());
+            if !self.stopped.swap(true, Ordering::SeqCst) {
+                self.filing.send(()).expect("the test waits for the line");
+                self.go_on.lock().recv().expect("the test lets it go on");
+            }
+        }
+    }
+
+    /// A transition made while another thread tells one is left to that
+    /// thread: its own returns at once, the breaker moved and nothing of it
+    /// told yet, and the thread telling says it after its own, line and event,
+    /// before it gives the turn up.
+    #[test]
+    fn a_transition_made_while_another_thread_tells_is_told_by_that_thread_after_its_own() {
+        use std::sync::mpsc::channel;
+
+        use BreakerPhase::{Closed, Open};
+
+        let subscribers = Arc::new(Subscribers::default());
+        let breaker = Arc::new(Breaker::new(
+            "upstream",
+            1,
+            1,
+            OPEN_FOR,
+            None,
+            1,
+            Arc::new(Counters::new("upstream")),
+            Arc::clone(&subscribers),
+        ));
+        let mut events = subscribers.subscribe();
+        let said = Arc::new(Mutex::new(Vec::new()));
+        let (filing, in_line) = channel();
+        let (let_go, go_on) = channel();
+        let lines = tracing::Dispatch::new(Stopped {
+            said: Arc::clone(&said),
+            stopped: AtomicBool::new(false),
+            filing,
+            go_on: Mutex::new(go_on),
+        });
+
+        let telling = {
+            let (breaker, lines) = (Arc::clone(&breaker), lines.clone());
+            std::thread::spawn(move || {
+                let _lines = tracing::dispatcher::set_default(&lines);
+                breaker.open_manually(OPEN_FOR);
+            })
+        };
+        in_line.recv().expect("the opening's line is being filed");
+        let (returned, closed) = channel();
+        let closing = {
+            let breaker = Arc::clone(&breaker);
+            std::thread::spawn(move || {
+                let _lines = tracing::dispatcher::set_default(&lines);
+                breaker.close_manually();
+                returned.send(()).expect("the test waits for the closing");
+            })
+        };
+        if closed.recv_timeout(Duration::from_secs(5)).is_err() {
+            // Joined, the two threads would hang the test past its verdict.
+            std::mem::forget((telling, closing));
+            panic!("the closing waits for the thread telling the opening");
+        }
+        assert_eq!(breaker.state(), "closed", "the closing took effect");
+        assert_eq!(
+            (said.lock().as_slice(), told(&mut events).len()),
+            (["open manual".to_owned()].as_slice(), 0),
+            "and is not told yet, the opening's line still being filed"
+        );
+
+        let_go.send(()).expect("the opening's line waits");
+        telling.join().expect("the thread telling");
+        closing.join().expect("the thread closing");
+        assert_eq!(*said.lock(), ["open manual", "closed manual"]);
+        assert_eq!(
+            told(&mut events),
+            [(Closed, Open, true), (Open, Closed, true)]
+        );
+        assert!(all_told(&breaker), "the turn given up, nothing left");
+    }
+
+    /// A subscriber taking down each transition's line as `state`, with its
+    /// `open_ms` and the thread filing it, and counting the lines two threads
+    /// filed at once. It stops
+    /// the first line it files until `behind` threads have each made a
+    /// transition behind it, so the thread filing it has theirs to tell.
+    struct Ordered {
+        said: Mutex<Vec<(String, Option<u64>, std::thread::ThreadId)>>,
+        filing: AtomicBool,
+        together: AtomicUsize,
+        stopped: AtomicBool,
+        behind: usize,
+        /// The threads back from their first switch.
+        back: AtomicUsize,
+    }
+
+    impl tracing::Subscriber for Ordered {
+        taking_events_alone!();
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let Some(line) = Line::of(event) else {
+                return;
+            };
+            if self.filing.swap(true, Ordering::SeqCst) {
+                self.together.fetch_add(1, Ordering::SeqCst);
+            }
+            self.said
+                .lock()
+                .push((line.state, line.open_ms, std::thread::current().id()));
+            if !self.stopped.swap(true, Ordering::SeqCst) {
+                // Bounded, so threads that wait for this line fail the test
+                // where they would hang it.
+                let waited = std::time::Instant::now();
+                while self.back.load(Ordering::SeqCst) < self.behind
+                    && waited.elapsed() < Duration::from_secs(5)
+                {
+                    std::thread::yield_now();
+                }
+            }
+            // Leaves the other threads time to queue behind this line.
+            std::thread::yield_now();
+            self.filing.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Threads switching one breaker at once, the first to file a line held
+    /// in it until every other has made a transition behind it: each thread
+    /// returns leaving its own to the one telling, which tells every one once,
+    /// one thread at a time, each thread's in the order it made them and each
+    /// event leaving the phase the one before it entered. At no instant is a
+    /// transition queued with no thread telling, and once the threads have
+    /// returned none is left, the last line saying the state the breaker is
+    /// in.
+    #[test]
+    fn transitions_made_on_several_threads_are_each_told_once_and_in_order() {
+        const THREADS: usize = 8;
+        // Under the 256 events a subscription holds unread, the threads' together.
+        const SWITCHES: usize = 30;
+
+        let subscribers = Arc::new(Subscribers::default());
+        let breaker = Arc::new(Breaker::new(
+            "upstream",
+            1,
+            1,
+            OPEN_FOR,
+            None,
+            1,
+            Arc::new(Counters::new("upstream")),
+            Arc::clone(&subscribers),
+        ));
+        let mut events = subscribers.subscribe();
+        let ordered = Arc::new(Ordered {
+            said: Mutex::default(),
+            filing: AtomicBool::new(false),
+            together: AtomicUsize::new(0),
+            stopped: AtomicBool::new(false),
+            behind: THREADS - 1,
+            back: AtomicUsize::new(0),
+        });
+        let lines = tracing::Dispatch::new(Arc::clone(&ordered));
+        let start = Arc::new(std::sync::Barrier::new(THREADS));
+        // An open time no other switch asks, later than every one its thread
+        // asked before.
+        let open_ms = |thread: usize, switch: usize| (1 + thread + THREADS * switch) as u64;
+
+        let switching: Vec<_> = (0..THREADS)
+            .map(|thread| {
+                let (breaker, lines, start, ordered) = (
+                    Arc::clone(&breaker),
+                    lines.clone(),
+                    Arc::clone(&start),
+                    Arc::clone(&ordered),
+                );
+                std::thread::spawn(move || {
+                    let _lines = tracing::dispatcher::set_default(&lines);
+                    start.wait();
+                    for switch in 0..SWITCHES {
+                        if switch % 2 == 0 {
+                            breaker.open_manually(Duration::from_millis(open_ms(thread, switch)));
+                        } else {
+                            breaker.close_manually();
+                        }
+                        if switch == 0 {
+                            ordered.back.fetch_add(1, Ordering::SeqCst);
+                        }
+                        std::thread::yield_now();
+                    }
+                })
+            })
+            .collect();
+        let mut orphaned = 0;
+        while !switching.iter().all(std::thread::JoinHandle::is_finished) {
+            let held = breaker.held.lock();
+            orphaned += usize::from(!held.telling && !held.untold.is_empty());
+        }
+        for thread in switching {
+            thread.join().expect("a switching thread");
+        }
+
+        assert_eq!(orphaned, 0, "a transition queued, and no thread telling");
+        assert!(all_told(&breaker), "none left untold, the turn given up");
+        assert_eq!(
+            ordered.together.load(Ordering::SeqCst),
+            0,
+            "one thread at a time"
+        );
+        let said = ordered.said.lock();
+        let told = told(&mut events);
+        assert_eq!(
+            (said.len(), told.len()),
+            (THREADS * SWITCHES, THREADS * SWITCHES),
+            "a line and an event a switch"
+        );
+        let teller = said[0].2;
+        for thread in 0..THREADS {
+            let first = Some(open_ms(thread, 0));
+            let filed_by = said
+                .iter()
+                .find(|(_, open_ms, _)| *open_ms == first)
+                .map(|&(.., by)| by);
+            assert_eq!(
+                filed_by,
+                Some(teller),
+                "a thread's first switch, told by the thread the first line held"
+            );
+        }
+        let mut left = BreakerPhase::Closed;
+        for ((state, ..), &(from, to, manual)) in said.iter().zip(&told) {
+            assert_eq!(
+                (from, to.as_str(), manual),
+                (left, state.as_str(), true),
+                "each leaves the phase the one before it entered, as its line says"
+            );
+            left = to;
+        }
+        assert_eq!(left.as_str(), breaker.state(), "the last one told");
+        for thread in 0..THREADS {
+            let opened: Vec<u64> = said
+                .iter()
+                .filter_map(|&(_, open_ms, _)| open_ms)
+                .filter(|&open_ms| (open_ms as usize - 1) % THREADS == thread)
+                .collect();
+            let made: Vec<u64> = (0..SWITCHES)
+                .step_by(2)
+                .map(|switch| open_ms(thread, switch))
+                .collect();
+            assert_eq!(opened, made, "a thread's openings, each once and in order");
+        }
+        let closed = said.iter().filter(|(state, ..)| state == "closed").count();
+        assert_eq!(closed, THREADS * SWITCHES / 2, "and every closing");
+    }
+
+    /// A subscriber keeping the state the last transition's line said, and
+    /// counting the lines, and the ones two threads filed at once.
+    #[derive(Default)]
+    struct Last {
+        state: Mutex<String>,
+        filed: AtomicUsize,
+        filing: AtomicBool,
+        together: AtomicUsize,
+    }
+
+    impl tracing::Subscriber for Last {
+        taking_events_alone!();
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let Some(line) = Line::of(event) else {
+                return;
+            };
+            if self.filing.swap(true, Ordering::SeqCst) {
+                self.together.fetch_add(1, Ordering::SeqCst);
+            }
+            *self.state.lock() = line.state;
+            self.filed.fetch_add(1, Ordering::SeqCst);
+            self.filing.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// Threads switching one breaker at the same instant, round after round,
+    /// half opening it and half closing it: a thread ending its turn to tell
+    /// races the others queueing theirs. Once a round's threads are back,
+    /// every transition of it is told — none waits for the next one made —
+    /// and the last line says the state the breaker is in, so none was told
+    /// before one made earlier; no two threads ever filed at once.
+    #[test]
+    fn switches_racing_round_after_round_leave_none_untold_and_the_last_line_true() {
+        const THREADS: usize = 4;
+        const ROUNDS: usize = 2000;
+        const SWEEP: usize = 251;
+
+        let breaker = Arc::new(breaker(1, 1));
+        let last = Arc::new(Last::default());
+        let lines = tracing::Dispatch::new(Arc::clone(&last));
+        let (round, back) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let racing: Vec<_> = (0..THREADS)
+            .map(|thread| {
+                let (breaker, lines) = (Arc::clone(&breaker), lines.clone());
+                let (round, back) = (Arc::clone(&round), Arc::clone(&back));
+                std::thread::spawn(move || {
+                    let _lines = tracing::dispatcher::set_default(&lines);
+                    for next in 1..=ROUNDS {
+                        while round.load(Ordering::SeqCst) < next {
+                            std::thread::yield_now();
+                        }
+                        // Later by a time that sweeps, round after round,
+                        // across the turn of the thread that tells first.
+                        for _ in 0..(next * thread) % SWEEP {
+                            std::hint::spin_loop();
+                        }
+                        if thread % 2 == 0 {
+                            breaker.open_manually(OPEN_FOR);
+                        } else {
+                            breaker.close_manually();
+                        }
+                        back.fetch_add(1, Ordering::SeqCst);
+                    }
+                })
+            })
+            .collect();
+
+        let mut untold = Vec::new();
+        let mut stale = Vec::new();
+        for next in 1..=ROUNDS {
+            round.store(next, Ordering::SeqCst);
+            while back.load(Ordering::SeqCst) < next * THREADS {
+                std::thread::yield_now();
+            }
+            if !all_told(&breaker) {
+                untold.push(next);
+            }
+            if *last.state.lock() != breaker.state() {
+                stale.push(next);
+            }
+        }
+        for thread in racing {
+            thread.join().expect("a racing thread");
+        }
+
+        assert_eq!(
+            (untold, stale),
+            (Vec::new(), Vec::new()),
+            "the rounds that left a transition untold, and the ones whose last line was not the \
+             breaker's state"
+        );
+        assert_eq!(
+            (
+                last.filed.load(Ordering::SeqCst),
+                last.together.load(Ordering::SeqCst)
+            ),
+            (ROUNDS * THREADS, 0),
+            "a line a switch, one thread at a time"
+        );
+    }
+
+    /// A subscriber panicking out of the first transition's line it files,
+    /// once it has closed the breaker from inside it.
+    struct Panicking {
+        breaker: Arc<Breaker>,
+        said: Arc<Mutex<Vec<String>>>,
+        panicked: AtomicBool,
+    }
+
+    impl tracing::Subscriber for Panicking {
+        taking_events_alone!();
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let Some(line) = Line::of(event) else {
+                return;
+            };
+            if !self.panicked.swap(true, Ordering::SeqCst) {
+                // Switched under its lock, the breaker would wait for itself.
+                if !self.breaker.locked() {
+                    self.breaker.close_manually();
+                }
+                panic!("the subscriber fails on this line");
+            }
+            self.said.lock().push(line.said());
+        }
+    }
+
+    /// A subscriber panicking out of a line gives the turn to tell back as it
+    /// unwinds: the transitions queued behind that line are told with the next
+    /// one made, in order, where a turn kept would tell no transition again.
+    #[test]
+    fn a_line_that_panics_leaves_the_transitions_behind_it_to_the_next_one_made() {
+        let breaker = Arc::new(breaker(1, 1));
+        let said = Arc::new(Mutex::new(Vec::new()));
+        let _lines = tracing::subscriber::set_default(Panicking {
+            breaker: Arc::clone(&breaker),
+            said: Arc::clone(&said),
+            panicked: AtomicBool::new(false),
+        });
+
+        let opening = std::panic::AssertUnwindSafe(|| breaker.open_manually(OPEN_FOR));
+        assert!(std::panic::catch_unwind(opening).is_err());
+        assert_eq!(breaker.state(), "closed", "closed from inside the line");
+        assert!(
+            said.lock().is_empty() && !breaker.held.lock().telling,
+            "the closing waits, the turn free"
+        );
+
+        breaker.open_manually(OPEN_FOR);
+        assert_eq!(*said.lock(), ["closed manual", "open manual"]);
+        assert!(all_told(&breaker));
     }
 }

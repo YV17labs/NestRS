@@ -1,15 +1,18 @@
 error[E0277]: a `#[resilient]` method's error is a `std::error::Error`, and `Declined` is not one
-  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:22:29
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:23:29
    |
-22 |     async fn ship(&self) -> Result<(), ResilienceError<Declined>> {
+22 |     #[resilient(carrier)]
+   |     --------------------- in this attribute macro expansion
+23 |     async fn ship(&self) -> Result<(), ResilienceError<Declined>> {
    |                             ^^^^^^ what the method answers
    |
 help: the trait `nest_rs::resilience::__private::ChainedError` is not implemented for `Declined`
-  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:12:1
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:13:1
    |
-12 | struct Declined;
+13 | struct Declined;
    | ^^^^^^^^^^^^^^^
    = note: the policy tells the error's chain in the line a retry files and in its breaker's opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks
+   = note: give the method an error implementing `std::error::Error`, as a `thiserror` derive does; one that cannot — `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own that does
 note: required by a bound in `nest_rs::resilience::__private::run`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
@@ -17,19 +20,23 @@ note: required by a bound in `nest_rs::resilience::__private::run`
 ...
    |     R::Err: ChainedError,
    |             ^^^^^^^^^^^^ required by this bound in `run`
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a `#[resilient]` method's error is a `std::error::Error`, and `Declined` is not one
-  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:27:30
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:28:30
    |
-27 |     async fn track(&self) -> Result<(), ResilienceError<Declined>> {
+27 |     #[resilient(carrier, idempotent)]
+   |     --------------------------------- in this attribute macro expansion
+28 |     async fn track(&self) -> Result<(), ResilienceError<Declined>> {
    |                              ^^^^^^ what the method answers
    |
 help: the trait `nest_rs::resilience::__private::ChainedError` is not implemented for `Declined`
-  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:12:1
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:13:1
    |
-12 | struct Declined;
+13 | struct Declined;
    | ^^^^^^^^^^^^^^^
    = note: the policy tells the error's chain in the line a retry files and in its breaker's opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks
+   = note: give the method an error implementing `std::error::Error`, as a `thiserror` derive does; one that cannot — `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own that does
 note: required by a bound in `nest_rs::resilience::__private::run_idempotent`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
@@ -37,19 +44,23 @@ note: required by a bound in `nest_rs::resilience::__private::run_idempotent`
 ...
    |     R::Err: ChainedError,
    |             ^^^^^^^^^^^^ required by this bound in `run_idempotent`
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a `#[resilient]` method's error is a `std::error::Error`, and `Declined` is not one
-  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:36:30
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:40:30
    |
-36 |     async fn weigh(&self) -> Result<(), ResilienceError<Declined>> {
+39 |     #[resilient(carrier, record_if = |_| true, fallback = held, cancel = token)]
+   |     ---------------------------------------------------------------------------- in this attribute macro expansion
+40 |     async fn weigh(&self) -> Result<(), ResilienceError<Declined>> {
    |                              ^^^^^^ what the method answers
    |
 help: the trait `nest_rs::resilience::__private::ChainedError` is not implemented for `Declined`
-  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:12:1
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:13:1
    |
-12 | struct Declined;
+13 | struct Declined;
    | ^^^^^^^^^^^^^^^
    = note: the policy tells the error's chain in the line a retry files and in its breaker's opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks
+   = note: give the method an error implementing `std::error::Error`, as a `thiserror` derive does; one that cannot — `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own that does
 note: required by a bound in `nest_rs::resilience::__private::run`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
@@ -57,3 +68,45 @@ note: required by a bound in `nest_rs::resilience::__private::run`
 ...
    |     R::Err: ChainedError,
    |             ^^^^^^^^^^^^ required by this bound in `run`
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a `#[resilient]` method's error is a `std::error::Error`, and `anyhow::Error` is not one
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:46:30
+   |
+45 |     #[resilient(carrier)]
+   |     --------------------- in this attribute macro expansion
+46 |     async fn quote(&self) -> Result<(), ResilienceError<anyhow::Error>> {
+   |                              ^^^^^^ what the method answers
+   |
+   = help: the trait `nest_rs::resilience::__private::ChainedError` is not implemented for `anyhow::Error`
+   = note: the policy tells the error's chain in the line a retry files and in its breaker's opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks
+   = note: give the method an error implementing `std::error::Error`, as a `thiserror` derive does; one that cannot — `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own that does
+note: required by a bound in `nest_rs::resilience::__private::run`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub fn run<R, I, J, C, F>(
+...
+   |     R::Err: ChainedError,
+   |             ^^^^^^^^^^^^ required by this bound in `run`
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: a `#[resilient]` method's error is a `std::error::Error`, and `Box<dyn StdError + std::marker::Send + Sync>` is not one
+  --> tests/integration/diagnostics/resilience/resilient_error_is_no_error.rs:53:10
+   |
+50 |     #[resilient(carrier, idempotent)]
+   |     --------------------------------- in this attribute macro expansion
+...
+53 |     ) -> Result<(), ResilienceError<Box<dyn std::error::Error + Send + Sync>>> {
+   |          ^^^^^^ what the method answers
+   |
+   = help: the trait `nest_rs::resilience::__private::ChainedError` is not implemented for `Box<dyn StdError + std::marker::Send + Sync>`
+   = note: the policy tells the error's chain in the line a retry files and in its breaker's opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks
+   = note: give the method an error implementing `std::error::Error`, as a `thiserror` derive does; one that cannot — `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own that does
+note: required by a bound in `nest_rs::resilience::__private::run_idempotent`
+  --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
+   |
+   | pub async fn run_idempotent<R, I, J, C, F>(
+...
+   |     R::Err: ChainedError,
+   |             ^^^^^^^^^^^^ required by this bound in `run_idempotent`
+   = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)

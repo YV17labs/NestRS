@@ -1,7 +1,9 @@
 //! What a decorated method answers is read by its type: anything but a
 //! `Result<T, ResilienceError<E>>` is one error at its return type, saying its
 //! body answers `Result<T, E>`, whatever keys the method carries; the alias
-//! above it is read as the literal is.
+//! above it is read as the literal is. An answer a `macro_rules!` opens on its
+//! own `$crate` is told twice: that token keeps the context it resolves by,
+//! so the answer spans two.
 
 use std::sync::Arc;
 
@@ -59,5 +61,20 @@ impl ShipmentsService {
         Ok(String::new())
     }
 }
+
+pub struct Unread;
+
+macro_rules! declare_crate_rooted {
+    ($name:ident) => {
+        impl ShipmentsService {
+            #[resilient(carrier)]
+            async fn $name(&self) -> $crate::Unread {
+                $crate::Unread
+            }
+        }
+    };
+}
+
+declare_crate_rooted!(rooted);
 
 fn main() {}

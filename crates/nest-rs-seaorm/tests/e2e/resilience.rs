@@ -5,10 +5,17 @@
 //! its unit wrote before it standing — whatever retries its policy has, none
 //! included; a method declaring a fallback runs its attempts so too, the
 //! failed one rolled back before the fallback writes on the unit's own
-//! transaction, or its filter hands the error back; an attempt cut before its
-//! savepoint answered leaves its unit as it was; two calls joined in one unit
-//! take its turn one after the other; and nothing is sent for a call that
-//! never queries, nor on the pool, which holds no transaction.
+//! transaction, or its filter hands the error back; an attempt answering `Ok`
+//! over a statement that failed ends its run unsettled, the policy's line
+//! saying why; an attempt cut before its savepoint answered leaves its unit as
+//! it was; two calls joined in one unit take its turn one after the other; and
+//! nothing is sent for a call that never queries, nor on the pool, which holds
+//! no transaction.
+//!
+//! The clock is the real one, so no test here holds on an attempt meeting its
+//! bound: a call bounded at 200 ms is cut there while its test withholds what
+//! it waits for, and an attempt a stalled runner cuts as well is one more of
+//! its retries.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -17,7 +24,8 @@ use std::time::Duration;
 use nest_rs_core::{injectable, instance, module};
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_resilience::{
-    BreakerState, ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+    BreakerState, CancellationToken, ResilienceConfig, ResilienceError, ResilienceModule,
+    ResiliencePolicy, resilient,
 };
 use nest_rs_seaorm::__private::{
     FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor,
@@ -56,6 +64,13 @@ struct LedgerService {
     #[inject]
     tracker: Arc<ResiliencePolicy<Tracker>>,
     attempts: AtomicU32,
+    /// The token of the attempt of [`post_slowly`](Self::post_slowly) waiting
+    /// on the row its test holds.
+    waiting: std::sync::OnceLock<CancellationToken>,
+    /// Told once [`post_then_track`](Self::post_then_track) wrote its row.
+    posted: tokio::sync::Notify,
+    /// Told by the test once the tracker may answer `post_then_track`.
+    tracked: tokio::sync::Notify,
 }
 
 impl LedgerService {
@@ -69,32 +84,45 @@ impl LedgerService {
         Ok(())
     }
 
-    /// One row of `entry`, the first attempt cut at its timeout while a
-    /// statement it sent after writing is still running.
-    #[resilient(ledger, idempotent, timeout = "200ms")]
-    async fn post_slowly(&self, entry: Uuid) -> Result<(), ResilienceError<Failure>> {
+    /// One row of `entry`, the first attempt then writing the row `held`,
+    /// which waits for as long as its test holds that key in a transaction of
+    /// its own: until the attempt is given up at 200 ms, its statement still
+    /// running, as its token, kept for the test, says.
+    #[resilient(ledger, idempotent, timeout = "200ms", retries = 10, cancel = token)]
+    async fn post_slowly(&self, entry: Uuid, held: Uuid) -> Result<(), ResilienceError<Failure>> {
         write(entry).await?;
         if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
-            outlast_the_timeout().await?;
+            self.waiting.get_or_init(|| token);
+            write_as(held, entry).await?;
         }
         Ok(())
     }
 
     /// One row of `entry`, each attempt given up at 200 ms, whatever its
     /// first statement waits on.
-    #[resilient(ledger, idempotent, timeout = "200ms")]
+    #[resilient(ledger, idempotent, timeout = "200ms", retries = 10)]
     async fn post_quickly(&self, entry: Uuid) -> Result<(), ResilienceError<Failure>> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         write(entry).await?;
         Ok(())
     }
 
-    /// One row of `entry`, then a call to a dependency answering in
-    /// [`ANSWERS_IN`], inside the 300 ms its one attempt has.
-    #[resilient(tracker, idempotent, timeout = "300ms")]
+    /// One row of `entry`, said written, then a call to a dependency that
+    /// answers once the test lets it: an attempt holding its unit's turn for
+    /// as long as its test decides, under the tracker's own bound.
+    #[resilient(tracker, idempotent)]
     async fn post_then_track(&self, entry: Uuid) -> Result<(), ResilienceError<Failure>> {
         write(entry).await?;
-        tokio::time::sleep(ANSWERS_IN).await;
+        self.posted.notify_one();
+        self.tracked.notified().await;
+        Ok(())
+    }
+
+    /// One row of `entry` under the tracker's policy, its one attempt given
+    /// up at 200 ms.
+    #[resilient(tracker, idempotent, timeout = "200ms")]
+    async fn post_tracked(&self, entry: Uuid) -> Result<(), ResilienceError<Failure>> {
+        write(entry).await?;
         Ok(())
     }
 
@@ -148,6 +176,7 @@ impl LedgerService {
             ..ResilienceConfig::default()
         })),
         ResilienceModule::for_root((Tracker, ResilienceConfig {
+            timeout: HANGS,
             retries: None,
             breaker_window: Some(1),
             breaker_failures: 1,
@@ -158,9 +187,16 @@ impl LedgerService {
 )]
 struct LedgerModule;
 
-/// How long the tracker takes to answer [`LedgerService::post_then_track`]:
-/// two thirds of that attempt's bound.
-const ANSWERS_IN: Duration = Duration::from_millis(200);
+/// A bound no step of a test reaches unless it hangs: what the test waits for
+/// is an order it holds, never this.
+const HANGS: Duration = Duration::from_secs(60);
+
+/// `signal`, told within [`HANGS`].
+async fn told(signal: &tokio::sync::Notify) {
+    tokio::time::timeout(HANGS, signal.notified())
+        .await
+        .expect("the signal a test waits for is told");
+}
 
 async fn db() -> DatabaseConnection {
     let conn = crate::harness::connect().await;
@@ -207,25 +243,16 @@ async fn write(entry: Uuid) -> Result<(), DbErr> {
 /// The row `id` of `entry`, written on the ambient executor.
 async fn write_as(id: Uuid, entry: Uuid) -> Result<(), DbErr> {
     let executor = current_executor().ok_or_else(|| DbErr::Custom("no executor".into()))?;
-    executor
-        .execute_raw(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            "INSERT INTO resilience_probe (id, entry) VALUES ($1, $2)",
-            [id.into(), entry.into()],
-        ))
-        .await
-        .map(|_| ())
+    executor.execute_raw(row(id, entry)).await.map(|_| ())
 }
 
-/// A statement on the ambient executor still running at the 200 ms an attempt
-/// of [`LedgerService::post_slowly`] is given up at: the test lasts as long,
-/// since the rollback waits for it.
-async fn outlast_the_timeout() -> Result<(), DbErr> {
-    let executor = current_executor().ok_or_else(|| DbErr::Custom("no executor".into()))?;
-    executor
-        .execute_unprepared("SELECT pg_sleep(1)")
-        .await
-        .map(|_| ())
+/// The statement writing the row `id` of `entry`.
+fn row(id: Uuid, entry: Uuid) -> Statement {
+    Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        "INSERT INTO resilience_probe (id, entry) VALUES ($1, $2)",
+        [id.into(), entry.into()],
+    )
 }
 
 fn unit(conn: &DatabaseConnection) -> Arc<LazyTransaction> {
@@ -315,22 +342,44 @@ async fn a_decorated_methods_failed_attempt_is_rolled_back_alone_and_its_units_e
 
 /// An attempt given up at its timeout leaves a statement running: its future
 /// is dropped there, and its rollback is awaited behind that statement, so the
-/// unit stays able to commit what the retry writes.
+/// unit stays able to commit what the retry writes. The statement waits on a
+/// key the test holds until the attempt was given up, so it is running at the
+/// cut however the runner is loaded.
 #[tokio::test]
 async fn an_attempt_cut_at_its_timeout_mid_statement_is_rolled_back_and_its_retry_commits() {
     let logs = nest_rs_testing::LogCapture::install();
     let conn = db().await;
     let (_app, service) = service().await;
-    let entry = Uuid::now_v7();
+    let (entry, held) = (Uuid::now_v7(), Uuid::now_v7());
+    let holder = sea_orm::TransactionTrait::begin(&conn)
+        .await
+        .expect("a transaction of the test's own");
+    holder
+        .execute_raw(row(held, Uuid::now_v7()))
+        .await
+        .expect("the key the first attempt's statement waits on");
 
     let lazy = unit(&conn);
-    let ran = with_request_executor(
-        SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
-        service.post_slowly(entry),
-    )
-    .await;
-    assert!(ran.is_ok(), "the second attempt answers: {ran:?}");
-    assert_eq!(service.attempts.load(Ordering::Relaxed), 2);
+    let (ran, ()) = tokio::join!(
+        with_request_executor(
+            SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
+            service.post_slowly(entry, held),
+        ),
+        async {
+            nest_rs_testing::wait_until(HANGS, || {
+                service
+                    .waiting
+                    .get()
+                    .is_some_and(CancellationToken::is_cancelled)
+            })
+            .await;
+            holder.rollback().await.expect("the key is let go");
+        },
+    );
+    assert!(
+        ran.is_ok(),
+        "an attempt answers once the cut one is rolled back: {ran:?}"
+    );
     committed(lazy).await;
 
     assert_eq!(
@@ -376,6 +425,51 @@ async fn a_statement_refused_inside_an_attempt_leaves_its_retry_free_to_write_an
         2,
         "the unit's row and the retry's"
     );
+}
+
+/// An attempt answering `Ok` over a statement Postgres refused keeps nothing:
+/// its savepoint is rolled back and its run ends unsettled, attempted no
+/// further. The policy's line is the one saying why, and the unit commits what
+/// it wrote before the call.
+#[tokio::test]
+async fn an_attempt_answering_ok_over_a_statement_that_failed_ends_its_run_unsettled_saying_why() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = db().await;
+    let (_app, policy) = policy().await;
+    let (taken, entry) = (Uuid::now_v7(), Uuid::now_v7());
+    let attempts = AtomicU32::new(0);
+
+    let lazy = unit(&conn);
+    let ran = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
+        write_as(taken, entry).await.expect("the unit writes first");
+        policy
+            .run_idempotent(|_| async {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                let refused = write_as(taken, entry).await;
+                assert!(refused.is_err(), "the key is taken: {refused:?}");
+                Ok::<_, Failure>(())
+            })
+            .await
+    })
+    .await;
+    assert!(
+        matches!(ran, Err(ResilienceError::Unsettled { .. })),
+        "{ran:?}"
+    );
+    assert_eq!(attempts.load(Ordering::Relaxed), 1, "not attempted again");
+
+    let said: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|line| line.target == nest_rs_resilience::TARGET)
+        .collect();
+    let [line] = &said[..] else {
+        panic!("the policy files one line: {said:?}");
+    };
+    let cause = nest_rs_database::AtomicError::Poisoned { retryable: false };
+    assert_eq!(line.field("error"), Some(cause.to_string()), "{line:?}");
+    committed(lazy).await;
+    assert_eq!(written(&conn, entry).await, 1, "the unit's own row alone");
 }
 
 /// A run ending on its last attempt's error leaves its unit as it found it:
@@ -896,9 +990,10 @@ async fn an_attempt_cut_while_its_savepoint_is_unanswered_leaves_its_unit_able_t
                 .post_quickly(first)
                 .await
                 .expect("a call answering at once");
+            let made = service.attempts.load(Ordering::Relaxed);
             double.hold();
             let (ran, _sent) = tokio::join!(service.post_quickly(entry), async {
-                attempted(&service, 3).await;
+                attempted(&service, made + 2).await;
                 double.release()
             });
             let unit = current_executor().expect("the unit's executor");
@@ -927,10 +1022,10 @@ async fn an_attempt_cut_while_its_savepoint_is_unanswered_leaves_its_unit_able_t
 /// Savepoints are a stack on one connection, so two calls joined in one unit
 /// run their database parts one after the other: the second's first statement
 /// waits, inside its attempt's bound, until the first's savepoint settled —
-/// here for the whole of the first's call to its dependency. A limit, pinned
-/// as it stands: the tracker answered each call it was sent well inside the
-/// bound, yet the call that waited is given up at it, and counted against the
-/// tracker, whose breaker opens.
+/// here until the tracker answers the first, which the test lets it do only
+/// once the second was given up. A limit, pinned as it stands: the call that
+/// waited sent the tracker nothing, yet it is given up at its bound and counted
+/// against the tracker, whose breaker opens.
 #[tokio::test]
 async fn two_calls_joined_in_one_unit_take_its_turn_in_order_and_the_one_waiting_is_charged_the_wait()
  {
@@ -943,12 +1038,15 @@ async fn two_calls_joined_in_one_unit_take_its_turn_in_order_and_the_one_waiting
     let (first, second) = (Uuid::now_v7(), Uuid::now_v7());
 
     let lazy = unit(&conn);
-    let (went, waited) =
+    let (went, (waited, charged)) =
         with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
-            tokio::join!(
-                service.post_then_track(first),
-                service.post_then_track(second)
-            )
+            tokio::join!(service.post_then_track(first), async {
+                told(&service.posted).await;
+                let waited = service.post_tracked(second).await;
+                let charged = tracker.breaker_state();
+                service.tracked.notify_one();
+                (waited, charged)
+            })
         })
         .await;
 
@@ -958,14 +1056,17 @@ async fn two_calls_joined_in_one_unit_take_its_turn_in_order_and_the_one_waiting
     );
     assert!(
         matches!(waited, Err(ResilienceError::TimedOut { .. })),
-        "the call waiting for it spends {ANSWERS_IN:?} of its bound there: {waited:?}"
+        "the call waiting for it spends its bound there: {waited:?}"
     );
     assert!(
-        matches!(tracker.breaker_state(), Some(BreakerState::Open { .. })),
-        "counted as the tracker's failure: {:?}",
-        tracker.breaker_state()
+        matches!(charged, Some(BreakerState::Open { .. })),
+        "counted as the tracker's failure: {charged:?}"
     );
     committed(lazy).await;
     assert_eq!(written(&conn, first).await, 1);
-    assert_eq!(written(&conn, second).await, 0, "given up, and rolled back");
+    assert_eq!(
+        written(&conn, second).await,
+        0,
+        "given up, having written nothing"
+    );
 }

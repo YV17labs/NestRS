@@ -202,6 +202,39 @@ impl Verdict {
 /// What an attempt whose call unwound failed on; its payload is its unit's to file.
 pub(crate) const PANICKED: &str = "the call panicked";
 
+// The message of each line a policy files on `TARGET`, its breaker's transition
+// apart: what happened, then what the call does, which names the constant.
+
+/// A retry, certain, after an attempt that timed out or answered an `Err`.
+pub(crate) const RETRYING_FAILED: &str = "attempt failed; retrying the call";
+
+/// A retry, certain, after an attempt that answered an `Ok` sent again.
+pub(crate) const RETRYING_ANSWERED: &str = "attempt answered; retrying the call";
+
+/// A retry given up: the dependency asked a wait past the backoff's ceiling.
+pub(crate) const NOT_ATTEMPTED_AGAIN_PAST_CEILING: &str =
+    "the dependency asked a wait past the backoff's ceiling; not attempted again";
+
+/// A retry given up: its wait ends past the unit's deadline.
+pub(crate) const NOT_ATTEMPTED_AGAIN_PAST_DEADLINE: &str =
+    "no time left before the unit's deadline; not attempted again";
+
+/// A run ended on its attempt's savepoint, which the database could not settle.
+pub(crate) const NOT_ATTEMPTED_AGAIN_UNSETTLED: &str =
+    "an attempt's savepoint could not be settled; not attempted again";
+
+/// An attempt waiting for the token of the rate it reserved.
+pub(crate) const WAITING_FOR_TOKEN: &str = "rate limit reached; waiting for a token";
+
+/// A call the bulkhead refuses ([`Refusal::Full`]).
+pub(crate) const REFUSED_FULL: &str = "bulkhead full; the call is refused";
+
+/// A call the rate refuses ([`Refusal::Limited`]).
+pub(crate) const REFUSED_LIMITED: &str = "rate limit reached; the call is refused";
+
+/// A fallback answering in place of the error its run ended on.
+pub(crate) const FALLBACK_ANSWERS: &str = "the call ended on an error; its fallback answers";
+
 /// One attempt's answer and how it counts, or the policy's refusal.
 pub(crate) type Attempted<T> = Result<(T, Verdict), Refusal>;
 
@@ -537,7 +570,7 @@ impl<I: Instance> ResiliencePolicy<I> {
                 host = method.as_ref().map(ResilientMethod::host).as_deref(),
                 method = method.as_ref().map(ResilientMethod::name),
                 waiters = full.waiters(),
-                "bulkhead full; the call is refused",
+                "{REFUSED_FULL}",
             );
             self.refused(method.as_ref(), Refusal::Full)
         })?;
@@ -675,7 +708,7 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// of the rate loses its turn. When its wait ends it meets the breaker as
     /// a call
     /// arriving then does: refused while the opening lasts, and taking the
-    /// next probe's turn once it has passed. Each call files the transition's
+    /// next probe's turn once it has passed. Each call's transition is filed as a
     /// `warn`, marked `manual` and carrying the open time it was given, and
     /// counts on the transitions' counter marked manual, whether or not the
     /// breaker was open already.
@@ -706,7 +739,7 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// nothing once it answers: a probe answering a failure opens nothing,
     /// and no such answer counts in the window that follows. A breaker its
     /// probes closed counts the same way: the answer of a call sent before
-    /// it opened counts nowhere. Each call files the transition's `warn`,
+    /// it opened counts nowhere. Each call's transition is filed as a `warn`,
     /// marked `manual`, and counts on the transitions' counter marked
     /// manual, whether or not the breaker was closed already.
     /// Like [`open_breaker`](Self::open_breaker), it switches this replica's
@@ -744,7 +777,7 @@ impl<I: Instance> ResiliencePolicy<I> {
             host = method.host(),
             method = method.name(),
             error = said.insert(told(error)).as_str(),
-            "the call ended on an error; its fallback answers",
+            "{FALLBACK_ANSWERS}",
         );
         self.counters.fallback();
         self.subscribers
@@ -818,22 +851,24 @@ impl<'p, I: Instance> Run<'p, I> {
         attempted.map_err(|refusal| terms.policy.refused(terms.method.as_ref(), refusal))
     }
 
-    /// Whether to attempt the call again after `attempted`, having waited the
-    /// backoff when so — see [`next_wait`](Self::next_wait).
+    /// The wait before the call is attempted again after `attempted`, as
+    /// [`next_wait`](Self::next_wait) decides it, or `attempted` handed back
+    /// when the run ends there. An answer sent again is let go here, as its
+    /// retry is decided: the wait is handed nothing of it, so none holds what
+    /// the answer does — a response's connection, or its stream.
     #[cfg(any(feature = "reqwest", test))]
     pub(crate) fn again<'r, T>(
         &'r mut self,
-        attempted: &Attempted<T>,
-    ) -> impl Future<Output = bool> + use<'r, 'p, I, T> {
-        let wait = self.next_wait(attempted);
-        async move {
-            let Some(wait) = wait else {
-                return false;
-            };
+        attempted: Attempted<T>,
+    ) -> Result<impl Future<Output = ()> + use<'r, 'p, I, T>, Attempted<T>> {
+        let Some(wait) = self.next_wait(&attempted) else {
+            return Err(attempted);
+        };
+        drop(attempted);
+        Ok(async move {
             tokio::time::sleep(wait).await;
             self.resent = self.resent.saturating_add(1);
-            true
-        }
+        })
     }
 
     /// How long to wait before attempting the call again after `attempted`, the
@@ -841,9 +876,9 @@ impl<'p, I: Instance> Run<'p, I> {
     /// decision for a run opening no savepoint, whose retry is certain as it
     /// is decided.
     ///
-    /// It reads nothing of the answer past it, so no wait holds the answer,
-    /// and a run is `Send` for an answer that is `Send` and not `Sync`, a
-    /// stream's.
+    /// It keeps nothing of the answer: [`again`](Self::again) lets it go
+    /// before the wait, and a run stays `Send` for an answer that is `Send`
+    /// and not `Sync`, a stream's.
     ///
     /// [`retry`]: Self::retry
     #[cfg(any(feature = "reqwest", test))]
@@ -908,7 +943,7 @@ impl<'p, I: Instance> Run<'p, I> {
                 attempt,
                 wait_ms = millis(wait),
                 error,
-                "attempt failed; retrying the call",
+                "{RETRYING_FAILED}",
             ),
             None => tracing::debug!(
                 target: TARGET,
@@ -917,7 +952,7 @@ impl<'p, I: Instance> Run<'p, I> {
                 method = self.terms.method_name(),
                 attempt,
                 wait_ms = millis(wait),
-                "attempt answered; retrying the call",
+                "{RETRYING_ANSWERED}",
             ),
         }
         self.terms
@@ -947,7 +982,7 @@ impl<'p, I: Instance> Run<'p, I> {
                 asked_ms = millis(asked),
                 ceiling_ms = millis(ceiling),
                 error,
-                "the dependency asked a wait past the backoff's ceiling; not attempted again",
+                "{NOT_ATTEMPTED_AGAIN_PAST_CEILING}",
             );
             return None;
         }
@@ -970,7 +1005,7 @@ impl<'p, I: Instance> Run<'p, I> {
                 method = terms.method_name(),
                 wait_ms = millis(wait),
                 error,
-                "no time left before the unit's deadline; not attempted again",
+                "{NOT_ATTEMPTED_AGAIN_PAST_DEADLINE}",
             );
             return None;
         }
@@ -1082,20 +1117,23 @@ impl<I: Instance> Terms<'_, I> {
     /// what the attempt ended on: its answer to answer, its call to send
     /// again, its panic unwinding on. A savepoint the database could not
     /// settle ends the run there, whatever the attempt answered: nothing that
-    /// attempt wrote stands. The driver filed why and the run's caller holds
-    /// it, so the line says the policy's part alone.
+    /// attempt wrote stands. Its line tells why, the cause's chain as its
+    /// `error`: a driver owes no line of its own for it, and the
+    /// [`Unsettled`](ResilienceError::Unsettled) holding it reaches the run's
+    /// caller alone, never past a panic unwinding on.
     fn after_savepoint<T, E>(
         &self,
         ended: Ended<Attempted<Result<T, E>>>,
         settled: Result<(), AtomicError>,
     ) -> Result<Next<Attempted<Result<T, E>>>, ResilienceError<E>> {
-        if settled.is_err() {
+        if let Err(cause) = &settled {
             tracing::debug!(
                 target: TARGET,
                 instance = I::NAME,
                 host = self.host().as_deref(),
                 method = self.method_name(),
-                "an attempt's savepoint could not be settled; not attempted again",
+                error = told(cause).as_str(),
+                "{NOT_ATTEMPTED_AGAIN_UNSETTLED}",
             );
         }
         match (ended, settled) {
@@ -1278,7 +1316,7 @@ impl<'p, I: Instance> Terms<'p, I> {
                     host = self.host().as_deref(),
                     method = self.method_name(),
                     wait_ms = millis(at.saturating_duration_since(now)),
-                    "rate limit reached; waiting for a token",
+                    "{WAITING_FOR_TOKEN}",
                 );
                 Admission::Postponed(at)
             }
@@ -1968,7 +2006,7 @@ fn refused_by_the_rate(instance: &'static str, method: Option<&ResilientMethod>,
         host = method.map(ResilientMethod::host).as_deref(),
         method = method.map(ResilientMethod::name),
         retry_after_ms = millis(wait),
-        "rate limit reached; the call is refused",
+        "{REFUSED_LIMITED}",
     );
 }
 
@@ -2106,6 +2144,18 @@ mod tests {
 
     /// What a call answering `Result<T, E>` answers under its policy.
     type Answer<T, E> = Result<T, ResilienceError<E>>;
+
+    /// Whether `run` attempts its call again after `attempted`, its backoff
+    /// waited when so.
+    async fn again<T>(run: &mut Run<'_, Upstream>, attempted: Attempted<T>) -> bool {
+        match run.again(attempted) {
+            Ok(backoff) => {
+                backoff.await;
+                true
+            }
+            Err(_ended) => false,
+        }
+    }
 
     /// Retries on, no breaker, no bulkhead: the subject is the retry.
     fn retrying(retries: usize) -> ResiliencePolicy<Upstream> {
@@ -3063,7 +3113,7 @@ mod tests {
             "refused at once, the one place taken: {crowded:?}"
         );
 
-        let full = lines.find(TARGET, "bulkhead full; the call is refused");
+        let full = lines.find(TARGET, REFUSED_FULL);
         assert_eq!(full.len(), 2, "{full:#?}");
         for line in &full {
             assert_eq!(line.level, "debug", "{line:?}");
@@ -3129,14 +3179,14 @@ mod tests {
         let asked = Duration::from_secs(1);
         let started = tokio::time::Instant::now();
         let failed: Attempted<()> = Ok(((), failing(Some(asked))));
-        assert!(run.again(&failed).await);
+        assert!(again(&mut run, failed).await);
         let waited = started.elapsed();
         assert!(
             waited >= asked && waited <= asked.mul_f64(1.2),
             "the ask, stretched by a fifth at most: {waited:?}"
         );
         let too_long: Attempted<()> = Ok(((), failing(Some(Duration::from_secs(3)))));
-        assert!(!run.again(&too_long).await, "past the 2 s ceiling");
+        assert!(!again(&mut run, too_long).await, "past the 2 s ceiling");
     }
 
     /// A backoff at its floor of a millisecond waits from 0.8 ms to 1.2 ms, its
@@ -3169,7 +3219,10 @@ mod tests {
 
         let mut retrying = run().await;
         let started = tokio::time::Instant::now();
-        assert!(retrying.again(&failed).await, "attempted again");
+        assert!(
+            again(&mut retrying, failed.clone()).await,
+            "attempted again"
+        );
         assert!(
             started.elapsed() >= drawn,
             "{:?}, drawn {drawn:?}",
@@ -3180,7 +3233,7 @@ mod tests {
             Some(tokio::time::Instant::now() + drawn / 2),
             async {
                 let mut run = run().await;
-                run.again(&failed).await
+                again(&mut run, failed).await
             },
         )
         .await;
@@ -3188,20 +3241,14 @@ mod tests {
 
         let asked: Attempted<()> = Ok(((), failing(Some(Duration::from_secs(3)))));
         let mut asking = run().await;
-        assert!(!asking.again(&asked).await, "past the ceiling");
+        assert!(!again(&mut asking, asked).await, "past the ceiling");
 
-        let retried = lines.expect_one(TARGET, "attempt failed; retrying the call");
-        let out_of_time = lines.expect_one(
-            TARGET,
-            "no time left before the unit's deadline; not attempted again",
-        );
+        let retried = lines.expect_one(TARGET, RETRYING_FAILED);
+        let out_of_time = lines.expect_one(TARGET, NOT_ATTEMPTED_AGAIN_PAST_DEADLINE);
         for line in [&retried, &out_of_time] {
             assert_eq!(line.field("wait_ms").as_deref(), Some("1"), "{line:?}");
         }
-        let past = lines.expect_one(
-            TARGET,
-            "the dependency asked a wait past the backoff's ceiling; not attempted again",
-        );
+        let past = lines.expect_one(TARGET, NOT_ATTEMPTED_AGAIN_PAST_CEILING);
         assert_eq!(
             (past.field("asked_ms"), past.field("ceiling_ms")),
             (Some("3000".to_owned()), Some("2".to_owned())),
@@ -3833,7 +3880,7 @@ mod tests {
             drop(held);
         }
 
-        let limited = lines.find(TARGET, "rate limit reached; the call is refused");
+        let limited = lines.find(TARGET, REFUSED_LIMITED);
         assert_eq!(limited.len(), 2, "{limited:#?}");
         for line in &limited {
             assert_eq!(line.level, "debug", "{line:?}");
@@ -3843,9 +3890,7 @@ mod tests {
             assert_eq!(line.field("retry_after_ms").as_deref(), Some("27000"));
         }
         assert!(
-            lines
-                .find(TARGET, "bulkhead full; the call is refused")
-                .is_empty(),
+            lines.find(TARGET, REFUSED_FULL).is_empty(),
             "no call met the full bulkhead"
         );
     }
@@ -3958,9 +4003,7 @@ mod tests {
             "the breaker opened by hand, before the spent rate: {open:?}"
         );
         assert!(
-            lines
-                .find(TARGET, "rate limit reached; the call is refused")
-                .is_empty(),
+            lines.find(TARGET, REFUSED_LIMITED).is_empty(),
             "the rate refused neither"
         );
 
@@ -4127,7 +4170,7 @@ mod tests {
 
         let mut run = policy.begin(None).await.expect("a run");
         let limited: Attempted<()> = Err(Refusal::Limited(Duration::from_secs(1)));
-        assert!(!run.again(&limited).await);
+        assert!(!again(&mut run, limited).await);
     }
 
     /// A window and a wait mean nothing without a limit: the policy builds no
@@ -5453,8 +5496,8 @@ mod tests {
         tokio::time::advance(Duration::from_secs(2)).await;
         assert!(policy.run(|_| answering()).await.is_ok());
 
-        let refusal = lines.expect_one(TARGET, "rate limit reached; the call is refused");
-        let wait = lines.expect_one(TARGET, "rate limit reached; waiting for a token");
+        let refusal = lines.expect_one(TARGET, REFUSED_LIMITED);
+        let wait = lines.expect_one(TARGET, WAITING_FOR_TOKEN);
         for (line, field, said) in [
             (&refusal, "retry_after_ms", "6000"),
             (&wait, "wait_ms", "4000"),
@@ -5505,8 +5548,8 @@ mod tests {
             sent.get()
         );
 
-        let refusal = lines.expect_one(TARGET, "rate limit reached; the call is refused");
-        let wait = lines.expect_one(TARGET, "rate limit reached; waiting for a token");
+        let refusal = lines.expect_one(TARGET, REFUSED_LIMITED);
+        let wait = lines.expect_one(TARGET, WAITING_FOR_TOKEN);
         for (line, field) in [(&refusal, "retry_after_ms"), (&wait, "wait_ms")] {
             assert_eq!(line.field(field).as_deref(), Some("1"), "{line:?}");
         }
@@ -5534,7 +5577,6 @@ mod tests {
     /// wait past the ceiling and the unit's deadline leaving no time for it.
     #[tokio::test(start_paused = true)]
     async fn each_line_a_retry_files_says_what_its_attempt_failed_on() {
-        const RETRIED: &str = "attempt failed; retrying the call";
         let policy = retrying(1);
 
         let lines = nest_rs_testing::LogCapture::install();
@@ -5545,7 +5587,10 @@ mod tests {
             matches!(failed, Err(ResilienceError::Failed(_))),
             "{failed:?}"
         );
-        assert_eq!(error_of(&lines, RETRIED).as_deref(), Some(UNREACHABLE));
+        assert_eq!(
+            error_of(&lines, RETRYING_FAILED).as_deref(),
+            Some(UNREACHABLE)
+        );
         drop(lines);
 
         let lines = nest_rs_testing::LogCapture::install();
@@ -5556,7 +5601,10 @@ mod tests {
             matches!(timed_out, Err(ResilienceError::TimedOut { .. })),
             "{timed_out:?}"
         );
-        assert_eq!(error_of(&lines, RETRIED).as_deref(), Some(TIMED_OUT));
+        assert_eq!(
+            error_of(&lines, RETRYING_FAILED).as_deref(),
+            Some(TIMED_OUT)
+        );
         drop(lines);
 
         let lines = nest_rs_testing::LogCapture::install();
@@ -5570,10 +5618,7 @@ mod tests {
             "{asked:?}"
         );
         assert_eq!(
-            error_of(
-                &lines,
-                "the dependency asked a wait past the backoff's ceiling; not attempted again",
-            ),
+            error_of(&lines, NOT_ATTEMPTED_AGAIN_PAST_CEILING,),
             Some(error_message(&asking())),
         );
         drop(lines);
@@ -5589,11 +5634,7 @@ mod tests {
             "{out_of_time:?}"
         );
         assert_eq!(
-            error_of(
-                &lines,
-                "no time left before the unit's deadline; not attempted again",
-            )
-            .as_deref(),
+            error_of(&lines, NOT_ATTEMPTED_AGAIN_PAST_DEADLINE,).as_deref(),
             Some(UNREACHABLE),
         );
     }
@@ -5604,8 +5645,6 @@ mod tests {
     /// error to tell, for an `Ok` sent again, which nothing failed in.
     #[tokio::test(start_paused = true)]
     async fn the_line_a_retry_files_says_whether_its_attempt_failed_or_answered() {
-        const FAILED: &str = "attempt failed; retrying the call";
-        const ANSWERED: &str = "attempt answered; retrying the call";
         type Polled = Answer<u8, Refused>;
         let policy = retrying(1);
 
@@ -5622,11 +5661,11 @@ mod tests {
             "{ignored:?}"
         );
         assert_eq!(
-            error_of(&lines, FAILED),
+            error_of(&lines, RETRYING_FAILED),
             Some(error_message(&Refused)),
             "an `Err` `record_if` refuses, sent again"
         );
-        lines.expect_none(TARGET, ANSWERED);
+        lines.expect_none(TARGET, RETRYING_ANSWERED);
         drop(lines);
 
         let lines = nest_rs_testing::LogCapture::install();
@@ -5638,7 +5677,7 @@ mod tests {
             )
             .await;
         assert!(matches!(polled, Ok(40)), "{polled:?}");
-        let answered = lines.expect_one(TARGET, ANSWERED);
+        let answered = lines.expect_one(TARGET, RETRYING_ANSWERED);
         assert_eq!(
             (
                 answered.level.as_str(),
@@ -5648,7 +5687,297 @@ mod tests {
             ("debug", Some("1"), None),
             "{answered:?}"
         );
-        lines.expect_none(TARGET, FAILED);
+        lines.expect_none(TARGET, RETRYING_FAILED);
+    }
+
+    /// The message of each line filed on this crate's target, in the order
+    /// they were filed.
+    fn filed(lines: &nest_rs_testing::LogCapture) -> Vec<String> {
+        lines
+            .events()
+            .into_iter()
+            .filter(|line| line.target == TARGET)
+            .map(|line| line.message)
+            .collect()
+    }
+
+    /// The breaker's transition, the one line of the ten its own file says.
+    const BREAKER_MOVED: &str = crate::breaker::MOVED;
+
+    /// The breaker said it opened, once: a call it refuses from there files
+    /// nothing, wherever it is refused — its run as it opens, under a
+    /// bulkhead, or its attempt as it is let through — sent once or again;
+    /// nor does the retry a breaker opening under its run refuses, past the
+    /// transition and the retry's own line.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_an_open_breaker_refuses_files_no_line() {
+        for concurrency in [None, Some(1)] {
+            let policy = policy(ResilienceConfig {
+                concurrency,
+                ..ResilienceConfig::default()
+            });
+            policy
+                .open_breaker(Duration::from_secs(30))
+                .expect("a breaker");
+            let lines = nest_rs_testing::LogCapture::install();
+            let once = policy.run(|_| answering()).await;
+            let again = policy.run_idempotent(|_| answering()).await;
+            assert!(
+                matches!(
+                    (&once, &again),
+                    (
+                        Err(ResilienceError::Open { .. }),
+                        Err(ResilienceError::Open { .. })
+                    )
+                ),
+                "{once:?}, {again:?}"
+            );
+            assert_eq!(filed(&lines), [""; 0], "concurrency: {concurrency:?}");
+        }
+
+        let policy = policy(ResilienceConfig {
+            retries: Some(1),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        });
+        let lines = nest_rs_testing::LogCapture::install();
+        let opened = policy
+            .run_idempotent(|_| async { Err::<(), _>(Refused) })
+            .await;
+        assert!(
+            matches!(opened, Err(ResilienceError::Open { .. })),
+            "{opened:?}"
+        );
+        assert_eq!(filed(&lines), [BREAKER_MOVED, RETRYING_FAILED]);
+    }
+
+    /// A timeout a run ends on is its caller's answer and files nothing:
+    /// an attempt given up at its bound, sent once, the last of a call sent
+    /// again, whose one line is the retry's, and a unit out of time, refused
+    /// as its run opens under a bulkhead or as its attempt is let through.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_ending_on_a_timeout_files_no_line_of_its_own() {
+        let never = |_| std::future::pending::<Result<(), Refused>>();
+        let timed_out = |ran: &Ran| matches!(ran, Err(ResilienceError::TimedOut { .. }));
+        let policy = retrying(1);
+
+        let lines = nest_rs_testing::LogCapture::install();
+        let once = policy.run(never).await;
+        assert!(timed_out(&once), "{once:?}");
+        assert_eq!(filed(&lines), [""; 0]);
+
+        let again = policy.run_idempotent(never).await;
+        assert!(timed_out(&again), "{again:?}");
+        assert_eq!(
+            filed(&lines),
+            [RETRYING_FAILED],
+            "the retry's, after the first timeout, and none for the one the run ends on"
+        );
+        drop(lines);
+
+        for concurrency in [None, Some(1)] {
+            let policy = self::policy(ResilienceConfig {
+                concurrency,
+                ..ResilienceConfig::default()
+            });
+            let lines = nest_rs_testing::LogCapture::install();
+            let spent = nest_rs_core::__private::with_deadline(
+                Some(tokio::time::Instant::now()),
+                policy.run(|_| answering()),
+            )
+            .await;
+            assert!(timed_out(&spent), "{spent:?}");
+            assert_eq!(filed(&lines), [""; 0], "concurrency: {concurrency:?}");
+        }
+    }
+
+    /// A call the bulkhead refuses files the bulkhead's line and no other,
+    /// refused at once or after its wait for a slot.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_the_bulkhead_refuses_files_its_one_line() {
+        for concurrency_wait in [None, Some(Duration::from_secs(1))] {
+            let policy = policy(ResilienceConfig {
+                concurrency: Some(1),
+                concurrency_wait,
+                ..ResilienceConfig::default()
+            });
+            let held = policy.begin(None).await.expect("the one slot");
+            let lines = nest_rs_testing::LogCapture::install();
+            let refused = policy.run(|_| answering()).await;
+            assert!(
+                matches!(refused, Err(ResilienceError::Full { .. })),
+                "{refused:?}"
+            );
+            assert_eq!(filed(&lines), [REFUSED_FULL], "{concurrency_wait:?}");
+            drop(held);
+        }
+    }
+
+    /// A call the rate refuses files the rate's line and no other, refused as
+    /// its attempt is let through or, finding no free slot, before it waits
+    /// for one.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_the_rate_refuses_files_its_one_line() {
+        let policy = policy(rated(1, Duration::from_secs(60), None));
+        assert!(policy.run(|_| answering()).await.is_ok());
+        let lines = nest_rs_testing::LogCapture::install();
+        let refused = policy.run(|_| answering()).await;
+        assert!(
+            matches!(refused, Err(ResilienceError::Limited { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(filed(&lines), [REFUSED_LIMITED]);
+        drop(lines);
+
+        let policy = self::policy(ResilienceConfig {
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(1)),
+            ..rated(1, Duration::from_secs(60), None)
+        });
+        let held = policy.begin(None).await.expect("the one slot");
+        let lines = nest_rs_testing::LogCapture::install();
+        let taken = held.attempt_once(|_| answering(), judged).await;
+        assert!(matches!(taken.0, Ok((Ok(()), _))), "the bucket's one token");
+        let refused = policy.run(|_| answering()).await;
+        assert!(
+            matches!(refused, Err(ResilienceError::Limited { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(filed(&lines), [REFUSED_LIMITED]);
+    }
+
+    /// A unit of work whose transaction refuses to settle the savepoints it
+    /// opens, each its own block.
+    struct Unsettling;
+
+    impl nest_rs_database::Executor for Unsettling {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
+            Some(Arc::new(Self))
+        }
+    }
+
+    impl nest_rs_database::AtomicBlock for Unsettling {
+        fn settle(
+            self: Arc<Self>,
+            _ok: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), AtomicError>> + Send>> {
+            Box::pin(std::future::ready(Err(AtomicError::Poisoned {
+                retryable: false,
+            })))
+        }
+    }
+
+    /// Every path that files a line, and each refusal that files none, walked
+    /// once: the messages filed are the ten the crate's documentation lists,
+    /// and no other.
+    #[tokio::test(start_paused = true)]
+    async fn a_policy_files_its_ten_lines_and_no_other() {
+        let lines = nest_rs_testing::LogCapture::install();
+        let failing = |_| async { Err::<(), _>(Refused) };
+        let retrying = retrying(1);
+
+        assert!(retrying.run_idempotent(failing).await.is_err());
+        type Polled = Answer<u8, Refused>;
+        let polled = retrying
+            .run_again::<Polled, _, _, _>(
+                None,
+                judging(PhantomData::<Polled>, every, every, every),
+                |_| async { Ok(40) },
+            )
+            .await;
+        assert!(matches!(polled, Ok(40)), "{polled:?}");
+        let asking = retrying
+            .run_idempotent(|_| async {
+                let slow_down = Problem::new(429, nest_rs_core::code::RATE_LIMITED);
+                Err::<(), _>(Throttled(slow_down.with_retry_after(3)))
+            })
+            .await;
+        assert!(asking.is_err(), "3 s, past the ceiling of 2 s: {asking:?}");
+        let out_of_time = nest_rs_core::__private::with_deadline(
+            Some(tokio::time::Instant::now() + Duration::from_millis(100)),
+            retrying.run_idempotent(failing),
+        )
+        .await;
+        assert!(out_of_time.is_err(), "{out_of_time:?}");
+        let unsettled = nest_rs_database::__private::with_request_executor(
+            Arc::new(Unsettling),
+            retrying.run_idempotent(|_| answering()),
+        )
+        .await;
+        assert!(
+            matches!(unsettled, Err(ResilienceError::Unsettled { .. })),
+            "{unsettled:?}"
+        );
+        let never = retrying
+            .run(|_| std::future::pending::<Result<(), Refused>>())
+            .await;
+        assert!(
+            matches!(never, Err(ResilienceError::TimedOut { .. })),
+            "{never:?}"
+        );
+
+        let rate = policy(rated(
+            1,
+            Duration::from_secs(10),
+            Some(Duration::from_secs(5)),
+        ));
+        assert!(rate.run(|_| answering()).await.is_ok());
+        tokio::time::advance(Duration::from_secs(4)).await;
+        let limited = rate.run(|_| answering()).await;
+        assert!(
+            matches!(limited, Err(ResilienceError::Limited { .. })),
+            "{limited:?}"
+        );
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(rate.run(|_| answering()).await.is_ok(), "its token waited");
+
+        let bulkhead = policy(ResilienceConfig {
+            concurrency: Some(1),
+            ..ResilienceConfig::default()
+        });
+        let held = bulkhead.begin(None).await.expect("the one slot");
+        let full = bulkhead.run(|_| answering()).await;
+        assert!(
+            matches!(full, Err(ResilienceError::Full { .. })),
+            "{full:?}"
+        );
+        drop(held);
+
+        bulkhead
+            .open_breaker(Duration::from_secs(30))
+            .expect("a breaker");
+        let open = bulkhead.run(|_| answering()).await;
+        assert!(
+            matches!(open, Err(ResilienceError::Open { .. })),
+            "{open:?}"
+        );
+        let tracking =
+            crate::resilient::resilient_method(|| "ShipmentsService", "track", None, None);
+        bulkhead.falling_back(&tracking, &Refused);
+
+        let filed: std::collections::BTreeSet<_> = filed(&lines).into_iter().collect();
+        let listed = [
+            BREAKER_MOVED,
+            FALLBACK_ANSWERS,
+            NOT_ATTEMPTED_AGAIN_PAST_CEILING,
+            NOT_ATTEMPTED_AGAIN_PAST_DEADLINE,
+            NOT_ATTEMPTED_AGAIN_UNSETTLED,
+            REFUSED_FULL,
+            REFUSED_LIMITED,
+            RETRYING_ANSWERED,
+            RETRYING_FAILED,
+            WAITING_FOR_TOKEN,
+        ];
+        assert_eq!(
+            filed,
+            listed.into_iter().map(str::to_owned).collect(),
+            "a refusal by an open breaker and a timeout among them, which file nothing"
+        );
     }
 
     /// A probe answering an `Err` `record_if` refuses is ignored, never
@@ -5657,7 +5986,7 @@ mod tests {
     /// where a probe dropped on no success yet files it open again.
     #[tokio::test(start_paused = true)]
     async fn a_probe_answering_an_err_record_if_refuses_files_no_transition_and_tells_none() {
-        const MOVED: &str = "circuit breaker changed state";
+        const MOVED: &str = crate::breaker::MOVED;
         type Polled = Answer<(), Refused>;
         let policy = policy(ResilienceConfig {
             retries: Some(1),

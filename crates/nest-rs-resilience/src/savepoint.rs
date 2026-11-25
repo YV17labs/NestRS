@@ -112,6 +112,7 @@ mod tests {
     use nest_rs_database::{AtomicBlock, Executor, current_executor};
 
     use super::*;
+    use crate::policy::{NOT_ATTEMPTED_AGAIN_UNSETTLED, RETRYING_FAILED};
     use crate::resilient::{judging_by_default, resilient_method};
     use crate::{ResilienceConfig, ResilienceError, ResiliencePolicy};
 
@@ -163,15 +164,18 @@ mod tests {
     /// How long a savepoint takes to settle: a round trip the run waits out.
     const SETTLES_IN: Duration = Duration::from_millis(60);
 
+    /// How a savepoint of these tests settles.
+    type Settles = fn() -> Result<(), AtomicError>;
+
     /// A unit of work holding a transaction: its driver offers a savepoint,
     /// settling as `settles` answers.
     struct Unit {
         seen: Arc<Seen>,
-        settles: fn() -> Result<(), AtomicError>,
+        settles: Settles,
     }
 
     impl Unit {
-        fn settling(settles: fn() -> Result<(), AtomicError>) -> (Arc<dyn Executor>, Arc<Seen>) {
+        fn settling(settles: Settles) -> (Arc<dyn Executor>, Arc<Seen>) {
             let seen = Arc::new(Seen::default());
             let unit = Arc::new(Self {
                 seen: Arc::clone(&seen),
@@ -198,7 +202,7 @@ mod tests {
 
     struct Block {
         seen: Arc<Seen>,
-        settles: fn() -> Result<(), AtomicError>,
+        settles: Settles,
         settled: AtomicBool,
     }
 
@@ -245,6 +249,11 @@ mod tests {
 
     fn refuses() -> Result<(), AtomicError> {
         Err(AtomicError::Database("ROLLBACK TO refused".into()))
+    }
+
+    /// The attempt answered `Ok` over a statement that failed inside it.
+    fn poisoned() -> Result<(), AtomicError> {
+        Err(AtomicError::Poisoned { retryable: false })
     }
 
     /// Says [`Saw::Spent`] when the future holding it is dropped.
@@ -652,20 +661,24 @@ mod tests {
         );
     }
 
-    const UNSETTLED: &str = "an attempt's savepoint could not be settled; not attempted again";
-    const RETRYING: &str = "attempt failed; retrying the call";
-
     /// A savepoint the database could not settle ends the run whatever its
-    /// attempt answered: an `Ok` whose writes are not kept is no answer, and a
+    /// attempt answered: an `Ok` whose writes are not kept is no answer — one
+    /// answered over a statement that failed inside it least of all — and a
     /// failure whose writes may still stand is not sent again over them. The
-    /// run's caller holds the cause, which the driver filed; the policy says
-    /// its own fact, once, and announces no retry it does not make.
+    /// run's caller holds the cause, whose chain the policy's line tells as
+    /// its `error`, once, announcing no retry it does not make.
     #[tokio::test(start_paused = true)]
     async fn a_savepoint_that_cannot_be_settled_ends_the_run_there_on_its_cause() {
-        for (answers, attempted) in [(&[Ok(7)][..], Saw::Kept), (&[][..], Saw::RolledBack)] {
+        for (answers, attempted, settles, cause) in [
+            (&[Ok(7)][..], Saw::Kept, refuses as Settles, refuses()),
+            (&[][..], Saw::RolledBack, refuses, refuses()),
+            (&[Ok(7)][..], Saw::Kept, poisoned, poisoned()),
+        ] {
+            let cause =
+                nest_rs_core::error_message(&cause.expect_err("a savepoint left unsettled"));
             let lines = nest_rs_testing::LogCapture::install();
             let policy = retrying(Some(2));
-            let (unit, seen) = Unit::settling(refuses);
+            let (unit, seen) = Unit::settling(settles);
 
             let ran =
                 with_request_executor(unit, policy.run_idempotent(answering(&seen, answers))).await;
@@ -677,8 +690,7 @@ mod tests {
             );
             assert_eq!(
                 nest_rs_core::error_message(&unsettled),
-                "an attempt's savepoint could not be settled: the atomic block could not be \
-                 settled: ROLLBACK TO refused"
+                format!("an attempt's savepoint could not be settled: {cause}")
             );
             assert_eq!(
                 seen.all(),
@@ -690,15 +702,15 @@ mod tests {
                 ],
                 "not attempted again"
             );
-            let line = lines.expect_one(crate::TARGET, UNSETTLED);
+            let line = lines.expect_one(crate::TARGET, NOT_ATTEMPTED_AGAIN_UNSETTLED);
             assert_eq!(line.level, "debug", "as every retry given up");
             assert_eq!(line.field("instance").as_deref(), Some("ledger"));
             assert_eq!(
-                line.field("error"),
-                None,
-                "the cause is the driver's to file"
+                line.field("error").as_deref(),
+                Some(cause.as_str()),
+                "no driver owes a line saying why"
             );
-            lines.expect_none(crate::TARGET, RETRYING);
+            lines.expect_none(crate::TARGET, RETRYING_FAILED);
         }
     }
 
@@ -720,11 +732,11 @@ mod tests {
             seen.all(),
             [Saw::Opened, Saw::Called { inside: true }, Saw::Spent]
         );
-        lines.expect_none(crate::TARGET, RETRYING);
+        lines.expect_none(crate::TARGET, RETRYING_FAILED);
 
         let ran = run.await;
         assert!(matches!(ran, Ok(7)), "{ran:?}");
-        let line = lines.expect_one(crate::TARGET, RETRYING);
+        let line = lines.expect_one(crate::TARGET, RETRYING_FAILED);
         assert_eq!(line.field("attempt").as_deref(), Some("1"));
         assert_eq!(
             line.field("error").as_deref(),
@@ -732,8 +744,8 @@ mod tests {
         );
     }
 
-    /// The line names the decorated method the run came from, and a panic
-    /// still unwinds on over a savepoint left unsettled.
+    /// The line names the decorated method the run came from and says the
+    /// cause, and a panic still unwinds on over a savepoint left unsettled.
     #[tokio::test(start_paused = true)]
     async fn an_unsettled_savepoint_names_its_method_and_never_holds_a_panic_back() {
         let lines = nest_rs_testing::LogCapture::install();
@@ -753,9 +765,16 @@ mod tests {
         std::panic::set_hook(previous);
 
         assert!(unwound.is_err(), "the panic unwinds past the run");
-        let line = lines.expect_one(crate::TARGET, UNSETTLED);
+        let line = lines.expect_one(crate::TARGET, NOT_ATTEMPTED_AGAIN_UNSETTLED);
         assert_eq!(line.field("host").as_deref(), Some("LedgerService"));
         assert_eq!(line.field("method").as_deref(), Some("post"));
+        assert_eq!(
+            line.field("error"),
+            refuses()
+                .err()
+                .map(|cause| nest_rs_core::error_message(&cause)),
+            "the one place the cause is said: the panic's caller holds no error"
+        );
     }
 
     /// With no unit of work, or one on a pool, each attempt runs as it would

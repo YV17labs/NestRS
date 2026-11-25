@@ -1,17 +1,35 @@
 error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes no receiver: a host is one instance shared by every call, and each method is lent a shared borrow of it
-  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:31:5
+  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:32:5
    |
-31 |     async fn detached() -> Answer {
+32 |     async fn detached() -> Answer {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes `self`: a host is one instance shared by every call, and each method is lent a shared borrow of it
-  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:36:23
+  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:37:23
    |
-36 |     async fn consumed(self) -> Answer {
+37 |     async fn consumed(self) -> Answer {
    |                       ^^^^
 
 error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes `&mut self`: a host is one instance shared by every call, and each method is lent a shared borrow of it
-  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:41:24
+  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:42:24
    |
-41 |     async fn exclusive(&mut self) -> Answer {
+42 |     async fn exclusive(&mut self) -> Answer {
    |                        ^^^^^^^^^
+
+error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes no receiver: a host is one instance shared by every call, and each method is lent a shared borrow of it
+  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:47:5
+   |
+47 |     async fn detached_reading_its_token() -> Answer {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes `self`: a host is one instance shared by every call, and each method is lent a shared borrow of it
+  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:55:41
+   |
+55 |     async fn consumed_reading_its_token(self) -> Answer {
+   |                                         ^^^^
+
+error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes `&mut self`: a host is one instance shared by every call, and each method is lent a shared borrow of it
+  --> tests/integration/diagnostics/resilience/resilient_borrows_its_host.rs:67:42
+   |
+67 |     async fn exclusive_reading_its_token(&mut self) -> Answer {
+   |                                          ^^^^^^^^^

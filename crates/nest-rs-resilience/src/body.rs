@@ -113,15 +113,22 @@ impl Signal {
     /// When the transport signalled since the read before this one, if it
     /// did, `reader` being the one it wakes from now on.
     fn listen(&self, reader: &Waker) -> Option<Instant> {
-        let mut heard = self.heard.lock();
-        if !heard
-            .reader
-            .as_ref()
-            .is_some_and(|known| known.will_wake(reader))
-        {
-            heard.reader = Some(reader.clone());
-        }
-        heard.at.take()
+        // Cloned before the lock and dropped after it: either runs the
+        // reader's runtime's code.
+        let mut spare = Some(reader.clone());
+        let at = {
+            let mut heard = self.heard.lock();
+            if !heard
+                .reader
+                .as_ref()
+                .is_some_and(|known| known.will_wake(reader))
+            {
+                std::mem::swap(&mut heard.reader, &mut spare);
+            }
+            heard.at.take()
+        };
+        drop(spare);
+        at
     }
 }
 
@@ -518,8 +525,8 @@ mod tests {
     /// What the head left of the attempt's bound is what the body's reads may
     /// wait in all, whenever they are made: a read still waiting once it is
     /// spent is given up there, a failure counted as a timeout, its reader
-    /// told the policy's own refusal with the attempt's bound, and the slot
-    /// is freed.
+    /// told the policy's own refusal with the attempt's bound, which files no
+    /// line of its own, and the slot is freed.
     #[tokio::test(start_paused = true)]
     async fn a_read_still_waiting_once_the_bounds_rest_is_spent_is_given_up_as_timed_out() {
         let lines = LogCapture::install();
@@ -536,6 +543,12 @@ mod tests {
             "what the head left, counted from the read"
         );
         assert_eq!(opened_on(&lines), [TIMED_OUT]);
+        let filed = lines.events();
+        assert_eq!(
+            filed.iter().filter(|line| line.target == TARGET).count(),
+            1,
+            "the breaker's opening, and no line for the timeout its reader is told: {filed:?}"
+        );
         policy.close_breaker().expect("a breaker");
         assert!(!slot_taken(&policy).await, "freed as the read is given up");
 

@@ -4,8 +4,8 @@
 //! the last offered a name no argument has. So is an argument a macro's
 //! pattern binds beside `cancel`: the token's name may be one no attribute
 //! reads. A body reading a token the decorator bound under no name adds no
-//! error, and a token named and never read is the developer's unused
-//! variable, at the name.
+//! error, nor does a parameter its build compiles out, and a token named and
+//! never read is the developer's unused variable, at the name.
 
 use std::sync::Arc;
 
@@ -134,6 +134,17 @@ impl ShipmentsService {
     #[resilient(carrier)]
     async fn weighed(&self, parcel!(weight): u32) -> Answer {
         drop(weight);
+        Ok(())
+    }
+
+    #[resilient(carrier, cancel = token)]
+    async fn named_beside_a_parameter_compiled_out(
+        &self,
+        #[cfg(any())] absent: String,
+        #[cfg_attr(all(), cfg(any()))] unit: String,
+        token: String,
+    ) -> Answer {
+        drop(token);
         Ok(())
     }
 }

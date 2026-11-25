@@ -595,14 +595,14 @@ reference's word first:
 
 | The reference | Here | Differs by |
 |---|---|---|
-| `@Resilience(preset)`, `@Retry`, `@Timeout`, `@CircuitBreaker`, `@Bulkhead`, `@Fallback` on a handler or a class | `#[resilient(field, …)]` on the method making the call: a provider's, or a handler of every edge | one decorator; per method, never per class; the field names the policy, so a missing import is refused at boot |
+| `@Resilience(preset)`, `@Retry`, `@Timeout`, `@CircuitBreaker`, `@Bulkhead`, `@Fallback` on a handler or a class | `#[resilient(field, …)]` on the method making the call: a provider's, or a handler of every edge but a WebSocket connection hook, which answers `()` | one decorator; per method, never per class; the field names the policy, so a missing import is refused at boot |
 | `ResilienceService.preset(name)` / `create(options)`, `policy.execute(fn, { source })` | `Arc<ResiliencePolicy<I>>` injected, `run` and `run_idempotent` for a call that is part of a method | a policy is named by a type and built from `<PREFIX>_RESILIENCE__<INSTANCE>__*` or `for_root`; none is built inline; a call run by hand is told with no `host` and no `method`, a decorated method with its own |
-| `ResiliencePolicy.wrap(…)`, any order | one order: the fallback, the bulkhead's slot for the whole run, then per attempt the unit's deadline, the breaker, the rate, the timeout | no second order |
-| `retry.attempts` (total, default 3, `Infinity`) | `RETRIES`, `retries = N` (after the first, 0 to 10, default 2) | bounded: ten at most |
+| `ResiliencePolicy.wrap(…)`, any order | one order: a call out of time or meeting an open breaker is refused before any wait for a slot, and the rate is read there; then the bulkhead's slot, held for the whole run; then per attempt the unit's deadline, the breaker, the rate, the timeout; the fallback once the run is over | no second order |
+| `retry.attempts` (total, default 3, `Infinity`) | `RETRIES` (after the first, 0 to 10, default 2, 0 for none); `retries = N` on a method, 1 to 10 | bounded: ten at most; a method wanting none drops `idempotent` |
 | `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS`; doubling, ±20 % | the curve is the framework's one; a `Retry-After` the dependency asks is waited whole |
 | `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips an error carrying a 4xx status); no attempt number; a timeout is sent again and read by none |
 | `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, `F: Fn(&T) -> bool` | a key of any decorated method, a handler included; the retries spent, the last `Ok` answers |
-| `idempotent`, else `GET`/`HEAD`/`OPTIONS` and GraphQL queries | `idempotent`, always written; `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods and `Idempotency-Key` | never inferred for a method |
+| `idempotent`, else `GET`/`HEAD`/`OPTIONS` and GraphQL queries | `idempotent`, always written; `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods, `QUERY` and `Idempotency-Key` | never inferred for a method |
 | a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body, each attempt in a savepoint of the unit's transaction | the unit is not replayed |
 | `@Timeout(d)` per attempt | `TIMEOUT_MS`, `timeout = "2s"` | every policy has one; the unit's deadline ends an attempt sooner |
 | `@Signal()`, `AttemptContext.signal`, `ResilienceContext.signal` | `cancel = token` in a decorated body; the closure's argument in `run` | the attempt's future is dropped at its bound, so the token is for work handed to another task |
@@ -658,6 +658,15 @@ reference's word first:
   closed again, by its probes as by `close_breaker()` — the reference's
   generation. The proof found the other rule the laxer: successes in flight
   across a cycle pushed a fresh failure out of the new window.
+- **Nothing is told under the breaker's lock.** A transition is decided there
+  and its line, its count and its event come out once the lock is let go, in
+  the order the transitions took effect, each once, one thread telling at a
+  time and a thread finding another telling leaving its own to it. A layer, a
+  meter or a subscription's waker reading or switching the breaker from inside
+  one returns: the transitions' counter built under that lock, while a metrics
+  export ran the breaker's observed reads under its own, was a deadlock at a
+  process's first transition. Across threads a call can meet the new phase,
+  and have its refusal told, before the transition that caused it.
 - **The fallback answers after the run**, for the call's own error once its
   attempts are spent and for a refusal that sent nothing; `fallback_if` is
   asked first. It is a method of `Self` named by the key, handed the method's
@@ -666,11 +675,15 @@ reference's word first:
   pattern are refused under `fallback`. The failed attempt's savepoint is
   rolled back before it runs, and where the filter refuses;
   `ResilienceError::Unsettled` never reaches it, the unit being unable to
-  commit what a fallback would write.
+  commit what a fallback would write. Its future is held as an attempt's is,
+  in place in a release build and boxed in a debug one; a parameter under a
+  `#[cfg]` is handed under it.
 - **A key's value is bounded by a trait of the key's name**
   (`RetryIf`, `RetryOkIf`, `RecordIf`, `FallbackIf`, `Fallback`, in the
   tier-2 seam), whose `#[diagnostic::on_unimplemented]` is the key's sentence:
-  a value of another shape is one error at the value.
+  a value of another shape — a function of another arity, a constant — is one
+  error at the value, and a closure taking no argument or several, or written
+  `async`, the decorator's own refusal at the closure.
 - **`cancel = token` binds the attempt's `CancellationToken`** as a local of
   the body, never a parameter: the signature stays what callers call. A name
   an argument already holds is refused, and so is the key beside an argument a
@@ -731,7 +744,8 @@ operation, which is split out and kept on the method; "each forgets the
 window and starts an epoch" of a switch by hand, an opening by a failure
 starting one too; "where a method run once moves them" of the idempotent
 `Send` limit, a method sent once under `record_if` or a `fallback` lending
-its arguments as well.
+its arguments as well; "every transition files its line under the breaker's
+lock" and the limit it left, a transition being told once the lock is let go.
 
 **Refused:**
 
@@ -777,11 +791,23 @@ its arguments as well.
   not `Sync` by value is refused as not `Send` in rustc's words, naming no
   key; pointing it at the key is the run written as an `async fn`, which
   holds its call twice.
-- **A non-callable value that is no literal** (a `const`) is refused in the
-  key's sentence, then by rustc naming the seam's own types. Nothing on stable
-  leaves the proof unresolved without breaking a closure's inference.
-- **A fallback taking other arguments** is rustc's `E0308` or `E0061` at the
-  `fallback` key, no sentence of ours leading there.
+- **A predicate closure whose body answers no `bool`** is rustc's `E0308` at
+  its body: what a body answers is the type checker's to read.
+- **A fallback taking other arguments** is rustc's `E0308` at the `fallback`
+  key or `E0061` at the fallback's name, no sentence of ours leading there; one
+  that is no method of `Self` is its `E0599`, and one consuming an argument an
+  attempt lends its `E0382`.
+- **A refusal reported at the method's answer carries rustc's own label and
+  note of an attribute's expansion**: every token the expansion writes there
+  is the expansion's, which is what keeps `clippy::large_futures` silent on an
+  `.await` the developer did not write. An answer a `macro_rules!` opens on
+  its own `$crate`, refused, is told twice.
+- **The thread making a process's first transition waits for a metrics export
+  in progress**, holding no lock of the breaker: the transitions' counter is
+  made at its first record. A subscriber panicking out of a transition's line
+  loses that transition's count and event, and one blocking there for good
+  keeps the turn, the transitions after it queued and untold; no call on the
+  breaker waits for either.
 - **A refusal reaching a tick, a listener or a shutdown hook is that unit's
   failure**, filed at `error` by its edge — a tick's at every occurrence while
   the breaker is open. An init hook's fails the boot naming the hook, the

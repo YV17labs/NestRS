@@ -114,6 +114,12 @@ pub enum ResilienceEvent {
     /// the one before it. What opened it — the failures its window counted,
     /// what the last failed on, the open time — is on the transition's `warn`
     /// alone.
+    ///
+    /// A transition is told once the breaker has made it and is free again,
+    /// so a reader may read or switch the breaker as it is told — and a call
+    /// on another thread may meet the new phase first: its
+    /// [`Refusal`](Self::Refusal) can come before the transition that
+    /// refused it.
     #[non_exhaustive]
     Transition {
         /// The phase it left.

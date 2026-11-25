@@ -166,7 +166,10 @@ impl<T, E> ResilientAnswer for Result<T, ResilienceError<E>> {
     message = "a `#[resilient]` method's error is a `std::error::Error`, and `{Self}` is not one",
     label = "what the method answers",
     note = "the policy tells the error's chain in the line a retry files and in its breaker's \
-            opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks"
+            opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks",
+    note = "give the method an error implementing `std::error::Error`, as a `thiserror` derive \
+            does; one that cannot — `anyhow::Error`, a `Box<dyn Error>` — is held in a type of \
+            the app's own that does"
 )]
 pub trait ChainedError: Error + 'static {}
 
@@ -201,48 +204,67 @@ pub trait Shaped<V, A, O, W>: Fn(&V) -> bool {}
 
 impl<V, F: Fn(&V) -> bool> Shaped<V, &V, bool, Proved> for F {}
 
+/// A shape no value has, which each predicate key's trait has a second impl
+/// over.
+// With one impl rustc takes it before reading the value, and refuses a function
+// of another arity, or no function, in its own words and twice; with two it weighs
+// each against the value, finds none, and refuses the value in the key's sentence.
+pub trait Unshaped<V>: Fn(&V) -> bool {}
+
 /// What `retry_if` takes: whether an `Err` the method answered is sent again.
-/// `S` is the value's own shape and its proof, inferred.
+/// `S` is the value's own shape and `W` its proof, both inferred.
 #[diagnostic::on_unimplemented(
     message = "a `#[resilient]` method's `retry_if` is a `Fn(&{E}) -> bool` over its error, and \
                this is not one",
     label = "what `retry_if` is given",
     note = "it says whether an `Err` the method answered is sent again: a function's path, or a \
-            closure such as `|error| error.is_transient()`"
+            closure such as `|error| error.is_transient()` — a method of `self` is called from \
+            one, `|error| self.is_transient(error)`"
 )]
-pub trait RetryIf<E, S>: Fn(&E) -> bool {}
+pub trait RetryIf<E, S, W>: Fn(&E) -> bool {}
 
 #[diagnostic::do_not_recommend]
-impl<E, F, A, O, W> RetryIf<E, (A, W)> for F where F: Fn(A) -> O + Shaped<E, A, O, W> {}
+impl<E, F, A, O, W> RetryIf<E, (A,), W> for F where F: Fn(A) -> O + Shaped<E, A, O, W> {}
+
+#[diagnostic::do_not_recommend]
+impl<E, F> RetryIf<E, Refused, Refused> for F where F: Unshaped<E> {}
 
 /// What `retry_ok_if` takes: whether an `Ok` the method answered is sent
-/// again. `S` is the value's own shape and its proof, inferred.
+/// again. `S` is the value's own shape and `W` its proof, both inferred.
 #[diagnostic::on_unimplemented(
     message = "a `#[resilient]` method's `retry_ok_if` is a `Fn(&{T}) -> bool` over what it \
                answers, and this is not one",
     label = "what `retry_ok_if` is given",
     note = "it says whether an `Ok` the method answered is sent again: a function's path, or a \
-            closure such as `|answer| answer.is_pending()`"
+            closure such as `|answer| answer.is_pending()` — a method of `self` is called from \
+            one, `|answer| self.is_pending(answer)`"
 )]
-pub trait RetryOkIf<T, S>: Fn(&T) -> bool {}
+pub trait RetryOkIf<T, S, W>: Fn(&T) -> bool {}
 
 #[diagnostic::do_not_recommend]
-impl<T, F, A, O, W> RetryOkIf<T, (A, W)> for F where F: Fn(A) -> O + Shaped<T, A, O, W> {}
+impl<T, F, A, O, W> RetryOkIf<T, (A,), W> for F where F: Fn(A) -> O + Shaped<T, A, O, W> {}
+
+#[diagnostic::do_not_recommend]
+impl<T, F> RetryOkIf<T, Refused, Refused> for F where F: Unshaped<T> {}
 
 /// What `record_if` takes: whether an `Err` the method answered counts as a
-/// failure in the circuit breaker. `S` is the value's own shape and its
-/// proof, inferred.
+/// failure in the circuit breaker. `S` is the value's own shape and `W` its
+/// proof, both inferred.
 #[diagnostic::on_unimplemented(
     message = "a `#[resilient]` method's `record_if` is a `Fn(&{E}) -> bool` over its error, and \
                this is not one",
     label = "what `record_if` is given",
     note = "it says whether an `Err` the method answered counts as a failure in the circuit \
-            breaker: a function's path, or a closure such as `|error| !error.is_declined()`"
+            breaker: a function's path, or a closure such as `|error| !error.is_declined()` — a \
+            method of `self` is called from one, `|error| !self.is_declined(error)`"
 )]
-pub trait RecordIf<E, S>: Fn(&E) -> bool {}
+pub trait RecordIf<E, S, W>: Fn(&E) -> bool {}
 
 #[diagnostic::do_not_recommend]
-impl<E, F, A, O, W> RecordIf<E, (A, W)> for F where F: Fn(A) -> O + Shaped<E, A, O, W> {}
+impl<E, F, A, O, W> RecordIf<E, (A,), W> for F where F: Fn(A) -> O + Shaped<E, A, O, W> {}
+
+#[diagnostic::do_not_recommend]
+impl<E, F> RecordIf<E, Refused, Refused> for F where F: Unshaped<E> {}
 
 /// What `fallback_if` takes: whether the fallback answers in place of the
 /// error the run ended on. `S` is the value's own shape and its proof,
@@ -253,7 +275,8 @@ impl<E, F, A, O, W> RecordIf<E, (A, W)> for F where F: Fn(A) -> O + Shaped<E, A,
     label = "what `fallback_if` is given",
     note = "it says whether the fallback answers in place of that error, the call's own or the \
             policy's refusal: a function's path, or a closure such as \
-            `|error| matches!(error, ResilienceError::Open {{ .. }})`"
+            `|error| matches!(error, ResilienceError::Open {{ .. }})` — a method of `self` is \
+            called from one, `|error| self.is_refusal(error)`"
 )]
 pub trait FallbackIf<E, S>: Fn(&ResilienceError<E>) -> bool {}
 
@@ -262,6 +285,9 @@ impl<E, F, A, O, W> FallbackIf<E, (A, W)> for F where
     F: Fn(A) -> O + Shaped<ResilienceError<E>, A, O, W>
 {
 }
+
+#[diagnostic::do_not_recommend]
+impl<E, F> FallbackIf<E, Refused> for F where F: Unshaped<ResilienceError<E>> {}
 
 /// A predicate key's value, its shape read where the key is written and
 /// proved `W`.
@@ -311,7 +337,7 @@ pub struct Judging<RI, RO, RC> {
 /// there in neither direction otherwise. Each value's shape is checked here,
 /// at the key that wrote it; the first argument names `R` with no turbofish,
 /// so that rustc points a refusal at the value.
-pub fn judging<R, RI, RO, RC, A1, A2, A3, W1, W2, W3>(
+pub fn judging<R, RI, RO, RC, S1, S2, S3, W1, W2, W3>(
     _: PhantomData<R>,
     retry_if: RI,
     retry_ok_if: RO,
@@ -319,9 +345,9 @@ pub fn judging<R, RI, RO, RC, A1, A2, A3, W1, W2, W3>(
 ) -> Judging<Checked<RI, W1>, Checked<RO, W2>, Checked<RC, W3>>
 where
     R: ResilientAnswer,
-    RI: RetryIf<R::Err, (A1, W1)>,
-    RO: RetryOkIf<R::Ok, (A2, W2)>,
-    RC: RecordIf<R::Err, (A3, W3)>,
+    RI: RetryIf<R::Err, S1, W1>,
+    RO: RetryOkIf<R::Ok, S2, W2>,
+    RC: RecordIf<R::Err, S3, W3>,
 {
     Judging {
         retry_if: Checked::new(retry_if),
@@ -416,7 +442,7 @@ pub trait Fallback<T, E, A, Fut, W> {
         match ended.ended {
             Ok(answered) => FellBack::ran(answered),
             Err(error) => FellBack::FallingBack {
-                fallback: fallback.answer(error),
+                fallback: held(fallback.answer(error)),
             },
         }
     }
@@ -543,9 +569,33 @@ impl<R, T, E> Ended<R, T, E> {
     }
 }
 
+/// A fallback's future as its method holds it, which is how a run holds an
+/// attempt's: in place in a release build, whatever its size.
+#[cfg(not(debug_assertions))]
+type Held<Fut> = Fut;
+
+/// A fallback's future as its method holds it, which is how a run holds an
+/// attempt's: boxed in a debug build.
+// A debug build copies a value's whole type at each move, and a place that may hold
+// a large future has its size (`.claude/upstream/rustc.md`).
+#[cfg(debug_assertions)]
+type Held<Fut> = Pin<Box<Fut>>;
+
+#[cfg(not(debug_assertions))]
+const fn held<Fut>(fallback: Fut) -> Held<Fut> {
+    fallback
+}
+
+#[cfg(debug_assertions)]
+fn held<Fut>(fallback: Fut) -> Held<Fut> {
+    Box::pin(fallback)
+}
+
 pin_project_lite::pin_project! {
     /// What [`Fallback::in_place_of`] answers: the run's own answer, or its
-    /// fallback's, polled in place, `W` being the fallback's proof.
+    /// fallback's, polled where a run polls an attempt's — in place in a
+    /// release build, in a box of its own in a debug build — `W` being the
+    /// fallback's proof.
     #[project = FellBackProj]
     pub enum FellBack<R, Fut, W> {
         /// The run's own answer.
@@ -557,7 +607,7 @@ pin_project_lite::pin_project! {
         /// The fallback's, once it answers.
         FallingBack {
             #[pin]
-            fallback: Fut,
+            fallback: Held<Fut>,
         },
     }
 }
@@ -786,7 +836,7 @@ mod tests {
     /// probe's answer it hands the turn on, the series as it was.
     #[tokio::test(start_paused = true)]
     async fn an_err_record_if_refuses_counts_in_neither_direction_and_hands_a_probes_turn_on() {
-        const MOVED: &str = "circuit breaker changed state";
+        const MOVED: &str = crate::breaker::MOVED;
         let policy = policy(ResilienceConfig {
             retries: None,
             breaker_window: Some(3),
@@ -1171,7 +1221,8 @@ mod tests {
     }
 
     /// The future holds the run's answer or the fallback's future, never
-    /// both, and neither twice.
+    /// both, and neither twice: in a release build the fallback's in place,
+    /// in a debug build its box, whatever it holds.
     #[tokio::test]
     async fn a_fallbacks_future_weighs_its_runs_answer_or_its_fallbacks_future_once() {
         const HELD: usize = 4 * 1024;
@@ -1190,12 +1241,42 @@ mod tests {
             stale,
         );
         let weighs = size_of_val(&falling);
+        let held = if cfg!(debug_assertions) {
+            size_of::<usize>()
+        } else {
+            made
+        };
         assert!(
-            weighs <= made.max(size_of::<Large>()) + size_of::<usize>(),
+            weighs <= held.max(size_of::<Large>()) + size_of::<usize>(),
             "{weighs} B, for a fallback's future of {made} B and an answer of {} B",
             size_of::<Large>()
         );
         assert!(matches!(falling.await, Ok(buffer) if buffer == [7; HELD]));
+
+        let laden = |_: ResilienceError<Quote>| async {
+            let buffer = [7_u8; 4 * HELD];
+            tokio::task::yield_now().await;
+            Ok(buffer.len() as u32)
+        };
+        let made = size_of_val(&laden(ResilienceError::Failed(Quote::Down)));
+        let down = Err(ResilienceError::Failed(Quote::Down));
+        let falling = Fallback::in_place_of(
+            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, down, every),
+            laden,
+        );
+        let weighs = size_of_val(&falling);
+        if cfg!(debug_assertions) {
+            assert!(
+                weighs <= size_of::<Answer>() + 2 * size_of::<usize>(),
+                "{weighs} B in a debug build, for a fallback's future of {made} B"
+            );
+        } else {
+            assert!(
+                made <= weighs && weighs <= made + size_of::<usize>(),
+                "{weighs} B in a release build, for a fallback's future of {made} B"
+            );
+        }
+        assert!(matches!(falling.await, Ok(answered) if answered as usize == 4 * HELD));
     }
 
     /// Through the two calls a decorated method makes: the run, then its

@@ -49,7 +49,8 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// `429`'s or a `503`'s `Retry-After` is waited whole — in seconds, or an
 /// HTTP-date counted from the answer's own `Date` — and one past the policy's
 /// backoff ceiling ends the run with that answer. An answer the run sends
-/// again is dropped unread; the last one is returned as it came, and a
+/// again is dropped unread before the wait for its retry, which so holds no
+/// connection and no stream of it; the last one is returned as it came, and a
 /// refusal of the policy's is a [`reqwest_middleware::Error::Middleware`]
 /// holding a `ResilienceError<Infallible>`, whose `503` every edge answers.
 ///
@@ -162,9 +163,17 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
             let (attempted, outstanding) = run
                 .attempt_once(move |_| sending.run(copy, carried), judged)
                 .await;
-            if !run.again(&attempted).await {
-                return self.answered(run, attempted, outstanding);
-            }
+            let attempted = match run.again(attempted) {
+                Ok(backoff) => {
+                    // Nothing of an attempt sent again is kept through the
+                    // wait: it counted as it was judged.
+                    drop(outstanding);
+                    backoff.await;
+                    continue;
+                }
+                Err(attempted) => attempted,
+            };
+            return self.answered(run, attempted, outstanding);
         }
     }
 }
@@ -273,6 +282,9 @@ fn refused(refusal: Refusal) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use super::*;
@@ -332,5 +344,102 @@ mod tests {
                 error: "no route to host".into(),
             }
         );
+    }
+
+    /// A body no part of which ever comes, saying once it is dropped: what an
+    /// answer left unread keeps of its connection, or of its stream.
+    struct Unread(Arc<AtomicBool>);
+
+    impl http_body::Body for Unread {
+        type Data = &'static [u8];
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<std::result::Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for Unread {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// How long the dependency asks to be left alone: under the backoff's
+    /// ceiling of these tests, so it is waited whole.
+    const ASKED: Duration = Duration::from_secs(5);
+
+    /// A dependency answering `503` over a body it never sends, asking
+    /// [`ASKED`]: a middleware after the policy's.
+    struct Overloaded(Arc<AtomicBool>);
+
+    #[async_trait::async_trait]
+    impl Middleware for Overloaded {
+        async fn handle(
+            &self,
+            _req: Request,
+            _extensions: &mut Extensions,
+            _next: Next<'_>,
+        ) -> Result<Response> {
+            let unread = reqwest::Body::wrap(Unread(Arc::clone(&self.0)));
+            Ok(http::Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header(RETRY_AFTER, ASKED.as_secs())
+                .body(unread)
+                .expect("an answer")
+                .into())
+        }
+    }
+
+    /// An answer the run sends again is let go once its retry is decided,
+    /// before the wait the dependency asked: its body, so its connection or
+    /// its stream, is dropped there, the attempt already counted in the
+    /// breaker, and the slot, the run's, is kept through the wait.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_sent_again_is_let_go_before_the_wait_for_its_retry() {
+        let let_go = Arc::new(AtomicBool::new(false));
+        let config = crate::ResilienceConfig {
+            retries: Some(1),
+            backoff_ceiling: 2 * ASKED,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            concurrency: Some(1),
+            ..crate::ResilienceConfig::default()
+        };
+        let policy = Arc::new(ResiliencePolicy::<Unnamed>::new(&config).expect("a valid policy"));
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(ResilienceMiddleware::new(Arc::clone(&policy)))
+            .with(Overloaded(Arc::clone(&let_go)))
+            .build();
+
+        let sending =
+            tokio::spawn(async move { client.get("https://upstream.example/").send().await });
+        tokio::time::sleep(ASKED / 5).await;
+
+        assert!(
+            !sending.is_finished(),
+            "the run waits the {ASKED:?} the dependency asked"
+        );
+        assert!(
+            let_go.load(Ordering::SeqCst),
+            "the 503 is held, unread, through the wait for its retry"
+        );
+        assert!(
+            matches!(
+                policy.breaker_state(),
+                Some(crate::BreakerState::Open { .. })
+            ),
+            "the attempt counted before the wait: {:?}",
+            policy.breaker_state()
+        );
+        assert_eq!(
+            policy.concurrency_running(),
+            Some(1),
+            "the slot is the run's, kept through its retries and their waits"
+        );
+        sending.abort();
     }
 }

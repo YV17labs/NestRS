@@ -1,8 +1,8 @@
-//! A predicate key's value that is no predicate in a way its shape does not
-//! tell: a literal is the decorator's own refusal, at the value; a closure
-//! whose body answers no `bool` is rustc's `E0308` at that body, one taking
-//! two arguments its `E0593`; and a constant, which is not callable, is the
-//! key's sentence at the value, then what rustc expected of the run.
+//! A predicate key's value that is no predicate in a way its type's shape
+//! does not tell. What its own tokens say is the decorator's refusal, at the
+//! value: a literal, a closure taking no argument or two, an `async` closure.
+//! A closure whose body answers no `bool` is rustc's `E0308` at that body,
+//! and a constant, which is not callable, the key's sentence at the value.
 
 use std::sync::Arc;
 
@@ -48,6 +48,16 @@ impl ShipmentsService {
 
     #[resilient(carrier, record_if = ALWAYS)]
     async fn constant(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, record_if = || true)]
+    async fn unasked(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, idempotent, retry_if = async |error| error.transient())]
+    async fn awaited(&self) -> Answer {
         Err(CarrierDown)
     }
 }

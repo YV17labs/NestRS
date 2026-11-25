@@ -394,6 +394,40 @@ declare_fragment_methods! {
     #[resilient(courier, idempotent)] trace
 }
 
+// The answer is named from the macro's own crate: `$crate` resolves by the context it is written in.
+macro_rules! declare_crate_rooted_methods {
+    ($once:ident, $again:ident, $fallen:ident) => {
+        impl FragmentService {
+            #[resilient(courier)]
+            async fn $once(&self) -> $crate::resilient::Answer<()> {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                Err(CarrierDown)
+            }
+
+            #[resilient(courier, idempotent)]
+            async fn $again(&self) -> Result<(), ResilienceError<$crate::resilient::CarrierDown>> {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                Err(CarrierDown)
+            }
+
+            #[resilient(courier, fallback = unrouted)]
+            async fn $fallen(&self) -> $crate::resilient::Answer<()> {
+                self.attempts.fetch_add(1, Ordering::Relaxed);
+                Err(CarrierDown)
+            }
+
+            async fn unrouted(
+                &self,
+                error: ResilienceError<CarrierDown>,
+            ) -> $crate::resilient::Answer<()> {
+                Err(error)
+            }
+        }
+    };
+}
+
+declare_crate_rooted_methods!(route, reroute, route_or_not);
+
 declare_fragment_methods! {
     once: {
         async fn origin<'a>(&'a self) -> Answer<&'a str> {
@@ -443,6 +477,15 @@ async fn a_method_a_macro_fragment_writes_runs_under_its_policy_as_the_one_writt
         fragments.attempted(),
         3,
         "the caller's attribute, and again"
+    );
+
+    assert!(failed(&fragments.route().await));
+    assert!(failed(&fragments.reroute().await));
+    assert!(failed(&fragments.route_or_not().await));
+    assert_eq!(
+        fragments.attempted(),
+        5,
+        "an answer named through `$crate`: once, again, and once under a fallback"
     );
 }
 
@@ -3600,9 +3643,9 @@ mod footprint {
     use std::sync::Arc;
 
     use nest_rs_core::{injectable, module};
-    use nest_rs_resilience::{ResilienceModule, ResiliencePolicy, resilient};
+    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy, resilient};
 
-    use super::{Answer, Courier, boot};
+    use super::{Answer, CarrierDown, Courier, boot};
     use crate::quiet;
 
     /// What a body below holds across its `.await`, or takes by value: past
@@ -3660,6 +3703,33 @@ mod footprint {
             Ok(std::hint::black_box(&buffer).len())
         }
 
+        /// The twin of the two methods below once their call failed: `sized`
+        /// names `N`, which a fallback is handed no other way.
+        async fn falling_back<const N: usize>(&self, sized: [(); N]) -> Answer<usize> {
+            self.stale(sized, ResilienceError::Failed(CarrierDown))
+                .await
+        }
+
+        #[resilient(courier, fallback = stale)]
+        async fn falling_back_once<const N: usize>(&self, sized: [(); N]) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        #[resilient(courier, idempotent, fallback = stale)]
+        async fn falling_back_again<const N: usize>(&self, sized: [(); N]) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        async fn stale<const N: usize>(
+            &self,
+            _sized: [(); N],
+            _error: ResilienceError<CarrierDown>,
+        ) -> Answer<usize> {
+            let buffer = [7_u8; N];
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
         #[resilient(courier)]
         async fn answering_once(&self) -> Answer<usize> {
             Ok(7)
@@ -3668,6 +3738,67 @@ mod footprint {
         #[resilient(courier, idempotent)]
         async fn answering_again(&self) -> Answer<usize> {
             Ok(7)
+        }
+    }
+
+    /// What each method below holds past the 16 KiB clippy's `large_futures`
+    /// allows a future a developer awaits.
+    const LADEN: usize = 32 * 1024;
+
+    /// The lint is denied on each shape whose large future the expansion
+    /// alone awaits — a body's, a fallback's, a run's whose predicates own
+    /// what they read — in a debug build, which boxes the first two, and in a
+    /// release one, which holds them in place.
+    #[deny(clippy::large_futures)]
+    impl BuffersService {
+        #[resilient(courier)]
+        async fn laden_once(&self) -> Answer<usize> {
+            let buffer = [7_u8; LADEN];
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
+        #[resilient(courier, idempotent)]
+        async fn laden_again(&self) -> Answer<usize> {
+            let buffer = [7_u8; LADEN];
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
+        #[resilient(courier, fallback = unladen)]
+        async fn unloaded_once(&self) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        #[resilient(courier, idempotent, fallback = unladen)]
+        async fn unloaded_again(&self) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        async fn unladen(&self, _error: ResilienceError<CarrierDown>) -> Answer<usize> {
+            let buffer = [7_u8; LADEN];
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+
+        #[resilient(
+            courier,
+            idempotent,
+            retry_if = move |_error| ledger[0] == 0,
+            record_if = move |_error| ledger[1] == 0,
+            fallback = audited,
+            fallback_if = move |_error| ledger[2] == 7,
+        )]
+        async fn audit(&self, ledger: [u8; LADEN]) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        async fn audited(
+            &self,
+            ledger: [u8; LADEN],
+            _error: ResilienceError<CarrierDown>,
+        ) -> Answer<usize> {
+            Ok(ledger.len())
         }
     }
 
@@ -3748,6 +3879,60 @@ mod footprint {
         }
     }
 
+    /// A fallback's future is held as an attempt's is: in place in a release
+    /// build, once, as the method awaiting its fallback by hand holds it, and
+    /// boxed in a debug build, so the method's future holds none of it.
+    #[tokio::test]
+    async fn a_decorated_methods_future_holds_its_fallbacks_future_as_it_holds_its_bodys() {
+        let app = boot::<BuffersModule>().await;
+        let buffers = app.container().get::<BuffersService>().expect("provided");
+        for (twin, once, again) in [
+            (
+                size_of_val(&buffers.falling_back([(); HELD])),
+                size_of_val(&buffers.falling_back_once([(); HELD])),
+                size_of_val(&buffers.falling_back_again([(); HELD])),
+            ),
+            (
+                size_of_val(&buffers.falling_back([(); UNDER])),
+                size_of_val(&buffers.falling_back_once([(); UNDER])),
+                size_of_val(&buffers.falling_back_again([(); UNDER])),
+            ),
+        ] {
+            for (shape, decorated) in [("run once", once), ("run again", again)] {
+                if cfg!(debug_assertions) {
+                    assert!(
+                        decorated <= RUN,
+                        "in a debug build, a method {shape} whose fallback is a future of {twin} \
+                         B is a future of {decorated} B"
+                    );
+                } else {
+                    assert!(
+                        twin <= decorated && decorated <= twin + RUN,
+                        "in a release build, a method {shape} is a future of {decorated} B \
+                         decorated, of {twin} B awaiting its fallback by hand"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Each shape `large_futures` is denied on answers: its body, its
+    /// fallback, and its fallback once its filter read what its predicates own.
+    #[tokio::test]
+    async fn a_method_whose_expansion_awaits_a_large_future_answers() {
+        let app = boot::<BuffersModule>().await;
+        let buffers = app.container().get::<BuffersService>().expect("provided");
+        for (shape, answered) in [
+            ("its body, run once", buffers.laden_once().await),
+            ("its body, run again", buffers.laden_again().await),
+            ("its fallback, run once", buffers.unloaded_once().await),
+            ("its fallback, run again", buffers.unloaded_again().await),
+            ("its predicates", buffers.audit([7; LADEN]).await),
+        ] {
+            assert!(matches!(answered, Ok(LADEN)), "{shape}: {answered:?}");
+        }
+    }
+
     /// tokio's default worker stack, which `#[nest_rs::main]`'s runtime keeps.
     const WORKER_STACK: usize = 2 * 1024 * 1024;
 
@@ -3784,6 +3969,43 @@ mod footprint {
             let again =
                 tokio::spawn(async move { buffers.holding_again::<HELD_ON_A_WORKER>().await });
             assert!(matches!(again.await, Ok(Ok(HELD_ON_A_WORKER))));
+        });
+    }
+
+    /// What the fallback below holds across its `.await` on that stack: a
+    /// fifth of it, which the method awaiting that fallback by hand holds
+    /// there too, under one `.await` more than the bodies above.
+    const HELD_BY_A_FALLBACK: usize = WORKER_STACK / 5;
+
+    /// A stack overflow aborts the process, as above.
+    #[test]
+    fn a_decorated_method_whose_fallback_holds_a_large_buffer_across_an_await_runs_on_a_worker_its_twin_runs_on()
+     {
+        // A runtime of the test's own, for its worker's stack.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(WORKER_STACK)
+            .enable_all()
+            .build()
+            .expect("the runtime builds");
+        runtime.block_on(async {
+            let app = boot::<BuffersModule>().await;
+            let buffers = app.container().get::<BuffersService>().expect("provided");
+            let twin = tokio::spawn({
+                let buffers = Arc::clone(&buffers);
+                async move { buffers.falling_back([(); HELD_BY_A_FALLBACK]).await }
+            });
+            assert!(matches!(twin.await, Ok(Ok(HELD_BY_A_FALLBACK))));
+            let once = tokio::spawn({
+                let buffers = Arc::clone(&buffers);
+                async move { buffers.falling_back_once([(); HELD_BY_A_FALLBACK]).await }
+            });
+            assert!(matches!(once.await, Ok(Ok(HELD_BY_A_FALLBACK))));
+            let again =
+                tokio::spawn(
+                    async move { buffers.falling_back_again([(); HELD_BY_A_FALLBACK]).await },
+                );
+            assert!(matches!(again.await, Ok(Ok(HELD_BY_A_FALLBACK))));
         });
     }
 
@@ -4382,6 +4604,46 @@ mod instrumented {
         }
     }
 
+    /// What the fallback below holds across its `.await`: past the 16 KiB
+    /// clippy's `large_futures` allows a future a developer awaits.
+    const LADEN: usize = 32 * 1024;
+
+    /// Written out, where a `macro_rules!` would make every `.await` its own:
+    /// the lint is denied on a method naming a fallback past its threshold,
+    /// under an instrument in either order, and on that method run again.
+    #[deny(clippy::large_futures)]
+    impl TracedService {
+        #[tracing::instrument(skip_all)]
+        #[resilient(courier, fallback = unladen)]
+        async fn laden_above(&self) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        #[resilient(courier, fallback = unladen)]
+        #[tracing::instrument(skip_all)]
+        async fn laden_below(&self) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        #[tracing::instrument(skip_all)]
+        #[resilient(courier, idempotent, fallback = unladen)]
+        async fn laden_again_above(&self) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        #[resilient(courier, idempotent, fallback = unladen)]
+        #[tracing::instrument(skip_all)]
+        async fn laden_again_below(&self) -> Answer<usize> {
+            Err(CarrierDown)
+        }
+
+        async fn unladen(&self, _error: ResilienceError<CarrierDown>) -> Answer<usize> {
+            let buffer = [7_u8; LADEN];
+            tokio::task::yield_now().await;
+            Ok(std::hint::black_box(&buffer).len())
+        }
+    }
+
     #[module(
         imports = [ResilienceModule::for_root((Courier, retrying_once()))],
         providers = [TracedService],
@@ -4686,6 +4948,21 @@ mod instrumented {
         let once = tokio::spawn(async move { sent.once_above("P1".to_owned()).await });
         let once = once.await.expect("the attempt does not panic");
         assert!(matches!(once.as_deref(), Ok("P1")), "{once:?}");
+    }
+
+    /// A fallback's future past clippy's `large_futures` threshold answers
+    /// under an instrument in either order, the method run once or again.
+    #[tokio::test(start_paused = true)]
+    async fn a_fallback_holding_a_large_buffer_answers_under_an_instrument_in_either_order() {
+        let (_app, traced) = traced().await;
+        let above = traced.laden_above().await;
+        assert!(matches!(above, Ok(LADEN)), "{above:?}");
+        let below = traced.laden_below().await;
+        assert!(matches!(below, Ok(LADEN)), "{below:?}");
+        let above = traced.laden_again_above().await;
+        assert!(matches!(above, Ok(LADEN)), "{above:?}");
+        let below = traced.laden_again_below().await;
+        assert!(matches!(below, Ok(LADEN)), "{below:?}");
     }
 
     /// Both orders hold under every other key. Above, each attempt opens a
@@ -5328,6 +5605,32 @@ mod fallback {
             Ok(weight * 2)
         }
 
+        /// As `last_known`, two of its parameters under a `#[cfg]`: one no
+        /// build compiles, of a type none declares, and one every build does.
+        async fn last_known_where_compiled(
+            &self,
+            #[cfg(any())] absent: Absent,
+            zone: &str,
+            #[cfg_attr(test, cfg(test))] weight: u32,
+            error: ResilienceError<CarrierDown>,
+        ) -> Answer<u32> {
+            self.note(format!("{zone}/{weight} after {}", ended_on(&error)));
+            Ok(weight * 2)
+        }
+
+        #[resilient(courier, fallback = last_known_where_compiled)]
+        async fn rate_where_compiled(
+            &self,
+            #[cfg(any())] absent: Absent,
+            zone: &str,
+            #[cfg_attr(test, cfg(test))] weight: u32,
+        ) -> Answer<u32> {
+            if zone == "home" {
+                return Ok(weight);
+            }
+            Err(CarrierDown)
+        }
+
         /// The carrier quotes its home zone alone.
         #[resilient(courier, fallback = last_known)]
         async fn rate(&self, zone: &str, weight: u32) -> Answer<u32> {
@@ -5524,6 +5827,18 @@ mod fallback {
             Some(error_message(&ResilienceError::Failed(CarrierDown))),
             "the whole chain of the error the run ended on"
         );
+    }
+
+    /// A parameter under a `#[cfg]` is handed in the build that compiles it,
+    /// under that condition, and named in no other.
+    #[tokio::test]
+    async fn a_fallback_is_handed_each_parameter_its_build_compiles() {
+        let (_app, rates, _courier) = rates::<FallingBackModule>().await;
+        let answered = rates.rate_where_compiled("home", 3).await;
+        assert!(matches!(answered, Ok(3)), "{answered:?}");
+        let fell_back = rates.rate_where_compiled("north", 3).await;
+        assert!(matches!(fell_back, Ok(6)), "{fell_back:?}");
+        assert_eq!(rates.journal(), ["north/3 after failed"]);
     }
 
     #[tokio::test(start_paused = true)]

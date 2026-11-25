@@ -165,6 +165,12 @@ impl Rate {
             .unwrap_or(usize::MAX)
     }
 
+    /// Whether the rate's lock is held now.
+    #[cfg(test)]
+    fn locked(&self) -> bool {
+        self.held.try_lock().is_none()
+    }
+
     /// Whether an attempt at `now` waits for a token free at `at`.
     fn waits(&self, now: Instant, at: Instant, deadline: Option<Instant>) -> bool {
         self.wait
@@ -207,18 +213,18 @@ impl Reservation<'_> {
     /// The instant the token is free at, as the line stands, `waker` woken
     /// when a reservation given back brings it forward.
     pub(crate) fn due(&self, waker: &Waker) -> Instant {
+        // A waker is cloned before the lock is taken and dropped, as it is
+        // woken, once it is let go: each runs its runtime's code.
+        let mut spare = Some(waker.clone());
         let mut held = self.rate.held.lock();
         let ahead = self.ahead(&held);
         let armed = &mut held.line[ahead].waker;
-        let stale = match armed {
-            Some(armed) if armed.will_wake(waker) => None,
-            _ => armed.replace(waker.clone()),
-        };
+        if !armed.as_ref().is_some_and(|armed| armed.will_wake(waker)) {
+            std::mem::swap(armed, &mut spare);
+        }
         let at = self.rate.instant(self.rate.due(&held, ahead));
-        // A waker is dropped, as it is woken, once the lock is let go: either
-        // runs its runtime's code.
         drop(held);
-        drop(stale);
+        drop(spare);
         at
     }
 
@@ -269,7 +275,7 @@ impl Drop for Reservation<'_> {
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::task::Wake;
+    use std::task::{RawWaker, RawWakerVTable, Wake};
 
     use super::*;
 
@@ -626,6 +632,92 @@ mod tests {
             [0, 1, 2].map(|nth| woken[nth].times()),
             [0, 1, 1],
             "a token taken moves no one behind it"
+        );
+    }
+
+    /// A rate, and how often a waker made over it ran — cloned, woken or
+    /// dropped — and how often with the rate's lock held.
+    struct Watched {
+        rate: Rate,
+        ran: AtomicUsize,
+        locked: AtomicUsize,
+    }
+
+    impl Watched {
+        /// A waker running the test's code at each of its four calls, which a
+        /// `Wake` behind an `Arc` cannot: its clone is the `Arc`'s.
+        #[expect(
+            unsafe_code,
+            reason = "a waker with a clone of its own is made raw; its data is `&'static Watched`, read and never freed"
+        )]
+        fn waker(&'static self) -> Waker {
+            unsafe { Waker::from_raw(Self::raw(std::ptr::from_ref(self).cast())) }
+        }
+
+        fn raw(watched: *const ()) -> RawWaker {
+            static CALLS: RawWakerVTable = RawWakerVTable::new(
+                |watched| {
+                    Watched::ran(watched);
+                    Watched::raw(watched)
+                },
+                Watched::ran,
+                Watched::ran,
+                Watched::ran,
+            );
+            RawWaker::new(watched, &CALLS)
+        }
+
+        fn ran(watched: *const ()) {
+            #[expect(
+                unsafe_code,
+                reason = "the data of a waker `Watched::waker` made: `&'static Watched`"
+            )]
+            let watched = unsafe { &*watched.cast::<Self>() };
+            watched.ran.fetch_add(1, Ordering::Relaxed);
+            if watched.rate.locked() {
+                watched.locked.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// A waker runs its runtime's code as it is cloned, woken and dropped,
+    /// which may read the rate: none of the three happens under the rate's
+    /// lock — arming a reservation, arming it again with the same waker and
+    /// with another, a reservation given back waking the ones behind it, and
+    /// a token taken.
+    #[tokio::test(start_paused = true)]
+    async fn a_waker_is_cloned_woken_and_dropped_with_the_rates_lock_free() {
+        let watched: &'static Watched = Box::leak(Box::new(Watched {
+            rate: Rate::new(1, WINDOW, Some(WINDOW * 4)),
+            ran: AtomicUsize::new(0),
+            locked: AtomicUsize::new(0),
+        }));
+        let ran = || watched.ran.swap(0, Ordering::Relaxed);
+        let rate = &watched.rate;
+        let origin = Instant::now();
+        assert_eq!(arriving(rate, origin), Ok(()));
+        let (first, _) = reserved(rate, origin);
+        let (second, _) = reserved(rate, origin);
+        let (waker, other) = (watched.waker(), Waker::noop());
+
+        second.due(&waker);
+        assert_eq!(ran(), 1, "cloned to arm it");
+        second.due(&waker);
+        assert_eq!(ran(), 2, "armed already: a spare cloned, and dropped");
+        second.due(other);
+        assert_eq!(ran(), 1, "the one armed dropped for another");
+        second.due(&waker);
+        drop(first);
+        assert_eq!(ran(), 2, "cloned to arm it, then woken");
+        second.due(&waker);
+        assert!(second.take(origin + WINDOW).is_ok());
+        assert_eq!(ran(), 2, "cloned to arm it, then dropped with its place");
+
+        drop(waker);
+        assert_eq!(
+            (ran(), watched.locked.load(Ordering::Relaxed)),
+            (1, 0),
+            "the rate's lock free at each"
         );
     }
 

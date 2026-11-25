@@ -8,9 +8,9 @@
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::task::{Context, Waker};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use nest_rs_core::{error_message, injectable, module};
@@ -591,6 +591,107 @@ async fn every_subscription_is_told_each_event_from_its_opening_on() {
         [(Closed, Closed, true)],
         "the other closing takes nothing from it"
     );
+}
+
+/// A waker reading and switching the policy whose event woke it.
+struct Reading {
+    policy: Arc<ResiliencePolicy>,
+    /// What each wake read of the breaker: its state, and its window's outcomes.
+    read: Mutex<Vec<(Option<BreakerState>, Option<usize>)>>,
+}
+
+impl Wake for Reading {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let read = (
+            self.policy.breaker_state(),
+            self.policy.breaker_stats().map(|stats| stats.outcomes),
+        );
+        let first = {
+            let mut reads = self.read.lock().expect("no wake panics");
+            reads.push(read);
+            reads.len() == 1
+        };
+        if first {
+            self.policy.close_breaker().expect("a breaker");
+        }
+    }
+}
+
+/// A subscription's reader is woken by the transition it waits for, on the
+/// thread that made it and with no lock of the policy held: a waker reading
+/// the breaker reads it, one closing it closes it, and that closing is told
+/// after the opening it was made inside.
+#[tokio::test(start_paused = true)]
+async fn a_subscriptions_waker_reads_and_switches_the_breaker_whose_transition_woke_it() {
+    use BreakerPhase::{Closed, Open};
+
+    let (_app, policy) = crate::policy(ResilienceConfig::default()).await;
+    let reading = Arc::new(Reading {
+        policy: Arc::clone(&policy),
+        read: Mutex::new(Vec::new()),
+    });
+    let (returned, done) = std::sync::mpsc::channel();
+    let opening = {
+        let (policy, reading) = (Arc::clone(&policy), Arc::clone(&reading));
+        std::thread::spawn(move || {
+            let mut events = policy.events();
+            let waker = Waker::from(reading);
+            let mut told = Vec::new();
+            {
+                let mut next = Box::pin(events.next());
+                assert!(
+                    next.as_mut()
+                        .poll(&mut Context::from_waker(&waker))
+                        .is_pending(),
+                    "nothing told yet"
+                );
+                policy
+                    .open_breaker(Duration::from_secs(60))
+                    .expect("a breaker");
+                let _ = returned.send(());
+                // The closing's event wakes no reader: none waits since the opening's.
+                let Poll::Ready(Some(first)) = next.as_mut().poll(&mut Context::from_waker(&waker))
+                else {
+                    panic!("the opening is told");
+                };
+                told.push(first);
+            }
+            told.extend(crate::told(&mut events));
+            told
+        })
+    };
+    if done.recv_timeout(Duration::from_secs(5)).is_err() {
+        // Joined, the thread would hang the test past its verdict.
+        std::mem::forget(opening);
+        panic!("the reader's waker ran under a lock of the policy's");
+    }
+    let told: Vec<_> = opening
+        .join()
+        .expect("the opening's thread")
+        .into_iter()
+        .map(|event| match event {
+            ResilienceEvent::Transition {
+                from, to, manual, ..
+            } => (from, to, manual),
+            other => panic!("a transition: {other:?}"),
+        })
+        .collect();
+
+    assert_eq!(
+        told,
+        [(Closed, Open, true), (Open, Closed, true)],
+        "the opening, then the closing its reader made"
+    );
+    let read = reading.read.lock().expect("no wake panics").clone();
+    assert!(
+        matches!(read[..], [(Some(BreakerState::Open { .. }), Some(0))]),
+        "woken once, by the opening, the breaker open then: {read:?}"
+    );
+    assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
 }
 
 /// A subscription left unread past the 256 events it holds is told how many

@@ -70,6 +70,12 @@ error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body
 129 |     async fn named_as_a_macro_may_bind(&self, parcel!(weight): u32) -> Answer {
     |                                               ^^^^^^^^^^^^^^^
 
+error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
+   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:140:35
+    |
+140 |     #[resilient(carrier, cancel = token)]
+    |                                   ^^^^^
+
 warning: unused variable: `token`
   --> tests/integration/diagnostics/resilience/resilient_refused_names.rs:94:35
    |

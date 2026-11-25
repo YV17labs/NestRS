@@ -24,7 +24,9 @@ mod resilient;
 /// error into `E`. That `E` is a `std::error::Error`, run once or again: its
 /// chain is the `error` of the `warn` the breaker files when that failure opens
 /// it and of the line each retry files, and a retry reads it for the
-/// `Retry-After` of a `Problem` it carries.
+/// `Retry-After` of a `Problem` it carries. An error that is none —
+/// `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own
+/// that is, which each `?` converts into.
 ///
 /// - `idempotent` — the call is sent again after a failure or a timeout, up to
 ///   its retries. Only the developer declares it: sending again a call that is
@@ -87,7 +89,11 @@ mod resilient;
 ///   none `mut`, takes no `&mut`, and clones what an attempt consumes, which
 ///   rustc answers with `E0382` at the key. A handler taking an extractor
 ///   apart in its signature (`Path(id): Path<u32>`) names it instead
-///   (`id: Path<u32>`) and takes it apart in its body.
+///   (`id: Path<u32>`) and takes it apart in its body. A parameter under a
+///   `#[cfg]`, plain or inside a `#[cfg_attr]`, is handed in the builds that
+///   compile it, to a fallback declaring it under the same condition. The
+///   fallback's future is held as an attempt's is, in place in a release
+///   build and boxed in a debug build.
 /// - `fallback_if = F` — which errors the fallback answers for: a
 ///   `Fn(&ResilienceError<E>) -> bool`. Left out, every one, the policy's
 ///   refusals included. An error it refuses is the method's answer. It is
@@ -104,17 +110,20 @@ mod resilient;
 /// A predicate is an expression of the method: a closure reads `self` and the
 /// arguments by reference, as the `idempotent` method's attempts, the one
 /// attempt of a method run once under `record_if`, and the attempts of one
-/// naming a `fallback` do. A timeout is no `E`, so no predicate reads it: it
-/// is always a failure in the breaker, and always sent again by an
-/// `idempotent` method. `retry_if`, `retry_ok_if` and `record_if` judge an
-/// attempt's answer, so one that panics fails its attempt as a panic in the
-/// body does: one failure in the breaker, the savepoint it ran in rolled
-/// back, and the panic unwinds from the method. `fallback_if` and the
-/// fallback are asked once the run is over, outside every attempt: a panic in
-/// either unwinds from the method and fails none — the run stays counted as
-/// it ended, the breaker's window and the bulkhead as it left them, its last
-/// attempt's savepoint already rolled back — and files no line of its own,
-/// the fallback's coming after the line and the count saying it answers.
+/// naming a `fallback` do. It takes the one value it judges and answers at
+/// once, so a closure of another arity and an `async` one are refused where
+/// written, and a method of the host, whose path takes `self` first, is
+/// called from a closure: `|error| self.is_transient(error)`. A timeout is no
+/// `E`, so no predicate reads it: it is always a failure in the breaker, and
+/// always sent again by an `idempotent` method. `retry_if`, `retry_ok_if` and
+/// `record_if` judge an attempt's answer, so one that panics fails its attempt
+/// as a panic in the body does: one failure in the breaker, the savepoint it
+/// ran in rolled back, and the panic unwinds from the method. `fallback_if`
+/// and the fallback are asked once the run is over, outside every attempt: a
+/// panic in either unwinds from the method and fails none — the run stays
+/// counted as it ended, the breaker's window and the bulkhead as it left them,
+/// its last attempt's savepoint already rolled back — and files no line of its
+/// own, the fallback's coming after the line and the count saying it answers.
 ///
 /// Every other setting is the policy's, shared by every caller of the
 /// dependency — the backoff's, the circuit breaker's, the bulkhead's and the

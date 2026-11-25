@@ -3,7 +3,8 @@
 //! impl half compiles here, `#[scheduled]`: its methods, in every answer its
 //! probe reads, under the lints an answer of `!` trips where it is bound or
 //! read, and the one an `.await` of a large future trips outside a macro. One
-//! method decorator does too, `#[resilient]`, in each form its keys expand to.
+//! method decorator does too, `#[resilient]`, in each form its keys expand to,
+//! whichever of its futures is the large one.
 
 #![forbid(
     unreachable_code,
@@ -160,9 +161,13 @@ pub mod scheduled {
 /// A method of each form `#[resilient]` expands to — run once, its one attempt
 /// owning the arguments or lending them to a predicate, sent again, answered
 /// by a fallback its filter chooses, its token read — each opening on a
-/// `return` never taken, and one whose future is past `large_futures`'
-/// threshold, which only the expansion awaits. The lints a binding nothing
-/// reads trips are forbidden on the methods beside the file's.
+/// `return` never taken, and each future only the expansion awaits past
+/// `large_futures`' threshold: a body's, a fallback's under a method run once
+/// and again, and a run's whose predicates own what they read. A release
+/// build holds a body's and a fallback's in place, where `nest-rs-resilience`'s
+/// own suite denies the lint on the same shapes, its clippy run in both
+/// profiles. The lints a binding nothing reads trips are forbidden on the
+/// methods beside the file's.
 #[cfg(feature = "resilience")]
 pub mod resilient {
     use std::sync::Arc;
@@ -252,6 +257,45 @@ pub mod resilient {
 
         async fn unarchived(&self, _error: ResilienceError<HygieneDepotDown>) -> Answer<usize> {
             Ok(0)
+        }
+
+        #[resilient(depot, fallback = recalled)]
+        pub async fn recall(&self) -> Answer<usize> {
+            Ok(0)
+        }
+
+        #[resilient(depot, idempotent, fallback = recalled)]
+        pub async fn recall_again(&self) -> Answer<usize> {
+            Ok(0)
+        }
+
+        /// Holds a buffer past clippy's 16 KiB across an `.await`.
+        async fn recalled(&self, _error: ResilienceError<HygieneDepotDown>) -> Answer<usize> {
+            let buffer = [0_u8; 32 * 1024];
+            std::future::ready(()).await;
+            std::hint::black_box(&buffer);
+            Ok(buffer.len())
+        }
+
+        /// Each predicate owns a copy of a ledger past clippy's 16 KiB.
+        #[resilient(
+            depot,
+            idempotent,
+            retry_if = move |_error| ledger[0] == 0,
+            record_if = move |_error| ledger[1] == 0,
+            fallback = audited,
+            fallback_if = move |_error| ledger[2] == 0,
+        )]
+        pub async fn audit(&self, ledger: [u8; 32 * 1024]) -> Answer<usize> {
+            Ok(ledger.len())
+        }
+
+        async fn audited(
+            &self,
+            ledger: [u8; 32 * 1024],
+            _error: ResilienceError<HygieneDepotDown>,
+        ) -> Answer<usize> {
+            Ok(ledger.len())
         }
     }
 }

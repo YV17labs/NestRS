@@ -6,10 +6,12 @@
 //! provider, a struct built by hand through a trait's native `async fn`, and a
 //! method of every impl half whose feature the build enables — the hooks',
 //! the kernel's, under none. So is each predicate reading an argument its
-//! method owns, run once or again, the way out of each borrow error a
+//! method owns, run once or again, one its host holds as a value, a function
+//! pointer or a boxed closure, an error that is no `std::error::Error`
+//! held in one of the app's own, the way out of each borrow error a
 //! predicate reading what its body changes earns, an argument a macro's
-//! pattern binds, and a fallback handed arguments a `macro_rules!` wrote apart
-//! from the decorator.
+//! pattern binds, a parameter under a `#[cfg]` beside every key, and a
+//! fallback handed arguments a `macro_rules!` wrote apart from the decorator.
 
 use std::sync::Arc;
 
@@ -42,6 +44,33 @@ impl ToProblem for HygieneCarrierDown {
     fn to_problem(&self) -> Option<Problem> {
         None
     }
+}
+
+/// An error of the app's own holding one that is no `std::error::Error`
+/// itself, a boxed one: what a decorated method answers in its place.
+#[derive(Debug)]
+pub struct HygieneDepotFailed(Box<dyn std::error::Error + Send + Sync>);
+
+impl std::fmt::Display for HygieneDepotFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the depot failed")
+    }
+}
+
+impl std::error::Error for HygieneDepotFailed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+impl From<Box<dyn std::error::Error + Send + Sync>> for HygieneDepotFailed {
+    fn from(failed: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        Self(failed)
+    }
+}
+
+fn stocked(parcel: &str) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(parcel.parse::<usize>()?)
 }
 
 /// What a decorated method answers, through an alias: the probe reads it by
@@ -243,6 +272,65 @@ impl HygieneResilientShipments {
         Ok(parcel.len() + unit.as_ref().len())
     }
 
+    /// A boxed error, which is no `std::error::Error`, held in one of the
+    /// app's own that is: each `?` converts into it.
+    #[resilient(carrier, idempotent)]
+    pub async fn stock(&self, parcel: &str) -> Result<usize, ResilienceError<HygieneDepotFailed>> {
+        Ok(stocked(parcel)?)
+    }
+
+    /// A parameter under a `#[cfg]`, plain or inside a `#[cfg_attr]`: handed
+    /// to the fallback in the build that has it, and named in no other.
+    #[resilient(carrier, fallback = last_routed, fallback_if = |_error| !zone.is_empty())]
+    pub async fn route(
+        &self,
+        #[cfg(any())] absent: crate::does_not_exist::Zone,
+        #[cfg(feature = "resilience")] zone: String,
+        #[cfg_attr(feature = "resilience", cfg(any()))] unit: crate::does_not_exist::Unit,
+        parcel: String,
+    ) -> HygieneAnswer<usize> {
+        Ok(zone.len() + parcel.len())
+    }
+
+    async fn last_routed(
+        &self,
+        #[cfg(any())] absent: crate::does_not_exist::Zone,
+        #[cfg(feature = "resilience")] zone: String,
+        #[cfg_attr(feature = "resilience", cfg(any()))] unit: crate::does_not_exist::Unit,
+        parcel: String,
+        _error: ResilienceError<HygieneCarrierDown>,
+    ) -> HygieneAnswer<usize> {
+        Ok(zone.len() + parcel.len())
+    }
+
+    /// Such a parameter under every other key: sent again, a predicate reading
+    /// the one its build has, the token named beside it.
+    #[resilient(
+        carrier,
+        idempotent,
+        retry_if = |_error| !zone.is_empty(),
+        record_if = |_error| !zone.is_empty(),
+        cancel = token
+    )]
+    pub async fn reroute(
+        &self,
+        #[cfg(any())] absent: crate::does_not_exist::Zone,
+        #[cfg(feature = "resilience")] zone: String,
+    ) -> HygieneAnswer<usize> {
+        let _attempt: CancellationToken = token;
+        Ok(zone.len())
+    }
+
+    /// And run once under a predicate, its one attempt lending the arguments.
+    #[resilient(carrier, record_if = |_error| !zone.is_empty())]
+    pub async fn route_once(
+        &self,
+        #[cfg(any())] absent: crate::does_not_exist::Zone,
+        #[cfg(feature = "resilience")] zone: String,
+    ) -> HygieneAnswer<usize> {
+        Ok(zone.len())
+    }
+
     /// A method compiled out takes its expansion with it.
     #[cfg(any())]
     #[resilient(carrier)]
@@ -301,6 +389,42 @@ impl HygieneTracking for HygieneHandBuilt {
     #[resilient(carrier, idempotent)]
     async fn status(&self, parcel: &str) -> HygieneAnswer<String> {
         depot(parcel)
+    }
+}
+
+/// A host holding its predicates as values: function pointers, and a boxed
+/// closure.
+pub struct HygieneJudged {
+    /// The policy each call runs under.
+    pub carrier: Arc<ResiliencePolicy<HygieneCarrier>>,
+    /// Which `Err` is sent again.
+    pub sent_again: fn(&HygieneCarrierDown) -> bool,
+    /// Which `Err` is a failure in the breaker.
+    pub counted: Box<dyn Fn(&HygieneCarrierDown) -> bool + Send + Sync>,
+    /// Which errors the fallback answers for.
+    pub served: fn(&ResilienceError<HygieneCarrierDown>) -> bool,
+}
+
+impl HygieneJudged {
+    /// Each predicate read off the host, by value or by reference.
+    #[resilient(
+        carrier,
+        idempotent,
+        retry_if = self.sent_again,
+        record_if = &self.counted,
+        fallback = unshipped,
+        fallback_if = self.served,
+    )]
+    pub async fn ship(&self, parcel: String) -> HygieneAnswer<usize> {
+        Ok(parcel.len())
+    }
+
+    async fn unshipped(
+        &self,
+        parcel: String,
+        _error: ResilienceError<HygieneCarrierDown>,
+    ) -> HygieneAnswer<usize> {
+        Ok(parcel.len())
     }
 }
 

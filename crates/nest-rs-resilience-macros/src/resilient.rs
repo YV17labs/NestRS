@@ -4,9 +4,9 @@
 //! it, and the error its run ends on answered by the fallback it names.
 
 use nest_rs_codegen::__private::{
-    HostBorrow, RESILIENT, RETRIES, TIMEOUT, answer_span, is_resilient, mixed_site_ident,
-    needs_a_value, opens_on_operation_field_mark, resilient_policy_setting, resilient_retries,
-    resilient_timeout, shared_receiver, site, takes_value, ungrouped_expr,
+    HostBorrow, RESILIENT, RETRIES, TIMEOUT, answer_span, cfg_attrs, is_resilient,
+    mixed_site_ident, needs_a_value, opens_on_operation_field_mark, resilient_policy_setting,
+    resilient_retries, resilient_timeout, shared_receiver, site, takes_value, ungrouped_expr,
 };
 use nest_rs_codegen::{Arg, Grammar, Refusals};
 use proc_macro2::{Group, Span, TokenStream, TokenTree};
@@ -328,7 +328,8 @@ fn refused(item: TokenStream, refusals: Refusals) -> Refused {
 /// whose name the decorator did not bind, its parameters read in that body's
 /// place; as written where it is no `async fn`; run once where the method
 /// could be expanded at all; and checked against a stand-in that never runs
-/// where its receiver or its field is what was refused.
+/// where its receiver or its field is what was refused. Every form but the
+/// bodiless one binds the token under the name `cancel` gave.
 fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStream {
     if !shape.opaque && (shape.unread || shape.unbound) {
         no_body(&mut method);
@@ -347,7 +348,7 @@ fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStre
     }
     match (args, shape.receiver) {
         (Some(args), Some(receiver)) => expand(method, receiver, &args.once()),
-        _ => stand_in(method),
+        _ => stand_in(method, args.and_then(|args| args.cancel.as_ref())),
     }
 }
 
@@ -360,23 +361,25 @@ fn leading_items(stmts: &[Stmt]) -> usize {
 }
 
 /// Leaves `method` no body: each name its parameters bind, read as it is
-/// bound, then an answer never given. The body that read them is gone, and a
-/// lint attribute in its place is `E0453` in a crate forbidding the lint. A
-/// parameter binding names no attribute reads is taken under none, `_`.
+/// bound and under its parameter's `#[cfg]`s, then an answer never given. The
+/// body that read them is gone, and a lint attribute in its place is `E0453`
+/// in a crate forbidding the lint. A parameter binding names no attribute
+/// reads is taken under none, `_`.
 fn no_body(method: &mut ImplItemFn) {
     let mut read = Vec::new();
     for input in &mut method.sig.inputs {
         let FnArg::Typed(typed) = input else {
             continue;
         };
+        let cfgs = cfg_attrs(&typed.attrs);
         let mut bound = Bound::default();
         bound.read(&typed.pat);
         if bound.unparsed.is_empty() {
             read.extend(bound.names.iter().map(|binding| {
                 let name = &binding.ident;
                 match (&binding.by_ref, &binding.mutability) {
-                    (None, Some(_)) => quote!(&mut #name),
-                    _ => quote!(&#name),
+                    (None, Some(_)) => quote!(#(#cfgs)* &mut #name),
+                    _ => quote!(#(#cfgs)* &#name),
                 }
             }));
         } else {
@@ -626,25 +629,54 @@ const PREDICATES: [Predicate; 4] = [
     },
 ];
 
-/// `arg`'s value as the predicate its key takes: any expression but a
-/// literal, which is no function whatever its key — refused here, in
-/// `refusals`, where rustc would follow the key's sentence with one naming the
-/// expansion. A value that reads as no expression is the error handed back.
+/// `arg`'s value as the predicate its key takes: any expression but one whose
+/// own tokens say it is no function over one value answering at once — a
+/// literal, a closure taking no argument or several, an `async` closure —
+/// refused here, in `refusals`, where rustc would follow the key's sentence
+/// with one naming the expansion, count a closure's arguments at the
+/// attribute, or ask an `async` closure's argument for a type. A value that
+/// reads as no expression is the error handed back.
 fn predicate(arg: &Arg<'_>, refusals: &mut Refusals) -> syn::Result<Option<Expr>> {
     let value = value(arg)?;
-    let row = PREDICATES.iter().find(|row| row.key == arg.key());
-    let (Expr::Lit(literal), Some(row)) = (ungrouped_expr(&value), row) else {
+    let Some(row) = PREDICATES.iter().find(|row| row.key == arg.key()) else {
         return Ok(Some(value));
     };
+    let written = unparenthesized(&value);
+    let why = match written {
+        Expr::Lit(_) => String::new(),
+        Expr::Closure(closure) if closure.asyncness.is_some() => {
+            " — an `async` closure answers a future, and a predicate answers `bool` at once".into()
+        }
+        Expr::Closure(closure) if closure.inputs.len() != 1 => {
+            let takes = match closure.inputs.len() {
+                0 => "no argument".to_owned(),
+                several => format!("{several} arguments"),
+            };
+            format!(" — this closure takes {takes}, and a predicate takes the one value it judges")
+        }
+        _ => return Ok(Some(value)),
+    };
     let what = format!(
-        "a {}, a function's path or a closure such as `{}`",
+        "a {}, a function's path or a closure such as `{}`{why}",
         row.over, row.example
     );
     refusals.push(syn::Error::new_spanned(
-        literal,
+        written,
         takes_value(RESILIENT, Some(row.key), &what),
     ));
     Ok(None)
+}
+
+/// `value` without the parentheses and invisible groups around it.
+fn unparenthesized(value: &Expr) -> &Expr {
+    let mut written = value;
+    loop {
+        match written {
+            Expr::Group(group) => written = &group.expr,
+            Expr::Paren(paren) => written = &paren.expr,
+            _ => return written,
+        }
+    }
 }
 
 /// `value` as a name written alone, or the refusal saying `key` takes `what`.
@@ -1031,14 +1063,16 @@ fn exclusive_reference(ty: &Type) -> Option<&Type> {
     }
 }
 
-/// What the method answers, as the expansion writes it — every token at the
-/// return type's span — and that span.
+/// What the method answers, as the expansion writes it — every token at one
+/// span, the expansion's own, located at the return type — and that span.
 ///
 /// Every helper the expansion calls is bounded on the answer there, so a
 /// refused answer is one error: rustc reports one predicate once per span, and
 /// a stable macro can give it no wider span than the type's first token.
 fn answer(method: &ImplItemFn) -> (TokenStream, Span) {
-    let at = answer_span(&method.sig);
+    // The expansion's own, so no lint reads its `.await` as one a developer wrote:
+    // clippy's `large_futures` would offer a fix at the answer that none can apply.
+    let at = Span::mixed_site().located_at(answer_span(&method.sig));
     let answer = match &method.sig.output {
         ReturnType::Type(_, ty) => respanned(ty.to_token_stream(), at),
         ReturnType::Default => quote_spanned!(at=> ()),
@@ -1175,11 +1209,15 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
             let receiver = this(method.span());
             let error = Ident::new("__error", Span::mixed_site().located_at(method.span()));
             let when = written(*when);
-            let names = handed.iter().map(|handed| &handed.name);
-            let under: Vec<_> = handed.iter().map(|handed| &handed.under).collect();
+            let bound = handed.iter().map(|Handed { name, under, cfgs }| {
+                quote_spanned!(method.span()=> #(#cfgs)* let #under = #name;)
+            });
+            let passed = handed
+                .iter()
+                .map(|Handed { under, cfgs, .. }| quote!(#(#cfgs)* #under));
             let answering = quote_spanned!(method.span()=> |#error| {
-                #(let #under = #names;)*
-                #receiver.#method(#(#under,)* #error)
+                #(#bound)*
+                #receiver.#method(#(#passed,)* #error)
             });
             // rustc reads an `.await` as no argument of its own to blame for what the
             // run answers, and reports it once more at the attribute; a call it does.
@@ -1209,33 +1247,41 @@ struct Handed {
     /// The expansion's own local it is passed under: rustc offers its fixes on
     /// an argument the developer wrote, and one there would rewrite the key.
     under: Ident,
+    /// The `#[cfg]`s its parameter is under, which the local and the argument
+    /// passed are under too: a build names the arguments it has.
+    cfgs: Vec<TokenStream>,
 }
 
 /// Each argument of `method` as its fallback is handed it, in order, located
 /// `at` the key that hands it on.
 fn arguments(method: &ImplItemFn, at: Span) -> Vec<Handed> {
     typed_inputs(method)
-        .filter_map(|typed| plain_name(&typed.pat))
+        .filter_map(|typed| Some((plain_name(&typed.pat)?, cfg_attrs(&typed.attrs))))
         .enumerate()
-        .map(|(index, bound)| {
+        .map(|(index, (bound, cfgs))| {
             let mut name = bound.clone();
             name.set_span(bound.span().located_at(at));
             let under = Ident::new(
                 &format!("__handed_{index}"),
                 Span::mixed_site().located_at(at),
             );
-            Handed { name, under }
+            Handed { name, under, cfgs }
         })
         .collect()
 }
 
 /// `method` with its body checked as one attempt against a stand-in that
-/// reads no field and never runs.
-fn stand_in(mut method: ImplItemFn) -> TokenStream {
+/// reads no field and never runs, its token bound under the name `cancel`
+/// gave, when it gave one.
+fn stand_in(mut method: ImplItemFn, cancel: Option<&Ident>) -> TokenStream {
     let (answer, at) = answer(&method);
     let block = body(&mut method, &answer, at, false, None);
+    let token = match cancel {
+        Some(name) => name.to_token_stream(),
+        None => quote!(_),
+    };
     let checked = quote_spanned! {at=>
-        ::nest_rs_resilience::__private::refused::<#answer, _, _>(move |_| async move #block)
+        ::nest_rs_resilience::__private::refused::<#answer, _, _>(move |#token| async move #block)
     };
     method.block.stmts = vec![syn::Stmt::Expr(Expr::Verbatim(checked), None)];
     method.into_token_stream()
@@ -1249,7 +1295,8 @@ fn optional(value: Option<impl ToTokens>) -> TokenStream {
     }
 }
 
-/// `tokens`, every one at `span`.
+/// `tokens`, every one at `span` — but a `$crate`, located there and resolved
+/// as it was written: the crate it names is its own context's, never a span's.
 fn respanned(tokens: TokenStream, span: Span) -> TokenStream {
     tokens
         .into_iter()
@@ -1258,6 +1305,10 @@ fn respanned(tokens: TokenStream, span: Span) -> TokenStream {
                 let mut moved = Group::new(group.delimiter(), respanned(group.stream(), span));
                 moved.set_span(span);
                 TokenTree::Group(moved)
+            }
+            TokenTree::Ident(mut root) if root == "$crate" => {
+                root.set_span(root.span().located_at(span));
+                TokenTree::Ident(root)
             }
             mut other => {
                 other.set_span(span);
@@ -1727,6 +1778,67 @@ mod tests {
         }
     }
 
+    /// A parameter under a `#[cfg]`, written plainly or inside a `#[cfg_attr]`,
+    /// is handed to the fallback under that condition, and read under it by a
+    /// method kept with no body: each build names the arguments it has.
+    #[test]
+    fn a_parameter_under_a_cfg_is_handed_and_read_under_it() {
+        let item = quote! {
+            async fn rates(
+                &self,
+                #[cfg(feature = "zones")] zone: &str,
+                #[cfg_attr(unix, cfg(feature = "weights"), allow(unused_variables))] weight: u32,
+                parcel: u32,
+            ) -> Answer {
+                quote(parcel).await
+            }
+        };
+        let zones = "# [cfg (feature = \"zones\")]";
+        let weights = "# [cfg_attr (unix , cfg (feature = \"weights\"))]";
+        let handed = resilient(quote!(carrier, fallback = stale), item.clone()).to_string();
+        let answering = format!(
+            "| __error | {{ {zones} let __handed_0 = zone ; {weights} let __handed_1 = weight ; \
+             let __handed_2 = parcel ; self . stale ({zones} __handed_0 , {weights} __handed_1 , \
+             __handed_2 , __error) }}"
+        );
+        assert!(handed.contains(&answering), "{answering} in {handed}");
+        let kept = kept(quote!(carrier, fallback = stale, cancel), item);
+        let read = format!(
+            "{{ let _ = ({zones} & zone , {weights} & weight , & parcel ,) ; :: core :: \
+             unreachable ! () }}"
+        );
+        assert!(kept.ends_with(&read), "{read} in {kept}");
+    }
+
+    /// A method refused for its receiver is checked against the stand-in under
+    /// the name its `cancel` gave: a body reading its token names one bound.
+    #[test]
+    fn a_method_refused_for_its_receiver_keeps_its_token() {
+        for receiver in [quote!(&mut self,), quote!(self,), quote!()] {
+            let item = quote! {
+                async fn ship(#receiver order: Order) -> Answer {
+                    send(order, token).await
+                }
+            };
+            for keys in [
+                quote!(carrier, cancel = token),
+                quote!(carrier, idempotent, cancel = token),
+                quote!(carrier, fallback = stale, cancel = token),
+            ] {
+                let kept = kept(keys.clone(), item.clone());
+                assert!(
+                    kept.contains("refused :: < Answer , _ , _ > (move | token | async move {"),
+                    "#[resilient({keys})] on `{receiver}`: {kept}"
+                );
+            }
+            let unnamed = kept(quote!(carrier), item);
+            assert!(
+                unnamed.contains("refused :: < Answer , _ , _ > (move | _ | async move {"),
+                "`{receiver}`: {unnamed}"
+            );
+        }
+    }
+
     /// The token is the closure's parameter where the one attempt owns what it
     /// reads, and a `let` of the attempt's block where attempts borrow: after
     /// the body's leading items, ahead of the return never taken.
@@ -1834,6 +1946,49 @@ mod tests {
         assert!(
             read.is_ok(),
             "any other expression is the type checker's to judge"
+        );
+    }
+
+    /// A closure's own tokens say it is no predicate where it takes no value
+    /// or more than one, or is written `async`: refused at the closure, where
+    /// rustc would count its arguments at the attribute, or ask for a type.
+    #[test]
+    fn a_predicate_closure_of_another_arity_or_written_async_is_refused_at_the_closure() {
+        for predicate in &PREDICATES {
+            let takes = format!(
+                "#[resilient] `{}` takes a {}, a function's path or a closure such as `{}`",
+                predicate.key, predicate.over, predicate.example
+            );
+            for (closure, why) in [
+                (
+                    "|| true",
+                    "this closure takes no argument, and a predicate takes the one value it judges",
+                ),
+                (
+                    "(|value, _attempt| value.counts())",
+                    "this closure takes 2 arguments, and a predicate takes the one value it judges",
+                ),
+                (
+                    "async |value| value.counts()",
+                    "an `async` closure answers a future, and a predicate answers `bool` at once",
+                ),
+            ] {
+                let args: TokenStream = format!(
+                    "carrier, idempotent, fallback = stale, {} = {closure}",
+                    predicate.key
+                )
+                .parse()
+                .expect("arguments");
+                assert_eq!(refusals(args, track()), [format!("{takes} — {why}")]);
+            }
+        }
+        let read = expansion(
+            quote!(carrier, record_if = |error| async { error.counts() }),
+            track(),
+        );
+        assert!(
+            read.is_ok(),
+            "what a closure of one argument answers is the type checker's to judge"
         );
     }
 
@@ -2261,7 +2416,7 @@ mod tests {
         for args in [
             quote!(
                 carrier,
-                retry_if = |error, _unused| error.busy(),
+                retry_if = |error: &Either<A, B>| error.busy(),
                 idempotent
             ),
             quote!(carrier, retry_ok_if = pick::<A, B>, idempotent),

@@ -290,6 +290,10 @@ impl Reads {
     /// mechanism the policy has on — one a read, the breaker's window as one
     /// instrument by outcome — each observed when the metric reader exports,
     /// and observing nothing once the policy is dropped.
+    ///
+    /// An export runs these reads holding the meter's pipeline, which a
+    /// counter's first record waits for: each takes one lock of its mechanism
+    /// at most, for the read alone, and no counter records under one.
     fn observe(&self, provider: &(dyn opentelemetry::metrics::MeterProvider + Send + Sync)) {
         use opentelemetry::KeyValue;
 
@@ -577,11 +581,97 @@ mod tests {
         );
     }
 
+    /// A policy's first transition makes the transitions' counter, which waits
+    /// for the meter's pipeline; an export holds that pipeline while it runs
+    /// each observed read, the breaker's among them. The transition lands
+    /// while the export is inside an app's own read, registered first: both
+    /// end, the counter made with no lock of the breaker held. The app's read
+    /// lasts until the opening has had time to reach the pipeline; a runner
+    /// stalled past that only spares the test the race.
+    #[test]
+    fn a_first_transition_racing_an_export_completes() {
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+        let (collecting, in_collect) = std::sync::mpsc::channel();
+        let (starting, started) = std::sync::mpsc::channel();
+        let started = parking_lot::Mutex::new(Some(started));
+        let _app = opentelemetry::global::meter("app")
+            .i64_observable_gauge("app.slow")
+            .with_callback(move |_| {
+                let Some(started) = started.lock().take() else {
+                    return;
+                };
+                collecting.send(()).expect("the test waits for the export");
+                if started.recv_timeout(Duration::from_secs(5)).is_ok() {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            })
+            .build();
+        let policy = Arc::new(policy::<Quotes>(ResilienceConfig::default()));
+        let flushing = {
+            let provider = provider.clone();
+            std::thread::spawn(move || provider.force_flush())
+        };
+        in_collect.recv().expect("the export runs the app's read");
+
+        let (opened, done) = std::sync::mpsc::channel();
+        let opening = {
+            let policy = Arc::clone(&policy);
+            std::thread::spawn(move || {
+                starting.send(()).expect("the export waits for the opening");
+                policy
+                    .open_breaker(Duration::from_secs(60))
+                    .expect("a breaker");
+                opened.send(()).expect("the test waits for the opening");
+            })
+        };
+        let finished = done.recv_timeout(Duration::from_secs(5)).is_ok();
+        if !finished {
+            // Joined, or shut down, what waits here would hang the test past its verdict.
+            std::mem::forget((provider, flushing, opening, policy));
+            panic!("the first transition and the export wait for each other");
+        }
+        flushing
+            .join()
+            .expect("the export's thread")
+            .expect("the export");
+        opening.join().expect("the opening's thread");
+
+        exporter.reset();
+        provider.force_flush().expect("the export");
+        let exported = exporter
+            .get_finished_metrics()
+            .expect("the exported metrics");
+        assert!(
+            exported
+                .iter()
+                .flat_map(|export| export.scope_metrics())
+                .flat_map(|scope| scope.metrics())
+                .any(|metric| metric.name() == TRANSITIONS),
+            "the transition counted, its counter made while the export ran"
+        );
+        assert!(
+            observed(&exporter).contains(&(
+                BREAKER_STATUS.to_owned(),
+                "quotes".to_owned(),
+                "open".to_owned(),
+                1
+            )),
+            "and the breaker is read open"
+        );
+    }
+
     /// The reads are observed on the meter by instance, read when the reader
     /// exports and recorded on no run: a policy built before the meter
     /// provider was installed reports from its first run, one built after it
     /// with no run at all, a mechanism that is off reports nothing, and a
-    /// policy dropped reports no more. The clock is the real one, which a
+    /// policy dropped reports no more. Each instrument is read at two values
+    /// at least, so none exports a constant: the breaker's status on each
+    /// state, its window with failures and successes, calls running and one
+    /// waiting, the rate under its limit. The clock is the real one, which a
     /// reader's thread reads.
     #[tokio::test]
     async fn the_reads_are_observed_on_the_meter_whenever_its_provider_was_installed() {
@@ -598,6 +688,7 @@ mod tests {
         let after = policy::<Carrier>(ResilienceConfig {
             retries: None,
             concurrency: Some(2),
+            concurrency_wait: Some(Duration::from_secs(60)),
             rate_limit: Some(5),
             ..ResilienceConfig::default()
         });
@@ -624,7 +715,11 @@ mod tests {
         }
         let holding = parked(before.run(|_| silent()));
         assert!(after.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
-        let sent = parked(after.run(|_| silent()));
+        let sent = [
+            parked(after.run(|_| silent())),
+            parked(after.run(|_| silent())),
+        ];
+        let waiting = parked(after.run(|_| silent()));
         after
             .open_breaker(Duration::from_secs(60))
             .expect("a breaker");
@@ -645,16 +740,36 @@ mod tests {
                 (BREAKER_STATUS, "carrier", "closed", 0),
                 (BREAKER_STATUS, "carrier", "half_open", 0),
                 (BREAKER_STATUS, "carrier", "open", 1),
-                (CONCURRENCY_RUNNING, "carrier", "", 1),
-                (CONCURRENCY_WAITING, "carrier", "", 0),
-                (RATE_AVAILABLE, "carrier", "", 3),
+                (CONCURRENCY_RUNNING, "carrier", "", 2),
+                (CONCURRENCY_WAITING, "carrier", "", 1),
+                (RATE_AVAILABLE, "carrier", "", 2),
             ]),
             "the one built before from its first run, its window's three outcomes by what each \
-             was, with no rate to report; the carrier's two attempts sent, one still running, \
-             its window forgotten as it was opened by hand"
+             was, with no rate to report; the carrier's three attempts sent, two still running \
+             and a fourth call waiting for a slot, its window forgotten as it was opened by hand"
         );
 
-        drop((holding, sent));
+        const OPEN_FOR: Duration = Duration::from_millis(1);
+        after.open_breaker(OPEN_FOR).expect("a breaker");
+        // Past the open time, however long the runner makes it.
+        tokio::time::sleep(OPEN_FOR * 5).await;
+        exporter.reset();
+        provider.force_flush().expect("the export");
+        let status: Vec<_> = observed(&exporter)
+            .into_iter()
+            .filter(|(name, instance, ..)| name == BREAKER_STATUS && instance == "carrier")
+            .collect();
+        assert_eq!(
+            status,
+            sorted(&[
+                (BREAKER_STATUS, "carrier", "closed", 0),
+                (BREAKER_STATUS, "carrier", "half_open", 1),
+                (BREAKER_STATUS, "carrier", "open", 0),
+            ]),
+            "its open time passed, the next call its probe"
+        );
+
+        drop((holding, sent, waiting));
         drop(after);
         exporter.reset();
         provider.force_flush().expect("the export");

@@ -297,10 +297,12 @@ async fn a_call_answering_at_once_allocates_nothing_but_its_token_in_a_release_b
 }
 
 /// Every mechanism a policy takes, on: the breaker and the retries of the
-/// defaults, a bulkhead with a wait and a bound on its waiters, and a rate
-/// with a wait, a slot and a token free for every call a test makes.
+/// defaults, its outcomes given an age, a bulkhead with a wait and a bound on
+/// its waiters, and a rate with a wait, a slot and a token free for every
+/// call a test makes.
 fn every_mechanism() -> ResilienceConfig {
     ResilienceConfig {
+        breaker_age: Some(Duration::from_secs(60)),
         concurrency: Some(8),
         concurrency_wait: Some(Duration::from_secs(1)),
         concurrency_waiters: Some(8),
@@ -326,11 +328,22 @@ impl Answering {
     async fn again(&self) -> Result<u32, ResilienceError<Silent>> {
         Ok(7)
     }
+
+    #[resilient(policy, fallback = stale)]
+    async fn kept(&self) -> Result<u32, ResilienceError<Silent>> {
+        Ok(7)
+    }
+
+    /// The fallback of [`kept`](Self::kept), which answers and never calls it.
+    async fn stale(&self, _error: ResilienceError<Silent>) -> Result<u32, ResilienceError<Silent>> {
+        Ok(0)
+    }
 }
 
-/// A slot of the bulkhead, a token of the rate and the breaker's pass cost a
-/// call answering at once no allocation, by whichever path an app calls its
-/// policy: in a release build it allocates its token alone. A debug build
+/// A slot of the bulkhead, a token of the rate and the breaker's pass, its
+/// outcome counted with its age, cost a call answering at once no allocation,
+/// by whichever path an app calls its policy, a fallback it declares never
+/// called: in a release build it allocates its token alone. A debug build
 /// boxes its future, and a decorated method's closure where it holds
 /// something, as an idempotent one's does.
 #[tokio::test(start_paused = true)]
@@ -367,6 +380,11 @@ async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_
             2 * debug,
             crate::allocations(|| host.again()),
         ),
+        (
+            "of a decorated method declaring a fallback",
+            debug,
+            crate::allocations(|| host.kept()),
+        ),
     ] {
         assert!(matches!(answered, Ok(7)), "{shape}: {answered:?}");
         assert_eq!(
@@ -377,9 +395,13 @@ async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_
         );
     }
     assert_eq!(
-        (policy.concurrency_running(), policy.rate_available()),
-        (Some(0), Some(996)),
-        "each of the four took a slot, given back, and a token"
+        (
+            policy.concurrency_running(),
+            policy.rate_available(),
+            policy.breaker_stats().map(|stats| stats.outcomes),
+        ),
+        (Some(0), Some(995), Some(5)),
+        "each of the five took a slot, given back, and a token, and counted in the breaker"
     );
 }
 

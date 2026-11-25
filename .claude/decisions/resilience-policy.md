@@ -601,7 +601,7 @@ reference's word first:
 | `ResiliencePolicy.wrap(…)`, any order | one order: a call out of time or meeting an open breaker is refused before any wait for a slot, and the rate is read there; then the bulkhead's slot, held for the whole run; then per attempt the unit's deadline, the breaker, the rate, the timeout; the fallback once the run is over | no second order |
 | `retry.attempts` (total, default 3, `Infinity`) | `RETRIES` (after the first, 0 to 10, default 2, 0 for none); `retries = N` on a method, 1 to 10 | bounded: ten at most; a method wanting none drops `idempotent` |
 | `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS`; doubling, ±20 % | the curve is the framework's one; a `Retry-After` the dependency asks is waited whole |
-| `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips a client error: an `HttpException` under `500`, and any other error carrying a 4xx status but `408` and `429`); no attempt number; a timeout is sent again and read by none; the reference never retries a refusal, where one an inner policy answers is here an `Err` like any other, for `retry_if` to refuse |
+| `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips a client error: an `HttpException` under `500`, and any other error carrying a 4xx status but `408` and `429`); no attempt number; a timeout is sent again and read by none; the reference never retries a rejection (an open breaker, a full bulkhead, a spent rate), where one an inner policy answers is here an `Err` like any other: for `retry_if` to refuse, and sent again after the whole `Retry-After` it carries, or not at all past `BACKOFF_CEILING_MS`; an inner timeout is sent again, as there |
 | `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, `F: Fn(&T) -> bool` | a key of any method declared `idempotent`, a handler included, where the reference keeps it off its entrypoints; the retries spent, the last `Ok` answers |
 | `idempotent`, else `GET`/`HEAD`/`OPTIONS` and GraphQL queries | `idempotent`, always written; `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods, `QUERY` and `Idempotency-Key` | never inferred for a method |
 | a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body, each attempt in a savepoint of the unit's transaction | the unit is not replayed |
@@ -613,7 +613,7 @@ reference's word first:
 | `failureRateThreshold` `T`, `minimumCalls` `M` | `BREAKER_FAILURES` of `⌈T × M / 100⌉`, the fewest failures the reference opens on | a count, read when a failure is counted: it opens at that many failures whatever the answers between them |
 | `openDuration` | `BREAKER_OPEN_SECS` | whole seconds in the environment, an hour at most |
 | `halfOpenMaxCalls` (together, judged by their rate) | `BREAKER_PROBES` (in a row, one at a time) | one failed probe opens again |
-| `recordIf(error)` | `record_if = F`, `F: Fn(&E) -> bool` | an `Err` it refuses is counted in neither direction, and a probe hands its turn on, as there; the reference never records an inner policy's refusal, where it is here an `Err` like any other, for `record_if` to refuse |
+| `recordIf(error)` | `record_if = F`, `F: Fn(&E) -> bool` | an `Err` it refuses is counted in neither direction, and a probe hands its turn on, as there; the reference never records an inner policy's rejection, where it is here an `Err` like any other, for `record_if` to refuse; an inner timeout is recorded, as there |
 | `breaker.state`, `breaker.stats` | `breaker_state()`, `breaker_stats()` (`outcomes`, `failures`, `failure_rate()` from 0 to 1) | the age is applied at the read |
 | `breaker.trip()`, `breaker.reset()` | `open_breaker(duration)`, `close_breaker()` | an opening says how long |
 | `bulkhead.maxConcurrent`, `maxQueue`, `queueTimeout` | `CONCURRENCY`, `CONCURRENCY_WAITERS`, `CONCURRENCY_WAIT_MS` | the slot is held for the whole run, its retries included; a call waits for one only where `CONCURRENCY_WAIT_MS` is set — none by default, sixty seconds at most — and `CONCURRENCY_WAITERS` bounds how many wait, `0` for no bound, where the reference's `maxQueue` of `0` is no queue and its wait has no limit by default |
@@ -626,6 +626,7 @@ reference's word first:
 | `retry`, `timeout`, `circuit-open` / `-half-open` / `-closed`, `circuit-rejected`, `bulkhead-rejected`, `rate-limited`, `fallback` | `ResilienceEvent`'s `Retry`, `Timeout`, `Transition`, `Refusal`, `Fallback` | one transition and one refusal event, each saying which; the error as its chain in text, never the value |
 | `ResilienceService.circuitBreaker(name)`, `bulkhead(name)`, `circuitBreakers()`, `bulkheads()`, for an app to export | each policy injected by its type; its reads observed on the meter under `opentelemetry` | none is looked up by a name or enumerated; the export is built |
 | `ResilienceModuleOptions.defaults`, merged under every preset and decorator | `ResilienceConfig`'s defaults; `for_root` pins a base per instance, the environment overlays it | no defaults shared across policies |
+| `name` on a breaker, a bulkhead or a limiter, and its name in a preset: a stage shared across handlers and presets; unnamed, a decorator's breaker or bulkhead is its handler's | the policy: one breaker, one bulkhead and one bucket per instance, shared by every method naming it | a stage is neither shared by two policies nor held by one method; a quota two dependencies share is a policy of its own, its `run` around each call |
 | `ExecuteOptions.signal`, the caller's own cancellation | the caller drops the run's future | an attempt in flight is dropped with it and counts in neither direction — but under a unit's deadline, where one dropped past its bound is a timeout; a slot, a token or a probe's turn it held is given back |
 | `mapErrors`: `504` / `503`, `RpcException`, `WsException`, `GraphQLError`; `TIMEOUT`, `CIRCUIT_OPEN`, `BULKHEAD_FULL`, `RATE_LIMITED`; `mapErrors: false` | `ToProblem`: `503` `UNAVAILABLE` on every edge, `Retry-After` where known; the variant tells them apart in code | one class; no switch — a method answering otherwise maps the `ResilienceError` it holds |
 | `isClientError()` as the default filter | none: every `Err` is a failure; `ResilienceMiddleware` reads statuses | the developer classifies |
@@ -821,8 +822,9 @@ lock" and the limit it left, a transition being told once the lock is let go.
   and judged by their rate**: the count and the series in a row are the
   stricter at the first difference, and the mapping above reaches the
   reference's cases.
-- **A class-level form and a preset merged field by field**: a policy is one
-  named instance, a method names it.
+- **A class-level form, a preset merged field by field, and a stage named apart
+  from its policy**: a policy is one named instance, a method names it, and its
+  breaker, its bulkhead and its bucket are its own.
 - **A fallback that is a closure or a free function**: it would have nowhere
   to take the method's arguments from, and no signature to check.
 - **A label on a call run by hand** (`source`): a method wanting its name in
@@ -874,6 +876,11 @@ lock" and the limit it left, a transition being told once the lock is let go.
   a decorated call does that, and every other call is refused meanwhile.
   Closing it is the breaker giving an overdue probe up itself, its late answer
   voided by an epoch.
+- **The umbrella's `full` takes `resilience`**, as it takes every capability: a
+  7.0 app on it declaring a `#[config]` of its own in that namespace fails its
+  boot, and one with an attribute of its own named `resilient` on an operation
+  has it read as the decorator. The changelog says both. Closing it is `full`
+  leaving the capability out until 8.0, the owner's to decide.
 - **The default breaker is not the reference's default mapped**: ten failures
   of twenty, where the mapping of the reference's 50 % after ten calls gives
   five. A deployment moving a default breaker sets `BREAKER_FAILURES`.

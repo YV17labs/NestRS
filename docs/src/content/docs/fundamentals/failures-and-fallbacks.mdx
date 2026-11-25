@@ -180,10 +180,13 @@ was.
 - **A decorated method calling another is two runs, one inside the other's
   attempt.** A refusal the inner policy answers (`Open`, `Full`, `Limited`, or the
   `TimedOut` of its own bound), carried by the outer method's `Err`, is an `Err`
-  like any other: an idempotent method sends it again and its breaker counts it as
-  a failure, unless its `retry_if` and `record_if` refuse it, as in
+  like any other: its breaker counts it as a failure and an idempotent method sends
+  it again, unless its `record_if` and `retry_if` refuse it, as in
   `|error| !matches!(error, PostError::Upstream(ResilienceError::Open { .. }))`,
-  written for the variant of the error that holds the `ResilienceError`.
+  written for the variant of the error that holds the `ResilienceError`. The
+  `Retry-After` an `Open` or a `Limited` carries is waited whole before the call is
+  sent again, and one past `BACKOFF_CEILING_MS`, as a fresh opening's is by default,
+  ends the run.
 - **A policy's breaker times its dependency out at its tightest caller's bound.**
   An inner attempt in flight when the outer policy's timeout cuts the call it runs
   in counts as a timeout in its own breaker: under an outer timeout of two

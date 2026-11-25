@@ -772,7 +772,8 @@ reference's word first:
   answers`); at `warn` the breaker's transition. A call an open breaker
   refuses and a run ending on a timeout are counted and told, and file no line
   of their own: one per refused call is the noise the 2026-11-22 entry
-  refused. A retry's line and event are told as it is decided, its counter
+  refused. A retry's line and event are told once it is certain — as it is
+  decided, or once its attempt's savepoint rolled back — and its counter
   counts a call sent again; a `Transition` carries `from`, `to` and `manual`,
   what opened the breaker being on the `warn` alone.
 - **The reads sit beside `breaker_state()`** — `breaker_stats()`,

@@ -144,8 +144,10 @@ failing, or a probe its caller dropped once sent, unanswered and before that dro
 counts [as a timeout](/fundamentals/circuit-breaker/#how-it-opens-and-closes), no
 probe of its series having succeeded; the next call then probes. `refusals` counts the runs the policy ended on its own refusal,
 whether its caller is answered `503` or the method's fallback answers in its
-place, which `fallbacks` then counts too. Its `limited` is the rate a dependency
-allows reached.
+place, which `fallbacks` then counts too. A run's last attempt given up at its
+bound counts as `timed_out` as it ends, so it is counted too where its savepoint
+then cannot settle and the run answers `Unsettled`. Its `limited` is the rate a
+dependency allows reached.
 
 What a policy holds is read when the metric reader exports, on up-down
 counters keyed the same way — recorded on no call, and only for a mechanism

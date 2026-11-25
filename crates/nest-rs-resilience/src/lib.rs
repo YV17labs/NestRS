@@ -60,13 +60,13 @@
 //! reads are observed there. The meter is the one `OpenTelemetry::init()`
 //! installs: a counter first recorded before it, and the reads of a policy
 //! whose first run came before it, report nothing, then or after. A count is
-//! not always an event's: a retry's line
-//! and event are told as the retry is decided, and its counter counts the
-//! call once it is sent again, so a retry the policy then refuses unsent — a
-//! breaker that opened, a rate with no token — is told, and counted as the
-//! refusal its run ends on, never as a retry; and a timeout the run sends its
-//! call again after is told and counts on no counter, where the one a run
-//! is over at counts among the refusals.
+//! not always an event's: a retry's line and event are told once the retry is
+//! certain — as it is decided, or once its attempt's savepoint rolled back —
+//! and its counter counts the call once it is sent again, so a retry the
+//! policy then refuses unsent — a breaker that opened, a rate with no token —
+//! is told, and counted as the refusal its run ends on, never as a retry; and
+//! a timeout of an attempt that left a retry to make is told and counts on no
+//! counter, where the run's last attempt given up counts among the refusals.
 //!
 //! **A policy's state lives in its process.** Each replica keeps its own
 //! breaker, bulkhead and rate, so a dependency failing for one replica is

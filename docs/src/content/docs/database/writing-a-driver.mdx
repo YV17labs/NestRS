@@ -215,8 +215,11 @@ A block owes, in order of how badly it goes wrong without it: the enclosing
 unit waits for it, so none of its statements lands inside the block's
 savepoint; a failure inside poisons the block, not the unit; a refused
 `RELEASE` or `ROLLBACK TO`, or a block dropped once its `SAVEPOINT` was
-answered and before it settled, leaves the unit unable to commit, while one
-dropped before that answer leaves the unit as it was; nothing is sent before the block's first statement;
+answered and before it settled, leaves what holds it unable to commit — the
+unit, for a block sitting directly in it, and for a block nested in another
+block or attempt's savepoint that one alone, the unit going on to commit what it
+wrote beside it — while one dropped before that answer leaves what it sat in as
+it was; nothing is sent before the block's first statement;
 and a block of its own on a pool unit commits on your settle task, its pool
 unit answering `Unhonoured::IN_DOUBT` when the body was cut before it saw
 that commit's answer. `crates/nest-rs-seaorm/src/savepoint.rs` and `turn.rs`

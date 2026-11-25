@@ -7608,12 +7608,16 @@ mod tests {
     }
 
     /// A savepoint the database cannot settle ends the run on `Unsettled`
-    /// though its attempt timed out: that timeout is the attempt's, counted
-    /// and told as it ended, and the run's answer says what its unit holds.
+    /// though its attempt timed out, a retry left to make or none: that
+    /// timeout is the attempt's, counted and told as it ended, no retry is
+    /// told, and the run's answer says what its unit holds.
     #[tokio::test(start_paused = true)]
     async fn a_timed_out_attempt_whose_savepoint_cannot_settle_is_told_then_ends_unsettled() {
-        for idempotent in [false, true] {
-            let policy = policy(guarding());
+        for (idempotent, retries) in [(false, None), (true, None), (true, Some(2))] {
+            let policy = policy(ResilienceConfig {
+                retries,
+                ..guarding()
+            });
             let mut events = policy.events();
             let unsettled = silent_in(&policy, Settling(Err(())), idempotent).await;
             assert!(
@@ -7627,7 +7631,7 @@ mod tests {
                     heard[..],
                     [ResilienceEvent::Timeout { timeout, .. }] if timeout == Duration::from_secs(5)
                 ),
-                "idempotent: {idempotent}: {heard:?}"
+                "idempotent: {idempotent}, retries: {retries:?}: {heard:?}"
             );
         }
     }

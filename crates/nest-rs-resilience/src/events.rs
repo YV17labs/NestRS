@@ -68,9 +68,10 @@ pub enum ResilienceEvent {
         /// says it.
         refusal: ResilienceRefusal,
     },
-    /// An attempt answered what the run decides to send its call again after:
-    /// a failure, a timeout, or an answer its method said to send again. It is
-    /// told as the retry is decided, before its wait: once the wait ends the
+    /// An attempt answered what the run sends its call again after: a failure,
+    /// a timeout, or an answer its method said to send again. It is told once
+    /// the retry is certain, before the call is sent — as it is decided, or
+    /// once the savepoint the attempt ran in rolled back: a wait later the
     /// policy may still refuse the call unsent — a breaker that opened, a rate
     /// with no token — which a [`Refusal`](Self::Refusal) then tells, and the
     /// retries' counter counts the calls sent again alone.
@@ -90,10 +91,12 @@ pub enum ResilienceEvent {
     },
     /// An attempt was given up at its bound, unanswered: told as it ends, by
     /// the run that gave it up. A retry follows it when the run sends its
-    /// call again; when none does the run is over at it, and it counts among
-    /// the refusals on the meter — the run answering it, or
-    /// [`Unsettled`](crate::ResilienceError::Unsettled) when the savepoint the
-    /// attempt ran in cannot be rolled back.
+    /// call again; the run's last attempt given up is the run over at it, and
+    /// counts among the refusals on the meter. Where the savepoint the attempt
+    /// ran in cannot be rolled back the run answers
+    /// [`Unsettled`](crate::ResilienceError::Unsettled) in place of either, the
+    /// last attempt's counted all the same and one with a retry left counted
+    /// among none.
     ///
     /// Three timeouts are told by no event. Each counts as a timeout in the
     /// breaker, the dependency having delivered nothing in time, and leaves

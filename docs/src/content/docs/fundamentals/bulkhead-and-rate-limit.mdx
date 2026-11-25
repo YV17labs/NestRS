@@ -88,8 +88,8 @@ attempt's: its timeout starts when its call is sent, and the unit's deadline
 bounds the wait and the attempt together.
 
 **Attempts waiting are served in the order they arrived.** Each reserves the token
-after the last one's, and one arriving stands behind them all. A token that
-neither `RATE_WAIT_MS` nor the unit's deadline reaches is not waited for, so no
+after the last one's, and one arriving stands behind them all. A token past
+`RATE_WAIT_MS`, or at the unit's deadline or after it, is not waited for, so no
 more attempts wait at once than tokens come within the wait. An attempt given up
 while it waits — its call dropped, the breaker refusing it once its wait ends, or
 its unit out of time by then — gives its token to the attempt behind it, and

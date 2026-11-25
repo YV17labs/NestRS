@@ -127,19 +127,25 @@ letter's reason and a client's error frame read an error chain through
 `nest_rs::core::error_message`, which asks each `SafeLink` about a link before
 its `Display`. Submit one:
 
-```rust title="from nest-rs-seaorm's errors, abridged"
+```rust title="crates/acme/src/error.rs"
+use std::error::Error;
+use std::sync::Arc;
+
 nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
 
-/// What a sea-orm or sqlx error means, said without a value: a server error by
-/// its SQLSTATE and the names it reported; a variant whose text can hold a value
-/// by its kind alone; every other by its own sentence, which holds none.
-fn say(link: &(dyn std::error::Error + 'static)) -> Option<String> {
-    if let Some(err) = link.downcast_ref::<DbErr>() {
-        return Some(said_db(err));
-    }
-    // …
+/// What an `AcmeError` means, said without a value.
+fn say(link: &(dyn Error + 'static)) -> Option<String> {
+    let error = link
+        .downcast_ref::<AcmeError>()
+        .or_else(|| link.downcast_ref::<Arc<AcmeError>>().map(|held| &**held))
+        .or_else(|| link.downcast_ref::<Box<AcmeError>>().map(|held| &**held))?;
+    Some(format!("acme error {}", error.code()))
 }
 ```
+
+`std` makes an `Arc` and a `Box` of an error an error of its own, so one naming
+yours as its `#[source]` behind either hands out the pointer, which your sayer
+downcasts to as well; an `Arc<dyn Error>` is read through before it is asked.
 
 A link your sayer claims is said by its sentence alone, and nothing below it
 is read. Keep identifiers — a code, a constraint, a table — and drop every

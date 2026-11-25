@@ -97,9 +97,13 @@ undecorated method's, as if it answered `Result<T, E>`. A `?` converting your
 error, `Ok(..)`, `Err(e)` and an early `return` each end one attempt, run once
 or again alike. Each answer is coerced as that method would coerce it — a
 `&String` into the `&str` it returns, a box into its `Box<dyn …>`.
-That `E` is a `std::error::Error`, as a `thiserror` derive makes one: its chain is
-what the policy's lines tell of an error. An error that is none — `anyhow::Error`, a
-boxed error — is held in a type of your own that is, and the compile error says so.
+That `E` is a `std::error::Error` owning what it says (`'static`), as a `thiserror`
+derive makes one: its chain is what the policy's lines tell of an error. One
+borrowing an argument is rustc's lifetime error at the method's answer, naming
+neither the policy nor the remedy: it owns the value instead. One generic over a
+type that is not `'static` is rustc's `E0310`, whose help adds the bound. An error
+that is none — `anyhow::Error`, a boxed error — is held in a type of your own that is,
+and the compile error says so.
 
 It goes on a provider, a struct you build, a trait impl, a route, a socket
 message, a queue job, a scheduled tick, a listener, a health indicator, a
@@ -286,7 +290,7 @@ off is `None`.
 - **The state lives in the process.** Each replica keeps its own breaker, its
   switch by hand included, bulkhead and rate, as each mechanism's page says.
 - **A decorated method answers the policy's error.** One answering an error of its
-  own, `Result<T, PostsError>`, calls a decorated one and maps its error. Another
+  own, `Result<T, PostError>`, calls a decorated one and maps its error. Another
   answer is refused at the method's return type, which rustc labels the attribute's
   expansion, and one a `macro_rules!` writes on its own `$crate` is refused twice.
 - **A method carries `#[resilient]` once.** A second is refused as written
@@ -305,7 +309,8 @@ off is `None`.
 - **`#[operations]` reads `#[resilient]` by its name**, by any path, in a build
   where any crate enables `resilience` (Cargo unifies features across a build):
   one of yours by that name lands on your method instead of the field, failing
-  to compile or covering the method alone, so import it under another name. It
+  to compile or covering the method alone, so import it under another name. The
+  umbrella's `full` feature takes `resilience`, so this holds for an app on `full`. It
   keeps `#[resilient]` on the method written plain or as an entry of a
   `#[cfg_attr]`, under its condition, and reads a decorated field's `Result` by
   its spelling, refusing one written through an alias.

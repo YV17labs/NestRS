@@ -23,8 +23,9 @@ pub(crate) const TRANSITIONS: &str = "nestrs.resilience.breaker.transitions";
 pub(crate) const RETRIES: &str = "nestrs.resilience.retries";
 
 /// Each run over at its policy's own refusal, by the refusal: the one the run
-/// answers, but for a timeout whose savepoint cannot be rolled back, counted
-/// as the attempt ends, its run then answering `Unsettled`.
+/// answers, but for the timeout of a last attempt whose savepoint cannot be
+/// rolled back, counted as that attempt ends, its run then answering
+/// `Unsettled`.
 #[cfg(feature = "opentelemetry")]
 pub(crate) const REFUSALS: &str = "nestrs.resilience.refusals";
 

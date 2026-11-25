@@ -34,7 +34,7 @@ impl PostsService {
 
 | Event | Told when |
 |---|---|
-| `Retry` | an attempt answered what the run sends its call again after, as it is decided and before the wait: its `attempt`, the first being `1`, the `wait`, and the `error` — its chain, or the timeout's sentence, `None` for an `Ok` sent again |
+| `Retry` | an attempt answered what the run sends its call again after, told once the retry is certain, before its call is sent: its `attempt`, the first being `1`, the `wait`, and the `error` — its chain, or the timeout's sentence, `None` for an `Ok` sent again |
 | `Timeout` | an attempt was given up at its bound, with the `timeout`: zero for a call its unit had no time left to send |
 | `Refusal` | the policy refused a call unsent: `ResilienceRefusal::Open`, `Full` or `Limited`, the first and the last with their `retry_after`; `Full` says neither its cause nor a count |
 | `Transition` | the breaker moved, `from` and `to` a `BreakerPhase`, and whether by hand (`manual`) |
@@ -119,7 +119,8 @@ unencoded is read as ending there, so a userinfo holding one is told in part.
 
 ### A reqwest error on a line
 
-In a program linking `nest-rs-reqwest`, as the `reqwest` and `authn` features do,
+In a program linking `nest-rs-reqwest`, as the `reqwest` and `authn` features do
+and every feature taking `authn`,
 a reqwest error that is a link of the chain, reqwest-middleware's included, is
 said by what that crate reads of it wherever the framework says an error:
 
@@ -130,8 +131,16 @@ said by what that crate reads of it wherever the framework says an error:
   without the value;
 - a timeout, a failed lookup, a closed connection, too many redirects, a scheme
   reqwest does not speak and a refused certificate, its names and dates left out,
-  each by a constant sentence. A cause of any other type is not said: hyper's
-  other reasons, HTTP/2's codes, rustls's alerts, a redirect policy's own error.
+  each by a constant sentence;
+- a cause another crate's `SafeLink` claims, as that crate says it: a response
+  body the policy cut says the policy's own sentence, and an HTTP/2 `GOAWAY` is
+  said without its debug data in a program linking `nest-rs-http`.
+
+A cause of any other type is not said: hyper's other reasons, HTTP/2's codes,
+rustls's alerts, a serializer's error, a redirect policy's own. The error is read
+through an `Arc`, a `Box` or an `Arc<dyn Error>` around it, and inside an I/O error
+holding one, one pointer deep: a pointer to a pointer (`Arc<Box<reqwest::Error>>`)
+and a reference handed out as the link are said as `std` displays them, URL included.
 
 An error handing reqwest's sentence on as its own (`#[error(transparent)]`) hides
 it from the chain, and without that crate every reqwest error is said as it writes
@@ -149,7 +158,8 @@ are listed there, each by the policy's `instance`.
 
 ## A line, an event and a counter each say their own fact
 
-- A retry's line and event are told as it is decided, before the wait; its
+- A retry's line and event are told once it is certain — as it is decided, or
+  once its attempt's savepoint has rolled back — and before its call is sent; its
   counter counts the call once sent again. A retry the policy then refuses unsent
   counts as that refusal.
 - A call an open breaker refuses, a call its unit had no time to send and a run
@@ -157,10 +167,22 @@ are listed there, each by the policy's `instance`.
   line.
 - A timeout the run retries is told as a `Timeout` event and counted by no
   counter.
-- A response of `ResilienceMiddleware` its caller drops while a read of its body
-  has waited past the bound counts as a timeout in the breaker, and no caller is
-  left to tell: no event says it and no refusal counts it, and only a
-  `Transition` follows, when that failure opens the breaker.
+- Three timeouts are told by no event and counted by no refusal. Each counts as a
+  timeout in the breaker, the dependency having delivered nothing in time, and
+  leaves no caller to answer; only a `Transition` follows, when that failure
+  opens the breaker:
+  - a response of `ResilienceMiddleware` its caller drops while a read of its
+    body has waited past the bound;
+  - an attempt its caller, or the edge cutting its unit, drops at or past the
+    instant its bound ends at, inside a unit whose edge set a deadline;
+  - an attempt, or such a response while a read of its body waits, dropped by the
+    timeout of another policy: the one the method calling it runs under, whose own
+    run tells its timeout.
+- A refusal is counted and told as its attempt ends, before its savepoint
+  settles. A run whose last attempt timed out and whose savepoint then cannot
+  settle answers `Unsettled`, its timeout told as a `Timeout` event and counted
+  among the refusals all the same. With a retry left to make, that timeout is told
+  and counted in the breaker, and among no refusals.
 - A transition's line, count and event are told once the breaker's lock is let
   go, in the order the transitions took effect, each once, one thread telling at a
   time. A reader of the breaker, or a switch by hand, from inside the line
@@ -186,9 +208,10 @@ instrument.
 
 On a GraphQL operation the order says nothing: `#[operations]` hands the
 instrument to the field it generates, so one span covers the whole field, its
-guards and every attempt, and `err` and `ret` record what the field answers. A
-span per attempt there is that of a provider's decorated method the operation
-calls, instrumented above `#[resilient]`.
+guards and every attempt. Its `err` is written `err(Debug)`, the field's error
+having a `Debug` and no `Display`, and `ret` does not compile there, the field's
+answer having neither. A span per attempt there is that of a provider's decorated
+method the operation calls, instrumented above `#[resilient]`.
 
 ## Limits
 

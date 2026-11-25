@@ -66,8 +66,10 @@ turn to the next call, the breaker staying half-open.
 **An attempt its caller drops unanswered counts in neither direction**, as in a
 `select!` taking another branch. Under a unit's deadline — a request's, a job's, a tick's, a
 health check's — one dropped past its bound counts as a timeout, whether the
-policy or the unit's edge cut it. Outside one, no instant ends the bound, and a
-drop counts for nothing however late it comes.
+policy or the unit's edge cut it. Outside one, no instant ends the bound, and its
+caller's drop counts for nothing however late it comes. One that [another policy's
+timeout](/fundamentals/failures-and-fallbacks/#limits) cuts counts as a timeout,
+in a unit or outside one.
 
 **An answer counts in the phase its attempt was let through in.** One sent before
 an opening counts nowhere once the breaker has closed again, whether its probes
@@ -96,11 +98,11 @@ attempts however old.
 
 `BREAKER_PROBES` asks that many probes in a row to succeed before the breaker
 closes, one at a time. A failed probe opens it again for its whole open time,
-and the series starts over. A probe whose call is cut at its timeout or at its
-unit's deadline has failed. A probe whose call is never sent, because the rate
-refused it or its unit ran out of time first, counts as neither a success nor a
-failure. The same goes for one its caller drops unanswered, where that drop is no
-timeout, and the series keeps its count.
+and the series starts over. A probe whose call is cut at its timeout, at its
+unit's deadline or by another policy's timeout has failed. A probe whose call is
+never sent, because the rate refused it or its unit ran out of time first, counts
+as neither a success nor a failure. The same goes for one its caller drops
+unanswered, where that drop is no timeout, and the series keeps its count.
 
 Under a rate limit, an age leaves room for only so many of the policy's own
 attempts to answer within it of one another, each attempt running ten minutes at
@@ -294,14 +296,11 @@ and more than the rate lets answer within the age.
   millisecond once the probe's bound has passed. A switch by hand takes the
   breaker out of it.
 - **A transition is told once the breaker's lock is let go, by one thread at a
-  time.** Its line, its count and its event follow in the order the transitions
-  took effect, each once. A tracing layer, a meter or a subscription may read the
-  breaker, or switch it by hand, from inside a transition's line: that switch is
-  told once the line in hand is.
-- **A refusal can be told before the transition that caused it.** A call that
-  moves the breaker while another thread is still telling can return before its
-  own transition's line is filed, and a call on another thread can meet the new
-  phase first.
+  time**, in the order the transitions took effect. A call that moves the breaker
+  while another thread is telling can return before its own transition's line is
+  filed, and a refusal can be told before the transition that caused it. A tracing
+  layer, a meter or a subscription may read or switch the breaker from inside a
+  transition's line: that switch is told once the line in hand is.
 - **A subscriber panicking out of a transition's line loses that transition's
   count and event**, those behind it told with the next one made; one blocking
   there for good keeps the turn, those behind it untold. No call waits for either,

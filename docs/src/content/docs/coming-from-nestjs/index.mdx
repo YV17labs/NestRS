@@ -209,11 +209,11 @@ The method's shape, with its keys written, is the first block of
 |---|---|---|
 | `retry.attempts` (the total, 3 by default, `Infinity`) | `RETRIES`, or `retries = N` on an `idempotent` method | Counts the sends after the first: `RETRIES` from 1 to 10, `0` for none, 2 by default; `retries` from 1 to 10. |
 | `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS` | One curve: doubling, with ±20 % of jitter. A `Retry-After` the dependency asks is waited whole; one past `BACKOFF_CEILING_MS` ends the run. |
-| `retry.retryIf(error, attempt)` | `retry_if = F`, with `F: Fn(&E) -> bool`, on an `idempotent` method | Every `Err` is sent again unless `F` says no, a client error included, whatever its status. A timeout is sent again and read by no predicate. |
+| `retry.retryIf(error, attempt)` | `retry_if = F`, with `F: Fn(&E) -> bool`, on an `idempotent` method | Every `Err` is sent again unless `F` says no, a client error included, whatever its status. A timeout is sent again and read by no predicate. A refusal an inner policy answers, carried by the `Err` of an enclosing decorated method, is an `Err` like any other: an idempotent method sends it again, and `retry_if` refuses it with a `matches!` on the error's own variant holding the `ResilienceError`, such as `\|error\| !matches!(error, PostError::Upstream(_))`. |
 | `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, with `F: Fn(&T) -> bool`, on an `idempotent` method | A key of any `idempotent` method, a handler included. Once the retries are spent, the last `Ok` is the answer. |
 | `idempotent`, else `GET`, `HEAD`, `OPTIONS` and GraphQL queries | `idempotent` on the decorator | Always written by the developer, for every method. `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods, `QUERY` and `Idempotency-Key`. |
 | a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body; inside a transaction, each attempt of an `idempotent` method, or of one naming a `fallback`, runs in a savepoint of it | The unit is not replayed. The writes of an attempt sent again, or ending on an error, are rolled back; a savepoint the database cannot settle ends the run on `ResilienceError::Unsettled`. |
-| `@Timeout(d)`, per attempt | `TIMEOUT_MS`, or `timeout = "2s"` on a method, from `"1ms"` to `"10m"` | Every policy has a timeout, 5 seconds by default; the unit's deadline ends an attempt sooner. |
+| `@Timeout(d)`, per attempt | `TIMEOUT_MS`, or `timeout = "2s"` on a method, from `"1ms"` to `"10m"` | Every policy has a timeout, 5 seconds by default; the unit's deadline ends an attempt sooner. An attempt that an enclosing policy's timeout cuts counts as a timeout in its own breaker. |
 | `@Signal()`, `AttemptContext.signal`, `ResilienceContext.signal` | `cancel = token` in a decorated method; the closure's argument in `run` and `run_idempotent` | The attempt's future is dropped at its bound, so the token is for work handed to another task. |
 | `AttemptContext.attempt`, `ResilienceContext.attempt` | a count the call keeps itself | A body, a predicate and a fallback read the method's arguments, and no attempt number; the closure `run_idempotent` takes is an `FnMut`, which counts its own calls. |
 
@@ -224,9 +224,9 @@ The method's shape, with its keys written, is the first block of
 | `slidingWindow` of a `count` | `BREAKER_WINDOW` | The same count of outcomes, 20 by default; `0` turns the breaker off. |
 | `slidingWindow` of a `time` of `A` | `BREAKER_AGE_SECS` of `A`, over a `BREAKER_WINDOW` of twice `minimumCalls` or more | An outcome is forgotten at its own age. The variable takes whole seconds; an age under a second is pinned through `for_root`. |
 | `failureRateThreshold` `T` and `minimumCalls` `M` | `BREAKER_FAILURES`, of `⌈T × M / 100⌉` | The threshold is a count of failures, read when a failure is counted: the breaker opens at that many failures, whatever the answers between them. A threshold of 50 % after ten calls is a `BREAKER_FAILURES` of 5. The default, ten failures of twenty, is not that mapping: set `BREAKER_FAILURES` to carry a default breaker over. |
-| `openDuration` | `BREAKER_OPEN_SECS` | The same. |
+| `openDuration` | `BREAKER_OPEN_SECS` | The variable takes whole seconds, an hour at most. |
 | `halfOpenMaxCalls`, sent together and judged by their rate | `BREAKER_PROBES`, in a row | Probes go one at a time; one failed probe opens the breaker again. |
-| `recordIf(error)` | `record_if = F`, with `F: Fn(&E) -> bool` | An `Err` it refuses is counted in neither direction, and a probe hands its turn on. |
+| `recordIf(error)` | `record_if = F`, with `F: Fn(&E) -> bool` | An `Err` it refuses is counted in neither direction, and a probe hands its turn on. A refusal an inner policy answers, carried by the `Err` of an enclosing decorated method, is an `Err` like any other and counts as a failure; `record_if` refuses it with a `matches!` on the error's own variant holding the `ResilienceError`. |
 | `breaker.state`, `breaker.stats` | `breaker_state()`, `breaker_stats()` (`outcomes`, `failures`, `failure_rate()` from 0 to 1) | The age is applied at the read. |
 | `breaker.trip()`, `breaker.reset()` | `open_breaker(duration)`, `close_breaker()` | An opening says for how long. |
 | `isClientError()` as the default filter | every `Err` a failure, unless `record_if` says otherwise | A client error is one too: the developer classifies. `ResilienceMiddleware` reads statuses. |
@@ -246,7 +246,7 @@ The method's shape, with its keys written, is the first block of
 | `@nestjs/resilience` | NestRS | What NestRS does |
 |---|---|---|
 | `@Fallback(method or fn, { handleIf })` | `fallback = method`, `fallback_if = F`, with `F: Fn(&ResilienceError<E>) -> bool` | The method is one of `Self`, its signature checked: the decorated method's arguments, then the error by value, answering what the method answers. It answers every error, a client error and the policy's refusals included, unless `fallback_if` says no, and runs under no policy. The last attempt's savepoint is rolled back first; `ResilienceError::Unsettled` is never handed to it. A free function or a closure answers through a method of `Self` that calls it. |
-| `preset.fallback` for `execute()` | `.or_else(…)` on the `Result` a run answers | The same. |
+| `preset.fallback` for `execute()` | `.or_else(…)` on the `Result` a run answers | The fallback is written at each call, against the `Result` that `run` answers, and its filter is a `match`. No line, event or counter says that a fallback answered. |
 | `executeObservable`, committed once a value is emitted | `#[sse]` and `#[subscription]` | The policy runs the call that opens the stream, never the items it yields later. |
 
 ### Events, reads and errors

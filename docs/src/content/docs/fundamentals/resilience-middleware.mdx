@@ -98,12 +98,14 @@ so a reader slower than the dependency is never cut.
 - A read still waiting once the budget is spent is given up there, and counts
   as a timeout in the breaker. `bytes()`, `chunk()` and the others answer
   reqwest's error, whose chain holds the `ResilienceError::TimedOut` a request
-  given up before its head carries.
-- Dropped before its end, the answer counts as its head did. One case differs:
-  a read you abandoned, in a `select!` or under a timeout of your own, that has
-  waited past the budget. The body is read once more as you drop it: a part
-  that came counts as the head did, a read that fails as a failure, and a part the
-  dependency still owes as a timeout.
+  given up before its head carries, and a line says that cut by the policy's own
+  sentence.
+- Dropped before its end, the answer counts as its head did. Two cases differ: a
+  read you abandoned, in a `select!` or under a timeout of your own, that has
+  waited past the budget, and a read still waiting as another policy's timeout
+  drops it, the one its reader runs under. The body is read once more as it is
+  dropped: a part that came counts as the head did, a read that fails as a
+  failure, and a part the dependency still owes as a timeout.
 - A panic while the body is read counts as a failure in the breaker, then
   unwinds on.
 

@@ -142,10 +142,13 @@ A savepoint the database cannot settle ends the method on
 unit cannot commit what the attempt wrote. Another statement of the unit, issued
 beside the method, waits until an attempt that sent a statement has settled; a
 method's future dropped mid-attempt, once the attempt's savepoint was answered,
-leaves its unit unable to commit, as an
-[atomic block](/database/transactions/#atomic-blocks) dropped does. Dropped
-sooner, waiting for its unit's turn, a connection or that `SAVEPOINT`'s answer,
-it leaves the unit as it was.
+leaves what holds that savepoint unable to commit, as an
+[atomic block](/database/transactions/#atomic-blocks) dropped does: its unit
+or, for a method nested in another attempt's savepoint or in an atomic block,
+that savepoint or that block alone, which can only roll back while the unit goes
+on to commit what it wrote beside it. Dropped sooner, waiting for its unit's
+turn, a connection or that `SAVEPOINT`'s answer, it leaves what it sits in as it
+was.
 
 ## Limits
 
@@ -168,8 +171,34 @@ it leaves the unit as it was.
   build, boxed in a debug build. clippy's `large_futures` says nothing of a
   decorated method's own `.await`s, whichever of its futures is large; a caller
   awaiting a method whose future is large is still told, at its own `.await`.
-- **A fallback has no time past its unit's deadline**: one that answers at once
-  answers for the unit, and one that waits is cut with it.
+- **A fallback has no time past its unit's deadline**: one that waits is cut
+  with the unit. Where the attempt given up at that deadline had sent a statement
+  in its unit's transaction, its savepoint is rolled back first, a round trip the
+  edge cuts the unit in, and the fallback is never asked. One that answers at once
+  answers for the unit where no rollback is sent: outside a transaction, or after
+  an attempt that sent no statement.
+- **A decorated method calling another is two runs, one inside the other's
+  attempt.** A refusal the inner policy answers (`Open`, `Full`, `Limited`, or the
+  `TimedOut` of its own bound), carried by the outer method's `Err`, is an `Err`
+  like any other: an idempotent method sends it again and its breaker counts it as
+  a failure, unless its `retry_if` and `record_if` refuse it, as in
+  `|error| !matches!(error, PostError::Upstream(ResilienceError::Open { .. }))`,
+  written for the variant of the error that holds the `ResilienceError`.
+- **A policy's breaker times its dependency out at its tightest caller's bound.**
+  An inner attempt in flight when the outer policy's timeout cuts the call it runs
+  in counts as a timeout in its own breaker: under an outer timeout of two
+  seconds, an answer due after three is a failure there, whatever the inner
+  timeout. One on a task the call spawned goes to its own bound.
+- **A method calling another under the same policy** keeps its breaker from
+  closing once it has opened: its own probe refuses the inner call, whose
+  refusal fails the probe and opens the breaker again. Call a method under
+  another policy, or share the body.
+- **Arguments drop last declared first**, as the undecorated method's do, however
+  the run ends. Of a method run once, under no `record_if` and no `fallback`, an
+  argument the body reads nowhere and the part of a pattern it leaves unbound drop
+  once the attempt has, and one it names under a leading `_` drops with the
+  attempt, after the others. Beside a `#[tracing::instrument]`, whose future takes
+  the arguments, they drop in the order it takes them.
 - **Two decorated calls joined in one unit's transaction take its turn in
   order**: an attempt's savepoint holds the unit until it settles, its call to
   the dependency included, so the other waits inside its own bound and can be

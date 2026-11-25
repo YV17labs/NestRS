@@ -100,12 +100,15 @@ refusals included, and an error it refuses is the method's answer. The fallback
 runs once the run is over, under no policy: no timeout, no retry, counted in no
 breaker. `ResilienceError::Unsettled` never reaches it.
 
-Every attempt lends the arguments the fallback is then handed, so the method
+Every attempt lends the arguments the fallback is then handed (one under a
+`#[cfg]` is handed under that condition, the fallback declaring it under the
+same), so the method
 binds each to a plain name, none `mut`, takes no `&mut`, and clones what an
-attempt consumes, which rustc answers with `E0382` at the key. A handler naming
-its extractor whole, `id: Path<u32>`, takes it apart in its body; one binding it
-by a pattern, `Path(id): Path<u32>`, is refused. A fallback taking other
-arguments is rustc's `E0308` or `E0061` at the key, and one naming the method it
+attempt consumes, which rustc answers with `E0382` at the fallback's name. A
+handler naming its extractor whole, `id: Path<u32>`, takes it apart in its body;
+one binding it by a pattern, `Path(id): Path<u32>`, is refused. A fallback taking
+other arguments is rustc's `E0308` at the key or `E0061` at the fallback's name,
+one naming no method of `Self` is its `E0599`, and one naming the method it
 answers for is refused. The fallback is always a method, whose signature is
 checked against the decorated one's: a closure or a free function answers
 through a method that calls it.
@@ -131,8 +134,11 @@ A savepoint the database cannot settle ends the method on
 `ResilienceError::Unsettled`, attempted no further and handed to no fallback: the
 unit cannot commit what the attempt wrote. Another statement of the unit, issued
 beside the method, waits until an attempt that sent a statement has settled; a
-method's future dropped mid-attempt leaves its unit unable to commit, as an
-[atomic block](/database/transactions/#atomic-blocks) dropped does.
+method's future dropped mid-attempt, once the attempt's savepoint was answered,
+leaves its unit unable to commit, as an
+[atomic block](/database/transactions/#atomic-blocks) dropped does. Dropped
+sooner, waiting for its unit's turn, a connection or that `SAVEPOINT`'s answer,
+it leaves the unit as it was.
 
 ## Limits
 
@@ -146,9 +152,15 @@ method's future dropped mid-attempt leaves its unit unable to commit, as an
 - **A method lending its arguments to each attempt is `Send` only where each
   argument it takes by value is `Sync`.** That is every idempotent method, every
   one naming a `fallback`, and one run once under `record_if`, for each argument
-  its body only reads; a non-`Sync`
-  argument taken by value is refused as not `Send`, in rustc's words, naming no
-  key.
+  its body only reads. Where the future must be `Send`, a non-`Sync` argument
+  taken by value is refused in rustc's words: for an idempotent method as
+  `E0277`, the argument "cannot be shared between threads safely", with a note
+  pointing at the key; for a method run once that lends under `record_if` or a
+  `fallback`, as a future that is not `Send`, naming no key.
+- **A fallback's future is held as an attempt's is**: in place in a release
+  build, boxed in a debug build. clippy's `large_futures` says nothing of a
+  decorated method's own `.await`s, whichever of its futures is large; a caller
+  awaiting a method whose future is large is still told, at its own `.await`.
 - **A fallback has no time past its unit's deadline**: one that answers at once
   answers for the unit, and one that waits is cut with it.
 - **Two calls joined in one transaction wait for each other**: the second's first

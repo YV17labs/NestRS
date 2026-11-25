@@ -93,7 +93,9 @@ undecorated method's, as if it answered `Result<T, E>`. A `?` converting your
 error, `Ok(..)`, `Err(e)` and an early `return` each end one attempt, run once
 or again alike. Each answer is coerced as that method would coerce it — a
 `&String` into the `&str` it returns, a box into its `Box<dyn …>`.
-That `E` is a `std::error::Error`: its chain is what the policy's lines tell of a failure.
+That `E` is a `std::error::Error`, as a `thiserror` derive makes one: its chain is
+what the policy's lines tell of a failure. An error that is none — `anyhow::Error`, a
+boxed error — is held in a type of your own that is, and the refusal says so.
 
 It goes on a provider, a struct you build, a trait impl, a route, a socket
 message, a queue job, a scheduled tick, a listener, a health indicator, a
@@ -105,7 +107,9 @@ it yields: a stream calling the dependency per item calls a decorated method eac
 
 A method pins its own `timeout`, and an idempotent one its own `retries`, in
 place of the policy's: `#[resilient(upstream, idempotent, timeout = "2s",
-retries = 3)]`. The unit's deadline still ends every attempt. Every other
+retries = 3)]`. Its `retries` takes `1` to `10`: a method wanting none drops
+`idempotent`, and `0` is the policy's `RETRIES` alone. The unit's deadline still
+ends every attempt. Every other
 setting — the backoff's, the breaker's, the bulkhead's, the rate limit's — is
 the policy's, shared by every method calling the dependency: a key naming one,
 before the field or after it, is refused with the variable and the
@@ -144,11 +148,13 @@ answer.
 | `fallback_if = F` | `Fn(&ResilienceError<E>) -> bool` | `fallback` | which errors the fallback answers for |
 | `cancel = token` | a name | | the local under which the body reads its attempt's token |
 
-A key written without the one it needs is refused naming it, and a value of the
-wrong shape — a literal for `F`, anything but a name written alone for
-`fallback` or `cancel` — is refused at the value with what the key takes. A
-value that is no literal and calls nothing, a `const`, is refused in the key's
-sentence, then by rustc naming the decorator's own types.
+A key written without the one it needs is refused naming it. A value of the wrong
+shape is refused at the value, in the key's sentence: a literal for `F`, anything
+but a name written alone for `fallback` or `cancel`, and a constant, a function's
+path of another arity or a closure typed otherwise for `F`, whose note offers the
+closure form for a method of `self` (`|error| self.is_transient(error)`). A
+closure taking no argument or several, or written `async`, is refused at the
+closure. A closure whose body answers no `bool` is rustc's own, at the body.
 
 **`cancel = token` hands a body its attempt's `CancellationToken`**, as a local
 that is no argument: the signature stays what callers call, and a name an
@@ -268,7 +274,9 @@ off is `None`.
 - **The state lives in the process.** Each replica keeps its own breaker, its
   switch by hand included, bulkhead and rate, as each mechanism's page says.
 - **A decorated method answers the policy's error.** One answering an error of its
-  own, `Result<T, PostsError>`, calls a decorated one and maps its error.
+  own, `Result<T, PostsError>`, calls a decorated one and maps its error. Another
+  answer is refused at the method's return type, which rustc labels the attribute's
+  expansion, and one a `macro_rules!` writes on its own `$crate` is refused twice.
 - **An `async fn` under `#[async_trait]` is a `fn` by the time `#[resilient]`
   reads it**, and is refused: write the trait's method as a native `async fn`.
 - **A WebSocket connection hook answers `()`**, so it carries no `#[resilient]`: it

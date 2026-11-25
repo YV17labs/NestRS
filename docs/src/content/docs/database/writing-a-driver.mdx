@@ -183,31 +183,40 @@ What the router answers itself — a `404`, a `405` — opens no unit.
 through `Executor::atomic`. The default answers `None`, and `atomic` then
 refuses with `AtomicError::Unsupported` without running the work —
 fail-closed, so a driver that offers no block loses the feature, and every
-GraphQL mutation with it: each root field runs in a block. SeaORM's nests one
-in whatever the handle holds:
+GraphQL mutation with it: each root field runs in a block. SeaORM's nests a
+savepoint in whatever transaction the handle holds, through
+`Executor::savepoint`, and opens a transaction of its own on the pool:
 
-```rust title="from nest-rs-seaorm's executor"
+```rust title="from nest-rs-seaorm's executor, abridged"
 pub(crate) fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-    let block = match self {
-        SeaOrmExecutor::Pool(pool) => {
-            AtomicExecutor::own(Arc::new(LazyTransaction::new(pool.clone(), ATOMIC)))
-        }
-        SeaOrmExecutor::Lazy(lazy) => {
-            AtomicExecutor::savepoint(Arc::new(Savepoint::in_boundary(Arc::clone(lazy))))
-        }
-        SeaOrmExecutor::Savepoint(block) => {
-            AtomicExecutor::savepoint(Arc::new(Savepoint::in_block(Arc::clone(block))))
-        }
+    self.savepoint().or_else(|| {
+        let own = AtomicExecutor::own(Arc::new(self.own_block()?));
+        Some(Arc::new(own) as Arc<dyn AtomicBlock>)
+    })
+}
+
+// …
+pub(crate) fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
+    let savepoint = match self {
+        SeaOrmExecutor::Pool(_) => return None,
+        SeaOrmExecutor::Lazy(lazy) => Savepoint::in_boundary(Arc::clone(lazy)),
+        SeaOrmExecutor::Savepoint(block) => Savepoint::in_block(Arc::clone(block)),
     };
-    Some(Arc::new(block))
+    Some(Arc::new(AtomicExecutor::savepoint(Arc::new(savepoint))))
 }
 ```
+
+`Executor::savepoint` is also what a resilience policy runs each attempt of an
+idempotent call, or of a method naming a `fallback`, in. Its default answers `None`, and such an attempt then runs on
+the executor itself, so a failed attempt's writes stay in the unit: a driver
+whose `atomic` opens a savepoint inside a transaction overrides it.
 
 A block owes, in order of how badly it goes wrong without it: the enclosing
 unit waits for it, so none of its statements lands inside the block's
 savepoint; a failure inside poisons the block, not the unit; a refused
-`RELEASE` or `ROLLBACK TO`, or a block dropped before it settled, leaves the
-unit unable to commit; nothing is sent before the block's first statement;
+`RELEASE` or `ROLLBACK TO`, or a block dropped once its `SAVEPOINT` was
+answered and before it settled, leaves the unit unable to commit, while one
+dropped before that answer leaves the unit as it was; nothing is sent before the block's first statement;
 and a block of its own on a pool unit commits on your settle task, its pool
 unit answering `Unhonoured::IN_DOUBT` when the body was cut before it saw
 that commit's answer. `crates/nest-rs-seaorm/src/savepoint.rs` and `turn.rs`

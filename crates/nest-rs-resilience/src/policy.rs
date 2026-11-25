@@ -408,11 +408,11 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// unit, issued beside the run, waits for it; an attempt given up while one
     /// of its statements runs is rolled back once that statement ends, which
     /// the next attempt and the run's answer wait for, and one given up before
-    /// its first statement was sent — its unit waiting for a connection —
-    /// leaves the unit as it was; and a run dropped mid-attempt, once it sent
-    /// a statement, leaves its unit unable to commit, as an atomic block
-    /// dropped does. A savepoint the database cannot settle ends the run on
-    /// [`ResilienceError::Unsettled`].
+    /// its savepoint was answered — its unit waiting for a connection, or for
+    /// that answer — leaves the unit as it was; and a run dropped mid-attempt,
+    /// once its savepoint was answered, leaves its unit unable to commit, as an
+    /// atomic block dropped does. A savepoint the database cannot settle ends
+    /// the run on [`ResilienceError::Unsettled`].
     ///
     /// An attempt's wait for its unit counts against its bound: of two such
     /// calls joined in one transaction, the second's first statement waits

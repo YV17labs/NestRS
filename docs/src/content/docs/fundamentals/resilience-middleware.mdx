@@ -50,8 +50,9 @@ A transport failure, a timeout, and a `408`, `429`, `500`, `502`, `503` or `504`
 are attempted again and count in the breaker. Any other answer is the
 dependency's. A `429`'s or a `503`'s `Retry-After` is waited whole, whether in
 seconds or an HTTP-date counted from the answer's own `Date`, so no clock skew
-enters. One past `BACKOFF_CEILING_MS` ends the run with that answer. The last
-answer comes back as it came; a refusal is a
+enters. One past `BACKOFF_CEILING_MS` ends the run with that answer. An answer
+sent again is dropped unread before the wait for its retry, so no wait holds its
+connection or its stream. The last answer comes back as it came; a refusal is a
 `reqwest_middleware::Error::Middleware`.
 
 Each request it hands on is one attempt of the policy, and the rate limit, a

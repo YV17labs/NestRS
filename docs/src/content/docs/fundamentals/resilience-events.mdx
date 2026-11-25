@@ -75,7 +75,7 @@ and `method` of the decorated method that ran it, and neither when `run`,
 | `attempt answered; retrying the call` | `debug` | `attempt`, `wait_ms` |
 | `no time left before the unit's deadline; not attempted again` | `debug` | `wait_ms`, `error` |
 | `the dependency asked a wait past the backoff's ceiling; not attempted again` | `debug` | `asked_ms`, `ceiling_ms`, `error` |
-| `an attempt's savepoint could not be settled; not attempted again` | `debug` | none |
+| `an attempt's savepoint could not be settled; not attempted again` | `debug` | `error` |
 | `rate limit reached; waiting for a token` | `debug` | `wait_ms` |
 | `rate limit reached; the call is refused` | `debug` | `retry_after_ms` |
 | `bulkhead full; the call is refused` | `debug` | `waiters`, the bound met when every place to wait was taken |
@@ -87,7 +87,8 @@ by `retry_ok_if`, which has no `error`. The third and fourth are a retry left bu
 not made. Each transition of the breaker files the last line, probes and switches
 by hand included, and only an opening by failures adds the `error` of the failure
 that opened it. An `error` is the error's chain with every URL in it cut to its
-origin, or the timeout's sentence.
+origin, or the timeout's sentence; the savepoint's line says the chain of the
+cause the database could not settle it for.
 
 A call an open breaker refuses and a run ending on a timeout file no line of
 their own: the breaker said it opened once, and each caller is answered its
@@ -119,6 +120,11 @@ are listed there, each by the policy's `instance`.
   has waited past the bound counts as a timeout in the breaker, and no caller is
   left to tell: no event says it and no refusal counts it, and only a
   `Transition` follows, when that failure opens the breaker.
+- A transition's line, count and event are told once the breaker's lock is let
+  go, in the order the transitions took effect, each once, one thread telling at a
+  time. A reader of the breaker, or a switch by hand, from inside the line
+  returns. A `Refusal` event can come before the `Transition` that caused it, and
+  a subscriber panicking out of the line loses that transition's count and event.
 - A `Transition` event says `from`, `to` and `manual`, and not what opened the
   breaker: that is on the `warn` alone. A wait for a token, a retry given up and
   an unsettled savepoint are lines alone.

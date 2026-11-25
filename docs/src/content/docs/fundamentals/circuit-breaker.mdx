@@ -19,8 +19,8 @@ NESTRS_RESILIENCE__UPSTREAM__BREAKER_AGE_SECS=600
 NESTRS_RESILIENCE__UPSTREAM__BREAKER_PROBES=3
 ```
 
-The first three are the defaults. Here an outcome older than ten minutes no
-longer counts, and three probes in a row close the breaker. By default no
+The first three are the defaults. Here an outcome older than ten minutes stops
+counting, and three probes in a row close the breaker. By default no
 outcome ages, and one probe closes it.
 
 ## How it opens and closes
@@ -40,10 +40,10 @@ timeout. Then one call probes, and the breaker closes or opens for thirty more.
 **A share is written as a count.** "Half the calls failed, ten of them at
 least" is written `BREAKER_FAILURES=10` and `BREAKER_WINDOW=20`, the defaults: half of
 a full window, and never before ten calls failed. Until the window holds twenty
-outcomes it still waits for ten failures, which makes it the stricter rule. Ten
-calls of which five failed leave it closed, where a rate counted from the tenth
-call opens it. A share `p`, never before `m` failures, is `BREAKER_FAILURES=m`
-and `BREAKER_WINDOW=m/p`: a quarter, never before five, is `5` of `20`.
+outcomes it still waits for ten failures. Ten calls of which five failed leave
+it closed, where a rate counted from the tenth call opens it. A share `p`, never
+before `m` failures, is `BREAKER_FAILURES=m` and `BREAKER_WINDOW=m/p`: a
+quarter, never before five, is `5` of `20`.
 
 **A share, by an age.** A breaker configured by a time window, a failure rate and
 a minimum of calls maps to this one so: `BREAKER_AGE_SECS` is the time window,
@@ -260,7 +260,7 @@ under the policy's instance.
 | `BREAKER_WINDOW` | how many of the latest attempts the breaker counts — default `20`; from `1` to `10000`, `0` for no breaker |
 | `BREAKER_FAILURES` | how many failed attempts in the window open it — default `10`; from `1` to `BREAKER_WINDOW` |
 | `BREAKER_OPEN_SECS` | how long it refuses every call before one probes — default `30`; from `1` to `3600` (an hour), and in code anything above zero up to an hour |
-| `BREAKER_AGE_SECS` | how old an outcome grows, from its call's answer, before it no longer counts — default none; from `1` to `86400` (a day), `0` for none, and in code anything above zero up to a day |
+| `BREAKER_AGE_SECS` | how old an outcome grows, from its call's answer, before it stops counting — default none; from `1` to `86400` (a day), `0` for none, and in code anything above zero up to a day |
 | `BREAKER_PROBES` | how many probes in a row close it — default `1`; from `1` to `100` |
 
 The age and the probes mean nothing without a breaker, and build none. Beside a
@@ -281,10 +281,20 @@ and more than the rate lets answer within the age.
   with a breaker that never opens. It takes each timeout as firing on time: a
   runtime stalled past a timeout can let more failures answer within the age
   than the check counts.
-- **A transition's line is filed under the breaker's lock**, so no switch comes
-  between a transition and its line, and the last line says the state the
-  breaker is in. A `tracing` subscriber or a meter that reads or switches that
-  breaker from inside the line waits for good; none of the framework's does.
+- **A transition is told once the breaker's lock is let go, by one thread at a
+  time.** Its line, its count and its event follow in the order the transitions
+  took effect, each once. A tracing layer, a meter or a subscription may read the
+  breaker, or switch it by hand, from inside a transition's line: that switch is
+  told once the line in hand is.
+- **A refusal can be told before the transition that caused it.** A call that
+  moves the breaker while another thread is still telling can return before its
+  own transition's line is filed, and a call on another thread can meet the new
+  phase first.
+- **A subscriber panicking out of a transition's line loses that transition's
+  count and event**, those behind it told with the next one made; one blocking
+  there for good keeps the turn, those behind it untold. No call waits for either,
+  but a process's first transition waits for a metrics export in progress, its
+  counter made at its first record, holding no lock of the breaker.
 
 ## Going further
 

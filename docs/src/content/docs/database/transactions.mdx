@@ -274,9 +274,12 @@ refused, whether or not the block has opened yet, rather than left to wait for
 the block that holds it.
 
 <Aside type="caution">
-A block dropped before it settles — cancelled by a timeout or a `select!` —
-leaves its savepoint open, so the request can no longer commit: it answers
-`500`. Keep a deadline outside the block, around the work that may cancel it.
+A block dropped — cancelled by a timeout or a `select!` — before its `SAVEPOINT`
+was answered, while its unit still waited for a connection, for its `BEGIN` or for
+that answer, leaves the unit as it was: no statement of the block ran, and the
+request commits what it wrote beside it. A block dropped once its `SAVEPOINT` was
+answered leaves that savepoint open, so the request cannot commit: it
+answers `500`. Keep a deadline outside the block, around the work that may cancel it.
 </Aside>
 
 ## Serialization conflicts

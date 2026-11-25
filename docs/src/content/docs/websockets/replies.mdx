@@ -41,7 +41,8 @@ someone meant it to read:
   rejection, a decode failure said without its value
   (`invalid type: a string, expected u64 at line 1 column 24`) — answers in its
   own form, a decode failure under `code: "INVALID_ARGUMENT"` as a payload or
-  an envelope that does not decode does;
+  an envelope that does not decode does, unless a pointer such as
+  `Arc<serde_json::Error>` holds it;
 - **anything else answers `"internal error"`** under `code: "INTERNAL"`, and
   its whole chain is filed once at `error` on `nest_rs::ws`.
 

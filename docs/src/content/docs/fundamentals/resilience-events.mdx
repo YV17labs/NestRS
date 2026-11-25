@@ -129,18 +129,28 @@ said by what that crate reads of it wherever the framework says an error:
   the reason phrase or a word the dependency wrote;
 - beneath it, an I/O error by its OS's sentence or its kind, and a decode failure
   without the value;
-- a timeout, a failed lookup, a closed connection, too many redirects, a scheme
-  reqwest does not speak and a refused certificate, its names and dates left out,
-  each by a constant sentence;
+- a failure of TLS in rustls's own words, where they quote nothing the peer wrote:
+  the alert a peer refusing the handshake sent, by its name (`error sending
+  request: received fatal alert: CertificateExpired`), a port that speaks no TLS
+  (`received corrupt message of type InvalidContentType`), a peer sharing no
+  version or suite with the client;
+- a certificate the client refuses, by a constant sentence without its names and
+  dates (`invalid peer certificate: UnknownIssuer`);
+- a proxy that opened no tunnel, by one of six constant sentences
+  (`tunnel error: proxy authorization required`, `tunnel error: unsuccessful`),
+  then the cause beneath it where there is one, said as any other;
+- a timeout, a failed lookup, a closed connection, too many redirects and a scheme
+  reqwest does not speak, each by a constant sentence;
 - a cause another crate's `SafeLink` claims, as that crate says it: a response
   body the policy cut says the policy's own sentence, and an HTTP/2 `GOAWAY` is
   said without its debug data in a program linking `nest-rs-http`.
 
-A cause of any other type is not said: hyper's other reasons, HTTP/2's codes,
-rustls's alerts, a serializer's error, a redirect policy's own. The error is read
-through an `Arc`, a `Box` or an `Arc<dyn Error>` around it, and inside an I/O error
-holding one, one pointer deep: a pointer to a pointer (`Arc<Box<reqwest::Error>>`)
-and a reference handed out as the link are said as `std` displays them, URL included.
+A cause of any other type is not said: hyper's other reasons, HTTP/2's other
+codes, a rejected Encrypted Client Hello and rustls's catch-alls, a serializer's
+error, a redirect policy's own. The error is read through an `Arc`, a `Box` or an
+`Arc<dyn Error>` around it, and inside an I/O error holding one, one pointer deep:
+a pointer to a pointer (`Arc<Box<reqwest::Error>>`) and a reference handed out as
+the link are said as `std` displays them, URL included.
 
 An error handing reqwest's sentence on as its own (`#[error(transparent)]`) hides
 it from the chain, and without that crate every reqwest error is said as it writes
@@ -171,8 +181,9 @@ are listed there, each by the policy's `instance`.
   timeout in the breaker, the dependency having delivered nothing in time, and
   leaves no caller to answer; only a `Transition` follows, when that failure
   opens the breaker:
-  - a response of `ResilienceMiddleware` its caller drops while a read of its
-    body has waited past the bound;
+  - a response of `ResilienceMiddleware` that its caller drops while a read of
+    its body has waited past the bound, or that the edge cutting its unit drops
+    while a read begun before the unit's deadline still waits;
   - an attempt its caller, or the edge cutting its unit, drops at or past the
     instant its bound ends at, inside a unit whose edge set a deadline;
   - an attempt, or such a response while a read of its body waits, dropped by the

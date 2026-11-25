@@ -52,9 +52,12 @@ a constant `internal error`, and the class every edge names it by under
 Returning the
 error itself does the same — an operation answering a `Result<T, E>` answers
 an `E` that says no problem opaquely, and files it — while keeping it typed for an
-[exception filter](/mcp/#layers-around-an-operation). A *deliberate* error is the
-opposite case — `McpError::invalid_params(...)` exists to be read, so return it
-directly and never route it through `opaque`.
+[exception filter](/mcp/#layers-around-an-operation). An `E` that is no `ToProblem`
+answers first what its chain carries: an `McpError` as built, a `Problem`, a pipe
+rejection, or a decode failure as `invalid_params` under `INVALID_ARGUMENT`, said
+without its value; one held behind a pointer (`Arc<serde_json::Error>`) is opaque.
+A *deliberate* error is the opposite case — `McpError::invalid_params(...)` exists
+to be read, so return it directly and never route it through `opaque`.
 
 A tool that **panics** is answered the same way: rmcp runs it on a task of its
 own, so the panic is contained where the operation is dispatched, the client

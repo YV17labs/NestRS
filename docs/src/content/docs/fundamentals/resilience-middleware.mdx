@@ -100,12 +100,17 @@ so a reader slower than the dependency is never cut.
   reqwest's error, whose chain holds the `ResilienceError::TimedOut` a request
   given up before its head carries, and a line says that cut by the policy's own
   sentence.
-- Dropped before its end, the answer counts as its head did. Two cases differ: a
+- Dropped before its end, the answer counts as its head did. Three cases differ: a
   read you abandoned, in a `select!` or under a timeout of your own, that has
-  waited past the budget, and a read still waiting as another policy's timeout
+  waited past the budget; a read still waiting when the edge cuts its unit at its
+  deadline (a request's, a job's, a health check's), whatever time you took of
+  your own before that read; and a read still waiting as another policy's timeout
   drops it, the one its reader runs under. The body is read once more as it is
   dropped: a part that came counts as the head did, a read that fails as a
-  failure, and a part the dependency still owes as a timeout.
+  failure, and a part the dependency still owes as a timeout. The budget alone
+  bounds a read begun at the deadline or after it, and a body handed on past its
+  unit, as by a handler answering the response's stream: dropped with that budget
+  unspent, the answer counts as its head did.
 - A panic while the body is read counts as a failure in the breaker, then
   unwinds on.
 

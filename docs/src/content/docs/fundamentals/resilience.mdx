@@ -124,8 +124,9 @@ before the field or after it, is refused with the variable and the
 `ResilienceConfig` field that set it. An idempotent body reads its arguments
 again at every attempt, so it binds none `mut` and takes no `&mut`, both refused
 at compile time, and clones what an attempt consumes: a consumed argument is
-rustc's `E0507`, whose help writes the clone. Every attempt borrows them, which
-bounds what a method takes by value ([Limits](/fundamentals/failures-and-fallbacks/#limits)).
+rustc's `E0507`, "cannot move out of value" with the argument underlined, whose
+help writes the clone. Every attempt borrows them, which bounds what a method
+takes by value ([Limits](/fundamentals/failures-and-fallbacks/#limits)).
 
 **No attempt outlives its unit.** Each attempt ends at its timeout or at the
 deadline of the unit it runs in — the request timeout on HTTP, a message's on a
@@ -239,7 +240,11 @@ impl ToProblem for UpstreamError {
 
 A route, a resolver, a gateway's message or a tool then returns
 `ResilienceError<UpstreamError>` as it is; a domain error of your own wrapping it
-hands its problem on with `self.0.to_problem()`. A queue job refused by an open
+hands its problem on with `self.0.to_problem()`. An error that is no `ToProblem` is
+answered on GraphQL, WebSocket and MCP by what its chain carries: a decode
+failure, an unreadable answer of the upstream's included, is told the client as
+its own `INVALID_ARGUMENT`, unless a pointer (`Arc<serde_json::Error>`) holds it. A
+`to_problem` answering `None` keeps it opaque. A queue job refused by an open
 breaker or a reached rate limit waits at least the refusal's `Retry-After`, up to
 an hour ([how a job honours it](/queue/retries-and-failure/)).
 
@@ -310,8 +315,9 @@ off is `None`.
   where any crate enables `resilience` (Cargo unifies features across a build):
   one of yours by that name lands on your method instead of the field, failing
   to compile or covering the method alone, so import it under another name. The
-  umbrella's `full` feature takes `resilience`, so this holds for an app on `full`. It
-  keeps `#[resilient]` on the method written plain or as an entry of a
+  umbrella's `full` feature takes `resilience`, so this holds for an app on `full`,
+  whose boot also refuses a `#[config]` of its own in the `resilience` namespace.
+  `#[operations]` keeps `#[resilient]` on the method written plain or as an entry of a
   `#[cfg_attr]`, under its condition, and reads a decorated field's `Result` by
   its spelling, refusing one written through an alias.
 - **No attempt number** is handed to a body, a predicate or a fallback: a closure

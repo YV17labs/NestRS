@@ -197,10 +197,18 @@ was.
   refusal fails the probe and opens the breaker again. Call a method under
   another policy, or share the body.
 - **Arguments drop last declared first**, as the undecorated method's do, however
-  the run ends. Of a method run once, under no `record_if` and no `fallback`, an
-  argument the body reads nowhere and the part of a pattern it leaves unbound drop
-  once the attempt has, and one it names under a leading `_` drops with the
-  attempt, after the others. Beside a `#[tracing::instrument]`, whose future takes
+  the run ends, but for the cases that follow. Of a method run once, under no
+  `record_if` and no `fallback`, an argument the body reads nowhere and the part
+  of a pattern it leaves unbound drop once the attempt has, and one it names under
+  a leading `_` drops with the attempt, after the others. The body is read by its
+  words there: a local or a struct literal's field spelled as an argument reads as
+  it, and can cost rustc's `unused variable` warning on that argument. Run once
+  under `record_if` and no `fallback`, an argument the body consumes is the
+  attempt's own: one it has not consumed when the attempt ends (failed sooner,
+  cut, or refused unsent) drops with the attempt, ahead of the arguments the body
+  only reads and in the order the body first names them. A body opening on
+  `let _ = (&out, &held);`, its arguments declared `held` then `out`, sets that
+  order last declared first. Beside a `#[tracing::instrument]`, whose future takes
   the arguments, they drop in the order it takes them.
 - **Two decorated calls joined in one unit's transaction take its turn in
   order**: an attempt's savepoint holds the unit until it settles, its call to

@@ -15,7 +15,8 @@ error's **type**, so a client reads only what someone meant it to read:
   and `extensions.title` and its field map's `extensions.errors` when it has
   them;
 - the framework's own vocabulary found in the chain — a `Problem`, a pipe
-  rejection, a decode failure said without its value — answers in its own form;
+  rejection, a decode failure said without its value, unless a pointer such as
+  `Arc<serde_json::Error>` holds it — answers in its own form;
 - **anything else answers `"internal error"` under the `INTERNAL` code**, and its
   whole chain is filed once at `error` on `nest_rs::graphql`.
 

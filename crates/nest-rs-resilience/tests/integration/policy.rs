@@ -1,6 +1,8 @@
 //! Covers `src/policy.rs`: through the HTTP edge, an attempt ends by the
 //! request's deadline, before the policy's own timeout, so its client is told
-//! by the policy and its breaker counts the attempt; and, under no edge, what a
+//! by the policy and its breaker counts the attempt; through the health edge,
+//! by the cut of the indicator sending it, a probe's turn included; and, under
+//! no edge, what a
 //! run's future holds — its size against its call's, what it allocates, alone,
 //! through every mechanism its policy takes and inside a unit of work whose
 //! transaction each attempt opens a savepoint of, and a large one run on a
@@ -10,12 +12,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http::StatusCode;
-use nest_rs_core::{Problem, ToProblem, module};
+use nest_rs_core::{Problem, ToProblem, injectable, module};
+use nest_rs_health::{
+    HealthConfig, HealthModule, HealthService, IndicatorStatus, ProbeKind, indicators,
+};
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_resilience::{
-    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+    BreakerState, ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
 };
-use nest_rs_testing::TestApp;
+use nest_rs_testing::{HeadlessApp, TestApp};
 
 #[derive(Debug, thiserror::Error)]
 #[error("the upstream never answers")]
@@ -99,6 +104,86 @@ async fn an_attempt_ends_by_the_requests_deadline_and_its_breaker_counts_it() {
         refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         refused.assert_header("retry-after", "30");
     }
+}
+
+#[injectable]
+struct SilentDependency {
+    #[inject]
+    upstream: Arc<ResiliencePolicy>,
+}
+
+#[indicators]
+impl SilentDependency {
+    #[readiness]
+    #[resilient(upstream)]
+    async fn dependency_answers(&self) -> Result<(), ResilienceError<Silent>> {
+        std::future::pending().await
+    }
+}
+
+/// How long the breaker below stays open.
+const OPEN: Duration = Duration::from_secs(30);
+
+#[module(
+    imports = [
+        HealthModule,
+        ResilienceModule::for_root(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(2),
+            breaker_failures: 2,
+            breaker_open: OPEN,
+            ..ResilienceConfig::default()
+        }),
+    ],
+    providers = [SilentDependency],
+)]
+struct SilentHealthModule;
+
+/// The health edge cuts an indicator well before the policy's own timeout: the
+/// attempt ends there, a timeout its breaker counts, so a dependency that
+/// accepts and never answers opens the breaker a readiness indicator runs
+/// under, and a probe sent from one fails rather than being handed on.
+#[tokio::test(start_paused = true)]
+async fn an_attempt_ends_by_its_indicators_cut_and_its_breaker_counts_it() {
+    let cut = HealthConfig::default().indicator_timeout;
+    assert!(
+        cut < ResilienceConfig::default().timeout,
+        "the edge cuts first"
+    );
+    let app = HeadlessApp::builder()
+        .module::<SilentHealthModule>()
+        .build_headless()
+        .await
+        .expect("a decorated indicator boots");
+    let health = app.container().get::<HealthService>().expect("provided");
+    let upstream = crate::held::<nest_rs_core::Unnamed>(&app);
+
+    let started = tokio::time::Instant::now();
+    let probed = health.probe(ProbeKind::Readiness).await;
+    assert_eq!(probed.status, IndicatorStatus::Down);
+    assert_eq!(started.elapsed(), cut);
+    let counted = upstream.breaker_stats().expect("a breaker");
+    assert_eq!(
+        (counted.outcomes, counted.failures),
+        (1, 1),
+        "the attempt its indicator cut is a timeout"
+    );
+
+    health.probe(ProbeKind::Readiness).await;
+    let opened = upstream.breaker_state();
+    assert!(
+        matches!(opened, Some(BreakerState::Open { retry_after, .. }) if retry_after == OPEN),
+        "two timeouts of two: {opened:?}"
+    );
+
+    tokio::time::advance(OPEN).await;
+    assert_eq!(upstream.breaker_state(), Some(BreakerState::HalfOpen));
+    health.probe(ProbeKind::Readiness).await;
+    let reopened = upstream.breaker_state();
+    assert!(
+        matches!(reopened, Some(BreakerState::Open { retry_after, .. }) if retry_after == OPEN),
+        "the probe its indicator cut has failed: {reopened:?}"
+    );
 }
 
 /// What a body below holds across its `.await`, or its closure moves in: past

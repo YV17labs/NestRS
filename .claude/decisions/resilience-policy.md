@@ -600,8 +600,8 @@ reference's word first:
 | `ResiliencePolicy.wrap(…)`, any order | one order: a call out of time or meeting an open breaker is refused before any wait for a slot, and the rate is read there; then the bulkhead's slot, held for the whole run; then per attempt the unit's deadline, the breaker, the rate, the timeout; the fallback once the run is over | no second order |
 | `retry.attempts` (total, default 3, `Infinity`) | `RETRIES` (after the first, 0 to 10, default 2, 0 for none); `retries = N` on a method, 1 to 10 | bounded: ten at most; a method wanting none drops `idempotent` |
 | `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS`; doubling, ±20 % | the curve is the framework's one; a `Retry-After` the dependency asks is waited whole |
-| `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips an error carrying a 4xx status but `408` and `429`); no attempt number; a timeout is sent again and read by none |
-| `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, `F: Fn(&T) -> bool` | a key of any decorated method, a handler included; the retries spent, the last `Ok` answers |
+| `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips a client error: an `HttpException` under `500`, and any other error carrying a 4xx status but `408` and `429`); no attempt number; a timeout is sent again and read by none |
+| `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, `F: Fn(&T) -> bool` | a key of any method declared `idempotent`, a handler included, where the reference keeps it off its entrypoints; the retries spent, the last `Ok` answers |
 | `idempotent`, else `GET`/`HEAD`/`OPTIONS` and GraphQL queries | `idempotent`, always written; `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods, `QUERY` and `Idempotency-Key` | never inferred for a method |
 | a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body, each attempt in a savepoint of the unit's transaction | the unit is not replayed |
 | `@Timeout(d)` per attempt | `TIMEOUT_MS`, `timeout = "2s"` | every policy has one; the unit's deadline ends an attempt sooner |
@@ -619,13 +619,13 @@ reference's word first:
 | `bulkhead.active`, `bulkhead.queued`; a rejection's `reason`, `active`, `queued` | `concurrency_running()`, `concurrency_waiting()`; `Full` | a call is in one of the two reads at any instant; the refusal says neither which cause nor a count, its `debug` line's `waiters` and the reads do |
 | `outboundRateLimit.limit`, `interval`, `maxWait` (token bucket) | `RATE_LIMIT`, `RATE_WINDOW_SECS`, `RATE_WAIT_MS` (token bucket) | counts attempts, a retry included; a token is waited for only when it comes before the unit's deadline; one given back goes to the next in line |
 | `limiter.available` | `rate_available()` | — |
-| `@Fallback(method \| fn, { handleIf })` | `fallback = method`, `fallback_if = F` | a method of `Self` alone, its signature checked: handed the method's arguments, then the error by value; default: every error (the reference's skips a 4xx but `408` and `429`); the failed attempt's savepoint is rolled back first |
+| `@Fallback(method \| fn, { handleIf })` | `fallback = method`, `fallback_if = F` | a method of `Self` alone, its signature checked: handed the method's arguments, then the error by value; default: every error (the reference's skips a client error, as its retry does); the failed attempt's savepoint is rolled back first |
 | `preset.fallback` for `execute()` | the `Result` a run answers: `.or_else(…)` | — |
 | `ResilienceEvents.events$`, `nestjs:resilience:<type>` channels | `ResiliencePolicy::events()`, beside the lines on `nest_rs::resilience` and the counters | per policy; bounded, a subscription behind is told how many it missed; a send never runs a subscriber; a line, an event and a counter each say their own fact (below) |
 | `retry`, `timeout`, `circuit-open` / `-half-open` / `-closed`, `circuit-rejected`, `bulkhead-rejected`, `rate-limited`, `fallback` | `ResilienceEvent`'s `Retry`, `Timeout`, `Transition`, `Refusal`, `Fallback` | one transition and one refusal event, each saying which; the error as its chain in text, never the value |
 | `ResilienceService.circuitBreaker(name)`, `bulkhead(name)`, `circuitBreakers()`, `bulkheads()`, for an app to export | each policy injected by its type; its reads observed on the meter under `opentelemetry` | none is looked up by a name or enumerated; the export is built |
 | `ResilienceModuleOptions.defaults`, merged under every preset and decorator | `ResilienceConfig`'s defaults; `for_root` pins a base per instance, the environment overlays it | no defaults shared across policies |
-| `ExecuteOptions.signal`, the caller's own cancellation | the caller drops the run's future | an attempt in flight is dropped with it, counted in neither direction before its bound and a timeout past it; a slot, a token or a probe's turn it held is given back |
+| `ExecuteOptions.signal`, the caller's own cancellation | the caller drops the run's future | an attempt in flight is dropped with it and counts in neither direction — but under a unit's deadline, where one dropped past its bound is a timeout; a slot, a token or a probe's turn it held is given back |
 | `mapErrors`: `504` / `503`, `RpcException`, `WsException`, `GraphQLError`; `TIMEOUT`, `CIRCUIT_OPEN`, `BULKHEAD_FULL`, `RATE_LIMITED`; `mapErrors: false` | `ToProblem`: `503` `UNAVAILABLE` on every edge, `Retry-After` where known; the variant tells them apart in code | one class; no switch — a method answering otherwise maps the `ResilienceError` it holds |
 | `isClientError()` as the default filter | none: every `Err` is a failure; `ResilienceMiddleware` reads statuses | the developer classifies |
 | `executeObservable`, committed once a value is emitted | an `#[sse]` route and a `#[subscription]` run the call opening the stream | — |
@@ -667,15 +667,33 @@ reference's word first:
   export ran the breaker's observed reads under its own, was a deadlock at a
   process's first transition. Across threads a call can meet the new phase,
   and have its refusal told, before the transition that caused it.
-- **A told error never tells a byte of a userinfo.** The chain a line or an
-  event carries is cut wherever `://` is written to the scheme, the host and a
-  numeric port, in one pass whatever the text; where an `@` follows the
-  authority's end the host cannot be told from a userinfo holding the
-  delimiter unencoded, and the scheme alone is told. The first cutter read a
-  run of closing brackets once per bracket, a dependency's own text stalling
-  the worker, and told a username as a host.
+- **A told error never tells a byte of a userinfo, nor a word a dependency
+  wrote in a status.** The chain a line or an event carries is cut wherever
+  `://` is written to the scheme, the host and a numeric port, in one pass
+  whatever the text; where an `@` follows the authority's end the host cannot
+  be told from a userinfo holding the delimiter unencoded, and the scheme alone
+  is told. The first cutter read a run of closing brackets once per bracket, a
+  dependency's own text stalling the worker, and told a username as a host. A
+  reqwest error is said by `nest-rs-reqwest`'s `SafeLink` — its kind, a status
+  by its class and its code, and beneath it only what a type that crate reads
+  tells or a constant opening it knows — since reqwest's own sentence quotes
+  the reason phrase the dependency answered, and its causes a trailer hyper
+  refuses, HTTP/2's debug data and a certificate's names.
 - **A call its unit had no time to send is no attempt**: it files no line, in
   any configuration, and is told as a timeout of none.
+- **No attempt outlives a health indicator's check either**: the probe cuts
+  each check at the sooner of `INDICATOR_TIMEOUT_MS` and its own deadline, and
+  that cut is the `Deadline` the check runs under, as every edge's is. Dropped
+  there instead, an attempt counted nothing, and a dependency that accepts and
+  never answers never opened the breaker a readiness indicator runs under.
+- **The list's first entry is the field, whatever its name**, one of a key that
+  takes a value included. `idempotent`, the one key written alone, is told from
+  a field of that name by the key after it, and a field named as a setting of
+  the policy's is renamed: the refusal of each says both readings.
+- **The attempt's type is read where the signature is**: the body is kept whole
+  in a block of its own inside the attempt's, so an item it declares under a
+  name of its answer — a `use … as Error`, a `type` — shadows nothing the
+  expansion names.
 - **The fallback answers after the run**, for the call's own error once its
   attempts are spent and for a refusal that sent nothing; `fallback_if` is
   asked first. It is a method of `Self` named by the key, handed the method's
@@ -783,6 +801,12 @@ lock" and the limit it left, a transition being told once the lock is let go.
   one after the other; closing it is the driver telling the policy an attempt
   waits for its own unit. Pinned as it stands by
   `two_calls_joined_in_one_unit_take_its_turn_in_order_and_the_one_waiting_is_charged_the_wait`.
+- **A probe whose run is kept and never polled again holds the half-open
+  turn**: only its own timer or its drop gives the turn back, and both need
+  its future polled or dropped. A stream that stops being read while it awaits
+  a decorated call does that, and every other call is refused meanwhile.
+  Closing it is the breaker giving an overdue probe up itself, its late answer
+  voided by an epoch.
 - **The default breaker is not the reference's default mapped**: ten failures
   of twenty, where the mapping of the reference's 50 % after ten calls gives
   five. A deployment moving a default breaker sets `BREAKER_FAILURES`.
@@ -813,6 +837,21 @@ lock" and the limit it left, a transition being told once the lock is let go.
   told as a host before it and left as prose after it. A cutter reading prose
   cannot close it; the error's writer does, by encoding its URL or quoting
   none. An address written with no `://` is left as written.
+- **A cause `nest-rs-reqwest` cannot read is not said**: hyper's reasons but
+  one, HTTP/2's codes, rustls's alerts, a redirect policy's and a serializer's
+  error are lost to every line, an operator reading the kind alone. Saying them
+  safely takes `hyper`, `h2` and `rustls` as dependencies of that crate, and a
+  reader of each type.
+- **An error handing reqwest's sentence on as its own** (`#[error(transparent)]`)
+  hides it from the chain, so no `SafeLink` reads it: on the policy's lines its
+  URL is cut to its origin and its status to its code, its causes are said as
+  they write themselves, and an edge's own failure line cuts nothing of it.
+  Closing it is `nest_rs_core::error_message`'s; an error naming reqwest's as
+  its `#[source]` is read.
+- **An argument a fallback is handed is read**, so one named with a leading `_`
+  is `clippy::used_underscore_binding`'s at the key: the name is dropped of its
+  underscore. Reading it as the expansion's own would lose a name a
+  `macro_rules!` writes apart from the attribute.
 - **A call refused beside a probe whose response its caller still holds is
   told that probe's whole bound**, constant for as long as it is held: no
   timer gives a held answer up, and the turn comes back when the response is

@@ -167,7 +167,8 @@ pub mod scheduled {
 /// build holds a body's and a fallback's in place, where `nest-rs-resilience`'s
 /// own suite denies the lint on the same shapes, its clippy run in both
 /// profiles. The lints a binding nothing reads trips are forbidden on the
-/// methods beside the file's.
+/// methods beside the file's, and so is the one braces around one expression
+/// trip: a body written on one line is kept in braces of the expansion's.
 #[cfg(feature = "resilience")]
 pub mod resilient {
     use std::sync::Arc;
@@ -195,8 +196,16 @@ pub mod resilient {
         depot: Arc<ResiliencePolicy>,
     }
 
-    #[forbid(unused_variables, unused_mut)]
+    #[forbid(unused_variables, unused_mut, unused_braces)]
     impl HygieneForbiddingDepot {
+        #[rustfmt::skip]
+        #[resilient(depot)]
+        pub async fn count(&self) -> Answer<usize> { Ok(0) }
+
+        #[rustfmt::skip]
+        #[resilient(depot, idempotent, fallback = recalled, cancel = token)]
+        pub async fn recount(&self) -> Answer<usize> { Ok(usize::from(token.is_cancelled())) }
+
         #[resilient(depot)]
         pub async fn store(&self, mut parcel: String) -> Answer<usize> {
             parcel.push('!');

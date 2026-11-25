@@ -10,6 +10,7 @@
 )]
 
 mod middleware;
+mod safe_link;
 
 use std::sync::LazyLock;
 

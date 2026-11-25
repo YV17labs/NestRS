@@ -10,8 +10,11 @@
 //! pointer or a boxed closure, an error that is no `std::error::Error`
 //! held in one of the app's own, the way out of each borrow error a
 //! predicate reading what its body changes earns, an argument a macro's
-//! pattern binds, a parameter under a `#[cfg]` beside every key, and a
-//! fallback handed arguments a `macro_rules!` wrote apart from the decorator.
+//! pattern binds, a parameter under a `#[cfg]` beside every key, a fallback
+//! handed arguments a `macro_rules!` wrote apart from the decorator, a body
+//! declaring items under the names its method answers in, in each form the
+//! keys expand to, one opening on an inner attribute, and a policy held in a
+//! field named as a key is.
 
 use std::sync::Arc;
 
@@ -406,6 +409,123 @@ impl HygieneHandBuilt {
         _error: ResilienceError<HygieneCarrierDown>,
     ) -> HygieneAnswer<usize> {
         Ok(parcel.as_ref().len())
+    }
+}
+
+/// What a quote answers, under the name a body's own struct takes.
+pub struct HygieneQuote(pub usize);
+
+/// A host whose bodies declare items under the names their methods answer in:
+/// an item is in scope of its whole block, and the attempt's type is read
+/// where the signature is.
+pub struct HygieneShadowing {
+    /// The policy each call runs under.
+    pub carrier: Arc<ResiliencePolicy<HygieneCarrier>>,
+}
+
+impl HygieneShadowing {
+    /// Sent once, the error's name imported as another's.
+    #[resilient(carrier)]
+    pub async fn parsed(&self, parcel: &str) -> Result<usize, ResilienceError<HygieneCarrierDown>> {
+        use std::num::ParseIntError as HygieneCarrierDown;
+        let parsed = parcel
+            .parse()
+            .map_err(|_unparsed: HygieneCarrierDown| crate::resilient::HygieneCarrierDown)?;
+        Ok(parsed)
+    }
+
+    /// Sent again, `Result` imported as an alias of one parameter.
+    #[resilient(carrier, idempotent)]
+    pub async fn read(&self, parcel: &str) -> Result<usize, ResilienceError<HygieneCarrierDown>> {
+        use std::io::Result;
+        let read: Result<usize> = Ok(parcel.len());
+        let read = read.map_err(|_unread| crate::resilient::HygieneCarrierDown)?;
+        if read == 0 {
+            return Err(crate::resilient::HygieneCarrierDown);
+        }
+        Ok(read)
+    }
+
+    /// Under a fallback, its token the closure's own `let`: a struct of the
+    /// name of what the method answers.
+    #[resilient(carrier, fallback = unquoted, cancel = token)]
+    pub async fn quoted(
+        &self,
+        parcel: &str,
+    ) -> Result<HygieneQuote, ResilienceError<HygieneCarrierDown>> {
+        struct HygieneQuote(bool);
+        let HygieneQuote(cancelled) = HygieneQuote(token.is_cancelled());
+        if cancelled {
+            return Err(HygieneCarrierDown);
+        }
+        Ok(crate::resilient::HygieneQuote(parcel.len()))
+    }
+
+    async fn unquoted(
+        &self,
+        parcel: &str,
+        _error: ResilienceError<HygieneCarrierDown>,
+    ) -> Result<HygieneQuote, ResilienceError<HygieneCarrierDown>> {
+        Ok(HygieneQuote(parcel.len()))
+    }
+
+    /// Sent again under a token, the `let` naming it the attempt's own: the
+    /// answer's alias declared as another type.
+    #[resilient(carrier, idempotent, cancel = token)]
+    pub async fn counted(&self, parcel: &str) -> HygieneAnswer<usize> {
+        type HygieneAnswer<T> = Option<T>;
+        let counted: HygieneAnswer<usize> = (!token.is_cancelled()).then_some(parcel.len());
+        counted.ok_or(HygieneCarrierDown)
+    }
+
+    /// An inner attribute still opens the body, over every statement of it,
+    /// and its items are in scope of them.
+    #[resilient(carrier, idempotent)]
+    pub async fn labelled(&self, parcel: &str) -> HygieneAnswer<usize> {
+        #![expect(
+            unused_variables,
+            reason = "the witness: the expectation is met by a statement of the body"
+        )]
+        const LABEL: &str = "parcel";
+        let unread = LABEL;
+        Ok(parcel.len())
+    }
+}
+
+/// A host holding its policy in a field named as a key is: the list's first
+/// entry is the field, whatever its name.
+pub struct HygieneFallbackProvider {
+    /// The policy the fallback's own provider runs under.
+    pub fallback: Arc<ResiliencePolicy<HygieneCarrier>>,
+    /// A policy named as the one key written alone.
+    pub idempotent: Arc<ResiliencePolicy<HygieneCarrier>>,
+}
+
+impl HygieneFallbackProvider {
+    /// The field alone.
+    #[resilient(fallback)]
+    pub async fn stored(&self, parcel: &str) -> HygieneAnswer<usize> {
+        Ok(depot(parcel)?.len())
+    }
+
+    /// The field, then the key of its name.
+    #[resilient(fallback, idempotent, fallback = last_stored)]
+    pub async fn restored(&self, parcel: &str) -> HygieneAnswer<usize> {
+        Ok(depot(parcel)?.len())
+    }
+
+    async fn last_stored(
+        &self,
+        parcel: &str,
+        _error: ResilienceError<HygieneCarrierDown>,
+    ) -> HygieneAnswer<usize> {
+        Ok(parcel.len())
+    }
+
+    /// A field named `idempotent`, the key written after it.
+    #[resilient(idempotent, idempotent)]
+    pub async fn resent(&self, parcel: &str) -> HygieneAnswer<usize> {
+        Ok(depot(parcel)?.len())
     }
 }
 

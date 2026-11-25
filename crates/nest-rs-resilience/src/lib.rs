@@ -8,10 +8,11 @@
 //! `#[instance] struct I` naming the dependency
 //! (`<PREFIX>_RESILIENCE__<INSTANCE>__*`, [`ResilienceConfig`]), and decorate
 //! the method making the call: [`#[resilient(field)]`](macro@resilient) runs
-//! its body once, `#[resilient(field, idempotent)]` again after a failure, up
-//! to its retries. A call reads its attempt's [`CancellationToken`] two ways: a
-//! decorated method names it in its body with the `cancel` key, and a call
-//! that is not a whole method runs through [`ResiliencePolicy::run`] or
+//! its body once, `#[resilient(field, idempotent)]` again after an `Err` or a
+//! timeout, up to its retries. A call reads its attempt's
+//! [`CancellationToken`] two ways: a decorated method names it in its body with
+//! the `cancel` key, and a call that is not a whole method runs through
+//! [`ResiliencePolicy::run`] or
 //! [`ResiliencePolicy::run_idempotent`], its closure handed the token. Every
 //! attempt is bounded by the policy's timeout and the unit's deadline,
 //! whichever ends first, and counted in its circuit breaker; the bulkhead
@@ -112,7 +113,7 @@ pub use policy::ResiliencePolicy;
 
 /// Runs a method calling a dependency under the policy a field of `self` holds,
 /// with no closure and no `run` to call: `#[resilient(field)]` sends the call
-/// once, `#[resilient(field, idempotent)]` again after a failure or a timeout,
+/// once, `#[resilient(field, idempotent)]` again after an `Err` or a timeout,
 /// and `timeout` and `retries` pin this method's own. `retry_if`, `retry_ok_if`
 /// and `record_if` say how an answer counts — which `Err` and which `Ok` is
 /// sent again, which `Err` is a failure in the circuit breaker, any other

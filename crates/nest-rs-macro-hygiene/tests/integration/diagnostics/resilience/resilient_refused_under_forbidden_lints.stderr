@@ -28,7 +28,7 @@ error: unknown #[resilient] argument `timout`; expected `idempotent`, `timeout`,
 73 |     #[resilient(carrier, fallback = stale, timout = "2s")]
    |                                            ^^^^^^
 
-error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes no receiver: a host is one instance shared by every call, and each method is lent a shared borrow of it
+error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes no receiver: a host is one instance shared by every call, and each method is lent a shared borrow of it. A free function has no host to hold a policy in a field: the method making the call is decorated, a provider's or that of a struct built by hand
   --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:79:30
    |
 79 |     async fn read_by_no_host(parcel: String) -> Answer<usize> {

@@ -193,8 +193,7 @@ struct Plan<'a> {
     /// arguments: each is read ahead of the run, where rustc would report one
     /// only a predicate or the fallback read as unused, its fix breaking the key.
     reads: bool,
-    /// `idempotent` as written, when the call is sent again after a failure:
-    /// kept for its span.
+    /// `idempotent` as written, when the call is sent again: kept for its span.
     idempotent: Option<&'a Ident>,
     /// The key that has each attempt borrow the arguments rather than own
     /// them, as written: `idempotent`, whose next attempt reads them again,
@@ -418,18 +417,16 @@ fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStre
             return stand_in(method, token, inferred);
         }
         let read = reads(&method, Read::BesideItsBody);
-        let stmts = &mut method.block.stmts;
-        let after_items = leading_items(stmts);
+        let written = std::mem::take(&mut method.block.stmts);
+        let mut stmts = vec![run_mark()];
+        stmts.extend(read);
         if let Some(token) = token {
-            stmts.insert(
-                after_items,
+            stmts.push(
                 syn::parse_quote!(let #token = ::nest_rs_resilience::CancellationToken::new();),
             );
         }
-        if let Some(read) = read {
-            stmts.insert(after_items, read);
-        }
-        stmts.insert(0, run_mark());
+        stmts.push(as_written(method.block.brace_token, written));
+        method.block.stmts = stmts;
         return method.into_token_stream();
     }
     if !shape.asynchronous {
@@ -472,14 +469,6 @@ fn awaits(tokens: TokenStream) -> bool {
         after_bang = matches!(&tree, TokenTree::Punct(bang) if bang.as_char() == '!');
     }
     false
-}
-
-/// How many items open `stmts`, ahead of its first statement.
-fn leading_items(stmts: &[Stmt]) -> usize {
-    stmts
-        .iter()
-        .take_while(|stmt| matches!(stmt, Stmt::Item(_)))
-        .count()
 }
 
 /// How a kept method reads the names its parameters bind.
@@ -654,7 +643,7 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
                             arg.ident().span(),
                             format!(
                                 "{} takes no value — it is a flag, and what it declares is its \
-                                 presence: the call is sent again after a failure or a timeout",
+                                 presence: the call is sent again after an `Err` or a timeout",
                                 site(RESILIENT, Some(IDEMPOTENT)),
                             ),
                         ));
@@ -895,31 +884,124 @@ fn resumes(input: ParseStream<'_>) -> bool {
     true
 }
 
-/// The field, named first and alone — refused when what leads the list is a
-/// key, the decorator's own or a setting of the policy's, told where that one
-/// is set as it is after the field, or anything but a field's name.
+/// The field: the list's first entry, a name written alone, whatever that name
+/// is. One a key that takes a value has too (`fallback`) is no key written
+/// right with none, so it is the field it reads as. A first entry is a key
+/// ahead of its field, and refused, where the list says so: it is given a
+/// value, or a name that is no key follows it, the field written late. Where
+/// nothing tells the two apart, the refusal says how each is written:
+/// `idempotent`, the one key written alone, unless the key follows it, and a
+/// setting of the policy's, which no list takes.
 fn field(input: ParseStream<'_>) -> syn::Result<Ident> {
-    if let Ok(leading) = input.fork().call(Ident::parse_any) {
-        let key = leading.unraw().to_string();
-        if KEYS.contains(&key.as_str()) {
+    let fork = input.fork();
+    let leading = fork.call(Ident::parse_any).ok();
+    let alone = fork.is_empty() || fork.peek(Token![,]);
+    if let Some(leading) = &leading {
+        let name = leading.unraw().to_string();
+        let rest = if alone {
+            Rest::after(&fork)
+        } else {
+            Rest::default()
+        };
+        let ahead = fork.peek(Token![=]) || fork.peek(syn::token::Paren) || rest.field;
+        let unsure = alone && !rest.field;
+        if KEYS.contains(&name.as_str()) {
+            let either = match (ahead, name == IDEMPOTENT && unsure && !rest.idempotent) {
+                (true, _) => Some(String::new()),
+                (false, true) => Some(format!(
+                    "; a field itself named `{leading}` is named before the key, \
+                     `#[resilient({leading}, {leading})]`, or renamed"
+                )),
+                (false, false) => None,
+            };
+            if let Some(either) = either {
+                return Err(syn::Error::new(
+                    leading.span(),
+                    format!(
+                        "#[resilient] reads the field holding the policy first, and `{leading}` \
+                         is one of its keys — write the field before it: `#[resilient(carrier, \
+                         {leading})]`{either}",
+                    ),
+                ));
+            }
+        } else if let Some(elsewhere) = resilient_policy_setting(&name) {
+            let either = if unsure {
+                format!("; a field itself named `{leading}` is renamed")
+            } else {
+                String::new()
+            };
             return Err(syn::Error::new(
                 leading.span(),
-                format!(
-                    "#[resilient] reads the field holding the policy first, and `{leading}` is \
-                     one of its keys — write the field before it: `#[resilient(carrier, \
-                     {leading})]`",
-                ),
+                format!("{elsewhere}{either}"),
             ));
-        }
-        if let Some(elsewhere) = resilient_policy_setting(&key) {
-            return Err(syn::Error::new(leading.span(), elsewhere));
         }
     }
     let fork = input.fork();
     match fork.parse::<Ident>() {
-        Ok(_) if fork.is_empty() || fork.peek(Token![,]) => input.parse(),
+        Ok(_) if alone => input.parse(),
+        Ok(field) if fork.peek(Ident::peek_any) || fork.peek(Lit) => Err(no_comma(&field, &fork)),
         _ => Err(no_field(input)),
     }
+}
+
+/// What a list writes after its first entry, as far as it reads as one.
+#[derive(Default)]
+struct Rest {
+    /// A name written alone that is no key, nor a setting of the policy's:
+    /// the field, written after a key.
+    field: bool,
+    /// `idempotent`, which written twice is the key once at most.
+    idempotent: bool,
+}
+
+impl Rest {
+    /// What follows `first`, a stream standing after the list's first entry.
+    fn after(first: ParseStream<'_>) -> Self {
+        let ahead = first.fork();
+        let mut rest = Self::default();
+        while ahead.parse::<Token![,]>().is_ok()
+            && let Ok(written) = ahead.call(Ident::parse_any)
+        {
+            let name = written.unraw().to_string();
+            let alone = ahead.is_empty() || ahead.peek(Token![,]);
+            if name == IDEMPOTENT {
+                rest.idempotent = true;
+            } else if alone
+                && !KEYS.contains(&name.as_str())
+                && resilient_policy_setting(&name).is_none()
+            {
+                rest.field = true;
+            }
+            let value = if ahead.peek(Token![=]) {
+                ahead
+                    .parse::<Token![=]>()
+                    .and_then(|_| ahead.parse::<Expr>())
+                    .map(drop)
+            } else if ahead.peek(syn::token::Paren) {
+                ahead.parse::<TokenTree>().map(drop)
+            } else {
+                Ok(())
+            };
+            if value.is_err() {
+                break;
+            }
+        }
+        rest
+    }
+}
+
+/// The refusal of a field what follows it is parted from by no comma, the
+/// list shown with one keeping everything written `after` the field.
+fn no_comma(field: &Ident, after: ParseStream<'_>) -> syn::Error {
+    let written: TokenStream = after.fork().parse().unwrap_or_default();
+    syn::Error::new(
+        after.span(),
+        format!(
+            "#[resilient] reads the field of `self` holding the policy, then each key after a \
+             comma, and the comma after `{field}` is missing — write `#[resilient({field}, \
+             {written})]`"
+        ),
+    )
 }
 
 /// The refusal of what leads the list in a field's place: a call, which rustc
@@ -994,21 +1076,35 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
     }
     let asynchronous = method.sig.asyncness.is_some();
     if !asynchronous {
-        refusals.push(syn::Error::new_spanned(
-            method.sig.fn_token,
-            "#[resilient] decorates an `async fn`: the policy's run is awaited, and this method \
-             is a `fn` — write `async fn`. Under `#[async_trait]`, which turns each `async fn` of \
-             the impl into a `fn` returning a boxed future before this attribute reads it, write \
-             the trait's method as a native `async fn` instead",
-        ));
+        let fn_token = method.sig.fn_token;
+        refusals.push(match &method.sig.constness {
+            Some(constness) => syn::Error::new_spanned(
+                quote!(#constness #fn_token),
+                "#[resilient] decorates an `async fn`: the policy's run is awaited, and this \
+                 method is a `const fn`, which is never `async` — write `async fn`, without \
+                 `const`",
+            ),
+            None => syn::Error::new_spanned(
+                fn_token,
+                "#[resilient] decorates an `async fn`: the policy's run is awaited, and this \
+                 method is a `fn` — write `async fn`. Under `#[async_trait]`, which turns each \
+                 `async fn` of the impl into a `fn` returning a boxed future before this \
+                 attribute reads it, write the trait's method as a native `async fn` instead",
+            ),
+        });
     }
+    let lent = shared_receiver(
+        method,
+        "#[resilient]",
+        &Ident::new("Self", Span::call_site()),
+        HostBorrow::Arc,
+    )
+    .map_err(|refusal| match method.sig.receiver() {
+        Some(_) => refusal,
+        None => hostless(method, &refusal),
+    });
     let receiver = refusals
-        .handle(shared_receiver(
-            method,
-            "#[resilient]",
-            &Ident::new("Self", Span::call_site()),
-            HostBorrow::Arc,
-        ))
+        .handle(lent)
         .and_then(|()| method.sig.receiver())
         .map(|receiver| receiver.self_token);
     let opaque = match &method.sig.output {
@@ -1155,6 +1251,23 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
         unread: false,
         unbound: hidden.is_some() || !unseen.is_empty(),
     }
+}
+
+/// `refusal`, a method's for taking no receiver, saying too what a free
+/// function is told: its tokens are an associated function's, and a receiver
+/// is no remedy it can follow.
+fn hostless(method: &ImplItemFn, refusal: &syn::Error) -> syn::Error {
+    let at: &dyn ToTokens = match method.sig.inputs.first() {
+        Some(first) => first,
+        None => &method.sig,
+    };
+    syn::Error::new_spanned(
+        at,
+        format!(
+            "{refusal}. A free function has no host to hold a policy in a field: the method \
+             making the call is decorated, a provider's or that of a struct built by hand"
+        ),
+    )
 }
 
 /// `pat` as a sentence quotes it: a macro's call as it is written, where its
@@ -1404,15 +1517,18 @@ fn answer(method: &ImplItemFn) -> (TokenStream, Span) {
     (answer, at)
 }
 
-/// `method`'s body, taken out of it and braced as it was written, opening after
-/// its items on a `return` of the attempt's type never taken: rustc types an
-/// async block's output from its body, so without it no answer is coerced.
+/// `method`'s body, taken out of it and kept whole in the braces it was written
+/// in, inside a block of the expansion's own opening on a `return` of the
+/// attempt's type never taken: rustc types an async block's output from its
+/// body, so without it no answer is coerced. Nothing is written in the body's
+/// own block, where an item it declares — a `use … as Error`, a `type` of the
+/// answer's name — is in scope of every statement, the expansion's included.
 ///
 /// A body `#[tracing::instrument]` wrapped answers the attempt's type inside
 /// the future it built too, and where each attempt `borrows` the arguments,
 /// that future borrows them as the body it holds would. `bound`, the `let`
 /// naming the attempt's token where the closure's parameter cannot, leads the
-/// statements.
+/// expansion's block.
 fn body(
     method: &mut ImplItemFn,
     answer: &TokenStream,
@@ -1432,25 +1548,37 @@ fn body(
         Part::Future(_) | Part::Written(_) => {}
     })
     .unwrap_or_default();
-    let items = leading_items(&stmts);
-    stmts.insert(
-        items,
-        syn::Stmt::Expr(
-            Expr::Verbatim(quote_spanned! {at=>
-                if false {
-                    return ::nest_rs_resilience::__private::attempt::<#answer>();
-                }
-            }),
-            None,
-        ),
-    );
-    if let Some(bound) = bound {
-        stmts.insert(items, bound);
-    }
+    let brace_token = method.block.brace_token;
+    let mut around: Vec<Stmt> = bound.into_iter().collect();
+    around.push(Stmt::Expr(
+        Expr::Verbatim(quote_spanned! {at=>
+            if false {
+                return ::nest_rs_resilience::__private::attempt::<#answer>();
+            }
+        }),
+        None,
+    ));
+    around.push(as_written(brace_token, stmts));
     syn::Block {
-        brace_token: method.block.brace_token,
-        stmts,
+        brace_token,
+        stmts: around,
     }
+}
+
+/// `stmts`, a method's body, as the last expression of a block the expansion
+/// writes its own statements ahead of: in braces at those the body was written
+/// in, and the expansion's own, as tracing's are around a body it wraps —
+/// rustc reports braces a developer wrote around one expression as unneeded.
+fn as_written(written: syn::token::Brace, stmts: Vec<Stmt>) -> Stmt {
+    let brace_token = syn::token::Brace(Span::mixed_site().located_at(written.span.join()));
+    Stmt::Expr(
+        Expr::Block(syn::ExprBlock {
+            attrs: Vec::new(),
+            label: None,
+            block: syn::Block { brace_token, stmts },
+        }),
+        None,
+    )
 }
 
 /// `method` with its body run as `plan` says, the policy's field and the
@@ -1697,7 +1825,7 @@ mod tests {
             "resilient_method (:: core :: any :: type_name :: < Self > , \"rates\" , :: core \
              :: option :: Option :: Some (2000u64) , :: core :: option :: Option :: Some (3u32) ,)",
             "| _ | async { if false { return :: nest_rs_resilience :: __private :: attempt :: < \
-             Result < u32 , ResilienceError < E > > > () ; } quote (zone) . await }",
+             Result < u32 , ResilienceError < E > > > () ; } { quote (zone) . await } }",
         ] {
             assert!(expanded.contains(written), "{written} in {expanded}");
         }
@@ -1721,7 +1849,8 @@ mod tests {
         assert!(
             expanded.contains(
                 "move | _ | async move { if false { return :: nest_rs_resilience :: __private :: \
-                 attempt :: < Result < () , ResilienceError < E > > > () ; } send (order) . await }"
+                 attempt :: < Result < () , ResilienceError < E > > > () ; } { send (order) . await \
+                 } }"
             ),
             "{expanded}"
         );
@@ -1764,11 +1893,11 @@ mod tests {
         );
     }
 
-    /// The attempt's type is the body's first answer, after the items it
-    /// declares first and before every statement, so rustc checks each answer
-    /// the body writes against it and no item follows a statement.
+    /// The attempt's type is the first answer of the block the expansion
+    /// writes around the body's, so rustc checks each answer the body writes
+    /// against it, and the body's items still lead its own block.
     #[test]
-    fn the_body_answers_the_attempts_type_first_after_its_leading_items() {
+    fn the_attempts_type_is_answered_first_ahead_of_the_block_the_body_was_written_in() {
         let expanded = resilient(
             quote!(carrier),
             quote! {
@@ -1783,9 +1912,9 @@ mod tests {
         .to_string();
         assert!(
             expanded.contains(
-                "async move { use std :: fmt :: Write as _ ; const LABEL : & str = \"parcel\" ; \
-                 if false { return :: nest_rs_resilience :: __private :: attempt :: < Answer > () \
-                 ; } let label = LABEL ;"
+                "async move { if false { return :: nest_rs_resilience :: __private :: attempt :: < \
+                 Answer > () ; } { use std :: fmt :: Write as _ ; const LABEL : & str = \"parcel\" \
+                 ; let label = LABEL ;"
             ),
             "{expanded}"
         );
@@ -2181,8 +2310,8 @@ mod tests {
     }
 
     /// The token is the closure's parameter where the one attempt owns what it
-    /// reads, and a `let` of the attempt's block where attempts borrow: after
-    /// the body's leading items, ahead of the return never taken.
+    /// reads, and a `let` of the attempt's block where attempts borrow: ahead
+    /// of the return never taken, outside the block the body was written in.
     #[test]
     fn the_token_is_bound_under_the_name_written_as_the_attempt_takes_its_arguments() {
         let item = quote! {
@@ -2193,7 +2322,10 @@ mod tests {
         };
         let once = resilient(quote!(carrier, cancel = token), item.clone()).to_string();
         assert!(
-            once.contains("move | token | async move { use std :: fmt :: Write as _ ; if false"),
+            once.contains(
+                "move | token | async move { if false { return :: nest_rs_resilience :: __private \
+                 :: attempt :: < Answer > () ; } { use std :: fmt :: Write as _ ;"
+            ),
             "{once}"
         );
         for lending in [
@@ -2203,8 +2335,9 @@ mod tests {
             let lent = resilient(lending, item.clone()).to_string();
             assert!(
                 lent.contains(
-                    "| __cancel | async { use std :: fmt :: Write as _ ; let token = __cancel ; \
-                     if false"
+                    "| __cancel | async { let token = __cancel ; if false { return :: \
+                     nest_rs_resilience :: __private :: attempt :: < Answer > () ; } { use std :: \
+                     fmt :: Write as _ ;"
                 ),
                 "{lent}"
             );
@@ -2615,7 +2748,7 @@ mod tests {
             }
         };
         let as_written = "async fn opaque (& self , token : String) -> impl Quoted { fn \
-                          __nestrs_resilient_run () { } let _ = (& token ,) ; token }";
+                          __nestrs_resilient_run () { } let _ = (& token ,) ; { token } }";
         for args in [
             quote!(carrier),
             quote!(carrier, cancel = token),
@@ -2647,7 +2780,7 @@ mod tests {
             },
         );
         assert!(
-            unread.ends_with("let _entered = __tracing_attr_span . enter () ; order }"),
+            unread.ends_with("let _entered = __tracing_attr_span . enter () ; order } }"),
             "an instrument's body the decorator cannot read: {unread}"
         );
         for (written, kept_as) in [
@@ -2660,9 +2793,9 @@ mod tests {
                     }
                 },
                 "async fn opaque (& self , order : Order) -> impl Quoted { fn \
-                 __nestrs_resilient_run () { } use std :: fmt :: Write as _ ; let _ = (& order ,) \
-                 ; let stop = :: nest_rs_resilience :: CancellationToken :: new () ; stop . \
-                 cancelled () . await ; order }",
+                 __nestrs_resilient_run () { } let _ = (& order ,) ; let stop = :: \
+                 nest_rs_resilience :: CancellationToken :: new () ; { use std :: fmt :: Write as \
+                 _ ; stop . cancelled () . await ; order } }",
             ),
             (
                 quote! {
@@ -2671,8 +2804,8 @@ mod tests {
                     }
                 },
                 "fn boxed (& self) -> impl Quoted { fn __nestrs_resilient_run () { } let stop = \
-                 :: nest_rs_resilience :: CancellationToken :: new () ; Box :: pin (async move { \
-                 stop . is_cancelled () }) }",
+                 :: nest_rs_resilience :: CancellationToken :: new () ; { Box :: pin (async move { \
+                 stop . is_cancelled () }) } }",
             ),
         ] {
             assert_eq!(kept(quote!(carrier, cancel = stop), written), kept_as);
@@ -2939,7 +3072,8 @@ mod tests {
 
     /// A setting of the policy's written where the field belongs — with a
     /// value, before the field, or alone — is refused in the words the same
-    /// key earns after the field, rather than as a field the list names wrong.
+    /// key earns after the field, rather than as a field the list names wrong;
+    /// alone, where it may be a field of that name, it says that one is renamed.
     #[test]
     fn a_setting_of_the_policys_written_first_is_refused_as_it_is_after_the_field() {
         let item = quote!(
@@ -2960,11 +3094,20 @@ mod tests {
             for first in [
                 format!("{key} = 5"),
                 format!("{key} = 5, carrier"),
-                key.to_owned(),
+                format!("{key}, carrier"),
             ] {
                 let refused = refusals(first.parse().expect("arguments"), item.clone());
                 assert_eq!(refused, after, "#[resilient({first})]");
             }
+            let alone = refusals(key.parse().expect("arguments"), item.clone());
+            assert_eq!(
+                alone,
+                [format!(
+                    "{}; a field itself named `{key}` is renamed",
+                    after[0]
+                )],
+                "#[resilient({key})]"
+            );
             assert!(
                 after[0].starts_with(&format!("#[resilient] takes no `{key}`: ")),
                 "{after:?}"
@@ -3013,7 +3156,7 @@ mod tests {
         assert!(
             stood_in.contains(
                 "move | _ | async move { if false { return :: nest_rs_resilience :: __private :: \
-                 attempt :: < Answer > () ; } send (order) . await }"
+                 attempt :: < Answer > () ; } { send (order) . await } }"
             ),
             "the stand-in checks the body against the attempt's type: {stood_in}"
         );
@@ -3112,9 +3255,9 @@ mod tests {
         );
         assert!(
             opaque.ends_with(&format!(
-                "-> impl Quoted {{ fn __nestrs_resilient_run () {{ }} use std :: fmt :: Write as _ \
-                 ; {read} let stop = :: nest_rs_resilience :: CancellationToken :: new () ; send \
-                 () . await }}"
+                "-> impl Quoted {{ fn __nestrs_resilient_run () {{ }} {read} let stop = :: \
+                 nest_rs_resilience :: CancellationToken :: new () ; {{ use std :: fmt :: Write as \
+                 _ ; send () . await }} }}"
             )),
             "as written: {opaque}"
         );
@@ -3554,9 +3697,227 @@ mod tests {
                 },
             );
             assert!(
-                kept.ends_with("{ fn __nestrs_resilient_run () { } send () . await }"),
+                kept.ends_with("{ fn __nestrs_resilient_run () { } { send () . await } }"),
                 "as written: {kept}"
             );
         }
+    }
+
+    /// An item the body declares is in scope of its whole block, a name of
+    /// the method's answer included: whatever the expansion writes for itself
+    /// — the attempt's type, the token's `let`, a kept form's mark and reads —
+    /// stands outside the block the body was written in, kept whole.
+    #[test]
+    fn nothing_of_the_expansions_is_written_inside_the_block_the_body_was_written_in() {
+        let stmts = "use std :: num :: ParseIntError as Error ; let n = parse (zone) . map_err (| \
+                     _ : Error | Down) ? ; Ok (n)";
+        let written = format!("{{ {stmts} }}");
+        let body: TokenStream = written.parse().expect("a block");
+        let item = quote! {
+            async fn rates(&self, zone: &str) -> Result<u32, ResilienceError<Error>> #body
+        };
+        let attempt = ":: nest_rs_resilience :: __private :: attempt :: < Result < u32 , \
+                       ResilienceError < Error > > > ()";
+        for (keys, opens) in [
+            (quote!(carrier), "move | _ | async move {".to_owned()),
+            (quote!(carrier, idempotent), "| _ | async {".to_owned()),
+            (
+                quote!(carrier, fallback = stale),
+                "| _ | async {".to_owned(),
+            ),
+            (
+                quote!(carrier, cancel = token),
+                "move | token | async move {".to_owned(),
+            ),
+            (
+                quote!(carrier, idempotent, cancel = token),
+                "| __cancel | async { let token = __cancel ;".to_owned(),
+            ),
+        ] {
+            let expanded = resilient(keys.clone(), item.clone()).to_string();
+            let attempted = format!("{opens} if false {{ return {attempt} ; }} {written} }}");
+            assert!(
+                expanded.contains(&attempted),
+                "#[resilient({keys})]: {attempted} in {expanded}"
+            );
+        }
+        let stood_in = kept(quote!(), item.clone());
+        assert!(
+            stood_in.contains(&format!(
+                "move | _ | async move {{ if false {{ return {attempt} ; }} {written} }}"
+            )),
+            "{stood_in}"
+        );
+        let wrapped = resilient(
+            quote!(carrier, idempotent),
+            instrumented_above(stmts.parse().expect("statements")),
+        )
+        .to_string();
+        assert!(
+            wrapped.contains("() ; } { { } let __tracing_attr_span")
+                && wrapped.contains(&format!(
+                    "__tracing_attr_fake_return ; }} {written} }} ; if !"
+                )),
+            "the body an instrument wrapped is as tracing left it, inside the attempt's: {wrapped}"
+        );
+        let as_written = kept(
+            quote!(carrier, cancel = stop),
+            quote! {
+                async fn rates(&self, zone: &str) -> impl Quoted #body
+            },
+        );
+        assert!(
+            as_written.ends_with(&format!(
+                "{{ fn __nestrs_resilient_run () {{ }} let _ = (& zone ,) ; let stop = :: \
+                 nest_rs_resilience :: CancellationToken :: new () ; {written} }}"
+            )),
+            "{as_written}"
+        );
+    }
+
+    /// A field followed by a key with no comma between them is told the comma,
+    /// what was written kept in the list it is shown.
+    #[test]
+    fn a_field_its_keys_follow_with_no_comma_is_told_the_comma_is_missing() {
+        for (list, remedy) in [
+            (quote!(carrier idempotent), "carrier, idempotent"),
+            (
+                quote!(carrier timeout = "2s", idempotent),
+                "carrier, timeout = \"2s\" , idempotent",
+            ),
+            (quote!(fallback idempotent), "fallback, idempotent"),
+        ] {
+            let refused = refusals(list.clone(), track());
+            let field = list.clone().into_iter().next().expect("a field");
+            assert_eq!(
+                refused,
+                [format!(
+                    "#[resilient] reads the field of `self` holding the policy, then each key \
+                     after a comma, and the comma after `{field}` is missing — write \
+                     `#[resilient({remedy})]`"
+                )],
+                "#[resilient({list})]"
+            );
+        }
+    }
+
+    /// The list's first entry is the field, whatever its name: one named like
+    /// a key that takes a value, written with none, is no key written right,
+    /// so it is the field it reads as.
+    #[test]
+    fn a_field_named_like_a_key_is_read_as_the_field_it_is_written_as() {
+        for (list, field) in [
+            (quote!(fallback), "fallback"),
+            (quote!(r#fallback), "r#fallback"),
+            (quote!(timeout, idempotent), "timeout"),
+            (quote!(fallback, fallback = stale), "fallback"),
+            (
+                quote!(cancel, cancel = token, retries = 2, idempotent),
+                "cancel",
+            ),
+            (quote!(idempotent, idempotent), "idempotent"),
+            (quote!(idempotent, timeout = "2s", idempotent), "idempotent"),
+        ] {
+            let expanded = expansion(list.clone(), track())
+                .unwrap_or_else(|_| panic!("#[resilient({list})] refused"))
+                .to_string();
+            assert!(
+                expanded.contains(&format!("policy (& self . {field})")),
+                "#[resilient({list})]: {expanded}"
+            );
+        }
+        let sent_again = resilient(quote!(idempotent, idempotent), track()).to_string();
+        assert!(sent_again.contains("run_idempotent"), "{sent_again}");
+    }
+
+    /// A first entry named like a key is that key, its field missing, where
+    /// the list says so — it is given a value, or a name that is no key
+    /// follows it — and where nothing tells the two apart, `idempotent` or a
+    /// setting of the policy's written alone, the refusal says how to write
+    /// either.
+    #[test]
+    fn a_key_ahead_of_its_field_is_told_apart_from_a_field_named_like_it() {
+        let ahead = |key: &str| {
+            format!(
+                "#[resilient] reads the field holding the policy first, and `{key}` is one of its \
+                 keys — write the field before it: `#[resilient(carrier, {key})]`"
+            )
+        };
+        for (list, key) in [
+            (quote!(fallback = stale), "fallback"),
+            (quote!(timeout = "2s", carrier), "timeout"),
+            (quote!(idempotent(true)), "idempotent"),
+            (quote!(idempotent, carrier), "idempotent"),
+            (quote!(fallback, carrier), "fallback"),
+            (quote!(retries, idempotent, carrier), "retries"),
+        ] {
+            assert_eq!(
+                refusals(list.clone(), track()),
+                [ahead(key)],
+                "#[resilient({list})]"
+            );
+        }
+        for list in [quote!(idempotent), quote!(idempotent, timeout = "2s")] {
+            assert_eq!(
+                refusals(list.clone(), track()),
+                [format!(
+                    "{}; a field itself named `idempotent` is named before the key, \
+                     `#[resilient(idempotent, idempotent)]`, or renamed",
+                    ahead("idempotent")
+                )],
+                "#[resilient({list})]"
+            );
+        }
+        for list in [quote!(concurrency), quote!(concurrency, idempotent)] {
+            let refused = refusals(list.clone(), track());
+            assert_eq!(refused.len(), 1, "#[resilient({list})]: {refused:#?}");
+            assert!(
+                refused[0].starts_with("#[resilient] takes no `concurrency`: ")
+                    && refused[0].ends_with(
+                        "`ResilienceConfig::concurrency` in code; a field itself named \
+                         `concurrency` is renamed"
+                    ),
+                "#[resilient({list})]: {refused:#?}"
+            );
+        }
+    }
+
+    /// A function taking no receiver may be a free one, which no receiver
+    /// cures, and a `const fn` is never `async`: each is told what can be done.
+    #[test]
+    fn a_free_fn_and_a_const_fn_are_each_told_a_remedy_they_can_follow() {
+        let free = refusals(
+            quote!(carrier),
+            quote!(
+                pub async fn free() -> Answer {
+                    Ok(())
+                }
+            ),
+        );
+        assert_eq!(
+            free,
+            [
+                "a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and \
+              this one takes no receiver: a host is one instance shared by every call, and each \
+              method is lent a shared borrow of it. A free function has no host to hold a policy \
+              in a field: the method making the call is decorated, a provider's or that of a \
+              struct built by hand"
+            ]
+        );
+        let constant = refusals(
+            quote!(carrier),
+            quote!(
+                const fn ship(&self) -> Answer {
+                    Ok(())
+                }
+            ),
+        );
+        assert_eq!(
+            constant,
+            [
+                "#[resilient] decorates an `async fn`: the policy's run is awaited, and this \
+              method is a `const fn`, which is never `async` — write `async fn`, without `const`"
+            ]
+        );
     }
 }

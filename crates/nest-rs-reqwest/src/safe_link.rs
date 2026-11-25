@@ -1,24 +1,62 @@
-//! The [`SafeLink`] saying reqwest's errors: reqwest's own sentence quotes the
+//! The [`SafeLink`] saying reqwest's errors. reqwest's own sentence quotes the
 //! URL the request was sent to, whose path and query hold what the caller sent
-//! — an identifier, a token — so the crate that knows reqwest's errors claims
-//! them wherever one is a link of a chain, in a program linking this crate:
-//! read alone, or beneath an app's error naming it as its source. An error
-//! handing reqwest's sentence on as its own (`#[error(transparent)]`) holds it
-//! as no link, so nothing here reads it — reqwest-middleware's apart, which
-//! this crate knows — and that sentence's URL is its reader's to cut.
+//! — an identifier, a token — and, of a status, the reason phrase the peer
+//! wrote; beneath it lie other crates' errors, whose sentences quote what the
+//! peer answered — a trailer hyper refuses, HTTP/2's debug data, the names of
+//! a certificate. So the crate that knows reqwest's errors claims them
+//! wherever one is a link of a chain, in a program linking this crate — read
+//! alone, or beneath an app's error naming it as its source — and says of each
+//! only what a type it can read tells, or a sentence it knows the constant
+//! opening of:
+//!
+//! - its kind, in reqwest's words, and of a status its class and its code:
+//!   never the URL, never the peer's phrase;
+//! - beneath it, a reqwest error the same way; a decode failure as
+//!   [`DecodeError`] reports it, without the value; an I/O error by the
+//!   sentence its OS or `std` gives it, and one holding another error by what
+//!   that one tells, or else by its kind;
+//! - a cause of any other type by the opening of its sentence when that is
+//!   one of [`KNOWN`], and by nothing otherwise — hyper's, HTTP/2's, a
+//!   redirect policy's, a serializer's — the chain being read on beneath it.
+//!
+//! An error handing reqwest's sentence on as its own (`#[error(transparent)]`)
+//! holds it as no link, so nothing here reads it — reqwest-middleware's apart,
+//! which this crate knows — and that sentence's URL and phrase, with every
+//! cause beneath it, are its reader's to cut.
 
 use std::error::Error;
 
-use nest_rs_core::{SafeLink, error_message};
+use nest_rs_core::{DecodeError, SafeLink};
 
 nest_rs_core::inventory::submit! { SafeLink::new(say) }
 
-/// What a reqwest error is said as should its sentence no longer end with the
-/// URL it holds: nothing of that sentence is then known to be free of it.
+/// What a reqwest error of a kind this crate does not know is said as.
 const UNREAD: &str = "the HTTP client failed";
 
-/// A reqwest error, and reqwest-middleware's, said without the request's URL;
-/// any other link is its own driver's to say.
+/// The constant openings of the sentences a cause is said by where this crate
+/// cannot read its type, each the last word on a failure an operator acts on,
+/// a longer one before the one it starts with: reqwest's own causes, private
+/// to it (a bound of the client's that passed, a scheme it does not speak, a
+/// name that did not resolve, a redirect followed past its limit); `std`'s
+/// for a lookup that failed; hyper's for a connection closed under a request;
+/// and rustls's for a certificate it refuses, without the names and the dates
+/// it goes on to quote.
+const KNOWN: [&str; 11] = [
+    "operation timed out",
+    "URL scheme is not allowed",
+    "error resolving DNS",
+    "too many redirects",
+    "failed to lookup address information",
+    "connection closed before message completed",
+    "invalid peer certificate: UnknownIssuer",
+    "invalid peer certificate: certificate expired",
+    "invalid peer certificate: certificate not valid yet",
+    "invalid peer certificate: certificate not valid for name",
+    "invalid peer certificate",
+];
+
+/// A reqwest error, and reqwest-middleware's, said by what this crate reads of
+/// it; any other link is its own driver's to say.
 fn say(link: &(dyn Error + 'static)) -> Option<String> {
     if let Some(error) = link.downcast_ref::<reqwest::Error>() {
         return Some(said(error));
@@ -29,31 +67,99 @@ fn say(link: &(dyn Error + 'static)) -> Option<String> {
         // included, and `source()` skips it.
         return Some(match error {
             reqwest_middleware::Error::Reqwest(error) => said(error),
-            reqwest_middleware::Error::Middleware(error) => error_message(error.as_ref()),
+            reqwest_middleware::Error::Middleware(error) => {
+                nest_rs_core::error_message(error.as_ref())
+            }
         });
     }
     None
 }
 
-/// reqwest's own sentence for `error` without the URL it ends with, then what
-/// the causes beneath it say.
+/// `error` by its kind, then what the causes beneath it tell.
 fn said(error: &reqwest::Error) -> String {
-    let displayed = error.to_string();
-    let own = match error.url() {
-        None => displayed.as_str(),
-        Some(url) => displayed
-            .strip_suffix(&format!(" for url ({url})"))
-            .unwrap_or(UNREAD),
-    };
-    match error.source() {
-        Some(cause) => format!("{own}: {}", error_message(cause)),
-        None => own.to_owned(),
+    let mut sentence = kind(error);
+    below(error.source(), &mut sentence);
+    sentence
+}
+
+/// reqwest's sentence for the kind of `error`, which it writes before the URL:
+/// a constant, but for a status, said by its class and its code alone —
+/// reqwest's own goes on with the phrase the peer wrote.
+fn kind(error: &reqwest::Error) -> String {
+    if let Some(status) = error.status() {
+        let class = if status.is_client_error() {
+            "client"
+        } else {
+            "server"
+        };
+        return format!("HTTP status {class} error ({})", status.as_u16());
     }
+    let kind = if error.is_builder() {
+        "builder error"
+    } else if error.is_request() {
+        "error sending request"
+    } else if error.is_body() {
+        "request or response body error"
+    } else if error.is_decode() {
+        "error decoding response body"
+    } else if error.is_redirect() {
+        "error following redirect"
+    } else if error.is_upgrade() {
+        "error upgrading connection"
+    } else {
+        UNREAD
+    };
+    kind.to_owned()
+}
+
+/// Adds to `sentence` what the links from `link` down tell, each after a
+/// colon, and answers whether any told something.
+fn below(mut link: Option<&(dyn Error + 'static)>, sentence: &mut String) -> bool {
+    fn tell(part: &str, sentence: &mut String) {
+        sentence.push_str(": ");
+        sentence.push_str(part);
+    }
+    let mut told = false;
+    while let Some(cause) = link {
+        if let Some(error) = cause.downcast_ref::<reqwest::Error>() {
+            tell(&said(error), sentence);
+            return true;
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            match io.get_ref() {
+                // The OS's sentence, or `std`'s own: no library wrote it.
+                None => tell(&io.to_string(), sentence),
+                // Its sentence is the held error's, a library's: hyper quotes
+                // a trailer it refuses there, rustls a certificate's names.
+                Some(held) => {
+                    if !below(Some(held), sentence) {
+                        tell(&io.kind().to_string(), sentence);
+                    }
+                }
+            }
+            return true;
+        }
+        // `in_chain` reads on beneath a link: only a last link is read alone.
+        if cause.source().is_none()
+            && let Some(report) = DecodeError::in_chain(cause)
+        {
+            tell(&report.to_string(), sentence);
+            return true;
+        }
+        let written = cause.to_string();
+        if let Some(known) = KNOWN.iter().find(|known| written.starts_with(**known)) {
+            tell(known, sentence);
+            told = true;
+        }
+        link = cause.source();
+    }
+    told
 }
 
 #[cfg(test)]
 mod tests {
     use nest_rs_core::__private::find_in_chain;
+    use nest_rs_core::error_message;
 
     use super::*;
 
@@ -135,6 +241,17 @@ mod tests {
                 "builder error: URL scheme is not allowed",
                 "{userinfo}"
             );
+        }
+    }
+
+    /// The first opening a sentence starts with is the one said: a shorter
+    /// one listed first would hide the longer.
+    #[test]
+    fn no_known_opening_comes_before_a_longer_one_it_starts() {
+        for (at, known) in KNOWN.iter().enumerate() {
+            for later in &KNOWN[at + 1..] {
+                assert!(!later.starts_with(known), "`{known}` hides `{later}`");
+            }
         }
     }
 

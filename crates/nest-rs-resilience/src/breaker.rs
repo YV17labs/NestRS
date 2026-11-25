@@ -68,7 +68,10 @@ pub enum BreakerState {
     ///   answer up, the turn comes back when its caller has read or dropped
     ///   it, and its reads wait for the dependency no longer than that bound.
     ///
-    /// It carries no time: that bound is the probe's own run's.
+    /// It carries no time: that bound is the probe's own run's. A limit: the
+    /// turn is given up by the probe's own run, as it is polled or dropped,
+    /// so a caller keeping that run's future and never polling it again
+    /// holds the turn, and every other call refused, for as long as it does.
     HalfOpen,
 }
 
@@ -465,14 +468,17 @@ impl Drop for Pass<'_> {
 /// Dropped so at or past the instant its bound ends at, it has timed out, as
 /// its own timer due there would have said: an edge cutting its unit at that
 /// deadline may be polled first, tokio firing one instant's timers in batches
-/// that another worker runs between. However it ends, it changes and counts
-/// nothing once the breaker opened or was switched by hand since it was
-/// admitted.
+/// that another worker runs between. A bound ends at an instant under a unit's
+/// deadline alone ([`until`](Self::until)): sent under none, an attempt
+/// dropped past its timeout counts for nothing too, and a probe hands its
+/// turn on. However it ends, it changes and counts nothing once the breaker
+/// opened or was switched by hand since it was admitted.
 pub(crate) struct Sent<'b> {
     breaker: &'b Breaker,
     probe: bool,
     epoch: u64,
-    /// The instant the attempt's bound ends at, when its timer is armed at one.
+    /// The instant the attempt's bound ends at, when its timer is armed at
+    /// one: inside a unit whose edge cuts it at a deadline, and nowhere else.
     until: Option<Instant>,
 }
 
@@ -793,7 +799,8 @@ impl Breaker {
     }
 
     /// A probe its caller dropped once its call was sent, before it answered
-    /// and before its bound ended: the next call probes instead, the series
+    /// and before its bound ended — or whenever, where it was sent under no
+    /// unit's deadline: the next call probes instead, the series
     /// keeping what it counted — and the breaker, half-open on no success yet,
     /// open again, saying so.
     fn abandon_probe(&self, epoch: u64) {
@@ -970,7 +977,7 @@ mod tests {
 
     fn states(lines: &nest_rs_testing::LogCapture) -> Vec<String> {
         lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, MOVED)
             .iter()
             .map(|event| event.field("state").unwrap_or_default())
             .collect()
@@ -1213,7 +1220,7 @@ mod tests {
         };
         probe.send(BOUND, None).settle(None);
         let said: Vec<(String, String)> = lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, MOVED)
             .iter()
             .map(|event| {
                 assert_eq!(event.level, "warn", "{event:?}");
@@ -1262,7 +1269,7 @@ mod tests {
         breaker.close_manually();
 
         let said: Vec<(String, Option<String>)> = lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, MOVED)
             .iter()
             .map(|event| {
                 (
@@ -1360,7 +1367,7 @@ mod tests {
     /// `failed` where it carries them.
     fn said(lines: &nest_rs_testing::LogCapture) -> Vec<String> {
         lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, MOVED)
             .iter()
             .map(|event| {
                 assert_eq!(event.level, "warn", "{event:?}");
@@ -2216,7 +2223,7 @@ mod tests {
                 retry_after: OPEN_FOR
             }
         );
-        let opened = lines.find(TARGET, "circuit breaker changed state");
+        let opened = lines.find(TARGET, MOVED);
         assert_eq!(opened.len(), 1, "{opened:?}");
         assert_eq!(opened[0].field("error").as_deref(), Some(DOWN));
     }
@@ -2669,7 +2676,7 @@ mod tests {
         fn of(event: &tracing::Event<'_>) -> Option<Self> {
             let mut line = Self::default();
             event.record(&mut line);
-            (line.message == "circuit breaker changed state").then_some(line)
+            (line.message == MOVED).then_some(line)
         }
 
         fn said(&self) -> String {

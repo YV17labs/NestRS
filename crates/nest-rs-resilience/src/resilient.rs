@@ -784,7 +784,7 @@ mod tests {
             (0, 0),
             "and none a success: the window holds nothing of them"
         );
-        let retried = lines.find(TARGET, "attempt failed; retrying the call");
+        let retried = lines.find(TARGET, crate::policy::RETRYING_FAILED);
         assert_eq!(retried.len(), 4, "{retried:#?}");
         assert!(
             retried.iter().all(|line| {
@@ -896,7 +896,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_ok_retry_ok_if_takes_is_sent_again_and_the_last_answers_once_the_retries_are_spent()
     {
-        const RETRIED: &str = "attempt answered; retrying the call";
+        const RETRIED: &str = crate::policy::RETRYING_ANSWERED;
         let policy = guarded(2);
         let pending = |quote: &u32| *quote < 10;
 
@@ -925,7 +925,7 @@ mod tests {
             retried.iter().all(|line| line.field("error").is_none()),
             "an `Ok` sent again has no error to tell: {retried:#?}"
         );
-        lines.expect_none(TARGET, "attempt failed; retrying the call");
+        lines.expect_none(TARGET, crate::policy::RETRYING_FAILED);
         drop(lines);
 
         let attempts = AtomicU32::new(0);
@@ -1337,7 +1337,7 @@ mod tests {
     /// whole chain; a run its fallback does not answer for files none.
     #[tokio::test]
     async fn a_fallback_answering_files_a_debug_line_with_the_errors_chain() {
-        const FELL_BACK: &str = "the call ended on an error; its fallback answers";
+        const FELL_BACK: &str = crate::policy::FALLBACK_ANSWERS;
         let policy = unguarded();
         let stale = |_: ResilienceError<Quote>| async { Ok(7) };
         let throttled =
@@ -1647,7 +1647,7 @@ mod tests {
     /// the one line is the fallback's, filed before it was called.
     #[tokio::test(start_paused = true)]
     async fn a_filter_or_a_fallback_that_panics_unwinds_from_a_run_already_counted() {
-        const FELL_BACK: &str = "the call ended on an error; its fallback answers";
+        const FELL_BACK: &str = crate::policy::FALLBACK_ANSWERS;
         #[derive(Clone, Copy, Debug)]
         enum Panics {
             Filter,

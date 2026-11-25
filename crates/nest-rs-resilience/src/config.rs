@@ -288,7 +288,10 @@ pub struct ResilienceConfig {
     /// or its unit out of time before it — whose caller drops it unanswered
     /// before then, or which answers an `Err` its method's `record_if`
     /// refuses, counts as neither a success nor a failure, and the series
-    /// keeps its count.
+    /// keeps its count. A caller's drop past the timeout counts as that
+    /// timeout only inside a unit whose edge set a deadline — a request, a
+    /// job, a tick, a health indicator's check; outside one, as on a task the
+    /// app spawned or in a streamed body, it counts as neither.
     #[config(bounds = BREAKER_PROBES)]
     pub breaker_probes: usize,
     /// How many calls run inside the policy at once, the bulkhead,
@@ -566,6 +569,47 @@ mod tests {
         assert_eq!(
             read.concurrency_waiters, None,
             "no bound on the calls waiting for a slot, as before it existed"
+        );
+    }
+
+    /// Each default is the one its field's rustdoc and the pages state: what
+    /// a bare import does, which no release changes unsaid.
+    #[test]
+    fn the_defaults_are_the_documented_ones() {
+        let read = read(&[]).expect("the defaults are in range");
+        assert_eq!(
+            (read.timeout, read.retries),
+            (Duration::from_secs(5), Some(2)),
+            "5 seconds an attempt, 2 retries"
+        );
+        assert_eq!(
+            (read.backoff_first, read.backoff_ceiling),
+            (Duration::from_millis(200), Duration::from_secs(2)),
+            "200 ms before the first retry, up to 2 seconds"
+        );
+        assert_eq!(
+            (read.breaker_window, read.breaker_failures),
+            (Some(20), 10),
+            "10 failures of the latest 20 attempts open the breaker"
+        );
+        assert_eq!(
+            (read.breaker_open, read.breaker_age, read.breaker_probes),
+            (Duration::from_secs(30), None, 1),
+            "open 30 seconds, no age, one probe closing it"
+        );
+        assert_eq!(
+            (
+                read.concurrency,
+                read.concurrency_wait,
+                read.concurrency_waiters
+            ),
+            (None, None, None),
+            "no bulkhead"
+        );
+        assert_eq!(
+            (read.rate_limit, read.rate_window, read.rate_wait),
+            (None, Duration::from_secs(60), None),
+            "no rate limit, over a minute's window"
         );
     }
 

@@ -1,89 +1,101 @@
 error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout`, `retries`, `retry_if`, `retry_ok_if`, `record_if`, `fallback`, `fallback_if` or `cancel`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:32:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:33:26
    |
-32 |     #[resilient(carrier, retry = 3)]
+33 |     #[resilient(carrier, retry = 3)]
    |                          ^^^^^
 
 error: #[resilient] takes at most one `timeout`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:37:42
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:38:42
    |
-37 |     #[resilient(carrier, timeout = "1s", timeout = "2s")]
+38 |     #[resilient(carrier, timeout = "1s", timeout = "2s")]
    |                                          ^^^^^^^
 
 error: #[resilient] reads the field holding the policy first, and `idempotent` is one of its keys — write the field before it: `#[resilient(carrier, idempotent)]`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:42:17
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:43:17
    |
-42 |     #[resilient(idempotent, carrier)]
+43 |     #[resilient(idempotent, carrier)]
    |                 ^^^^^^^^^^
 
-error: #[resilient] names the field of `self` holding the policy by its name, alone — write `#[resilient(carrier)]` to run the method under `self.carrier`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:47:17
+error: #[resilient] reads the field holding the policy first, and `idempotent` is one of its keys — write the field before it: `#[resilient(carrier, idempotent)]`; a field itself named `idempotent` is named before the key, `#[resilient(idempotent, idempotent)]`, or renamed
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:48:17
    |
-47 |     #[resilient(self.carrier)]
+48 |     #[resilient(idempotent)]
+   |                 ^^^^^^^^^^
+
+error: #[resilient] reads the field of `self` holding the policy, then each key after a comma, and the comma after `carrier` is missing — write `#[resilient(carrier, idempotent, timeout = "2s")]`
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:53:25
+   |
+53 |     #[resilient(carrier idempotent, timeout = "2s")]
+   |                         ^^^^^^^^^^
+
+error: #[resilient] names the field of `self` holding the policy by its name, alone — write `#[resilient(carrier)]` to run the method under `self.carrier`
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:58:17
+   |
+58 |     #[resilient(self.carrier)]
    |                 ^^^^
 
 error: #[resilient] names the field of `self` holding the policy by its name, alone, and this is a call: the policy is read from a field, never through a method — hold the `Arc<ResiliencePolicy<I>>` in a field of the host, and write that field's name, `#[resilient(carrier)]`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:52:17
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:63:17
    |
-52 |     #[resilient(carrier())]
+63 |     #[resilient(carrier())]
    |                 ^^^^^^^^^
 
 error: #[resilient] names the field of `self` holding the policy by its name, alone, and `0` is a tuple struct's field, which has a position and no name — hold the policy in a named field, `carrier: Arc<ResiliencePolicy<I>>`, and write `#[resilient(carrier)]`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:57:17
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:68:17
    |
-57 |     #[resilient(0)]
+68 |     #[resilient(0)]
    |                 ^
 
 error: #[resilient] `retries` needs a value — write `retries = 3`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:62:38
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:73:38
    |
-62 |     #[resilient(carrier, idempotent, retries =)]
+73 |     #[resilient(carrier, idempotent, retries =)]
    |                                      ^^^^^^^
 
 error: #[resilient] `retries` takes an expression after its `=`, and this reads as none
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:67:48
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:78:48
    |
-67 |     #[resilient(carrier, idempotent, retries = =)]
+78 |     #[resilient(carrier, idempotent, retries = =)]
    |                                                ^
 
-error: #[resilient] `idempotent` takes no value — it is a flag, and what it declares is its presence: the call is sent again after a failure or a timeout
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:72:26
+error: #[resilient] `idempotent` takes no value — it is a flag, and what it declares is its presence: the call is sent again after an `Err` or a timeout
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:83:26
    |
-72 |     #[resilient(carrier, idempotent = true)]
+83 |     #[resilient(carrier, idempotent = true)]
    |                          ^^^^^^^^^^
 
 error: #[resilient] `timeout` needs a value — write `timeout = "2s"`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:77:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:88:26
    |
-77 |     #[resilient(carrier, timeout)]
+88 |     #[resilient(carrier, timeout)]
    |                          ^^^^^^^
 
 error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout`, `retries`, `retry_if`, `retry_ok_if`, `record_if`, `fallback`, `fallback_if` or `cancel`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:82:40
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:93:40
    |
-82 |     #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
+93 |     #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
    |                                        ^^^^^
 
 error: #[resilient] `timeout` needs a value — write `timeout = "2s"`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:82:63
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:93:63
    |
-82 |     #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
+93 |     #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
    |                                                               ^^^^^^^
 
 error: #[resilient] `retries`: must be at most 10 — past ten, the retries let one call send its failing dependency twelve attempts or more, the hammering a breaker exists to stop
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:82:36
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:93:36
    |
-82 |     #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
+93 |     #[resilient(carrier, retries = 11, retry = 3, idempotent, timeout)]
    |                                    ^^
 
 error: unknown #[resilient] argument `retry`; expected `idempotent`, `timeout`, `retries`, `retry_if`, `retry_ok_if`, `record_if`, `fallback`, `fallback_if` or `cancel`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:87:39
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:98:39
    |
-87 |     #[resilient(carrier, retries = 3, retry = 3)]
+98 |     #[resilient(carrier, retries = 3, retry = 3)]
    |                                       ^^^^^
 
 error: #[resilient] `retries` needs `idempotent`: a call run once is never sent again — declare the call `idempotent` where sending it twice leaves the dependency as sending it once does, or drop `retries`
-  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:87:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_keys.rs:98:26
    |
-87 |     #[resilient(carrier, retries = 3, retry = 3)]
+98 |     #[resilient(carrier, retries = 3, retry = 3)]
    |                          ^^^^^^^

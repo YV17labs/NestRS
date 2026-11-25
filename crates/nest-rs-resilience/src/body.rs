@@ -264,8 +264,9 @@ mod tests {
     const TIMEOUT: Duration = Duration::from_secs(5);
     const OPEN_FOR: Duration = Duration::from_secs(30);
 
-    /// What a read of these tests fails on.
-    const RESET: &str = "connection reset by peer";
+    /// What a read of these tests fails on, an I/O error holding no other:
+    /// said by `std`'s sentence for its kind, beneath reqwest's too.
+    const RESET: io::ErrorKind = io::ErrorKind::ConnectionReset;
 
     /// One slot, and a breaker `failures` failures of its latest `failures`
     /// attempts open, which one probe closes.
@@ -286,7 +287,7 @@ mod tests {
     /// next request is its probe.
     async fn probing() -> Arc<ResiliencePolicy> {
         let policy = policy(1);
-        let failed = policy.run(|_| async { Err::<(), _>(io::Error::other(RESET)) });
+        let failed = policy.run(|_| async { Err::<(), _>(io::Error::from(RESET)) });
         assert!(failed.await.is_err());
         tokio::time::advance(OPEN_FOR).await;
         policy
@@ -319,7 +320,7 @@ mod tests {
         ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
             Poll::Ready(match ready!(self.0.poll_recv(cx)) {
                 Some(Part::Frame(data)) => Some(Ok(Frame::data(data))),
-                Some(Part::Fails) => Some(Err(io::Error::other(RESET))),
+                Some(Part::Fails) => Some(Err(io::Error::from(RESET))),
                 Some(Part::Panics) => panic!("the transport panicked"),
                 None => None,
             })
@@ -406,7 +407,7 @@ mod tests {
     /// Each transition `lines` holds, by the state it entered.
     fn states(lines: &LogCapture) -> Vec<String> {
         lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, crate::breaker::MOVED)
             .iter()
             .map(|line| line.field("state").unwrap_or_default())
             .collect()
@@ -415,7 +416,7 @@ mod tests {
     /// What each opening of the breaker by a failure says it failed on.
     fn opened_on(lines: &LogCapture) -> Vec<String> {
         lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, crate::breaker::MOVED)
             .iter()
             .filter_map(|line| line.field("error"))
             .collect()
@@ -506,7 +507,7 @@ mod tests {
             .and_then(Result::err)
             .expect("the read failed");
         assert!(
-            nest_rs_core::error_message(failed.as_ref()).ends_with(RESET),
+            nest_rs_core::error_message(failed.as_ref()).ends_with(&RESET.to_string()),
             "the failure as it came: {failed:?}"
         );
         assert!(
@@ -517,7 +518,7 @@ mod tests {
         assert!(is_open(&policy));
         let opened = opened_on(&lines);
         assert_eq!(opened.len(), 1, "{opened:?}");
-        assert!(opened[0].ends_with(RESET), "{opened:?}");
+        assert!(opened[0].ends_with(&RESET.to_string()), "{opened:?}");
         policy.close_breaker().expect("a breaker");
         assert!(!slot_taken(&policy).await, "freed at the failure");
     }
@@ -779,7 +780,8 @@ mod tests {
             assert_eq!(is_open(&policy), failed, "{said}");
             let opened = opened_on(&lines);
             assert_eq!(opened.len(), usize::from(failed), "{said}: {opened:?}");
-            assert!(opened.iter().all(|error| error.ends_with(RESET)), "{said}");
+            let reset = RESET.to_string();
+            assert!(opened.iter().all(|error| error.ends_with(&reset)), "{said}");
             policy.close_breaker().expect("a breaker");
             assert!(!slot_taken(&policy).await, "{said}");
             drop(feed);

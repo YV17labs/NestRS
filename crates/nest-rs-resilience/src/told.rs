@@ -1,8 +1,10 @@
 //! What the policy tells of a failure, wherever it puts one in a line: the
-//! error's chain, no URL in it past its origin. An HTTP client's error quotes
-//! the URL its request was sent to, whose userinfo, path and query hold what
-//! the caller sent — a password, an identifier, a token — and the dependency's
-//! error rides the retry's line and the breaker's opening.
+//! error's chain, no URL in it past its origin and no status past its code.
+//! An HTTP client's error quotes the URL its request was sent to, whose
+//! userinfo, path and query hold what the caller sent — a password, an
+//! identifier, a token — and, of a status, the reason phrase the dependency
+//! wrote; the dependency's error rides the retry's line and the breaker's
+//! opening.
 
 use std::borrow::Cow;
 use std::error::Error;
@@ -34,20 +36,59 @@ use nest_rs_core::error_message;
 ///
 /// The cut reads each URL a fixed number of times, whatever it holds.
 ///
+/// A status reqwest's own sentence says, where an error hands that sentence
+/// on and no `SafeLink` reads it, is told by its class and its code, and the
+/// chain no further: reqwest writes after the code the reason phrase the
+/// dependency answered with, which can end anywhere.
+///
 /// Not caught: a URL holding a whitespace, a control character, a double
 /// quote or an angle bracket unencoded — it is read as ending there, so a
 /// userinfo holding one is told as a host before it and as the sentence's
 /// after it; an address with no `://` — a URI with no authority (`mailto:`),
 /// a reference with no scheme (`//host/path`), a bare `user@host`, a path or a
-/// query quoted alone; and a value an error quotes that is no URL. This covers
+/// query quoted alone; and a value an error quotes that is no URL and no
+/// status's phrase — what a cause beneath a sentence handed on says of its
+/// own, which only an error naming its client's as its source leaves to that
+/// client's `SafeLink`. This covers
 /// the lines this crate files; the line an edge files for an error an app
 /// returns is `nest-rs-core`'s to say.
 pub(crate) fn told(error: &(dyn Error + 'static)) -> String {
     let chain = error_message(error);
+    let chain = ended_at_a_status(&chain).unwrap_or(chain);
     match origins(&chain) {
         Cow::Borrowed(_) => chain,
         Cow::Owned(cut) => cut,
     }
+}
+
+/// What reqwest's own sentence for a status opens with, up to its class.
+const STATUS_SAID: &str = "HTTP status ";
+
+/// What follows there for each class reqwest tells, up to the code.
+const STATUS_CLASSES: [&str; 2] = ["client error (", "server error ("];
+
+/// `text` ended at the code of the first status reqwest's own sentence says in
+/// it, where a phrase follows that code — `None` where none does. reqwest
+/// writes there the reason phrase the dependency answered with, which may hold
+/// anything, a closing parenthesis included: nothing after the code can be
+/// told from it.
+fn ended_at_a_status(text: &str) -> Option<String> {
+    let mut from = 0;
+    while let Some(found) = text[from..].find(STATUS_SAID) {
+        from += found + STATUS_SAID.len();
+        let Some(code) = STATUS_CLASSES
+            .iter()
+            .find_map(|class| text[from..].strip_prefix(class))
+        else {
+            continue;
+        };
+        let digits = code.bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 && code[digits..].starts_with(' ') {
+            let ends = text.len() - code.len() + digits;
+            return Some(format!("{})", &text[..ends]));
+        }
+    }
+    None
 }
 
 /// Where RFC 3986 writes a URL's authority: after its scheme.
@@ -589,6 +630,89 @@ mod tests {
             .send()
             .await
             .expect_err("no HTTP scheme")
+    }
+
+    #[test]
+    fn a_status_reqwests_own_sentence_says_is_told_by_its_code_and_nothing_after_it() {
+        for (text, told) in [
+            (
+                "HTTP status server error (503 shard db-7 refused token=s3cr3t) for url \
+                 (https://host/parcels/s3cr3t)",
+                "HTTP status server error (503)",
+            ),
+            (
+                "the tracker failed: HTTP status client error (404 no parcel (s3cr3t) here)",
+                "the tracker failed: HTTP status client error (404)",
+            ),
+            (
+                "HTTP status server error (502): then HTTP status server error (503 s3cr3t)",
+                "HTTP status server error (502): then HTTP status server error (503)",
+            ),
+        ] {
+            assert_eq!(ended_at_a_status(text).as_deref(), Some(told), "{text}");
+        }
+        for as_said in [
+            "the tracker failed: HTTP status server error (503)",
+            "HTTP status server error (503): see https://host/parcels",
+            "HTTP status server error (unknown s3cr3t)",
+            "HTTP status server error (",
+            "HTTP status of the tracker: client error",
+            "HTTP status ",
+        ] {
+            assert_eq!(ended_at_a_status(as_said), None, "{as_said}");
+        }
+    }
+
+    /// An error naming reqwest's as its source, under a sentence of its own.
+    #[derive(Debug, thiserror::Error)]
+    #[error("the tracker failed")]
+    struct Named(#[source] reqwest::Error);
+
+    /// What a peer answering `503` makes of `error_for_status`: reqwest's
+    /// error for a status, whose sentence quotes the phrase the peer wrote.
+    async fn answered_503() -> reqwest::Error {
+        use nest_rs_testing::{HttpsPeer, PeerAnswer, TestAuthority};
+
+        let authority = TestAuthority::new();
+        let peer =
+            HttpsPeer::answering(&authority.server(&["127.0.0.1"]), [PeerAnswer::status(503)])
+                .await;
+        let trusted =
+            reqwest::Certificate::from_pem(authority.pem().as_bytes()).expect("the authority");
+        let error = reqwest::Client::builder()
+            .tls_certs_only([trusted])
+            .build()
+            .expect("a client")
+            .get(peer.url(&format!("/parcels/{SENT}")))
+            .send()
+            .await
+            .expect("the peer answers")
+            .error_for_status()
+            .expect_err("a 503");
+        assert!(
+            error.to_string().contains("(503 Answer)"),
+            "reqwest's own sentence quotes the peer's phrase: {error}"
+        );
+        error
+    }
+
+    /// The phrase after a status's code is the dependency's own words: no
+    /// line tells it, whether the error names reqwest's as its source, which
+    /// its `SafeLink` then says, or hands its sentence on, which hides it.
+    #[tokio::test]
+    async fn a_status_error_is_told_by_its_code_never_the_phrase_its_dependency_wrote() {
+        assert_eq!(
+            told(&Named(answered_503().await)),
+            "the tracker failed: HTTP status server error (503)"
+        );
+        assert_eq!(
+            told(&HandedOn(answered_503().await)),
+            "HTTP status server error (503)"
+        );
+        assert_eq!(
+            told(&HandedOn(answered_503().await.without_url())),
+            "HTTP status server error (503)"
+        );
     }
 
     #[tokio::test]

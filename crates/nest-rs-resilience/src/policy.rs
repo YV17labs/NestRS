@@ -94,9 +94,11 @@ use crate::told::told;
 /// bracket — is told by its scheme, its host and a port of digits, and by its
 /// scheme alone where an `@` past its authority's end leaves its host
 /// impossible to tell from a userinfo: no byte of the userinfo, the path, the
-/// query or the fragment a request carried. A value an error quotes otherwise
-/// is the error's to keep out, a URL holding one of those four unencoded
-/// included, which is read as ending there.
+/// query or the fragment a request carried. A status reqwest's own sentence
+/// says is told by its class and its code, and the chain no further: the
+/// phrase reqwest writes after the code is the dependency's. A value an error
+/// quotes otherwise is the error's to keep out, a URL holding one of those
+/// four unencoded included, which is read as ending there.
 ///
 /// The breaker's state is read through [`breaker_state`](Self::breaker_state),
 /// and switched by hand — an operator taking a dependency out for its
@@ -1184,7 +1186,8 @@ pub(crate) struct Retry {
 /// instant that ends at: its timer is armed at that instant, so it is due with
 /// the edge's cut at the deadline however long the call takes to first wait,
 /// and an attempt the edge cuts there first has timed out all the same
-/// ([`Sent`]).
+/// ([`Sent`]). Under no deadline it ends at no instant, and an attempt
+/// dropped past it counts for nothing.
 #[derive(Clone, Copy)]
 pub(crate) struct Bound {
     wait: Duration,
@@ -4609,7 +4612,7 @@ mod tests {
             "the timeout, then the panic: the two failures that open it"
         );
         assert_eq!(
-            error_of(&lines, "circuit breaker changed state").as_deref(),
+            error_of(&lines, crate::breaker::MOVED).as_deref(),
             Some(PANICKED)
         );
     }
@@ -5020,7 +5023,7 @@ mod tests {
             "the probe failed, opening the breaker again for its whole open time"
         );
         let reopened = lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, crate::breaker::MOVED)
             .pop()
             .expect("the probe's transition");
         assert_eq!(
@@ -5387,7 +5390,7 @@ mod tests {
         );
         assert!(matches!(probed, Ok(())), "{probed:?}");
         let states: Vec<String> = lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, crate::breaker::MOVED)
             .iter()
             .map(|line| line.field("state").unwrap_or_default())
             .collect();
@@ -5412,7 +5415,7 @@ mod tests {
         });
         let states = || -> Vec<String> {
             lines
-                .find(TARGET, "circuit breaker changed state")
+                .find(TARGET, crate::breaker::MOVED)
                 .iter()
                 .map(|line| {
                     assert_eq!(line.level, "warn", "{line:?}");
@@ -5465,7 +5468,7 @@ mod tests {
         });
         let states = || -> Vec<String> {
             lines
-                .find(TARGET, "circuit breaker changed state")
+                .find(TARGET, crate::breaker::MOVED)
                 .iter()
                 .map(|line| line.field("state").unwrap_or_default())
                 .collect()
@@ -6154,7 +6157,7 @@ mod tests {
             })
         };
         let opened = |lines: &nest_rs_testing::LogCapture| {
-            let line = lines.expect_one(TARGET, "circuit breaker changed state");
+            let line = lines.expect_one(TARGET, crate::breaker::MOVED);
             assert_eq!(line.field("state").as_deref(), Some("open"), "{line:?}");
             line.field("error")
         };
@@ -6776,11 +6779,7 @@ mod tests {
             "the policy has no circuit breaker to switch"
         );
         assert!(policy.run(|_| answering()).await.is_ok());
-        assert!(
-            lines
-                .find(TARGET, "circuit breaker changed state")
-                .is_empty()
-        );
+        assert!(lines.find(TARGET, crate::breaker::MOVED).is_empty());
     }
 
     /// A manual opening for a duration `breaker_open` would not take in code
@@ -6816,11 +6815,7 @@ mod tests {
             assert!(!said.contains(&format!("{outside:?}")), "{said}");
         }
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
-        assert!(
-            lines
-                .find(TARGET, "circuit breaker changed state")
-                .is_empty()
-        );
+        assert!(lines.find(TARGET, crate::breaker::MOVED).is_empty());
         for taken in [tick, Duration::from_millis(500), most] {
             assert_eq!(policy.open_breaker(taken), Ok(()), "{taken:?}");
             assert_eq!(
@@ -7061,7 +7056,7 @@ mod tests {
         assert_eq!(sent.load(Ordering::Relaxed), 1, "sent at its token");
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
         let states: Vec<String> = lines
-            .find(TARGET, "circuit breaker changed state")
+            .find(TARGET, crate::breaker::MOVED)
             .iter()
             .map(|line| line.field("state").unwrap_or_default())
             .collect();

@@ -1,8 +1,9 @@
-//! A key `#[resilient]` does not take, one written twice or before the field, a
-//! field written as an expression, as a call or as a tuple struct's position,
-//! `idempotent` given a value, a pin given none or one that reads as no
-//! expression: each refused where it is written, in the decorator's words, and
-//! the keys around a refused one read.
+//! A key `#[resilient]` does not take, one written twice, before the field or
+//! after it with no comma, `idempotent` written alone, which a field may be
+//! named, a field written as an expression, as a call or as a tuple struct's
+//! position, `idempotent` given a value, a pin given none or one that reads as
+//! no expression: each refused where it is written, in the decorator's words,
+//! and the keys around a refused one read.
 
 use std::sync::Arc;
 
@@ -41,6 +42,16 @@ impl ShipmentsService {
 
     #[resilient(idempotent, carrier)]
     async fn keyed_first(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(idempotent)]
+    async fn keyed_alone(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier idempotent, timeout = "2s")]
+    async fn no_comma(&self) -> Answer {
         Err(CarrierDown)
     }
 

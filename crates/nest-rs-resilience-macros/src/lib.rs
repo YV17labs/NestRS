@@ -9,7 +9,7 @@ mod resilient;
 
 /// Runs an `async fn` method's body under the policy a field of `self` holds:
 /// `#[resilient(field)]` sends the call once, `#[resilient(field, idempotent)]`
-/// again after a failure or a timeout, and the keys after the field say how an
+/// again after an `Err` or a timeout, and the keys after the field say how an
 /// answer counts, which method answers in place of the error a run ends on,
 /// and under what name the body reads its attempt's token.
 ///
@@ -18,9 +18,16 @@ mod resilient;
 /// the policy's `ResilienceModule<I>`. It is read by its name, as `self.field`:
 /// a tuple struct's position is refused, and so is a call — the policy is held
 /// in a named field, never answered by a method, which named in the field's
-/// place is rustc's `E0615`, its help writing that call. The method answers
-/// `Result<T, ResilienceError<E>>` — read by its type, so an alias reads as the
-/// literal does — and its body is written as if it answered `Result<T, E>`:
+/// place is rustc's `E0615`, its help writing that call. The list's first entry
+/// is that field, whatever its name, one of a key that takes a value included
+/// (`#[resilient(fallback)]`). A field named `idempotent`, the one key written
+/// alone, is told from it by the key after it,
+/// `#[resilient(idempotent, idempotent)]`, and is renamed where the method is
+/// not; one named as a setting of the policy's is renamed, as its refusal says.
+///
+/// The method answers `Result<T, ResilienceError<E>>` — read by its type, so an
+/// alias reads as the literal does, and where its signature is, whatever items
+/// the body declares — and its body is written as if it answered `Result<T, E>`:
 /// `?`, `Ok(..)`, `Err(e)` and an early `return` answer one attempt, each
 /// answer coerced as the undecorated method's would be — a `&String` into the
 /// `&str` it returns, a box into its `Box<dyn …>` — and each `?` converting its
@@ -31,7 +38,7 @@ mod resilient;
 /// `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own
 /// that is, which each `?` converts into.
 ///
-/// - `idempotent` — the call is sent again after a failure or a timeout, up to
+/// - `idempotent` — the call is sent again after an `Err` or a timeout, up to
 ///   its retries. Only the developer declares it: sending again a call that is
 ///   not idempotent would charge a card twice. Each attempt reads the
 ///   arguments again, so the method binds none `mut` and takes no `&mut` (read
@@ -98,7 +105,8 @@ mod resilient;
 ///   future: the method binds each to a plain name, none `mut`, takes no
 ///   `&mut`, and clones what an attempt consumes, which rustc answers with
 ///   `E0382` at the fallback's name, the key marked as where the argument
-///   moved. A handler taking an extractor apart in its signature
+///   moved. An argument handed on is read, so one the body reads nowhere takes
+///   no leading `_`, which `clippy::used_underscore_binding` says at the key. A handler taking an extractor apart in its signature
 ///   (`Path(id): Path<u32>`) names it instead (`id: Path<u32>`) and takes it
 ///   apart in its body, and one binding by reference (`ref id`) binds by
 ///   value and borrows there. A parameter under a
@@ -180,18 +188,18 @@ mod resilient;
 /// hook answers `()`, so it carries none and calls a decorated method instead.
 /// A GraphQL field writes its `Result<T, ResilienceError<E>>` out:
 /// `#[operations]` reads a field's `Result` by its spelling, and refuses any
-/// other answer of a decorated one. It keeps this attribute, read by its last segment, on the method — written
-/// plain, or as an entry of a `#[cfg_attr]`, kept under its condition — and
-/// hands the method's other attributes and entries to the field it generates,
-/// in a build with `graphql` and `resilience` both, whichever crate of it
-/// enables them, the umbrella's `resilience` enabling `nest-rs-graphql`'s. So
-/// the decorator is imported as `resilient` there: under another name it is
-/// handed to the field, and refused saying so. An app's own attribute of this
-/// name stays on the method too, where it fails to compile or applies to the
-/// method alone, so it is imported under another name; without `resilience`
-/// one of this name goes on the field, as 7.0.0 placed it. A method under
-/// `#[async_trait]` is a `fn` by the time this attribute reads it, and is
-/// refused saying so.
+/// other answer of a decorated one. It keeps this attribute, read by its last
+/// segment, on the method — written plain, or as an entry of a `#[cfg_attr]`,
+/// kept under its condition — and hands the method's other attributes and
+/// entries to the field it generates, in a build with `graphql` and
+/// `resilience` both, whichever crate of it enables them, the umbrella's
+/// `resilience` enabling `nest-rs-graphql`'s. So the decorator is imported as
+/// `resilient` there: under another name it is handed to the field, and refused
+/// saying so. An app's own attribute of this name stays on the method too, where
+/// it fails to compile or applies to the method alone, so it is imported under
+/// another name; without `resilience` one of this name goes on the field, as
+/// 7.0.0 placed it. A method under `#[async_trait]` is a `fn` by the time this
+/// attribute reads it, and is refused saying so.
 ///
 /// `#[tracing::instrument]` goes above it or below, and the order says what
 /// the span covers. Below `#[resilient]`, one span covers the whole run —
@@ -206,7 +214,11 @@ mod resilient;
 /// orders hold under every key: below, the span also covers the fallback and
 /// records what it answers; above, the fallback runs outside every attempt's
 /// span. The token `cancel` names is no argument of the method, so no span
-/// records it.
+/// records it. On a GraphQL operation the order says nothing: `#[operations]`
+/// hands the instrument to the field it generates, so one span covers the whole
+/// field, its guards and every attempt, and `err` and `ret` record what the
+/// field answers; a span per attempt there is that of a provider's decorated
+/// method the operation calls.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry made or
 /// given up, a savepoint left unsettled, a full bulkhead or a reached rate

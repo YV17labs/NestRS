@@ -9,12 +9,20 @@
 //! framework's own reqwest clients take this crate without it.
 //!
 //! In a program linking this crate, [`nest_rs_core::error_message`] says a
-//! reqwest error — and reqwest-middleware's, under `middleware` — without the
-//! URL its own sentence quotes, where that error is a link of the chain: a log
-//! line names what failed and why, never the path and the query a request
-//! carried. An error handing reqwest's sentence on as its own
-//! (`#[error(transparent)]`) hides it from the chain, and is built from
-//! `reqwest::Error::without_url`.
+//! reqwest error — and reqwest-middleware's, under `middleware` — where that
+//! error is a link of the chain, by what this crate reads of it: its kind, a
+//! status by its class and its code, a decode failure without its value, an
+//! I/O error by its OS's sentence or its kind, and a timeout, a failed lookup,
+//! a closed connection or a refused certificate by a constant sentence. A log
+//! line names what failed and why, never the URL a request carried, the reason
+//! phrase a peer wrote on its status line, a value its answer held or the
+//! names in its certificate; a cause this crate cannot read — hyper's, a
+//! redirect policy's, a serializer's — is not said. An error handing reqwest's
+//! sentence on as its own (`#[error(transparent)]`) hides it from the chain
+//! and is said as reqwest writes it: built from `reqwest::Error::without_url`
+//! it holds no URL, and still a status's reason phrase and its causes' own
+//! sentences, which an error naming reqwest's as its `#[source]` leaves to
+//! this crate.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

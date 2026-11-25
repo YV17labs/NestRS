@@ -29,7 +29,7 @@ const HELD: usize = 256;
 /// middleware, which take no name: two callers sharing a policy through them
 /// are told apart by no event, so decorate the method making the call to name
 /// it. An `error` is the error's chain as the lines tell it, a URL cut to its
-/// origin, never the error itself.
+/// origin and a status reqwest says ended at its code, never the error itself.
 ///
 /// An event is not its line. Where a fact files one, the event may say less:
 /// a [`Transition`](Self::Transition) not what opened the breaker, a full

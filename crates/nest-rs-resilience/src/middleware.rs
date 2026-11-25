@@ -44,8 +44,10 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// `500`, `502`, `503` or `504`, read off the answer's head, and each counts
 /// as a failure in the breaker; any other answer is the dependency's answer.
 /// The line a retry files and the `warn` of the breaker such a failure opens
-/// say it as their `error`: a transport failure's chain without the URL it was
-/// sent to, and a status by its code alone, never a header or a body. A
+/// say it as their `error`: a transport failure by reqwest's kind and what
+/// `nest-rs-reqwest` reads of the causes beneath it, never the URL it was sent
+/// to nor a word the dependency wrote, and a status by its code alone, never a
+/// header or a body. A
 /// `429`'s or a `503`'s `Retry-After` is waited whole — in seconds, or an
 /// HTTP-date counted from the answer's own `Date` — and one past the policy's
 /// backoff ceiling ends the run with that answer. An answer the run sends
@@ -231,8 +233,7 @@ struct TracedOutside;
 
 /// A transport failure and the statuses a retry may cure fail, each said as
 /// the lines telling the attempt say it — a transport failure as its chain,
-/// the URL it was sent to cut to its origin; any other answer is the
-/// dependency's.
+/// without the URL it was sent to; any other answer is the dependency's.
 fn judged(answer: &Result<Response>) -> Verdict {
     let response = match answer {
         Ok(response) => response,

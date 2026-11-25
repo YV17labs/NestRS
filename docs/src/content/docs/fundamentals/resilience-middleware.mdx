@@ -75,9 +75,9 @@ by nothing it files. Give each client a policy of its own, one instance per
 dependency.
 
 A failure rides the retry's line, its event and the breaker's opening as its
-chain, and never the request's address: every URL in it is cut to its origin,
-its scheme, host and port, the userinfo, the path, the query and the fragment
-gone, since they hold what you sent. A status is told by its code alone
+chain, and never the request's address: every URL in it is cut as
+[the lines tell](/fundamentals/resilience-events/#what-a-line-tells-of-a-url),
+since a path, a query and a userinfo hold what you sent. A status is told by its code alone
 (`the dependency answered 503`), never a header or a body.
 
 ## The answer's body
@@ -121,7 +121,8 @@ what was sent again and what each attempt carried.
   without this middleware, or under a policy of its own.
 - The timeout bounds the dependency, never you. A response you keep unread, or
   read slowly, keeps its slot for as long as you take, and a probe's keeps the
-  half-open breaker's one turn: read it or drop it.
+  half-open breaker's one turn: read it or drop it. A call refused meanwhile is
+  told the probe's whole bound, however long the response has been held.
 
 ## Going further
 

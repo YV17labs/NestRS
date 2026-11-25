@@ -90,13 +90,13 @@ use crate::told::told;
 /// at `debug`, and of the `warn` the breaker files when that failure opens it,
 /// where an operator reads what the dependency answered once every caller is
 /// told the breaker is open. A URL in that chain — whatever follows a `://`,
-/// up to the next whitespace, double quote or angle bracket — is told by its
-/// scheme, its host and a port of digits, and by its scheme alone where an `@`
-/// past its authority's end leaves its host impossible to tell from a
-/// userinfo: no byte of the userinfo, the path, the query or the fragment a
-/// request carried. A value an error quotes otherwise is the error's to keep
-/// out, a URL holding a whitespace or a double quote unencoded included, which
-/// is read as ending there.
+/// up to the next whitespace, control character, double quote or angle
+/// bracket — is told by its scheme, its host and a port of digits, and by its
+/// scheme alone where an `@` past its authority's end leaves its host
+/// impossible to tell from a userinfo: no byte of the userinfo, the path, the
+/// query or the fragment a request carried. A value an error quotes otherwise
+/// is the error's to keep out, a URL holding one of those four unencoded
+/// included, which is read as ending there.
 ///
 /// The breaker's state is read through [`breaker_state`](Self::breaker_state),
 /// and switched by hand — an operator taking a dependency out for its

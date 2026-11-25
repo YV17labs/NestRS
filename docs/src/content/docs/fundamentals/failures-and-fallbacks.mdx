@@ -106,10 +106,15 @@ same), so the method
 binds each to a plain name, none `mut`, takes no `&mut`, and clones what an
 attempt consumes, which rustc answers with `E0382` at the fallback's name. A
 handler naming its extractor whole, `id: Path<u32>`, takes it apart in its body;
-one binding it by a pattern, `Path(id): Path<u32>`, is refused. A fallback taking
-other arguments is rustc's `E0308` at the key or `E0061` at the fallback's name,
-one naming no method of `Self` is its `E0599`, and one naming the method it
-answers for is refused. The fallback is always a method, whose signature is
+one binding it by a pattern, `Path(id): Path<u32>`, is refused, a pattern binding
+`mut` included, in one error. A fallback is called as a method, so it takes
+`&self` or `self: &Arc<Self>`; its type parameters are fixed by its arguments and
+its answer, one they leave open being rustc's `E0283`, and a `fallback` written
+with type arguments or as a call is refused saying to name the method alone. A
+fallback taking other arguments is rustc's `E0308` at the key or `E0061` at the
+fallback's name, one naming no method of `Self`, a function of `Self` taking no
+`self` included, is its `E0599`, and one naming the method it answers for is
+refused. The fallback is always a method, whose signature is
 checked against the decorated one's: a closure or a free function answers
 through a method that calls it.
 
@@ -163,10 +168,12 @@ it leaves the unit as it was.
   awaiting a method whose future is large is still told, at its own `.await`.
 - **A fallback has no time past its unit's deadline**: one that answers at once
   answers for the unit, and one that waits is cut with it.
-- **Two calls joined in one transaction wait for each other**: the second's first
-  statement waits for the first's whole attempt and may be given up at its timeout,
-  counted as the dependency's failure. Send them one after the other, or outside
-  the transaction.
+- **Two decorated calls joined in one unit's transaction take its turn in
+  order**: an attempt's savepoint holds the unit until it settles, its call to
+  the dependency included, so the other waits inside its own bound and can be
+  given up having sent nothing. That timeout is counted against a dependency
+  that answered, in its breaker, which can open for every caller. Send them one
+  after the other, or outside the transaction.
 - **A refusal reaching a tick, a listener or a hook is that unit's failure.** A
   tick's, a listener's and a shutdown hook's are filed at `error` by their edge,
   a tick's at every occurrence while the breaker is open. An init hook's fails
@@ -175,7 +182,7 @@ it leaves the unit as it was.
 - **A decorated `#[liveness]` indicator refused by an open breaker fails the
   liveness probe**, and the orchestrator restarts the process for a dependency's
   outage: decorate readiness checks, never liveness ones. A `fallback` is how any
-of these units answers instead of failing.
+  of these units answers instead of failing.
 
 ## Going further
 

@@ -87,7 +87,11 @@ make, and nothing else makes it: replaying a call that is not idempotent would
 charge a card twice.
 
 The field is the method's own `#[inject]`, so a boot whose modules do not import
-`ResilienceModule<Upstream>` is refused, naming the import. The method answers
+`ResilienceModule<Upstream>` is refused, naming the import. It is read by its
+name: a tuple struct's position (`#[resilient(0)]`) and a call
+(`#[resilient(upstream())]`) are refused, saying a named field is read, and a
+getter's name in the field's place is rustc's `E0615`, whose help writes that
+call. The method answers
 `Result<T, ResilienceError<E>>`, an alias included. Its body is written as the
 undecorated method's, as if it answered `Result<T, E>`. A `?` converting your
 error, `Ok(..)`, `Err(e)` and an early `return` each end one attempt, run once
@@ -95,7 +99,7 @@ or again alike. Each answer is coerced as that method would coerce it — a
 `&String` into the `&str` it returns, a box into its `Box<dyn …>`.
 That `E` is a `std::error::Error`, as a `thiserror` derive makes one: its chain is
 what the policy's lines tell of a failure. An error that is none — `anyhow::Error`, a
-boxed error — is held in a type of your own that is, and the refusal says so.
+boxed error — is held in a type of your own that is, and the compile error says so.
 
 It goes on a provider, a struct you build, a trait impl, a route, a socket
 message, a queue job, a scheduled tick, a listener, a health indicator, a
@@ -152,9 +156,12 @@ A key written without the one it needs is refused naming it. A value of the wron
 shape is refused at the value, in the key's sentence: a literal for `F`, anything
 but a name written alone for `fallback` or `cancel`, and a constant, a function's
 path of another arity or a closure typed otherwise for `F`, whose note offers the
-closure form for a method of `self` (`|error| self.is_transient(error)`). A
-closure taking no argument or several, or written `async`, is refused at the
-closure. A closure whose body answers no `bool` is rustc's own, at the body.
+closure form for a method of `self` (`|error| self.is_transient(error)`);
+written `self.is_transient`, it is rustc's `E0615`. A closure taking no argument
+or several, or written `async`, is refused at the closure. A closure whose body answers no `bool` is rustc's own, at the body. A
+`fallback` given type arguments, or written as a call, is refused saying to name
+the method alone; a method whose type parameters its arguments and its answer do
+not fix is rustc's, and the fallback's signature fixes them.
 
 **`cancel = token` hands a body its attempt's `CancellationToken`**, as a local
 that is no argument: the signature stays what callers call, and a name an
@@ -179,7 +186,7 @@ unsettled savepoint are not refusals:
 | Variant | When | Retry-After |
 |---|---|---|
 | `TimedOut` | the last attempt ended at its timeout or at the unit's deadline | none |
-| `Open` | the breaker is open, or half-open with another call holding its probe's turn; the call was not sent | the time until it lets a call through, or at the latest until that probe answers, rounded up to whole seconds |
+| `Open` | the breaker is open, or half-open with another call holding its probe's turn; the call was not sent | the time until it lets a call through, or what is left of that probe's bound, all of it while its response is held, rounded up to whole seconds |
 | `Full` | every slot of the bulkhead stayed taken for as long as the call waits, or as many calls as may wait were waiting; the call was not sent | none |
 | `Limited` | the rate limit had no token free, and the one due the attempt, behind the attempts already waiting, came past what it may wait or past its unit's deadline; the call was not sent, nor attempted again | the time until that token is free, rounded up to whole seconds |
 | `Failed` | the call answered its own error on its last attempt | what that error's `ToProblem` says, else a `Problem` its chain carries; opaque `500` otherwise |
@@ -277,8 +284,16 @@ off is `None`.
   own, `Result<T, PostsError>`, calls a decorated one and maps its error. Another
   answer is refused at the method's return type, which rustc labels the attribute's
   expansion, and one a `macro_rules!` writes on its own `$crate` is refused twice.
-- **An `async fn` under `#[async_trait]` is a `fn` by the time `#[resilient]`
-  reads it**, and is refused: write the trait's method as a native `async fn`.
+- **A method carries `#[resilient]` once.** A second is refused as written
+  twice, under whatever name it is imported by, in a `#[cfg_attr]` or below a
+  `#[tracing::instrument]`: a method calling two dependencies is two methods.
+- **A `fn` that is not `async` is refused**, and so is an answer holding an
+  `impl Trait`, which names no type in the expansion: name the type, or box it.
+  Neither shows rustc's own errors beside. An `async fn` under `#[async_trait]` is
+  a `fn` by the time `#[resilient]` reads it, so write the trait's method as a
+  native `async fn`. A trait's own declaration is refused, saying to decorate
+  each impl's method; on a default body, whose `Self` has no field, it is
+  rustc's `E0609` at the field.
 - **A WebSocket connection hook answers `()`**, so it carries no `#[resilient]`: it
   calls a decorated method — the gateway's own, or a service's — and handles its error.
 - **`#[operations]` reads `#[resilient]` by its name**, by any path, in a build

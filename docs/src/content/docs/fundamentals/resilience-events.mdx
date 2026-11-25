@@ -73,32 +73,47 @@ and `method` of the decorated method that ran it, and neither when `run`,
 |---|---|---|
 | `attempt failed; retrying the call` | `debug` | `attempt`, `wait_ms`, `error` |
 | `attempt answered; retrying the call` | `debug` | `attempt`, `wait_ms` |
-| `no time left before the unit's deadline; not attempted again` | `debug` | `wait_ms`, `error` |
+| `no time left before the unit's deadline; not attempted again` | `debug` | `wait_ms`, and `error` but after an `Ok` that `retry_ok_if` was to send again |
 | `the dependency asked a wait past the backoff's ceiling; not attempted again` | `debug` | `asked_ms`, `ceiling_ms`, `error` |
 | `an attempt's savepoint could not be settled; not attempted again` | `debug` | `error` |
 | `rate limit reached; waiting for a token` | `debug` | `wait_ms` |
 | `rate limit reached; the call is refused` | `debug` | `retry_after_ms` |
-| `bulkhead full; the call is refused` | `debug` | `waiters`, the bound met when every place to wait was taken |
+| `bulkhead full; the call is refused` | `debug` | `waiters`, the bound met, when every place to wait was taken |
 | `the call ended on an error; its fallback answers` | `debug` | `error` |
 | `circuit breaker changed state` | `warn` | `state`; an opening by failures adds `failed`, `window`, `open_ms` and `error`, a switch by hand `manual`, and an opening by hand its `open_ms` |
 
 The first is a retry after a failure and the second a retry of an `Ok` sent again
 by `retry_ok_if`, which has no `error`. The third and fourth are a retry left but
-not made. Each transition of the breaker files the last line, probes and switches
+not made, with the `error` of the attempt that was to be sent again: the third
+has none after an `Ok` `retry_ok_if` was to send again, and the fourth follows
+a failure alone, the one answer that asks a wait. Each transition of the breaker files the last line, probes and switches
 by hand included, and only an opening by failures adds the `error` of the failure
-that opened it. An `error` is the error's chain with every URL in it cut to its
-origin, or the timeout's sentence; the savepoint's line says the chain of the
+that opened it. An `error` is the error's chain with every URL in it cut as
+[below](#what-a-line-tells-of-a-url), or the timeout's sentence; the savepoint's line says the chain of the
 cause the database could not settle it for.
 
-A call an open breaker refuses and a run ending on a timeout file no line of
-their own: the breaker said it opened once, and each caller is answered its
-refusal. Each mechanism's page says what it files:
+A call an open breaker refuses, a call its unit had no time left to send and a
+run ending on a timeout file no line of their own, in any configuration: the
+breaker said it opened once, and each caller is answered its refusal. A call its
+unit had no time to send is no attempt: it is told once as a `Timeout` event with
+a zero `timeout`. Each mechanism's page says what it files:
 [the breaker's](/fundamentals/circuit-breaker/#what-it-files),
 [the bulkhead's and the rate's](/fundamentals/bulkhead-and-rate-limit/).
 
 A line carries the error's sentence, so an error quoting a payload value puts it
 on the line: keep it out of the error's message, as `UpstreamError` keeps the URL
 out ([Resilience](/fundamentals/resilience/#what-the-client-is-told)).
+
+### What a line tells of a URL
+
+An error quoting the address it called would put the caller's path, query or
+password on a line, so a URL is read wherever `://` is written and told by its
+scheme, its host and a numeric port, and by no byte of a userinfo, a path, a
+query or a fragment. Where an `@` follows the end of the authority (a `/`, `?`,
+`#` or backslash), the host cannot be told from a userinfo, and the URL is told
+by its scheme alone. An address with no `://` is left as written. One limit: a
+URL holding a space, a control character, a double quote or an angle bracket
+unencoded is read as ending there, so a userinfo holding one is told in part.
 
 ## The counters
 
@@ -112,8 +127,9 @@ are listed there, each by the policy's `instance`.
 - A retry's line and event are told as it is decided, before the wait; its
   counter counts the call once sent again. A retry the policy then refuses unsent
   counts as that refusal.
-- A call an open breaker refuses and a run ending on a timeout are counted as
-  refusals and told as events, and file no line.
+- A call an open breaker refuses, a call its unit had no time to send and a run
+  ending on a timeout are counted as refusals and told as events, and file no
+  line.
 - A timeout the run retries is told as a `Timeout` event and counted by no
   counter.
 - A response of `ResilienceMiddleware` its caller drops while a read of its body
@@ -138,8 +154,10 @@ waits between them, what the policy refuses unsent and the fallback — and its
 of its own, and `err` and `ret` record what that attempt answered, the
 dependency's own error; the fallback runs outside every attempt's span, and the
 token `cancel` names is no argument, so no span records it. Above, the decorator
-reads the body as `tracing-attributes` 0.1 wraps it, and refuses one wrapped
-otherwise, saying to write `#[resilient]` above.
+reads the body as `tracing-attributes` 0.1 wraps it, by the `__tracing_` names
+that expansion writes, and refuses one wrapped otherwise, saying to write
+`#[resilient]` above; a release writing none of those names would be read as no
+instrument.
 
 ## Limits
 

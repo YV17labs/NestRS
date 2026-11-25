@@ -246,7 +246,7 @@ async fn page(&self, post: u64) -> Result<String, ResilienceError<PreviewFailed>
 
 | `@nestjs/resilience` | NestRS | What NestRS does |
 |---|---|---|
-| `bulkhead.maxConcurrent`, `maxQueue`, `queueTimeout` | `CONCURRENCY`, `CONCURRENCY_WAITERS`, `CONCURRENCY_WAIT_MS` | Off by default. The slot is held for the whole run, its retries included. |
+| `bulkhead.maxConcurrent`, `maxQueue`, `queueTimeout` | `CONCURRENCY`, `CONCURRENCY_WAITERS`, `CONCURRENCY_WAIT_MS` | Off by default. The slot is held for the whole run, its retries included. A call waits for a slot only where `CONCURRENCY_WAIT_MS` is set, from a millisecond to a minute, none by default, and `CONCURRENCY_WAITERS` bounds how many wait, `0` for no bound. `maxQueue: 0`, no queue, is `CONCURRENCY_WAIT_MS` left unset or `0`: a call finding every slot taken is refused at once. A `queueTimeout` is a `CONCURRENCY_WAIT_MS`, which bounds every wait for a slot. |
 | `bulkhead.active`, `bulkhead.queued` | `concurrency_running()`, `concurrency_waiting()` | A call is in one of the two at any instant. |
 | a rejection's `reason`, `active` and `queued` | the `Full` variant of `ResilienceError` | The error names neither a cause nor a count; the `debug` line's `waiters` and the two reads do. |
 | `outboundRateLimit.limit`, `interval`, `maxWait`, a token bucket | `RATE_LIMIT`, `RATE_WINDOW_SECS`, `RATE_WAIT_MS`, a token bucket | Off by default. Counts attempts, a retry included. A token is waited for only when it comes within `RATE_WAIT_MS` and before the unit's deadline. A bucket left idle sends its whole limit at once, then a token at a time: up to twice the limit within one window's length. |

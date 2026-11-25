@@ -76,10 +76,14 @@ out of the new window, and a late failure does not open it.
 **One probe at a time.** While a call holds the probe's turn, every other call
 is refused, told what is left of that probe's own bound. The bound is the
 probe's timeout, its method's pin included, or what its unit's deadline leaves
-when that is sooner. While the probe waits for its token of the
-[rate limit](/fundamentals/bulkhead-and-rate-limit/#the-rate-limit), it counts
-from the instant the token is due. Past the bound, a refused call is told a
-millisecond, the probe being given up at any moment.
+when that is sooner. While the probe's call is sent, or waits for its token of the
+[rate limit](/fundamentals/bulkhead-and-rate-limit/#the-rate-limit), that is
+what is left of the bound; once the bound has passed, a refused call is told a
+millisecond, the probe being given up at any moment. A probe whose response the
+caller of [`ResilienceMiddleware`](/fundamentals/resilience-middleware/) still
+holds has no timer to give it up: a call refused beside it is told the probe's
+whole bound, the same for as long as the response is held, until the caller has
+read or dropped it.
 
 ## An age and a series of probes
 
@@ -97,10 +101,12 @@ probe whose call is never sent, because the rate refused it or its unit ran out
 of time first, counts as neither a success nor a failure. The same goes for one
 whose caller drops it unanswered before then, and the series keeps its count.
 
-Under a rate limit, an age leaves room for only so many failures to answer
-within it of one another, each attempt running ten minutes at most. A
-`BREAKER_FAILURES` above that never opens the breaker, so the boot refuses it,
-naming `BREAKER_AGE_SECS`, `RATE_LIMIT` and `RATE_WINDOW_SECS`.
+Under a rate limit, an age leaves room for only so many of the policy's own
+attempts to answer within it of one another, each attempt running ten minutes at
+most. A `BREAKER_FAILURES` above that is opened by none of them, so the boot
+refuses it, naming `BREAKER_AGE_SECS`, `RATE_LIMIT` and `RATE_WINDOW_SECS`. The
+check bounds the policy's attempts alone: the body of a response
+`ResilienceMiddleware` hands its caller counts when it ends, outside it.
 
 ## Read it and switch it by hand
 
@@ -153,7 +159,8 @@ Each transition is a `warn` on `nest_rs::resilience`,
 `circuit breaker changed state`, naming the `instance` and the `state` it
 entered: `open`, `half_open` or `closed`. Failures opening it add `failed`,
 `window`, `open_ms` and `error`: what the last of them failed on, the error's
-chain with every URL in it cut to its origin, or the timeout's sentence for an
+chain with every URL in it cut to its scheme, host and numeric port (see
+[what a line tells of a URL](/fundamentals/resilience-events/#what-a-line-tells-of-a-url)), or the timeout's sentence for an
 attempt given up at its bound. A switch by hand adds `manual = true`, and an
 opening its `open_ms`, filed even when it enters the state it found. Every
 duration is in whole milliseconds, rounded up.
@@ -278,7 +285,7 @@ and more than the rate lets answer within the age.
 - **The boot's check of an age under a rate counts the longest attempt.** It
   takes each attempt as running up to ten minutes, the timeout's ceiling, which
   a method may pin: a policy whose attempts all end sooner can still be built
-  with a breaker that never opens. It takes each timeout as firing on time: a
+  with a breaker none of them opens. It takes each timeout as firing on time: a
   runtime stalled past a timeout can let more failures answer within the age
   than the check counts.
 - **A transition is told once the breaker's lock is let go, by one thread at a

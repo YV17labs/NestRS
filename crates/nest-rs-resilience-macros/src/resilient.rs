@@ -9,15 +9,15 @@ use nest_rs_codegen::__private::{
     resilient_retries, resilient_timeout, shared_receiver, site, takes_value, ungrouped_expr,
 };
 use nest_rs_codegen::{Arg, Grammar, Refusals};
-use proc_macro2::{Group, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::parse::discouraged::Speculative;
 use syn::parse::{ParseStream, Parser};
 use syn::spanned::Spanned;
 use syn::{
-    Expr, FnArg, GenericArgument, Ident, ImplItemFn, Pat, PatIdent, PatType, PathArguments,
-    ReturnType, Stmt, Token, Type, TypeParamBound,
+    Expr, ExprLit, FnArg, GenericArgument, Ident, ImplItemFn, Item, Lit, Member, Pat, PatIdent,
+    PatType, PathArguments, ReturnType, Stmt, Token, TraitItemFn, Type, TypeParamBound,
 };
 
 use crate::instrumented::{Part, instrumented};
@@ -161,15 +161,18 @@ impl Args {
                 method,
                 when: self.fallback_if.as_ref(),
             }),
+            reads: false,
             ..self.once()
         }
     }
 
     /// The run a refused method is kept as: once, its one attempt owning the
-    /// arguments, under the field and the token's name alone.
+    /// arguments, under the field and the token's name alone, each argument
+    /// read first in the place of the keys left out.
     fn once(&self) -> Plan<'_> {
         Plan {
             field: &self.field,
+            reads: true,
             idempotent: None,
             lends: None,
             timeout_millis: None,
@@ -186,6 +189,10 @@ impl Args {
 /// How a method's body runs under its policy.
 struct Plan<'a> {
     field: &'a Ident,
+    /// The method is one refused, kept without the keys that read its
+    /// arguments: each is read ahead of the run, where rustc would report one
+    /// only a predicate or the fallback read as unused, its fix breaking the key.
+    reads: bool,
     /// `idempotent` as written, when the call is sent again after a failure:
     /// kept for its span.
     idempotent: Option<&'a Ident>,
@@ -256,23 +263,22 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
     let args = parse_args(args, &mut refusals);
     let unbound = cancels && args.as_ref().is_none_or(|args| args.cancel.is_none());
     let Ok(mut method) = syn::parse2::<ImplItemFn>(item.clone()) else {
-        refusals.push(syn::Error::new(
-            Span::call_site(),
-            "#[resilient] decorates an `async fn` method with a body, run under the policy a \
-             field of `self` holds, and this is no method — put it on the method making the \
-             call",
-        ));
+        refusals.push(no_method(&item));
         return Err(refused(item, refusals));
     };
-    let mut on_a_generated_field = false;
-    let read = match method.sig.asyncness {
-        Some(_) => instrumented(&mut method.block.stmts, &mut |part| {
-            if let Part::Written(stmts) = part {
-                on_a_generated_field = opens_on_operation_field_mark(stmts);
-            }
-        }),
-        None => Ok(()),
-    };
+    let (mut on_a_generated_field, mut run_already) = (false, false);
+    let read = instrumented(&mut method.block.stmts, &mut |part| {
+        if let Part::Written(stmts) = part {
+            on_a_generated_field = opens_on_operation_field_mark(stmts);
+            run_already = opens_on_run_mark(stmts);
+        }
+    });
+    if run_already {
+        return Err(Refused {
+            kept: item,
+            refusal: syn::Error::new(Span::call_site(), TWICE),
+        });
+    }
     if on_a_generated_field {
         return Err(Refused {
             kept: item,
@@ -284,7 +290,12 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
             ),
         });
     }
-    let unread = refusals.handle(read).is_none();
+    // A `fn` an instrument wrapped is read once it is an `async fn`: its refusal
+    // says to write one, and the body it is kept without is typed as nothing.
+    let unread = match method.sig.asyncness {
+        Some(_) => refusals.handle(read).is_none(),
+        None => read.is_err(),
+    };
     let checked = check(&method, args.as_ref(), &mut refusals);
     let shape = Shape {
         unread,
@@ -320,36 +331,147 @@ fn refused(item: TokenStream, refusals: Refusals) -> Refused {
     }
 }
 
+/// The refusal of an item that is no method with a body: a declaration ending
+/// on `;`, as a trait writes one, is told what it is at its name, and anything
+/// else at the attribute.
+fn no_method(item: &TokenStream) -> syn::Error {
+    match syn::parse2::<TraitItemFn>(item.clone()) {
+        Ok(declared) if declared.default.is_none() => syn::Error::new(
+            declared.sig.ident.span(),
+            format!(
+                "#[resilient] decorates an `async fn` method with a body, run under the policy a \
+                 field of `self` holds, and `{}` is declared with none, as a trait declares a \
+                 method: there is no body to run, and no field of `self` to read — put \
+                 `#[resilient]` on the method of each impl",
+                declared.sig.ident,
+            ),
+        ),
+        _ => syn::Error::new(
+            Span::call_site(),
+            "#[resilient] decorates an `async fn` method with a body, run under the policy a \
+             field of `self` holds, and this is no method — put it on the method making the \
+             call",
+        ),
+    }
+}
+
+/// What a second `#[resilient]` on one method is told.
+const TWICE: &str = "#[resilient] is written twice here — a method runs under one policy, and a \
+                     second would run the first's whole run again at each of its attempts. Keep \
+                     one; a method calling two dependencies is two methods, each decorated";
+
+/// The item the body of a method `#[resilient]` read opens on, expanded or
+/// kept, in the macro ABI's prefix: no developer writes it, so a `#[resilient]`
+/// finding it was written below another its name did not show — one imported
+/// under another name, or an entry of a `#[cfg_attr]`.
+const RUN: &str = "__nestrs_resilient_run";
+
+/// The mark a body run under a policy opens on: an item rustc reports as no
+/// dead code, its name leading with `_`, so it carries no lint level a crate's
+/// `forbid` could refuse, every token the expansion's own, so no lint reads
+/// it as a function the developer wrote.
+fn run_mark() -> Stmt {
+    let mark = mixed_site_ident(RUN);
+    Stmt::Item(Item::Verbatim(
+        quote_spanned!(Span::mixed_site()=> fn #mark() {}),
+    ))
+}
+
+/// Whether `stmts`, a method's body, opens on [`run_mark`].
+fn opens_on_run_mark(stmts: &[Stmt]) -> bool {
+    matches!(stmts.first(), Some(Stmt::Item(Item::Fn(mark))) if mark.sig.ident == RUN)
+}
+
 /// A refused method, in the nearest form its body compiles in as written —
 /// as if it answered `Result<T, E>` — so that no error but its refusals is
-/// reported: as written where it answers an `impl Trait`, which its body alone
-/// names, whatever else refused it; with no body where the one it has is an
-/// instrument's the decorator cannot type as an attempt, or may read a token
-/// whose name the decorator did not bind, its parameters read in that body's
-/// place; as written where it is no `async fn`; run once where the method
-/// could be expanded at all; and checked against a stand-in that never runs
-/// where its receiver or its field is what was refused. Every form but the
-/// bodiless one binds the token under the name `cancel` gave.
+/// reported:
+///
+/// - with no body where the one it has is an instrument's the decorator cannot
+///   type as an attempt, or may read a token whose name the decorator did not
+///   bind;
+/// - where its answer holds an `impl Trait`, whatever else refused it: checked
+///   against the stand-in as an attempt of that answer, `_` in the place of
+///   what the body alone names, or as written where the answer is an
+///   `impl Trait` whole, which says nothing of its attempt;
+/// - as the `async fn` it was meant as where it is a `fn` whose body awaits at
+///   its own level, then as any other; with no body where it is another `fn`,
+///   a boxed future's as `#[async_trait]` leaves one, which answers the
+///   method's own type where the developer wrote an attempt's;
+/// - run once where the method could be expanded at all;
+/// - and checked against a stand-in that never runs where its receiver or its
+///   field is what was refused.
+///
+/// Every form but the bodiless one binds the token under the name `cancel`
+/// gave; every form reads each name its parameters bind, the keys that read
+/// them being left out, and opens on the expansion's mark, so a second
+/// decorator below, read by no name, is refused beside the first.
 fn kept(mut method: ImplItemFn, args: Option<&Args>, shape: &Shape) -> TokenStream {
     if !shape.opaque && (shape.unread || shape.unbound) {
         no_body(&mut method);
         return method.into_token_stream();
     }
-    if !shape.asynchronous || shape.opaque {
-        let token = args.and_then(|args| args.cancel.as_ref());
-        if let Some(token) = token.filter(|_| !shape.unbound) {
-            let stmts = &mut method.block.stmts;
+    if shape.opaque {
+        let token = args
+            .and_then(|args| args.cancel.as_ref())
+            .filter(|_| !shape.unbound);
+        if let Some(inferred) = inferred_answer(&method).filter(|_| !shape.unread) {
+            return stand_in(method, token, inferred);
+        }
+        let read = reads(&method, Read::BesideItsBody);
+        let stmts = &mut method.block.stmts;
+        let after_items = leading_items(stmts);
+        if let Some(token) = token {
             stmts.insert(
-                leading_items(stmts),
+                after_items,
                 syn::parse_quote!(let #token = ::nest_rs_resilience::CancellationToken::new();),
             );
         }
+        if let Some(read) = read {
+            stmts.insert(after_items, read);
+        }
+        stmts.insert(0, run_mark());
         return method.into_token_stream();
+    }
+    if !shape.asynchronous {
+        let written = method.block.stmts.iter().map(ToTokens::to_token_stream);
+        if method.sig.constness.is_some() || !awaits(written.collect()) {
+            no_body(&mut method);
+            return method.into_token_stream();
+        }
+        method.sig.asyncness = Some(Token![async](method.sig.fn_token.span));
     }
     match (args, shape.receiver) {
         (Some(args), Some(receiver)) => expand(method, receiver, &args.once()),
-        _ => stand_in(method, args.and_then(|args| args.cancel.as_ref())),
+        _ => {
+            let answer = answer(&method);
+            stand_in(method, args.and_then(|args| args.cancel.as_ref()), answer)
+        }
     }
+}
+
+/// Whether `tokens`, a `fn`'s body, hold an `.await` of their own, which only
+/// an `async fn`'s does: outside every `async` block, every item's body and
+/// every macro's arguments, whose expansion may hold a block of its own. Read
+/// by tokens: what is taken for one of those wrongly — the brace after a `fn`
+/// pointer's type, a parenthesised operand of `!` — hides an `.await`, and the
+/// method is kept with no body, which is right of every `fn`.
+fn awaits(tokens: TokenStream) -> bool {
+    let (mut after_dot, mut after_bang, mut in_another) = (false, false, false);
+    for tree in tokens {
+        match &tree {
+            TokenTree::Ident(word) if after_dot && word == "await" => return true,
+            TokenTree::Ident(word) if word == "async" || word == "fn" => in_another = true,
+            TokenTree::Group(_) if after_bang => {}
+            TokenTree::Group(group) if in_another && group.delimiter() == Delimiter::Brace => {
+                in_another = false;
+            }
+            TokenTree::Group(group) if awaits(group.stream()) => return true,
+            _ => {}
+        }
+        after_dot = matches!(&tree, TokenTree::Punct(dot) if dot.as_char() == '.');
+        after_bang = matches!(&tree, TokenTree::Punct(bang) if bang.as_char() == '!');
+    }
+    false
 }
 
 /// How many items open `stmts`, ahead of its first statement.
@@ -360,44 +482,56 @@ fn leading_items(stmts: &[Stmt]) -> usize {
         .count()
 }
 
-/// Leaves `method` no body: each name its parameters bind, read as it is
-/// bound and under its parameter's `#[cfg]`s, then an answer never given. The
-/// body that read them is gone, and a lint attribute in its place is `E0453`
-/// in a crate forbidding the lint. A parameter binding names no attribute
-/// reads is taken under none, `_`.
+/// How a kept method reads the names its parameters bind.
+#[derive(Clone, Copy, PartialEq)]
+enum Read {
+    /// Beside the body written, which changes what it binds `mut`.
+    BesideItsBody,
+    /// In the place of a body left out: a `mut` binding is read as one, or it
+    /// would be one nothing changes.
+    InPlaceOfItsBody,
+}
+
+/// The statement reading each name the parameters of `method` bind, under its
+/// parameter's `#[cfg]`s — `None` where they bind none an attribute reads. No
+/// lint attribute stands in for it: one is `E0453` in a crate forbidding the
+/// lint.
+fn reads(method: &ImplItemFn, read: Read) -> Option<Stmt> {
+    let mut names = Vec::new();
+    for typed in typed_inputs(method) {
+        let cfgs = cfg_attrs(&typed.attrs);
+        let mut bound = Bound::default();
+        bound.read(&typed.pat);
+        names.extend(bound.names.iter().map(|binding| {
+            let name = &binding.ident;
+            match (&binding.by_ref, &binding.mutability) {
+                (None, Some(_)) if read == Read::InPlaceOfItsBody => quote!(#(#cfgs)* &mut #name),
+                _ => quote!(#(#cfgs)* &#name),
+            }
+        }));
+    }
+    (!names.is_empty()).then(|| syn::parse_quote!(let _ = (#(#names,)*);))
+}
+
+/// Leaves `method` no body: the expansion's mark, each name its parameters
+/// bind, read as it is bound, then an answer never given. A parameter binding
+/// names no attribute reads is taken under none, `_`.
 fn no_body(method: &mut ImplItemFn) {
-    let mut read = Vec::new();
     for input in &mut method.sig.inputs {
         let FnArg::Typed(typed) = input else {
             continue;
         };
-        let cfgs = cfg_attrs(&typed.attrs);
         let mut bound = Bound::default();
         bound.read(&typed.pat);
-        if bound.unparsed.is_empty() {
-            read.extend(bound.names.iter().map(|binding| {
-                let name = &binding.ident;
-                match (&binding.by_ref, &binding.mutability) {
-                    (None, Some(_)) => quote!(#(#cfgs)* &mut #name),
-                    _ => quote!(#(#cfgs)* &#name),
-                }
-            }));
-        } else {
+        if !bound.unparsed.is_empty() {
             *typed.pat = Pat::Wild(syn::PatWild {
                 attrs: Vec::new(),
                 underscore_token: Token![_](typed.pat.span()),
             });
         }
     }
-    let mut stmts = Vec::new();
-    if !read.is_empty() {
-        stmts.push(syn::parse_quote!(let _ = (#(#read,)*);));
-    }
-    stmts.push(Stmt::Expr(
-        Expr::Verbatim(quote!(::core::unreachable!())),
-        None,
-    ));
-    method.block.stmts = stmts;
+    let read = reads(method, Read::InPlaceOfItsBody);
+    method.block.stmts = run_under(read, quote!(::core::unreachable!()));
 }
 
 /// The arguments `method` takes beside its receiver.
@@ -531,13 +665,7 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
                 RETRY_IF => args.retry_if = predicate(&arg, refusals)?,
                 RETRY_OK_IF => args.retry_ok_if = predicate(&arg, refusals)?,
                 RECORD_IF => args.record_if = predicate(&arg, refusals)?,
-                FALLBACK => {
-                    args.fallback = refusals.handle(name(
-                        &value(&arg)?,
-                        FALLBACK,
-                        "the name of an `async fn` method of `Self`, alone, e.g. `fallback = stale`",
-                    ));
-                }
+                FALLBACK => args.fallback = refusals.handle(fallback(&value(&arg)?)),
                 FALLBACK_IF => args.fallback_if = predicate(&arg, refusals)?,
                 CANCEL => {
                     args.cancel = refusals.handle(name(
@@ -589,11 +717,28 @@ fn parse_args(args: TokenStream, refusals: &mut Refusals) -> Option<Args> {
 
 /// `arg`'s value, read ahead of the stream, which stays before a value that is
 /// no expression: a parse that fails leaves its stream wherever it gave up,
-/// and [`resumes`] reads on from there.
+/// and [`resumes`] reads on from there. Nothing after the `=` is the key
+/// written bare, and anything else that reads as no expression is refused at
+/// the token `syn` gave up on, in the key's words, never `syn`'s.
 fn value(arg: &Arg<'_>) -> syn::Result<Expr> {
     let input = arg.value()?;
+    if input.is_empty() || input.peek(Token![,]) {
+        return Err(syn::Error::new(
+            arg.ident().span(),
+            bare(RESILIENT, arg.key()),
+        ));
+    }
     let ahead = input.fork();
-    let value = ahead.parse()?;
+    let value = ahead.parse().map_err(|unread: syn::Error| {
+        syn::Error::new(
+            unread.span(),
+            takes_value(
+                RESILIENT,
+                Some(arg.key()),
+                "an expression after its `=`, and this reads as none",
+            ),
+        )
+    })?;
     input.advance_to(&ahead);
     Ok(value)
 }
@@ -697,6 +842,33 @@ fn name(value: &Expr, key: &str, what: &str) -> syn::Result<Ident> {
     ))
 }
 
+/// `value` as the name of the method answering in place of the run's error. A
+/// name given type arguments, which rustc's help writes for a fallback whose
+/// type parameter no argument fixes, and a call are each told why the key
+/// takes neither.
+fn fallback(value: &Expr) -> syn::Result<Ident> {
+    const WHAT: &str = "the name of an `async fn` method of `Self`, alone, e.g. `fallback = stale`";
+    let why = match ungrouped_expr(value) {
+        Expr::Path(path)
+            if path
+                .path
+                .segments
+                .last()
+                .is_some_and(|named| !named.arguments.is_none()) =>
+        {
+            " — it takes no type argument: a fallback is handed the method's arguments, then the \
+             error, and answers what the method answers, so name one whose type parameters those \
+             fix"
+        }
+        Expr::Call(_) | Expr::MethodCall(_) => {
+            " — it is named, never called: the decorator calls it with the method's arguments, \
+             then the error"
+        }
+        _ => "",
+    };
+    name(value, FALLBACK, &format!("{WHAT}{why}"))
+}
+
 /// Whether the list reads on past the key just refused, `input` then standing
 /// at the next one: over what is written there as a key's value, `= expression`
 /// or `(…)`, when a comma or the list's end follows it. A value that reads as
@@ -746,11 +918,53 @@ fn field(input: ParseStream<'_>) -> syn::Result<Ident> {
     let fork = input.fork();
     match fork.parse::<Ident>() {
         Ok(_) if fork.is_empty() || fork.peek(Token![,]) => input.parse(),
-        _ => Err(syn::Error::new(
+        _ => Err(no_field(input)),
+    }
+}
+
+/// The refusal of what leads the list in a field's place: a call, which rustc
+/// offers a host answering its policy through a method, and a tuple struct's
+/// position are each told what the decorator reads instead.
+fn no_field(input: ParseStream<'_>) -> syn::Error {
+    const NAMES: &str = "#[resilient] names the field of `self` holding the policy by its name, \
+                         alone";
+    let ahead = input.fork();
+    let written = ahead
+        .parse::<Expr>()
+        .ok()
+        .filter(|_| ahead.is_empty() || ahead.peek(Token![,]));
+    let position = |index: &dyn ToTokens| {
+        format!(
+            "{NAMES}, and `{}` is a tuple struct's field, which has a position and no name — \
+             hold the policy in a named field, `carrier: Arc<ResiliencePolicy<I>>`, and write \
+             `#[resilient(carrier)]`",
+            index.to_token_stream(),
+        )
+    };
+    match written.as_ref().map(ungrouped_expr) {
+        Some(called @ (Expr::Call(_) | Expr::MethodCall(_))) => syn::Error::new_spanned(
+            called,
+            format!(
+                "{NAMES}, and this is a call: the policy is read from a field, never through a \
+                 method — hold the `Arc<ResiliencePolicy<I>>` in a field of the host, and write \
+                 that field's name, `#[resilient(carrier)]`"
+            ),
+        ),
+        Some(
+            literal @ Expr::Lit(ExprLit {
+                lit: Lit::Int(index),
+                ..
+            }),
+        ) => syn::Error::new_spanned(literal, position(index)),
+        Some(Expr::Field(field)) if matches!(field.member, Member::Unnamed(_)) => {
+            syn::Error::new_spanned(field, position(&field.member))
+        }
+        _ => syn::Error::new(
             input.span(),
-            "#[resilient] names the field of `self` holding the policy by its name, alone — \
-             write `#[resilient(carrier)]` to run the method under `self.carrier`",
-        )),
+            format!(
+                "{NAMES} — write `#[resilient(carrier)]` to run the method under `self.carrier`"
+            ),
+        ),
     }
 }
 
@@ -776,12 +990,7 @@ fn bare(attr: &str, key: &str) -> String {
 /// when its field did not read — and the shape it has.
 fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> Shape {
     if let Some(second) = method.attrs.iter().find(|attr| is_resilient(attr)) {
-        refusals.push(syn::Error::new_spanned(
-            second,
-            "#[resilient] is written twice here — a method runs under one policy, and a second \
-             would run the first's whole run again at each of its attempts. Keep one; a method \
-             calling two dependencies is two methods, each decorated",
-        ));
+        refusals.push(syn::Error::new_spanned(second, TWICE));
     }
     let asynchronous = method.sig.asyncness.is_some();
     if !asynchronous {
@@ -814,8 +1023,13 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
         ));
     }
     let fallback = args.and_then(|args| args.key(FALLBACK));
+    let itself = method.sig.ident.unraw();
     if let Some(key) = fallback
-        && args.is_some_and(|args| args.fallback.as_ref() == Some(&method.sig.ident))
+        && args.is_some_and(|args| {
+            args.fallback
+                .as_ref()
+                .is_some_and(|named| named.unraw() == itself)
+        })
     {
         refusals.push(syn::Error::new(
             key.span(),
@@ -866,8 +1080,13 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
         ));
     }
     for typed in typed_inputs(method) {
+        // What a fallback cannot hand on under a name is refused once, in the words
+        // whose fix cures a `mut` it binds too: naming the argument.
+        let unnamed = fallback.filter(|_| plain_name(&typed.pat).is_none());
         if let Some(lent) = &lent {
-            if let Some((binding, written)) = mutable_binding(&typed.pat) {
+            if let Some((binding, written)) = mutable_binding(&typed.pat)
+                && unnamed.is_none()
+            {
                 refusals.push(syn::Error::new(
                     binding,
                     format!(
@@ -895,15 +1114,36 @@ fn check(method: &ImplItemFn, args: Option<&Args>, refusals: &mut Refusals) -> S
                 ));
             }
         }
-        if fallback.is_some() && plain_name(&typed.pat).is_none() {
+        if unnamed.is_some() {
+            let (binds, remedy) = match &*typed.pat {
+                Pat::Ident(PatIdent {
+                    by_ref: Some(_),
+                    mutability,
+                    ident,
+                    subpat: None,
+                    ..
+                }) => {
+                    let then = match mutability {
+                        Some(_) => "change a copy",
+                        None => "borrow it",
+                    };
+                    (
+                        "by reference",
+                        format!("bind it by value, `{ident}`, and {then} inside the body"),
+                    )
+                }
+                _ => (
+                    "to no plain name",
+                    "name the argument, and take it apart inside the body".to_owned(),
+                ),
+            };
             refusals.push(syn::Error::new_spanned(
                 &typed.pat,
                 format!(
                     "{} hands its fallback each argument under the name the method binds it to, \
-                     and `{}` binds this one to no plain name — name the argument, and take it \
-                     apart inside the body",
+                     and `{}` binds this one {binds} — {remedy}",
                     site(RESILIENT, Some(FALLBACK)),
-                    typed.pat.to_token_stream(),
+                    written(&typed.pat),
                 ),
             ));
         }
@@ -1001,6 +1241,90 @@ fn impl_trait(ty: &Type) -> Option<&Type> {
             _ => None,
         }),
         _ => None,
+    }
+}
+
+/// What a method holding an `impl Trait` inside its answer answers, `_` in the
+/// place of each, and its span as [`answer`] gives it — `None` where the answer
+/// is an `impl Trait` whole, or the method answers nothing.
+fn inferred_answer(method: &ImplItemFn) -> Option<(TokenStream, Span)> {
+    let ReturnType::Type(_, answered) = &method.sig.output else {
+        return None;
+    };
+    let mut inferred = (**answered).clone();
+    infer_impl_traits(&mut inferred);
+    let mut whole = &inferred;
+    while let Type::Paren(syn::TypeParen { elem, .. }) | Type::Group(syn::TypeGroup { elem, .. }) =
+        whole
+    {
+        whole = elem;
+    }
+    if matches!(whole, Type::Infer(_)) {
+        return None;
+    }
+    let (_, at) = answer(method);
+    Some((respanned(inferred.into_token_stream(), at), at))
+}
+
+/// Writes `_` in the place of each `impl Trait` `ty` holds, wherever
+/// [`impl_trait`] finds one.
+fn infer_impl_traits(ty: &mut Type) {
+    if let Type::ImplTrait(opaque) = ty {
+        let underscore = Token![_](opaque.impl_token.span);
+        *ty = syn::parse_quote!(#underscore);
+        return;
+    }
+    match ty {
+        Type::Path(path) => {
+            if let Some(qself) = &mut path.qself {
+                infer_impl_traits(&mut qself.ty);
+            }
+            for segment in &mut path.path.segments {
+                infer_impl_traits_within(&mut segment.arguments);
+            }
+        }
+        Type::Reference(reference) => infer_impl_traits(&mut reference.elem),
+        Type::Ptr(pointer) => infer_impl_traits(&mut pointer.elem),
+        Type::Slice(slice) => infer_impl_traits(&mut slice.elem),
+        Type::Array(array) => infer_impl_traits(&mut array.elem),
+        Type::Paren(paren) => infer_impl_traits(&mut paren.elem),
+        Type::Group(group) => infer_impl_traits(&mut group.elem),
+        Type::Tuple(tuple) => tuple.elems.iter_mut().for_each(infer_impl_traits),
+        Type::TraitObject(object) => {
+            for bound in &mut object.bounds {
+                if let TypeParamBound::Trait(bound) = bound {
+                    for segment in &mut bound.path.segments {
+                        infer_impl_traits_within(&mut segment.arguments);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`infer_impl_traits`] over a path segment's arguments.
+fn infer_impl_traits_within(arguments: &mut PathArguments) {
+    match arguments {
+        PathArguments::AngleBracketed(angled) => {
+            for argument in &mut angled.args {
+                match argument {
+                    GenericArgument::Type(ty) => infer_impl_traits(ty),
+                    GenericArgument::AssocType(assoc) => infer_impl_traits(&mut assoc.ty),
+                    _ => {}
+                }
+            }
+        }
+        PathArguments::Parenthesized(parenthesized) => {
+            parenthesized
+                .inputs
+                .iter_mut()
+                .for_each(|input| infer_impl_traits(&mut input.ty));
+            if let ReturnType::Type(_, ty) = &mut parenthesized.output {
+                infer_impl_traits(ty);
+            }
+        }
+        PathArguments::None => {}
     }
 }
 
@@ -1234,8 +1558,21 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
         }
         _ => run,
     };
-    method.block.stmts = vec![syn::Stmt::Expr(Expr::Verbatim(call), None)];
+    let read = plan
+        .reads
+        .then(|| reads(&method, Read::BesideItsBody))
+        .flatten();
+    method.block.stmts = run_under(read, call);
     method.into_token_stream()
+}
+
+/// The body of a method whose own was taken into `run`, or left out for it:
+/// the expansion's mark, what a kept form reads of its arguments, then `run`.
+fn run_under(read: Option<Stmt>, run: TokenStream) -> Vec<Stmt> {
+    let mut stmts = vec![run_mark()];
+    stmts.extend(read);
+    stmts.push(Stmt::Expr(Expr::Verbatim(run), None));
+    stmts
 }
 
 /// An argument of the method as its fallback is handed it.
@@ -1270,11 +1607,15 @@ fn arguments(method: &ImplItemFn, at: Span) -> Vec<Handed> {
         .collect()
 }
 
-/// `method` with its body checked as one attempt against a stand-in that
-/// reads no field and never runs, its token bound under the name `cancel`
-/// gave, when it gave one.
-fn stand_in(mut method: ImplItemFn, cancel: Option<&Ident>) -> TokenStream {
-    let (answer, at) = answer(&method);
+/// `method` with its body checked as one attempt of `answer` against a
+/// stand-in that reads no field and never runs, its token bound under the name
+/// `cancel` gave, when it gave one, and each of its arguments read first.
+fn stand_in(
+    mut method: ImplItemFn,
+    cancel: Option<&Ident>,
+    (answer, at): (TokenStream, Span),
+) -> TokenStream {
+    let read = reads(&method, Read::BesideItsBody);
     let block = body(&mut method, &answer, at, false, None);
     let token = match cancel {
         Some(name) => name.to_token_stream(),
@@ -1283,7 +1624,7 @@ fn stand_in(mut method: ImplItemFn, cancel: Option<&Ident>) -> TokenStream {
     let checked = quote_spanned! {at=>
         ::nest_rs_resilience::__private::refused::<#answer, _, _>(move |#token| async move #block)
     };
-    method.block.stmts = vec![syn::Stmt::Expr(Expr::Verbatim(checked), None)];
+    method.block.stmts = run_under(read, checked);
     method.into_token_stream()
 }
 
@@ -1804,8 +2145,8 @@ mod tests {
         assert!(handed.contains(&answering), "{answering} in {handed}");
         let kept = kept(quote!(carrier, fallback = stale, cancel), item);
         let read = format!(
-            "{{ let _ = ({zones} & zone , {weights} & weight , & parcel ,) ; :: core :: \
-             unreachable ! () }}"
+            "{{ fn __nestrs_resilient_run () {{ }} let _ = ({zones} & zone , {weights} & weight , \
+             & parcel ,) ; :: core :: unreachable ! () }}"
         );
         assert!(kept.ends_with(&read), "{read} in {kept}");
     }
@@ -1875,7 +2216,6 @@ mod tests {
         for value in [
             quote!(self.stale),
             quote!(Self::stale),
-            quote!(stale()),
             quote!(|error| Ok(0)),
             quote!("stale"),
             quote!(self),
@@ -2047,8 +2387,8 @@ mod tests {
                  method binds it to, and `_` binds this one to no plain name — name the \
                  argument, and take it apart inside the body",
                 "#[resilient] `fallback` hands its fallback each argument under the name the \
-                 method binds it to, and `ref depot` binds this one to no plain name — name the \
-                 argument, and take it apart inside the body",
+                 method binds it to, and `ref depot` binds this one by reference — bind it by \
+                 value, `depot`, and borrow it inside the body",
             ]
         );
         let again = refusals(quote!(carrier, idempotent, fallback = stale), item.clone());
@@ -2113,8 +2453,8 @@ mod tests {
             let kept = kept(unbound.clone(), item.clone());
             assert_eq!(
                 kept,
-                "async fn ship (& self , mut order : Order) -> Answer { let _ = (& mut order ,) ; \
-                 :: core :: unreachable ! () }",
+                "async fn ship (& self , mut order : Order) -> Answer { fn __nestrs_resilient_run () { } \
+                 let _ = (& mut order ,) ; :: core :: unreachable ! () }",
                 "#[resilient({unbound})]"
             );
         }
@@ -2143,8 +2483,8 @@ mod tests {
         );
         assert!(
             patterned.ends_with(
-                "-> Answer { let _ = (& zone , & mut weight , & depot , & label , & carrier , & \
-                 first , & inner ,) ; :: core :: unreachable ! () }"
+                "-> Answer { fn __nestrs_resilient_run () { } let _ = (& zone , & mut weight , & depot , \
+                 & label , & carrier , & first , & inner ,) ; :: core :: unreachable ! () }"
             ),
             "{patterned}"
         );
@@ -2155,7 +2495,8 @@ mod tests {
         let bare = kept(quote!(carrier, cancel), track());
         assert_eq!(
             bare,
-            "async fn track (& self) -> Answer { :: core :: unreachable ! () }"
+            "async fn track (& self) -> Answer { fn __nestrs_resilient_run () { } :: core :: \
+             unreachable ! () }"
         );
     }
 
@@ -2191,7 +2532,8 @@ mod tests {
             let kept = kept(args.clone(), item.clone());
             assert!(
                 kept.ends_with(
-                    "-> Answer { let _ = (& token , & r#type ,) ; :: core :: unreachable ! () }"
+                    "-> Answer { fn __nestrs_resilient_run () { } let _ = (& token , & r#type ,) ; :: \
+                     core :: unreachable ! () }"
                 ),
                 "#[resilient({args})]: {kept}"
             );
@@ -2262,8 +2604,9 @@ mod tests {
 
     /// An answer no expansion can name has no stand-in either: a body that
     /// answers nothing would be typed `!`, an error of the decorator's own, so
-    /// the method is kept as written whatever else refuses it, its token bound
-    /// where the decorator read a name no argument has.
+    /// the method is kept as written whatever else refuses it, its arguments
+    /// read first and its token bound where the decorator read a name no
+    /// argument has.
     #[test]
     fn a_refused_method_answering_impl_trait_is_kept_as_written_whatever_else_refuses_it() {
         let item = quote! {
@@ -2271,7 +2614,8 @@ mod tests {
                 token
             }
         };
-        let as_written = "async fn opaque (& self , token : String) -> impl Quoted { token }";
+        let as_written = "async fn opaque (& self , token : String) -> impl Quoted { fn \
+                          __nestrs_resilient_run () { } let _ = (& token ,) ; token }";
         for args in [
             quote!(carrier),
             quote!(carrier, cancel = token),
@@ -2315,19 +2659,20 @@ mod tests {
                         order
                     }
                 },
-                "async fn opaque (& self , order : Order) -> impl Quoted { use std :: fmt :: \
-                 Write as _ ; let stop = :: nest_rs_resilience :: CancellationToken :: new () ; \
-                 stop . cancelled () . await ; order }",
+                "async fn opaque (& self , order : Order) -> impl Quoted { fn \
+                 __nestrs_resilient_run () { } use std :: fmt :: Write as _ ; let _ = (& order ,) \
+                 ; let stop = :: nest_rs_resilience :: CancellationToken :: new () ; stop . \
+                 cancelled () . await ; order }",
             ),
             (
                 quote! {
-                    fn boxed(&self) -> Answer {
+                    fn boxed(&self) -> impl Quoted {
                         Box::pin(async move { stop.is_cancelled() })
                     }
                 },
-                "fn boxed (& self) -> Answer { let stop = :: nest_rs_resilience :: \
-                 CancellationToken :: new () ; Box :: pin (async move { stop . is_cancelled () \
-                 }) }",
+                "fn boxed (& self) -> impl Quoted { fn __nestrs_resilient_run () { } let stop = \
+                 :: nest_rs_resilience :: CancellationToken :: new () ; Box :: pin (async move { \
+                 stop . is_cancelled () }) }",
             ),
         ] {
             assert_eq!(kept(quote!(carrier, cancel = stop), written), kept_as);
@@ -2380,8 +2725,8 @@ mod tests {
         let stood_in = kept(quote!(carrier, cancel = zone), item.clone());
         assert!(
             stood_in.ends_with(
-                "(& self , token : String , _ : u32 , _ : Path < (Depot , u32) > ,) -> Answer { \
-                 let _ = (& token ,) ; :: core :: unreachable ! () }"
+                "(& self , token : String , _ : u32 , _ : Path < (Depot , u32) > ,) -> Answer { fn \
+                 __nestrs_resilient_run () { } let _ = (& token ,) ; :: core :: unreachable ! () }"
             ),
             "{stood_in}"
         );
@@ -2515,7 +2860,10 @@ mod tests {
         );
         let kept = kept(quote!(carrier, idempotent), item);
         assert!(
-            kept.ends_with("-> Answer { let _ = (& order ,) ; :: core :: unreachable ! () }"),
+            kept.ends_with(
+                "-> Answer { fn __nestrs_resilient_run () { } let _ = (& order ,) ; :: core :: \
+                 unreachable ! () }"
+            ),
             "{kept}"
         );
     }
@@ -2704,10 +3052,511 @@ mod tests {
             quote!(Result<Vec<(u8, impl Display)>, E>),
             quote!(Box<dyn Iterator<Item = impl Display>>),
         ] {
-            let ty: Type = syn::parse2(ty).expect("a type");
+            let mut ty: Type = syn::parse2(ty).expect("a type");
             assert!(impl_trait(&ty).is_some(), "{}", ty.to_token_stream());
+            infer_impl_traits(&mut ty);
+            assert!(impl_trait(&ty).is_none(), "{}", ty.to_token_stream());
         }
         let ty: Type = syn::parse2(quote!(Result<Box<dyn Display>, E>)).expect("a type");
         assert!(impl_trait(&ty).is_none());
+    }
+
+    /// A refused method drops the keys it was refused under, and an argument
+    /// only one of them read would be rustc's `unused variable`, whose fix
+    /// breaks the key: every kept form reads each name its parameters bind.
+    #[test]
+    fn a_refused_method_kept_with_its_body_reads_each_name_its_parameters_bind() {
+        let arguments = quote! {
+            zone: String,
+            #[cfg(unix)] mut weight: u32,
+            (first, ref second): (u8, u8),
+            _: Unread,
+        };
+        let read = "let _ = (& zone , # [cfg (unix)] & weight , & first , & second ,) ;";
+        let once = kept(
+            quote!(carrier, record_if = |_| !zone.is_empty(), retries = 3),
+            quote! {
+                async fn quote(&self, #arguments) -> Answer {
+                    send().await
+                }
+            },
+        );
+        assert!(
+            once.contains(&format!(
+                "{read} :: nest_rs_resilience :: __private :: run :: < Answer"
+            )),
+            "run once: {once}"
+        );
+        let stood_in = kept(
+            quote!(carrier, fallback = stale),
+            quote! {
+                async fn quote(&mut self, #arguments) -> Answer {
+                    send().await
+                }
+            },
+        );
+        assert!(
+            stood_in.contains(&format!(
+                "{read} :: nest_rs_resilience :: __private :: refused :: < Answer"
+            )),
+            "checked against the stand-in: {stood_in}"
+        );
+        let opaque = kept(
+            quote!(carrier, fallback = stale, cancel = stop),
+            quote! {
+                async fn quote(&self, #arguments) -> impl Quoted {
+                    use std::fmt::Write as _;
+                    send().await
+                }
+            },
+        );
+        assert!(
+            opaque.ends_with(&format!(
+                "-> impl Quoted {{ fn __nestrs_resilient_run () {{ }} use std :: fmt :: Write as _ \
+                 ; {read} let stop = :: nest_rs_resilience :: CancellationToken :: new () ; send \
+                 () . await }}"
+            )),
+            "as written: {opaque}"
+        );
+        let unread = kept(quote!(carrier, timout = "2s"), track());
+        assert!(!unread.contains("let _ ="), "no argument to read: {unread}");
+        let accepted = resilient(
+            quote!(carrier, fallback = stale),
+            quote! {
+                async fn quote(&self, zone: String) -> Answer {
+                    send().await
+                }
+            },
+        )
+        .to_string();
+        assert!(
+            !accepted.contains("let _ ="),
+            "its keys read them: {accepted}"
+        );
+    }
+
+    /// Under `fallback` a pattern is refused as binding no plain name, and
+    /// naming the argument cures a `mut` it binds too: one refusal, one fix,
+    /// whichever key has the attempts borrow.
+    #[test]
+    fn a_pattern_binding_mut_under_a_fallback_is_refused_once_with_the_fix_that_cures_it() {
+        let item = quote! {
+            async fn weigh(
+                &self,
+                (mut grams, unit): (u32, u32),
+                ref mut tare: u32,
+                ref depot: Depot,
+                whole @ Parcel { mut weight, .. }: Parcel,
+            ) -> Answer {
+                send(grams).await
+            }
+        };
+        for keys in [
+            quote!(carrier, fallback = stale),
+            quote!(carrier, idempotent, fallback = stale),
+        ] {
+            let refused = refusals(keys.clone(), item.clone());
+            assert_eq!(
+                refused,
+                [
+                    "#[resilient] `fallback` hands its fallback each argument under the name the \
+                     method binds it to, and `(mut grams , unit)` binds this one to no plain \
+                     name — name the argument, and take it apart inside the body",
+                    "#[resilient] `fallback` hands its fallback each argument under the name the \
+                     method binds it to, and `ref mut tare` binds this one by reference — bind \
+                     it by value, `tare`, and change a copy inside the body",
+                    "#[resilient] `fallback` hands its fallback each argument under the name the \
+                     method binds it to, and `ref depot` binds this one by reference — bind it \
+                     by value, `depot`, and borrow it inside the body",
+                    "#[resilient] `fallback` hands its fallback each argument under the name the \
+                     method binds it to, and `whole @ Parcel { mut weight , .. }` binds this one \
+                     to no plain name — name the argument, and take it apart inside the body",
+                ],
+                "#[resilient({keys})]"
+            );
+        }
+        let alone = refusals(quote!(carrier, idempotent), item);
+        assert_eq!(
+            alone.len(),
+            3,
+            "`idempotent` alone takes a pattern: {alone:#?}"
+        );
+        assert!(
+            alone.iter().all(|refused| refused.contains("bound `mut`")),
+            "{alone:#?}"
+        );
+    }
+
+    /// The method's own name is read as every other name is, raw or not.
+    #[test]
+    fn a_method_named_raw_is_no_fallback_of_its_own() {
+        for (fallback, method) in [
+            (quote!(r#track), quote!(track)),
+            (quote!(track), quote!(r#track)),
+            (quote!(r#track), quote!(r#track)),
+        ] {
+            let refused = refusals(
+                quote!(carrier, fallback = #fallback),
+                quote! {
+                    async fn #method(&self) -> Answer {
+                        send().await
+                    }
+                },
+            );
+            assert_eq!(
+                refused.len(),
+                1,
+                "fallback = {fallback} on {method}: {refused:#?}"
+            );
+            assert!(
+                refused[0].contains("is this method itself"),
+                "fallback = {fallback} on {method}: {refused:#?}"
+            );
+        }
+    }
+
+    /// rustc's help for a fallback whose type parameter no argument fixes
+    /// writes a type argument in the key, and a call is how a method is used
+    /// anywhere else: each is told what the key takes in its place.
+    #[test]
+    fn a_fallback_given_type_arguments_or_called_is_told_what_to_name() {
+        for value in [quote!(stale::<u8>), quote!(stale::<Vec<u8>, _>)] {
+            let refused = refusals(quote!(carrier, fallback = #value), track());
+            assert_eq!(
+                refused,
+                [
+                    "#[resilient] `fallback` takes the name of an `async fn` method of `Self`, \
+                     alone, e.g. `fallback = stale` — it takes no type argument: a fallback is \
+                     handed the method's arguments, then the error, and answers what the method \
+                     answers, so name one whose type parameters those fix"
+                ],
+                "fallback = {value}"
+            );
+        }
+        for value in [quote!(stale()), quote!(self.stale(zone))] {
+            let refused = refusals(quote!(carrier, fallback = #value), track());
+            assert_eq!(
+                refused,
+                [
+                    "#[resilient] `fallback` takes the name of an `async fn` method of `Self`, \
+                     alone, e.g. `fallback = stale` — it is named, never called: the decorator \
+                     calls it with the method's arguments, then the error"
+                ],
+                "fallback = {value}"
+            );
+        }
+    }
+
+    /// rustc's help for a host answering its policy through a method writes
+    /// the call in the list, and a tuple struct's field has a position for a
+    /// name: each is told the decorator reads a named field, and none else.
+    #[test]
+    fn a_field_written_as_a_call_or_a_position_is_told_a_named_field_is_read() {
+        for called in [
+            quote!(carrier()),
+            quote!(self.carrier()),
+            quote!(carrier(), idempotent),
+        ] {
+            let refused = refusals(called.clone(), track());
+            assert_eq!(
+                refused,
+                [
+                    "#[resilient] names the field of `self` holding the policy by its name, \
+                     alone, and this is a call: the policy is read from a field, never through a \
+                     method — hold the `Arc<ResiliencePolicy<I>>` in a field of the host, and \
+                     write that field's name, `#[resilient(carrier)]`"
+                ],
+                "#[resilient({called})]"
+            );
+        }
+        for (position, written) in [
+            (quote!(0), "0"),
+            (quote!(self.1), "1"),
+            (quote!(0, idempotent), "0"),
+        ] {
+            let refused = refusals(position.clone(), track());
+            assert_eq!(
+                refused,
+                [format!(
+                    "#[resilient] names the field of `self` holding the policy by its name, \
+                     alone, and `{written}` is a tuple struct's field, which has a position and \
+                     no name — hold the policy in a named field, `carrier: \
+                     Arc<ResiliencePolicy<I>>`, and write `#[resilient(carrier)]`"
+                )],
+                "#[resilient({position})]"
+            );
+        }
+    }
+
+    /// A trait's declaration is a method with no body: told what it is and
+    /// where the decorator goes, at its name, and kept as written.
+    #[test]
+    fn a_method_a_trait_declares_is_told_the_decorator_goes_on_each_impl() {
+        let declared = quote!(
+            async fn status(&self, parcel: u32) -> Answer;
+        );
+        let refused = refusals(quote!(carrier, idempotent), declared.clone());
+        assert_eq!(
+            refused,
+            [
+                "#[resilient] decorates an `async fn` method with a body, run under the policy a \
+                 field of `self` holds, and `status` is declared with none, as a trait declares \
+                 a method: there is no body to run, and no field of `self` to read — put \
+                 `#[resilient]` on the method of each impl"
+            ]
+        );
+        assert_eq!(
+            kept(quote!(carrier, idempotent), declared.clone()),
+            declared.to_string()
+        );
+        let no_method = refusals(
+            quote!(carrier),
+            quote!(
+                struct Shipments;
+            ),
+        );
+        assert!(
+            no_method[0].ends_with("this is no method — put it on the method making the call"),
+            "{no_method:#?}"
+        );
+    }
+
+    /// A decorated method's body opens on the expansion's own mark, so a
+    /// second decorator `check` could not read by its name — imported under
+    /// another, or written in a `#[cfg_attr]` — finds a body already run under
+    /// a policy and says so, alone, the method kept as the first left it.
+    #[test]
+    fn a_second_decorator_read_by_no_name_finds_the_first_ones_run_and_is_refused() {
+        let written = quote! {
+            async fn ship(&self, order: Order) -> Answer {
+                send(order).await
+            }
+        };
+        let twice = |refused: Vec<String>| {
+            assert_eq!(refused.len(), 1, "{refused:#?}");
+            assert!(
+                refused[0].starts_with("#[resilient] is written twice here"),
+                "{refused:#?}"
+            );
+        };
+        for first in [
+            quote!(carrier),
+            quote!(carrier, idempotent, cancel = token),
+            quote!(carrier, fallback = stale, fallback_if = refused),
+        ] {
+            let run = resilient(first.clone(), written.clone());
+            assert!(
+                run.to_string()
+                    .contains("-> Answer { fn __nestrs_resilient_run () { }"),
+                "#[resilient({first})]: {run}"
+            );
+            for second in [quote!(carrier, idempotent), quote!(carrier, retry = 3)] {
+                twice(refusals(second.clone(), run.clone()));
+                assert_eq!(kept(second, run.clone()), run.to_string());
+            }
+            // An instrument between the two wraps the mark with the run.
+            let body: syn::ImplItemFn = syn::parse2(run).expect("a method");
+            let stmts = &body.block.stmts;
+            twice(refusals(
+                quote!(carrier),
+                instrumented_above(quote!(#(#stmts)*)),
+            ));
+        }
+        // A first decorator refused keeps the method in a form the second finds too.
+        for first in [
+            quote!(carrier, retries = 3),
+            quote!(carier(), idempotent),
+            quote!(carrier, cancel),
+        ] {
+            let kept_run: TokenStream = kept(first.clone(), written.clone())
+                .parse()
+                .expect("a method");
+            twice(refusals(quote!(carrier), kept_run));
+        }
+        // A body that only names the mark is the developer's own.
+        let named = quote! {
+            async fn ship(&self, order: Order) -> Answer {
+                let __nestrs_resilient_run = order;
+                send(__nestrs_resilient_run).await
+            }
+        };
+        assert!(expansion(quote!(carrier), named).is_ok());
+    }
+
+    /// A key whose `=` nothing follows is the key written bare, and a value
+    /// that reads as no expression is refused in the key's words: `syn`'s own
+    /// name neither the decorator nor the key.
+    #[test]
+    fn a_value_that_reads_as_no_expression_is_refused_in_its_keys_words() {
+        for (args, said) in [
+            (
+                quote!(carrier, idempotent, retries =),
+                "#[resilient] `retries` needs a value — write `retries = 3`",
+            ),
+            (
+                quote!(carrier, fallback = , idempotent),
+                "#[resilient] `fallback` needs a value — write `fallback = stale`",
+            ),
+            (
+                quote!(carrier, idempotent, retries = =),
+                "#[resilient] `retries` takes an expression after its `=`, and this reads as none",
+            ),
+            (
+                quote!(carrier, record_if = |),
+                "#[resilient] `record_if` takes an expression after its `=`, and this reads as \
+                 none",
+            ),
+            (
+                quote!(carrier, cancel = ;),
+                "#[resilient] `cancel` takes an expression after its `=`, and this reads as none",
+            ),
+        ] {
+            let refused = refusals(args.clone(), track());
+            assert_eq!(refused, [said], "#[resilient({args})]");
+        }
+    }
+
+    /// A `fn` whose body awaits at its own level is an `async fn` missing its
+    /// `async`, and is kept as one, so neither its body nor a caller awaiting
+    /// it adds an error. Any other is kept with no body: a boxed future's,
+    /// as `#[async_trait]` leaves one, answers the method's own type where the
+    /// developer wrote an attempt's.
+    #[test]
+    fn a_refused_fn_is_kept_as_the_async_fn_its_body_awaits_as_or_with_no_body() {
+        let forgot = kept(
+            quote!(carrier, fallback = stale),
+            quote! {
+                fn ship(&self, order: Order) -> Answer {
+                    let sent = send(&order).await?;
+                    Ok(sent)
+                }
+            },
+        );
+        assert!(
+            forgot.starts_with(
+                "async fn ship (& self , order : Order) -> Answer { fn __nestrs_resilient_run () \
+                 { } let _ = (& order ,) ; :: nest_rs_resilience :: __private :: run :: < Answer"
+            ),
+            "{forgot}"
+        );
+        let hostless = kept(
+            quote!(carrier),
+            quote! {
+                fn ship(order: Order) -> Answer {
+                    send(order).await
+                }
+            },
+        );
+        assert!(
+            hostless.starts_with("async fn ship (order : Order) -> Answer {")
+                && hostless.contains("__private :: refused :: < Answer"),
+            "{hostless}"
+        );
+        for body in [
+            quote!(Box::pin(async move {
+                let sent = send(&order).await?;
+                Ok(sent)
+            })),
+            quote!(Err(Down)),
+            quote! {
+                async fn sent(order: &Order) -> Answer {
+                    send(order).await
+                }
+                block_on(sent(&order))
+            },
+            quote!(block_on(async { send(&order).await })),
+            quote!(traced!(send(&order).await)),
+        ] {
+            let kept = kept(
+                quote!(carrier, cancel = token),
+                quote! {
+                    fn ship(&self, order: Order) -> Answer {
+                        #body
+                    }
+                },
+            );
+            assert_eq!(
+                kept,
+                "fn ship (& self , order : Order) -> Answer { fn __nestrs_resilient_run () { } let _ = \
+                 (& order ,) ; :: core :: unreachable ! () }",
+                "{body}"
+            );
+        }
+        let constant = kept(
+            quote!(carrier),
+            quote! {
+                const fn ship(&self) -> Answer {
+                    send().await
+                }
+            },
+        );
+        assert!(constant.starts_with("const fn ship"), "{constant}");
+    }
+
+    /// An `impl Trait` inside the answer leaves the rest of it written: the
+    /// body is checked as an attempt of that answer, `_` standing for what it
+    /// alone names, so an `Err(e)` or a `?` it writes adds no error of rustc's.
+    /// An answer that is an `impl Trait` whole says nothing of its attempt.
+    #[test]
+    fn a_refused_method_answering_impl_trait_inside_its_answer_is_checked_as_an_attempt() {
+        let inside = kept(
+            quote!(carrier, idempotent, cancel = stop),
+            quote! {
+                async fn label(&self, order: Order) -> Result<impl Display, ResilienceError<Down>> {
+                    let sent = send(&order, stop).await?;
+                    Ok(sent)
+                }
+            },
+        );
+        for written in [
+            "-> Result < impl Display , ResilienceError < Down > > { fn __nestrs_resilient_run () { } \
+             let _ = (& order ,) ; :: nest_rs_resilience :: __private :: refused :: < Result < _ , \
+             ResilienceError < Down > > , _ , _ > (move | stop | async move {",
+            "if false { return :: nest_rs_resilience :: __private :: attempt :: < Result < _ , \
+             ResilienceError < Down > > > () ; }",
+        ] {
+            assert!(inside.contains(written), "{written} in {inside}");
+        }
+        for (answer, inferred) in [
+            (
+                quote!(Result<Vec<(u8, impl Display)>, ResilienceError<impl Error>>),
+                "Result < Vec < (u8 , _) > , ResilienceError < _ > >",
+            ),
+            (
+                quote!(Result<Box<dyn Iterator<Item = impl Display>>, E>),
+                "Result < Box < dyn Iterator < Item = _ > > , E >",
+            ),
+            (
+                quote!(Result<&(impl Display), <impl Tr as Named>::Error>),
+                "Result < & (_) , < _ as Named > :: Error >",
+            ),
+        ] {
+            let kept = kept(
+                quote!(carrier),
+                quote! {
+                    async fn label(&self) -> #answer {
+                        send().await
+                    }
+                },
+            );
+            assert!(
+                kept.contains(&format!("refused :: < {inferred} , _ , _ >")),
+                "{inferred} in {kept}"
+            );
+        }
+        for whole in [quote!(impl Quoted), quote!((impl Quoted))] {
+            let kept = kept(
+                quote!(carrier),
+                quote! {
+                    async fn label(&self) -> #whole {
+                        send().await
+                    }
+                },
+            );
+            assert!(
+                kept.ends_with("{ fn __nestrs_resilient_run () { } send () . await }"),
+                "as written: {kept}"
+            );
+        }
     }
 }

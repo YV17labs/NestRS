@@ -22,8 +22,11 @@ use crate::millis::millis;
 /// The transition's line, the one a policy files at `warn`.
 pub(crate) const MOVED: &str = "circuit breaker changed state";
 
-/// What a call refused beside a probe past its bound is told: one tick of the
-/// timer, the probe being given up at any moment.
+/// The least a call refused beside a probe is told, one tick of the timer:
+/// what is left of a probe's bound once it has passed, the probe's own timer
+/// giving it up at any moment. A probe whose answer is held past its run has
+/// no timer to give it up, and a call refused beside it is told that probe's
+/// whole bound instead ([`Answers`]).
 const OVERDUE: Duration = Duration::from_millis(1);
 
 /// A policy's circuit breaker, as the next call meets it:
@@ -53,10 +56,19 @@ pub enum BreakerState {
     /// over, or between two probes: of the series
     /// [`breaker_probes`](crate::ResilienceConfig::breaker_probes) asks, or
     /// after one whose answer counted in neither direction — and is refused
-    /// while another call holds it, whether that call is sent yet or still
-    /// waits for its token of the rate limit, told when the probe has
-    /// answered at the latest. It carries no time: that bound is the probe's
-    /// own run's.
+    /// while another call holds it, told a wait that is that probe's:
+    ///
+    /// - while the probe's call is sent, or still waits for its token of the
+    ///   rate limit, what is left of its bound, when it has answered at the
+    ///   latest — and a millisecond once that has passed, its own timer giving
+    ///   it up at any moment;
+    /// - once the probe's answer is a response its caller holds
+    ///   ([`ResilienceMiddleware`](crate::ResilienceMiddleware)), that probe's
+    ///   whole bound, however long it has been held: no timer gives a held
+    ///   answer up, the turn comes back when its caller has read or dropped
+    ///   it, and its reads wait for the dependency no longer than that bound.
+    ///
+    /// It carries no time: that bound is the probe's own run's.
     HalfOpen,
 }
 
@@ -182,10 +194,10 @@ enum Phase {
         turn: Turn,
     },
     /// One call probes the dependency, `passed` probes of the series having
-    /// succeeded before it; every other is refused until it answers, by
-    /// `until` at the latest.
+    /// succeeded before it; every other is refused until it answers, as
+    /// `answers` says.
     HalfOpen {
-        until: Instant,
+        answers: Answers,
         passed: usize,
     },
     /// Between two probes of a series, `passed` of them having succeeded —
@@ -194,6 +206,19 @@ enum Phase {
     BetweenProbes {
         passed: usize,
     },
+}
+
+/// When the probe sent has answered, as far as its breaker knows: what a call
+/// refused beside it is told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Answers {
+    /// By this instant at the latest, where its attempt's timer gives it up.
+    By(Instant),
+    /// When its caller has read or dropped the answer it holds past its run,
+    /// which no timer bounds: a call refused meanwhile is told the bound the
+    /// probe was sent under, the longest its reads wait for the dependency.
+    #[cfg(feature = "reqwest")]
+    Held(Duration),
 }
 
 impl Phase {
@@ -219,9 +244,16 @@ impl Phase {
             Self::Closed => Ok(None),
             Self::Open { until } => left(until).map_or(Ok(Some(Turn::First)), Err),
             Self::BetweenProbes { passed } => Ok(Some(Turn::Next { passed })),
-            Self::ProbePending { until, .. } | Self::HalfOpen { until, .. } => {
-                Err(until.saturating_duration_since(Instant::now()).max(OVERDUE))
-            }
+            Self::ProbePending { until, .. }
+            | Self::HalfOpen {
+                answers: Answers::By(until),
+                ..
+            } => Err(until.saturating_duration_since(Instant::now()).max(OVERDUE)),
+            #[cfg(feature = "reqwest")]
+            Self::HalfOpen {
+                answers: Answers::Held(bound),
+                ..
+            } => Err(bound.max(OVERDUE)),
         }
     }
 
@@ -469,12 +501,18 @@ impl Sent<'_> {
     }
 
     /// The attempt held past its run, with no borrow of the breaker, by what
-    /// its call answered: a response whose body is still to read.
+    /// its call answered: a response whose body is still to read. No timer
+    /// gives it up from here, so a call refused beside a probe held is told
+    /// `bound`, the one the attempt was sent under.
     #[cfg(feature = "reqwest")]
-    pub(crate) fn hold(mut self) -> HeldAttempt {
+    pub(crate) fn hold(mut self, bound: Duration) -> HeldAttempt {
         self.until = None;
+        let probe = std::mem::take(&mut self.probe);
+        if probe {
+            self.breaker.probe_held(self.epoch, bound);
+        }
         HeldAttempt {
-            probe: std::mem::take(&mut self.probe),
+            probe,
             epoch: self.epoch,
         }
     }
@@ -563,7 +601,8 @@ impl Breaker {
     /// passed or between two probes of a series, its call sent now under
     /// `bound` unless it postpones it — or refuse it for the wait the breaker
     /// knows: what is left of the open time, or of the probe's own bound while
-    /// another call holds its turn.
+    /// another call holds its turn — that whole bound, once the probe's answer
+    /// is held past its run.
     #[inline]
     pub(crate) fn admit(&self, bound: Duration) -> Result<Pass<'_>, Duration> {
         let mut held = self.held.lock();
@@ -716,12 +755,24 @@ impl Breaker {
         let from = held.phase;
         if let Phase::ProbePending { turn, .. } = from {
             held.phase = Phase::HalfOpen {
-                until: Instant::now() + bound,
+                answers: Answers::By(Instant::now() + bound),
                 passed: turn.passed(),
             };
             if turn == Turn::First {
                 self.entered(held, from, Moved::Probe);
             }
+        }
+    }
+
+    /// The probe's answer held past its run, sent under `bound`: no instant
+    /// ends it from here.
+    #[cfg(feature = "reqwest")]
+    fn probe_held(&self, epoch: u64, bound: Duration) {
+        let Some(mut held) = self.held_since(epoch) else {
+            return;
+        };
+        if let Phase::HalfOpen { answers, .. } = &mut held.phase {
+            *answers = Answers::Held(bound);
         }
     }
 
@@ -1953,7 +2004,7 @@ mod tests {
                 .admit(BOUND)
                 .expect("closed")
                 .send(BOUND, None)
-                .hold()
+                .hold(BOUND)
         };
         let (success, another, failure) = (held(), held(), held());
         cycled(&breaker).await;
@@ -2145,8 +2196,10 @@ mod tests {
         let lines = nest_rs_testing::LogCapture::install();
         let breaker = breaker(2, 2);
         let admitted = || breaker.admit(BOUND).expect("closed");
-        let first = admitted().send(BOUND, None).hold();
-        let second = admitted().send(BOUND, Some(Instant::now() + BOUND)).hold();
+        let first = admitted().send(BOUND, None).hold(BOUND);
+        let second = admitted()
+            .send(BOUND, Some(Instant::now() + BOUND))
+            .hold(BOUND);
         tokio::time::advance(2 * BOUND).await;
         assert_eq!(
             breaker.read(),
@@ -2179,18 +2232,19 @@ mod tests {
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
 
-        let held = probe(&breaker).send(BOUND, None).hold();
+        let held = probe(&breaker).send(BOUND, None).hold(BOUND);
         tokio::time::advance(2 * BOUND).await;
-        assert_eq!(refused_for(&breaker), OVERDUE, "the turn is still held");
+        assert_eq!(breaker.read(), BreakerState::HalfOpen);
+        assert_eq!(refused_for(&breaker), BOUND, "the turn is still held");
         drop(breaker.resume(held));
         assert_eq!(states(&lines), ["open", "half_open", "open"]);
 
-        let held = probe(&breaker).send(BOUND, None).hold();
+        let held = probe(&breaker).send(BOUND, None).hold(BOUND);
         breaker.resume(held).settle(Some(DOWN));
         assert_eq!(refused_for(&breaker), OPEN_FOR, "the probe failed");
 
         tokio::time::advance(OPEN_FOR).await;
-        let held = probe(&breaker).send(BOUND, None).hold();
+        let held = probe(&breaker).send(BOUND, None).hold(BOUND);
         assert_eq!(breaker.read(), BreakerState::HalfOpen);
         breaker.resume(held).settle(None);
         assert_eq!(breaker.read(), BreakerState::Closed);
@@ -2209,6 +2263,50 @@ mod tests {
         );
     }
 
+    /// A call refused beside a probe is told what is left of that probe's
+    /// bound while its timer runs, and that whole bound once its answer is
+    /// held past its run, at once and however long after: nothing gives a
+    /// held probe up, so it is never told the tick of one being given up.
+    #[cfg(feature = "reqwest")]
+    #[tokio::test(start_paused = true)]
+    async fn a_call_refused_beside_a_held_probe_is_told_that_probes_bound() {
+        let breaker = breaker(1, 1);
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+        let second = Duration::from_secs(1);
+
+        let sent = probe(&breaker).send(BOUND, None);
+        tokio::time::advance(second).await;
+        assert_eq!(refused_for(&breaker), BOUND - second, "sent, unanswered");
+        let held = sent.hold(BOUND);
+        assert_eq!(refused_for(&breaker), BOUND, "held as its head came");
+        for _ in 0..3 {
+            tokio::time::advance(4 * BOUND).await;
+            assert_eq!(refused_for(&breaker), BOUND, "held, long past its bound");
+            assert_eq!(breaker.refusing(), Some(BOUND));
+        }
+        breaker.resume(held).settle(None);
+        assert_eq!(breaker.read(), BreakerState::Closed);
+
+        attempt(&breaker, true);
+        tokio::time::advance(OPEN_FOR).await;
+        let stale = probe(&breaker).send(BOUND, None);
+        breaker.open_manually(second);
+        tokio::time::advance(second).await;
+        let current = probe(&breaker).send(BOUND, None);
+        let stale = stale.hold(BOUND);
+        assert_eq!(
+            refused_for(&breaker),
+            BOUND,
+            "a probe held from before a switch says nothing of the one sent since"
+        );
+        tokio::time::advance(BOUND - second).await;
+        assert_eq!(refused_for(&breaker), second);
+        drop(breaker.resume(stale));
+        current.settle(None);
+        assert_eq!(breaker.read(), BreakerState::Closed);
+    }
+
     /// A manual switch while an attempt is held past its run leaves it nothing
     /// to change once it is taken up again: a failure opens nothing after a
     /// manual closing, and a probe's success closes nothing after a manual
@@ -2221,14 +2319,14 @@ mod tests {
             .admit(BOUND)
             .expect("closed")
             .send(BOUND, None)
-            .hold();
+            .hold(BOUND);
         breaker.close_manually();
         breaker.resume(held).settle(Some(DOWN));
         assert_eq!(breaker.read(), BreakerState::Closed);
 
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
-        let held = probe(&breaker).send(BOUND, None).hold();
+        let held = probe(&breaker).send(BOUND, None).hold(BOUND);
         let held_open = Duration::from_secs(10);
         breaker.open_manually(held_open);
         tokio::time::advance(held_open).await;

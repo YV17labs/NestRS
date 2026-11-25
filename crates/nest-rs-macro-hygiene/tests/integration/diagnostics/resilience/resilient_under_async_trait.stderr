@@ -1,5 +1,11 @@
 error: #[resilient] decorates an `async fn`: the policy's run is awaited, and this method is a `fn` — write `async fn`. Under `#[async_trait]`, which turns each `async fn` of the impl into a `fn` returning a boxed future before this attribute reads it, write the trait's method as a native `async fn` instead
-  --> tests/integration/diagnostics/resilience/resilient_under_async_trait.rs:37:5
+  --> tests/integration/diagnostics/resilience/resilient_under_async_trait.rs:40:5
    |
-37 |     async fn track(&self, parcel: &str) -> Answer<String> {
+40 |     async fn track(&self, parcel: &str) -> Answer<String> {
+   |     ^^^^^
+
+error: #[resilient] decorates an `async fn`: the policy's run is awaited, and this method is a `fn` — write `async fn`. Under `#[async_trait]`, which turns each `async fn` of the impl into a `fn` returning a boxed future before this attribute reads it, write the trait's method as a native `async fn` instead
+  --> tests/integration/diagnostics/resilience/resilient_under_async_trait.rs:45:5
+   |
+45 |     async fn locate(&self, parcel: &str) -> Answer<usize> {
    |     ^^^^^

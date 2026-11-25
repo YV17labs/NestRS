@@ -17,7 +17,8 @@ use crate::tls::TestCertificate;
 /// connection, each answered from its script in turn, the last answer again
 /// once the script ran out, and the head of every request kept. An answer's
 /// body comes whole, cut short, stalled, or in two parts the suite lets
-/// through one at a time ([`release`](Self::release)).
+/// through one at a time ([`release`](Self::release)), and its head carries
+/// the headers the suite gives it ([`PeerAnswer::header`]), whichever it is.
 ///
 /// ```
 /// use nest_rs_testing::{HttpsPeer, PeerAnswer, TestAuthority};
@@ -69,11 +70,15 @@ pub enum PeerAnswer {
     Stalling {
         /// The status code.
         status: u16,
+        /// The headers beside it, as written.
+        headers: Vec<(String, String)>,
     },
     /// A status and a whole body, its length declared.
     Body {
         /// The status code.
         status: u16,
+        /// The headers beside it, as written.
+        headers: Vec<(String, String)>,
         /// The body, as written.
         body: Vec<u8>,
     },
@@ -83,6 +88,8 @@ pub enum PeerAnswer {
     Truncated {
         /// The status code.
         status: u16,
+        /// The headers beside it, as written.
+        headers: Vec<(String, String)>,
     },
     /// A status and a body written in two parts: the head and the first part,
     /// then the second once the suite calls [`HttpsPeer::release`], and the
@@ -90,6 +97,8 @@ pub enum PeerAnswer {
     Parted {
         /// The status code.
         status: u16,
+        /// The headers beside it, as written.
+        headers: Vec<(String, String)>,
         /// The part written with the head.
         first: Vec<u8>,
         /// The part held back until the peer is released.
@@ -108,13 +117,17 @@ impl PeerAnswer {
 
     /// An answer of `status` whose body stalls halfway.
     pub const fn stalling(status: u16) -> Self {
-        Self::Stalling { status }
+        Self::Stalling {
+            status,
+            headers: Vec::new(),
+        }
     }
 
     /// An answer of `status` carrying `body` whole.
     pub fn body(status: u16, body: impl Into<Vec<u8>>) -> Self {
         Self::Body {
             status,
+            headers: Vec::new(),
             body: body.into(),
         }
     }
@@ -122,7 +135,10 @@ impl PeerAnswer {
     /// An answer of `status` whose body is cut short halfway, the connection
     /// closed.
     pub const fn truncated(status: u16) -> Self {
-        Self::Truncated { status }
+        Self::Truncated {
+            status,
+            headers: Vec::new(),
+        }
     }
 
     /// An answer of `status` whose body is `first`, then `second` once the
@@ -130,29 +146,28 @@ impl PeerAnswer {
     pub fn parted(status: u16, first: impl Into<Vec<u8>>, second: impl Into<Vec<u8>>) -> Self {
         Self::Parted {
             status,
+            headers: Vec::new(),
             first: first.into(),
             second: second.into(),
         }
     }
 
-    /// The same answer, carrying `name: value` too; a silent one stays silent,
-    /// and one with a body carries its length alone.
+    /// The same answer, carrying `name: value` too, written in its head
+    /// beside the length it declares, whatever becomes of its body. A
+    /// [`Silent`](Self::Silent) answer writes no head, so the header has
+    /// nowhere to go: it stays as it is.
     #[must_use]
-    pub fn header(self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        match self {
-            Self::Status {
-                status,
-                mut headers,
-            } => {
-                headers.push((name.into(), value.into()));
-                Self::Status { status, headers }
-            }
-            as_it_is @ (Self::Silent
-            | Self::Stalling { .. }
-            | Self::Body { .. }
-            | Self::Truncated { .. }
-            | Self::Parted { .. }) => as_it_is,
-        }
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        let headers = match &mut self {
+            Self::Status { headers, .. }
+            | Self::Stalling { headers, .. }
+            | Self::Body { headers, .. }
+            | Self::Truncated { headers, .. }
+            | Self::Parted { headers, .. } => headers,
+            Self::Silent => return self,
+        };
+        headers.push((name.into(), value.into()));
+        self
     }
 }
 
@@ -245,24 +260,27 @@ impl HttpsPeer {
                         Some(PeerAnswer::Status { status, headers }) => {
                             (status, headers, 0, Vec::new(), None, true)
                         }
-                        Some(PeerAnswer::Body { status, body }) => {
-                            (status, Vec::new(), body.len(), body, None, true)
-                        }
-                        Some(PeerAnswer::Stalling { status }) => {
+                        Some(PeerAnswer::Body {
+                            status,
+                            headers,
+                            body,
+                        }) => (status, headers, body.len(), body, None, true),
+                        Some(PeerAnswer::Stalling { status, headers }) => {
                             let declared = 2 * HALF.len();
-                            (status, Vec::new(), declared, HALF.to_vec(), None, false)
+                            (status, headers, declared, HALF.to_vec(), None, false)
                         }
-                        Some(PeerAnswer::Truncated { status }) => {
+                        Some(PeerAnswer::Truncated { status, headers }) => {
                             let declared = 2 * HALF.len();
-                            (status, Vec::new(), declared, HALF.to_vec(), None, true)
+                            (status, headers, declared, HALF.to_vec(), None, true)
                         }
                         Some(PeerAnswer::Parted {
                             status,
+                            headers,
                             first,
                             second,
                         }) => {
                             let declared = first.len() + second.len();
-                            (status, Vec::new(), declared, first, Some(second), true)
+                            (status, headers, declared, first, Some(second), true)
                         }
                         Some(PeerAnswer::Silent) | None => {
                             std::future::pending::<()>().await;
@@ -336,12 +354,28 @@ fn lock<T>(held: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     use super::*;
 
+    /// One answer of each kind that writes a head.
+    fn answers_with_a_head() -> [PeerAnswer; 5] {
+        [
+            PeerAnswer::status(503),
+            PeerAnswer::stalling(503),
+            PeerAnswer::body(503, "a parcel"),
+            PeerAnswer::truncated(503),
+            PeerAnswer::parted(503, "a par", "cel"),
+        ]
+    }
+
+    /// A silent answer writes no head, so a header has nowhere to go.
     #[test]
     fn a_silent_answer_stays_silent_whatever_it_is_told_to_carry() {
         assert_eq!(
             PeerAnswer::Silent.header("retry-after", "1"),
             PeerAnswer::Silent
         );
+    }
+
+    #[test]
+    fn every_answer_that_writes_a_head_keeps_the_headers_it_is_told_to_carry() {
         assert_eq!(
             PeerAnswer::status(429).header("retry-after", "1"),
             PeerAnswer::Status {
@@ -349,17 +383,83 @@ mod tests {
                 headers: vec![("retry-after".to_owned(), "1".to_owned())],
             }
         );
+        for answer in answers_with_a_head() {
+            let carrying = answer.clone().header("retry-after", "2");
+            assert_ne!(carrying, answer);
+            assert_ne!(carrying.clone().header("x-attempt", "1"), carrying);
+        }
     }
 
-    #[test]
-    fn an_answer_with_a_body_carries_its_length_alone() {
-        for bodied in [
-            PeerAnswer::stalling(200),
-            PeerAnswer::body(200, "a parcel"),
-            PeerAnswer::truncated(200),
-            PeerAnswer::parted(200, "a par", "cel"),
-        ] {
-            assert_eq!(bodied.clone().header("retry-after", "1"), bodied);
+    /// The head `answer` is given by a peer scripted with it, read off the
+    /// socket as it is written, up to the blank line ending it.
+    async fn head_of(answer: PeerAnswer) -> String {
+        use tokio_rustls::rustls::pki_types::pem::PemObject as _;
+        use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
+        use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+
+        let authority = crate::TestAuthority::new();
+        let peer = HttpsPeer::answering(&authority.server(&["127.0.0.1"]), [answer]).await;
+        let mut roots = RootCertStore::empty();
+        roots.add_parsable_certificates(
+            CertificateDer::pem_slice_iter(authority.pem().as_bytes()).map_while(Result::ok),
+        );
+        let config = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let stream = tokio::net::TcpStream::connect(("127.0.0.1", peer.port()))
+            .await
+            .expect("the peer listens");
+        let mut tls = tokio_rustls::TlsConnector::from(Arc::new(config))
+            .connect(
+                ServerName::try_from("127.0.0.1").expect("an address"),
+                stream,
+            )
+            .await
+            .expect("the peer's certificate is the authority's");
+        tls.write_all(b"GET /parcels/42 HTTP/1.1\r\nhost: 127.0.0.1\r\n\r\n")
+            .await
+            .expect("the request is written");
+        let mut read = Vec::new();
+        let mut buf = [0_u8; 1024];
+        let ends = loop {
+            if let Some(ends) = read.windows(4).position(|window| window == b"\r\n\r\n") {
+                break ends;
+            }
+            let count = tls.read(&mut buf).await.expect("the head is read");
+            assert_ne!(count, 0, "the connection closed before the head ended");
+            read.extend_from_slice(&buf[..count]);
+        };
+        String::from_utf8(read[..ends].to_vec()).expect("a head is text")
+    }
+
+    /// Each answer writes the headers it carries in its head, beside the
+    /// length it declares, whatever becomes of its body.
+    #[tokio::test]
+    async fn every_answer_that_writes_a_head_writes_the_headers_it_carries() {
+        for (answer, declared) in answers_with_a_head().into_iter().zip([
+            0,
+            2 * HALF.len(),
+            "a parcel".len(),
+            2 * HALF.len(),
+            "a parcel".len(),
+        ]) {
+            let carrying = answer
+                .clone()
+                .header("retry-after", "2")
+                .header("x-attempt", "1");
+            let head = head_of(carrying).await;
+            let lines: Vec<&str> = head.split("\r\n").collect();
+            assert_eq!(
+                lines,
+                [
+                    "HTTP/1.1 503 Answer",
+                    &format!("content-length: {declared}"),
+                    "retry-after: 2",
+                    "x-attempt: 1",
+                    "connection: close",
+                ],
+                "{answer:?}"
+            );
         }
     }
 

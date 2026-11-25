@@ -119,6 +119,25 @@ mod tests {
         );
     }
 
+    /// A userinfo the request's URL holds goes with the URL, cut whole: no
+    /// host is read out of it, so none is mistaken for one.
+    #[tokio::test]
+    async fn a_request_whose_url_holds_a_userinfo_is_said_without_it() {
+        for userinfo in ["ledger:hunter2", "ledger:2024%2FSpring", "ledger"] {
+            let error = reqwest::Client::new()
+                .get(format!("ftp://{userinfo}@files.example/{SENT}"))
+                .send()
+                .await
+                .expect_err("no HTTP scheme");
+
+            assert_eq!(
+                error_message(&error),
+                "builder error: URL scheme is not allowed",
+                "{userinfo}"
+            );
+        }
+    }
+
     /// What `#[error(transparent)]` expands to: reqwest's sentence as its own,
     /// and reqwest's cause as its source.
     #[derive(Debug)]

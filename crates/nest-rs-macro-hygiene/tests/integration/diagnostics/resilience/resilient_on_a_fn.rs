@@ -1,5 +1,8 @@
 //! The policy's run is awaited, so `#[resilient]` decorates an `async fn`: a
-//! `fn` is refused saying to write one.
+//! `fn` is refused saying to write one, and nothing else is said of it. One
+//! whose body awaits is kept as the `async fn` it was meant as, so neither its
+//! `.await` nor a caller's is an error of rustc's; one that does not is kept
+//! with no body, where an `Err(e)` written as an attempt's would be one.
 
 use std::sync::Arc;
 
@@ -30,6 +33,28 @@ impl ShipmentsService {
     fn ship(&self) -> Answer {
         Ok(())
     }
+
+    #[resilient(carrier, idempotent)]
+    fn track(&self, parcel: &str) -> Answer<usize> {
+        let found = locate(parcel).await?;
+        Ok(found)
+    }
+
+    #[resilient(carrier)]
+    fn refuse(&self, parcel: &str) -> Answer<usize> {
+        if parcel.is_empty() {
+            return Err(CarrierDown);
+        }
+        Ok(parcel.len())
+    }
+
+    async fn tracked(&self) -> Answer<usize> {
+        self.track("parcel").await
+    }
+}
+
+async fn locate(parcel: &str) -> Result<usize, CarrierDown> {
+    Ok(parcel.len())
 }
 
 fn main() {}

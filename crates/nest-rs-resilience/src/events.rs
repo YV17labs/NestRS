@@ -158,7 +158,8 @@ pub enum ResilienceRefusal {
     /// The circuit breaker is open, or another call holds its probe's turn.
     #[non_exhaustive]
     Open {
-        /// How long until the breaker lets a call through again.
+        /// How long until the breaker lets a call through again, as
+        /// [`ResilienceError::Open`](crate::ResilienceError::Open) says it.
         retry_after: Duration,
     },
 }

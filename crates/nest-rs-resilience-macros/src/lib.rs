@@ -15,7 +15,10 @@ mod resilient;
 ///
 /// The field holds an `Arc<ResiliencePolicy<I>>`, which a provider takes
 /// under `#[inject]`, so the boot refuses an app whose modules do not import
-/// the policy's `ResilienceModule<I>`. The method answers
+/// the policy's `ResilienceModule<I>`. It is read by its name, as `self.field`:
+/// a tuple struct's position is refused, and so is a call — the policy is held
+/// in a named field, never answered by a method, which named in the field's
+/// place is rustc's `E0615`, its help writing that call. The method answers
 /// `Result<T, ResilienceError<E>>` — read by its type, so an alias reads as the
 /// literal does — and its body is written as if it answered `Result<T, E>`:
 /// `?`, `Ok(..)`, `Err(e)` and an early `return` answer one attempt, each
@@ -83,13 +86,22 @@ mod resilient;
 ///   method answers:
 ///   `async fn stale(&self, zone: &str, error: ResilienceError<E>) -> Result<T, ResilienceError<E>>`.
 ///   An `Err` it answers is the method's. It runs once the run is over, under
-///   no policy: no timeout, no retry, counted in no breaker. Every attempt
-///   borrows the arguments it is handed next, as under `idempotent` and with
-///   the same bound on a `Send` future: the method binds each to a plain name,
-///   none `mut`, takes no `&mut`, and clones what an attempt consumes, which
-///   rustc answers with `E0382` at the key. A handler taking an extractor
-///   apart in its signature (`Path(id): Path<u32>`) names it instead
-///   (`id: Path<u32>`) and takes it apart in its body. A parameter under a
+///   no policy: no timeout, no retry, counted in no breaker. It is called as
+///   a method, so it takes `&self` or `self: &Arc<Self>`: a function of `Self`
+///   taking neither, and a field holding one, are rustc's `E0599` at the
+///   fallback's name, whose help writes a call or parentheses the key
+///   refuses. Its type parameters are fixed by what it is handed and what it
+///   answers: one they leave open is rustc's `E0283` at the fallback's name,
+///   whose help writes a type argument the key refuses too — the fallback's
+///   signature fixes it, or drops it. Every attempt borrows the arguments it
+///   is handed next, as under `idempotent` and with the same bound on a `Send`
+///   future: the method binds each to a plain name, none `mut`, takes no
+///   `&mut`, and clones what an attempt consumes, which rustc answers with
+///   `E0382` at the fallback's name, the key marked as where the argument
+///   moved. A handler taking an extractor apart in its signature
+///   (`Path(id): Path<u32>`) names it instead (`id: Path<u32>`) and takes it
+///   apart in its body, and one binding by reference (`ref id`) binds by
+///   value and borrows there. A parameter under a
 ///   `#[cfg]`, plain or inside a `#[cfg_attr]`, is handed in the builds that
 ///   compile it, to a fallback declaring it under the same condition. The
 ///   fallback's future is held as an attempt's is, in place in a release
@@ -113,7 +125,9 @@ mod resilient;
 /// naming a `fallback` do. It takes the one value it judges and answers at
 /// once, so a closure of another arity and an `async` one are refused where
 /// written, and a method of the host, whose path takes `self` first, is
-/// called from a closure: `|error| self.is_transient(error)`. A timeout is no
+/// called from a closure: `|error| self.is_transient(error)`. Named as
+/// `self.is_transient`, it is rustc's `E0615`, whose help writes a call no
+/// predicate is. A timeout is no
 /// `E`, so no predicate reads it: it is always a failure in the breaker, and
 /// always sent again by an `idempotent` method. `retry_if`, `retry_ok_if` and
 /// `record_if` judge an attempt's answer, so one that panics fails its attempt
@@ -141,24 +155,32 @@ mod resilient;
 /// rolled back before the fallback runs, and before the method answers an
 /// error `fallback_if` refused. Once an attempt sent a statement, another
 /// statement of that unit, issued beside the method, waits until the savepoint
-/// settles; the method's future dropped mid-attempt leaves its unit unable to
-/// commit, as an atomic block dropped does; and a savepoint the database
-/// cannot settle ends the method on `ResilienceError::Unsettled`, attempted no
-/// further and handed to no fallback. A method run once with no fallback opens
-/// none, nor does any outside a transaction — no unit of work, or one on the
-/// pool: an `Err` there leaves what the body wrote, as it does with no policy.
+/// settles; the method's future dropped mid-attempt, once that attempt's
+/// savepoint was answered, leaves its unit unable to commit, as an atomic
+/// block dropped does — dropped sooner, its unit waiting for a connection, its
+/// `BEGIN` or that answer, it leaves the unit as it was; and a savepoint the
+/// database cannot settle ends the method on `ResilienceError::Unsettled`,
+/// attempted no further and handed to no fallback. A method run once with no
+/// fallback opens none, nor does any outside a transaction — no unit of work,
+/// or one on the pool: an `Err` there leaves what the body wrote, as it does
+/// with no policy.
 ///
 /// Everything else on the method stays as written: its visibility, generics,
 /// lifetimes, docs, `#[cfg]`s and other attributes, and its body's tokens and
-/// spans. It takes `&self` or `self: &Arc<Self>`, on any host — a provider, a
-/// struct built by hand, a native `async fn` in a trait impl, a handler of
-/// every impl half, a scheduled tick included. On an `#[sse]` route or a
-/// `#[subscription]`, the policy runs the call opening the stream, never the
-/// items it yields later. A WebSocket connection hook answers `()`, so it
-/// carries none and calls a decorated method instead. A GraphQL field writes
-/// its `Result<T, ResilienceError<E>>` out: `#[operations]` reads a field's
-/// `Result` by its spelling, and refuses any other answer of a decorated one. It
-/// keeps this attribute, read by its last segment, on the method — written
+/// spans. It takes `&self` or `self: &Arc<Self>`, on any host holding its
+/// policy in a named field — a provider, a struct built by hand, a native
+/// `async fn` in a trait impl, a handler of every impl half, a scheduled tick
+/// included. A trait's own method carries none: its declaration is refused
+/// saying to decorate each impl's, and a default body, whose `Self` has no
+/// field, is rustc's `E0609` at the field named. A method carries it once: a
+/// second, under whatever name it is imported, is refused.
+///
+/// On an `#[sse]` route or a `#[subscription]`, the policy runs the call
+/// opening the stream, never the items it yields later. A WebSocket connection
+/// hook answers `()`, so it carries none and calls a decorated method instead.
+/// A GraphQL field writes its `Result<T, ResilienceError<E>>` out:
+/// `#[operations]` reads a field's `Result` by its spelling, and refuses any
+/// other answer of a decorated one. It keeps this attribute, read by its last segment, on the method — written
 /// plain, or as an entry of a `#[cfg_attr]`, kept under its condition — and
 /// hands the method's other attributes and entries to the field it generates,
 /// in a build with `graphql` and `resilience` both, whichever crate of it
@@ -177,11 +199,14 @@ mod resilient;
 /// and its `err` and `ret` record what the method answers. Above, tracing
 /// expands first: each attempt opens a span of its own, and `err` and `ret`
 /// record what that attempt answered, the dependency's own error. Above, the
-/// decorator reads the body as tracing-attributes 0.1 wraps it, and refuses one
-/// wrapped otherwise saying to write `#[resilient]` above. Both orders hold
-/// under every key: below, the span also covers the fallback and records what
-/// it answers; above, the fallback runs outside every attempt's span. The
-/// token `cancel` names is no argument of the method, so no span records it.
+/// decorator reads the body as tracing-attributes 0.1.31 wraps it, by the
+/// names that expansion binds: a release wrapping it otherwise, or under other
+/// names of the same `__tracing_` prefix, is refused saying to write
+/// `#[resilient]` above, the order that compiles whatever tracing writes. Both
+/// orders hold under every key: below, the span also covers the fallback and
+/// records what it answers; above, the fallback runs outside every attempt's
+/// span. The token `cancel` names is no argument of the method, so no span
+/// records it.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry made or
 /// given up, a savepoint left unsettled, a full bulkhead or a reached rate

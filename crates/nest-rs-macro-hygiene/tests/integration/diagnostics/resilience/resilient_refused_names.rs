@@ -1,11 +1,12 @@
 //! `fallback` names a method of `Self` and `cancel` the attempt's token, each
-//! by a name alone: a path, a call, a literal, a bare key, a method naming
-//! itself and a token named as an argument are each refused where written,
-//! the last offered a name no argument has. So is an argument a macro's
-//! pattern binds beside `cancel`: the token's name may be one no attribute
-//! reads. A body reading a token the decorator bound under no name adds no
-//! error, nor does a parameter its build compiles out, and a token named and
-//! never read is the developer's unused variable, at the name.
+//! by a name alone: a path, a call, a name given a type argument or put in
+//! parentheses, a literal, a bare key, a method naming itself, raw or not, and
+//! a token named as an argument are each refused where written, the last
+//! offered a name no argument has. So is an argument a macro's pattern binds
+//! beside `cancel`: the token's name may be one no attribute reads. A body
+//! reading a token the decorator bound under no name adds no error, nor does a
+//! parameter its build compiles out, and a token named and never read is the
+//! developer's unused variable, at the name.
 
 use std::sync::Arc;
 
@@ -64,6 +65,26 @@ impl ShipmentsService {
 
     #[resilient(carrier, fallback = itself)]
     async fn itself(&self, _error: ResilienceError<CarrierDown>) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = r#itself_raw)]
+    async fn itself_raw(&self, _error: ResilienceError<CarrierDown>) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = stale())]
+    async fn by_call(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = stale::<u8>)]
+    async fn by_type_argument(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = (stale))]
+    async fn by_parentheses(&self) -> Answer {
         Err(CarrierDown)
     }
 

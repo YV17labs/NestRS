@@ -1,6 +1,8 @@
 //! A key `#[resilient]` does not take, one written twice or before the field, a
-//! field written as an expression, `idempotent` given a value, a pin given none:
-//! each refused where it is written, and the keys around a refused one read.
+//! field written as an expression, as a call or as a tuple struct's position,
+//! `idempotent` given a value, a pin given none or one that reads as no
+//! expression: each refused where it is written, in the decorator's words, and
+//! the keys around a refused one read.
 
 use std::sync::Arc;
 
@@ -44,6 +46,26 @@ impl ShipmentsService {
 
     #[resilient(self.carrier)]
     async fn expression(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier())]
+    async fn called(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(0)]
+    async fn positional(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, idempotent, retries =)]
+    async fn valueless(&self) -> Answer {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, idempotent, retries = =)]
+    async fn no_expression(&self) -> Answer {
         Err(CarrierDown)
     }
 

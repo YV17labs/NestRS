@@ -1,7 +1,9 @@
 //! Under `fallback` the fallback is handed the arguments the method was called
 //! with, each under the name it is bound to: a `mut` binding, a `&mut`
 //! parameter and a parameter bound by a pattern are each refused at what was
-//! written, and the body, which consumes its argument, adds no error.
+//! written, and the body, which consumes its argument, adds no error. A
+//! pattern binding `mut`, and a binding by reference, are each one refusal,
+//! whose fix cures both: under a name, the body changes or borrows a copy.
 
 use std::sync::Arc;
 
@@ -56,6 +58,23 @@ impl ShipmentsService {
     #[resilient(carrier, fallback = queued)]
     async fn unnamed(&self, _: String) -> Answer<usize> {
         Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = queued)]
+    async fn pair_changed(&self, (mut order, _zone): (String, u8)) -> Answer<usize> {
+        order.push_str(" (labelled)");
+        send(order).await
+    }
+
+    #[resilient(carrier, idempotent, fallback = queued)]
+    async fn stamped_in_place(&self, ref mut order: String) -> Answer<usize> {
+        order.push_str(" (stamped)");
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = queued)]
+    async fn borrowed(&self, ref order: String) -> Answer<usize> {
+        Ok(order.len())
     }
 }
 

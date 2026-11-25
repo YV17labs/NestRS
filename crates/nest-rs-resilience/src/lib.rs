@@ -39,9 +39,9 @@
 //! the database could not settle; a wait for a token of the rate; a call the
 //! bulkhead or the rate refuses; and a fallback answering. At `warn`: a
 //! breaker's transition.
-//! A call an open breaker refuses and a run ending on a timeout file no line
-//! of their own: the breaker said it opened once, and each caller is answered
-//! its refusal. An event in code: [`ResiliencePolicy::events`] opens a
+//! A call an open breaker refuses, a call its unit had no time left to send
+//! and a run ending on a timeout file no line of their own: the breaker said
+//! it opened once, and each caller is answered its refusal. An event in code: [`ResiliencePolicy::events`] opens a
 //! subscription to each retry, attempt given up at its bound, call refused
 //! unsent, transition and fallback as a [`ResilienceEvent`]; a wait, a retry
 //! given up and an unsettled savepoint are lines alone. And what it holds

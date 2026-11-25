@@ -90,7 +90,9 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 ///
 /// So a response is read or dropped, never kept: one held unread holds its
 /// slot, and a probe's holds the half-open breaker's one turn, for as long as
-/// its caller takes. A body whose reads wait for the dependency longer than
+/// its caller takes — every call refused beside it told that probe's whole
+/// bound, the longest its reads wait for the dependency, since no timer gives
+/// a held answer up. A body whose reads wait for the dependency longer than
 /// the policy's timeout in all — an event stream idling between events, a
 /// download an origin trickles — is cut there, and the cut counts against the
 /// dependency: such a client is built without this middleware, or under a
@@ -283,7 +285,7 @@ fn refused(refusal: Refusal) -> Error {
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::task::{Context, Poll};
     use std::time::Duration;
 
@@ -344,6 +346,71 @@ mod tests {
                 error: "no route to host".into(),
             }
         );
+    }
+
+    /// A dependency counting the requests it is sent, answering each `200`: a
+    /// middleware after the policy's.
+    struct Counting(Arc<AtomicU32>);
+
+    #[async_trait::async_trait]
+    impl Middleware for Counting {
+        async fn handle(
+            &self,
+            _req: Request,
+            _extensions: &mut Extensions,
+            _next: Next<'_>,
+        ) -> Result<Response> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            answer(StatusCode::OK, None)
+        }
+    }
+
+    /// A request its unit has no time left to send is no attempt, so no retry
+    /// of it is given up: refused unsent, a request the run would send again
+    /// files no line, whether a bulkhead refuses its run as it opens or its
+    /// attempt is refused as it is let through.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_its_unit_has_no_time_left_to_send_gives_up_no_retry() {
+        for concurrency in [None, Some(4)] {
+            let config = crate::ResilienceConfig {
+                retries: Some(2),
+                breaker_window: None,
+                concurrency,
+                ..crate::ResilienceConfig::default()
+            };
+            let policy =
+                Arc::new(ResiliencePolicy::<Unnamed>::new(&config).expect("a valid policy"));
+            let sent = Arc::new(AtomicU32::new(0));
+            let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+                .with(ResilienceMiddleware::new(policy))
+                .with(Counting(Arc::clone(&sent)))
+                .build();
+
+            let lines = nest_rs_testing::LogCapture::install();
+            let refused = nest_rs_core::__private::with_deadline(
+                Some(tokio::time::Instant::now()),
+                client.get("https://upstream.example/").send(),
+            )
+            .await
+            .expect_err("no time left to send it");
+
+            let refusal = match &refused {
+                Error::Middleware(refusal) => refusal.downcast_ref::<ResilienceError<Infallible>>(),
+                Error::Reqwest(_) => None,
+            };
+            assert!(
+                matches!(refusal, Some(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+                "{refused:?}"
+            );
+            assert_eq!(sent.load(Ordering::SeqCst), 0, "nothing was sent");
+            let filed: Vec<_> = lines
+                .events()
+                .into_iter()
+                .filter(|line| line.target == crate::TARGET)
+                .map(|line| line.message)
+                .collect();
+            assert_eq!(filed, [""; 0], "concurrency: {concurrency:?}");
+        }
     }
 
     /// A body no part of which ever comes, saying once it is dropped: what an

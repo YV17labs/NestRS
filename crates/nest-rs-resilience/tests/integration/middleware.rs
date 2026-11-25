@@ -238,6 +238,40 @@ async fn a_wait_asked_past_the_backoffs_ceiling_ends_the_run_with_that_answer() 
     );
 }
 
+/// A `503` carrying a body asks its wait as a bodiless one does: the retry is
+/// decided for the second its `Retry-After` says, stretched by a fifth at
+/// most, where the policy's own backoff is a millisecond or two. The wait
+/// itself is not sat through here: the retry's event says it as it is decided.
+#[tokio::test]
+async fn a_wait_asked_by_a_503_carrying_a_body_is_the_wait_before_its_retry() {
+    const ASKED: Duration = Duration::from_secs(1);
+    let busy = PeerAnswer::body(503, "busy").header("retry-after", ASKED.as_secs().to_string());
+    let peer = answering([busy]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        backoff_ceiling: 2 * ASKED,
+        ..retrying()
+    })
+    .await;
+    let mut events = policy.events();
+    let url = peer.url(PARCEL);
+    let sending = tokio::spawn(async move { client(policy).get(url).send().await });
+
+    let decided = tokio::time::timeout(Duration::from_secs(60), events.next())
+        .await
+        .expect("the retry is decided as the 503's head comes");
+    let Some(ResilienceEvent::Retry { wait, error, .. }) = decided else {
+        panic!("the retry after the 503: {decided:?}");
+    };
+    sending.abort();
+
+    assert!(
+        (ASKED..=ASKED.mul_f64(1.2)).contains(&wait),
+        "the second the peer asked, never the backoff's two milliseconds: {wait:?}"
+    );
+    assert_eq!(error.as_deref(), Some("the dependency answered 503"));
+    assert_eq!(peer.requests().len(), 1);
+}
+
 #[tokio::test]
 async fn a_client_error_is_the_dependencys_answer_and_never_sent_again() {
     let peer = answering([PeerAnswer::status(404)]).await;
@@ -1360,16 +1394,20 @@ async fn a_body_cut_short_by_the_dependency_is_told_by_the_breakers_opening_alon
 /// A probe follows the body's rules: answered with no body, it closes the
 /// breaker as its head comes; answered with one, it keeps the probe's turn
 /// while the body is unread, and closes the breaker when the caller, having
-/// read the status alone, drops the response.
+/// read the status alone, drops the response. A request refused beside the
+/// response held is told the probe's whole bound, the policy's timeout, where
+/// one refused beside a probe still unanswered is told what is left of it:
+/// nothing counts a held answer down.
 #[tokio::test]
 async fn a_probes_answer_closes_the_breaker_once_its_body_is_read_or_dropped() {
     let peer = answering([PeerAnswer::status(200), PeerAnswer::stalling(200)]).await;
-    let (_app, policy) = policy(ResilienceConfig {
+    let config = ResilienceConfig {
         breaker_window: Some(1),
         breaker_failures: 1,
         ..quiet()
-    })
-    .await;
+    };
+    let timeout = config.timeout;
+    let (_app, policy) = policy(config).await;
     let client = client(Arc::clone(&policy));
     let probing = || async {
         policy
@@ -1399,7 +1437,10 @@ async fn a_probes_answer_closes_the_breaker_once_its_body_is_read_or_dropped() {
         .await
         .expect_err("the unread body holds the probe's turn");
     assert!(
-        matches!(refusal(&refused), ResilienceError::Open { .. }),
+        matches!(
+            refusal(&refused),
+            ResilienceError::Open { retry_after, .. } if *retry_after == timeout
+        ),
         "{refused:?}"
     );
     drop(unread);

@@ -15,11 +15,18 @@
 //!
 //! Under `err` or `ret` the future's first statement awaits a second
 //! `async move` block, and that one holds the return never taken and the body.
+//!
+//! The names are private to that crate, and an app's own `cargo update` may
+//! bring a release writing others: a body this file does not read whole that
+//! carries a name under [`OWN`], the prefix all three share, is refused saying
+//! which order compiles, never typed as one no instrument wrapped.
 
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenStream, TokenTree};
+use quote::ToTokens;
 use syn::{Expr, ExprAsync, Pat, Stmt, Type};
 
-const SPAN: &str = "__tracing_attr_span";
+/// The prefix of every name tracing-attributes binds in its expansion.
+const OWN: &str = "__tracing_";
 const FUTURE: &str = "__tracing_instrument_future";
 const FAKE_RETURN: &str = "__tracing_attr_fake_return";
 
@@ -35,17 +42,18 @@ pub(crate) enum Part<'a> {
 }
 
 /// Hand `each` every part of `stmts`, a method's body, outermost first, through
-/// each `#[tracing::instrument]` that wrapped it — or refuse a body carrying
-/// tracing's names in a shape other than the one above, which the decorator
-/// could type as no attempt.
+/// each `#[tracing::instrument]` that wrapped it — or refuse a body carrying a
+/// name of tracing's, wherever it sits, in a shape other than the one above,
+/// which the decorator could type as no attempt.
 pub(crate) fn instrumented(
     stmts: &mut Vec<Stmt>,
     each: &mut dyn FnMut(Part<'_>),
 ) -> syn::Result<()> {
     let Some(Stmt::Local(bound)) = stmts.iter_mut().find(|stmt| binds(stmt, FUTURE)) else {
-        return match stmts.iter().find(|stmt| binds(stmt, SPAN)) {
-            Some(Stmt::Local(span)) => Err(unread(span.let_token.span)),
-            _ => {
+        let written = stmts.iter().map(ToTokens::to_token_stream).collect();
+        return match own_name(written) {
+            Some(found) => Err(unread(found)),
+            None => {
                 each(Part::Written(stmts));
                 Ok(())
             }
@@ -73,6 +81,17 @@ pub(crate) fn instrumented(
     };
     each(Part::Answer(answer));
     instrumented(&mut written.block.stmts, each)
+}
+
+/// Where `tokens` first write a name under tracing's prefix, at any depth: the
+/// sign a release renaming what it binds still carries while it keeps the
+/// prefix, and one no developer writes.
+fn own_name(tokens: TokenStream) -> Option<Span> {
+    tokens.into_iter().find_map(|tree| match tree {
+        TokenTree::Ident(name) if name.to_string().starts_with(OWN) => Some(name.span()),
+        TokenTree::Group(group) => own_name(group.stream()),
+        _ => None,
+    })
 }
 
 /// Whether `stmt` is a `let` binding `name` and nothing else.
@@ -123,7 +142,7 @@ fn awaited(stmt: &mut Stmt) -> Option<&mut ExprAsync> {
 }
 
 /// The refusal of a body carrying tracing's names in a shape this file does not
-/// read, at the `let` found, which tracing spans at its attribute.
+/// read, at the name found, which tracing spans at its attribute.
 fn unread(found: Span) -> syn::Error {
     syn::Error::new(
         found,
@@ -139,6 +158,9 @@ mod tests {
     use syn::parse_quote;
 
     use super::*;
+
+    /// The name tracing-attributes 0.1.31 binds its span under, read by none.
+    const SPAN: &str = "__tracing_attr_span";
 
     /// What `instrumented` hands of `body`: the `move` of each future, the
     /// answer's type and the statements written, in the order handed.
@@ -261,15 +283,15 @@ mod tests {
         );
     }
 
-    /// The developer's own `async move`, and tracing's names below the
-    /// statements written, are the body's: only its futures are handed.
+    /// The developer's own `async move` below the statements written is the
+    /// body's: only tracing's futures are handed.
     #[test]
     fn nothing_below_the_statements_written_is_read_as_tracings() {
         let written = quote! {
             let sent = async move {
-                let __tracing_attr_span = order.span();
-                let __tracing_instrument_future = async move { send(order).await };
-                __tracing_instrument_future.await
+                let span = order.span();
+                let future = async move { send(order).await };
+                future.await
             };
             sent.await
         };
@@ -287,6 +309,99 @@ mod tests {
         );
         let mut bare: syn::Block = parse_quote!({ #written });
         assert_eq!(parts(&mut bare).expect("read"), [written.to_string()]);
+    }
+
+    /// `body` with each name of `renames` written as its release would.
+    fn renamed(body: &syn::Block, renames: &[(&str, &str)]) -> syn::Block {
+        let mut written = body.to_token_stream().to_string();
+        for (name, renamed) in renames {
+            written = written.replace(name, renamed);
+        }
+        syn::parse_str(&written).expect("a block")
+    }
+
+    /// A release may rename the private names this file reads the expansion
+    /// by. Whatever follows the prefix they share, a body carrying it that is
+    /// read whole no more is refused, never handed on as one no instrument
+    /// wrapped: typed as the method's answer, it would be `E0308` at each
+    /// answer the developer wrote, with no order named.
+    #[test]
+    fn an_expansion_under_other_names_is_refused_saying_which_order_compiles() {
+        let plain = attempt(quote!(send(order).await));
+        let read = wrapped(quote!(async move #plain));
+        for renames in [
+            &[(FUTURE, "__tracing_attr_future")][..],
+            &[(FAKE_RETURN, "__tracing_attr_return")],
+            &[
+                (FUTURE, "__tracing_attr_future"),
+                (SPAN, "__tracing_instrument_span"),
+            ],
+            &[
+                (FUTURE, "__tracing_future"),
+                (SPAN, "__tracing_span"),
+                (FAKE_RETURN, "__tracing_return"),
+            ],
+        ] {
+            let mut body = renamed(&read, renames);
+            let refused = parts(&mut body).expect_err("names this file does not read");
+            assert!(
+                refused
+                    .to_string()
+                    .contains("write `#[resilient]` above `#[tracing::instrument]`"),
+                "{renames:?}: {refused}"
+            );
+        }
+        // The span is read by no name: renamed alone, the body is read whole.
+        let mut body = renamed(&read, &[(SPAN, "__tracing_instrument_span")]);
+        assert_eq!(
+            parts(&mut body).expect("read"),
+            [
+                "async move",
+                "Answer < String >",
+                quote!(send(order).await).to_string().as_str()
+            ]
+        );
+    }
+
+    /// The prefix is a sign wherever the body carries it: in one expression
+    /// binding no name, and below what another attribute wrapped tracing's
+    /// statements in.
+    #[test]
+    fn an_expansion_in_another_shape_or_wrapped_again_is_refused_wherever_its_names_sit() {
+        let plain = attempt(quote!(send(order).await));
+        let wrapped_again = wrapped(quote!(async move #plain));
+        let statements = &wrapped_again.stmts;
+        for mut unread in [
+            parse_quote!({
+                ::tracing::Instrument::instrument(
+                    async move #plain,
+                    ::tracing::span!(::tracing::Level::INFO, "ship"),
+                )
+                .await
+            }),
+            parse_quote!({ ::std::boxed::Box::pin(async move { #(#statements)* }).await }),
+            parse_quote!({
+                let sent = async move {
+                    let __tracing_attr_span = order.span();
+                    send(order).await
+                };
+                sent.await
+            }),
+        ] {
+            let refused = parts(&mut unread).expect_err("tracing's names, read in no shape");
+            assert!(
+                refused
+                    .to_string()
+                    .contains("write `#[resilient]` above `#[tracing::instrument]`"),
+                "{refused}"
+            );
+        }
+        // A word of the body's own that only holds the prefix is no name of tracing's.
+        let mut own: syn::Block = parse_quote!({
+            let my__tracing_id = order.id();
+            send(order, my__tracing_id, "__tracing_attr_span").await
+        });
+        assert!(parts(&mut own).is_ok());
     }
 
     #[test]

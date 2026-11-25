@@ -1,31 +1,61 @@
 error: #[resilient] `cancel` needs a value — write `cancel = token`
-  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:41:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:44:26
    |
-41 |     #[resilient(carrier, cancel)]
+44 |     #[resilient(carrier, cancel)]
    |                          ^^^^^^
 
 error: #[resilient] `cancel` names the attempt's `CancellationToken` in the body, and `token` is an argument of this method, which the body would read no more under that name — name the token otherwise, e.g. `cancel = cancellation`
-  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:50:35
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:53:35
    |
-50 |     #[resilient(carrier, cancel = token)]
+53 |     #[resilient(carrier, cancel = token)]
    |                                   ^^^^^
 
 error: #[resilient] under a `#[tracing::instrument]` types the body that attribute wrapped as one attempt, and found it in no shape it reads — write `#[resilient]` above `#[tracing::instrument]`, whose span then covers the whole run
-  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:57:9
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:60:13
    |
-57 |         let __tracing_attr_span = slug.len();
-   |         ^^^
+60 |         let __tracing_attr_span = slug.len();
+   |             ^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] `retries` needs `idempotent`: a call run once is never sent again — declare the call `idempotent` where sending it twice leaves the dependency as sending it once does, or drop `retries`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:68:65
+   |
+68 |     #[resilient(carrier, record_if = |_error| !zone.is_empty(), retries = 3)]
+   |                                                                 ^^^^^^^
+
+error: unknown #[resilient] argument `timout`; expected `idempotent`, `timeout`, `retries`, `retry_if`, `retry_ok_if`, `record_if`, `fallback`, `fallback_if` or `cancel`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:73:44
+   |
+73 |     #[resilient(carrier, fallback = stale, timout = "2s")]
+   |                                            ^^^^^^
+
+error: a `#[resilient]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes no receiver: a host is one instance shared by every call, and each method is lent a shared borrow of it
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:79:30
+   |
+79 |     async fn read_by_no_host(parcel: String) -> Answer<usize> {
+   |                              ^^^^^^^^^^^^^^
+
+error: #[resilient] writes the method's return type into its expansion, where `impl Trait` names no type — name the type the method answers, or box it as a `Box<dyn …>`
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:87:17
+   |
+87 |     ) -> Result<impl std::fmt::Display, ResilienceError<CarrierDown>> {
+   |                 ^^^^^^^^^^^^^^^^^^^^^^
+
+error: #[resilient] decorates an `async fn`: the policy's run is awaited, and this method is a `fn` — write `async fn`. Under `#[async_trait]`, which turns each `async fn` of the impl into a `fn` returning a boxed future before this attribute reads it, write the trait's method as a native `async fn` instead
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:93:5
+   |
+93 |     fn read_by_a_fn(&self, parcel: String) -> Answer<usize> {
+   |     ^^
 
 error: #[resilient] `cancel` needs a value — write `cancel = token`
-  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:61:26
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:97:26
    |
-61 |     #[resilient(carrier, cancel)]
+97 |     #[resilient(carrier, cancel)]
    |                          ^^^^^^
 
 warning: unused macro definition: `parcel`
-  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:27:14
+  --> tests/integration/diagnostics/resilience/resilient_refused_under_forbidden_lints.rs:30:14
    |
-27 | macro_rules! parcel {
+30 | macro_rules! parcel {
    |              ^^^^^^
    |
    = note: `#[warn(unused_macros)]` (part of `#[warn(unused)]`) on by default

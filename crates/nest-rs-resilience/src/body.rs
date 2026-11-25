@@ -630,6 +630,30 @@ mod tests {
         );
     }
 
+    /// A call refused beside a probe whose answer its caller holds is told
+    /// that probe's bound, the policy's timeout — the longest the body's
+    /// reads wait in all, whatever the head took of it — as the head comes
+    /// and however long the answer is held: nothing gives a held probe up, so
+    /// no refusal is told the tick of one being given up.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_refused_beside_a_probes_held_answer_is_told_the_probes_bound() {
+        let policy = probing().await;
+        let (held, _feed) = answered(&policy, Duration::from_secs(1), Verdict::Succeeded).await;
+        for held_for in [Duration::ZERO, TIMEOUT, 10 * TIMEOUT] {
+            tokio::time::advance(held_for).await;
+            let refused = policy.run(|_| async { Ok::<(), io::Error>(()) }).await;
+            assert!(
+                matches!(
+                    refused,
+                    Err(ResilienceError::Open { retry_after, .. }) if retry_after == TIMEOUT
+                ),
+                "held for {held_for:?} more: {refused:?}"
+            );
+        }
+        drop(held);
+        assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+    }
+
     /// A frame read ends its read's wait: the body dropped long after stands
     /// as its head was judged, however long that read had waited.
     #[tokio::test(start_paused = true)]

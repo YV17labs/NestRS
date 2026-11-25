@@ -2,9 +2,12 @@
 //! inside (`E0453`). A refused method kept with no body — its `cancel` given no
 //! name, or an argument's, its instrument in a shape the decorator cannot read
 //! — reads its parameters in that body's place under no lint attribute, so its
-//! refusal is the one error here too. A parameter a macro's pattern binds is
-//! taken as `_`, its names read by no attribute: a macro written for that one
-//! method is then rustc's unused macro, a warning beside the refusal.
+//! refusal is the one error here too. So does one kept with its body, in every
+//! form: the keys it was refused under are left out, and an argument only a
+//! predicate or the fallback read would be rustc's unused variable, whose fix
+//! breaks the key. A parameter a macro's pattern binds is taken as `_`, its
+//! names read by no attribute: a macro written for that one method is then
+//! rustc's unused macro, a warning beside the refusal.
 
 use std::sync::Arc;
 
@@ -56,6 +59,39 @@ impl ShipmentsService {
     async fn unread(&self, slug: String) -> Answer<usize> {
         let __tracing_attr_span = slug.len();
         Ok(__tracing_attr_span)
+    }
+
+    async fn stale(&self, parcel: String, _error: ResilienceError<CarrierDown>) -> Answer<usize> {
+        Ok(parcel.len())
+    }
+
+    #[resilient(carrier, record_if = |_error| !zone.is_empty(), retries = 3)]
+    async fn read_by_its_predicate(&self, zone: String) -> Answer<usize> {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = stale, timout = "2s")]
+    async fn read_by_its_fallback(&self, parcel: String) -> Answer<usize> {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = stale, fallback_if = |_error| !parcel.is_empty())]
+    async fn read_by_no_host(parcel: String) -> Answer<usize> {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, fallback = stale)]
+    async fn read_beside_an_answer_unnamed(
+        &self,
+        parcel: String,
+    ) -> Result<impl std::fmt::Display, ResilienceError<CarrierDown>> {
+        let weighed: Result<usize, CarrierDown> = Err(CarrierDown);
+        Ok(weighed?)
+    }
+
+    #[resilient(carrier, fallback = stale)]
+    fn read_by_a_fn(&self, parcel: String) -> Answer<usize> {
+        Err(CarrierDown)
     }
 
     #[resilient(carrier, cancel)]

@@ -255,9 +255,11 @@ pub struct ResilienceConfig {
     /// `BREAKER_FAILURES`, from 1 to the window; defaults to 10. With a
     /// [`breaker_age`](Self::breaker_age) under a
     /// [`rate_limit`](Self::rate_limit), it is at most the failures that rate
-    /// lets answer within the age of one another, an attempt running ten
-    /// minutes at most: a breaker opening on more never opens, and is refused
-    /// at boot.
+    /// lets the policy's attempts count within the age of one another, an
+    /// attempt running ten minutes at most: a breaker opening on more is
+    /// opened by none of them, and is refused at boot. The check counts what
+    /// the policy bounds: the body of a response `ResilienceMiddleware` hands
+    /// its caller counts when it ends, however long it is held, outside it.
     #[config(bounds = BREAKER_FAILURES)]
     pub breaker_failures: usize,
     /// How long an open breaker refuses every call before one attempt probes

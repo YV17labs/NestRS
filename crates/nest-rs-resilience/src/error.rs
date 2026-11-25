@@ -88,7 +88,9 @@ pub enum ResilienceError<E> {
     Open {
         /// How long until the breaker lets a call through again, at the
         /// earliest — or, while another call probes the dependency, until that
-        /// probe has answered at the latest: the `Retry-After` every edge
+        /// probe has answered at the latest, and that probe's whole bound once
+        /// its answer is a response its caller holds, which ends when that
+        /// caller has read or dropped it: the `Retry-After` every edge
         /// answers, in whole seconds rounded up.
         retry_after: Duration,
         #[doc(hidden)]
@@ -179,6 +181,8 @@ impl BreakerError {
 /// A policy's refusal, before it is told in the caller's error type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Refusal {
+    /// An attempt given up at the bound it was sent under, or
+    /// [`OUT_OF_TIME`](Self::OUT_OF_TIME).
     TimedOut(Duration),
     /// For this long at least.
     Open(Duration),
@@ -188,6 +192,11 @@ pub(crate) enum Refusal {
 }
 
 impl Refusal {
+    /// A call its unit had no time left to send: refused unsent, so no
+    /// attempt, where any other [`TimedOut`](Self::TimedOut) is one given up
+    /// at its bound, which is never zero.
+    pub(crate) const OUT_OF_TIME: Self = Self::TimedOut(Duration::ZERO);
+
     /// The word the refusals' counter says.
     #[cfg(feature = "opentelemetry")]
     pub(crate) const fn as_str(self) -> &'static str {

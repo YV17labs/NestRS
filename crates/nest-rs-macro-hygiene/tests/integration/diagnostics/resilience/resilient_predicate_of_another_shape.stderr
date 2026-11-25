@@ -1,7 +1,16 @@
+error[E0425]: cannot find value `sent_again` in this scope
+   --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:114:38
+    |
+ 72 |     fn sent_again(&self, _error: &CarrierDown) -> bool {
+    |        ---------- a method by that name is available on `Self` here
+...
+114 |     #[resilient(carrier, record_if = sent_again)]
+    |                                      ^^^^^^^^^^ not found in this scope
+
 error[E0277]: a `#[resilient]` method's `retry_if` is a `Fn(&CarrierDown) -> bool` over its error, and this is not one
-  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:50:49
+  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:52:49
    |
-50 |     #[resilient(carrier, idempotent, retry_if = Quote::pending)]
+52 |     #[resilient(carrier, idempotent, retry_if = Quote::pending)]
    |     --------------------------------------------^^^^^^^^^^^^^^--
    |     |                                           |
    |     |                                           what `retry_if` is given
@@ -18,9 +27,9 @@ note: required by a bound in `nest_rs::resilience::__private::judging`
    |         ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `judging`
 
 error[E0277]: a `#[resilient]` method's `retry_ok_if` is a `Fn(&Quote) -> bool` over what it answers, and this is not one
-  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:55:52
+  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:57:52
    |
-55 |     #[resilient(carrier, idempotent, retry_ok_if = CarrierDown::transient)]
+57 |     #[resilient(carrier, idempotent, retry_ok_if = CarrierDown::transient)]
    |     -----------------------------------------------^^^^^^^^^^^^^^^^^^^^^^--
    |     |                                              |
    |     |                                              what `retry_ok_if` is given
@@ -37,15 +46,15 @@ note: required by a bound in `nest_rs::resilience::__private::judging`
    |         ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `judging`
 
 error[E0277]: a `#[resilient]` method's `record_if` is a `Fn(&CarrierDown) -> bool` over its error, and this is not one
-  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:60:38
+  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:62:38
    |
-60 |     #[resilient(carrier, record_if = |error: CarrierDown| error.transient())]
+62 |     #[resilient(carrier, record_if = |error: CarrierDown| error.transient())]
    |     ---------------------------------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
    |     |                                |
    |     |                                what `record_if` is given
    |     required by a bound introduced by this call
    |
-   = help: the trait `nest_rs::resilience::__private::RecordIf<CarrierDown, _, _>` is not implemented for closure `{closure@$DIR/tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:60:38: 60:58}`
+   = help: the trait `nest_rs::resilience::__private::RecordIf<CarrierDown, _, _>` is not implemented for closure `{closure@$DIR/tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:62:38: 62:58}`
    = note: it says whether an `Err` the method answered counts as a failure in the circuit breaker: a function's path, or a closure such as `|error| !error.is_declined()` — a method of `self` is called from one, `|error| !self.is_declined(error)`
 note: required by a bound in `nest_rs::resilience::__private::judging`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
@@ -56,9 +65,9 @@ note: required by a bound in `nest_rs::resilience::__private::judging`
    |         ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `judging`
 
 error[E0277]: a `#[resilient]` method's `fallback_if` is a `Fn(&ResilienceError<CarrierDown>) -> bool` over the error its run ended on, and this is not one
-  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:65:58
+  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:67:58
    |
-65 |     #[resilient(carrier, fallback = stale, fallback_if = CarrierDown::transient)]
+67 |     #[resilient(carrier, fallback = stale, fallback_if = CarrierDown::transient)]
    |     -----------------------------------------------------^^^^^^^^^^^^^^^^^^^^^^--
    |     |                                                    |
    |     |                                                    what `fallback_if` is given
@@ -75,9 +84,9 @@ note: required by a bound in `nest_rs::resilience::__private::fall_back`
    |        ^^^^^^^^^^^^^^^^ required by this bound in `fall_back`
 
 error[E0277]: a `#[resilient]` method's `retry_if` is a `Fn(&CarrierDown) -> bool` over its error, and this is not one
-  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:82:49
+  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:84:49
    |
-82 |     #[resilient(carrier, idempotent, retry_if = Self::sent_again)]
+84 |     #[resilient(carrier, idempotent, retry_if = Self::sent_again)]
    |     --------------------------------------------^^^^^^^^^^^^^^^^--
    |     |                                           |
    |     |                                           what `retry_if` is given
@@ -94,9 +103,9 @@ note: required by a bound in `nest_rs::resilience::__private::judging`
    |         ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `judging`
 
 error[E0277]: a `#[resilient]` method's `retry_ok_if` is a `Fn(&Quote) -> bool` over what it answers, and this is not one
-  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:87:52
+  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:89:52
    |
-87 |     #[resilient(carrier, idempotent, retry_ok_if = Self::pending)]
+89 |     #[resilient(carrier, idempotent, retry_ok_if = Self::pending)]
    |     -----------------------------------------------^^^^^^^^^^^^^--
    |     |                                              |
    |     |                                              what `retry_ok_if` is given
@@ -113,9 +122,9 @@ note: required by a bound in `nest_rs::resilience::__private::judging`
    |         ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `judging`
 
 error[E0277]: a `#[resilient]` method's `record_if` is a `Fn(&CarrierDown) -> bool` over its error, and this is not one
-  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:92:38
+  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:94:38
    |
-92 |     #[resilient(carrier, record_if = Self::sent_again)]
+94 |     #[resilient(carrier, record_if = Self::sent_again)]
    |     ---------------------------------^^^^^^^^^^^^^^^^--
    |     |                                |
    |     |                                what `record_if` is given
@@ -132,9 +141,9 @@ note: required by a bound in `nest_rs::resilience::__private::judging`
    |         ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `judging`
 
 error[E0277]: a `#[resilient]` method's `fallback_if` is a `Fn(&ResilienceError<CarrierDown>) -> bool` over the error its run ended on, and this is not one
-  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:97:58
+  --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:99:58
    |
-97 |     #[resilient(carrier, fallback = stale, fallback_if = Self::served)]
+99 |     #[resilient(carrier, fallback = stale, fallback_if = Self::served)]
    |     -----------------------------------------------------^^^^^^^^^^^^--
    |     |                                                    |
    |     |                                                    what `fallback_if` is given
@@ -151,9 +160,9 @@ note: required by a bound in `nest_rs::resilience::__private::fall_back`
    |        ^^^^^^^^^^^^^^^^ required by this bound in `fall_back`
 
 error[E0277]: a `#[resilient]` method's `record_if` is a `Fn(&CarrierDown) -> bool` over its error, and this is not one
-   --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:102:38
+   --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:104:38
     |
-102 |     #[resilient(carrier, record_if = always)]
+104 |     #[resilient(carrier, record_if = always)]
     |     ---------------------------------^^^^^^--
     |     |                                |
     |     |                                what `record_if` is given
@@ -168,3 +177,14 @@ note: required by a bound in `nest_rs::resilience::__private::judging`
 ...
     |     RC: RecordIf<R::Err, S3, W3>,
     |         ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `judging`
+
+error[E0615]: attempted to take value of method `sent_again` on type `&ShipmentsService`
+   --> tests/integration/diagnostics/resilience/resilient_predicate_of_another_shape.rs:109:43
+    |
+109 |     #[resilient(carrier, record_if = self.sent_again)]
+    |                                           ^^^^^^^^^^ method, not a field
+    |
+help: use parentheses to call the method
+    |
+109 |     #[resilient(carrier, record_if = self.sent_again(_))]
+    |                                                     +++

@@ -1,5 +1,34 @@
 error[E0599]: no method named `stale` found for reference `&ShipmentsService` in the current scope
-  --> tests/integration/diagnostics/resilience/resilient_fallback_is_no_method_of_self.rs:33:37
+  --> tests/integration/diagnostics/resilience/resilient_fallback_is_no_method_of_self.rs:36:37
    |
-33 |     #[resilient(carrier, fallback = stale)]
+36 |     #[resilient(carrier, fallback = stale)]
    |                                     ^^^^^ method not found in `&ShipmentsService`
+
+error[E0599]: no method named `hostless` found for reference `&ShipmentsService` in the current scope
+  --> tests/integration/diagnostics/resilience/resilient_fallback_is_no_method_of_self.rs:45:37
+   |
+45 |     #[resilient(carrier, fallback = hostless)]
+   |                                     ^^^^^^^^ this is an associated function, not a method
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: the candidate is defined in an impl for the type `ShipmentsService`
+  --> tests/integration/diagnostics/resilience/resilient_fallback_is_no_method_of_self.rs:41:5
+   |
+41 |     async fn hostless(_error: ResilienceError<CarrierDown>) -> Answer {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: use associated function syntax instead
+   |
+45 -     #[resilient(carrier, fallback = hostless)]
+45 +     #[resilient(carrier, fallback = ShipmentsService::hostless(hostless))]
+   |
+
+error[E0599]: no method named `queued` found for reference `&ShipmentsClient` in the current scope
+  --> tests/integration/diagnostics/resilience/resilient_fallback_is_no_method_of_self.rs:57:37
+   |
+57 |     #[resilient(carrier, fallback = queued)]
+   |                                     ^^^^^^ field, not a method
+   |
+help: to call the function pointer stored in `queued`, surround the field access with parentheses
+   |
+57 |     #[resilient(carrier, fallback = (queued))]
+   |                                     +      +

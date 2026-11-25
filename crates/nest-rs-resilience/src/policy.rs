@@ -89,9 +89,14 @@ use crate::told::told;
 /// [`std::error::Error`]: its chain is the `error` of the line a retry files,
 /// at `debug`, and of the `warn` the breaker files when that failure opens it,
 /// where an operator reads what the dependency answered once every caller is
-/// told the breaker is open. A URL in that chain is told by its scheme and
-/// authority alone, never the path, the query or the userinfo a request
-/// carried; a value an error quotes otherwise is the error's to keep out.
+/// told the breaker is open. A URL in that chain — whatever follows a `://`,
+/// up to the next whitespace, double quote or angle bracket — is told by its
+/// scheme, its host and a port of digits, and by its scheme alone where an `@`
+/// past its authority's end leaves its host impossible to tell from a
+/// userinfo: no byte of the userinfo, the path, the query or the fragment a
+/// request carried. A value an error quotes otherwise is the error's to keep
+/// out, a URL holding a whitespace or a double quote unencoded included, which
+/// is read as ending there.
 ///
 /// The breaker's state is read through [`breaker_state`](Self::breaker_state),
 /// and switched by hand — an operator taking a dependency out for its
@@ -215,7 +220,9 @@ pub(crate) const RETRYING_ANSWERED: &str = "attempt answered; retrying the call"
 pub(crate) const NOT_ATTEMPTED_AGAIN_PAST_CEILING: &str =
     "the dependency asked a wait past the backoff's ceiling; not attempted again";
 
-/// A retry given up: its wait ends past the unit's deadline.
+/// A retry given up: its wait ends past the unit's deadline. Its `error` is
+/// what the attempt failed on, an `Err`'s chain or the timeout's sentence, and
+/// it has none after an `Ok` that was to be sent again.
 pub(crate) const NOT_ATTEMPTED_AGAIN_PAST_DEADLINE: &str =
     "no time left before the unit's deadline; not attempted again";
 
@@ -287,7 +294,14 @@ impl<I> Copy for Terms<'_, I> {}
 
 impl<I: Instance> ResiliencePolicy<I> {
     /// The policy `config` describes, refusing a combination of its settings
-    /// that cannot work, named as the instance's variables.
+    /// that cannot work, named as the instance's variables: a first backoff
+    /// above the ceiling, and a breaker opening on more failures than its
+    /// window holds or, under an age and a rate, than the policy's own
+    /// attempts can count within the age of one another — each counted within
+    /// the longest attempt of taking its token. That last check holds for what
+    /// the policy bounds: the body of a response
+    /// [`ResilienceMiddleware`](crate::ResilienceMiddleware) hands its caller
+    /// counts when it ends, however long it is held, and is outside it.
     pub(crate) fn new(config: &ResilienceConfig) -> Result<Self, ConfigError> {
         let namespace = instance_namespace::<I>(ResilienceConfig::NAMESPACE);
         if config.backoff_first > config.backoff_ceiling {
@@ -314,17 +328,19 @@ impl<I: Instance> ResiliencePolicy<I> {
         let rate = config
             .rate_limit
             .map(|limit| Arc::new(Rate::new(limit, config.rate_window, config.rate_wait)));
-        // An outcome's age runs from its answer, which comes up to the longest
-        // attempt after its call took its token.
+        // An attempt's outcome ages from its answer, at most the longest attempt after its
+        // token. A body `ResilienceMiddleware` holds counts when it ends, tied to no token.
         if let (Some(_), Some(age), Some(rate)) = (config.breaker_window, config.breaker_age, &rate)
             && config.breaker_failures > rate.most_sent_within(age + LONGEST_ATTEMPT)
         {
             return Err(ConfigError::parse(
                 ResilienceConfig::BREAKER_FAILURES.var(&namespace),
                 format!(
-                    "must be at most the failures that can answer within the age of one another \
-                     under the rate limit, set by {}; {}; and {}: a breaker opening on more never \
-                     opens",
+                    "must be at most the failures the policy's attempts can count within the age \
+                     of one another under the rate limit, set by {}; {}; and {}: each attempt \
+                     counts within its timeout of taking its token, so a breaker opening on more \
+                     is opened by none of them; the body of a response ResilienceMiddleware's \
+                     caller holds counts when it ends, outside this bound",
                     ResilienceConfig::BREAKER_AGE.var_or_field(&namespace),
                     ResilienceConfig::RATE_LIMIT.var_or_field(&namespace),
                     ResilienceConfig::RATE_WINDOW.var_or_field(&namespace),
@@ -524,8 +540,7 @@ impl<I: Instance> ResiliencePolicy<I> {
         let slot = match &self.bulkhead {
             Some(bulkhead) => {
                 if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
-                    let out_of_time = Refusal::TimedOut(Duration::ZERO);
-                    return Opened::Refused(self.refused(method.as_ref(), out_of_time));
+                    return Opened::Refused(self.refused(method.as_ref(), Refusal::OUT_OF_TIME));
                 }
                 if let Some(retry_after) = self.breaker.as_deref().and_then(Breaker::refusing) {
                     let open = Refusal::Open(retry_after);
@@ -835,7 +850,10 @@ impl<'p, I: Instance> Run<'p, I> {
             "a run's slot and its attempt are held for the policy they were taken from"
         );
         Held {
-            attempt: outstanding.sent.take().map(Sent::hold),
+            attempt: outstanding
+                .sent
+                .take()
+                .map(|sent| sent.hold(outstanding.bound)),
             slot: slot
                 .zip(policy.bulkhead.as_deref())
                 .map(|(slot, bulkhead)| bulkhead.hold(slot)),
@@ -963,9 +981,10 @@ impl<'p, I: Instance> Run<'p, I> {
 
     /// How long to wait before the next attempt, after one that answered
     /// `error` asking `asked`, or `None` when the run ends there: its retries
-    /// spent, or a retry left that is given up, whose line says why with
-    /// `error` — the dependency asked a wait past the backoff's ceiling, or
-    /// the wait ends past the unit's deadline.
+    /// spent, or a retry left that is given up, whose line says why — the
+    /// dependency asked a wait past the backoff's ceiling, or the wait ends
+    /// past the unit's deadline — with `error`, which an `Ok` sent again has
+    /// none of.
     fn retry_wait(&mut self, asked: Option<Duration>, error: Option<&str>) -> Option<Duration> {
         let terms = self.terms;
         let policy = terms.policy;
@@ -1256,7 +1275,7 @@ impl<'p, I: Instance> Terms<'p, I> {
     ) -> Admission<'p> {
         let bound = self.bound();
         if bound.wait.is_zero() {
-            return Admission::Refused(Refusal::TimedOut(bound.wait));
+            return Admission::Refused(Refusal::OUT_OF_TIME);
         }
         // While this one waited for its token, another call may have opened the
         // breaker or taken the probe's turn, and a manual switch voids a turn held.
@@ -2072,16 +2091,19 @@ fn asked(error: &(dyn Error + 'static)) -> Option<Duration> {
 /// What an attempt a run sends again, when it may, answered in error — none,
 /// for an `Ok` — and the wait its dependency asked before the retry: a timeout
 /// or an answer judged one to send again, never one the run ends on, nor a
-/// refusal that sent nothing.
+/// refusal that sent nothing — a unit out of time's included, which is no
+/// attempt given up at its bound.
 fn sent_again<T>(attempted: &Attempted<T>) -> Option<(Option<Duration>, Option<&str>)> {
     match attempted {
         Ok((_, Verdict::Failed { asked, error } | Verdict::IgnoredAgain { asked, error })) => {
             Some((*asked, Some(error)))
         }
         Ok((_, Verdict::Again)) => Some((None, None)),
-        Err(Refusal::TimedOut(_)) => Some((None, Some(TIMED_OUT))),
         Ok((_, Verdict::Succeeded | Verdict::Final { .. } | Verdict::Ignored))
-        | Err(Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => None,
+        | Err(Refusal::OUT_OF_TIME | Refusal::Open(_) | Refusal::Full | Refusal::Limited(_)) => {
+            None
+        }
+        Err(Refusal::TimedOut(_)) => Some((None, Some(TIMED_OUT))),
     }
 }
 
@@ -5792,6 +5814,71 @@ mod tests {
         }
     }
 
+    /// A call its unit has no time left to send is no attempt, so no retry
+    /// of it is given up: refused unsent with retries left, it files no line,
+    /// whether a bulkhead refuses its run as it opens or its attempt is
+    /// refused as it is let through, and it is told once, as the refusal its
+    /// run ends on.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_its_unit_has_no_time_left_to_send_gives_up_no_retry() {
+        for concurrency in [None, Some(4)] {
+            let policy = policy(ResilienceConfig {
+                retries: Some(2),
+                breaker_window: None,
+                concurrency,
+                ..ResilienceConfig::default()
+            });
+            let mut events = policy.events();
+            let lines = nest_rs_testing::LogCapture::install();
+            let calls = AtomicU32::new(0);
+            let spent = nest_rs_core::__private::with_deadline(
+                Some(tokio::time::Instant::now()),
+                policy.run_idempotent(|_| async {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    Err::<(), _>(Refused)
+                }),
+            )
+            .await;
+            assert!(
+                matches!(spent, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+                "{spent:?}"
+            );
+            assert_eq!(calls.load(Ordering::Relaxed), 0, "nothing was sent");
+            assert_eq!(filed(&lines), [""; 0], "concurrency: {concurrency:?}");
+            drop(policy);
+            let told = events.next().await;
+            assert!(
+                matches!(told, Some(ResilienceEvent::Timeout { timeout, .. }) if timeout.is_zero()),
+                "{told:?}"
+            );
+            assert_eq!(events.next().await, None, "told once");
+        }
+    }
+
+    /// The line of a retry the unit's deadline leaves no time for says what
+    /// the attempt failed on, and nothing for an `Ok` that was to be sent
+    /// again: no error was answered.
+    #[tokio::test(start_paused = true)]
+    async fn a_retry_of_an_ok_the_deadline_leaves_no_time_for_files_its_line_with_no_error() {
+        type Polled = Answer<u8, Refused>;
+        let policy = retrying(1);
+        let lines = nest_rs_testing::LogCapture::install();
+        let polled = nest_rs_core::__private::with_deadline(
+            Some(tokio::time::Instant::now() + Duration::from_millis(1)),
+            policy.run_again::<Polled, _, _, _>(
+                None,
+                judging(PhantomData::<Polled>, every, every, every),
+                |_| async { Ok(40) },
+            ),
+        )
+        .await;
+        assert!(matches!(polled, Ok(40)), "{polled:?}");
+        assert_eq!(filed(&lines), [NOT_ATTEMPTED_AGAIN_PAST_DEADLINE]);
+        let given_up = lines.expect_one(TARGET, NOT_ATTEMPTED_AGAIN_PAST_DEADLINE);
+        assert_eq!(given_up.field("error"), None, "{given_up:?}");
+        assert!(given_up.field("wait_ms").is_some(), "{given_up:?}");
+    }
+
     /// A call the bulkhead refuses files the bulkhead's line and no other,
     /// refused at once or after its wait for a slot.
     #[tokio::test(start_paused = true)]
@@ -6402,9 +6489,11 @@ mod tests {
         );
     }
 
-    /// Under a rate limit, a breaker opening on more failures than can answer
-    /// within its age of one another never opens, and is refused naming the
-    /// settings that decide it, quoting none of their values. Three attempts
+    /// Under a rate limit, a breaker opening on more failures than the
+    /// policy's attempts can count within its age of one another is opened by
+    /// none of them, and is refused naming the settings that decide it,
+    /// quoting none of their values, and the one outcome the check does not
+    /// bound, a response body the middleware's caller holds. Three attempts
     /// an hour let three answer within a minute at most — a full bucket's, the
     /// next token twenty minutes off, past that minute and the ten an attempt
     /// takes at most — and a breaker opening on three is built, and opens on
@@ -6421,8 +6510,12 @@ mod tests {
             ..ResilienceConfig::default()
         };
         let refused = ResiliencePolicy::<Upstream>::new(&config(4))
-            .expect_err("a breaker that never opens")
+            .expect_err("a breaker the policy's attempts never open")
             .to_string();
+        assert!(
+            refused.contains("the policy's attempts") && refused.contains("ResilienceMiddleware"),
+            "what the check bounds, and what it does not: {refused}"
+        );
         let mut unnamed = refused.clone();
         for key in [
             "BREAKER_FAILURES",
@@ -6475,7 +6568,7 @@ mod tests {
         };
         assert!(
             ResiliencePolicy::<Upstream>::new(&config(10)).is_err(),
-            "a breaker that never opens"
+            "a breaker the policy's attempts never open"
         );
 
         let policy = Arc::new(policy(config(9)));

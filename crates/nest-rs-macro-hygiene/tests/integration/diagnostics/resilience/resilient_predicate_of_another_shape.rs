@@ -2,7 +2,9 @@
 //! error, what it answers, or the error its run ended on — answering `bool`:
 //! a value of another shape is one error, at the value, in the key's sentence.
 //! So is a function of another arity: a method taking `&self` beside what it
-//! judges, which a closure calls, and a function taking nothing.
+//! judges, which a closure calls, and a function taking nothing. A method
+//! named through `self` or alone is rustc's own error at the name, `E0615`
+//! with a help writing a call, or `E0425` pointing at the method.
 
 use std::sync::Arc;
 
@@ -101,6 +103,16 @@ impl ShipmentsService {
 
     #[resilient(carrier, record_if = always)]
     async fn recorded_by_a_function_of_nothing(&self) -> Answer<Quote> {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, record_if = self.sent_again)]
+    async fn recorded_by_a_method_of_self(&self) -> Answer<Quote> {
+        Err(CarrierDown)
+    }
+
+    #[resilient(carrier, record_if = sent_again)]
+    async fn recorded_by_a_method_named_alone(&self) -> Answer<Quote> {
         Err(CarrierDown)
     }
 }

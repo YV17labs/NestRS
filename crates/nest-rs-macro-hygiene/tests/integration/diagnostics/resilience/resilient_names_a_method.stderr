@@ -1,0 +1,16 @@
+error: #[resilient] names the field of `self` holding the policy by its name, alone, and this is a call: the policy is read from a field, never through a method — hold the `Arc<ResiliencePolicy<I>>` in a field of the host, and write that field's name, `#[resilient(carrier)]`
+  --> tests/integration/diagnostics/resilience/resilient_names_a_method.rs:37:17
+   |
+37 |     #[resilient(carrier())]
+   |                 ^^^^^^^^^
+
+error[E0615]: attempted to take value of method `carrier` on type `&ShipmentsClient`
+  --> tests/integration/diagnostics/resilience/resilient_names_a_method.rs:32:17
+   |
+32 |     #[resilient(carrier)]
+   |                 ^^^^^^^ method, not a field
+   |
+help: use parentheses to call the method
+   |
+32 |     #[resilient(carrier())]
+   |                        ++

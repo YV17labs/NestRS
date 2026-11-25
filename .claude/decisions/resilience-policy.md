@@ -600,7 +600,7 @@ reference's word first:
 | `ResiliencePolicy.wrap(…)`, any order | one order: a call out of time or meeting an open breaker is refused before any wait for a slot, and the rate is read there; then the bulkhead's slot, held for the whole run; then per attempt the unit's deadline, the breaker, the rate, the timeout; the fallback once the run is over | no second order |
 | `retry.attempts` (total, default 3, `Infinity`) | `RETRIES` (after the first, 0 to 10, default 2, 0 for none); `retries = N` on a method, 1 to 10 | bounded: ten at most; a method wanting none drops `idempotent` |
 | `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS`; doubling, ±20 % | the curve is the framework's one; a `Retry-After` the dependency asks is waited whole |
-| `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips an error carrying a 4xx status); no attempt number; a timeout is sent again and read by none |
+| `retry.retryIf(error, attempt)` | `retry_if = F`, `F: Fn(&E) -> bool` | default: every `Err` (the reference's skips an error carrying a 4xx status but `408` and `429`); no attempt number; a timeout is sent again and read by none |
 | `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, `F: Fn(&T) -> bool` | a key of any decorated method, a handler included; the retries spent, the last `Ok` answers |
 | `idempotent`, else `GET`/`HEAD`/`OPTIONS` and GraphQL queries | `idempotent`, always written; `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods, `QUERY` and `Idempotency-Key` | never inferred for a method |
 | a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body, each attempt in a savepoint of the unit's transaction | the unit is not replayed |
@@ -615,11 +615,11 @@ reference's word first:
 | `recordIf(error)` | `record_if = F`, `F: Fn(&E) -> bool` | — : an `Err` it refuses is counted in neither direction, and a probe hands its turn on |
 | `breaker.state`, `breaker.stats` | `breaker_state()`, `breaker_stats()` (`outcomes`, `failures`, `failure_rate()` from 0 to 1) | the age is applied at the read |
 | `breaker.trip()`, `breaker.reset()` | `open_breaker(duration)`, `close_breaker()` | an opening says how long |
-| `bulkhead.maxConcurrent`, `maxQueue`, `queueTimeout` | `CONCURRENCY`, `CONCURRENCY_WAITERS`, `CONCURRENCY_WAIT_MS` | the slot is held for the whole run, its retries included |
+| `bulkhead.maxConcurrent`, `maxQueue`, `queueTimeout` | `CONCURRENCY`, `CONCURRENCY_WAITERS`, `CONCURRENCY_WAIT_MS` | the slot is held for the whole run, its retries included; a call waits for one only where `CONCURRENCY_WAIT_MS` is set — none by default, sixty seconds at most — and `CONCURRENCY_WAITERS` bounds how many wait, `0` for no bound, where the reference's `maxQueue` of `0` is no queue and its wait has no limit by default |
 | `bulkhead.active`, `bulkhead.queued`; a rejection's `reason`, `active`, `queued` | `concurrency_running()`, `concurrency_waiting()`; `Full` | a call is in one of the two reads at any instant; the refusal says neither which cause nor a count, its `debug` line's `waiters` and the reads do |
 | `outboundRateLimit.limit`, `interval`, `maxWait` (token bucket) | `RATE_LIMIT`, `RATE_WINDOW_SECS`, `RATE_WAIT_MS` (token bucket) | counts attempts, a retry included; a token is waited for only when it comes before the unit's deadline; one given back goes to the next in line |
 | `limiter.available` | `rate_available()` | — |
-| `@Fallback(method \| fn, { handleIf })` | `fallback = method`, `fallback_if = F` | a method of `Self` alone, its signature checked: handed the method's arguments, then the error by value; default: every error (the reference's skips a 4xx); the failed attempt's savepoint is rolled back first |
+| `@Fallback(method \| fn, { handleIf })` | `fallback = method`, `fallback_if = F` | a method of `Self` alone, its signature checked: handed the method's arguments, then the error by value; default: every error (the reference's skips a 4xx but `408` and `429`); the failed attempt's savepoint is rolled back first |
 | `preset.fallback` for `execute()` | the `Result` a run answers: `.or_else(…)` | — |
 | `ResilienceEvents.events$`, `nestjs:resilience:<type>` channels | `ResiliencePolicy::events()`, beside the lines on `nest_rs::resilience` and the counters | per policy; bounded, a subscription behind is told how many it missed; a send never runs a subscriber; a line, an event and a counter each say their own fact (below) |
 | `retry`, `timeout`, `circuit-open` / `-half-open` / `-closed`, `circuit-rejected`, `bulkhead-rejected`, `rate-limited`, `fallback` | `ResilienceEvent`'s `Retry`, `Timeout`, `Transition`, `Refusal`, `Fallback` | one transition and one refusal event, each saying which; the error as its chain in text, never the value |
@@ -667,6 +667,15 @@ reference's word first:
   export ran the breaker's observed reads under its own, was a deadlock at a
   process's first transition. Across threads a call can meet the new phase,
   and have its refusal told, before the transition that caused it.
+- **A told error never tells a byte of a userinfo.** The chain a line or an
+  event carries is cut wherever `://` is written to the scheme, the host and a
+  numeric port, in one pass whatever the text; where an `@` follows the
+  authority's end the host cannot be told from a userinfo holding the
+  delimiter unencoded, and the scheme alone is told. The first cutter read a
+  run of closing brackets once per bracket, a dependency's own text stalling
+  the worker, and told a username as a host.
+- **A call its unit had no time to send is no attempt**: it files no line, in
+  any configuration, and is told as a timeout of none.
 - **The fallback answers after the run**, for the call's own error once its
   attempts are spent and for a refusal that sent nothing; `fallback_if` is
   asked first. It is a method of `Self` named by the key, handed the method's
@@ -766,6 +775,14 @@ lock" and the limit it left, a transition being told once the lock is let go.
 
 **Limits, named:**
 
+- **Two decorated calls joined in one unit's transaction take its turn in
+  order**: an attempt's savepoint holds the unit until it settles, its call to
+  the dependency included, so the other waits inside its own bound and can be
+  given up having sent nothing — a timeout counted against a dependency that
+  answered, opening its breaker for every caller. A handler sends such calls
+  one after the other; closing it is the driver telling the policy an attempt
+  waits for its own unit. Pinned as it stands by
+  `two_calls_joined_in_one_unit_take_its_turn_in_order_and_the_one_waiting_is_charged_the_wait`.
 - **The default breaker is not the reference's default mapped**: ten failures
   of twenty, where the mapping of the reference's 50 % after ten calls gives
   five. A deployment moving a default breaker sets `BREAKER_FAILURES`.
@@ -791,8 +808,34 @@ lock" and the limit it left, a transition being told once the lock is let go.
   not `Sync` by value is refused as not `Send` in rustc's words, naming no
   key; pointing it at the key is the run written as an `async fn`, which
   holds its call twice.
+- **A URL holding a space, a control character, a double quote or an angle
+  bracket unencoded is read as ending there**, so a userinfo holding one is
+  told as a host before it and left as prose after it. A cutter reading prose
+  cannot close it; the error's writer does, by encoding its URL or quoting
+  none. An address written with no `://` is left as written.
+- **A call refused beside a probe whose response its caller still holds is
+  told that probe's whole bound**, constant for as long as it is held: no
+  timer gives a held answer up, and the turn comes back when the response is
+  read or dropped.
+- **The boot's check of `BREAKER_FAILURES` under an age and a rate bounds the
+  policy's own attempts**: a response body held through the middleware counts
+  when it ends, tied to no token, outside that bound.
 - **A predicate closure whose body answers no `bool`** is rustc's `E0308` at
-  its body: what a body answers is the type checker's to read.
+  its body: what a body answers is the type checker's to read. A predicate
+  named `self.method` is its `E0615`, a field holding a function being a
+  valid one.
+- **Where rustc's own help writes in a key a value the decorator refuses** —
+  type arguments after a fallback's name (`E0283`), a call in the field's
+  place (`E0615`), a function of `Self` taking no `self` (`E0599`) — the
+  refusal it leads to says the remedy.
+- **On a trait's method with a default body** the decorator is answered by
+  rustc's `E0609`: it reads the method alone and cannot tell it sits in a
+  trait.
+- **`#[tracing::instrument]` above `#[resilient]` is read by the names its
+  expansion writes** (`.claude/upstream/tracing-attributes.md`): one it cannot
+  read whole is refused saying which order compiles, by any name beginning as
+  the expansion's do; a release dropping that beginning from every name would
+  be read as no instrument.
 - **A fallback taking other arguments** is rustc's `E0308` at the `fallback`
   key or `E0061` at the fallback's name, no sentence of ours leading there; one
   that is no method of `Self` is its `E0599`, and one consuming an argument an

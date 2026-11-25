@@ -1,9 +1,11 @@
 //! `#[tracing::instrument]` written above `#[resilient]` expands first, and the
 //! decorator types the body it wrapped as one attempt, in every shape
-//! tracing-attributes 0.1.31 writes. This body carries that expansion's own
-//! names by hand, standing for a release writing another shape: one error says
-//! which order compiles whatever tracing writes, where each answer of the body
-//! would be reported against a type the decorator could not give it.
+//! tracing-attributes 0.1.31 writes. These bodies carry by hand a name under
+//! that expansion's own prefix — one it binds, then one it does not, below
+//! their own block — standing for a release writing another shape or other
+//! names: one error says which order compiles whatever tracing writes, where
+//! each answer of the body would be reported against a type the decorator
+//! could not give it.
 
 use std::sync::Arc;
 
@@ -35,6 +37,18 @@ impl PreviewService {
             return Err(UpstreamDown);
         }
         Ok(slug)
+    }
+
+    #[resilient(upstream, idempotent)]
+    async fn preview_again(&self, slug: String) -> Result<String, ResilienceError<UpstreamDown>> {
+        let traced = async move {
+            let __tracing_instrument_span = slug.len();
+            if __tracing_instrument_span == 0 {
+                return Err(UpstreamDown);
+            }
+            Ok(slug)
+        };
+        traced.await
     }
 }
 

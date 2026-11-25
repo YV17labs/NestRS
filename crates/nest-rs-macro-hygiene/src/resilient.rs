@@ -392,6 +392,23 @@ impl HygieneTracking for HygieneHandBuilt {
     }
 }
 
+impl HygieneHandBuilt {
+    /// A method and its fallback each named raw, the fallback's type parameter
+    /// fixed by the argument it is handed.
+    #[resilient(carrier, fallback = r#try)]
+    pub async fn r#match(&self, parcel: &str) -> HygieneAnswer<usize> {
+        Ok(depot(parcel)?.len())
+    }
+
+    async fn r#try<P: AsRef<str> + Send>(
+        &self,
+        parcel: P,
+        _error: ResilienceError<HygieneCarrierDown>,
+    ) -> HygieneAnswer<usize> {
+        Ok(parcel.as_ref().len())
+    }
+}
+
 /// A host holding its predicates as values: function pointers, and a boxed
 /// closure.
 pub struct HygieneJudged {

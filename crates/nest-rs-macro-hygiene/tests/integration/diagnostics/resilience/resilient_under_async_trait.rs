@@ -1,6 +1,8 @@
 //! A method under `#[async_trait]` is a `fn` returning a boxed future by the
 //! time `#[resilient]` reads it: refused as a `fn`, the sentence naming
-//! `#[async_trait]` and the native `async fn` to write instead.
+//! `#[async_trait]` and the native `async fn` to write instead. Its body,
+//! written as an attempt, answers that future's type and is kept out: the
+//! refusal is the one error.
 
 use std::sync::Arc;
 
@@ -29,6 +31,7 @@ struct ShipmentsService {
 #[async_trait]
 trait Tracking {
     async fn track(&self, parcel: &str) -> Answer<String>;
+    async fn locate(&self, parcel: &str) -> Answer<usize>;
 }
 
 #[async_trait]
@@ -36,6 +39,25 @@ impl Tracking for ShipmentsService {
     #[resilient(carrier, idempotent)]
     async fn track(&self, parcel: &str) -> Answer<String> {
         Ok(parcel.to_owned())
+    }
+
+    #[resilient(carrier, fallback = unlocated)]
+    async fn locate(&self, parcel: &str) -> Answer<usize> {
+        if parcel.is_empty() {
+            return Err(CarrierDown);
+        }
+        let found: Result<usize, CarrierDown> = Ok(parcel.len());
+        Ok(found?)
+    }
+}
+
+impl ShipmentsService {
+    async fn unlocated(
+        &self,
+        _parcel: &str,
+        _error: ResilienceError<CarrierDown>,
+    ) -> Answer<usize> {
+        Ok(0)
     }
 }
 

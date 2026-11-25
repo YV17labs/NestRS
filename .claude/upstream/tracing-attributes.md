@@ -17,15 +17,28 @@
   `Result<T, ResilienceError<E>>`, the body stopped compiling, three `E0308` at
   the developer's lines.
 - **Our side** — `crates/nest-rs-resilience-macros/src/instrumented.rs` reads
-  the expansion by those names and by position: it gives the return never taken
-  the attempt's type, and drops the `move` of tracing's own blocks where each
-  attempt borrows the arguments. A body carrying the names in another shape is
-  one error, saying to write `#[resilient]` above `#[tracing::instrument]`
-  (`resilient_under_an_instrument_it_cannot_read.stderr`). On a
-  tracing-attributes bump, `gen_block` is read again against that file's `//!`.
+  the expansion by two of those names, the future's and the return's, and by
+  position: it gives the return never taken the attempt's type, and drops the
+  `move` of tracing's own blocks where each attempt borrows the arguments. The
+  names are private, and nothing holds an app to 0.1.31: `tracing = "0.1"`
+  takes any 0.1.x of tracing-attributes at the app's own `cargo update`, and
+  the rule forbids pinning a patch. So what is not read whole degrades by one
+  sign, the `__tracing_` prefix all three names share: a body carrying a name
+  under it anywhere — bound at its top, inside one expression, or below what
+  another attribute wrapped tracing's statements in — in a shape the file does
+  not read is one error, saying to write `#[resilient]` above
+  `#[tracing::instrument]`, the order that compiles whatever tracing writes
+  (`resilient_under_an_instrument_it_cannot_read.stderr`), never a body typed
+  as one no instrument wrapped. A release that dropped the prefix from every
+  name would be read as no instrument, and the developer's answers reported as
+  three `E0308` again: the one limit left, which only a marker upstream closes.
+  On a tracing-attributes bump, `gen_block` is read again against that file's
+  `//!`.
 - **Canary** — none that tells a fix; a change of shape fails
   `nest-rs-resilience`'s `instrumented` module
-  (`tests/integration/resilient.rs`), which runs every flavour in both orders.
+  (`tests/integration/resilient.rs`), which runs every flavour in both orders,
+  on the framework's own lockfile alone. The renamed variants an app could
+  meet first are that file's unit tests.
 - **Upstream** — not filed.
 - **When fixed** — `instrumented.rs` reads the documented marker and its
   recogniser of names goes. Half a day.

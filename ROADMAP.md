@@ -1,6 +1,6 @@
 # Roadmap
 
-This file explains three things: what 7.x plans to add, in what order, and what would force a NestRS 8.0. Nothing here is
+This file explains three things: what is planned, in what order, and what makes a release a major. Nothing here is
 promised until a release's changelog lists it. Each item starts only once the owner says yes to it by name, and
 `Status` records that yes.
 
@@ -15,10 +15,13 @@ Last reviewed **2026-11-17**, against NestJS 12.1 and the npm registry on that d
 
 ---
 
-## 1. The principle: 7.x lasts
+## 1. The principle: the design comes first
 
-7.0 is the foundation, and the 7.x line is meant to last for years. New capabilities arrive as minors.
-[The semver policy](https://nestrs.dev/semver/) (`.claude/decisions/semver-7x.md`) lets a minor add each of these:
+7.0 is the foundation. **What makes the framework considerably faster, safer or simpler is built whatever it breaks**
+(`.claude/decisions/semver-7x.md`, 2026-11-25): the release holding the break is a major, it ships when it is ready, and
+its changelog says what a program changes. The 7.x line lasts until something better is found, no longer.
+
+New capabilities arrive as minors. [The semver policy](https://nestrs.dev/semver/) lets a minor add each of these:
 
 - a tier-1 item;
 - a crate, an umbrella feature, a decorator key or a variable;
@@ -43,11 +46,11 @@ checked in the code on 2026-11-17:
 
 ---
 
-## 2. What would force 8.0: public dependencies, not features
+## 2. What makes a release a major: a better design, or a public dependency's major
 
 A public dependency is one whose vocabulary an app writes in its own code (`.claude/decisions/public-dependencies.md`). Its
-next major can only land in a NestRS major, and the README promises exactly that. **The length of the 7.x line is
-therefore set by these libraries' release clocks, not by this roadmap.** The table is their state on 2026-11-18.
+next major can only land in a NestRS major, and the README promises exactly that. **These libraries' release clocks are the
+latest a major can come; a better design brings it sooner.** The table is their state on 2026-11-18.
 
 | Library | 7.0 pins | Next major | Recent pace | What an app writes in it |
 |---|---|---|---|---|
@@ -90,15 +93,11 @@ stable major, and no release candidate holds it.
 8. **A GraphQL id is `ID` and a timestamp `DateTime` at every position, an instant spelled once on every edge**
    (`a-column-reads-in-one-type.md`).
 
-**When a forced major comes**, 8.0 stays mechanical: it moves the dependency, takes what that move requires, and ships
-an upgrade guide. No redesign rides along. It also refuses what a 7.x minor deprecated, each listed under its
-changelog's *Deprecated*, and moves what only a break can: `#[operations]` keeps `#[resilient]` on a GraphQL
-operation's method, plain or under a `#[cfg_attr]`, and hands every other attribute to the field it generates, as 7.0
-did, so one reading the method's own `self` — `#[tracing::instrument(fields(depot = self.depot.0))]` — compiles only
-once 8.0 keeps them on the method, a move that
-refuses a 7.0 attribute naming a parameter the field leaves out. `SECURITY.md` already bounds its pace: a major ships at
-most every six months, announced four weeks ahead with its upgrading guide. A rare, small major is the healthy outcome.
-A long line that holds a vulnerable or outdated library is not.
+**A major takes everything only a break can**: the dependency's move, what a 7.x minor deprecated, each listed under its
+changelog's *Deprecated*, and every design compatibility held back, each with its upgrading entry. It ships when it is
+ready (`semver-7x.md`, 2026-11-18). The first design it takes: `#[operations]` keeps every attribute a developer writes on
+a GraphQL operation on the developer's method, where 7.0 handed them to the field it generates, so a decorator, an
+instrument reading the method's own `self` or an app's own attribute works there as on every other handler.
 
 What async-graphql 8 would require was measured against rc.5 on 2026-11-18. GraphQL Playground is gone upstream, so the
 `playground` setting and its variable become GraphiQL's. Every `DataLoader` a `#[dataloader]` builds takes a `Spawn` and
@@ -157,7 +156,7 @@ is in engineering hours, review and gates included. It is a guess calibrated on 
 Every crate name follows `.claude/rules/naming.md`. The shared word is read off the NestJS package name, the market's
 word, as `storage-port-by-url.md` did for `nest-rs-storage`. A new crate's name is the owner's to confirm.
 
-NestJS ships each of these at `0.0.x`, so their APIs will move. Ours is held to 7.x semver from its first minor: each design
+NestJS ships each of these at `0.0.x`, so their APIs will move. Ours is held to semver from its first release: each design
 is settled before it ships, not iterated in public.
 
 ### 2. Distributed locks — `nest-rs-locks`

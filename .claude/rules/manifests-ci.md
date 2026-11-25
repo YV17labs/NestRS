@@ -180,9 +180,11 @@ its reason.
 
 ## Semver
 
-A 7.x release never breaks what a program or an operator matches
+A release that breaks what a program or an operator matches is a major
 (`decisions/semver-7x.md`); `docs/src/content/docs/semver.mdx` says it to
-readers, and the two move in one change.
+readers, and the two move in one change. The list decides a release's number,
+never a design: a break worth making is made when it is found (`CLAUDE.md`,
+*How we work*), and the next release is the major holding it.
 
 - **API**: every tier-1 item of a published crate — reachable through no
   `__private`, `__`-prefixed or `#[doc(hidden)]` item — but `nest-rs-cli`'s
@@ -216,12 +218,12 @@ readers, and the two move in one change.
   2, and never raises the MSRV.
 - **A minor may deprecate a spelling its own addition replaces**: the old one
   keeps compiling and warns through rustc's `deprecated` lint, naming what to
-  write, under the changelog's `### Deprecated`, until 8.0 refuses it.
+  write, under the changelog's `### Deprecated`, until a major refuses it.
 - **A security fix refusing an insecure configuration that used to boot is a
   patch** (`decisions/semver-7x.md`, 2026-10-12): it ships under the
   changelog's `### Security`, with an upgrading line naming the refused
   configuration and the secure one. Insecure by a standard (an RFC, OWASP),
-  never merely unusual; every other break waits for 8.0.
+  never merely unusual; every other break makes its release a major.
 - **Tier 2 is outside semver**, safe only under the `=` pins: no third party
   names it, even through `::nest_rs::<concern>::__private`.
 - **A package depends on `nest-rs = { version = "7.N", default-features =

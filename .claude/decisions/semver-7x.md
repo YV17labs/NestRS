@@ -216,3 +216,40 @@ after the current major ships, its end date written when it does.
 **Refused:** keeping the six months as a floor. A fix that needs a major — a
 public dependency's next major carrying a security fix, among them — would wait
 on a date rather than on its readiness.
+
+## 2026-11-25 — compatibility with a published release is no constraint
+
+The owner's directive, one week after 7.0: nobody is bound to keep what version
+7 exposed; what is wanted is performance and the best code, and where something
+better is found, version 7 is changed rather than worked around, plainly said,
+and a rule that contradicts this is changed with it.
+
+**The list above still says what a break is; it decides a release's number,
+never a design.** A release holding a break is a major, and it ships when it is
+ready (2026-11-18): the 7.x line lasts until something better is found, no
+longer. "What 7.0 exposes, every 7.x must keep" is read of the releases numbered
+7.x alone.
+
+- **A considerable gain is taken whatever it breaks** — performance, safety, or
+  an architecture with fewer cases — and is stated with its evidence: a measure,
+  or the cases, features and limits that go. A gain nobody can state is taste.
+- **A break is told, never asked**: the commit (`!`), the changelog's upgrading
+  entry, the report.
+- **It goes whole**: no alias, no shim, no second reading kept beside the new
+  one. A detector for persisted data stays, and a migration dropping or rewriting
+  data is still asked.
+- **A refusal in these files whose only reason is a break inside a major is open
+  again**, reopened by the change that takes it, with its own dated entry.
+
+**Superseded:** the hard "no" on breaks inside a major, and "a break waits for
+8.0" wherever this file and `manifests-ci.md` said it; `ROADMAP.md`'s "7.x
+lasts" and "8.0 stays mechanical … no redesign rides along".
+
+**Refused:**
+
+- **A break under a 7.x number.** Cargo takes a minor without asking, so a
+  program would stop compiling on `cargo update`: a number costs nothing, and
+  SemVer is the standard the semver page promises to a reader.
+- **A grace period, the old API deprecated beside the new until the next
+  major.** Two ways to do one thing for as long as it lasts, and the worse one
+  the one every program already spells.

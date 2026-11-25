@@ -3,7 +3,8 @@
 First off — thank you. NestRS ships under a
 [semver policy](https://nestrs.dev/semver/), so a change that breaks what it
 covers — a public item, a decorator key, a variable, a wire format, a span
-target — waits for the next major.
+target — makes its release a major: say in the pull request what it breaks and
+what that buys.
 This guide is the shortest path from *I want to help* to *my change is merged*.
 
 New here? Browse the

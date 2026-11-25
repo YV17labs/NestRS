@@ -81,7 +81,7 @@ address is the deployment's, [`PostsConfig`](/configuration/)'s `upstream_url`:
 ## Run a call
 
 `#[resilient(upstream)]` runs the method's body once. `#[resilient(upstream,
-idempotent)]` runs it again after a failure or a timeout, up to the policy's
+idempotent)]` runs it again after an `Err` or a timeout, up to the policy's
 retries, each retry waiting a jittered backoff first. The choice is yours to
 make, and nothing else makes it: replaying a call that is not idempotent would
 charge a card twice.
@@ -98,7 +98,7 @@ error, `Ok(..)`, `Err(e)` and an early `return` each end one attempt, run once
 or again alike. Each answer is coerced as that method would coerce it — a
 `&String` into the `&str` it returns, a box into its `Box<dyn …>`.
 That `E` is a `std::error::Error`, as a `thiserror` derive makes one: its chain is
-what the policy's lines tell of a failure. An error that is none — `anyhow::Error`, a
+what the policy's lines tell of an error. An error that is none — `anyhow::Error`, a
 boxed error — is held in a type of your own that is, and the compile error says so.
 
 It goes on a provider, a struct you build, a trait impl, a route, a socket
@@ -125,13 +125,15 @@ bounds what a method takes by value ([Limits](/fundamentals/failures-and-fallbac
 
 **No attempt outlives its unit.** Each attempt ends at its timeout or at the
 deadline of the unit it runs in — the request timeout on HTTP, a message's on a
-socket, a job's on the queue — whichever comes first, and counts as a timeout,
-in the breaker too. No retry starts whose wait would end past that deadline.
+socket, a job's on the queue, a check's on a health probe — whichever comes
+first, and counts as a timeout, in the breaker too. One its caller drops counts
+[as the breaker says](/fundamentals/circuit-breaker/#how-it-opens-and-closes).
+No retry starts whose wait would end past that deadline.
 
 A call that is part of a method takes the policy's own `run` or `run_idempotent`:
 `self.upstream.run_idempotent(|cancel| async move { … }).await`, its closure
 handed the attempt's `CancellationToken`. A run by hand takes no key: every `Err`
-is a failure, and what stands in for one is the `Result` it answers.
+is a failure, and what stands in for an error is the `Result` it answers.
 
 ### The keys
 
@@ -142,7 +144,7 @@ answer.
 
 | Key | Takes | Needs | Says |
 |---|---|---|---|
-| `idempotent` | no value | | the call is sent again after a failure or a timeout |
+| `idempotent` | no value | | the call is sent again after an `Err` or a timeout |
 | `timeout = "2s"` | `"1ms"` to `"10m"` | | how long each attempt of this method waits |
 | `retries = 3` | `1` to `10` | `idempotent` | this method's retries |
 | `retry_if = F` | `Fn(&E) -> bool` | `idempotent` | which `Err` is sent again |
@@ -152,16 +154,21 @@ answer.
 | `fallback_if = F` | `Fn(&ResilienceError<E>) -> bool` | `fallback` | which errors the fallback answers for |
 | `cancel = token` | a name | | the local under which the body reads its attempt's token |
 
-A key written without the one it needs is refused naming it. A value of the wrong
-shape is refused at the value, in the key's sentence: a literal for `F`, anything
-but a name written alone for `fallback` or `cancel`, and a constant, a function's
-path of another arity or a closure typed otherwise for `F`, whose note offers the
-closure form for a method of `self` (`|error| self.is_transient(error)`);
-written `self.is_transient`, it is rustc's `E0615`. A closure taking no argument
-or several, or written `async`, is refused at the closure. A closure whose body answers no `bool` is rustc's own, at the body. A
-`fallback` given type arguments, or written as a call, is refused saying to name
-the method alone; a method whose type parameters its arguments and its answer do
-not fix is rustc's, and the fallback's signature fixes them.
+A key written without the one it needs is refused naming it. The list's first
+entry is the field, whatever its name, one of a key that takes a value included
+(`#[resilient(fallback)]`), and a comma missing after it is refused. A field
+named `idempotent` is told from the key by the key after it,
+`#[resilient(idempotent, idempotent)]`, and is renamed where the method is not
+idempotent; one named as a setting of the policy's is renamed, as its refusal
+says.
+
+A value of the wrong shape is refused at the value, in the key's sentence: a
+literal for `F`, anything but a name written alone for `fallback` or `cancel`,
+and a constant, a function's path of another arity or a closure typed otherwise
+for `F`, whose note offers the closure form for a method of `self`
+(`|error| self.is_transient(error)`); written `self.is_transient`, it is rustc's
+`E0615`. A closure taking no argument or several, or written `async`, is refused
+at the closure; one whose body answers no `bool` is rustc's own, at the body.
 
 **`cancel = token` hands a body its attempt's `CancellationToken`**, as a local
 that is no argument: the signature stays what callers call, and a name an
@@ -180,7 +187,7 @@ policy, with no `#[resilient]`: [Resilience middleware](/fundamentals/resilience
 ## What the client is told
 
 A decorated method answers a `ResilienceError`. Every refusal of the policy is
-one every edge answers `503`, `UNAVAILABLE`; the call's own failure and an
+one every edge answers `503`, `UNAVAILABLE`; the call's own error and an
 unsettled savepoint are not refusals:
 
 | Variant | When | Retry-After |
@@ -190,12 +197,13 @@ unsettled savepoint are not refusals:
 | `Full` | every slot of the bulkhead stayed taken for as long as the call waits, or as many calls as may wait were waiting; the call was not sent | none |
 | `Limited` | the rate limit had no token free, and the one due the attempt, behind the attempts already waiting, came past what it may wait or past its unit's deadline; the call was not sent, nor attempted again | the time until that token is free, rounded up to whole seconds |
 | `Failed` | the call answered its own error on its last attempt | what that error's `ToProblem` says, else a `Problem` its chain carries; opaque `500` otherwise |
-| `Unsettled` | an attempt's savepoint could not be settled | none: the server's own failure, an opaque `500` |
+| `Unsettled` | an attempt's savepoint could not be settled | none: the server's own error, an opaque `500` |
 
-The call's error says what its own failure tells a client, so it implements
-`ToProblem` — answering nothing, for a failure no client should read — keeps
-reqwest's error without the URL that error quotes, and says whether the upstream
-had no page:
+The call's error says what it tells a client, so it implements `ToProblem` —
+answering nothing, for an error no client should read — names reqwest's error as
+its `#[source]`, without the URL that error quotes, and says whether the upstream
+had no page. [What a line tells](/fundamentals/resilience-events/#a-reqwest-error-on-a-line)
+of reqwest's error is read off that source:
 
 ```rust title="crates/features/src/posts/error.rs"
 use nest_rs::core::{Problem, ToProblem};
@@ -233,9 +241,9 @@ an hour ([how a job honours it](/queue/retries-and-failure/)).
 
 ## The circuit breaker
 
-The breaker opens once `BREAKER_FAILURES` of the latest `BREAKER_WINDOW` attempts
-failed, ten of twenty by default, and refuses every call unsent, its client answered
-`503` at once, until its probes close it: [Circuit breaker](/fundamentals/circuit-breaker/).
+It opens once `BREAKER_FAILURES` of the latest `BREAKER_WINDOW` attempts failed, ten of
+twenty by default, and refuses every call unsent until its probes close it:
+[Circuit breaker](/fundamentals/circuit-breaker/).
 
 ## The bulkhead and the rate limit
 
@@ -246,13 +254,10 @@ or `Limited`, unsent: [Bulkhead and rate limit](/fundamentals/bulkhead-and-rate-
 
 ## Test it
 
-What your client is told while the dependency is down takes one failure, or
-none: [a test's root pins the policy to open on the first, or the test opens the
+A test's root pins the policy to open on its first failure, or the test [opens the
 breaker by hand](/fundamentals/circuit-breaker/#test-it). A scripted HTTPS peer
-[stands in for the upstream](/fundamentals/resilience-middleware/#test-it), and a
-test reads what the policy did from `events()` and its reads — `breaker_state()`,
-`breaker_stats()` — instead of from a log: [Resilience events and
-reads](/fundamentals/resilience-events/).
+[stands in for the upstream](/fundamentals/resilience-middleware/#test-it), and the
+policy's [events and reads](/fundamentals/resilience-events/) say what it did.
 
 ## Configuration
 
@@ -287,9 +292,10 @@ off is `None`.
 - **A method carries `#[resilient]` once.** A second is refused as written
   twice, under whatever name it is imported by, in a `#[cfg_attr]` or below a
   `#[tracing::instrument]`: a method calling two dependencies is two methods.
-- **A `fn` that is not `async` is refused**, and so is an answer holding an
-  `impl Trait`, which names no type in the expansion: name the type, or box it.
-  Neither shows rustc's own errors beside. An `async fn` under `#[async_trait]` is
+- **A `fn` that is not `async` is refused**, a `const fn` told to drop `const`,
+  and so are a free function, which has no host to hold a policy, and an answer
+  holding an `impl Trait`, which names no type in the expansion: name the type, or
+  box it. None shows rustc's own errors beside. An `async fn` under `#[async_trait]` is
   a `fn` by the time `#[resilient]` reads it, so write the trait's method as a
   native `async fn`. A trait's own declaration is refused, saying to decorate
   each impl's method; on a default body, whose `Self` has no field, it is
@@ -305,7 +311,7 @@ off is `None`.
   its spelling, refusing one written through an alias.
 - **No attempt number** is handed to a body, a predicate or a fallback: a closure
   counts its own calls.
-- **The limits of a failure, a fallback and a unit's transaction** are on
+- **The limits of the keys, a fallback and a unit's transaction** are on
   [Failures and fallbacks](/fundamentals/failures-and-fallbacks/#limits), and of
   what a policy tells on [Resilience events and
   reads](/fundamentals/resilience-events/#limits).

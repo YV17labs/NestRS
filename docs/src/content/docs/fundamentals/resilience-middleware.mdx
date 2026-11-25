@@ -46,7 +46,7 @@ It sends again only a request its method declares idempotent (`GET`, `HEAD`,
 `PUT`, `DELETE`, `OPTIONS`, `TRACE`, `QUERY`) or one carrying an
 `Idempotency-Key`, and only when its body can be sent twice.
 
-A transport failure, a timeout, and a `408`, `429`, `500`, `502`, `503` or `504`
+A transport error, a timeout, and a `408`, `429`, `500`, `502`, `503` or `504`
 are attempted again and count in the breaker. Any other answer is the
 dependency's. A `429`'s or a `503`'s `Retry-After` is waited whole, whether in
 seconds or an HTTP-date counted from the answer's own `Date`, so no clock skew
@@ -75,10 +75,12 @@ by nothing it files. Give each client a policy of its own, one instance per
 dependency.
 
 A failure rides the retry's line, its event and the breaker's opening as its
-chain, and never the request's address: every URL in it is cut as
-[the lines tell](/fundamentals/resilience-events/#what-a-line-tells-of-a-url),
-since a path, a query and a userinfo hold what you sent. A status is told by its code alone
-(`the dependency answered 503`), never a header or a body.
+chain, and never the request's address: a transport error is said [by reqwest's
+kind and the causes that can be
+read](/fundamentals/resilience-events/#a-reqwest-error-on-a-line), never a word the
+dependency wrote, and any URL another middleware's error quotes [is cut to its
+origin](/fundamentals/resilience-events/#what-a-line-tells-of-a-url). A status is
+told by its code alone (`the dependency answered 503`), never a header or a body.
 
 ## The answer's body
 
@@ -100,7 +102,7 @@ so a reader slower than the dependency is never cut.
 - Dropped before its end, the answer counts as its head did. One case differs:
   a read you abandoned, in a `select!` or under a timeout of your own, that has
   waited past the budget. The body is read once more as you drop it: a part
-  that came counts as the head did, a failure as a failure, and a part the
+  that came counts as the head did, a read that fails as a failure, and a part the
   dependency still owes as a timeout.
 - A panic while the body is read counts as a failure in the breaker, then
   unwinds on.

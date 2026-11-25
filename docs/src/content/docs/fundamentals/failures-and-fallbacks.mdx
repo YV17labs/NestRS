@@ -70,7 +70,7 @@ a timeout, an open breaker, a full bulkhead, a reached rate limit. It takes the
 decorated method's arguments, in order, then that error by value, and answers
 what the method answers; an `Err` it answers is the method's. `card` answers no
 card for a refusal, files it at `warn` with its chain, and leaves the upstream's
-own failure to its caller:
+own error to its caller:
 
 ```rust title="crates/features/src/posts/service.rs"
 #[resilient(
@@ -110,7 +110,9 @@ one binding it by a pattern, `Path(id): Path<u32>`, is refused, a pattern bindin
 `mut` included, in one error. A fallback is called as a method, so it takes
 `&self` or `self: &Arc<Self>`; its type parameters are fixed by its arguments and
 its answer, one they leave open being rustc's `E0283`, and a `fallback` written
-with type arguments or as a call is refused saying to name the method alone. A
+with type arguments or as a call is refused saying to name the method alone. An argument
+the method hands on is read, so one named with a leading `_` is
+`clippy::used_underscore_binding`'s at the key: drop the underscore. A
 fallback taking other arguments is rustc's `E0308` at the key or `E0061` at the
 fallback's name, one naming no method of `Self`, a function of `Self` taking no
 `self` included, is its `E0599`, and one naming the method it answers for is
@@ -128,7 +130,7 @@ of a method declaring `idempotent` or a `fallback` runs in a savepoint of it,
 whatever its retries, none included, and so does each attempt of
 `run_idempotent`. What the body writes through the data layer is kept only when
 the method answers that attempt's `Ok`, and rolled back otherwise, an `Ok` sent
-again by `retry_ok_if` included: a failed attempt leaves no write for the next to
+again by `retry_ok_if` included: an attempt leaves no write for the next to
 repeat, nor beside the error the method answers. The last attempt is rolled back
 before a fallback runs, and before the method answers an error `fallback_if`
 refused. A method run once with no fallback opens none, nor does any outside a
@@ -174,11 +176,14 @@ it leaves the unit as it was.
   given up having sent nothing. That timeout is counted against a dependency
   that answered, in its breaker, which can open for every caller. Send them one
   after the other, or outside the transaction.
-- **A refusal reaching a tick, a listener or a hook is that unit's failure.** A
+- **A refusal reaching a tick, a listener or a hook is that unit's error.** A
   tick's, a listener's and a shutdown hook's are filed at `error` by their edge,
   a tick's at every occurrence while the breaker is open. An init hook's fails
   the boot naming the hook, the chain in the error `init` returns and on no log
-  line. A refused readiness indicator answers down, the chain in a `warn`.
+  line. A refused readiness indicator answers down, the chain in a `warn`, and so
+  does one whose attempt ends at [its check's
+  deadline](/health/indicators/#a-check-under-a-policy), a timeout its breaker
+  counts.
 - **A decorated `#[liveness]` indicator refused by an open breaker fails the
   liveness probe**, and the orchestrator restarts the process for a dependency's
   outage: decorate readiness checks, never liveness ones. A `fallback` is how any

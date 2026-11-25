@@ -21,12 +21,6 @@ unauthenticated, and an error from a connection check carries a DSN, an
 internal hostname or a driver message. Triage is one filtered log query;
 it is not a value anyone can read off an open port.
 
-An indicator under [`#[resilient]`](/fundamentals/resilience/) reports `down`
-while its breaker is open, so decorate `#[readiness]` checks only: a refused
-`#[liveness]` one fails the liveness probe, and the orchestrator restarts the
-process for a dependency's outage
-([the limit](/fundamentals/failures-and-fallbacks/#limits)).
-
 ## A first indicator
 
 ```rust title="crates/features/src/upstream/health/indicator.rs"
@@ -177,6 +171,22 @@ test that overrides `Storage` opens no store, and probes none.
   and reads up.
 
 See [Database health](/database/health/) for the pool end to end.
+
+## A check under a policy
+
+An indicator under [`#[resilient]`](/fundamentals/resilience/) reports `down`
+while its breaker is open, so decorate `#[readiness]` checks only: a refused
+`#[liveness]` one fails the liveness probe, and the orchestrator restarts the
+process for a dependency's outage
+([the limit](/fundamentals/failures-and-fallbacks/#limits)).
+
+Each check runs under the deadline its probe cuts it at, the sooner of
+`INDICATOR_TIMEOUT_MS` and `PROBE_DEADLINE_MS`, or its request's when that is
+sooner. A decorated indicator's attempt ends there as a timeout its breaker
+counts, so a dependency that accepts and never answers opens that breaker. Unless
+a `fallback` answers in its place, the indicator then reads `check failed` and
+files `health indicator failed`, the policy's timeout in `error`; an undecorated
+one cut at its ceiling reads `timed out` and files `health indicator timed out`.
 
 ## An indicator a module attaches
 

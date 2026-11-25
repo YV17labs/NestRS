@@ -82,15 +82,17 @@ and `method` of the decorated method that ran it, and neither when `run`,
 | `the call ended on an error; its fallback answers` | `debug` | `error` |
 | `circuit breaker changed state` | `warn` | `state`; an opening by failures adds `failed`, `window`, `open_ms` and `error`, a switch by hand `manual`, and an opening by hand its `open_ms` |
 
-The first is a retry after a failure and the second a retry of an `Ok` sent again
-by `retry_ok_if`, which has no `error`. The third and fourth are a retry left but
+The first is a retry after an `Err` or a timeout — or, through the middleware,
+after a status it sends again — and the second a retry of an `Ok` sent again by
+`retry_ok_if`, which has no `error`. The third and fourth are a retry left but
 not made, with the `error` of the attempt that was to be sent again: the third
 has none after an `Ok` `retry_ok_if` was to send again, and the fourth follows
-a failure alone, the one answer that asks a wait. Each transition of the breaker files the last line, probes and switches
-by hand included, and only an opening by failures adds the `error` of the failure
-that opened it. An `error` is the error's chain with every URL in it cut as
-[below](#what-a-line-tells-of-a-url), or the timeout's sentence; the savepoint's line says the chain of the
-cause the database could not settle it for.
+what asks a wait, an `Err` or such a status. Each transition of the breaker files
+the last line, probes and switches by hand included, and only an opening by
+failures adds the `error` of the failure that opened it. An `error` is the
+error's chain with every URL in it cut as [below](#what-a-line-tells-of-a-url),
+or the timeout's sentence; the savepoint's line says the chain of the cause the
+database could not settle it for.
 
 A call an open breaker refuses, a call its unit had no time left to send and a
 run ending on a timeout file no line of their own, in any configuration: the
@@ -114,6 +116,29 @@ query or a fragment. Where an `@` follows the end of the authority (a `/`, `?`,
 by its scheme alone. An address with no `://` is left as written. One limit: a
 URL holding a space, a control character, a double quote or an angle bracket
 unencoded is read as ending there, so a userinfo holding one is told in part.
+
+### A reqwest error on a line
+
+In a program linking `nest-rs-reqwest`, as the `reqwest` and `authn` features do,
+a reqwest error that is a link of the chain, reqwest-middleware's included, is
+said by what that crate reads of it wherever the framework says an error:
+
+- its kind, in reqwest's words (`error sending request`), and of a status its
+  class and its numeric code, `HTTP status server error (503)` — never the URL,
+  the reason phrase or a word the dependency wrote;
+- beneath it, an I/O error by its OS's sentence or its kind, and a decode failure
+  without the value;
+- a timeout, a failed lookup, a closed connection, too many redirects, a scheme
+  reqwest does not speak and a refused certificate, its names and dates left out,
+  each by a constant sentence. A cause of any other type is not said: hyper's
+  other reasons, HTTP/2's codes, rustls's alerts, a redirect policy's own error.
+
+An error handing reqwest's sentence on as its own (`#[error(transparent)]`) hides
+it from the chain, and without that crate every reqwest error is said as it writes
+itself. On the policy's lines and events its URL is then cut to its origin and its
+status to its code, its causes said as they write themselves; on an edge's own
+line nothing is cut. Name reqwest's error as your error's `#[source]`, as
+`UpstreamError` does.
 
 ## The counters
 
@@ -158,6 +183,12 @@ reads the body as `tracing-attributes` 0.1 wraps it, by the `__tracing_` names
 that expansion writes, and refuses one wrapped otherwise, saying to write
 `#[resilient]` above; a release writing none of those names would be read as no
 instrument.
+
+On a GraphQL operation the order says nothing: `#[operations]` hands the
+instrument to the field it generates, so one span covers the whole field, its
+guards and every attempt, and `err` and `ret` record what the field answers. A
+span per attempt there is that of a provider's decorated method the operation
+calls, instrumented above `#[resilient]`.
 
 ## Limits
 

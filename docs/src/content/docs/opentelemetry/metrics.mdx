@@ -140,9 +140,9 @@ for the default one:
 
 A transition to `open` marked `nestrs.resilience.breaker.manual` is an
 operator's switch. Unmarked, it is failures opening the breaker, a probe
-failing, or a probe its caller dropped once sent, unanswered before its timeout
-or its unit's deadline, no probe of its series having succeeded; the next call
-then probes. `refusals` counts the runs the policy ended on its own refusal,
+failing, or a probe its caller dropped once sent, unanswered and before that drop
+counts [as a timeout](/fundamentals/circuit-breaker/#how-it-opens-and-closes), no
+probe of its series having succeeded; the next call then probes. `refusals` counts the runs the policy ended on its own refusal,
 whether its caller is answered `503` or the method's fallback answers in its
 place, which `fallbacks` then counts too. Its `limited` is the rate a dependency
 allows reached.

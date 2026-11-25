@@ -189,19 +189,8 @@ the variable's last segment. [Resilience](/fundamentals/resilience/), [Failures 
 and [Resilience events and reads](/fundamentals/resilience-events/) are the pages
 to read in full.
 
-```rust title="a method under a policy, from the crate's tests"
-#[resilient(
-    previewer,
-    idempotent,
-    retry_if = |error| !error.missing(),
-    record_if = |error| !error.missing()
-)]
-async fn page(&self, post: u64) -> Result<String, ResilienceError<PreviewFailed>> {
-    let url = format!("{}/previews/{post}", self.config.upstream_url);
-    let page = self.http.get(url).send().await?.error_for_status()?;
-    Ok(page.text().await?)
-}
-```
+The method's shape, with its keys written, is the first block of
+[Failures and fallbacks](/fundamentals/failures-and-fallbacks/).
 
 ### The policy and its order
 
@@ -212,7 +201,7 @@ async fn page(&self, post: u64) -> Result<String, ResilienceError<PreviewFailed>
 | `ResiliencePolicy.wrap(…)`, in any order | the one order: a call out of time or meeting an open breaker is refused before any wait for a slot, and the rate is read there too; then the bulkhead's slot, held for the whole run; then each attempt under the unit's deadline, the breaker, the rate and the timeout; the fallback answers once the run is over | One order. |
 | `ResilienceContext.run(scope, fn)` | the unit's ambient `Deadline` | The deadline bounds every attempt and every wait; no attempt is ambient. |
 | `ResilienceModuleOptions.defaults`, merged under every preset and decorator | `ResilienceConfig`'s defaults, and `ResilienceModule::for_root((Upstream, config))` for a base per instance | Each policy reads its own variables over its own base. |
-| `ExecuteOptions.signal`, the caller's own cancellation | the caller drops the run's future | An attempt in flight is dropped with it, counted in neither direction before its bound and as a timeout past it; a slot, a token or a probe's turn it held is given back. |
+| `ExecuteOptions.signal`, the caller's own cancellation | the caller drops the run's future | An attempt in flight is dropped with it and counts in neither direction; under a unit's deadline (a request, a job, a tick), one dropped past its bound counts as a timeout. A slot, a token or a probe's turn it held is given back. |
 
 ### Retries
 
@@ -220,10 +209,10 @@ async fn page(&self, post: u64) -> Result<String, ResilienceError<PreviewFailed>
 |---|---|---|
 | `retry.attempts` (the total, 3 by default, `Infinity`) | `RETRIES`, or `retries = N` on an `idempotent` method | Counts the sends after the first: `RETRIES` from 1 to 10, `0` for none, 2 by default; `retries` from 1 to 10. |
 | `retry.backoff` (`delay`, `factor`, `maxDelay`, `jitter`, or a function) | `BACKOFF_FIRST_MS`, `BACKOFF_CEILING_MS` | One curve: doubling, with ±20 % of jitter. A `Retry-After` the dependency asks is waited whole; one past `BACKOFF_CEILING_MS` ends the run. |
-| `retry.retryIf(error, attempt)` | `retry_if = F`, with `F: Fn(&E) -> bool`, on an `idempotent` method | Every `Err` is sent again unless `F` says no. A timeout is sent again and read by no predicate. |
-| `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, with `F: Fn(&T) -> bool`, on an `idempotent` method | On every host, a handler included. Once the retries are spent, the last `Ok` is the answer. |
+| `retry.retryIf(error, attempt)` | `retry_if = F`, with `F: Fn(&E) -> bool`, on an `idempotent` method | Every `Err` is sent again unless `F` says no, a client error included, whatever its status. A timeout is sent again and read by no predicate. |
+| `retry.retryOnResult(result, attempt)` | `retry_ok_if = F`, with `F: Fn(&T) -> bool`, on an `idempotent` method | A key of any `idempotent` method, a handler included. Once the retries are spent, the last `Ok` is the answer. |
 | `idempotent`, else `GET`, `HEAD`, `OPTIONS` and GraphQL queries | `idempotent` on the decorator | Always written by the developer, for every method. `ResilienceMiddleware` reads RFC 9110 §9.2.2's methods, `QUERY` and `Idempotency-Key`. |
-| a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body; inside a transaction, each attempt of an `idempotent` method, or of one naming a `fallback`, runs in a savepoint of it | The unit is not replayed. A failed attempt's writes are rolled back; a savepoint the database cannot settle ends the run on `ResilienceError::Unsettled`. |
+| a retry re-runs the pipes, the inner interceptors and the handler | a retry re-runs the method's body; inside a transaction, each attempt of an `idempotent` method, or of one naming a `fallback`, runs in a savepoint of it | The unit is not replayed. The writes of an attempt sent again, or ending on an error, are rolled back; a savepoint the database cannot settle ends the run on `ResilienceError::Unsettled`. |
 | `@Timeout(d)`, per attempt | `TIMEOUT_MS`, or `timeout = "2s"` on a method, from `"1ms"` to `"10m"` | Every policy has a timeout, 5 seconds by default; the unit's deadline ends an attempt sooner. |
 | `@Signal()`, `AttemptContext.signal`, `ResilienceContext.signal` | `cancel = token` in a decorated method; the closure's argument in `run` and `run_idempotent` | The attempt's future is dropped at its bound, so the token is for work handed to another task. |
 | `AttemptContext.attempt`, `ResilienceContext.attempt` | a count the call keeps itself | A body, a predicate and a fallback read the method's arguments, and no attempt number; the closure `run_idempotent` takes is an `FnMut`, which counts its own calls. |
@@ -240,7 +229,7 @@ async fn page(&self, post: u64) -> Result<String, ResilienceError<PreviewFailed>
 | `recordIf(error)` | `record_if = F`, with `F: Fn(&E) -> bool` | An `Err` it refuses is counted in neither direction, and a probe hands its turn on. |
 | `breaker.state`, `breaker.stats` | `breaker_state()`, `breaker_stats()` (`outcomes`, `failures`, `failure_rate()` from 0 to 1) | The age is applied at the read. |
 | `breaker.trip()`, `breaker.reset()` | `open_breaker(duration)`, `close_breaker()` | An opening says for how long. |
-| `isClientError()` as the default filter | every `Err` a failure, unless `record_if` says otherwise | The developer classifies; `ResilienceMiddleware` reads statuses. |
+| `isClientError()` as the default filter | every `Err` a failure, unless `record_if` says otherwise | A client error is one too: the developer classifies. `ResilienceMiddleware` reads statuses. |
 
 ### The bulkhead and the rate
 
@@ -256,7 +245,7 @@ async fn page(&self, post: u64) -> Result<String, ResilienceError<PreviewFailed>
 
 | `@nestjs/resilience` | NestRS | What NestRS does |
 |---|---|---|
-| `@Fallback(method or fn, { handleIf })` | `fallback = method`, `fallback_if = F`, with `F: Fn(&ResilienceError<E>) -> bool` | The method is one of `Self`, its signature checked: the decorated method's arguments, then the error by value, answering what the method answers. It answers every error, the policy's refusals included, unless `fallback_if` says no, and runs under no policy. The failed attempt's savepoint is rolled back first; `ResilienceError::Unsettled` is never handed to it. A free function or a closure answers through a method of `Self` that calls it. |
+| `@Fallback(method or fn, { handleIf })` | `fallback = method`, `fallback_if = F`, with `F: Fn(&ResilienceError<E>) -> bool` | The method is one of `Self`, its signature checked: the decorated method's arguments, then the error by value, answering what the method answers. It answers every error, a client error and the policy's refusals included, unless `fallback_if` says no, and runs under no policy. The last attempt's savepoint is rolled back first; `ResilienceError::Unsettled` is never handed to it. A free function or a closure answers through a method of `Self` that calls it. |
 | `preset.fallback` for `execute()` | `.or_else(…)` on the `Result` a run answers | The same. |
 | `executeObservable`, committed once a value is emitted | `#[sse]` and `#[subscription]` | The policy runs the call that opens the stream, never the items it yields later. |
 

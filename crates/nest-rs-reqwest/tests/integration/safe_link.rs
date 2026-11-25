@@ -1,5 +1,6 @@
 //! Covers `src/safe_link.rs` against real answers: what `error_message` says
-//! of each kind of error reqwest raises on an exchange with a TLS peer — its
+//! of each kind of error reqwest raises on an exchange with a TLS peer, with
+//! one refusing the handshake and with a proxy refusing the tunnel — its
 //! kind, a status by its code, a cause by what its type tells or its own
 //! `SafeLink` says — and never a word the peer wrote, nor the URL the request
 //! was sent to, wherever an error holds reqwest's: named bare, behind a
@@ -10,6 +11,7 @@ use std::time::Duration;
 
 use nest_rs_core::error_message;
 use nest_rs_testing::{HttpsPeer, PeerAnswer};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use crate::{AUTHORITY, CERTIFICATE};
 
@@ -363,6 +365,181 @@ async fn a_certificate_for_another_name_is_said_without_the_names_it_holds() {
         said(&error),
         "error sending request: invalid peer certificate: certificate not valid for name"
     );
+}
+
+/// What a peer speaking no protocol does with a connection once it has read
+/// its first bytes.
+#[derive(Clone)]
+enum Raw {
+    /// Writes these bytes, as written.
+    Answers(Vec<u8>),
+    /// Ends its side, having written nothing.
+    Closes,
+    /// Resets the connection.
+    Resets,
+}
+
+/// The address of a peer speaking no protocol: it does with each connection
+/// what `raw` says, then reads until its client closes.
+async fn raw_peer(raw: Raw) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback port");
+    let address = listener.local_addr().expect("its address");
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let raw = raw.clone();
+            tokio::spawn(async move {
+                let mut sent = [0; 4096];
+                let _ = socket.read(&mut sent).await;
+                match raw {
+                    Raw::Answers(answer) => {
+                        let _ = socket.write_all(&answer).await;
+                    }
+                    Raw::Closes => {
+                        let _ = socket.shutdown().await;
+                    }
+                    // A zero linger makes of the close a reset.
+                    Raw::Resets => return socket.set_zero_linger().expect("a zero linger"),
+                }
+                // Closed over bytes unread, the socket resets under its answer.
+                while socket.read(&mut sent).await.is_ok_and(|read| read > 0) {}
+            });
+        }
+    });
+    address
+}
+
+/// A peer refusing the handshake says why in one alert, which rustls names:
+/// what tells an expired client certificate from a missing one, or from a
+/// version the peer does not speak.
+#[tokio::test]
+async fn a_handshake_the_peer_refuses_is_said_by_the_alert_it_sent() {
+    for (code, alert) in [
+        (40, "HandshakeFailure"),
+        (45, "CertificateExpired"),
+        (48, "UnknownCA"),
+        (70, "ProtocolVersion"),
+        (116, "CertificateRequired"),
+    ] {
+        // One TLS record: an alert (21), TLS 1.2 (3, 3), two bytes — fatal
+        // (2), then the alert's code.
+        let peer = raw_peer(Raw::Answers(vec![21, 3, 3, 0, 2, 2, code])).await;
+        let error = trusting()
+            .build()
+            .expect("a client")
+            .get(format!("https://{peer}{PARCEL}"))
+            .send()
+            .await
+            .expect_err("the handshake is refused");
+        assert!(error.is_connect(), "{error:?}");
+
+        assert_eq!(
+            said(&error),
+            format!("error sending request: received fatal alert: {alert}")
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_peer_answering_in_plaintext_is_said_as_speaking_no_tls() {
+    let plaintext = format!("HTTP/1.1 400 {SENT}\r\n\r\n").into_bytes();
+    let peer = raw_peer(Raw::Answers(plaintext)).await;
+    let error = trusting()
+        .build()
+        .expect("a client")
+        .get(format!("https://{peer}{PARCEL}"))
+        .send()
+        .await
+        .expect_err("no TLS on that port");
+
+    assert_eq!(
+        said(&error),
+        "error sending request: received corrupt message of type InvalidContentType"
+    );
+}
+
+/// What a request for a host beyond `proxy` fails with, no tunnel opened to
+/// it.
+async fn untunnelled(proxy: std::net::SocketAddr) -> reqwest::Error {
+    let through =
+        reqwest::Proxy::all(format!("http://ledger:{SENT}@{proxy}")).expect("a proxy's URL");
+    let error = trusting()
+        .proxy(through)
+        .build()
+        .expect("a client")
+        .get(format!("https://carrier.example{PARCEL}"))
+        .send()
+        .await
+        .expect_err("no tunnel");
+    assert!(error.is_connect(), "{error:?}");
+    error
+}
+
+/// hyper-util's error for a tunnel a proxy did not open is a type it keeps
+/// private, whose sentences are constants: the proxy's own answer is not said.
+#[tokio::test]
+async fn a_proxy_refusing_the_tunnel_is_said_by_why_it_opened_none() {
+    let refusing = |status: u16| {
+        Raw::Answers(format!("HTTP/1.1 {status} {SENT}\r\ncontent-length: 0\r\n\r\n").into_bytes())
+    };
+    // Past the 8192 bytes hyper-util reads of a head, and no end to it.
+    let endless = format!("HTTP/1.1 200 {SENT}\r\nx-ledger: {}", SENT.repeat(2048));
+    for (proxy, why) in [
+        (refusing(407), "proxy authorization required"),
+        (refusing(502), "unsuccessful"),
+        (
+            Raw::Answers(endless.into_bytes()),
+            "proxy response headers too long",
+        ),
+        (Raw::Closes, "unexpected end of file"),
+    ] {
+        let error = untunnelled(raw_peer(proxy).await).await;
+
+        assert_eq!(
+            said(&error),
+            format!("error sending request: tunnel error: {why}")
+        );
+    }
+}
+
+/// A tunnel the connection failed under is said by where it failed, then by
+/// the sentence the OS gives its reason, as beneath any other cause.
+#[tokio::test]
+async fn a_tunnel_its_connection_failed_under_is_said_with_the_reason_the_os_gave() {
+    use std::io::ErrorKind;
+
+    let closed = {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        closed.local_addr().expect("its address")
+    };
+    for (proxy, why, kind) in [
+        (
+            closed,
+            "failed to create underlying connection",
+            ErrorKind::ConnectionRefused,
+        ),
+        (
+            raw_peer(Raw::Resets).await,
+            "io error establishing tunnel",
+            ErrorKind::ConnectionReset,
+        ),
+    ] {
+        let error = untunnelled(proxy).await;
+        let mut reason: &(dyn Error + 'static) = &error;
+        while let Some(cause) = reason.source() {
+            reason = cause;
+        }
+        let reason = reason
+            .downcast_ref::<std::io::Error>()
+            .expect("the OS's error, last of the chain");
+        assert_eq!(reason.kind(), kind, "{error:?}");
+
+        assert_eq!(
+            said(&error),
+            format!("error sending request: tunnel error: {why}: {reason}")
+        );
+    }
 }
 
 /// What thiserror's `#[source]` makes of a field: a sentence of the error's

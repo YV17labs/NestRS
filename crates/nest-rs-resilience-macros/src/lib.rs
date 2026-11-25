@@ -189,7 +189,12 @@ mod resilient;
 /// names, so what the body does not name — an argument it reads nowhere, the
 /// part of a pattern it leaves unbound — stays in the method's frame and
 /// drops once the attempt has, and an argument the body names under a leading
-/// `_` drops with the attempt, after the others. It takes `&self` or
+/// `_` drops with the attempt, after the others. Run once under `record_if`
+/// and no `fallback`, an argument the body consumes is the attempt's own: one
+/// it has not consumed when the attempt ends — failed sooner, cut, or refused
+/// unsent — drops with it, ahead of the arguments the body only reads and in
+/// the order the body first names them, which a body opening on
+/// `let _ = (&out, &held);` sets last declared first. It takes `&self` or
 /// `self: &Arc<Self>`, on any host holding its policy in a named field — a
 /// provider, a struct built by hand, a native `async fn` in a trait impl, a
 /// handler of every impl half, a scheduled tick included. A trait's own

@@ -47,7 +47,15 @@ pin_project_lite::pin_project! {
     /// failure counts as itself, and only a body still waiting has timed out.
     /// A read left waiting is past it too, whatever the budget has left, when
     /// what drops the body is the timeout of a policy around its reader
-    /// ([`Cut`]).
+    /// ([`Cut`]), or when it waited across the deadline of the unit it is read
+    /// in — begun before that instant, dropped at or past it, as the edge
+    /// cutting that unit drops it: whatever its reader took of its own before
+    /// the read moved the budget's end past that cut. That deadline is read
+    /// where the body is dropped and arms no timer: a body handed on past the
+    /// unit its request was sent in — a handler answering the response's
+    /// stream, which its edge reads once the unit is over — is dropped under
+    /// none, so a client leaving a read of it, the budget unspent, charges
+    /// the dependency nothing.
     pub(crate) struct ResilienceBody<I>
     where
         I: Instance,
@@ -77,7 +85,15 @@ pin_project_lite::pin_project! {
             let (Some(held), Some(since)) = (this.held.as_mut(), *this.waiting) else {
                 return;
             };
-            if since.elapsed() < *this.left && !Cut::encloses() {
+            let now = Instant::now();
+            // The budget counts from the read, so its timer is due past the deadline an
+            // edge cuts this reader at: read here, a body handed on past its unit under none.
+            let across = || {
+                nest_rs_core::__private::deadline()
+                    .is_some_and(|deadline| since < deadline && deadline <= now)
+            };
+            let spent = now.saturating_duration_since(since) >= *this.left;
+            if !(spent || across() || Cut::encloses()) {
                 return;
             }
             // An edge cutting its unit as the budget is spent may drop the body
@@ -1061,6 +1077,219 @@ mod tests {
             ((1, 0), (1, 0)),
             "dropped inside both budgets"
         );
+    }
+
+    /// How far the deadline of a unit of these tests is: sooner than [`TIMEOUT`].
+    const DEADLINE: Duration = Duration::from_secs(1);
+
+    /// What `unit` answered under a deadline [`DEADLINE`] away, or `None`
+    /// once its edge cut it there, the edge's own timer polled first.
+    async fn cut_at_its_deadline<F: Future>(unit: F) -> Option<F::Output> {
+        let deadline = Instant::now() + DEADLINE;
+        let unit = nest_rs_core::__private::with_deadline(Some(deadline), unit);
+        tokio::select! {
+            biased;
+            () = tokio::time::sleep_until(deadline) => None,
+            answered = unit => Some(answered),
+        }
+    }
+
+    /// The body of a request sent as the unit polling this begins, its head
+    /// answered at once and judged a success, reading `fed`.
+    async fn sent_in_its_unit(
+        policy: &Arc<ResiliencePolicy>,
+        fed: mpsc::UnboundedReceiver<Part>,
+    ) -> Covered {
+        let fed = reqwest::Body::wrap(Fed(fed));
+        covering(policy, Duration::ZERO, Verdict::Succeeded, fed).await
+    }
+
+    /// A read waiting as the edge cuts its unit at the deadline has timed out,
+    /// whatever its reader took of its own between the head and the read: the
+    /// budget counts from the read, so that time moves the body's own timer
+    /// past the deadline, where the edge always cuts first.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_waiting_across_its_units_deadline_has_timed_out_whatever_its_reader_took() {
+        for own in [0, 2, 5, 400].map(Duration::from_millis) {
+            let lines = LogCapture::install();
+            let policy = policy(1);
+            let (feed, fed) = mpsc::unbounded_channel();
+            let cut = cut_at_its_deadline(async {
+                let mut body = sent_in_its_unit(&policy, fed).await;
+                tokio::time::sleep(own).await;
+                read(&mut body).await
+            })
+            .await;
+
+            assert!(cut.is_none(), "the reader's own {own:?}: {cut:?}");
+            assert!(is_open(&policy), "the reader's own {own:?}");
+            assert_eq!(opened_on(&lines), [TIMED_OUT], "the reader's own {own:?}");
+            policy.close_breaker().expect("a breaker");
+            assert!(!slot_taken(&policy).await, "the reader's own {own:?}");
+            drop(feed);
+        }
+    }
+
+    /// A body its unit's edge drops at the deadline is judged by what the
+    /// dependency owes there: nothing while no read waits, its reader busy
+    /// with work of its own; and with a read left waiting across the
+    /// deadline, a frame or the end that came since stands as the head was
+    /// judged, a failure counts as itself, and a body still waiting has timed
+    /// out.
+    #[tokio::test(start_paused = true)]
+    async fn a_body_dropped_at_its_units_deadline_is_judged_by_what_the_dependency_owes_there() {
+        let reset = RESET.to_string();
+        for (reads, came, failed_on) in [
+            (false, None, None),
+            (true, Some(Some(Part::Frame(b"whole"))), None),
+            (true, Some(None), None),
+            (true, Some(Some(Part::Fails)), Some(reset.as_str())),
+            (true, None, Some(TIMED_OUT)),
+        ] {
+            let lines = LogCapture::install();
+            let policy = policy(1);
+            let (feed, fed) = mpsc::unbounded_channel();
+            let mut feed = Some(feed);
+            let cut = cut_at_its_deadline(async {
+                let mut body = sent_in_its_unit(&policy, fed).await;
+                tokio::time::sleep(Duration::from_millis(2)).await;
+                if reads {
+                    assert!(waits(&mut body).await, "a read its reader abandons");
+                }
+                match (came, feed.as_ref()) {
+                    (Some(Some(part)), Some(feed)) => feed.send(part).expect("the body is held"),
+                    (Some(None), _) => drop(feed.take()),
+                    _ => {}
+                }
+                std::future::pending::<()>().await;
+                drop(body);
+            })
+            .await;
+
+            let said = format!("a read waiting: {reads}, {came:?} came");
+            assert!(cut.is_none(), "{said}");
+            let opened = opened_on(&lines);
+            assert_eq!(opened.len(), usize::from(failed_on.is_some()), "{said}");
+            assert!(
+                opened
+                    .iter()
+                    .zip(failed_on)
+                    .all(|(on, failed_on)| on.ends_with(failed_on)),
+                "{said}: {opened:?}"
+            );
+            assert_eq!(is_open(&policy), failed_on.is_some(), "{said}");
+            policy.close_breaker().expect("a breaker");
+            assert!(!slot_taken(&policy).await, "{said}");
+        }
+    }
+
+    /// A read its reader drops before its unit's deadline, the budget
+    /// unspent, charges the dependency nothing: only one left waiting across
+    /// that instant is past its bound.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_dropped_before_its_units_deadline_stands_as_its_head_was_judged() {
+        let policy = policy(1);
+        let (_feed, fed) = mpsc::unbounded_channel();
+        let dropped = cut_at_its_deadline(async {
+            let mut body = sent_in_its_unit(&policy, fed).await;
+            assert!(waits(&mut body).await, "a read its reader abandons");
+            tokio::time::sleep(DEADLINE / 2).await;
+            drop(body);
+        })
+        .await;
+
+        assert!(dropped.is_some(), "the unit ended before its deadline");
+        assert_eq!(counted(&policy), (1, 0), "its head's success");
+    }
+
+    /// A body handed on past its unit — a handler answering the response's
+    /// stream, which its edge reads once the unit is over — is bounded by its
+    /// budget alone: a read waiting as that unit's deadline passes, and one
+    /// begun after it, are handed what comes, and a client leaving a read
+    /// begun after it charges the dependency nothing.
+    #[tokio::test(start_paused = true)]
+    async fn a_body_handed_on_past_its_unit_is_read_past_its_deadline_and_stands_as_its_client_leaves()
+     {
+        const PART: Duration = Duration::from_millis(300);
+        let lines = LogCapture::install();
+        let policy = policy(1);
+        let (feed, fed) = mpsc::unbounded_channel();
+        let sent = Instant::now();
+        let mut body = cut_at_its_deadline(sent_in_its_unit(&policy, fed))
+            .await
+            .expect("the unit answers its stream before its deadline");
+
+        tokio::time::advance(DEADLINE - PART / 3).await;
+        waited(&mut body, &feed, PART).await;
+        assert!(
+            sent.elapsed() > DEADLINE,
+            "its wait began before the deadline"
+        );
+        waited(&mut body, &feed, PART).await;
+        assert!(waits(&mut body).await, "a read begun past the deadline");
+        tokio::time::advance(PART).await;
+        drop(body);
+
+        assert_eq!(counted(&policy), (1, 0), "its head's success");
+        assert!(opened_on(&lines).is_empty());
+        assert!(!slot_taken(&policy).await);
+    }
+
+    /// A read begun at or past its unit's deadline, its reader busy until then
+    /// and the edge's cut late, gave the dependency no time before that
+    /// instant: dropped with its unit, the budget unspent, it charges nothing.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_begun_at_or_past_its_units_deadline_charges_nothing_as_its_unit_is_dropped() {
+        for past in [0, 100].map(Duration::from_millis) {
+            let policy = policy(1);
+            let (_feed, fed) = mpsc::unbounded_channel();
+            let deadline = Instant::now() + DEADLINE;
+            let unit = nest_rs_core::__private::with_deadline(Some(deadline), async {
+                let mut body = sent_in_its_unit(&policy, fed).await;
+                tokio::time::sleep(DEADLINE + past).await;
+                assert!(waits(&mut body).await, "a read its reader abandons");
+                std::future::pending::<()>().await;
+                drop(body);
+            });
+            let cut = tokio::time::timeout(DEADLINE + past * 2, unit).await;
+
+            assert!(cut.is_err(), "{past:?} past: {cut:?}");
+            assert_eq!(
+                counted(&policy),
+                (1, 0),
+                "{past:?} past: its head's success"
+            );
+            assert!(!slot_taken(&policy).await, "{past:?} past");
+        }
+    }
+
+    /// A client leaving while the edge reads a body handed on past its unit
+    /// charges the dependency nothing, the budget unspent — whenever it
+    /// leaves: the one read that straddles the deadline of the unit the
+    /// request was sent in is dropped under no deadline, as the reads before
+    /// and after it are.
+    #[tokio::test(start_paused = true)]
+    async fn a_client_leaving_a_read_that_straddles_the_deadline_of_a_unit_over_charges_nothing() {
+        const EITHER_SIDE: Duration = Duration::from_millis(100);
+        let lines = LogCapture::install();
+        let policy = policy(1);
+        let (_feed, fed) = mpsc::unbounded_channel();
+        let mut body = cut_at_its_deadline(sent_in_its_unit(&policy, fed))
+            .await
+            .expect("the unit answers its stream before its deadline");
+
+        tokio::time::advance(DEADLINE - EITHER_SIDE).await;
+        assert!(waits(&mut body).await, "a read begun before the deadline");
+        tokio::time::advance(EITHER_SIDE * 2).await;
+        assert!(
+            nest_rs_core::__private::deadline().is_none(),
+            "the edge reads the stream outside the unit"
+        );
+        drop(body);
+
+        assert_eq!(counted(&policy), (1, 0), "its head's success");
+        assert!(opened_on(&lines).is_empty());
+        assert!(!slot_taken(&policy).await);
     }
 
     /// A `tracing` subscriber panicking out of each line a breaker's

@@ -252,6 +252,14 @@ impl TestGateway {
             .map_err(DecodeDisplayOnly)
     }
 
+    #[subscribe_message("decode_shared")]
+    #[public]
+    async fn decode_shared_handler(&self) -> Result<String, DecodeShared> {
+        serde_json::from_str::<u64>(SECRET_BODY)
+            .map(|amount| amount.to_string())
+            .map_err(|unread| DecodeShared(std::sync::Arc::new(unread)))
+    }
+
     /// The edge's own deliberate error.
     #[subscribe_message("deliberate")]
     #[public]
@@ -318,6 +326,12 @@ impl std::fmt::Display for DecodeDisplayOnly {
         write!(f, "could not read the amount: {}", self.0)
     }
 }
+
+/// A decode failure as a feature sharing it keeps it: serde_json's error is no
+/// `Clone`, so behind an `Arc`.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("the amount could not be read")]
+struct DecodeShared(#[source] std::sync::Arc<serde_json::Error>);
 
 /// An error holding an `Rc` — neither `Send` nor `Sync` — whose sentence names
 /// no cause, so only a walk of its chain reaches the one beneath it.
@@ -2078,6 +2092,43 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
         .map(|event| format!("{} {:?}", event.message, event.fields))
         .collect();
     assert!(quoting.is_empty(), "lines quoting the value: {quoting:#?}");
+}
+
+/// A decode failure a handler's error shares behind a pointer is no payload its
+/// client sent: the message answers opaquely, never `INVALID_ARGUMENT`, and its
+/// chain is filed without the value.
+#[tokio::test]
+async fn a_decode_failure_shared_behind_a_pointer_is_answered_opaquely_and_filed() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "decode_shared",
+            serde_json::Value::Null,
+        )
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(frame.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+    assert_eq!(
+        frame.code.as_deref(),
+        Some(nest_rs_core::code::INTERNAL.as_str()),
+        "{frame:?}",
+    );
+    assert!(frame.errors.is_none(), "{frame:?}");
+
+    let line = logs.expect_one(nest_rs_ws::TARGET, "websocket message failed");
+    assert_eq!(line.level, "error");
+    assert_eq!(line.field("event").as_deref(), Some("decode_shared"));
+    assert_eq!(
+        line.field("error").as_deref(),
+        Some(
+            "the amount could not be read: invalid type: a string, expected u64 at line 1 column \
+             24"
+        ),
+    );
+    assert!(!format!("{frame:?} {line:?}").contains("sk_live"));
 }
 
 /// The edge's own deliberate error answers as built.

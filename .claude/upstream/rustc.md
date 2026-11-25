@@ -301,6 +301,11 @@
   last declared first, each one its body names (`captured` in
   `crates/nest-rs-resilience-macros/src/resilient.rs`), which rests on the order
   rustc has today. What it cannot name is a limit the decorator's rustdoc says.
+  Under `record_if` the closure is not `move`, and the statement would be no
+  naming but a borrow: it widens each capture from the place the body uses to
+  the whole argument, held across the attempt's waits, so a method whose
+  non-`Sync` argument is read in part is no longer `Send`. None is written
+  there; a body opening on one of its own sets the order.
 - **Canary** — `nest-rs-resilience`'s `dropped` module, which fails on a
   toolchain dropping captures in another order.
 - **Upstream** — not filed. A search of rust-lang/reference's issues on captures

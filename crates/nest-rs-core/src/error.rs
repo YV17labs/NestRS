@@ -1078,9 +1078,14 @@ impl DecodeError {
         self
     }
 
-    /// The report of the first decode failure in `error`'s chain, `error`
-    /// itself first, down to an opaque failure's cause: what an edge answers
-    /// for a failure it reads as one.
+    /// The report of the first link of `error`'s chain that is a decode
+    /// failure, `error` itself first, down to an opaque failure's cause: what
+    /// an edge answers for a failure it reads as one.
+    ///
+    /// A link that is a pointer to one — an error naming an
+    /// `Arc<serde_json::Error>` as its source — is not read: an edge answers
+    /// such an error opaquely and files its chain, which
+    /// [`error_message`](fn@crate::error_message) says without the value.
     ///
     /// ```
     /// use nest_rs_core::DecodeError;
@@ -1094,12 +1099,18 @@ impl DecodeError {
     /// assert_eq!(report.to_string(), "invalid type: a string, expected u64 at line 1 column 16");
     /// ```
     pub fn in_chain(error: &(dyn std::error::Error + 'static)) -> Option<Self> {
-        crate::error_message::__private::answerable_links(error).find_map(Self::of)
+        crate::error_message::__private::answerable_links(error).find_map(|link| {
+            if let Some(error) = link.downcast_ref::<serde_json::Error>() {
+                return Some(Self::new(error));
+            }
+            link.downcast_ref::<serde::de::value::Error>()
+                .map(Self::from)
+        })
     }
 
-    /// `link` as the report it is, when it is a decode failure — serde_json's
-    /// error, or serde's own value error — or a pointer handed out as the link
-    /// holds one.
+    /// `link` as the report a line says it by, when it is a decode failure —
+    /// serde_json's error, or serde's own value error — or a pointer handed
+    /// out as the link holds one.
     pub(crate) fn of(link: &(dyn std::error::Error + 'static)) -> Option<Self> {
         use crate::error_message::__private::link_as;
 
@@ -1686,6 +1697,25 @@ mod decode_error_tests {
             DecodeError::from(custom).to_string(),
             "a value its type does not accept"
         );
+    }
+
+    /// A message a `Deserialize` impl wrote is one no shape of serde's
+    /// rebuilds: behind a pointer too, it is read off the type.
+    #[test]
+    fn a_value_error_named_as_a_source_behind_a_pointer_is_said_as_one_named_bare() {
+        use std::sync::Arc;
+
+        use serde::de::value::Error as ValueError;
+
+        #[derive(Debug, thiserror::Error)]
+        #[error("the form was refused")]
+        struct Naming<S: std::error::Error + 'static>(#[source] S);
+
+        let custom = || <ValueError as serde::de::Error>::custom("token ya29.secret refused");
+        let bare = crate::error_message(&Naming(custom()));
+        assert_eq!(bare, format!("the form was refused: {REFUSED_BY_ITS_TYPE}"));
+        assert_eq!(crate::error_message(&Naming(Arc::new(custom()))), bare);
+        assert_eq!(crate::error_message(&Naming(Box::new(custom()))), bare);
     }
 
     #[test]

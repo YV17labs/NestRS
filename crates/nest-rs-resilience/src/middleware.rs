@@ -84,10 +84,18 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// - dropped before its end — a caller reading a status alone — the answer
 ///   counts as its head did, and the slot is freed there. One left with a read
 ///   that has waited past that rest — a read the caller abandoned, or one an
-///   edge cut with its unit — or with a read still waiting as the timeout of
-///   another policy, the one its reader runs under, drops it, is read once
-///   more as it is dropped: a part or the end that came since counts as the
-///   head did, a failure as itself, and a body still waiting as a timeout;
+///   edge cut with its unit — or with a read that waited across the deadline
+///   of the unit the body is read in, begun before it and dropped at or past
+///   it, as that unit's edge cutting its reader drops it whatever the rest has
+///   left, or with a read still waiting as the timeout of another policy, the
+///   one its reader runs under, drops it, is read once more as it is dropped:
+///   a part or the end that came since counts as the head did, a failure as
+///   itself, and a body still waiting as a timeout. That deadline is read
+///   where the body is dropped, and cuts no read itself: a body handed on past
+///   the unit its request was sent in — a handler answering the response's
+///   stream, which its edge reads once that unit is over — is read within
+///   that rest alone, and a client leaving a read of it, that rest unspent,
+///   counts as the head did;
 /// - a panic while the body is read is a failure in the breaker, as a panic in
 ///   the request's own send is, and unwinds on.
 ///
@@ -590,5 +598,45 @@ mod tests {
             );
             assert_eq!(policy.concurrency_running(), Some(0), "head: {head}");
         }
+    }
+
+    /// A response whose reader, after work of its own, waits for its body as
+    /// the edge cuts its unit at the deadline has timed out in the breaker,
+    /// well inside the policy's timeout: the edge drops the body inside the
+    /// deadline it cut at, where the body reads it.
+    #[tokio::test(start_paused = true)]
+    async fn a_response_whose_read_waits_as_its_units_deadline_cuts_its_reader_has_timed_out() {
+        let config = crate::ResilienceConfig {
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            concurrency: Some(1),
+            ..crate::ResilienceConfig::default()
+        };
+        let policy = Arc::new(ResiliencePolicy::<Unnamed>::new(&config).expect("a valid policy"));
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(ResilienceMiddleware::new(Arc::clone(&policy)))
+            .with(Stalling { head: true })
+            .build();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        assert!(Duration::from_secs(1) < config.timeout);
+        let unit = nest_rs_core::__private::with_deadline(Some(deadline), async {
+            let answered = client.get("https://upstream.example/").send().await?;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            Ok::<_, Error>(answered.bytes().await?)
+        });
+        let cut = tokio::time::timeout_at(deadline, unit).await;
+
+        assert!(cut.is_err(), "the edge cut the unit: {cut:?}");
+        assert!(
+            matches!(
+                policy.breaker_state(),
+                Some(crate::BreakerState::Open { .. })
+            ),
+            "{:?}",
+            policy.breaker_state()
+        );
+        assert_eq!(policy.concurrency_running(), Some(0));
     }
 }

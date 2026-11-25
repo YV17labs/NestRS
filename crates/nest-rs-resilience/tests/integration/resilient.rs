@@ -7798,6 +7798,60 @@ mod dropped {
             }
         }
 
+        // Both arguments consumed, past where the body may end.
+        twins! {
+            #[resilient(carrier, record_if = |_error| true)]
+            async fn plain_handing_on, judged_handing_on(
+                &self,
+                held: Noted,
+                out: Noted,
+                ends: Ends,
+            ) -> () {
+                ends.answer().await?;
+                Self::handed(held, out)
+            }
+        }
+
+        // The first argument consumed on one path, the others only read.
+        twins! {
+            #[resilient(carrier, record_if = |_error| true)]
+            async fn plain_handing_one_on, judged_handing_one_on(
+                &self,
+                held: Noted,
+                lent: Noted,
+                out: Noted,
+                ends: Ends,
+            ) -> () {
+                if matches!(ends, Ends::Answered) {
+                    drop(held);
+                }
+                lent.name();
+                out.name();
+                ends.answer().await
+            }
+        }
+
+        // Both consumed, named last declared first in a statement of the body's own.
+        twins! {
+            #[resilient(carrier, record_if = |_error| true)]
+            async fn plain_naming_first, judged_naming_first(
+                &self,
+                held: Noted,
+                out: Noted,
+                ends: Ends,
+            ) -> () {
+                let _ = (&out, &held);
+                ends.answer().await?;
+                Self::handed(held, out)
+            }
+        }
+
+        fn handed(held: Noted, out: Noted) -> Result<(), CarrierDown> {
+            held.name();
+            out.name();
+            Ok(())
+        }
+
         twins! {
             #[resilient(carrier, fallback = recovered)]
             async fn plain_recovering, recovering(
@@ -7986,7 +8040,8 @@ mod dropped {
 
     /// A lock argument is released after the writer declared after it flushed,
     /// under a policy as with none: run once, the attempt owning the
-    /// arguments; lending them to the next attempt or to a predicate; and
+    /// arguments; lending them to the next attempt or to a predicate, its body
+    /// reading both, or consuming both it first names in that order; and
     /// handing them to a fallback, called or not.
     #[tokio::test(start_paused = true)]
     async fn a_method_drops_its_arguments_last_declared_first_however_its_run_ends() {
@@ -7999,6 +8054,7 @@ mod dropped {
                 plain, once_reading_its_token;
                 plain_again, again;
                 plain_judged, judged;
+                plain_naming_first, judged_naming_first;
                 plain_recovering, recovering;
             }
         }
@@ -8021,6 +8077,7 @@ mod dropped {
             dropped_by_method!(ledger.once_reading_its_token, Ends::Answered),
             dropped_by_method!(ledger.again, Ends::Answered),
             dropped_by_method!(ledger.judged, Ends::Answered),
+            dropped_by_method!(ledger.judged_naming_first, Ends::Answered),
             dropped_by_method!(ledger.recovering, Ends::Answered),
         ] {
             assert_eq!(dropped, LAST_DECLARED_FIRST);
@@ -8117,6 +8174,79 @@ mod dropped {
         }
         assert_eq!(twins[0], ["sent", "out", "held"]);
         assert_eq!(twins[1], twins[0]);
+    }
+
+    /// What `$method` of `$ledger` drops of `(held, lent, out)`, ending as `$ends`.
+    macro_rules! dropped_of_three_by_method {
+        ($ledger:ident . $method:ident, $ends:expr) => {{
+            let drops = Drops::default();
+            let (ledger, held, lent, out) = (
+                Arc::clone(&$ledger),
+                drops.noted("held"),
+                drops.noted("lent"),
+                drops.noted("out"),
+            );
+            dropped_by(&drops, async move {
+                ledger.$method(held, lent, out, $ends).await
+            })
+            .await
+        }};
+    }
+
+    /// The one difference `record_if` keeps: an argument the body consumes is
+    /// the attempt's own. One the body has not consumed when the attempt ends
+    /// drops with it — in the order the body first names them, and ahead of
+    /// those it only reads, which stay in the method's frame.
+    #[tokio::test(start_paused = true)]
+    async fn under_record_if_an_argument_the_body_would_consume_drops_with_the_attempt() {
+        let (_app, ledger) = ledger(ResilienceConfig {
+            retries: None,
+            ..ResilienceConfig::default()
+        })
+        .await;
+        for ends in ENDS {
+            let consumed = matches!(ends, Ends::Answered);
+            assert_eq!(
+                dropped_by_method!(ledger.plain_handing_on, ends),
+                LAST_DECLARED_FIRST,
+                "{ends:?}"
+            );
+            assert_eq!(
+                dropped_by_method!(ledger.judged_handing_on, ends),
+                if consumed {
+                    LAST_DECLARED_FIRST
+                } else {
+                    ["held", "out"]
+                },
+                "{ends:?}"
+            );
+            assert_eq!(
+                dropped_of_three_by_method!(ledger.plain_handing_one_on, ends),
+                if consumed {
+                    ["held", "out", "lent"]
+                } else {
+                    ["out", "lent", "held"]
+                },
+                "{ends:?}"
+            );
+            assert_eq!(
+                dropped_of_three_by_method!(ledger.judged_handing_one_on, ends),
+                ["held", "out", "lent"],
+                "{ends:?}"
+            );
+        }
+        ledger
+            .carrier
+            .open_breaker(Duration::from_secs(30))
+            .expect("an open time the breaker takes");
+        assert_eq!(
+            dropped_by_method!(ledger.judged_handing_on, Ends::Answered),
+            ["held", "out"]
+        );
+        assert_eq!(
+            dropped_of_three_by_method!(ledger.judged_handing_one_on, Ends::Answered),
+            ["held", "out", "lent"]
+        );
     }
 
     /// The one difference a method run once keeps: what its body does not

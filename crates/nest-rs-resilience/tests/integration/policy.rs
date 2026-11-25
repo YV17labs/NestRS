@@ -3,14 +3,16 @@
 //! by the policy and its breaker counts the attempt; through the health edge,
 //! by the cut of the indicator sending it, a probe's turn included; under a
 //! method of another dependency's policy, by that one's timeout, which a
-//! fallback runs outside; at its unit's deadline, told before its savepoint
-//! settles; and, under no edge, what a
+//! fallback runs outside; an inner policy's refusal met by an idempotent
+//! method, sent again as the `Err` it is; at its unit's deadline, told before
+//! its savepoint settles; and, under no edge, what a
 //! run's future holds — its size against its call's, what it allocates, alone,
 //! through every mechanism its policy takes and inside a unit of work whose
 //! transaction each attempt opens a savepoint of, and a large one run on a
 //! worker of tokio's default stack.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use http::StatusCode;
@@ -328,6 +330,178 @@ async fn a_call_its_fallback_makes_is_not_cut_by_the_timeout_of_the_run_it_answe
         (2, 1),
         "the call the broker's timeout cut, then the fallback's, which answered"
     );
+}
+
+/// The longest wait a dependency asks that [`Relayed`]'s outer policy honours.
+const CEILING: Duration = Duration::from_secs(5);
+
+/// A host the test builds itself: methods under its `outer` policy, declared
+/// idempotent, calling one under its `inner` policy, which answers at once
+/// whenever that policy lets it through.
+struct Relayed {
+    inner: Arc<ResiliencePolicy>,
+    outer: Arc<ResiliencePolicy>,
+    /// How many attempts the outer policy made.
+    sent: AtomicU32,
+}
+
+impl Relayed {
+    #[resilient(inner)]
+    async fn quote(&self) -> Result<u32, ResilienceError<Silent>> {
+        Ok(7)
+    }
+
+    #[resilient(outer, idempotent)]
+    async fn relay(&self) -> Result<u32, ResilienceError<Forwarded>> {
+        self.sent.fetch_add(1, Ordering::Relaxed);
+        Ok(self.quote().await?)
+    }
+
+    /// [`relay`](Self::relay), reading the inner policy's refusal as no
+    /// failure and nothing to send again.
+    #[resilient(
+        outer,
+        idempotent,
+        retry_if = |forwarded| matches!(forwarded.0, ResilienceError::Failed(_)),
+        record_if = |forwarded| matches!(forwarded.0, ResilienceError::Failed(_))
+    )]
+    async fn relay_what_answered(&self) -> Result<u32, ResilienceError<Forwarded>> {
+        self.sent.fetch_add(1, Ordering::Relaxed);
+        Ok(self.quote().await?)
+    }
+
+    fn sent(&self) -> u32 {
+        self.sent.load(Ordering::Relaxed)
+    }
+}
+
+/// A [`Relayed`] whose inner policy has one slot and a breaker, and whose
+/// outer one sends again once, after about 100 ms of its own or the wait a
+/// dependency asks up to [`CEILING`], and counts each attempt in a breaker
+/// the two of a run never open.
+async fn relayed() -> ([HeadlessApp; 2], Relayed) {
+    let (inner_app, inner) = crate::policy(ResilienceConfig {
+        concurrency: Some(1),
+        ..counting()
+    })
+    .await;
+    let (outer_app, outer) = crate::policy(ResilienceConfig {
+        retries: Some(1),
+        backoff_first: Duration::from_millis(100),
+        backoff_ceiling: CEILING,
+        breaker_window: Some(4),
+        breaker_failures: 4,
+        ..ResilienceConfig::default()
+    })
+    .await;
+    let relayed = Relayed {
+        inner,
+        outer,
+        sent: AtomicU32::new(0),
+    };
+    ([inner_app, outer_app], relayed)
+}
+
+/// An inner policy's open breaker is an `Err` like any other to the method
+/// calling it: a failure in the outer breaker, sent again after the whole
+/// `Retry-After` it carries when that is within the backoff's ceiling — the
+/// retry then the inner breaker's probe — and not at all past it.
+#[tokio::test(start_paused = true)]
+async fn an_inner_policys_open_breaker_is_sent_again_after_its_whole_wait_or_not_at_all_past_the_ceiling()
+ {
+    let within = Duration::from_secs(2);
+    let (_apps, host) = relayed().await;
+    host.inner.open_breaker(within).expect("a breaker");
+    let started = tokio::time::Instant::now();
+    let answered = host.relay().await;
+    assert!(matches!(answered, Ok(7)), "{answered:?}");
+    assert_eq!(host.sent(), 2);
+    let waited = started.elapsed();
+    assert!(
+        within <= waited && waited <= within + within / 5,
+        "the {within:?} the refusal said, stretched by a fifth at most: {waited:?}"
+    );
+    assert_eq!(counted(&host.outer), (2, 1), "the refusal, then the answer");
+
+    let (_apps, host) = relayed().await;
+    host.inner
+        .open_breaker(CEILING + Duration::from_secs(1))
+        .expect("a breaker");
+    let started = tokio::time::Instant::now();
+    let refused = host.relay().await;
+    assert!(
+        matches!(
+            refused,
+            Err(ResilienceError::Failed(Forwarded(
+                ResilienceError::Open { .. }
+            )))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(host.sent(), 1, "a retry left, given up");
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(counted(&host.outer), (1, 1));
+}
+
+/// An inner policy's full bulkhead says no `Retry-After`: the method calling
+/// it is sent again on the outer policy's own backoff, each refusal a failure
+/// in the outer breaker.
+#[tokio::test(start_paused = true)]
+async fn an_inner_policys_full_bulkhead_is_sent_again_on_the_plain_backoff() {
+    let (_apps, host) = relayed().await;
+    let inner = Arc::clone(&host.inner);
+    let holding = tokio::spawn(async move {
+        inner
+            .run(|_| std::future::pending::<Result<(), Silent>>())
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert_eq!(host.inner.concurrency_running(), Some(1));
+
+    let started = tokio::time::Instant::now();
+    let refused = host.relay().await;
+    assert!(
+        matches!(
+            refused,
+            Err(ResilienceError::Failed(Forwarded(
+                ResilienceError::Full { .. }
+            )))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(host.sent(), 2);
+    let waited = started.elapsed();
+    assert!(
+        Duration::from_millis(80) <= waited && waited <= Duration::from_millis(120),
+        "the first backoff, 100 ms within a fifth: {waited:?}"
+    );
+    assert_eq!(counted(&host.outer), (2, 2));
+    holding.abort();
+}
+
+/// An inner policy's refusal its caller's `retry_if` and `record_if` refuse
+/// ends the run at its one attempt, counted in neither direction in the
+/// outer breaker: a wait within the ceiling, or none, is waited by no retry.
+#[tokio::test(start_paused = true)]
+async fn an_inner_policys_refusal_its_callers_predicates_refuse_is_sent_once_and_counted_nowhere() {
+    let (_apps, host) = relayed().await;
+    host.inner
+        .open_breaker(Duration::from_secs(2))
+        .expect("a breaker");
+    let started = tokio::time::Instant::now();
+    let refused = host.relay_what_answered().await;
+    assert!(
+        matches!(
+            refused,
+            Err(ResilienceError::Failed(Forwarded(
+                ResilienceError::Open { .. }
+            )))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(host.sent(), 1);
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    assert_eq!(counted(&host.outer), (0, 0));
 }
 
 /// A unit of work holding a transaction whose savepoints settle after a round

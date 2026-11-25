@@ -680,7 +680,11 @@ reference's word first:
   caller's timeout. The cut reaches what that call's future holds, as it is
   dropped — a body still read through the middleware included — and no task the
   call spawned, whose attempt goes to its own bound. The inner policy tells no
-  `Timeout` and counts no refusal of it: none of its runs is left to answer.
+  `Timeout` and counts no refusal of it: none of its runs is left to answer. A
+  body whose read waits across its unit's deadline, as the edge cuts the unit
+  there, has timed out the same way: its budget counts from the read, so any
+  time its reader takes of its own puts the body's timer past that cut, and
+  each hung transfer counted as its head did, a success.
 - **A refusal is counted and told as its attempt ends**, before its savepoint
   settles: at the unit's deadline the edge drops the run while the rollback is
   in flight, and the timeout was told by nothing. A run whose savepoint then
@@ -697,8 +701,11 @@ reference's word first:
   tells, a constant opening it knows or what another crate's `SafeLink` claims
   — since reqwest's own sentence quotes the reason phrase the dependency
   answered, and its causes a trailer hyper refuses, HTTP/2's debug data and a
-  certificate's names. This crate claims its own refusals there, so a body the
-  policy gave up says its timeout.
+  certificate's names. rustls's failure is one of those types, read by an
+  allowlist of the variants holding nothing the peer wrote but a code of the
+  protocol: an alert says what a refused client certificate needs, and the
+  OAuth client's and the JWK Set's lines had said it in 7.0. This crate claims
+  its own refusals there, so a body the policy gave up says its timeout.
 - **A `SafeLink` reads its error behind a pointer**: `std` makes an `Arc` and a
   `Box` of an error an error displaying the one held, so an error naming a
   driver's as its `#[source]` behind one handed the line the driver's own
@@ -706,7 +713,11 @@ reference's word first:
   for every sayer, and each sayer of the workspace reads its type through
   `link_as`, an `Arc` or a `Box` of it included — reqwest's, sea-orm's, sqlx's,
   object_store's, rmcp's, h2's, and core's own of serde's and tokio's: a
-  security fix ships at every member reaching the data.
+  security fix ships at every member reaching the data. A line reads so; what
+  an edge answers does not: `DecodeError::in_chain` reads a link that is a
+  decode failure, as 7.0 does, and one an error shares behind a pointer is
+  answered opaquely and its line filed, where reading through it told a client
+  its payload was at fault and filed nothing.
 - **A call its unit had no time to send is no attempt**: it files no line, in
   any configuration, and is told as a timeout of none.
 - **No attempt outlives a health indicator's check either**: the probe cuts
@@ -726,7 +737,8 @@ reference's word first:
   crate writing it; a label in their place either keeps the expansion's edition
   or is a name the body can break to.
 - **A decorated method drops its arguments as the undecorated one does**, last
-  declared first, however its run ends. The attempt of a method run once owns
+  declared first, however its run ends — but those its body consumes under
+  `record_if`, a limit below. The attempt of a method run once owns
   them, and a closure's captures drop in the order its body first names them
   (`.claude/upstream/rustc.md`): the attempt opens on a statement naming those
   the body names, last declared first. A guard argument was released before the
@@ -859,6 +871,16 @@ lock" and the limit it left, a transition being told once the lock is let go.
   `unused variable` warning. Closing it is the parameters rebound inside the
   attempt, a signature other than the one written, and an ident an attribute
   can mark as its own.
+- **Under `record_if`, an argument the body consumes drops with the attempt**
+  that ended before handing it on — cut, failed sooner or refused unsent —
+  ahead of those the body only reads, and in the order the body first names
+  them. The attempt lends its arguments there, and the statement that sets a
+  run-once attempt's order would borrow each whole across the attempt's waits,
+  refusing methods that compile: a non-`Sync` argument read in part or named
+  unread, a reborrow of a `&mut` answered, a field moved beside one the
+  predicate reads. A body opening on `let _ = (&out, &held);` sets the order
+  itself. Closing it is the attempt owning every argument the predicate does
+  not name, another lending rule than the key's.
 - **`E0507` under a key lending the arguments says "cannot move out of value"**,
   the argument underlined: rustc names the variable only where the closure's
   head is the developer's, and there `closure_returning_async_block` fires at a
@@ -912,11 +934,14 @@ lock" and the limit it left, a transition being told once the lock is let go.
   cannot close it; the error's writer does, by encoding its URL or quoting
   none. An address written with no `://` is left as written.
 - **A cause `nest-rs-reqwest` cannot read is not said**: hyper's reasons but
-  one, HTTP/2's codes, rustls's alerts, a redirect policy's and a serializer's
-  error are lost to every line, an operator reading the kind alone, but for an
-  HTTP/2 GOAWAY in a program linking `nest-rs-http`, whose `SafeLink` says it.
-  Saying them safely takes `hyper`, `h2` and `rustls` as dependencies of that
-  crate, and a reader of each type.
+  one, HTTP/2's codes, a redirect policy's and a serializer's error are lost to
+  every line, an operator reading the kind alone, but for an HTTP/2 GOAWAY in a
+  program linking `nest-rs-http`, whose `SafeLink` says it. Saying them safely
+  takes `hyper` and `h2` as dependencies of that crate, and a reader of each
+  type. What it reads of rustls is an allowlist by outer variant, and of
+  hyper-util's tunnel, whose type is private, the text of constant sentences:
+  both are read again when either crate moves (`.claude/upstream/rustls.md`,
+  `.claude/upstream/hyper-util.md`).
 - **A pointer to a pointer is not read** (`Arc<Box<reqwest::Error>>`), nor a
   reference handed out as the link: each is said as `std` displays it, a type
   per depth having no end. A package's own `SafeLink` reads its pointers

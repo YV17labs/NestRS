@@ -19,6 +19,12 @@
 //!   reports it, without the value; an I/O error by the sentence its OS or
 //!   `std` gives it, and one holding another error by what that one tells, or
 //!   else by its kind;
+//! - a failure of TLS by rustls's own sentence where its variant holds nothing
+//!   the peer wrote but a code of the protocol ([`said_tls`]) — an alert by
+//!   its name, an answer that is not TLS by the type it was read as, a peer
+//!   sharing no version or suite with this client — and a certificate rustls
+//!   refuses by the opening of its sentence, without the names and the dates
+//!   it goes on to quote;
 //! - a cause of any other type by the opening of its sentence when that is
 //!   one of [`KNOWN`], and by nothing otherwise — hyper's, HTTP/2's, a
 //!   redirect policy's, a serializer's — the chain being read on beneath it.
@@ -48,15 +54,24 @@ const UNREAD: &str = "the HTTP client failed";
 /// to it (a bound of the client's that passed, a scheme it does not speak, a
 /// name that did not resolve, a redirect followed past its limit); `std`'s
 /// for a lookup that failed; hyper's for a connection closed under a request;
-/// and rustls's for a certificate it refuses, without the names and the dates
-/// it goes on to quote.
-const KNOWN: [&str; 11] = [
+/// hyper-util's for a proxy that opened no tunnel, a type it keeps private,
+/// whose sentences are constants — all but `missing destination host`, which
+/// no request meets, reqwest refusing a URL with no host first; and rustls's
+/// for a certificate it refuses, without the names and the dates it goes on
+/// to quote.
+const KNOWN: [&str; 17] = [
     "operation timed out",
     "URL scheme is not allowed",
     "error resolving DNS",
     "too many redirects",
     "failed to lookup address information",
     "connection closed before message completed",
+    "tunnel error: proxy authorization required",
+    "tunnel error: proxy response headers too long",
+    "tunnel error: unexpected end of file",
+    "tunnel error: unsuccessful",
+    "tunnel error: failed to create underlying connection",
+    "tunnel error: io error establishing tunnel",
     "invalid peer certificate: UnknownIssuer",
     "invalid peer certificate: certificate expired",
     "invalid peer certificate: certificate not valid yet",
@@ -160,13 +175,49 @@ fn below(mut link: Option<&(dyn Error + 'static)>, sentence: &mut String) -> boo
             return true;
         }
         let written = cause.to_string();
-        if let Some(known) = KNOWN.iter().find(|known| written.starts_with(**known)) {
+        if link_as::<rustls::Error>(cause).is_some_and(said_tls) {
+            tell(&written, sentence);
+            told = true;
+        } else if let Some(known) = KNOWN.iter().find(|known| written.starts_with(**known)) {
             tell(known, sentence);
             told = true;
         }
         link = cause.source();
     }
     told
+}
+
+/// Whether rustls's own sentence for `error` is said: its variant holds
+/// nothing the peer wrote but a code of the protocol — an alert's, a message
+/// type's, an extension's — which rustls names where it knows it. An
+/// allowlist, the enum being open: a certificate's refusal quotes its names
+/// and its dates and is said by its opening ([`KNOWN`]); a rejected Encrypted
+/// Client Hello quotes the configuration the peer answered; and a catch-all's
+/// text (`General`, `Other`) is written by whoever raised it.
+fn said_tls(error: &rustls::Error) -> bool {
+    use rustls::Error as Tls;
+    use rustls::PeerIncompatible::ServerRejectedEncryptedClientHello as RejectedHello;
+
+    match error {
+        Tls::PeerIncompatible(RejectedHello(_)) => false,
+        Tls::AlertReceived(_)
+        | Tls::InvalidMessage(_)
+        | Tls::InappropriateMessage { .. }
+        | Tls::InappropriateHandshakeMessage { .. }
+        | Tls::PeerMisbehaved(_)
+        | Tls::PeerIncompatible(_)
+        | Tls::NoCertificatesPresented
+        | Tls::DecryptError
+        | Tls::PeerSentOversizedRecord
+        | Tls::HandshakeNotComplete
+        | Tls::NoApplicationProtocol
+        | Tls::UnsupportedNameType
+        | Tls::EncryptError
+        | Tls::FailedToGetCurrentTime
+        | Tls::FailedToGetRandomBytes
+        | Tls::BadMaxFragmentSize => true,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -266,6 +317,122 @@ mod tests {
                 assert!(!later.starts_with(known), "`{known}` hides `{later}`");
             }
         }
+    }
+
+    /// What `below` adds for a failure of TLS as tokio-rustls hands it back:
+    /// an I/O error holding rustls's.
+    fn beneath_tls(refused: rustls::Error) -> String {
+        let failed = std::io::Error::new(std::io::ErrorKind::InvalidData, refused);
+        let mut sentence = String::new();
+        below(Some(&failed), &mut sentence);
+        sentence
+    }
+
+    #[test]
+    fn a_tls_failure_holding_nothing_its_peer_wrote_is_said_in_rustls_words() {
+        use rustls::Error as Tls;
+        use rustls::{AlertDescription, ContentType, HandshakeType};
+        use rustls::{InvalidMessage, PeerIncompatible, PeerMisbehaved};
+
+        for refused in [
+            Tls::AlertReceived(AlertDescription::CertificateExpired),
+            Tls::InvalidMessage(InvalidMessage::InvalidContentType),
+            Tls::InappropriateMessage {
+                expect_types: vec![ContentType::Handshake],
+                got_type: ContentType::ApplicationData,
+            },
+            Tls::InappropriateHandshakeMessage {
+                expect_types: vec![HandshakeType::ServerHello],
+                got_type: HandshakeType::Finished,
+            },
+            Tls::PeerMisbehaved(PeerMisbehaved::SelectedUnofferedCipherSuite),
+            Tls::PeerIncompatible(PeerIncompatible::Tls12NotOffered),
+            Tls::NoCertificatesPresented,
+            Tls::DecryptError,
+            Tls::PeerSentOversizedRecord,
+            Tls::HandshakeNotComplete,
+            Tls::NoApplicationProtocol,
+            Tls::UnsupportedNameType,
+            Tls::EncryptError,
+            Tls::FailedToGetCurrentTime,
+            Tls::FailedToGetRandomBytes,
+            Tls::BadMaxFragmentSize,
+        ] {
+            let own = refused.to_string();
+            assert_eq!(beneath_tls(refused), format!(": {own}"));
+        }
+    }
+
+    /// What the allowlist leaves out is said by the kind of the I/O error
+    /// holding it: a text whoever raised the failure wrote, or the peer.
+    #[test]
+    fn a_tls_failure_quoting_its_peer_or_its_raiser_is_said_by_its_io_kind() {
+        use rustls::Error as Tls;
+        use rustls::{CertRevocationListError, EncryptedClientHelloError, PeerIncompatible};
+
+        let raised = std::sync::Arc::new(std::io::Error::other(SENT));
+        for refused in [
+            Tls::General(SENT.to_owned()),
+            Tls::Other(rustls::OtherError(raised)),
+            Tls::InvalidCertRevocationList(CertRevocationListError::BadSignature),
+            Tls::InvalidEncryptedClientHello(EncryptedClientHelloError::NoCompatibleConfig),
+            Tls::PeerIncompatible(PeerIncompatible::ServerRejectedEncryptedClientHello(None)),
+        ] {
+            assert_eq!(
+                beneath_tls(refused),
+                format!(": {}", std::io::ErrorKind::InvalidData)
+            );
+        }
+    }
+
+    /// rustls goes on from each opening with what the certificate holds: the
+    /// names its issuer wrote, the dates it is valid between.
+    #[test]
+    fn a_certificate_rustls_refuses_is_said_without_its_names_or_its_dates() {
+        use std::time::Duration;
+
+        use rustls::CertificateError;
+        use rustls::pki_types::{ServerName, UnixTime};
+
+        let at = |secs| UnixTime::since_unix_epoch(Duration::from_secs(secs));
+        let dialled = ServerName::try_from("carrier.example").expect("a DNS name");
+        for (refused, said, quoted) in [
+            (
+                CertificateError::ExpiredContext {
+                    time: at(1_800_000_000),
+                    not_after: at(1_700_000_000),
+                },
+                "certificate expired",
+                "1700000000",
+            ),
+            (
+                CertificateError::NotValidYetContext {
+                    time: at(1_700_000_000),
+                    not_before: at(1_800_000_000),
+                },
+                "certificate not valid yet",
+                "1800000000",
+            ),
+            (
+                CertificateError::NotValidForNameContext {
+                    expected: dialled,
+                    presented: vec!["DnsName(\"ledger.internal\")".to_owned()],
+                },
+                "certificate not valid for name",
+                "ledger.internal",
+            ),
+        ] {
+            let refused = rustls::Error::InvalidCertificate(refused);
+            assert!(refused.to_string().contains(quoted), "{refused}");
+            assert_eq!(
+                beneath_tls(refused),
+                format!(": invalid peer certificate: {said}")
+            );
+        }
+        assert_eq!(
+            beneath_tls(CertificateError::BadEncoding.into()),
+            ": invalid peer certificate"
+        );
     }
 
     /// What `#[error(transparent)]` expands to: reqwest's sentence as its own,

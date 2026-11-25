@@ -68,7 +68,10 @@ pub(crate) const TIMED_OUT: &str = "the call did not answer within its timeout";
 pub enum ResilienceError<E> {
     /// The call answered its own error on its last attempt. Every edge answers
     /// it as the error's own [`to_problem`](ToProblem::to_problem) says, else
-    /// by a problem its chain carries, opaquely when neither does.
+    /// by a problem its chain carries, opaquely when neither does — but where
+    /// the call's error is no [`ToProblem`], GraphQL, WebSocket and MCP answer
+    /// a decode failure in its chain as `INVALID_ARGUMENT`, which a
+    /// `to_problem` answering `None` keeps opaque.
     #[error("the call failed")]
     Failed(#[source] E),
     /// The last attempt did not answer within the policy's timeout, or the

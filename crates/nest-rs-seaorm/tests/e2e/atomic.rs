@@ -414,6 +414,39 @@ async fn a_block_dropped_before_it_settles_leaves_its_unit_unable_to_commit() {
     assert!(!stored(&conn, inside).await);
 }
 
+/// A block dropped before its first statement sent no `SAVEPOINT`: nothing of
+/// it is open on the connection, so its unit commits what it wrote, and no
+/// line says it cannot.
+#[tokio::test]
+async fn a_block_dropped_before_its_first_statement_leaves_its_unit_free_to_commit() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = db().await;
+    let before = Uuid::now_v7();
+
+    let lazy = boundary(&conn);
+    with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
+        insert(before).await.expect("the unit writes first");
+        let (began, begun) = tokio::sync::oneshot::channel();
+        let block = atomic(async {
+            let _ = began.send(());
+            std::future::pending::<()>().await;
+            Ok::<_, Failure>(())
+        });
+        tokio::select! {
+            _ = block => panic!("the block never ends on its own"),
+            _ = begun => {}
+        }
+    })
+    .await;
+    committed(lazy).await;
+
+    assert!(stored(&conn, before).await);
+    logs.expect_none(
+        nest_rs_seaorm::target::ORM,
+        "atomic block abandoned before it settled; its unit cannot commit",
+    );
+}
+
 /// A block dropped inside another poisons that block alone: it rolls back,
 /// told to whoever kept an `Ok` over it, and the unit commits what it wrote
 /// beside it. The line says so, and not that the unit cannot commit.

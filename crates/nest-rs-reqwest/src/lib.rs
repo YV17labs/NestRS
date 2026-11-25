@@ -13,19 +13,21 @@
 //! error is a link of the chain, bare, behind an `Arc` or a `Box`, or inside
 //! the I/O error a reader over a body's stream makes of it, by what this crate
 //! reads of it: its kind, a status by its class and its code, a decode failure
-//! without its value, an I/O error by its OS's sentence or its kind, and a
-//! timeout, a failed lookup, a closed connection or a refused certificate by a
-//! constant sentence. A log line names what failed and why, never the URL a
-//! request carried, the reason phrase a peer wrote on its status line, a value
-//! its answer held or the names in its certificate; a cause this crate cannot
-//! read — hyper's, a redirect policy's, a serializer's — is not said, but one
-//! another crate's `SafeLink` claims, which that crate says: a body a
-//! resilience policy gave up says its timeout. An error handing reqwest's
-//! sentence on as its own (`#[error(transparent)]`) hides it from the chain
-//! and is said as reqwest writes it: built from `reqwest::Error::without_url`
-//! it holds no URL, and still a status's reason phrase and its causes' own
-//! sentences, which an error naming reqwest's as its `#[source]` leaves to
-//! this crate.
+//! without its value, an I/O error by its OS's sentence or its kind, a failure
+//! of TLS in rustls's words where they quote nothing its peer wrote — a
+//! handshake the peer refused by the alert it sent, an answer that is not TLS
+//! — and a timeout, a failed lookup, a closed connection, a proxy that opened
+//! no tunnel or a refused certificate by a constant sentence. A log line names
+//! what failed and why, never the URL a request carried, the reason phrase a
+//! peer wrote on its status line, a value its answer held or the names in its
+//! certificate; a cause this crate cannot read — hyper's, a redirect policy's,
+//! a serializer's — is not said, but one another crate's `SafeLink` claims,
+//! which that crate says: a body a resilience policy gave up says its timeout.
+//! An error handing reqwest's sentence on as its own (`#[error(transparent)]`)
+//! hides it from the chain and is said as reqwest writes it: built from
+//! `reqwest::Error::without_url` it holds no URL, and still a status's reason
+//! phrase and its causes' own sentences, which an error naming reqwest's as
+//! its `#[source]` leaves to this crate.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 

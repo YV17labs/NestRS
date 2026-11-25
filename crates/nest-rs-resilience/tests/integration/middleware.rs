@@ -12,7 +12,8 @@
 //! that policy's timeout. The response it hands back is reqwest's
 //! own, its body read as it comes and holding the run's slot, the breaker's
 //! verdict and what its head left of the attempt's bound until it ends: the
-//! time its reads wait for the dependency, never the time its caller takes.
+//! time its reads wait for the dependency, never the time its caller takes,
+//! and a read the health edge cuts with the indicator making it a timeout.
 //! What its policy tells a subscription of all this names no method: a retry
 //! as its line files it, a timeout before the retry it earns, a body given up
 //! as the timeout it is, and one the dependency cut short, or dropped by its
@@ -20,11 +21,15 @@
 
 use std::convert::Infallible;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use nest_rs_core::client_operation::{ClientOperation, HTTP_REQUEST_RESEND_COUNT, SERVER_PORT};
-use nest_rs_core::{Correlation, Problem, code, instance, module};
+use nest_rs_core::{Correlation, Problem, code, injectable, instance, module};
+use nest_rs_health::{
+    HealthConfig, HealthModule, HealthService, IndicatorStatus, ProbeKind, indicators,
+};
 use nest_rs_reqwest::ReqwestMiddleware;
 use nest_rs_resilience::{
     BreakerPhase, BreakerState, ResilienceConfig, ResilienceError, ResilienceEvent,
@@ -1540,6 +1545,104 @@ async fn a_body_the_clients_policy_gave_up_is_told_as_its_timeout_by_the_method_
     );
 }
 
+/// What the indicator below asks the carrier for, and whether its check got
+/// as far as reading the answer's body.
+struct Watched {
+    parcel: String,
+    reading: AtomicBool,
+}
+
+#[injectable]
+struct CarrierIndicator {
+    #[inject]
+    upstream: Arc<ResiliencePolicy>,
+    #[inject]
+    watched: Arc<Watched>,
+}
+
+#[indicators]
+impl CarrierIndicator {
+    /// A request sent under the policy, a few milliseconds of the check's own
+    /// once its head answered, then its body read whole.
+    #[readiness]
+    async fn carrier_answers(&self) -> Result<(), CarrierFailed> {
+        let http = client(Arc::clone(&self.upstream));
+        let answered = http.get(&self.watched.parcel).send().await?;
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        self.watched.reading.store(true, Ordering::Relaxed);
+        answered.bytes().await?;
+        Ok(())
+    }
+}
+
+/// How long the health edge below lets a check run: long enough for a head
+/// to cross loopback on a loaded machine, and well inside the policy's timeout.
+const CHECK: Duration = Duration::from_millis(300);
+
+#[module(
+    imports = [
+        HealthModule::for_root(HealthConfig {
+            indicator_timeout: CHECK,
+            ..HealthConfig::default()
+        }),
+        ResilienceModule::for_root(ResilienceConfig {
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..quiet()
+        }),
+    ],
+    providers = [CarrierIndicator],
+)]
+struct CarrierHealthModule;
+
+/// The health edge cutting an indicator drops the response its check reads
+/// inside the deadline it cut at: a read waiting there for a body that never
+/// ends is a timeout in the breaker of the policy the request was sent under,
+/// whatever the check took of its own between the head and the body, and
+/// however much of the policy's timeout is left.
+#[tokio::test]
+async fn a_body_its_indicator_reads_as_the_health_edge_cuts_it_has_timed_out() {
+    let peer = answering([PeerAnswer::stalling(200)]).await;
+    let app = HeadlessApp::builder()
+        .module::<CarrierHealthModule>()
+        .provide(Watched {
+            parcel: peer.url(PARCEL),
+            reading: AtomicBool::new(false),
+        })
+        .build_headless()
+        .await
+        .expect("an indicator over a client under the policy boots");
+    let health = app.container().get::<HealthService>().expect("provided");
+    let watched = app.container().get::<Watched>().expect("seeded");
+    let policy = held::<nest_rs_core::Unnamed>(&app);
+    let logs = LogCapture::install();
+
+    let started = Instant::now();
+    let probed = health.probe(ProbeKind::Readiness).await;
+
+    assert_eq!(probed.status, IndicatorStatus::Down);
+    assert!(
+        started.elapsed() < quiet().timeout / 2,
+        "cut by the health edge, the policy's timeout far from spent"
+    );
+    assert!(
+        watched.reading.load(Ordering::Relaxed),
+        "the cut found the check reading its answer's body"
+    );
+    assert_eq!(peer.requests().len(), 1);
+    assert!(
+        matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+        "{:?}",
+        policy.breaker_state()
+    );
+    let opening = logs.expect_one(TARGET, "circuit breaker changed state");
+    assert_eq!(
+        opening.field("error").as_deref(),
+        Some("the call did not answer within its timeout"),
+        "{opening:?}"
+    );
+}
+
 /// A body the dependency cuts short is a transport failure, never the
 /// policy's refusal: it reaches the caller as reqwest's error, and counts in
 /// the breaker, whose opening says its chain without the URL it was read from.
@@ -1618,6 +1721,56 @@ async fn a_body_cut_short_by_the_dependency_is_told_by_the_breakers_opening_alon
         ),
         "{told:?}"
     );
+}
+
+/// A request answered while a retry is left is covered as one sent once is:
+/// its head is handed back before its body, which holds the run's slot while
+/// unread, is given up at the attempt's bound, and counts in the breaker.
+#[tokio::test]
+async fn the_body_of_a_request_answered_with_a_retry_left_is_read_under_the_policy_never_buffered()
+{
+    let peer = answering([PeerAnswer::stalling(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        timeout: BODY_TIMEOUT,
+        concurrency: Some(1),
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..retrying()
+    })
+    .await;
+
+    // Guards against a hang alone: a body buffered before its head is handed
+    // back never comes whole.
+    let sent = client(Arc::clone(&policy)).get(peer.url(PARCEL)).send();
+    let answered = tokio::time::timeout(Duration::from_secs(3), sent)
+        .await
+        .expect("the head is handed back before its body")
+        .expect("the head answered");
+    assert_eq!(peer.requests().len(), 1, "at its first attempt");
+    assert_eq!(
+        policy.concurrency_running(),
+        Some(1),
+        "the call runs while its answer's body is unread"
+    );
+
+    // Guards against a hang alone: a body no bound covers is read for good.
+    let given_up = tokio::time::timeout(Duration::from_secs(3), answered.bytes())
+        .await
+        .expect("the read ends at the attempt's timeout")
+        .expect_err("the rest never came");
+    assert!(
+        matches!(
+            cut(&given_up),
+            Some(ResilienceError::TimedOut { timeout, .. }) if *timeout == BODY_TIMEOUT
+        ),
+        "{given_up:?}"
+    );
+    assert!(
+        matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+        "{:?}",
+        policy.breaker_state()
+    );
+    assert_eq!(policy.concurrency_running(), Some(0));
 }
 
 /// A probe follows the body's rules: answered with no body, it closes the

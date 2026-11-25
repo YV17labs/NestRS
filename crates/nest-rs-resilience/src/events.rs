@@ -105,7 +105,9 @@ pub enum ResilienceEvent {
     /// it:
     ///
     /// - a response of [`ResilienceMiddleware`](crate::ResilienceMiddleware)
-    ///   its caller drops while a read of its body has waited past the bound;
+    ///   dropped while a read of its body has waited past the bound, by its
+    ///   caller, or across the deadline of the unit the body is read in, as
+    ///   the edge cutting that unit drops it;
     /// - an attempt its caller, or the edge cutting its unit, drops at or past
     ///   the instant its bound ends at, inside a unit whose edge set a
     ///   deadline;

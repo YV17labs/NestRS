@@ -735,7 +735,19 @@ mod tests {
             error_message(&Naming(Arc::new(secret()))),
             format!("the import failed: {REPORT}")
         );
-        assert!(DecodeError::in_chain(&Naming(Arc::new(secret()))).is_some());
+    }
+
+    /// What an edge answers is a link that is the failure itself: one held
+    /// behind a pointer, kept and shared, is answered opaquely and its chain
+    /// filed, which a line says through the pointer.
+    #[test]
+    fn a_decode_failure_behind_a_pointer_is_no_failure_an_edge_answers() {
+        assert!(DecodeError::in_chain(&Naming(secret())).is_some());
+
+        let erased: Arc<dyn Error + Send + Sync> = Arc::new(secret());
+        assert!(DecodeError::in_chain(&Naming(Arc::new(secret()))).is_none());
+        assert!(DecodeError::in_chain(&Naming(Box::new(secret()))).is_none());
+        assert!(DecodeError::in_chain(&Naming(erased)).is_none());
     }
 
     /// Displays its cause whole and returns it as its source — the queue's

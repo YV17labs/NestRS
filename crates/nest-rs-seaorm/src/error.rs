@@ -2034,6 +2034,27 @@ pub(crate) mod tests {
         );
     }
 
+    /// sea-orm hands its driver's error out behind an `Arc`, which an app
+    /// matching the variant keeps as its own error's source.
+    #[test]
+    fn a_driver_error_named_as_a_source_behind_a_pointer_is_said_as_one_named_bare() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("the import failed")]
+        struct Naming<S: std::error::Error + 'static>(#[source] S);
+
+        const SAID: &str = "the import failed: database error 22P02";
+        let shared = || match bad_uuid() {
+            DbErr::Exec(RuntimeErr::SqlxError(driver)) => driver,
+            other => panic!("an execution error of the driver's: {other:?}"),
+        };
+        let owned = || Arc::into_inner(shared()).expect("held once");
+        assert!(shared().to_string().contains("secret-123"), "{}", shared());
+
+        assert_eq!(error_message(&Naming(owned())), SAID);
+        assert_eq!(error_message(&Naming(shared())), SAID);
+        assert_eq!(error_message(&Naming(Box::new(owned()))), SAID);
+    }
+
     /// A rule's failure as `validator` hands it over: its parameters holding the
     /// rejected value, as `bad_uuid`'s message does.
     fn short_password() -> ValidationErrors {

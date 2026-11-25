@@ -1620,6 +1620,12 @@ fn as_written(written: syn::token::Brace, stmts: Vec<Stmt>) -> Stmt {
 /// binding so named wherever it is: one the body names is captured where the
 /// body first does, after those read here. It is written where the body names
 /// two arguments or more, one having no order.
+///
+/// An attempt lending the arguments opens on none, under `record_if` neither,
+/// whose body may consume one: read whole there, an argument the body reads a
+/// part of, or names without reading, would be borrowed whole across the
+/// attempt's waits — no `Send` future where it is no `Sync`, and no answer
+/// reborrowing a `&mut` it holds.
 fn captured(method: &ImplItemFn) -> Option<Stmt> {
     let written: TokenStream = method
         .block
@@ -1702,7 +1708,7 @@ fn names(tokens: TokenStream, name: &str) -> bool {
 /// Whether `literal`, a token as written, is a string whose format captures
 /// `name`: in an argument's position (`{name}`, `{name:?}`) or as a width or a
 /// precision (`{:name$}`, `{:.name$}`). `{{` writes a brace, and `\u{…}` a
-/// character.
+/// character, unless its `\` is itself escaped.
 fn formats(literal: &str, name: &str) -> bool {
     if !literal.starts_with(['"', 'r']) {
         return false;
@@ -1717,7 +1723,10 @@ fn formats(literal: &str, name: &str) -> bool {
             return false;
         };
         rest = after;
-        if before.ends_with("\\u") && literal.starts_with('"') {
+        let escaping = before
+            .strip_suffix('u')
+            .map_or(0, |head| head.len() - head.trim_end_matches('\\').len());
+        if escaping % 2 == 1 && literal.starts_with('"') {
             continue;
         }
         let (argument, spec) = placeholder.split_once(':').unwrap_or((placeholder, ""));
@@ -2159,6 +2168,7 @@ mod tests {
             r#""{{{held}}}""#,
             r##"r#"{held}"#"##,
             r#"r"\u{held}""#,
+            r#""\\u{held}""#,
         ] {
             assert!(formats(literal, "held"), "{literal}");
         }
@@ -2171,6 +2181,7 @@ mod tests {
             r#""{0:held}""#,
             r#""{out:held}""#,
             r#""\u{held}""#,
+            r#""\\\u{held}""#,
             r#"b"{held}""#,
             r#"c"{held}""#,
             "'h'",

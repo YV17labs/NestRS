@@ -631,6 +631,48 @@ mod tests {
         );
     }
 
+    /// A method declaring a fallback, sent once: a panic inside its one
+    /// attempt is rolled back before it unwinds on, as an idempotent call's is.
+    #[tokio::test(start_paused = true)]
+    async fn a_panicking_attempt_of_a_method_declaring_a_fallback_is_rolled_back_and_unwinds_on() {
+        let policy = retrying(None);
+        let falling_back = resilient_method(host, "post", None, None).with_fallback();
+        let (unit, seen) = Unit::settling(settles);
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let unwound = nest_rs_core::panic::contain(with_request_executor(
+            unit,
+            policy.run_once::<Answer, _, _, _>(
+                Some(falling_back),
+                judging_by_default(),
+                |_| async {
+                    let _spending = Spending(Arc::clone(&seen));
+                    called(&seen);
+                    tokio::task::yield_now().await;
+                    panic!("inside the attempt")
+                },
+            ),
+        ))
+        .await;
+        std::panic::set_hook(previous);
+
+        let payload = unwound.expect_err("the panic unwinds past the run");
+        assert_eq!(
+            nest_rs_core::panic::panic_message(payload.as_ref()),
+            "inside the attempt"
+        );
+        assert_eq!(
+            seen.all(),
+            [
+                Saw::Opened,
+                Saw::Called { inside: true },
+                Saw::Spent,
+                Saw::RolledBack
+            ],
+            "rolled back before the unwind goes on"
+        );
+    }
+
     /// Nothing can be awaited as a run is dropped: its savepoint goes as the
     /// port says of a block dropped before it settled, never kept, once the
     /// attempt's future is gone.

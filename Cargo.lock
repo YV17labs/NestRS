@@ -3240,6 +3240,7 @@ dependencies = [
  "nest-rs-testing",
  "reqwest",
  "reqwest-middleware",
+ "rustls",
  "tokio",
 ]
 

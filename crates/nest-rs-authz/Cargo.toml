@@ -19,9 +19,8 @@ all-features = true
 
 [features]
 default = []
-# HTTP surface: the `Authorize` extractor, the `AbilityGuard`'s
-# HTTP entry, and the `RouteResponseShaper` that runs the class gate and opens the
-# route's reads.
+# HTTP surface: the `AbilityGuard`'s HTTP entry. The class gate a route's
+# posture declares is `class_gate`, every edge's, at the crate root.
 # The row `#[authorize(A, bind = S)]` loads is `nest-rs-seaorm`'s (it must use
 # the data layer). `AbilityGuard` itself is at the crate root and every
 # transport feature turns it on, because it answers all four; its

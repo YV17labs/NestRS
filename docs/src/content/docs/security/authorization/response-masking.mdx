@@ -41,9 +41,8 @@ and resources.
 `#[public(Action, Entity)]` opens the same read for a caller with no credential
 ([Public reads](/security/authorization/public-reads/)), and a unit naming no
 entity in its posture reads nothing a grant guards: what its guards attached is
-withheld from its reads. `Authorize<A, S>` is what the two declare, never a
-handler parameter: one written by hand does not compile, whatever its import
-calls it.
+withheld from its reads. Only the decorator opens them: a route declaring
+no posture reads withheld, whatever its parameters' types.
 </Aside>
 
 ## What a grant may withhold — `#[expose(nullable)]`

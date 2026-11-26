@@ -3,7 +3,7 @@ title: Glossary
 description: One-line definitions for the vocabulary NestRS uses across the docs.
 ---
 
-The docs lean on a small set of recurring terms — *shaper*, *endpoint
+The docs lean on a small set of recurring terms — *class gate*, *endpoint
 guards*, *ambient context*, *masking*. This page collects them in one place
 with a one-line definition and a link to the canonical page that goes
 deep on each.
@@ -37,10 +37,6 @@ deep on each.
 
 ## Request layers
 
-- **[Shaper](/fundamentals/request-lifecycle/)** — what the `#[routes]`
-  expansion selects by type off a route's posture: its class gate, and
-  whether the route reads under the caller's ability, as an entity's posture
-  does. A shaper is plumbing the framework writes, never a unit you declare.
 - **[Guard](/fundamentals/guards/)** — a pre-handler gate; returns
   `Ok(())` to let the request through or a typed `Denial` mapped to
   401/403/429, and may attach context a handler on any edge reads
@@ -61,10 +57,11 @@ deep on each.
   failure with `dyn Error + Send + Sync`; bound with
   `#[use_exception_filters(...)]`, the method's tried first. The unit stays
   failed whatever it answers.
-- **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
-  macro emits when a route declares `#[authorize(A, S)]` or `#[public(A, S)]`,
-  never a parameter; declares the route's class gate and opens its reads under
-  the caller's ability. [Layer order](/fundamentals/guard-scopes/#where-guards-run-in-the-chain).
+- **Class gate** — `nest_rs_authz::class_gate::<A, S>`, what every edge's
+  macro emits when a unit declares `#[authorize(A, S)]` or `#[public(A, S)]`:
+  run with the unit's guards, it refuses a caller whose ability lacks `A` on
+  `S` and opens the unit's reads under that ability. Only the decorator
+  declares it, never a parameter's type. [Layer order](/fundamentals/guard-scopes/#where-guards-run-in-the-chain).
 - **Unit** — one piece of work the framework dispatches and files one
   operation line for: an HTTP request, a GraphQL field, a WebSocket message,
   an MCP operation, a job's attempt, a tick, a listener call. Every layer

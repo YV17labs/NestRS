@@ -18,7 +18,7 @@ use crate::HttpConfig;
 use crate::endpoint_guards::NO_GUARD_REMEDY;
 use crate::headers::one_of;
 use crate::origin::OriginScheme;
-use crate::problem::{ProblemDetails, problem_response, status_of};
+use crate::problem::{ProblemDetails, problem_response, refusal_response, status_of};
 use crate::response::{IntoResponse, Response};
 
 /// Any error, boxed: a body's, or the cause an [`HttpError`] carries.
@@ -82,6 +82,10 @@ impl ResponseError for BodyError {
             Self::AlreadyTaken => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NotUtf8 | Self::Io(_) => StatusCode::BAD_REQUEST,
         }
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
     }
 }
 
@@ -148,14 +152,15 @@ pub trait ResponseError {
     /// The status this error answers.
     fn status(&self) -> StatusCode;
 
-    /// The response this error answers: by default an RFC 9457 problem document
-    /// of its status, whose `detail` on a `4xx` is the error's sentence said
-    /// without any value it quotes, and which a `5xx` answers without one.
+    /// The response this error answers: by default its status's RFC 9457
+    /// problem document, with no `detail`. An error's `Display` is the
+    /// operator's, never the client's: a sentence for the client is written
+    /// here, or as a [`Problem`]'s through [`ToProblem`].
     fn as_response(&self) -> Response
     where
         Self: Error + Send + Sync + Sized + 'static,
     {
-        ProblemDetails::answering(self.status(), self).into_response()
+        ProblemDetails::from_status(self.status()).into_response()
     }
 }
 
@@ -237,7 +242,7 @@ enum Cause {
     Status,
     /// A response answered as it is.
     Response(Response),
-    /// An error rendered as a problem document of the status.
+    /// An error kept for the operator beneath its status's problem document.
     Error(BoxError),
     /// An error rendering itself: a [`ResponseError`] by its own
     /// `as_response`, a [`ToProblem`] error by the problem it says.
@@ -252,9 +257,8 @@ impl Cause {
     /// response, which only its owner renders, answers its status's problem.
     fn rendered(&self, status: StatusCode) -> Response {
         match self {
-            Cause::Error(error) => ProblemDetails::answering(status, &**error).into_response(),
             Cause::Typed { error, render } => render(error, status),
-            Cause::Status | Cause::Response(_) => {
+            Cause::Error(_) | Cause::Status | Cause::Response(_) => {
                 ProblemDetails::from_status(status).into_response()
             }
         }
@@ -262,13 +266,17 @@ impl Cause {
 }
 
 impl HttpError {
-    /// `source` answering `status`.
+    /// `source` answering `status`'s problem document: `source` is the
+    /// operator's, kept as the cause, and its `Display` never reaches the
+    /// client. A sentence for the client is a [`Problem`]'s
+    /// [`with_detail`](Problem::with_detail).
     ///
     /// ```
     /// use nest_rs_http::{HttpError, StatusCode};
     ///
-    /// let error = HttpError::new(std::fmt::Error, StatusCode::BAD_GATEWAY);
-    /// assert!(error.is::<std::fmt::Error>());
+    /// let refused = std::io::Error::other("the ledger at 10.0.0.3 refused");
+    /// let error = HttpError::new(refused, StatusCode::BAD_GATEWAY);
+    /// assert!(error.is::<std::io::Error>());
     /// ```
     pub fn new(source: impl Error + Send + Sync + 'static, status: StatusCode) -> Self {
         Self::with(status, Cause::Error(Box::new(source)))
@@ -877,6 +885,16 @@ pub(crate) struct PathParameterError {
     pub(crate) name: std::sync::Arc<str>,
 }
 
+impl ResponseError for PathParameterError {
+    fn status(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
+    }
+}
+
 /// What [`Json`](crate::Json) refused.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum JsonError {
@@ -896,6 +914,10 @@ impl ResponseError for JsonError {
             Self::Malformed(_) => StatusCode::BAD_REQUEST,
         }
     }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
+    }
 }
 
 /// What [`Query`](crate::Query) refused: the query string is not what the type
@@ -907,6 +929,10 @@ pub(crate) struct QueryError(pub(crate) DecodeError);
 impl ResponseError for QueryError {
     fn status(&self) -> StatusCode {
         StatusCode::BAD_REQUEST
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
     }
 }
 
@@ -935,6 +961,10 @@ impl ResponseError for FormError {
             Self::Malformed(_) => StatusCode::BAD_REQUEST,
         }
     }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
+    }
 }
 
 /// What [`Multipart`](crate::Multipart) refused.
@@ -956,6 +986,10 @@ impl ResponseError for MultipartError {
             Self::MediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::Malformed(_) => StatusCode::BAD_REQUEST,
         }
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
     }
 }
 
@@ -1128,6 +1162,10 @@ impl ResponseError for PathError {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
         }
+    }
+
+    fn as_response(&self) -> Response {
+        refusal_response(self.status(), self)
     }
 }
 
@@ -1750,11 +1788,9 @@ mod tests {
         );
         let problem = problem_of(rendered).await;
         assert_eq!(problem["status"], 400);
-        let detail = problem["detail"].as_str().unwrap();
-        assert!(detail.contains("invalid type"), "{detail}");
         assert!(
-            !detail.contains("hunter2"),
-            "a 4xx detail never quotes the value: {detail}"
+            problem.get("detail").is_none(),
+            "a cause is the operator's, a 4xx's included: {problem}"
         );
 
         let failure = std::io::Error::other("connection to db-primary refused");

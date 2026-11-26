@@ -142,9 +142,9 @@ guard, filter or interceptor loop of its own.
    either without the other is a compile error, as is an entity written beside
    `bind` other than the service's. `#[routes]` refuses a posture naming an
    entity on `#[sse]` — by the subject's type, a stream taking a subject no table
-   holds — and `Authorize<A, E>` is what a posture declares, never a parameter,
-   which no `FromRequest` impl serves; a gate another parameter's type declares
-   refuses the boot (`.claude/decisions/route-posture-declared.md`).
+   holds. The class gate and the reads it opens are the posture's alone: no
+   parameter's type is read for either, so a route with no posture reads
+   withheld whatever it takes (`.claude/decisions/route-posture-declared.md`).
    An edge whose units have no caller (a job, a tick, an event) declares
    `Posture::System` and runs no guard stage.
 6. **A class gate the posture emits** — `nest_rs_authz::class_gate::<A, S>`,
@@ -269,7 +269,11 @@ guard, filter or interceptor loop of its own.
     decode failure a chain holds is no word of the client's — an upstream's
     answer, a stored value — and is answered opaquely and filed on every
     edge, a handler decoding its client's text by hand saying so with
-    `Problem::from(DecodeError::from(e))`. GraphQL holds the rule at
+    `Problem::from(DecodeError::from(e))`. A reply's message or `detail` is
+    a sentence written for the client, never an error's `Display`: HTTP's
+    `HttpError::new(e, status)` and a `ResponseError` writing no
+    `as_response` answer the status's problem with none, and the edge's own
+    refusals write theirs. GraphQL holds the rule at
     compile time: async-graphql's `custom-error-conversion` is on, so a `?`
     cannot turn a foreign error's `Display` into a client message. An
     `Opaque` trait beside the edge's error type says the same at a call
@@ -624,7 +628,7 @@ router parses. The rewrite is skipped when nothing is versioned.
 - **`#[sse]` is a verb, not an edge.** It collapses to `GET` before the route
   table is built and carries the route's guards, pipes, posture and document; it
   owns only the response. It refuses a posture on an entity (a
-  `#[subject]`'s gates it), a parameter whose type arms a shaper, at boot, the
+  `#[subject]`'s gates it), the
   response decorators (`#[http_code]`, `#[redirect]`, `#[response_header]`)
   and `#[api(response_content_type)]`.
   Correlation is the streaming body's, not the decorator's (`observability.md`).

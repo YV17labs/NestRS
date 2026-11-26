@@ -42,15 +42,13 @@ struct RouteHandler {
     guards: Vec<Path>,
     /// `#[use_interceptors]` paths on the method.
     interceptors: Vec<Path>,
-    /// The type a posture naming a subject declares, then every parameter type,
-    /// in order: arming a shaper and selecting a class gate are type-directed.
-    probe_types: Vec<Type>,
     /// Every parameter type, in order, then the service a bound subject loads
     /// through: the providers resolved per request are read off them.
     param_types: Vec<Type>,
-    /// The type a posture naming a subject declares, kept so a subject naming
-    /// neither an entity nor a capability is a spanned compile error.
-    posture_type: Option<Type>,
+    /// The class gate a posture naming a subject declares, spanned on the
+    /// subject, so one naming neither an entity nor a capability is a spanned
+    /// compile error.
+    gate: Option<TokenStream2>,
     /// On an `#[sse]` route, the assertion that its posture's subject shapes
     /// nothing, spanned on the subject the posture names.
     stream_posture: TokenStream2,
@@ -66,8 +64,6 @@ struct RouteHandler {
     /// The method's `#[cfg]` conditions, carried onto every item emitted for the
     /// route outside the method.
     cfgs: Vec<TokenStream2>,
-    /// Whether the route declares `#[authorize]`.
-    authorized: bool,
     /// The handler method, which names the route's site.
     method_name: syn::Ident,
 }
@@ -225,18 +221,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let wrapper_name = format_ident!("__nestrs_route_{}_{}", ctrl_name, method_name);
         let site_name = site_ref(&self_ty, &method_name);
 
-        // `#[crud]`'s own parameters declare neither a gate nor a shaper, so
-        // no probe asks their types again.
-        let mut unprobed: Vec<usize> = Vec::new();
-        for (index, arg) in method.sig.inputs.iter_mut().skip(1).enumerate() {
-            if let FnArg::Typed(pt) = arg {
-                match take_flag_attr(&mut pt.attrs, UNPROBED) {
-                    Ok(true) => unprobed.push(index),
-                    Ok(false) => {}
-                    Err(err) => return err.to_compile_error().into(),
-                }
-            }
-        }
         let mut inputs: Vec<FnArg> = method.sig.inputs.iter().skip(1).cloned().collect();
         let arg_idents = match normalize_forwarded_args(&mut inputs) {
             Ok(idents) => idents,
@@ -251,17 +235,17 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(posture) => posture,
             Err(err) => return err.to_compile_error().into(),
         };
-        // Probed like a parameter and never extracted: the gate runs with the
-        // guards, outside the route's own layers.
-        let authorize_ty = authorize.as_ref().map(posture_type);
-        // Decided by the posture's type, after name resolution: on a stream,
-        // only a subject whose posture shapes nothing — one no table holds.
-        let stream_posture = match (&authorize, &authorize_ty) {
-            (Some(spec), Some(ty)) if is_sse => quote_spanned! {spec.entity.span()=>
-                const _: () = ::core::assert!(
-                    !<#ty as ::nest_rs_http::RouteResponseShaper>::SHAPES,
-                    #SSE_NAMES_AN_ENTITY,
-                );
+        // The gate runs with the guards, outside the route's own layers.
+        let gate = authorize.as_ref().map(class_gate);
+        // Decided by the subject's type, after name resolution.
+        let names_an_entity = match &authorize {
+            Some(spec) => subject_rows(spec),
+            None => quote! { false },
+        };
+        // On a stream, only a subject no table holds.
+        let stream_posture = match &authorize {
+            Some(spec) if is_sse => quote_spanned! {spec.entity.span()=>
+                const _: () = ::core::assert!(!#names_an_entity, #SSE_NAMES_AN_ENTITY);
             },
             _ => quote! {},
         };
@@ -558,21 +542,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             cfgs: &cfgs,
         }));
 
-        // The compiler selects the arming type, so this crate needs no authz
-        // dependency and a renamed import still arms.
         let mut param_types = param_types(&inputs);
-        let probe_types: Vec<Type> = authorize_ty
-            .iter()
-            .chain(
-                param_types
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| !unprobed.contains(index))
-                    .map(|(_, ty)| ty),
-            )
-            .cloned()
-            .collect();
-        let shaper_selection = shaper_selection(&probe_types);
         let typed_body = documented_body(&param_types);
         let typed_refusal = documented_refusal(&param_types);
 
@@ -589,9 +559,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             wrapper: wrapper_name.clone(),
             guards,
             interceptors,
-            probe_types,
             param_types,
-            posture_type: authorize_ty,
+            gate,
             stream_posture,
             no_pipes,
             force_guards,
@@ -599,7 +568,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             exception_filters: method_exception_filters,
             versions: method_versions.clone(),
             cfgs: cfgs.clone(),
-            authorized: authorize.is_some(),
             method_name: method_name.clone(),
         };
         // Two handlers for one (verb, path) would leave one unreachable; refused
@@ -774,7 +742,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             (None, None, Some(ty)) => quote! { ::nest_rs_http::__media_of!(#ty) },
             (None, None, None) => quote! { ::core::option::Option::None },
         };
-        let names_an_entity = quote! { ::core::option::Option::is_some(&#shaper_selection) };
 
         let path_param_tys = path_param_types(&inputs);
         let path_params = if path_param_tys.is_empty() {
@@ -1040,10 +1007,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// What `#[crud]` marks the parameters it generates with: a type that
-/// declares neither a gate nor a shaper, so `#[routes]` probes it for neither.
-pub(crate) const UNPROBED: &str = "__nestrs_unprobed";
-
 /// A posture naming a subject: `#[authorize(Action, Subject)]`, or
 /// `#[public(Action, Subject)]`.
 struct AuthorizeSpec {
@@ -1264,15 +1227,21 @@ fn malformed_posture(attr: &Attribute, word: &str) -> syn::Error {
     )
 }
 
-/// The type a posture naming a subject declares, the same one `#[crud]` writes:
-/// probed for its class gate and its shaper, never extracted. Under
-/// `bind = Service` alone, the entity is the `Authorized<Action, E>`
-/// parameter's.
-fn posture_type(spec: &AuthorizeSpec) -> Type {
+/// The class gate a posture naming a subject declares, every edge's one, spanned
+/// on the subject. Under `bind = Service` alone, the subject is the
+/// `Authorized<Action, E>` parameter's.
+fn class_gate(spec: &AuthorizeSpec) -> TokenStream2 {
     let AuthorizeSpec { action, entity, .. } = spec;
-    syn::parse_quote! {
-        ::nest_rs_authz::http::Authorize<#action, #entity>
+    quote_spanned! {entity.span()=>
+        ::nest_rs_authz::class_gate::<#action, #entity>
+            as ::nest_rs_core::__private::ClassGate
     }
+}
+
+/// Whether the subject a posture names is an entity, a subject a table holds.
+fn subject_rows(spec: &AuthorizeSpec) -> TokenStream2 {
+    let entity = &spec.entity;
+    quote_spanned! {entity.span()=> <#entity as ::nest_rs_authz::Subject>::__ROWS }
 }
 
 fn param_types(inputs: &[FnArg]) -> Vec<Type> {
@@ -1321,37 +1290,6 @@ fn documented_refusal(param_types: &[Type]) -> TokenStream2 {
     )
 }
 
-/// The route's class gates, selected by type after name resolution like its
-/// shaper: every probed type whose `RouteResponseShaper` declares one.
-fn gate_selection(probe_types: &[Type]) -> TokenStream2 {
-    if probe_types.is_empty() {
-        return quote! { ::std::vec::Vec::new() };
-    }
-    quote! {{
-        let mut __nestrs_gates: ::std::vec::Vec<::nest_rs_http::__private::GateFn> =
-            ::std::vec::Vec::new();
-        #(
-            if let ::core::option::Option::Some(__nestrs_gate) =
-                ::nest_rs_http::__gate_of!(#probe_types)
-            {
-                __nestrs_gates.push(__nestrs_gate);
-            }
-        )*
-        __nestrs_gates
-    }}
-}
-
-/// The route's response shaper, selected by type after name resolution: the
-/// first parameter that is a `RouteResponseShaper` arms the route, so an
-/// aliased import arms too.
-fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
-    first_probed(
-        param_types,
-        &quote! { ::nest_rs_http::__private::CaptureFn },
-        &quote! { ::nest_rs_http::__shaper_of },
-    )
-}
-
 /// One routed handler, as its route's site declares it and its mount mounts
 /// it: the site (its interceptors and exception filters, its guard stage and
 /// class gates), and the call registering the handler — its response shaper
@@ -1376,27 +1314,18 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
         wrapper,
         guards,
         interceptors,
-        probe_types,
-        posture_type,
+        gate,
         stream_posture,
         no_pipes,
         force_guards,
         pipes: method_pipes,
         exception_filters: method_exception_filters,
-        authorized,
         method_name,
     } = handler;
 
-    let shaper_selection = shaper_selection(probe_types);
-    let gate_selection = gate_selection(probe_types);
-    let posture_assert = match posture_type {
-        Some(ty) => quote! {
-            const _: fn() = || {
-                fn __nestrs_assert_route_shaper<P: ::nest_rs_http::RouteResponseShaper>() {}
-                __nestrs_assert_route_shaper::<#ty>();
-            };
-        },
-        None => quote! {},
+    let gate = match gate {
+        Some(gate) => quote! { ::core::option::Option::Some(#gate) },
+        None => quote! { ::core::option::Option::None },
     };
     let method_guard_specs = scoped_specs(guards, quote!(dyn ::nest_rs_guards::Guard));
     let ambient = ambient_type_ids(param_types);
@@ -1423,10 +1352,7 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
                     host: <#self_ty>::__nestrs_controller_guard_specs(),
                     method: #method_guard_specs,
                     force: #force_guard_typeids,
-                    gates: #gate_selection,
-                    authorized: #authorized,
-                    names_an_entity: ::core::option::Option::is_some(&#shaper_selection),
-                    stream: #is_sse,
+                    gate: #gate,
                     ambient: #ambient,
                 }
             },
@@ -1458,9 +1384,8 @@ fn emitted_route(handler: &RouteHandler, self_ty: &Type) -> EmittedRoute {
                 none: #no_pipes_flag,
             },
             {
-                #posture_assert
                 #stream_posture
-                ::nest_rs_http::__private::shaped(#wrapper_expr, #shaper_selection)
+                #wrapper_expr
             },
             #deprecated,
         )

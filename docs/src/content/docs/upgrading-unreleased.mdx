@@ -1,6 +1,6 @@
 ---
 title: Upgrading to the unreleased changes
-description: "The order that moves a project on the published release onto the changes not yet released — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver — and what fails when a step is missed."
+description: "The order that moves a project on the published release onto the changes not yet released — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver, a route's posture, an HTTP error's detail — and what fails when a step is missed."
 ---
 
 import { Steps } from '@astrojs/starlight/components';
@@ -8,7 +8,9 @@ import { Steps } from '@astrojs/starlight/components';
 The changes not yet released make a major: they take the designs the
 published release's compatibility held back, whatever they break. An attribute
 on a GraphQL operation applies to the method you wrote, a `Problem` is the one thing an edge reads in a handler's error, a
-`SafeLink` names the type it says, and a data driver says what each handle holds.
+`SafeLink` names the type it says, a data driver says what each handle holds,
+only a route's decorator opens its reads, and an HTTP reply's `detail` is a
+sentence written for the client.
 This page is the order to take the changes in; the
 [changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/unreleased.md) says
 why each was made. The release holding them is numbered when it is cut, and
@@ -108,6 +110,32 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
    An app changes nothing here: `atomic`, `after_commit`, `Jobs::push` and
    `cancel`, `#[resilient]` and `Repo` keep their signatures.
 
+6. **Declare a route's reads with its posture.** No parameter's type opens a
+   route's reads any more: `nest_rs::http::RouteResponseShaper`,
+   `ResponseShaping`, `RouteFuture`, `ShapedEndpoint` and
+   `nest_rs::authz::http::Authorize` are gone. A route that read scoped rows
+   because a parameter's type implemented `RouteResponseShaper` now reads
+   withheld until it declares `#[authorize(Action, Subject)]`, or
+   `#[public(Action, Subject)]` where a caller with no credential is admitted;
+   code that shaped a response through the trait moves to an
+   [interceptor](/fundamentals/interceptors/).
+
+7. **Write the sentence a client reads.** An error's `Display` is no longer an
+   HTTP reply's `detail`: `HttpError::new(e, status)` answers `status`'s
+   problem with no `detail`, whatever the status, and so does a
+   `ResponseError` that writes no `as_response`. `ProblemDetails::from_error`
+   is gone ([HTTP errors](/http/errors/)):
+
+   | Before | Now |
+   |---|---|
+   | `HttpError::new(e, StatusCode::BAD_REQUEST)` for `e`'s sentence | `Problem::new(400, code::INVALID_ARGUMENT).with_detail("…")`, in words of your own |
+   | `HttpError::new(serde_err, StatusCode::BAD_REQUEST)` for a decode of the client's text | `Problem::from(DecodeError::from(serde_err))` |
+   | `ProblemDetails::from_error(status, title, &err)` | `ProblemDetails::from_problem(&problem)`, or `ProblemDetails::from_status(status).with_detail("…")` |
+   | `impl ResponseError` with no `as_response`, its `Display` the client's | `impl ToProblem`, its `Problem` carrying the sentence |
+
+   This step changes behaviour alone: status, `title` and `code` are unchanged,
+   and the cause stays for the operator and an exception filter.
+
 </Steps>
 
 ## What fails if you get it wrong
@@ -131,6 +159,11 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
 - **A client branching on `INVALID_ARGUMENT` for an upstream's unreadable
   answer** reads `INTERNAL`, and the operator's log gains its chain at `error`;
   **an MCP client reading `-32600`** for an argument refused reads `-32602`.
+
+- **A parameter whose type implemented `RouteResponseShaper`** is rustc's
+  `E0405` at the `impl`, and the route it sat on reads withheld:
+  `current_ability()` answers `None` in its handler.
+- **A client reading an HTTP `4xx`'s `detail` built from an error** finds none.
 
 ## Reference
 

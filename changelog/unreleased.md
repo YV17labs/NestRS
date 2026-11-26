@@ -595,6 +595,36 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
 - **Every page, generator and boot remedy writes a module of a named instance as
   its type**, `RedisModule<Cache>`, where the published release taught `RedisModule::<Cache>`.
 
+### Security
+
+- **Only a route's posture opens its reads.** `#[routes]` probed every
+  parameter's type for a `RouteResponseShaper`, and a route taking one, any
+  crate's, read under its guards' ability with no posture: two routes under the
+  same guards and none declaring one answered `current_ability()` `None` and
+  `Some`. The class gate is now `nest_rs_authz::class_gate::<A, S>`, emitted from
+  `#[authorize(A, S)]` or `#[public(A, S)]` as on every other edge, and no
+  parameter's type is read for it. **Breaking:**
+  `nest_rs::http::RouteResponseShaper`, `ResponseShaping`, `RouteFuture`,
+  `ShapedEndpoint` and `nest_rs::authz::http::Authorize` are gone; a route that
+  read scoped rows through such a parameter declares its posture, and code that
+  shaped a response through the trait moves to an interceptor. The boot
+  refusals of a gate a parameter's type declared, and of a shaper on an `#[sse]`
+  route, go with what they refused.
+- **An HTTP reply's `detail` is a sentence written for the client, never an
+  error's `Display`.** `HttpError::new(e, 4xx)`, a `ResponseError` writing no
+  `as_response` and `ProblemDetails::from_error` sent the error's sentence as
+  `detail`, a denylist of wordings its only filter: a driver's
+  `10.0.0.3:5432 as svc_ledger`, and a partner's `?token=…` once its
+  `reqwest::Error` was wrapped in `#[error(transparent)]`, reached the client.
+  Each now answers its status's problem with no `detail`, the error kept as the
+  cause; the framework's own refusals (`Json`, `Query`, `Form`, `Multipart`,
+  `Path`, a body read, a path parameter) write theirs. WebSocket, MCP and
+  GraphQL already took only a sentence passed in. **Breaking:**
+  `ProblemDetails::from_error` is gone; a client's sentence is a `Problem`'s
+  `with_detail("…")`, a decode of its own text
+  `Problem::from(DecodeError::from(e))`, and a `ResponseError` whose `Display`
+  was the client's implements `ToProblem`.
+
 ### Fixed
 
 - An `#[expect]` on a GraphQL operation, written plain or under a `#[cfg_attr]`, is

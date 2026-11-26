@@ -4,8 +4,7 @@
 //! `#[routes]` reads a body off a `Json<T>` or `Form<T>` spelling; an extractor
 //! that is the body itself names no wrapper, so the macro hands every handler
 //! parameter's *type* to [`BodyProbe`], and the compiler answers whether that
-//! type is a [`DocumentedBody`], as [`ShaperProbe`](crate::__private::ShaperProbe)
-//! answers for a shaper.
+//! type is a [`DocumentedBody`].
 
 use std::marker::PhantomData;
 
@@ -94,8 +93,7 @@ impl<T> UndocumentedProbe for &BodyProbe<T> {
 }
 
 /// The body one parameter type documents, or `None`. The only spelling of the
-/// selection: the extra `&` is what orders the two [`BodyProbe`] arms, as in
-/// [`__shaper_of`](crate::__shaper_of).
+/// selection: the extra `&` is what orders the two [`BodyProbe`] arms.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __body_of {

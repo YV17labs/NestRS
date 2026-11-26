@@ -12,8 +12,8 @@ use http::header::AsHeaderName;
 use http::request::Parts as RequestParts;
 use http::uri::Scheme;
 use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, Uri, Version, header};
+use nest_rs_core::Handler;
 use nest_rs_core::operation_log::OTHER;
-use nest_rs_core::{Handler, ServedAddress};
 
 use crate::body::Body;
 use crate::error::{BodyError, BoxError, Result};
@@ -83,44 +83,6 @@ impl Routed {
     /// `template`, matched with each parameter's decoded value by name.
     pub(crate) fn new(template: Arc<str>, params: Vec<(Arc<str>, String)>) -> Self {
         Self { template, params }
-    }
-}
-
-/// What a line names a request by, kept past the request: the site it runs as,
-/// its verb and the template it matched.
-#[derive(Debug)]
-pub struct ServedRoute {
-    handler: Option<&'static Handler>,
-    verb: Cow<'static, str>,
-    path: Option<Arc<str>>,
-}
-
-impl ServedRoute {
-    /// What `request` is named by. Cheap: a shaper takes it on every armed
-    /// request, for the failure it may never file.
-    pub fn of(request: &Request) -> Self {
-        Self {
-            handler: request.facts.handler,
-            verb: match &request.facts.verb {
-                Some(verb) => verb.clone(),
-                None => Cow::Borrowed(request.conventional_verb()),
-            },
-            path: request
-                .facts
-                .route
-                .as_ref()
-                .map(|routed| Arc::clone(&routed.template)),
-        }
-    }
-
-    /// The site it runs as, when it reached one.
-    pub fn handler(&self) -> Option<&'static Handler> {
-        self.handler
-    }
-
-    /// Where it is served, in the fields its `mounted` line names it by.
-    pub fn address(&self) -> ServedAddress<'_> {
-        ServedAddress::route(&self.verb, self.path.as_deref())
     }
 }
 

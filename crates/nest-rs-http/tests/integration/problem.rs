@@ -7,7 +7,7 @@ use nest_rs_core::{
     App, GlobalInterceptors, Interceptor, Layer, Module, Next, Outcome, Problem, ToProblem,
     Transport, UnitContext, injectable, module,
 };
-use nest_rs_core::{async_trait, code, input};
+use nest_rs_core::{DecodeError, async_trait, code, input};
 use nest_rs_http::StatusCode;
 use nest_rs_http::{
     Form, HttpConfig, HttpError, Json, Opaque, ProblemDetails, Query, RawBody, ResponseError,
@@ -57,16 +57,17 @@ impl DecodeController {
         format!("{:?}", filter.0.card)
     }
 
-    /// A body the handler decodes itself, failing as a `400` it names.
+    /// A body the handler decodes itself, failing as the `400` its decode
+    /// report says.
     #[post("/own")]
     #[public]
     async fn own(&self, body: RawBody) -> Result<String> {
-        let amount: u64 = serde_json::from_slice(&body)
-            .map_err(|err| HttpError::new(err, StatusCode::BAD_REQUEST))?;
+        let amount: u64 =
+            serde_json::from_slice(&body).map_err(|err| Problem::from(DecodeError::from(err)))?;
         Ok(amount.to_string())
     }
 
-    /// The same decode, through an error of the handler's own that knows its status.
+    /// The same decode, through an error of the handler's own that says its problem.
     #[post("/bad-request")]
     #[public]
     async fn bad_request(&self, body: RawBody) -> std::result::Result<String, BadAmount> {
@@ -74,13 +75,12 @@ impl DecodeController {
         Ok(amount.to_string())
     }
 
-    /// A problem built from the error by the framework's own constructor.
+    /// The same report, as the edge's own document.
     #[post("/problem")]
     #[public]
     async fn problem(&self, body: RawBody) -> std::result::Result<String, ProblemDetails> {
-        let amount: u64 = serde_json::from_slice(&body).map_err(|err| {
-            ProblemDetails::from_error(StatusCode::BAD_REQUEST, "Bad Request", &err)
-        })?;
+        let amount: u64 = serde_json::from_slice(&body)
+            .map_err(|err| ProblemDetails::from_problem(&Problem::from(DecodeError::from(err))))?;
         Ok(amount.to_string())
     }
 
@@ -88,7 +88,9 @@ impl DecodeController {
     #[get("/own-words")]
     #[public]
     async fn own_words(&self) -> Result<String> {
-        Err(HttpError::new(MustBePositive, StatusCode::BAD_REQUEST))
+        let refused = Problem::new(400, code::INVALID_ARGUMENT)
+            .with_detail("invalid value: must be positive");
+        Err(HttpError::from(refused))
     }
 
     /// A failure the client must not read, carrying a decode failure in an
@@ -103,20 +105,16 @@ impl DecodeController {
     }
 }
 
-/// A handler's own decode failure, which knows its status.
+/// A handler's own decode failure, which says its problem.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 struct BadAmount(#[from] serde_json::Error);
 
-impl ResponseError for BadAmount {
-    fn status(&self) -> StatusCode {
-        StatusCode::BAD_REQUEST
+impl ToProblem for BadAmount {
+    fn to_problem(&self) -> Option<Problem> {
+        Some(Problem::from(DecodeError::from(&self.0)))
     }
 }
-
-#[derive(Debug, thiserror::Error)]
-#[error("invalid value: must be positive")]
-struct MustBePositive;
 
 #[module(providers = [DecodeController, Forwarding])]
 struct DecodeModule;
@@ -1074,5 +1072,90 @@ async fn an_opaque_503_is_its_class_s_document() {
                 "code": "UNAVAILABLE",
             }),
         );
+    }
+}
+
+/// What a foreign error says of itself: where it ran and as whom.
+const LEDGER_REFUSED: &str = "connect to ledger at 10.0.0.3:5432 as svc_ledger refused";
+
+/// A dependency's error passed through whole, as `#[error(transparent)]` writes it.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+struct CarrierFailed(#[from] reqwest::Error);
+
+/// An error of the handler's own whose sentence is the operator's, rendered
+/// by `ResponseError`'s default.
+#[derive(Debug, thiserror::Error)]
+#[error("{LEDGER_REFUSED}")]
+struct LedgerRefused;
+
+impl ResponseError for LedgerRefused {
+    fn status(&self) -> StatusCode {
+        StatusCode::CONFLICT
+    }
+}
+
+/// A partner's URL, its credential in the query string.
+async fn carrier_failure() -> reqwest::Error {
+    reqwest::Client::new()
+        .get("https://127.0.0.1:1/parcels/42?token=s3cr3t")
+        .send()
+        .await
+        .expect_err("nothing listens on port 1")
+}
+
+#[controller(path = "/foreign")]
+struct ForeignController;
+
+#[routes]
+impl ForeignController {
+    #[get("/io")]
+    #[public]
+    async fn io(&self) -> Result<String> {
+        Err(HttpError::new(
+            std::io::Error::other(LEDGER_REFUSED),
+            StatusCode::BAD_REQUEST,
+        ))
+    }
+
+    #[get("/carrier")]
+    #[public]
+    async fn carrier(&self) -> Result<String> {
+        Err(HttpError::new(
+            CarrierFailed(carrier_failure().await),
+            StatusCode::NOT_FOUND,
+        ))
+    }
+
+    #[get("/typed")]
+    #[public]
+    async fn typed(&self) -> std::result::Result<String, LedgerRefused> {
+        Err(LedgerRefused)
+    }
+}
+
+#[module(providers = [ForeignController])]
+struct ForeignModule;
+
+/// A reply's `detail` is a sentence written for the client, never an error's
+/// `Display`: a `4xx` built from a foreign error answers its status's problem,
+/// and the error stays its cause for the operator.
+#[tokio::test]
+async fn a_foreign_errors_sentence_never_reaches_the_client() {
+    let client = crate::boot::<ForeignModule>().await;
+    for (path, status) in [
+        ("/foreign/io", StatusCode::BAD_REQUEST),
+        ("/foreign/carrier", StatusCode::NOT_FOUND),
+        ("/foreign/typed", StatusCode::CONFLICT),
+    ] {
+        let resp = client.get(path).send().await;
+        resp.assert_status(status);
+        resp.assert_content_type("application/problem+json");
+        let body = problem_json(resp).await;
+        assert!(body.get("detail").is_none(), "{path}: {body}");
+        let said = body.to_string();
+        for secret in ["10.0.0.3", "svc_ledger", "s3cr3t", "127.0.0.1"] {
+            assert!(!said.contains(secret), "{path} said {secret}: {said}");
+        }
     }
 }

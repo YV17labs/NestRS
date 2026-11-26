@@ -40,6 +40,21 @@ pub(crate) fn problem_response(problem: &Problem) -> crate::Response {
     response
 }
 
+/// The response a refusal of the edge's own answers: its status's problem, and
+/// on a `4xx` `sentence`, which the refusal's type words for the client and
+/// which quotes nothing the request sent.
+pub(crate) fn refusal_response(
+    status: StatusCode,
+    sentence: &dyn std::fmt::Display,
+) -> crate::Response {
+    let problem = ProblemDetails::from_status(status);
+    let problem = match status.is_client_error() {
+        true => problem.with_detail(sentence.to_string()),
+        false => problem,
+    };
+    crate::IntoResponse::into_response(problem)
+}
+
 /// Body of an `application/problem+json` response.
 ///
 /// Every problem the framework builds from a status alone has one `type`,
@@ -87,18 +102,6 @@ fn serialize_status<S: serde::Serializer>(
 }
 
 impl ProblemDetails {
-    /// A problem whose `detail` is `err`'s own sentence, any decode failure its
-    /// chain holds said without its value ([`DecodeError::redact`]).
-    pub fn from_error(
-        status: StatusCode,
-        title: impl Into<String>,
-        err: &(dyn std::error::Error + 'static),
-    ) -> Self {
-        Self::from_status(status)
-            .with_title(title)
-            .with_detail(DecodeError::redact(&err.to_string(), Some(err)).into_owned())
-    }
-
     /// The HTTP document of a [`Problem`]: its status's own problem, under
     /// the problem's [`type_uri`](Problem::type_uri) and
     /// [`title`](Problem::title) when it names them, its
@@ -128,24 +131,6 @@ impl ProblemDetails {
             document = document.with_extension(FIELD_ERRORS, errors.clone());
         }
         document
-    }
-
-    /// The problem an error answers with `status`: the status's own problem,
-    /// whose `detail` on a `4xx` is `error`'s sentence said without any value
-    /// it quotes ([`DecodeError::redact`]), and which a `5xx` answers without
-    /// one, so a driver's message never reaches the wire.
-    pub(crate) fn answering(status: StatusCode, error: &(dyn std::error::Error + 'static)) -> Self {
-        let problem = Self::from_status(status);
-        if !status.is_client_error() {
-            return problem;
-        }
-        let sentence = error.to_string();
-        let said = DecodeError::redact(sentence.trim(), Some(error));
-        if said.is_empty() {
-            problem
-        } else {
-            problem.with_detail(said.into_owned())
-        }
     }
 
     /// The problem a bare [`StatusCode`] answers: `about:blank` and the
@@ -845,12 +830,6 @@ mod tests {
             serde_json::to_value(ProblemDetails::internal()).unwrap(),
             internal_document(),
         );
-        let failed = ProblemDetails::from_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal Server Error",
-            &std::fmt::Error,
-        );
-        assert_eq!(failed.extensions["code"], "INTERNAL");
     }
 
     /// The `503` the request deadline answers, an empty body, is lifted onto

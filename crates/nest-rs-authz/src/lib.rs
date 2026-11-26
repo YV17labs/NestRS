@@ -81,7 +81,7 @@ pub use nest_rs_authz_macros::subject;
 #[cfg(feature = "graphql")]
 pub mod graphql;
 #[cfg(feature = "http")]
-pub mod http;
+mod http;
 #[cfg(feature = "mcp")]
 mod mcp;
 #[cfg(feature = "ws")]

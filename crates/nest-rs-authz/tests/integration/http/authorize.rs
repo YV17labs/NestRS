@@ -366,3 +366,107 @@ mod gate_order {
         assert!(chain.contains("#[use_guards]"), "{chain}");
     }
 }
+
+/// Who may read is the posture's to say, never a parameter's: two routes under
+/// the same guards and no posture read alike, whatever trait a parameter's type
+/// implements.
+mod a_parameters_type {
+    use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action, current_ability};
+    use nest_rs_core::{AmbientValue, Layer, UnitContext, async_trait, injectable, module};
+    use nest_rs_guards::{Denial, Guard, GuardFor, GuardPhase, PrincipalClaim};
+    use nest_rs_http::{FromRequest, HttpView, Json, Request, RequestBody, controller, routes};
+    use nest_rs_testing::TestApp;
+
+    #[nest_rs_authz::subject]
+    struct Browsing;
+
+    #[derive(Clone)]
+    struct Caller;
+
+    impl AmbientValue for Caller {}
+
+    /// Attaches a caller to every request: the ability guard has an actor.
+    #[injectable]
+    #[derive(Default, Layer)]
+    struct CallerGuard;
+
+    #[async_trait]
+    impl Guard for CallerGuard {
+        fn phase(&self) -> GuardPhase {
+            GuardPhase::Authentication
+        }
+
+        fn produced_principal(&self) -> Option<PrincipalClaim> {
+            Some(PrincipalClaim::of::<Caller>())
+        }
+
+        async fn check_http(&self, cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            cx.attach(Caller);
+            Ok(())
+        }
+
+        async fn check(&self, _cx: &mut UnitContext<'_>) -> Result<(), Denial> {
+            Ok(())
+        }
+    }
+
+    impl GuardFor<HttpView> for CallerGuard {}
+
+    #[injectable]
+    #[derive(Default)]
+    struct Rules;
+
+    impl AbilityFactory for Rules {
+        type Actor = Caller;
+
+        fn define(&self, _caller: &Caller, ability: &mut AbilityBuilder) {
+            ability.can(Action::Read, Browsing);
+        }
+    }
+
+    /// A parameter whose type is what a posture names, a subject.
+    #[nest_rs_authz::subject]
+    struct Innocent;
+
+    impl<'a> FromRequest<'a> for Innocent {
+        async fn from_request(
+            _req: &'a Request,
+            _body: &mut RequestBody,
+        ) -> nest_rs_http::Result<Self> {
+            Ok(Innocent)
+        }
+    }
+
+    #[controller(path = "/reads")]
+    #[use_guards(CallerGuard, AbilityGuard<Rules>)]
+    #[derive(Default)]
+    struct ReadsController;
+
+    #[routes]
+    impl ReadsController {
+        #[get("/plain")]
+        async fn plain(&self) -> Json<bool> {
+            Json(current_ability().is_some())
+        }
+
+        #[get("/typed")]
+        async fn typed(&self, _innocent: Innocent) -> Json<bool> {
+            Json(current_ability().is_some())
+        }
+    }
+
+    #[module(providers = [ReadsController, CallerGuard, Rules, AbilityGuard<Rules>])]
+    struct ReadsModule;
+
+    #[tokio::test]
+    async fn a_route_with_no_posture_reads_withheld_whatever_its_parameters_types() {
+        let app = TestApp::for_module::<ReadsModule>()
+            .await
+            .expect("two routes under one guard chain boot");
+
+        for path in ["/reads/plain", "/reads/typed"] {
+            let read = app.http().get(path).send().await;
+            read.assert_json(serde_json::json!(false)).await;
+        }
+    }
+}

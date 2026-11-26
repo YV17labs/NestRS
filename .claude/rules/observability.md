@@ -172,7 +172,8 @@ field or the enclosing span carries, and no two layers emit the same event.
 (`.claude/decisions/payload-never-quoted.md`): a URL is shown through
 `nest_rs_config::endpoint_shown`, a `validator` failure through
 `ConfigError::validation`, a serde failure through `DecodeError`, a driver's
-error through its `SafeLink`; no sentence formats a raw `ValidationErrors`, a
+error through the one `SafeLink` its type has (`ContestedSafeLinkError` refuses a
+second); no sentence formats a raw `ValidationErrors`, a
 serde error, a driver's error or a configured string. Held by review: no lint
 reads a `Display`. `SafeLink` is one reader of a chain, and a `{:?}` or a `main`
 returning the error another, past it: a holder keeping a driver's error or a cause

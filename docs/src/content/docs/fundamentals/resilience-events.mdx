@@ -134,8 +134,10 @@ said by what that crate reads of it wherever the framework says an error:
   request: received fatal alert: CertificateExpired`), a port that speaks no TLS
   (`received corrupt message of type InvalidContentType`), a peer sharing no
   version or suite with the client;
-- a certificate the client refuses, by a constant sentence without its names and
-  dates (`invalid peer certificate: UnknownIssuer`);
+- a certificate the client refuses, by its constant reason
+  (`invalid peer certificate: BadSignature`, `: CaUsedAsEndEntity`,
+  `: certificate does not allow extended key usage for server authentication`),
+  never its names, its dates or the usages it allows;
 - a proxy that opened no tunnel, by one of six constant sentences
   (`tunnel error: proxy authorization required`, `tunnel error: unsuccessful`),
   then the cause beneath it where there is one, said as any other;
@@ -157,7 +159,9 @@ it from the chain, and without that crate every reqwest error is said as it writ
 itself. On the policy's lines and events its URL is then cut to its origin and its
 status to its code, its causes said as they write themselves; on an edge's own
 line nothing is cut. Name reqwest's error as your error's `#[source]`, as
-`UpstreamError` does.
+`UpstreamError` does. A `SafeLink` of your own over `reqwest::Error` refuses the
+boot beside that crate's, a type having one sayer: word it your way through an
+error type of your own.
 
 ## The counters
 
@@ -217,12 +221,11 @@ that expansion writes, and refuses one wrapped otherwise, saying to write
 `#[resilient]` above; a release writing none of those names would be read as no
 instrument.
 
-On a GraphQL operation the order says nothing: `#[operations]` hands the
-instrument to the field it generates, so one span covers the whole field, its
-guards and every attempt. Its `err` is written `err(Debug)`, the field's error
-having a `Debug` and no `Display`, and `ret` does not compile there, the field's
-answer having neither. A span per attempt there is that of a provider's decorated
-method the operation calls, instrumented above `#[resilient]`.
+On a GraphQL operation the order says what it says on a route: the instrument
+stays on your method. Below `#[resilient]` one span covers the whole run, its
+`err` and `ret` recording what the method answers; above it, each attempt opens a
+span of its own. The field's guards, gate and pipes run before the method, outside
+that span, inside the request's `graphql.field` span.
 
 ## Limits
 

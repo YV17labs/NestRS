@@ -260,9 +260,10 @@ export default defineConfig({
             { label: 'Getting started', slug: 'getting-started' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
             { label: 'Semver policy', slug: 'semver' },
-            // Last in the group a returning reader opens first: the one page a
-            // 6.x project follows to 7.0, beside the orientation it no longer
-            // needs, rather than under Reference, three screens down.
+            // Last in the group a returning reader opens first: the page a
+            // project follows to the next major, beside the orientation it no
+            // longer needs, rather than under Reference, three screens down.
+            { label: 'Upgrading from 7.x', slug: 'upgrading-from-7' },
             { label: 'Upgrading from 6.x', slug: 'upgrading' },
           ],
         },

@@ -456,3 +456,39 @@ back, by the `DbErr` `ServiceError::Db` held, by the one boxed in `AtomicError::
 and `OutboxError::Database`, by `retry_on_conflict`'s answer and by `EphemeralDatabase`'s
 report; none prints it now. `ServiceError::Db` holds a `RepoError`, so its view of a
 `DbErr` is gone; the driver's `SafeLink` stays for a `DbErr` a chain still holds.
+
+## 2026-11-26 — a `SafeLink` names its type, and a type has one sayer
+
+A `SafeLink` was a function over any link, `fn(&dyn Error) -> Option<String>`,
+downcasting to its driver's types. Each sayer owed the pointers `std` makes an error
+of — an `Arc`, a `Box`, which an error naming its source behind one hands out — and
+read them through `link_as`, or did not: a package's that forgot one left its type
+said by its own `Display`, values included (`resilience-policy.md`, 2026-11-24). And
+two sayers claiming one type both stood: which spoke was link order, and the other
+went quiet in every line, an app's own beside `nest-rs-reqwest`'s among them. Taken
+under the directive of 2026-11-25 (`semver-7x.md`), a break of every sayer.
+
+- **Decided**: `SafeLink::of(&say)`, over `fn(&T) -> Option<String>`. The sayer names
+  its type and downcasts nothing; core reads `T` once, for every sayer — the link
+  itself, an `Arc<T>` or a `Box<T>` handed out as the link, an `Arc<dyn Error>`
+  holding either, and an `io::Error` holding one, which displays the error it holds
+  whole. An I/O error holding a claimed error (`io::Error::other(DbErr)`) is said by
+  that sayer in every program, where the held error's sentence was said.
+- **A type has one sayer.** Two functions claiming one type refuse the boot, naming
+  the type and both functions by their paths, which name their crates
+  (`ContestedSafeLinkError`, read as `AppBuilder::build` starts, before any module
+  collects). An app wording a library's error its own way claims an error type of its
+  own holding that one as its source. One function linked twice — a crate's unit tests
+  link the crate again through a dev-dependency on it — is one sayer, compared by
+  path. A binary building no `App` runs no check, and reads the first entry linked.
+- **`link_as` and the new `decode_failure` stay tier 2**, for a sayer reading the
+  causes beneath its own error: `nest-rs-reqwest`'s is the one.
+
+**Refused:** the sayer held by value, `SafeLink::of::<T>(say)`, as the change was first
+designed. Erasing a function pointer's type in a `const fn` takes `unsafe`, or a marker
+trait per sayer; a reference to the function item erases in safe code, and its type
+name is what names both crates in the refusal. A sayer over `&dyn Error` claims no
+type and does not compile (`E0277`, a `compile_fail` doctest).
+
+**Limits, unchanged:** a pointer to a pointer of a claimed type, a reference handed out
+as the link and an `#[error(transparent)]` wrapper are read by no sayer.

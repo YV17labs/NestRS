@@ -77,8 +77,10 @@ the handler body never runs:
 | MCP | `invalid_params` (`-32602`), `{ code: "INVALID_ARGUMENT", errors? }` in the error's `data` |
 | Queue | A job error that dead-letters at once: the same payload fails every attempt |
 
-A handler that parses a value itself answers its `PipeError` the same way,
-through its edge's `pipe_error`: `nest_rs::http::pipe_error`,
+A handler that parses a value itself returns its `PipeError`, bare or wrapped in
+its own error, and it answers the same way on every edge: the rejection carries
+its problem (`PipeError::problem`). A body answering the edge's own error type
+renders it with that edge's `pipe_error`: `nest_rs::http::pipe_error`,
 `nest_rs::graphql::pipe_error`, `nest_rs::mcp::pipe_error`, and
 `WsReply::pipe_error` on WebSockets.
 

@@ -108,8 +108,8 @@ and the compile error says so.
 It goes on a provider, a struct you build, a trait impl, a route, a socket
 message, a queue job, a scheduled tick, a listener, a health indicator, a
 lifecycle hook, an MCP tool, prompt, resource or listing, and a GraphQL query,
-mutation, field resolver or entity, where `#[operations]` keeps it on your method
-and puts the method's other attributes on the field it generates. On an `#[sse]`
+mutation, field resolver or entity, where `#[operations]` leaves it on your method
+with every attribute it does not consume. On an `#[sse]`
 route or a `#[subscription]`, it runs the call opening the stream, never the items
 it yields: a stream calling the dependency per item calls a decorated method each.
 
@@ -241,10 +241,9 @@ impl ToProblem for UpstreamError {
 A route, a resolver, a gateway's message or a tool then returns
 `ResilienceError<UpstreamError>` as it is; a domain error of your own wrapping it
 hands its problem on with `self.0.to_problem()`. An error that is no `ToProblem` is
-answered on GraphQL, WebSocket and MCP by what its chain carries: a decode
-failure, an unreadable answer of the upstream's included, is told the client as
-its own `INVALID_ARGUMENT`, unless a pointer (`Arc<serde_json::Error>`) holds it. A
-`to_problem` answering `None` keeps it opaque. A queue job refused by an open
+answered by the `Problem` its chain carries, opaquely where it carries none: an
+upstream's answer that does not decode is the server's failure on every edge, its
+chain filed. A queue job refused by an open
 breaker or a reached rate limit waits at least the refusal's `Retry-After`, up to
 an hour ([how a job honours it](/queue/retries-and-failure/)).
 
@@ -311,15 +310,11 @@ off is `None`.
   rustc's `E0609` at the field.
 - **A WebSocket connection hook answers `()`**, so it carries no `#[resilient]`: it
   calls a decorated method — the gateway's own, or a service's — and handles its error.
-- **`#[operations]` reads `#[resilient]` by its name**, by any path, in a build
-  where any crate enables `resilience` (Cargo unifies features across a build):
-  one of yours by that name lands on your method instead of the field, failing
-  to compile or covering the method alone, so import it under another name. The
-  umbrella's `full` feature takes `resilience`, so this holds for an app on `full`,
-  whose boot also refuses a `#[config]` of its own in the `resilience` namespace.
-  `#[operations]` keeps `#[resilient]` on the method written plain or as an entry of a
-  `#[cfg_attr]`, under its condition, and reads a decorated field's `Result` by
-  its spelling, refusing one written through an alias.
+- **A decorated GraphQL field spells its `Result<…>` out**: `#[operations]` reads
+  a field's answer by its spelling, so a `ResilienceError<E>` answered through an
+  alias is refused at the return type, in one sentence. The umbrella's `full`
+  feature takes `resilience`, so an app on `full` cannot declare a `#[config]` of
+  its own in the `resilience` namespace.
 - **No attempt number** is handed to a body, a predicate or a fallback: a closure
   counts its own calls.
 - **The limits of the keys, a fallback and a unit's transaction** are on

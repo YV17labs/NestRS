@@ -1009,3 +1009,132 @@ lock" and the limit it left, a transition being told once the lock is let go.
   `futures-core` into the port.
 - **`BREAKER_AGE_SECS` is whole seconds** in the environment; a window under a
   second is `for_root`'s.
+
+## 2026-11-26 — an operation keeps every attribute on its method, every driver owes the attempt's savepoint, and core reads a pointer for every sayer
+
+Taken under the owner's directive of 2026-11-25 (`semver-7x.md`): compatibility
+with a published release is no constraint, and the release holding a break is a
+major. Three designs version 7 had held back went in one change, so the line
+these entries call 7.1 is 8.0: "new in 7.1" and "7.1's switches and probes"
+above name the release this capability ships in, 8.0.
+
+- **`#[operations]` leaves every attribute it does not consume on the
+  developer's method**, as every other impl half does: a decorator under any
+  name and any `#[cfg_attr]`, an instrument reading `self`, a lint level holding
+  the body, an app's own attribute named `resilient`. No impl half reads
+  `#[resilient]` by its name any more: the field mark, the `#[cfg_attr]` splitter and the
+  `resilience` features of `nest-rs-graphql` and `nest-rs-graphql-macros` went,
+  and the umbrella's `resilience` is `dep:nest-rs-resilience` alone. The field
+  the macro generates carries what describes it to async-graphql — `#[graphql(…)]`,
+  the docs, each `#[cfg]`, one inside a `#[cfg_attr]` unfolded, and each
+  `#[allow]`, an `#[expect]` as an `#[allow]` — so an instrument on an operation
+  spans the method's body, after the guards, the gate and the pipes, and its
+  `err` records the method's own error, never the opaque GraphQL one.
+- **Rust's `#[deprecated]` on an operation is refused**, naming
+  `#[graphql(deprecation = "…")]`, as `#[routes]` refuses it on a handler
+  (`route-deprecation.md`, this date). A `#[graphql(…)]` inside a `#[cfg_attr]`
+  is refused too: the derive reading it expands before any condition is
+  evaluated, so nothing would read it.
+- **A field answering a `Result` under another name whose error async-graphql
+  cannot answer is told so first**, decorated or not, in one sentence at its
+  return type, rustc's unmet bounds following. The sentence leads because its
+  probe is an async method of a trait impl per block, which rustc checks before
+  the derive's impls: rustc's order, not a guarantee, which the snapshot shows
+  the day a toolchain moves it. An answer holding an `impl Trait`, or `!`, is
+  not asked, no turbofish naming it.
+- **A gated `#[subscription]` answers a stream a type names or a boxed one**,
+  decorated or not, as an ungated one does.
+- **Every data driver owes the savepoint an attempt runs in.**
+  `nest_rs_database::Executor` says what a handle holds (`Holds::Pool`,
+  `Holds::Transaction`), and `HeldTransaction::savepoint` has no default, so each
+  attempt of an idempotent call, or of a method naming a `fallback`, runs in a
+  savepoint on every driver's transaction — a unit's, a block's, a block of its
+  own on a pool unit — and on the pool runs as with no policy. As this line first
+  built it, `Executor::savepoint` defaulted to none, and a driver leaving it out
+  committed a failed attempt's writes beside its retry's, silently. Held by
+  rustc and by an idempotent replay leaving one write on every handle, on
+  Postgres.
+- **`Problem` is the one vocabulary an edge reads in a chain.** A decode failure
+  a chain holds — a dependency's unreadable answer among them — is the server's
+  on every edge, answered opaquely and filed, and `DecodeError::in_chain` is
+  gone: a handler decoding its client's text says so with
+  `Problem::from(DecodeError::from(e))`. A `SafeLink` is typed,
+  `SafeLink::of(&say)`, and core reads its type bare, behind an `Arc` or a
+  `Box`, through an `Arc<dyn Error>` and inside an I/O error holding one, for
+  every sayer; two sayers of one type refuse the boot
+  (`payload-never-quoted.md`, this date). A certificate rustls refuses is said
+  by its constant reason, read by type off rustls's `CertificateError` and
+  webpki's error inside its `Other` (`.claude/upstream/rustls.md`).
+
+**Reopened and built.** The 2026-11-22 refusal of "**Every attribute of an
+operation kept on the developer's method**: it refuses 7.0 programs whose
+attribute names a parameter the field leaves out —
+`#[tracing::instrument(skip(self, ctx))]` beside a `Scoped<T>`, which is no
+`Debug` — a break inside a major." Its one reason was the break, which 8.0 holds;
+its changelog's upgrading entry says what a 7.0 program changes.
+
+**Superseded:**
+
+- 2026-11-21: "**An impl half keeps `#[resilient]` on the developer's method**,
+  read by its name. `#[routes]`, `#[messages]`, `#[tools]` and `#[processor]`
+  leave any other decorator there too; `#[operations]` hands an operation's other
+  attributes to the field it generates, where 7.0 placed them." Every impl half
+  leaves what it does not consume, and none reads it by name.
+- 2026-11-22, *How each holds*: "**`#[operations]` places an operation's
+  attributes as 7.0.0 did**, on the wrapper it generates", with its reading by the
+  path's last segment, under a feature Cargo unifies across a build.
+- 2026-11-22, refused: "**`#[resilient]` read by its full path**: the docs import
+  it under its short name, as every decorator is." No impl half reads its path:
+  the question is gone.
+- 2026-11-24: "the limit of a `#[resilient]` inside a `#[cfg_attr]` on an
+  operation, which is split out and kept on the method". Nothing is split: the
+  `#[cfg_attr]` stays whole on the method.
+- 2026-11-24: "**A `SafeLink` reads its error behind a pointer**: … each sayer of
+  the workspace reads its type through `link_as` … A line reads so; what an edge
+  answers does not: `DecodeError::in_chain` reads a link that is a decode
+  failure, as 7.0 does, and one an error shares behind a pointer is answered
+  opaquely and its line filed". Core reads the type once for every sayer, so no
+  sayer calls `link_as`, and no edge answers a decode failure a chain holds,
+  bare or behind a pointer.
+- 2026-11-21, limits: "A GraphQL field writes its `Result` out, since
+  `#[operations]` reads a field's answer by its spelling: a decorated field
+  answering any other is refused at its return type, in one sentence, as a
+  subscription's aliased `Result` is." Now: any field answering a `Result` under
+  another name whose error async-graphql cannot answer — a decorated one's
+  `ResilienceError<E>` among them — is told so first, in one sentence at its
+  return type, rustc's unmet bounds following.
+
+**Limits closed:**
+
+- 2026-11-22: "**An app's own attribute named `resilient` on an operation** is
+  read as the framework's in a build where any crate enables the resilience
+  capability … Closing it is reading the decorator by its path, which its
+  short-name import defeats." Closed otherwise: no impl half reads it, so the
+  app's attribute is the app's.
+- 2026-11-22: "**An attribute of an operation reading the method's own `self`** —
+  `#[tracing::instrument(fields(depot = self.depot.0))]` — does not compile, as
+  in 7.0 … Closing it is keeping the attributes on the method, a break only 8.0
+  can make (ROADMAP § 2)." Closed: 8.0 keeps them there.
+- 2026-11-22: "**A `#[resilient]` inside a `#[cfg_attr]` on an operation** goes
+  on the field with the other attributes". Closed by the 2026-11-24 split, and
+  now with no split.
+- 2026-11-24: "**The umbrella's `full` takes `resilience`** … and one with an
+  attribute of its own named `resilient` on an operation has it read as the
+  decorator. … Closing it is `full` leaving the capability out until 8.0, the
+  owner's to decide." The attribute half is closed. The `#[config]` half stands
+  as a break of 8.0, told by its changelog, so nothing is left to wait for.
+- 2026-11-24: "A package's own `SafeLink` reads its pointers itself, `link_as`
+  being tier 2." Closed: core reads a package's type behind every pointer it
+  reads for its own. `link_as` and `decode_failure` stay tier 2 for a sayer
+  reading the causes beneath its own error, `nest-rs-reqwest`'s the one.
+
+**Limits, named:** a pointer to a pointer, a reference handed out as the link and
+an error handing reqwest's sentence on as its own (`#[error(transparent)]`) stay
+unread, as the 2026-11-24 limits say. The aliased `Result` sentence leads by
+rustc's order of checks, and an answer holding an `impl Trait` or `!` gets rustc's
+errors alone.
+
+**Refused:** calling an operation under `allow(deprecated)`, the change's first
+design for keeping Rust's `#[deprecated]` on one: the wrapper would silence the
+lint, as `route-deprecation.md` refused for a route, and a deprecation meant for a
+client would never reach the schema.

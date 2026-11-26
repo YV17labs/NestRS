@@ -128,8 +128,8 @@ HTTP, where every `ToProblem` error is a `ResponseError`, and with that edge's
 `problem_error` on GraphQL and MCP (`nest_rs::graphql::problem_error`,
 `nest_rs::mcp::problem_error`). `nest_rs::http::ResponseError` is for an
 answer that is no problem document — another protocol's body, a challenge.
-What no seam answers — no `ToProblem`, no `ResponseError`, no framework type
-in its chain — is answered opaquely on every edge, and its whole chain is
+What no seam answers — no `ToProblem`, no `ResponseError`, neither a `Problem`
+nor the edge's own error in its chain — is answered opaquely on every edge, and its whole chain is
 filed once at `error`, as is the chain behind a `5xx` problem or a `5xx` a
 `ResponseError` answers: a failed handler is never logged nowhere.
 

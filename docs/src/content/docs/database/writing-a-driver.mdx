@@ -44,55 +44,56 @@ the pool, a transaction opened on the unit's first statement, and an atomic
 block's savepoint. It is no part of that crate's API: an app has nothing to do
 with it, so nothing about it freezes with a release.
 
-What `as_any` hands out is private to your crate. `current_executor` is
-public, so whatever it downcasts to is in every service's reach: a public
-handle there is a connection a service could run a query on that your row
-filter never saw. SeaORM installs its executor inside a crate-private
-wrapper, and its `Repo` hands out no connection, so every statement that
-reaches the database is one `Repo` built, and its select hands out no
-statement to rewrite:
+What the port asks of a handle is what it holds: the pool, or a transaction.
+It reads every other decision off that answer — whether `after_commit` waits,
+the block `atomic` opens, the savepoint a resilience policy runs an attempt in,
+where a pushed job is kept — and each answer is a trait whose methods have no
+default, so a handle that leaves one out does not compile. SeaORM installs one
+crate-private type per answer:
 
 ```rust title="from nest-rs-seaorm's executor"
-pub(crate) struct Installed(pub(crate) SeaOrmExecutor);
+impl nest_rs_database::Executor for InstalledPool {
+    fn holds(&self) -> Holds<'_> {
+        Holds::Pool(self)
+    }
+}
 
-impl nest_rs_database::Executor for Installed {
-    fn as_any(&self) -> &dyn Any {
-        self
+// …
+impl nest_rs_database::Executor for InstalledTransaction {
+    fn holds(&self) -> Holds<'_> {
+        Holds::Transaction(self)
+    }
+}
+```
+
+What it holds is private to your crate. `current_executor` is public, and
+`Holds::downcast_ref` hands out what a handle holds as any type its caller can
+name: a public type there is a connection a service could run a query on that
+your row filter never saw. A wrapper — SeaORM's atomic block — answers what it
+wraps, so your query API reaches through it; and SeaORM's `Repo` hands out no
+connection, so every statement that reaches the database is one `Repo` built,
+and its select hands out no statement to rewrite. A transaction keeps the work
+an emitted event holds for the commit:
+
+```rust title="from nest-rs-seaorm's executor"
+impl HeldTransaction for InstalledTransaction {
+    fn after_commit(&self, work: Deferred) {
+        match self {
+            Self::Lazy(lazy) => lazy.hold(work),
+            Self::Savepoint(block) => block.hold(work),
+        }
     }
     // …
 }
 ```
 
-Its other obligation is to keep the work an emitted event holds for the
-commit, which the wrapper forwards to the enum:
-
-```rust title="from nest-rs-seaorm's executor"
-/// A lazy transaction or a block's savepoint holds the work for its
-/// settling; a pool hands it back to run at once.
-pub(crate) fn after_commit(&self, work: Deferred) -> Option<Deferred> {
-    match self {
-        SeaOrmExecutor::Lazy(lazy) => {
-            lazy.hold(work);
-            None
-        }
-        SeaOrmExecutor::Savepoint(block) => {
-            block.hold(work);
-            None
-        }
-        SeaOrmExecutor::Pool(_) => Some(work),
-    }
-}
-```
-
-The trait's default hands the work back to run at once — right for a handle
-with no transaction, and wrong for one with: a driver that leaves it out
-dispatches every event emitted inside a transaction before that transaction
-landed, and announces writes a rollback then undoes. The held work runs where
+On the pool the port runs the work at once; handed to a transaction, it is
+yours to run after the commit and drop on every other outcome. It runs where
 the unit settles, so take what it needs where it is registered: what the unit
 carries into its commit (`RequestContinuation::capture(Continuation::Commit)`)
-and the scope it ran under (`current_executor_scope()`), inside which your
-handle outside the transaction is installed when the work runs. Contain a
-panic in it: the commit already stood.
+and the scope it ran under (`current_executor_scope()`), inside which your pool
+is installed when the work runs. Contain a panic in it: the commit already
+stood.
 
 ### The unit of work
 
@@ -177,39 +178,27 @@ timeout cuts the body, never the commit: the edge waits your `settle_net` past
 the unit's deadline before it answers `500` for a commit that never answered.
 What the router answers itself — a `404`, a `405` — opens no unit.
 
-### Atomic blocks (optional)
+### Atomic blocks
 
-`nest_rs::database::atomic(work)` asks the ambient executor for a block
-through `Executor::atomic`. The default answers `None`, and `atomic` then
-refuses with `AtomicError::Unsupported` without running the work —
-fail-closed, so a driver that offers no block loses the feature, and every
-GraphQL mutation with it: each root field runs in a block. SeaORM's nests a
-savepoint in whatever transaction the handle holds, through
-`Executor::savepoint`, and opens a transaction of its own on the pool:
+`nest_rs::database::atomic(work)` opens a block off what the ambient handle
+holds: a savepoint of a transaction (`HeldTransaction::savepoint`), a
+transaction of its own on the pool (`HeldPool::transaction`); outside any unit
+it refuses with `AtomicError::Unsupported` without running the work. Every
+GraphQL mutation runs each root field in one, and a resilience policy runs each
+attempt of an idempotent call, or of a method naming a `fallback`, in the
+transaction's savepoint, so a failed attempt's writes never stay in the unit; on
+the pool an attempt runs as it would with no policy. SeaORM sends its savepoint
+on the connection of the transaction, or the block, it opens in:
 
-```rust title="from nest-rs-seaorm's executor, abridged"
-pub(crate) fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-    self.savepoint().or_else(|| {
-        let own = AtomicExecutor::own(Arc::new(self.own_block()?));
-        Some(Arc::new(own) as Arc<dyn AtomicBlock>)
-    })
-}
-
-// …
-pub(crate) fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
+```rust title="from nest-rs-seaorm's executor"
+fn savepoint(&self) -> Arc<dyn AtomicBlock> {
     let savepoint = match self {
-        SeaOrmExecutor::Pool(_) => return None,
-        SeaOrmExecutor::Lazy(lazy) => Savepoint::in_boundary(Arc::clone(lazy)),
-        SeaOrmExecutor::Savepoint(block) => Savepoint::in_block(Arc::clone(block)),
+        Self::Lazy(lazy) => Savepoint::in_boundary(Arc::clone(lazy)),
+        Self::Savepoint(block) => Savepoint::in_block(Arc::clone(block)),
     };
-    Some(Arc::new(AtomicExecutor::savepoint(Arc::new(savepoint))))
+    Arc::new(AtomicExecutor::savepoint(Arc::new(savepoint)))
 }
 ```
-
-`Executor::savepoint` is also what a resilience policy runs each attempt of an
-idempotent call, or of a method naming a `fallback`, in. Its default answers `None`, and such an attempt then runs on
-the executor itself, so a failed attempt's writes stay in the unit: a driver
-whose `atomic` opens a savepoint inside a transaction overrides it.
 
 A block owes, in order of how badly it goes wrong without it: the enclosing
 unit waits for it, so none of its statements lands inside the block's
@@ -225,21 +214,23 @@ unit answering `Unhonoured::IN_DOUBT` when the body was cut before it saw
 that commit's answer. `crates/nest-rs-seaorm/src/savepoint.rs` and `turn.rs`
 are the reference shape.
 
-### The outbox (optional)
+### The outbox
 
 A job pushed inside a unit is filed after its commit only where the driver
-keeps an outbox: the queue port hands the sealed jobs to
-`Executor::write_outbox`, whose default answers `None` — the job is filed at
-once, and a rollback leaves it behind. To keep one, bind a
+keeps an outbox: the queue port writes the sealed jobs into the `Outbox` a
+transaction answers (`HeldTransaction::outbox`), and a cancel removes a record
+through it, or through the `OutboxKept` the pool answers (`HeldPool::outbox`).
+A handle answering `None` says it keeps none: its jobs are filed at once, and a
+rollback leaves them behind. To keep one, bind a
 `nest_rs::database::OutboxStore` over a table of your own beside your unit of
 work — `arm` proves the table, `written` wakes once a unit that wrote records
 committed, `claim` locks due records no other relay holds, oldest first — and
 import `nest_rs::queue::OutboxModule`, which attaches the relay that drains
-it. Then write the records `write_outbox` hands you on each transaction a unit
-settles, in its turn, and wake the relay after its commit; `remove_outbox` and
-`remove_outbox_unique` delete a record no relay has filed, and wait for one a
-relay holds rather than skip it. The records are opaque: write them as you
-receive them, and never log the sealed text, which carries the job's payload.
+it. Then answer an outbox once the store is armed: `write` the records on the
+transaction, in its turn, and wake the relay after its commit; `remove` and
+`remove_unique` delete a record no relay has filed, and wait for one a relay
+holds rather than skip it. The records are opaque: write them as you receive
+them, and never log the sealed text, which carries the job's payload.
 `crates/nest-rs-seaorm/src/queue/outbox.rs` is the reference shape.
 
 ## The binding

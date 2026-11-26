@@ -124,28 +124,24 @@ a retry replays the whole job body, side effects included:
 **Say your errors without their values.** A database server words its
 refusal around the input it refused, and every framework log line, a dead
 letter's reason and a client's error frame read an error chain through
-`nest_rs::core::error_message`, which asks each `SafeLink` about a link before
-its `Display`. Submit one:
+`nest_rs::core::error_message`, which asks the `SafeLink` of a link's type before
+its `Display`. Submit one per error type:
 
 ```rust title="crates/acme/src/error.rs"
-use std::error::Error;
-use std::sync::Arc;
-
-nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say) }
 
 /// What an `AcmeError` means, said without a value.
-fn say(link: &(dyn Error + 'static)) -> Option<String> {
-    let error = link
-        .downcast_ref::<AcmeError>()
-        .or_else(|| link.downcast_ref::<Arc<AcmeError>>().map(|held| &**held))
-        .or_else(|| link.downcast_ref::<Box<AcmeError>>().map(|held| &**held))?;
+fn say(error: &AcmeError) -> Option<String> {
     Some(format!("acme error {}", error.code()))
 }
 ```
 
-`std` makes an `Arc` and a `Box` of an error an error of its own, so one naming
-yours as its `#[source]` behind either hands out the pointer, which your sayer
-downcasts to as well; an `Arc<dyn Error>` is read through before it is asked.
+Your sayer names its type and downcasts nothing. `std` makes an `Arc` and a `Box`
+of an error an error of its own, so one naming yours as its `#[source]` behind
+either hands out the pointer: the framework reads your type there, through an
+`Arc<dyn Error>`, and inside an I/O error holding one, before it asks your sayer.
+A type has one sayer: a second function claiming `AcmeError` refuses the boot,
+naming the type and both functions (`ContestedSafeLinkError`).
 
 A link your sayer claims is said by its sentence alone, and nothing below it
 is read. Keep identifiers — a code, a constraint, a table — and drop every

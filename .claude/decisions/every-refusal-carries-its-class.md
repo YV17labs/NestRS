@@ -234,3 +234,26 @@ spelling the docs already taught. `nest_rs_http::problem_error` goes: `?` and
 `HttpError::from` do what it did. GraphQL's and MCP's stay, their error
 types being their libraries'.
 
+## 2026-11-26 — a decode failure a chain holds is the server's, and `INVALID_ARGUMENT` is MCP's `invalid_params`
+
+Two answers named a class that did not hold. Changed under the directive of
+2026-11-25 (`semver-7x.md`), each a break of what a client reads.
+
+- **A decode failure a handler's chain held answered `INVALID_ARGUMENT`** on
+  GraphQL, WebSocket and MCP (`DecodeError::in_chain`) and filed nothing, where
+  HTTP answered `500` and filed it: a partner's answer that did not decode was
+  blamed on the client and hidden from the operator. Decided: `Problem` is the
+  one vocabulary an edge reads in a chain, and a decode failure blames no one by
+  its type — one a chain holds, an upstream's answer or a stored value, is the
+  server's `INTERNAL`, filed, on every edge. A payload the edge decoded keeps
+  `INVALID_ARGUMENT`, and a handler decoding its client's text says so with
+  `Problem::from(DecodeError::from(e))`. A `PipeError` carries its `Problem`, so
+  a refusal a handler returns answers `INVALID_ARGUMENT` on every edge, HTTP
+  included, where an `anyhow` handler's answered `500`. Held by
+  `nest-rs-testing`'s `chain_answers`, one chain answered on the four edges.
+- **On MCP, `INVALID_ARGUMENT` answered two JSON-RPC codes**: a pipe's refusal
+  `invalid_params` (`-32602`), a `Problem` of that class `invalid_request`
+  (`-32600`). Decided: the class picks the code. `INVALID_ARGUMENT` is
+  `invalid_params`, JSON-RPC's own code for an argument refused, whoever refused
+  it; any other `4xx` is `invalid_request`, a `5xx` `internal_error`.
+

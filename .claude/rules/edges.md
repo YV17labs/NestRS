@@ -248,8 +248,9 @@ guard, filter or interceptor loop of its own.
     or its field map on a `5xx`, a denial carries the same `code`
     on every edge (`denial_code`), an opaque answer the `INTERNAL` one through
     one constructor per edge, a problem HTTP builds from a status alone the
-    class core names for that status, a decode failure and a pipe's refusal
-    the `INVALID_ARGUMENT` one — the class beside the field map, which
+    class core names for that status, a payload the edge decoded that does
+    not decode and a pipe's refusal the `INVALID_ARGUMENT` one — the class
+    beside the field map, which
     `errors` names on every edge and nothing else does, each key as that
     edge's client spells the field, GraphQL's read off its schema's names,
     never re-cased — and every code the
@@ -263,9 +264,12 @@ guard, filter or interceptor loop of its own.
     the error type is a library's — so a domain error maps to the wire once,
     held by the compiler on HTTP, and a hand-written `ResponseError` is an
     answer that is no problem (another protocol's body, a challenge); a
-    `Problem`, `PipeError` or
-    decode failure its chain carries answers itself, HTTP reading the chain
-    of what it would otherwise render as text. GraphQL holds the rule at
+    `Problem` its chain carries answers itself — a `PipeError` carries one —
+    HTTP reading the chain of what it would otherwise render as text; a
+    decode failure a chain holds is no word of the client's — an upstream's
+    answer, a stored value — and is answered opaquely and filed on every
+    edge, a handler decoding its client's text by hand saying so with
+    `Problem::from(DecodeError::from(e))`. GraphQL holds the rule at
     compile time: async-graphql's `custom-error-conversion` is on, so a `?`
     cannot turn a foreign error's `Display` into a client message. An
     `Opaque` trait beside the edge's error type says the same at a call
@@ -288,7 +292,8 @@ guard, filter or interceptor loop of its own.
     stated exceptions aside (`.claude/decisions/payload-never-quoted.md`); a
     document the parser refuses says its place and the grammar's words, read by
     an allowlist, never its source.
-    Held by each edge's behaviour tests and a trybuild snapshot of the
+    Held by each edge's behaviour tests, one parity suite over the four
+    (`nest-rs-testing`'s `chain_answers`), and a trybuild snapshot of the
     refused `?`.
 13. **Discovery and its gate** (`container.md`).
 14. **Aggregation**, as above.

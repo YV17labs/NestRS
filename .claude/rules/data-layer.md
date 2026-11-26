@@ -196,8 +196,9 @@ nothing: `Repo` reads no ability there as system work, wider than the one it hol
 ## What waits for the commit — the event and the job
 
 Only the unit of work holding the transaction knows whether its writes
-landed. `nest_rs_database::after_commit(work)` hands work to the ambient
-executor; every unit settles through its driver's `OpenUnit::settle` (SeaORM's
+landed. `nest_rs_database::after_commit(work)` hands work to the transaction
+the ambient executor holds (`HeldTransaction::after_commit`), and runs it at
+once on the pool; every unit settles through its driver's `OpenUnit::settle` (SeaORM's
 `LazyTransaction::finalize`), which runs it once the transaction committed (or
 the unit succeeded with nothing to roll back) and drops it on every other
 outcome; the unit's answer waits for it until the unit's deadline, never past
@@ -247,13 +248,18 @@ transaction unless `transactional = false`, its `Err` rolled back and filed at `
   report `Ok` for work that may never be done. Inside a transaction it happens
   where it is written; work that must follow the commit is an event whose
   listener does it.
-- **Another ORM's driver** owes `Executor::after_commit` on every handle its
-  boundaries settle; the trait's default runs the work at once, which is right
-  for a pool only. What it holds runs under the `Commit` capture taken where
-  the work was registered, its own pool re-installed inside under the scope
-  read there (the trait method's rustdoc). It owes `write_outbox` on the same
-  handles, with an `OutboxStore` its binding binds beside the relay's module,
-  or its pushes are filed at once.
+- **Another ORM's driver** says of each handle what it holds
+  (`Executor::holds`): `Holds::Pool` or `Holds::Transaction`, each a trait with
+  no default method, so rustc lists what it leaves out. A transaction
+  (`HeldTransaction`) holds the work `after_commit` hands it, which runs under
+  the `Commit` capture taken where the work was registered, its own pool
+  re-installed inside under the scope read there (the trait method's rustdoc);
+  it opens the savepoint an atomic block and a resilience attempt run in, and
+  answers the `Outbox` a push is written into. The pool (`HeldPool`) opens an
+  atomic block's transaction of its own and answers the `OutboxKept` a cancel
+  reaches; the port runs `after_commit`'s work at once there. An outbox comes
+  with an `OutboxStore` its binding binds beside the relay's module; a handle
+  answering `None` keeps none, and its pushes are filed at once.
 
 ## What a create fills — the grants first, then the entity
 
@@ -466,8 +472,8 @@ The framework replays only what it knows rolled back (`retry.rs` holds the
 two predicates), so **a timeout is retryable only when it cut the body**: a
 commit that did not answer within the driver's settle net is in doubt
 (`Unhonoured::IN_DOUBT`), dead-lettered and reported `retryable=false`. **The promise is the transaction's, not the attempt's**:
-work stepped outside it — an HTTP call, `non_transactional` — is replayed with
-the body.
+work stepped outside it — an HTTP call, an S3 write — is replayed with the
+body.
 
 **The transaction bounds a retry, never a redelivery.** Delivery is at least
 once (`CLAUDE.md`, hard "no"), so a worker dying between `COMMIT` and recording

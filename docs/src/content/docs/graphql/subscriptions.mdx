@@ -104,7 +104,8 @@ Forgetting the bus is a boot error naming it, not a silent subscription.
 The stream reaches this process, and a reader far behind loses the oldest events:
 [Event streams](/events/streams/) has what it promises.
 A source of your own — a broker's consumer, a channel — is any
-`impl Stream<Item = T>`, gated and judged the same way.
+`impl Stream<Item = T>` or a stream a type names (`BoxStream<'static, T>`), under
+any posture, gated and judged the same way.
 
 Note what the event carries: the **published row**, not its id and not its wire
 type. An item is pushed, not read through `Repo`, and its judgement decides on the

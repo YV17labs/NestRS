@@ -26,3 +26,16 @@ error.
   route, where the route's wrapper no longer holds the response.
 
 Reopened when a deployment needs a sunset date per route.
+
+## 2026-11-26 — a GraphQL operation's `#[deprecated]` is refused the same way
+
+`#[operations]` now leaves every attribute it does not consume on the developer's
+method (`resilience-policy.md`, this date), whose one caller is the field the macro
+generates: Rust's `#[deprecated]` there deprecates nothing a client reads. It is
+refused, plain or under a `#[cfg_attr]`, naming `#[graphql(deprecation = "…")]`,
+which the schema and its introspection follow: one way to deprecate a field, as
+there is one to deprecate a route.
+
+**Refused:** calling the method under `allow(deprecated)`, the change's first
+design: the wrapper silences the lint, as the entry above refused for a route, and a
+deprecation meant for a client never reaches the schema.

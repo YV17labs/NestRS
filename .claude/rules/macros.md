@@ -158,18 +158,22 @@ with a trybuild snapshot per decorator:
 **A method decorator outside a pair** (`#[resilient]`) takes the members'
 receiver rule, `self: &Arc<Self>` lent as a provider's, and their reading by
 type; it dispatches nothing, so a generic method is its own. It goes on a
-handler of every impl half but a socket's connection hook, which answers `()`,
-so **an impl half keeps it on the developer's method**, read by its path's last
-segment — a foreign attribute whose full path ends in `resilient` is read too —
-and places every other attribute where a released version placed it, the field
-`#[operations]` generates carrying an `#[expect]` as an `#[allow]` so the
-expectation is checked on the method alone: `#[operations]` hands an
-operation's others to that field, so one naming the method's own `self` does not
-compile until a major moves them, and reads that segment only in a build where
-some crate enables its capability (`nest-rs-graphql-macros`' `resilience`
-feature, which Cargo's feature unification turns on for every crate of that
-build), since a released version placed an app's attribute of that name on the
-field too.
+handler of every impl half but a socket's connection hook, which answers `()`.
+**An impl half removes from a method what it consumes — its role, its posture,
+its layers, `#[meta]` and the attribute its edge reads (`#[api]` at `#[routes]`,
+async-graphql's `#[graphql(…)]` at `#[operations]`) — and leaves every other
+attribute on the developer's method, as written and in order**: a decorator, an
+instrument reading the method's own `self` or an app's own attribute applies
+there under any name and any `#[cfg_attr]`, as on a route's handler, since no
+impl half reads an attribute it leaves by its name or under a feature. The field
+`#[operations]` generates carries only what describes it to async-graphql, on the
+method as on each parameter: `#[graphql(…)]`, the docs, each `#[cfg]` — one
+inside a `#[cfg_attr]` unfolded — and each `#[allow]`, an `#[expect]` as an
+`#[allow]` of the same lints so the expectation is checked on the method alone.
+A `#[graphql(…)]` inside a `#[cfg_attr]`, which no macro would read, and Rust's
+`#[deprecated]`, whose one caller is the field, are refused there, as `#[routes]`
+refuses the latter on a handler. Held by `nest-rs-graphql`'s resolver suite and
+the hygiene snapshots.
 
 **What a method answers is read by its type, never by its spelling.** A
 decorator resolves no name, so a renamed `Result` or a type alias must behave
@@ -205,8 +209,7 @@ names the entity, which `#[subscribe_message]` parameter is the payload (`&WsCli
 `Ambient<T>` by their names — each resolved through a function of the edge crate's
 `__private` returning core's type, so a namesake does not compile), the
 `Scoped<T>` and `Ambient<T>` parameters `#[operations]` and `#[tools]` leave out of
-the protocol's arguments, read the same way, the `#[resilient]` an impl half keeps
-on the developer's method, a GraphQL field's
+the protocol's arguments, read the same way, a GraphQL field's
 `&DataLoader<L>`, whose `L` the boot reads the owner of, and the request parameters an
 OpenAPI document lists off the extractor spelling them (`Json<T>`, `Form<T>`,
 `Query<T>`, `Header<T>`, `Path<…>`, `Multipart`; an extractor that is the body

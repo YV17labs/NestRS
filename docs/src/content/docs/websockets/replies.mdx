@@ -37,14 +37,16 @@ someone meant it to read:
   and its code beside it (`"code": "CONFLICT"`, plus `type` and `title` when it
   names a problem type of its own, `retryAfterSeconds` when it names a wait
   and `errors` when it carries a field map); `ServiceError` is one;
-- the framework's own vocabulary found in the chain — a `Problem`, a pipe
-  rejection, a decode failure said without its value
-  (`invalid type: a string, expected u64 at line 1 column 24`) — answers in its
-  own form, a decode failure under `code: "INVALID_ARGUMENT"` as a payload or
-  an envelope that does not decode does, unless a pointer such as
-  `Arc<serde_json::Error>` holds it;
+- a `Problem` found in the chain answers in its own form — a pipe rejection
+  carries one;
 - **anything else answers `"internal error"`** under `code: "INTERNAL"`, and
-  its whole chain is filed once at `error` on `nest_rs::ws`.
+  its whole chain is filed once at `error` on `nest_rs::ws`. A decode failure a
+  chain holds is one: an upstream's answer or a stored value that does not
+  decode is the server's failure, filed without its value. A handler decoding
+  its client's own text says so with `Problem::from(DecodeError::from(e))`,
+  answered under `code: "INVALID_ARGUMENT"` as a payload or an envelope that
+  does not decode is, without its value
+  (`invalid type: a string, expected u64 at line 1 column 24`).
 
 That opaque frame is one shape whoever answered it — an unknown error, a
 `ToProblem` saying `None`, `.opaque()`, a panic, a request-scoped provider the
@@ -95,7 +97,8 @@ of what the client sent — a frame that is no envelope, a payload that does not
 deserialize, a pipe rejection, an unknown event — is reported at `debug` on
 `nest_rs::ws`, where it failed included: a client can send one per frame, and
 none is a denial. A handler's `Err` answered as a refusal — its `WsError`, a
-`4xx` problem, a pipe rejection, a decode failure — is the client's error too.
+`4xx` problem, a pipe rejection, a decode failure it says is its client's — is
+the client's error too.
 The message's line files it, with nothing beside it, as HTTP files a `4xx` on
 its access line alone. A guard's denial is filed at `warn` on the guard's
 target, `nest_rs::layers` when it declares none. An opaque failure is filed at `error` on `nest_rs::ws`

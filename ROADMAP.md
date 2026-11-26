@@ -95,9 +95,10 @@ stable major, and no release candidate holds it.
 
 **A major takes everything only a break can**: the dependency's move, what a 7.x minor deprecated, each listed under its
 changelog's *Deprecated*, and every design compatibility held back, each with its upgrading entry. It ships when it is
-ready (`semver-7x.md`, 2026-11-18). The first design it takes: `#[operations]` keeps every attribute a developer writes on
-a GraphQL operation on the developer's method, where 7.0 handed them to the field it generates, so a decorator, an
-instrument reading the method's own `self` or an app's own attribute works there as on every other handler.
+ready (`semver-7x.md`, 2026-11-18). The 8.0 line exists (`changelog/8.0.md`), holding the breaks taken so far. The first
+design it takes is built: `#[operations]` keeps every attribute a developer writes on a GraphQL operation on the
+developer's method, where 7.0 handed them to the field it generates, so a decorator, an instrument reading the method's own
+`self` or an app's own attribute works there as on every other handler.
 
 What async-graphql 8 would require was measured against rc.5 on 2026-11-18. GraphQL Playground is gone upstream, so the
 `playground` setting and its variable become GraphiQL's. Every `DataLoader` a `#[dataloader]` builds takes a `Spawn` and
@@ -118,7 +119,7 @@ to what NestRS already ships:
 | `@nestjs/authorization` | `nest-rs-authz`: abilities, row-level filtering, per-field masking, on every edge |
 | `@nestjs/outbox` | the queue's transactional push: a push inside a unit commits with it, and a relay files it (`transactional-outbox.md`) |
 | `@nestjs/http-client` | the app's own `reqwest` client with `nest_rs::reqwest::ReqwestMiddleware` (trace context and client spans), and `nest_rs::resilience::ResilienceMiddleware` for its timeouts and retries |
-| `@nestjs/resilience` | `nest-rs-resilience`, for 7.1 (`changelog/7.1.md`): `#[resilient(field)]` on the method making the call, on a provider as on a handler of every edge but a WebSocket connection hook, a scheduled tick included, with nine keys checked by the compiler — `idempotent` where it may be sent again, `timeout` and `retries`, `retry_if`, `retry_ok_if` and `record_if` to classify an answer, `fallback` and `fallback_if` for the method answering in its place, `cancel` for the attempt's token — each attempt of an idempotent or fallback method in a savepoint of the unit's transaction, under a named policy per dependency: a timeout per attempt within the unit's deadline, retries when the caller declares the call idempotent, a count-window circuit breaker with an age, a series of probes, a state read and a switch by hand, a bulkhead bounding its waiters, and an outbound token bucket — every refusal a `503` with the `Retry-After` it knows, events readable in code, reads and instruments on the meter, its state per process. Open for 8.0: every attribute of a GraphQL operation kept on its method, where 7.1 keeps `#[resilient]` alone (`.claude/decisions/resilience-policy.md`) |
+| `@nestjs/resilience` | `nest-rs-resilience`, for 8.0 (`changelog/8.0.md`): `#[resilient(field)]` on the method making the call, on a provider as on a handler of every edge but a WebSocket connection hook, a scheduled tick included, with nine keys checked by the compiler — `idempotent` where it may be sent again, `timeout` and `retries`, `retry_if`, `retry_ok_if` and `record_if` to classify an answer, `fallback` and `fallback_if` for the method answering in its place, `cancel` for the attempt's token — each attempt of an idempotent or fallback method in a savepoint of the unit's transaction, under a named policy per dependency: a timeout per attempt within the unit's deadline, retries when the caller declares the call idempotent, a count-window circuit breaker with an age, a series of probes, a state read and a switch by hand, a bulkhead bounding its waiters, and an outbound token bucket — every refusal a `503` with the `Retry-After` it knows, events readable in code, reads and instruments on the meter, its state per process |
 
 ## 4. Not planned, and why
 

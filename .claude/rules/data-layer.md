@@ -218,7 +218,8 @@ deadline**: opened through the binding its emitter ran under, the app's for an
 emitter under none (a task handed to `TaskContext`, whose listeners run under a
 request's scope and the ability it carried), bare in an app binding none, one
 transaction unless `transactional = false`, its `Err` rolled back and filed at `error` — at
-`warn` once a layer answered it — while the chain goes on — so an event a listener emits waits for that listener's commit. An open `EventBus::stream` reads the event at that same point, ahead of the listeners, and opens no unit.
+`warn` once a layer answered it, or for a `503` a filter answered or its chain
+carries — while the chain goes on — so an event a listener emits waits for that listener's commit. An open `EventBus::stream` reads the event at that same point, ahead of the listeners, and opens no unit.
 
 - **Waits:** every unit of its own — a mutating HTTP request, a GraphQL
   operation (a savepoint per mutation root field), a WS message or connection

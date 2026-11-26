@@ -138,12 +138,15 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
 
 8. **Move an alert on a `503` tick or listener to `warn`.** A scheduled job or
    an event listener failing with a `503` — a resilience policy's refusal, a
-   statement cancelled at its bound, a filter's — is filed at `warn` as
+   filter's, any `Problem` its error's chain carries — is filed at `warn` as
    `scheduled job failed; unavailable` or `event listener failed; unavailable —
    dispatch continues with the next listener`, where it was `scheduled job
    failed` or `event listener failed — dispatch continues with the next
-   listener` at `error`. This step changes behaviour alone: a log filter or an
-   alert reading the old level or message reads the new pair.
+   listener` at `error`. A `503` an error states through `ToProblem` alone — a
+   `ServiceError` for a statement cancelled at its bound — is read by neither
+   edge, and stays at `error` unless a filter answers it. This step changes
+   behaviour alone: a log filter or an alert reading the old level or message
+   reads the new pair.
 
 </Steps>
 

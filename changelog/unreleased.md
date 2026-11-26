@@ -269,7 +269,8 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   starts full and gains one every `RATE_LIMIT`th of the window; an attempt takes
   a token to be sent. One finding none is not sent: it waits for a token, in
   arrival order, within `RATE_WAIT_MS` and the unit's deadline, or ends the run
-  `ResilienceError::Limited`, never attempted again. A bucket left idle sends its
+  refused `Limited` (`ResilienceError::Refused`, `ResilienceRefusal::Limited`),
+  never attempted again. A bucket left idle sends its
   whole limit at once, then a token at a time: up to twice the limit within one
   window's length, which a dependency counting every request of the last window
   takes as half its limit. A token keeps its instant however late the runtime

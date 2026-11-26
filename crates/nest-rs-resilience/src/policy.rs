@@ -37,7 +37,10 @@ use crate::run::{Run, Running};
 /// the field that holds it, and reads its attempt's [`CancellationToken`]
 /// under the name its `cancel` key gives; [`run`](Self::run) and
 /// [`run_idempotent`](Self::run_idempotent) take a call that is part of a
-/// method, as a closure handed that token.
+/// method, as a closure of no argument, and
+/// [`run_cancellable`](Self::run_cancellable) and
+/// [`run_idempotent_cancellable`](Self::run_idempotent_cancellable) hand it that
+/// token.
 ///
 /// Each attempt is given up past the policy's timeout or the deadline of the
 /// unit it runs in (`nest_rs_core::Deadline`), whichever comes first, and its

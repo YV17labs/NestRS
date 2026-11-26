@@ -123,7 +123,7 @@ answers `None`.
 ```rust title="crates/features/src/posts/upstream.rs"
 use std::time::Duration;
 
-use nest_rs::resilience::{BreakerState, ResiliencePolicy, ResilienceRefusal};
+use nest_rs::resilience::{BreakerState, ResiliencePolicy};
 
 /// How long the upstream's breaker still refuses every call, while it is open.
 pub fn refused_for(upstream: &ResiliencePolicy<Upstream>) -> Option<Duration> {
@@ -196,7 +196,7 @@ upstream's address where nothing listens, and the next call is refused unsent.
 ```rust title="crates/features/tests/integration/posts/service.rs"
 use features::posts::{PostsConfig, PostsModule, PostsService, Upstream};
 use nest_rs::core::module;
-use nest_rs::resilience::{ResilienceConfig, ResilienceError, ResilienceModule};
+use nest_rs::resilience::{ResilienceConfig, ResilienceError, ResilienceModule, ResilienceRefusal};
 use nest_rs::testing::HeadlessApp;
 use uuid::Uuid;
 

@@ -241,7 +241,9 @@ scheduler is a `Transport` attached with `ContainerBuilder::provide_transport`.
 
 - **A tick is a unit of the pipeline**, read through `ScheduleView`; a
   failure a layer answered with `skip` or a client's problem (a `4xx`) is said
-  at `warn`, any other at `error`, and none is acted on.
+  at `warn`, a `503` a filter answered or its chain carries at `warn` as
+  `scheduled job failed; unavailable`, any other at `error`, and none is acted
+  on.
 - **The scheduler gives a tick no retry** — its retry is the next occurrence,
   though a `#[resilient(_, idempotent)]` tick's policy attempts its call again
   within the one run — and **a replica runs one occurrence of a job at a time**;

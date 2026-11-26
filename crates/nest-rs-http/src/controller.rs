@@ -245,9 +245,10 @@ impl HttpRouteMeta {
     }
 
     /// The route's posture names an entity, a subject a table holds
-    /// (`Authorize<_, _>` on one); a posture on a `#[subject]` reads `false`. What a
-    /// grant may withhold of a row it answers is no route's to say: the row's own
-    /// schema says it on each such property, whatever the posture names.
+    /// (`#[authorize(A, E)]` or `#[public(A, E)]` on one); a posture on a
+    /// `#[subject]` reads `false`. What a grant may withhold of a row it answers
+    /// is no route's to say: the row's own schema says it on each such property,
+    /// whatever the posture names.
     pub fn names_an_entity(&self) -> bool {
         self.parts.names_an_entity
     }

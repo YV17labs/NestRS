@@ -560,7 +560,7 @@ pub(crate) mod __private {
     ) -> Option<Withheld> {
         match kept {
             Some(kept) => (status >= 500).then(|| kept.answered_as(status)),
-            None if error.is::<Problem>() => None,
+            None if crate::__private::link_as::<Problem>(error).is_some() => None,
             None => Withheld::behind(status, error),
         }
     }

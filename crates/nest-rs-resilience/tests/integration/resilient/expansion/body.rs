@@ -571,7 +571,7 @@ async fn a_retry_of_a_decorated_method_names_its_host_and_its_method() {
     let calls = AtomicU32::new(0);
     let answered = parcels
         .courier
-        .run_idempotent(|_| async {
+        .run_idempotent(|| async {
             match calls.fetch_add(1, Ordering::Relaxed) {
                 0 => Err(CarrierDown),
                 _ => Ok(()),
@@ -1423,7 +1423,7 @@ async fn a_run_answering_a_value_that_is_not_sync_runs_on_a_task_of_its_own() {
         let courier = Arc::clone(&courier);
         async move {
             courier
-                .run(|_| async { Ok::<_, CarrierDown>(Cell::new(7)) })
+                .run(|| async { Ok::<_, CarrierDown>(Cell::new(7)) })
                 .await
         }
     });
@@ -1432,7 +1432,7 @@ async fn a_run_answering_a_value_that_is_not_sync_runs_on_a_task_of_its_own() {
         let calls = Arc::clone(&calls);
         async move {
             courier
-                .run_idempotent(|_| {
+                .run_idempotent(|| {
                     let calls = Arc::clone(&calls);
                     async move {
                         if calls.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -1501,7 +1501,7 @@ async fn a_run_answering_a_value_that_is_not_sync_runs_on_a_task_of_its_own() {
         let courier = Arc::clone(&courier);
         async move {
             courier
-                .run(|_| async { Ok::<_, CarrierDown>(Cell::new(7)) })
+                .run(|| async { Ok::<_, CarrierDown>(Cell::new(7)) })
                 .await
         }
     });
@@ -1510,7 +1510,7 @@ async fn a_run_answering_a_value_that_is_not_sync_runs_on_a_task_of_its_own() {
         let calls = Arc::clone(&calls);
         async move {
             courier
-                .run_idempotent(|_| {
+                .run_idempotent(|| {
                     let calls = Arc::clone(&calls);
                     async move {
                         if calls.fetch_add(1, Ordering::Relaxed) == 0 {

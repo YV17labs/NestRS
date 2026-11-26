@@ -80,6 +80,9 @@ impl SyncTasks {
     }
 }
 
+/// What a tick refused with a `503` files.
+const UNAVAILABLE: &str = "scheduled job failed; unavailable";
+
 /// How long a refusal of the tick below lasts: past its first occurrence, and
 /// no longer at its second.
 const REFUSED_FOR: Duration = Duration::from_millis(1500);
@@ -90,8 +93,8 @@ const REFUSED_FOR: Duration = Duration::from_millis(1500);
 )]
 struct RefusedScheduleModule;
 
-/// No client reads a tick's `503`: its refusal is the occurrence failed,
-/// filed as any failure of a tick, and the schedule goes on.
+/// No client reads a tick's `503`: its refusal is the occurrence failed, filed
+/// at `warn` as every edge files a `503`, and the schedule goes on.
 #[tokio::test(start_paused = true)]
 async fn a_tick_its_policy_refuses_is_filed_failed_and_its_next_occurrence_runs() {
     for refusing in Refusing::EACH {
@@ -115,9 +118,9 @@ async fn a_tick_its_policy_refuses_is_filed_failed_and_its_next_occurrence_runs(
 
         tokio::time::sleep(Duration::from_millis(1500)).await;
         let mounted = logs.expect_one(nest_rs_schedule::TARGET, "mounted");
-        let failed = logs.expect_one(nest_rs_schedule::TARGET, "scheduled job failed");
-        assert_eq!(failed.level, "error", "{failed:?}");
-        assert_eq!(logs.events_at(tracing::Level::ERROR).len(), 1);
+        let failed = logs.expect_one(nest_rs_schedule::TARGET, UNAVAILABLE);
+        assert_eq!(failed.level, "warn", "{failed:?}");
+        assert!(logs.events_at(tracing::Level::ERROR).is_empty());
         let ran = logs.expect_one(OPERATIONS, nest_rs_schedule::unit::TICK.name());
         assert_eq!(ran.field("outcome").as_deref(), Some(ERROR), "{ran:?}");
         for line in [&failed, &ran] {
@@ -148,8 +151,7 @@ async fn a_tick_its_policy_refuses_is_filed_failed_and_its_next_occurrence_runs(
         assert_eq!(dependency.called(), refusing.sent() + 1);
         assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
         assert_eq!(
-            logs.find(nest_rs_schedule::TARGET, "scheduled job failed")
-                .len(),
+            logs.find(nest_rs_schedule::TARGET, UNAVAILABLE).len(),
             1,
             "the one refusal, filed once"
         );

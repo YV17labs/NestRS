@@ -542,7 +542,7 @@ impl HttpError {
             Cause::Typed { error, .. } => &**error,
             _ => self.chain()?,
         };
-        if chain.is::<Problem>() {
+        if nest_rs_core::__private::link_as::<Problem>(chain).is_some() {
             return None;
         }
         Withheld::behind(status.as_u16(), chain)

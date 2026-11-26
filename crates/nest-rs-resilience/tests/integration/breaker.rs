@@ -577,7 +577,7 @@ impl Pair {
         let (policy, called) = (Arc::clone(&self.ours), Rc::clone(&sent));
         let mut run: Run = Box::pin(async move {
             policy
-                .run(move |_| {
+                .run(move || {
                     called.set(true);
                     async move {
                         answered
@@ -1886,20 +1886,20 @@ async fn a_layer_panicking_as_a_probe_is_sent_leaves_the_probes_turn_to_the_next
         ..ResilienceConfig::default()
     })
     .await;
-    let failed = policy.run(|_| async { Err::<(), _>(Down) }).await;
+    let failed = policy.run(|| async { Err::<(), _>(Down) }).await;
     assert!(matches!(failed, Err(ResilienceError::Failed(Down))));
     tokio::time::advance(OPEN).await;
 
     let unwound = {
         let _layer = tracing::subscriber::set_default(PanickingAtHalfOpen);
-        nest_rs_core::panic::contain(policy.run(|_| async { Ok::<_, Down>(()) })).await
+        nest_rs_core::panic::contain(policy.run(|| async { Ok::<_, Down>(()) })).await
     };
     assert!(
         unwound.is_err(),
         "the layer's panic unwinds the probe's run"
     );
 
-    let probed = policy.run(|_| async { Ok::<_, Down>(()) }).await;
+    let probed = policy.run(|| async { Ok::<_, Down>(()) }).await;
     assert!(matches!(probed, Ok(())), "the next call probes: {probed:?}");
     assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
 }

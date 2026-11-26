@@ -9,11 +9,12 @@
 //! (`<PREFIX>_RESILIENCE__<INSTANCE>__*`, [`ResilienceConfig`]), and decorate
 //! the method making the call: [`#[resilient(field)]`](macro@resilient) runs
 //! its body once, `#[resilient(field, idempotent)]` again after an `Err` or a
-//! timeout, up to its retries. A call reads its attempt's
-//! [`CancellationToken`] two ways: a decorated method names it in its body with
-//! the `cancel` key, and a call that is not a whole method runs through
-//! [`ResiliencePolicy::run`] or
-//! [`ResiliencePolicy::run_idempotent`], its closure handed the token. Every
+//! timeout, up to its retries. A call that is not a whole method runs through
+//! [`ResiliencePolicy::run`] or [`ResiliencePolicy::run_idempotent`]. An
+//! attempt makes a [`CancellationToken`] only for a call that reads it: a
+//! decorated method names it in its body with the `cancel` key, and a closure
+//! takes it through [`ResiliencePolicy::run_cancellable`] or
+//! [`ResiliencePolicy::run_idempotent_cancellable`]. Every
 //! attempt is bounded by the policy's timeout and the unit's deadline,
 //! whichever ends first — and, made from an attempt of another policy, by
 //! that one's — and counted in its circuit breaker; the bulkhead

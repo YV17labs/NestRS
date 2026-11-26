@@ -74,7 +74,7 @@ pub(crate) const PANICKED: &str = "the call panicked";
 /// }
 ///
 /// # async fn charge(policy: &ResiliencePolicy) {
-/// match policy.run(|_cancel| async { Ok::<_, ProviderDown>("charged") }).await {
+/// match policy.run(|| async { Ok::<_, ProviderDown>("charged") }).await {
 ///     Ok(receipt) => assert_eq!(receipt, "charged"),
 ///     Err(ResilienceError::Refused {
 ///         refusal: ResilienceRefusal::Open { retry_after, .. },

@@ -555,23 +555,26 @@ async fn a_decorated_listener_refused_or_failed_after_its_repo_write_leaves_noth
         0,
         "the refusal rolled its unit's write back",
     );
-    let failed = logs.find(
+    let failed = logs.expect_one(
         nest_rs_events::TARGET,
         "event listener failed — dispatch continues with the next listener",
     );
-    let errors: Vec<_> = failed.iter().map(|line| line.field("error")).collect();
-    assert_eq!(errors.len(), 2, "{failed:#?}");
     assert!(
-        errors[0]
-            .as_deref()
+        failed
+            .field("error")
             .is_some_and(|error| error.contains("the payment provider refused the refund")),
         "{failed:#?}"
     );
+    let refused = logs.expect_one(
+        nest_rs_events::TARGET,
+        "event listener failed; unavailable — dispatch continues with the next listener",
+    );
+    assert_eq!(refused.level, "warn", "a `503`: {refused:#?}");
     assert!(
-        errors[1]
-            .as_deref()
+        refused
+            .field("error")
             .is_some_and(|error| error.contains("the call did not answer within its timeout")),
-        "the refusal at the method's timeout: {failed:#?}"
+        "the refusal at the method's timeout: {refused:#?}"
     );
 
     emitted_off_every_unit(

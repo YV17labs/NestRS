@@ -79,7 +79,7 @@ async fn a_pinned_instance_runs_on_its_pin_and_a_bare_one_on_the_defaults() {
 
     let given_up = tracking
         .carrier
-        .run(|_| std::future::pending::<Result<(), std::io::Error>>())
+        .run(std::future::pending::<Result<(), std::io::Error>>)
         .await;
     assert!(
         matches!(
@@ -92,7 +92,7 @@ async fn a_pinned_instance_runs_on_its_pin_and_a_bare_one_on_the_defaults() {
     let started = tokio::time::Instant::now();
     let given_up = tracking
         .upstream
-        .run(|_| std::future::pending::<Result<(), std::io::Error>>())
+        .run(std::future::pending::<Result<(), std::io::Error>>)
         .await;
     assert!(
         matches!(

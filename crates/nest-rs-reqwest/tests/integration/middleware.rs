@@ -11,8 +11,41 @@ use nest_rs_core::client_operation::{
     NETWORK_PROTOCOL_VERSION, SERVER_ADDRESS, SERVER_PORT, URL_SCHEME,
 };
 use nest_rs_core::{Correlation, TraceParent};
+use nest_rs_reqwest::ReqwestMiddleware;
+use nest_rs_testing::{HttpsPeer, PeerAnswer};
+use reqwest_middleware::ClientWithMiddleware;
 
-use crate::{answering, client, header, silent};
+use crate::{AUTHORITY, CERTIFICATE};
+
+/// A peer answering every request with `status` and an empty body.
+async fn answering(status: u16) -> HttpsPeer {
+    HttpsPeer::answering(&CERTIFICATE, [PeerAnswer::status(status)]).await
+}
+
+/// A peer reading every request and answering none.
+async fn silent() -> HttpsPeer {
+    HttpsPeer::answering(&CERTIFICATE, [PeerAnswer::Silent]).await
+}
+
+/// The value of the header `name` (lowercase) on the request `peer` read `nth`.
+fn header(peer: &HttpsPeer, nth: usize, name: &str) -> Option<String> {
+    peer.requests()[nth].header(name).map(str::to_owned)
+}
+
+/// A client trusting the peer's authority, through the middleware, giving up
+/// on an answer past `timeout`.
+fn client(timeout: Duration) -> ClientWithMiddleware {
+    let authority =
+        reqwest::Certificate::from_pem(AUTHORITY.pem().as_bytes()).expect("the authority");
+    let client = reqwest::Client::builder()
+        .tls_certs_only([authority])
+        .timeout(timeout)
+        .build()
+        .expect("a client");
+    reqwest_middleware::ClientBuilder::new(client)
+        .with(ReqwestMiddleware::new())
+        .build()
+}
 
 /// Long enough for any answer the peer gives on loopback.
 const ANSWERED: Duration = Duration::from_secs(10);

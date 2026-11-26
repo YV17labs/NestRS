@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use futures_util::Stream;
 use nest_rs_core::__private::{
-    Site, Tail, UnitChains, caught_problem, dispatch, new_unit_context, settled, short_type_name,
+    Site, Tail, UnitChains, caught_problem, dispatch, is_unavailable, new_unit_context, settled,
+    short_type_name,
 };
 use nest_rs_core::operation_log::{FiledOnce, Line, Unwinding};
 use nest_rs_core::tracing::Instrument;
@@ -317,6 +318,23 @@ async fn dispatch_one(
                     error = %said,
                     "event listener failed; a layer answered it — dispatch continues with the \
                      next listener",
+                );
+            });
+        }
+        // A `503` is what the listener runs on unable to serve it in time, filed
+        // as every edge files one.
+        Ok(Err(failure)) if is_unavailable(&failure) => {
+            let said = nest_rs_core::error_message(failure.error());
+            nest_rs_core::operation_log::record_cause(&line.span, &said);
+            line.file(nest_rs_core::operation_log::ERROR);
+            continuation.enter(|| {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    event = event,
+                    host = handler.host_name(),
+                    method = handler.method(),
+                    error = %said,
+                    "event listener failed; unavailable — dispatch continues with the next listener",
                 );
             });
         }

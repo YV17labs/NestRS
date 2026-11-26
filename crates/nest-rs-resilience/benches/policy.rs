@@ -191,11 +191,11 @@ fn answering_at_once<I: Instance>(
     let dependency = dependency::<I>(app);
     let policy = &dependency.policy;
     c.benchmark_group("run").bench_function(mechanism, |b| {
-        b.iter_custom(|iters| timed(rt, iters, || policy.run(|_| answering())));
+        b.iter_custom(|iters| timed(rt, iters, || policy.run(answering)));
     });
     c.benchmark_group("run_idempotent")
         .bench_function(mechanism, |b| {
-            b.iter_custom(|iters| timed(rt, iters, || policy.run_idempotent(|_| answering())));
+            b.iter_custom(|iters| timed(rt, iters, || policy.run_idempotent(answering)));
         });
     c.benchmark_group("resilient")
         .bench_function(mechanism, |b| {
@@ -260,7 +260,7 @@ fn refused(c: &mut Criterion, rt: &tokio::runtime::Runtime, app: &App) {
         .expect("an open time the breaker takes");
     let mut group = c.benchmark_group("refused");
     group.bench_function("run/no_subscription", |b| {
-        b.iter_custom(|iters| timed(rt, iters, || policy.run(|_| answering())));
+        b.iter_custom(|iters| timed(rt, iters, || policy.run(answering)));
     });
     group.bench_function("resilient/no_subscription", |b| {
         b.iter_custom(|iters| timed(rt, iters, || dependency.once()));
@@ -268,7 +268,7 @@ fn refused(c: &mut Criterion, rt: &tokio::runtime::Runtime, app: &App) {
     // Unread: past what it holds, each event told takes the oldest one's place.
     let events = policy.events();
     group.bench_function("run/subscription", |b| {
-        b.iter_custom(|iters| timed(rt, iters, || policy.run(|_| answering())));
+        b.iter_custom(|iters| timed(rt, iters, || policy.run(answering)));
     });
     group.bench_function("resilient/subscription", |b| {
         b.iter_custom(|iters| timed(rt, iters, || dependency.once()));

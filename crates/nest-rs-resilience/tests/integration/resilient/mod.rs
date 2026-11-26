@@ -265,7 +265,7 @@ impl Refusing {
                 let mut held: std::pin::Pin<Box<dyn Future<Output = Refusable>>> =
                     Box::pin(async move {
                         holder
-                            .run(|_| std::future::pending::<Result<(), UpstreamDown>>())
+                            .run(std::future::pending::<Result<(), UpstreamDown>>)
                             .await
                     });
                 let waker = std::task::Waker::noop();
@@ -281,7 +281,7 @@ impl Refusing {
             Self::Limited => {
                 while upstream.rate_available() != Some(0) {
                     upstream
-                        .run(|_| async { Ok::<_, UpstreamDown>(()) })
+                        .run(|| async { Ok::<_, UpstreamDown>(()) })
                         .await
                         .expect("a token is free");
                 }

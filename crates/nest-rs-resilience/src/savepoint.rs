@@ -112,7 +112,7 @@ mod tests {
     use nest_rs_database::{AtomicBlock, Executor, current_executor};
 
     use super::*;
-    use crate::call::{Cancellable, Uncancelled};
+    use crate::call::Uncancelled;
     use crate::resilient::{ResilientMethod, judging_by_default, resilient_method};
     use crate::teller::{NOT_ATTEMPTED_AGAIN_UNSETTLED, RETRYING_FAILED};
     use crate::{ResilienceConfig, ResilienceError, ResiliencePolicy};
@@ -318,11 +318,10 @@ mod tests {
     fn answering<'a>(
         seen: &'a Arc<Seen>,
         answers: &'a [Result<u32, Refused>],
-    ) -> impl FnMut(
-        crate::CancellationToken,
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<u32, Refused>> + Send + 'a>> {
+    ) -> impl FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<u32, Refused>> + Send + 'a>>
+    {
         let attempts = AtomicU32::new(0);
-        move |_| {
+        move || {
             let attempt = attempts.fetch_add(1, Ordering::Relaxed) as usize;
             Box::pin(async move {
                 let _spending = Spending(Arc::clone(seen));
@@ -391,7 +390,7 @@ mod tests {
 
         let ran = with_request_executor(
             unit,
-            policy.run_idempotent(|_| async {
+            policy.run_idempotent(|| async {
                 called(&seen);
                 let mut retried = retried
                     .lock()
@@ -534,7 +533,7 @@ mod tests {
         fn send<F: Send>(_run: &F) {}
 
         let policy = retrying(Some(2));
-        let answer = |_| async { Ok::<_, Refused>(std::cell::Cell::new(7)) };
+        let answer = || async { Ok::<_, Refused>(std::cell::Cell::new(7)) };
         send(&policy.run(answer));
         send(&policy.run_idempotent(answer));
     }
@@ -560,7 +559,7 @@ mod tests {
             let call = answering(&seen, answers);
             let ran: Answer = with_request_executor(
                 unit,
-                policy.run_once::<Answer, _, Cancellable, _>(
+                policy.run_once::<Answer, _, Uncancelled, _>(
                     Some(&FALLING_BACK),
                     judging_by_default(),
                     call,
@@ -583,7 +582,7 @@ mod tests {
         let call = answering(&seen, &[]);
         let ran: Answer = with_request_executor(
             unit,
-            policy.run_once::<Answer, _, Cancellable, _>(Some(&PLAIN), judging_by_default(), call),
+            policy.run_once::<Answer, _, Uncancelled, _>(Some(&PLAIN), judging_by_default(), call),
         )
         .await;
         assert!(ran.is_err(), "{ran:?}");
@@ -602,7 +601,7 @@ mod tests {
 
         let ran = with_request_executor(
             unit,
-            policy.run_idempotent(|_| async {
+            policy.run_idempotent(|| async {
                 let _spending = Spending(Arc::clone(&seen));
                 called(&seen);
                 if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -624,7 +623,7 @@ mod tests {
 
         let ran = with_request_executor(
             unit,
-            policy.run_idempotent(|_| async {
+            policy.run_idempotent(|| async {
                 called(&seen);
                 std::future::pending::<Result<u32, Refused>>().await
             }),
@@ -662,7 +661,7 @@ mod tests {
         std::panic::set_hook(Box::new(|_| {}));
         let unwound = nest_rs_core::panic::contain(with_request_executor(
             unit,
-            policy.run_idempotent(|_| async {
+            policy.run_idempotent(|| async {
                 let _spending = Spending(Arc::clone(&seen));
                 called(&seen);
                 if seen.all().len() > 1 {
@@ -744,7 +743,7 @@ mod tests {
         {
             let mut run = std::pin::pin!(with_request_executor(
                 unit,
-                policy.run_idempotent(|_| async {
+                policy.run_idempotent(|| async {
                     let _spending = Spending(Arc::clone(&seen));
                     called(&seen);
                     std::future::pending::<Result<u32, Refused>>().await
@@ -892,7 +891,7 @@ mod tests {
 
         let attempts = AtomicU32::new(0);
         let bare = policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 let ambient = current_executor();
                 if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
                     return Err(Refused);
@@ -908,7 +907,7 @@ mod tests {
         let attempts = AtomicU32::new(0);
         let pooled = with_request_executor(
             Arc::new(Pool),
-            policy.run_idempotent(|_| async {
+            policy.run_idempotent(|| async {
                 let ambient = current_executor();
                 if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
                     return Err(Refused);

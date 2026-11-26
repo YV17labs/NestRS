@@ -44,15 +44,19 @@ A tick decorated `#[resilient(upstream, idempotent)]` has its policy attempt its
 call again within the one occurrence, before a failure is reported. A failure a filter
 answers with `tick.skip()`, or with a client's `Problem` (a `4xx`), is one the
 app expected: it is said at `warn` as `scheduled job failed; a layer answered
-it` rather than at `error`. A `5xx` problem is still the server's failure,
-logged at `error` like one no filter caught. Either way the tick's transaction
+it` rather than at `error`. A `503` — a filter's, or one the failure's chain
+carries — is what the tick runs on unable to serve it in time, said at `warn`
+as `scheduled job failed; unavailable`, as every edge files a `503`. Any other
+`5xx` problem is still the server's failure, logged at `error` like one no
+filter caught. Either way the tick's transaction
 rolls back. A job attached by hand as a
 `CronJobMeta` binds no layer of its own; the app's run around it all the same.
 
 A tick its policy refuses — its breaker open, its attempt cut at its timeout —
-is reported failed like any other: one `scheduled job failed` at `error`, naming
-its `host` and `method`, the refusal's whole chain in `error`, and the next
-occurrence fires as usual. An open breaker sends nothing to the dependency, and
+is reported failed as a `503`: one `scheduled job failed; unavailable` at
+`warn`, naming its `host` and `method`, the refusal's whole chain in `error`,
+and the next occurrence fires as usual. The breaker's opening is its own `warn`
+on `nest_rs::resilience`, and the failures that opened it the ticks' own. An open breaker sends nothing to the dependency, and
 the first occurrence after its open time is the probe. The line repeats on every
 occurrence for as long as the breaker stays open, so an alert on it fires once
 per occurrence through the dependency's outage. A tick that should answer for

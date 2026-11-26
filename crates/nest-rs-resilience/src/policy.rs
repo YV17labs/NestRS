@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::breaker::{Breaker, BreakerState, BreakerStats};
 use crate::bulkhead::Bulkhead;
-use crate::call::{Again, Cancellable, MakeAgain, MakeOnce, Once};
+use crate::call::{Again, Cancellable, MakeAgain, MakeOnce, Once, Uncancelled};
 use crate::config::{ResilienceConfig, is_open_time};
 use crate::error::{BreakerError, ResilienceError};
 use crate::events::ResilienceEvents;
@@ -121,7 +121,7 @@ use crate::run::{Run, Running};
 /// impl PreviewService {
 ///     pub async fn preview(&self, url: &str) -> Result<String, ResilienceError<std::io::Error>> {
 ///         self.upstream
-///             .run_idempotent(|_cancel| async move { Ok(format!("a preview of {url}")) })
+///             .run_idempotent(|| async move { Ok(format!("a preview of {url}")) })
 ///             .await
 ///     }
 /// }
@@ -157,10 +157,31 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// limit, and never again: a call this runs may change what it calls, so a
     /// retry could do it twice.
     ///
-    /// `call` is handed the attempt's [`CancellationToken`], cancelled when the
-    /// attempt is given up. Its error is a [`std::error::Error`], whose chain
-    /// the breaker's opening tells when that failure opens it.
+    /// Its error is a [`std::error::Error`], whose chain the breaker's opening
+    /// tells when that failure opens it. An attempt given up is dropped where it
+    /// waits; a call handing work beyond its future — a spawned task, a request
+    /// another client sends — takes the attempt's token through
+    /// [`run_cancellable`](Self::run_cancellable).
     pub fn run<T, E, F, Fut>(&self, call: F) -> impl Future<Output = Result<T, ResilienceError<E>>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        E: Error + 'static,
+    {
+        self.run_once::<Result<T, ResilienceError<E>>, _, Uncancelled, _>(
+            None,
+            judging_by_default(),
+            call,
+        )
+    }
+
+    /// [`run`](Self::run), `call` handed the attempt's [`CancellationToken`],
+    /// cancelled when the attempt is given up: the one a call needs for work
+    /// that outlives its future, made for this call alone.
+    pub fn run_cancellable<T, E, F, Fut>(
+        &self,
+        call: F,
+    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
     where
         F: FnOnce(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
@@ -182,10 +203,11 @@ impl<I: Instance> ResiliencePolicy<I> {
     ///
     /// Idempotent means one call or several leave the dependency as one does:
     /// a read, a `PUT`, a request carrying an idempotency key the dependency
-    /// honours. `call` is handed each attempt's [`CancellationToken`],
-    /// cancelled when that attempt is given up. Its error is a
-    /// [`std::error::Error`], whose chain each retry's line tells, and the
-    /// breaker's opening when that failure opens it.
+    /// honours. Its error is a [`std::error::Error`], whose chain each retry's
+    /// line tells, and the breaker's opening when that failure opens it; an
+    /// attempt given up is dropped where it waits, and a call handing work
+    /// beyond its future takes each attempt's token through
+    /// [`run_idempotent_cancellable`](Self::run_idempotent_cancellable).
     ///
     /// Inside a unit of work holding a transaction, each attempt runs in a
     /// savepoint of that transaction, whether or not the policy has retries:
@@ -214,6 +236,24 @@ impl<I: Instance> ResiliencePolicy<I> {
         call: F,
     ) -> impl Future<Output = Result<T, ResilienceError<E>>>
     where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        E: Error + 'static,
+    {
+        self.run_again::<Result<T, ResilienceError<E>>, _, Uncancelled, _>(
+            None,
+            judging_by_default(),
+            call,
+        )
+    }
+
+    /// [`run_idempotent`](Self::run_idempotent), `call` handed each attempt's
+    /// own [`CancellationToken`], cancelled when that attempt is given up.
+    pub fn run_idempotent_cancellable<T, E, F, Fut>(
+        &self,
+        call: F,
+    ) -> impl Future<Output = Result<T, ResilienceError<E>>>
+    where
         F: FnMut(CancellationToken) -> Fut,
         Fut: Future<Output = Result<T, E>>,
         E: Error + 'static,
@@ -229,8 +269,9 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// future made as `K` makes it — handed a token or none — its answer read
     /// as `R` reads a body's and answered as `R`, an `Err` a failure in the
     /// breaker when `judging` records it and counted in neither direction
-    /// otherwise: what [`run`](Self::run) runs, with no method, a token handed
-    /// and every `Err` a failure.
+    /// otherwise: what [`run`](Self::run) and
+    /// [`run_cancellable`](Self::run_cancellable) run, with no method and every
+    /// `Err` a failure.
     pub(crate) fn run_once<R, J, K, F>(
         &self,
         method: Option<&'static ResilientMethod>,
@@ -254,8 +295,9 @@ impl<I: Instance> ResiliencePolicy<I> {
     /// `R`, each counted as `judging` says — an `Err` or an `Ok` sent again
     /// when it retries it, an `Err` a failure in the breaker when it records
     /// it and counted in neither direction otherwise: what
-    /// [`run_idempotent`](Self::run_idempotent) runs, with no method, a token
-    /// handed to each attempt and every `Err` a failure sent again.
+    /// [`run_idempotent`](Self::run_idempotent) and
+    /// [`run_idempotent_cancellable`](Self::run_idempotent_cancellable) run,
+    /// with no method and every `Err` a failure sent again.
     pub(crate) fn run_again<R, J, K, F>(
         &self,
         method: Option<&'static ResilientMethod>,
@@ -522,7 +564,7 @@ mod tests {
             BreakerError::Off.to_string(),
             "the policy has no circuit breaker to switch"
         );
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert!(lines.find(TARGET, crate::teller::MOVED).is_empty());
     }
 

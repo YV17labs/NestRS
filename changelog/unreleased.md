@@ -96,8 +96,9 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   release build holds each attempt's future where the run is, whatever its
   size, and the closure there too, so a call answering at once outside a
   transaction allocates nothing but the cancellation token it takes: a
-  decorated method takes one only where its `cancel` names it, and allocates
-  nothing without; `run` and `run_idempotent` hand one to every attempt;
+  decorated method takes one only where its `cancel` names it, a closure only
+  through `run_cancellable` or `run_idempotent_cancellable`, and each allocates
+  nothing without; `run` and `run_idempotent` take a closure of no argument;
   `ResilienceMiddleware` makes none. A call waiting for a slot of the bulkhead
   or a token of the rate allocates that wait once, and a refusal its problem
   once, which the error's clones share. Past tokio's threshold for a spawned future,
@@ -460,6 +461,15 @@ included), a body cut short or
 stalled halfway, a body in two parts the suite lets through one at a time, or no
 answer at all — and keeping each `RequestHead`.
 
+#### `Upstream`, the service a TLS double stands in front of
+
+`nest_rs::testing::Upstream` (`tls`) is a development service as a double in
+front of it dials it — `Upstream::tls(host, port)` for one speaking TLS from its
+first byte, `Upstream::postgres(host, port)` for one asking with an `SSLRequest`
+— whose `bridge` accepts the client's handshake with the double's acceptor and
+dials the service verified against the system's trust, so a double holding
+back, pacing or severing what it relays writes only that.
+
 #### The umbrella's `full` takes `resilience`, and `reqwest-middleware` is public
 
 - **The umbrella's `full` feature takes `resilience`.** **Breaking:** an app on
@@ -622,7 +632,24 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
 - **Every page, generator and boot remedy writes a module of a named instance as
   its type**, `RedisModule<Cache>`, where the published release taught `RedisModule::<Cache>`.
 
+- **A tick or a listener failing with a `503` is filed at `warn`**, as every
+  edge files a `503` it answers: `scheduled job failed; unavailable` and `event
+  listener failed; unavailable — dispatch continues with the next listener`, the
+  `503` the one an exception filter answered or the failure's chain carries — a
+  resilience policy's refusal among them, every occurrence while a breaker stays
+  open. Each was `scheduled job failed` or `event listener failed — dispatch
+  continues with the next listener` at `error`. **Breaking:** a filter or an
+  alert on those lines' level or message reads the new pair.
+
 ### Security
+
+- **rustls says nothing on a line.** Its default `logging` feature, which the
+  workspace's requirement turned on for every crate taking rustls or
+  tokio-rustls, sends `log` records quoting what a peer sent — a refused SNI at
+  `warn`, a whole ClientHello at `trace` — and only a binary linking
+  `nest-rs-http` clamped them. Both are now taken without it, rustls's other
+  defaults (`aws_lc_rs`, `prefer-post-quantum`, `std`, `tls12`) named; no
+  dependency of the framework's turns it on.
 
 - **Only a route's posture opens its reads.** `#[routes]` probed every
   parameter's type for a `RouteResponseShaper`, and a route taking one, any
@@ -653,6 +680,19 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
   was the client's implements `ToProblem`.
 
 ### Fixed
+
+- A text redacted against the chain it was built from no longer says a
+  driver's sentence twice: where a `SafeLink`'s sentence goes on from its
+  link's own `Display` (a resilience refusal's `…: 503 UNAVAILABLE`), a text
+  already spelling the sentence keeps it as it is.
+- An edge's search of a failure's chain reads a link handed out as a pointer —
+  an `Arc` or a `Box` of the type, an `Arc<dyn Error>` holding one — as every
+  `SafeLink` does: a `Problem` named as a source behind one answers itself,
+  where it was answered opaquely, and an opaque failure's cause behind one stops
+  the search, where a `Problem` below it answered the client.
+- `nest-rs-reqwest`'s suite compiles and passes without its `middleware`
+  feature; `just lint` checks every crate's targets without its default
+  features.
 
 - An `#[expect]` on a GraphQL operation, written plain or under a `#[cfg_attr]`, is
   checked on the developer's method alone, the field's generated wrapper carrying

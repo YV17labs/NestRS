@@ -196,9 +196,7 @@ async fn a_retry_is_told_with_the_attempt_that_failed_its_wait_and_its_errors_ch
         "the wait it says, {wait:?}, is the one waited, {waited:?}, to the timer's millisecond"
     );
 
-    let failed = policy
-        .run_idempotent(|_| async { Err::<(), _>(Down) })
-        .await;
+    let failed = policy.run_idempotent(|| async { Err::<(), _>(Down) }).await;
     assert!(matches!(failed, Err(ResilienceError::Failed(Down))));
     let said: Vec<_> = told(&mut events)
         .into_iter()
@@ -269,7 +267,7 @@ async fn an_attempt_timed_out_is_told_with_its_bound_before_its_retry() {
     .await;
     let mut events = policy.events();
 
-    let given_up = policy.run_idempotent(|_| silent()).await;
+    let given_up = policy.run_idempotent(silent).await;
     assert!(matches!(
         given_up,
         Err(ResilienceError::Refused {
@@ -303,8 +301,7 @@ async fn an_attempt_timed_out_is_told_with_its_bound_before_its_retry() {
     );
 
     let out_of_time =
-        nest_rs_core::__private::with_deadline(Some(Instant::now()), policy.run(|_| silent()))
-            .await;
+        nest_rs_core::__private::with_deadline(Some(Instant::now()), policy.run(silent)).await;
     assert!(matches!(
         out_of_time,
         Err(ResilienceError::Refused {
@@ -384,7 +381,7 @@ async fn a_timeout_that_leaves_no_run_to_answer_is_told_by_no_event() {
 
     let deadline = Instant::now() + Duration::from_secs(10);
     nest_rs_core::__private::with_deadline(Some(deadline), async {
-        let run = parked(policy.run(|_| silent()));
+        let run = parked(policy.run(silent));
         tokio::time::advance(Duration::from_millis(200)).await;
         drop(run);
     })
@@ -398,7 +395,7 @@ async fn a_timeout_that_leaves_no_run_to_answer_is_told_by_no_event() {
     })
     .await;
     let mut told_around = around.events();
-    let cut = around.run(|_| policy.run(|_| silent())).await;
+    let cut = around.run(|| policy.run(silent)).await;
     assert!(
         matches!(cut, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. })
             if timeout == Duration::from_millis(50)),
@@ -444,7 +441,7 @@ async fn each_transition_of_the_breaker_is_told_with_the_phase_left_the_one_ente
     .await;
     let mut events = policy.events();
 
-    let failed = policy.run(|_| async { Err::<(), _>(Down) }).await;
+    let failed = policy.run(|| async { Err::<(), _>(Down) }).await;
     assert!(matches!(failed, Err(ResilienceError::Failed(Down))));
     assert_eq!(transitions(&mut events), [(Closed, Open, false)]);
 
@@ -455,7 +452,7 @@ async fn each_transition_of_the_breaker_is_told_with_the_phase_left_the_one_ente
         [],
         "the open time passing is no transition: none until a probe is sent"
     );
-    let probed = policy.run(|_| async { Ok::<_, Down>(()) }).await;
+    let probed = policy.run(|| async { Ok::<_, Down>(()) }).await;
     assert!(probed.is_ok());
     assert_eq!(
         transitions(&mut events),
@@ -539,8 +536,8 @@ async fn a_call_refused_unsent_is_told_with_the_refusal_its_caller_is_answered()
     })
     .await;
     let mut events = policy.events();
-    let holding = parked(policy.run(|_| silent()));
-    let full = policy.run(|_| silent()).await;
+    let holding = parked(policy.run(silent));
+    let full = policy.run(silent).await;
     assert!(matches!(
         full,
         Err(ResilienceError::Refused {
@@ -561,11 +558,11 @@ async fn a_call_refused_unsent_is_told_with_the_refusal_its_caller_is_answered()
     })
     .await;
     let mut events = policy.events();
-    assert!(policy.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
+    assert!(policy.run(|| async { Ok::<_, Down>(()) }).await.is_ok());
     let Err(ResilienceError::Refused {
         refusal: ResilienceRefusal::Limited { retry_after, .. },
         ..
-    }) = policy.run(|_| async { Ok::<_, Down>(()) }).await
+    }) = policy.run(|| async { Ok::<_, Down>(()) }).await
     else {
         panic!("the one token is taken");
     };
@@ -912,7 +909,7 @@ async fn with_no_subscription_a_failing_call_formats_no_chain_for_an_event() {
     let said = Arc::new(AtomicUsize::new(0));
     let asked = || said.swap(0, Ordering::Relaxed);
     let failing = || {
-        policy.run_idempotent(|_| {
+        policy.run_idempotent(|| {
             let said = Arc::clone(&said);
             async move { Err::<(), _>(Watched(said)) }
         })
@@ -961,11 +958,10 @@ async fn with_no_subscription_a_failing_call_formats_no_chain_for_an_event() {
 async fn a_call_answering_at_once_allocates_nothing_more_under_a_subscription() {
     let (_app, policy) = crate::policy(ResilienceConfig::default()).await;
     let mut events = policy.events();
-    let token = crate::token_allocations();
     let boxed = usize::from(cfg!(debug_assertions));
-    let (answered, made) = crate::allocations(|| policy.run(|_| async { Ok::<_, Down>(7) }));
+    let (answered, made) = crate::allocations(|| policy.run(|| async { Ok::<_, Down>(7) }));
     assert!(matches!(answered, Ok(7)));
-    assert_eq!(made, token + boxed);
+    assert_eq!(made, boxed);
     assert_eq!(told(&mut events), []);
 }
 
@@ -1021,8 +1017,8 @@ async fn the_breakers_window_is_read_at_each_state() {
         ..ResilienceConfig::default()
     })
     .await;
-    let ok = || policy.run(|_| async { Ok::<_, Down>(()) });
-    let fail = || policy.run(|_| async { Err::<(), _>(Down) });
+    let ok = || policy.run(|| async { Ok::<_, Down>(()) });
+    let fail = || policy.run(|| async { Err::<(), _>(Down) });
 
     assert_eq!(
         stats(&policy),
@@ -1069,9 +1065,9 @@ async fn an_outcome_past_its_age_is_read_no_more() {
         ..ResilienceConfig::default()
     })
     .await;
-    assert!(policy.run(|_| async { Err::<(), _>(Down) }).await.is_err());
+    assert!(policy.run(|| async { Err::<(), _>(Down) }).await.is_err());
     tokio::time::advance(Duration::from_secs(6)).await;
-    assert!(policy.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
+    assert!(policy.run(|| async { Ok::<_, Down>(()) }).await.is_ok());
     assert_eq!(stats(&policy), (2, 1, 0.5));
 
     tokio::time::advance(Duration::from_secs(5)).await;
@@ -1103,10 +1099,10 @@ async fn the_bulkhead_reads_the_calls_running_and_the_ones_waiting() {
         )
     };
 
-    let first = parked(policy.run(|_| silent()));
+    let first = parked(policy.run(silent));
     assert_eq!(read(), (1, 0));
-    let second = parked(policy.run(|_| silent()));
-    let mut waiting = parked(policy.run(|_| async { Ok::<_, Down>(()) }));
+    let second = parked(policy.run(silent));
+    let mut waiting = parked(policy.run(|| async { Ok::<_, Down>(()) }));
     assert_eq!(read(), (2, 1), "both slots held, and one call waiting");
 
     drop(first);
@@ -1131,7 +1127,7 @@ async fn the_rate_reads_the_tokens_free_after_sends_and_a_refill() {
         ..quiet()
     })
     .await;
-    let send = || policy.run(|_| async { Ok::<_, Down>(()) });
+    let send = || policy.run(|| async { Ok::<_, Down>(()) });
 
     assert_eq!(policy.rate_available(), Some(3));
     assert!(send().await.is_ok() && send().await.is_ok());

@@ -12,8 +12,7 @@ use std::time::Duration;
 
 use nest_rs_config::ClientTls;
 use nest_rs_redis::RedisConfig;
-use nest_rs_testing::{TestAuthority, TestCertificate, system_connector, url_at, url_on};
-use rustls::pki_types::ServerName;
+use nest_rs_testing::{TestAuthority, TestCertificate, Upstream, url_at, url_on};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, client, server};
@@ -44,20 +43,21 @@ pub(crate) async fn accept(client: TcpStream) -> Option<server::TlsStream<TcpStr
     ACCEPTOR.accept(client).await.ok()
 }
 
+/// The Valkey `url` names, as a double dials it.
+fn upstream(url: &str) -> Upstream {
+    let info = redis::IntoConnectionInfo::into_connection_info(url)
+        .expect("the URL of the Valkey a double fronts parses");
+    match info.addr() {
+        redis::ConnectionAddr::TcpTls { host, port, .. }
+        | redis::ConnectionAddr::Tcp(host, port) => Upstream::tls(host.clone(), *port),
+        other => panic!("a double fronts Valkey over TCP, not {other}"),
+    }
+}
+
 /// Reach the Valkey `url` names over TLS, verifying its certificate against
 /// the system's authorities; `None` when it cannot be reached.
 pub(crate) async fn dial(url: &str) -> Option<client::TlsStream<TcpStream>> {
-    let info = redis::IntoConnectionInfo::into_connection_info(url)
-        .expect("the URL of the Valkey a double fronts parses");
-    let host = match info.addr() {
-        redis::ConnectionAddr::TcpTls { host, .. } | redis::ConnectionAddr::Tcp(host, _) => {
-            host.clone()
-        }
-        other => panic!("a double fronts Valkey over TCP, not {other}"),
-    };
-    let name = ServerName::try_from(host).expect("the host is a server name");
-    let tcp = TcpStream::connect(info.addr().to_string()).await.ok()?;
-    system_connector().connect(name, tcp).await.ok()
+    upstream(url).dial().await
 }
 
 /// Both ends of a double standing between `client` and the Valkey `upstream`
@@ -65,11 +65,9 @@ pub(crate) async fn dial(url: &str) -> Option<client::TlsStream<TcpStream>> {
 /// either side gave up.
 pub(crate) async fn bridge(
     client: TcpStream,
-    upstream: &str,
+    url: &str,
 ) -> Option<(server::TlsStream<TcpStream>, client::TlsStream<TcpStream>)> {
-    let client = accept(client).await?;
-    let server = dial(upstream).await?;
-    Some((client, server))
+    upstream(url).bridge(client, &ACCEPTOR).await
 }
 
 /// A proxy on `127.0.0.1` terminating TLS with the test authority's

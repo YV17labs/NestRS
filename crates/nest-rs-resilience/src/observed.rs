@@ -555,17 +555,14 @@ mod tests {
             "the policy built since reports with no run, the one built before not yet"
         );
 
-        assert!(before.run(|_| async { Err::<(), _>(Down) }).await.is_err());
+        assert!(before.run(|| async { Err::<(), _>(Down) }).await.is_err());
         for _ in 0..2 {
-            assert!(before.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
+            assert!(before.run(|| async { Ok::<_, Down>(()) }).await.is_ok());
         }
-        let holding = parked(before.run(|_| silent()));
-        assert!(after.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
-        let sent = [
-            parked(after.run(|_| silent())),
-            parked(after.run(|_| silent())),
-        ];
-        let waiting = parked(after.run(|_| silent()));
+        let holding = parked(before.run(silent));
+        assert!(after.run(|| async { Ok::<_, Down>(()) }).await.is_ok());
+        let sent = [parked(after.run(silent)), parked(after.run(silent))];
+        let waiting = parked(after.run(silent));
         after
             .open_breaker(Duration::from_secs(60))
             .expect("a breaker");
@@ -638,7 +635,7 @@ mod tests {
             concurrency: Some(3),
             ..ResilienceConfig::default()
         });
-        assert!(early.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
+        assert!(early.run(|| async { Ok::<_, Down>(()) }).await.is_ok());
         let exporter = InMemoryMetricExporter::default();
         let provider = SdkMeterProvider::builder()
             .with_reader(PeriodicReader::builder(exporter.clone()).build())
@@ -646,7 +643,7 @@ mod tests {
         opentelemetry::global::set_meter_provider(provider.clone());
         nest_rs_core::__private::meter_provider_seated();
 
-        assert!(early.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
+        assert!(early.run(|| async { Ok::<_, Down>(()) }).await.is_ok());
         provider.force_flush().expect("the export");
         assert_eq!(
             observed(&exporter),

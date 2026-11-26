@@ -72,6 +72,7 @@ async fn a_status_error_is_said_by_its_class_and_its_code_never_the_peers_own_ph
         );
 
         assert_eq!(said(&error), sentence);
+        #[cfg(feature = "middleware")]
         assert_eq!(
             said(&reqwest_middleware::Error::Reqwest(error)),
             sentence,
@@ -631,12 +632,13 @@ type Shared = std::sync::Arc<dyn Error + Send + Sync>;
 
 /// Each way an error names reqwest's as its source without holding it bare:
 /// shared, since reqwest's error is no `Clone`; boxed, to stay small; erased;
-/// beneath reqwest-middleware's; and inside the I/O error a reader over a
-/// body's stream makes of it.
+/// inside the I/O error a reader over a body's stream makes of it; and, under
+/// `middleware`, beneath reqwest-middleware's.
 fn named(error: reqwest::Error, shape: usize) -> Option<Box<dyn Error>> {
     use std::io::Error as Io;
     use std::sync::Arc;
 
+    #[cfg(feature = "middleware")]
     use reqwest_middleware::Error as Middleware;
 
     Some(match shape {
@@ -646,18 +648,26 @@ fn named(error: reqwest::Error, shape: usize) -> Option<Box<dyn Error>> {
         3 => Box::new(Naming(Arc::new(error) as Shared)),
         4 => Box::new(Naming(Arc::new(Box::new(error)) as Shared)),
         5 => Box::new(Naming(Arc::new(Arc::new(error) as Shared) as Shared)),
-        6 => Box::new(Naming(Arc::new(Middleware::Reqwest(error)))),
-        7 => Box::new(Naming(Box::new(Middleware::Reqwest(error)))),
-        8 => Box::new(Naming(Arc::new(Middleware::middleware(error)))),
-        9 => Box::new(Naming(Arc::new(Middleware::middleware(Arc::new(error))))),
-        10 => Box::new(Naming(Io::other(error))),
-        11 => Box::new(Naming(Io::other(Arc::new(error)))),
-        12 => Box::new(Naming(Io::other(Io::other(Box::new(error))))),
-        13 => Box::new(Naming(Arc::new(Io::other(error)))),
+        6 => Box::new(Naming(Io::other(error))),
+        7 => Box::new(Naming(Io::other(Arc::new(error)))),
+        8 => Box::new(Naming(Io::other(Io::other(Box::new(error))))),
+        9 => Box::new(Naming(Arc::new(Io::other(error)))),
+        #[cfg(feature = "middleware")]
+        10 => Box::new(Naming(Arc::new(Middleware::Reqwest(error)))),
+        #[cfg(feature = "middleware")]
+        11 => Box::new(Naming(Box::new(Middleware::Reqwest(error)))),
+        #[cfg(feature = "middleware")]
+        12 => Box::new(Naming(Arc::new(Middleware::middleware(error)))),
+        #[cfg(feature = "middleware")]
+        13 => Box::new(Naming(Arc::new(Middleware::middleware(Arc::new(error))))),
+        #[cfg(feature = "middleware")]
         14 => Box::new(Naming(Io::other(Middleware::Reqwest(error)))),
         _ => return None,
     })
 }
+
+/// How many shapes [`named`] builds.
+const SHAPES: usize = if cfg!(feature = "middleware") { 15 } else { 10 };
 
 /// A pointer to reqwest's error handed out as the link is said as the error
 /// it holds: its downcast would fail, and its `Display` is reqwest's whole.
@@ -674,7 +684,7 @@ async fn a_reqwest_error_named_as_a_source_behind_a_pointer_is_said_as_one_named
             .error_for_status()
             .expect_err("no success");
         let Some(named) = named(error, shape) else {
-            assert!(shape > 14, "every shape was read");
+            assert_eq!(shape, SHAPES, "every shape was read");
             break;
         };
         assert!(

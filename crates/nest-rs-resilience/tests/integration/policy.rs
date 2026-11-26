@@ -49,7 +49,7 @@ impl SlowController {
     #[public]
     async fn wait(&self) -> Result<String, ResilienceError<Silent>> {
         self.upstream
-            .run(|_| std::future::pending::<Result<String, Silent>>())
+            .run(std::future::pending::<Result<String, Silent>>)
             .await
     }
 
@@ -59,7 +59,7 @@ impl SlowController {
     #[public]
     async fn busy(&self) -> Result<String, ResilienceError<Silent>> {
         self.upstream
-            .run(|_| async {
+            .run(|| async {
                 tokio::time::advance(Duration::from_millis(3)).await;
                 std::future::pending::<Result<String, Silent>>().await
             })
@@ -456,11 +456,8 @@ async fn an_inner_policys_open_breaker_is_sent_again_after_its_whole_wait_or_not
 async fn an_inner_policys_full_bulkhead_is_sent_again_on_the_plain_backoff() {
     let (_apps, host) = relayed().await;
     let inner = Arc::clone(&host.inner);
-    let holding = tokio::spawn(async move {
-        inner
-            .run(|_| std::future::pending::<Result<(), Silent>>())
-            .await
-    });
+    let holding =
+        tokio::spawn(async move { inner.run(std::future::pending::<Result<(), Silent>>).await });
     tokio::task::yield_now().await;
     assert_eq!(host.inner.concurrency_running(), Some(1));
 
@@ -593,7 +590,7 @@ fn counted(policy: &ResiliencePolicy) -> (usize, usize) {
 async fn a_timeout_at_the_units_deadline_is_told_though_its_savepoint_still_settles() {
     let (_app, policy) = crate::policy(counting()).await;
     let mut events = policy.events();
-    let call = policy.run_idempotent(|_| std::future::pending::<Result<u32, Silent>>());
+    let call = policy.run_idempotent(std::future::pending::<Result<u32, Silent>>);
     let cut = cut_in_a_second(Duration::from_millis(1), call).await;
     assert!(cut.is_none(), "cut while its savepoint settles: {cut:?}");
     assert_eq!(counted(&policy), (1, 1), "the timeout its breaker counted");
@@ -677,7 +674,7 @@ const RUN: usize = 1024;
 /// The size of the future `call` makes, read off its type.
 fn made<F, Fut>(_call: &F) -> usize
 where
-    F: FnOnce(nest_rs_resilience::CancellationToken) -> Fut,
+    F: FnOnce() -> Fut,
 {
     size_of::<Fut>()
 }
@@ -685,13 +682,13 @@ where
 /// Each shape of a call holding or moving `N` bytes: the size of its run, and
 /// what the call holds of its own.
 fn shapes<const N: usize>(policy: &ResiliencePolicy) -> [(&'static str, usize, usize, usize); 4] {
-    let holding = |_| async {
+    let holding = || async {
         let buffer = [7_u8; N];
         tokio::task::yield_now().await;
         Ok::<_, Silent>(std::hint::black_box(&buffer).len())
     };
     let buffer = [7_u8; N];
-    let moving = move |_| async move {
+    let moving = move || async move {
         tokio::task::yield_now().await;
         Ok::<_, Silent>(std::hint::black_box(&buffer).len())
     };
@@ -771,7 +768,7 @@ fn worker() -> tokio::runtime::Runtime {
 fn a_run_holding_a_large_buffer_across_an_await_runs_on_a_worker_of_tokios_default_stack() {
     worker().block_on(async {
         let (_app, policy) = crate::policy(crate::quiet()).await;
-        let holding = |_| async {
+        let holding = || async {
             let buffer = [7_u8; HELD_ON_A_WORKER];
             tokio::task::yield_now().await;
             Ok::<_, Silent>(std::hint::black_box(&buffer).len())
@@ -801,7 +798,7 @@ async fn moving_once<const N: usize>(
 ) -> Result<usize, ResilienceError<Silent>> {
     let buffer = [7_u8; N];
     policy
-        .run(move |_| async move {
+        .run(move || async move {
             tokio::task::yield_now().await;
             Ok(std::hint::black_box(&buffer).len())
         })
@@ -825,31 +822,47 @@ fn a_call_sent_once_moving_a_large_buffer_into_its_closure_runs_on_a_worker_of_t
 
 /// Under tokio's threshold a release build holds the call and its future in
 /// the run's own future, so a run allocates nothing of its own; a debug build
-/// boxes both, a closure holding nothing in a box that allocates nothing.
+/// boxes both, a closure holding nothing in a box that allocates nothing. A
+/// token is made only for a call that takes one.
 #[tokio::test]
 #[cfg_attr(
     not(target_os = "linux"),
     ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
 )]
-async fn a_call_answering_at_once_allocates_nothing_but_its_token_in_a_release_build() {
+async fn a_call_answering_at_once_allocates_nothing_but_the_token_it_takes_in_a_release_build() {
     let (_app, policy) = crate::policy(ResilienceConfig::default()).await;
     let token = crate::token_allocations();
     let boxed = usize::from(cfg!(debug_assertions));
-    for (shape, (answered, made)) in [
+    for (shape, tokens, (answered, made)) in [
         (
             "run once",
-            crate::allocations(|| policy.run(|_| async { Ok::<_, Silent>(7) })),
+            0,
+            crate::allocations(|| policy.run(|| async { Ok::<_, Silent>(7) })),
         ),
         (
             "run again",
-            crate::allocations(|| policy.run_idempotent(|_| async { Ok::<_, Silent>(7) })),
+            0,
+            crate::allocations(|| policy.run_idempotent(|| async { Ok::<_, Silent>(7) })),
+        ),
+        (
+            "run once, taking its token",
+            1,
+            crate::allocations(|| policy.run_cancellable(|_| async { Ok::<_, Silent>(7) })),
+        ),
+        (
+            "run again, taking its token",
+            1,
+            crate::allocations(|| {
+                policy.run_idempotent_cancellable(|_| async { Ok::<_, Silent>(7) })
+            }),
         ),
     ] {
         assert!(matches!(answered, Ok(7)), "{shape}: {answered:?}");
         assert_eq!(
             made,
-            token + boxed,
-            "a call {shape} allocates its token, {token}, and in a debug build its future's box"
+            tokens * token + boxed,
+            "a call {shape} allocates {tokens} token of {token}, and in a debug build its \
+             future's box"
         );
     }
 }
@@ -934,15 +947,21 @@ async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_
     for (shape, tokens, boxed, (answered, made)) in [
         (
             "run once",
-            1,
+            0,
             debug,
-            crate::allocations(|| policy.run(|_| async { Ok::<_, Silent>(7) })),
+            crate::allocations(|| policy.run(|| async { Ok::<_, Silent>(7) })),
         ),
         (
             "run again",
+            0,
+            debug,
+            crate::allocations(|| policy.run_idempotent(|| async { Ok::<_, Silent>(7) })),
+        ),
+        (
+            "run once, taking its token",
             1,
             debug,
-            crate::allocations(|| policy.run_idempotent(|_| async { Ok::<_, Silent>(7) })),
+            crate::allocations(|| policy.run_cancellable(|_| async { Ok::<_, Silent>(7) })),
         ),
         (
             "of a decorated method run once",
@@ -989,8 +1008,8 @@ async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_
             policy.rate_available(),
             policy.breaker_stats().map(|stats| stats.outcomes),
         ),
-        (Some(0), Some(993), Some(7)),
-        "each of the seven took a slot, given back, and a token, and counted in the breaker"
+        (Some(0), Some(992), Some(8)),
+        "each of the eight took a slot, given back, and a token, and counted in the breaker"
     );
 }
 
@@ -1000,7 +1019,7 @@ fn polled_once<F: Future>(run: std::pin::Pin<&mut F>) -> (std::task::Poll<F::Out
 }
 
 /// A call that waits — for a slot of the bulkhead, or for a token of the rate
-/// — allocates that wait once, beside its token: a run holds the two waits a
+/// — allocates that wait once: a run holds the two waits a
 /// call may never meet in a box, so one that meets neither reserves no room
 /// for them. A debug build boxes its future too.
 #[tokio::test(start_paused = true)]
@@ -1009,7 +1028,6 @@ fn polled_once<F: Future>(run: std::pin::Pin<&mut F>) -> (std::task::Poll<F::Out
     ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
 )]
 async fn a_call_waiting_for_a_slot_or_a_token_allocates_its_wait_once() {
-    let token = crate::token_allocations();
     let boxed = usize::from(cfg!(debug_assertions));
 
     let (_app, policy) = crate::policy(ResilienceConfig {
@@ -1018,12 +1036,12 @@ async fn a_call_waiting_for_a_slot_or_a_token_allocates_its_wait_once() {
         ..crate::quiet()
     })
     .await;
-    let mut holding = Box::pin(policy.run(|_| std::future::pending::<Result<u32, Silent>>()));
+    let mut holding = Box::pin(policy.run(std::future::pending::<Result<u32, Silent>>));
     assert!(
         polled_once(holding.as_mut()).0.is_pending(),
         "it holds the one slot"
     );
-    let mut waiting = std::pin::pin!(policy.run(|_| async { Ok::<_, Silent>(7) }));
+    let mut waiting = std::pin::pin!(policy.run(|| async { Ok::<_, Silent>(7) }));
     let (entering, entered) = polled_once(waiting.as_mut());
     assert!(entering.is_pending(), "it waits for the slot");
     drop(holding);
@@ -1034,9 +1052,8 @@ async fn a_call_waiting_for_a_slot_or_a_token_allocates_its_wait_once() {
     );
     assert_eq!(
         entered + sent,
-        token + 1 + boxed,
-        "a call waiting for a slot allocates its token, {token}, its wait, and in a debug build \
-         its future's box"
+        1 + boxed,
+        "a call waiting for a slot allocates its wait, and in a debug build its future's box"
     );
 
     let (_app, policy) = crate::policy(ResilienceConfig {
@@ -1046,10 +1063,10 @@ async fn a_call_waiting_for_a_slot_or_a_token_allocates_its_wait_once() {
         ..crate::quiet()
     })
     .await;
-    assert!(policy.run(|_| async { Ok::<_, Silent>(7) }).await.is_ok());
+    assert!(policy.run(|| async { Ok::<_, Silent>(7) }).await.is_ok());
     // The rate's line takes room for a waiting call the first time one waits.
-    assert!(policy.run(|_| async { Ok::<_, Silent>(7) }).await.is_ok());
-    let mut waiting = std::pin::pin!(policy.run(|_| async { Ok::<_, Silent>(7) }));
+    assert!(policy.run(|| async { Ok::<_, Silent>(7) }).await.is_ok());
+    let mut waiting = std::pin::pin!(policy.run(|| async { Ok::<_, Silent>(7) }));
     let (admitting, admitted) = polled_once(waiting.as_mut());
     assert!(admitting.is_pending(), "it waits for the next token");
     tokio::time::advance(Duration::from_secs(1)).await;
@@ -1060,9 +1077,9 @@ async fn a_call_waiting_for_a_slot_or_a_token_allocates_its_wait_once() {
     );
     assert_eq!(
         admitted + sent,
-        token + 1 + boxed,
-        "a call waiting for a token allocates its token, {token}, its wait, and in a debug build \
-         its future's box"
+        1 + boxed,
+        "a call waiting for a token of the rate allocates its wait, and in a debug build its \
+         future's box"
     );
 }
 
@@ -1074,11 +1091,9 @@ async fn a_call_waiting_for_a_slot_or_a_token_allocates_its_wait_once() {
     not(target_os = "linux"),
     ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
 )]
-async fn a_call_whose_future_is_past_tokios_threshold_allocates_nothing_but_its_token_in_a_release_build()
- {
+async fn a_call_whose_future_is_past_tokios_threshold_allocates_nothing_in_a_release_build() {
     let (_app, policy) = crate::policy(ResilienceConfig::default()).await;
-    let token = crate::token_allocations();
-    let large = |_| async {
+    let large = || async {
         let buffer = [7_u8; HELD];
         std::future::ready(()).await;
         Ok::<_, Silent>(std::hint::black_box(&buffer).len())
@@ -1094,20 +1109,18 @@ async fn a_call_whose_future_is_past_tokios_threshold_allocates_nothing_but_its_
     ] {
         assert!(matches!(answered, Ok(HELD)), "{shape}: {answered:?}");
         assert_eq!(
-            made,
-            token + boxed,
-            "a call {shape} whose future is past the threshold allocates its token, {token}, and \
-             in a debug build its future's box"
+            made, boxed,
+            "a call {shape} whose future is past the threshold allocates in a debug build its \
+             future's box alone"
         );
     }
 }
 
 /// A closure of `N` bytes, the buffer it moves in, making a future that holds
 /// only the length it read.
-fn closure_of<const N: usize>()
--> impl FnMut(nest_rs_resilience::CancellationToken) -> std::future::Ready<Result<usize, Silent>> {
+fn closure_of<const N: usize>() -> impl FnMut() -> std::future::Ready<Result<usize, Silent>> {
     let buffer = [7_u8; N];
-    move |_| std::future::ready(Ok(std::hint::black_box(&buffer).len()))
+    move || std::future::ready(Ok(std::hint::black_box(&buffer).len()))
 }
 
 /// The threshold `src/call.rs` mirrors, held on both sides: in a release
@@ -1124,7 +1137,6 @@ async fn a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed
  {
     assert_eq!(size_of_val(&closure_of::<THRESHOLD>()), THRESHOLD);
     let (_app, policy) = crate::policy(ResilienceConfig::default()).await;
-    let token = crate::token_allocations();
     // A debug build boxes the closure and the future it makes, whatever their size.
     let in_release = |boxes: usize| if cfg!(debug_assertions) { 2 } else { boxes };
     for (shape, boxes, (answered, made)) in [
@@ -1151,9 +1163,8 @@ async fn a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed
     ] {
         assert!(answered.is_ok(), "{shape}: {answered:?}");
         assert_eq!(
-            made,
-            token + boxes,
-            "a call whose closure is {shape} allocates its token, {token}, and {boxes} box(es)"
+            made, boxes,
+            "a call whose closure is {shape} allocates {boxes} box(es)"
         );
     }
 }
@@ -1235,7 +1246,6 @@ async fn inside_a_transaction_an_idempotent_calls_attempt_allocates_its_savepoin
     })
     .await;
     let unit = || Arc::new(InTransaction) as Arc<dyn nest_rs_database::Executor>;
-    let token = crate::token_allocations();
     let boxed = usize::from(cfg!(debug_assertions));
     let (_, installed) =
         crate::allocations(|| with_request_executor(unit(), std::future::ready(())));
@@ -1251,17 +1261,14 @@ async fn inside_a_transaction_an_idempotent_calls_attempt_allocates_its_savepoin
             "sent once",
             0,
             crate::allocations(|| {
-                with_request_executor(unit(), once.run(|_| async { Ok::<_, Silent>(7) }))
+                with_request_executor(unit(), once.run(|| async { Ok::<_, Silent>(7) }))
             }),
         ),
         (
             "sent again, its retries off",
             DRIVER + INSTALL + SETTLING,
             crate::allocations(|| {
-                with_request_executor(
-                    unit(),
-                    once.run_idempotent(|_| async { Ok::<_, Silent>(7) }),
-                )
+                with_request_executor(unit(), once.run_idempotent(|| async { Ok::<_, Silent>(7) }))
             }),
         ),
         (
@@ -1270,7 +1277,7 @@ async fn inside_a_transaction_an_idempotent_calls_attempt_allocates_its_savepoin
             crate::allocations(|| {
                 with_request_executor(
                     unit(),
-                    again.run_idempotent(|_| async { Ok::<_, Silent>(7) }),
+                    again.run_idempotent(|| async { Ok::<_, Silent>(7) }),
                 )
             }),
         ),
@@ -1278,9 +1285,9 @@ async fn inside_a_transaction_an_idempotent_calls_attempt_allocates_its_savepoin
         assert!(matches!(answered, Ok(7)), "{shape}: {answered:?}");
         assert_eq!(
             made,
-            installed + token + boxed + own,
-            "inside a transaction, a call {shape} allocates its unit's install, {installed}, its \
-             token, {token}, in a debug build its future's box, and {own} for its savepoint"
+            installed + boxed + own,
+            "inside a transaction, a call {shape} allocates its unit's install, {installed}, in a \
+             debug build its future's box, and {own} for its savepoint"
         );
     }
 }
@@ -1342,7 +1349,7 @@ async fn inside_a_transaction_an_attempt_polled_many_times_allocates_its_savepoi
         let (once, without) = allocations_until_answered(|| {
             with_request_executor(
                 unit(),
-                policy.run(move |_| async move {
+                policy.run(move || async move {
                     Waits(polls).await;
                     Ok::<_, Silent>(7)
                 }),
@@ -1351,7 +1358,7 @@ async fn inside_a_transaction_an_attempt_polled_many_times_allocates_its_savepoi
         let (again, within) = allocations_until_answered(|| {
             with_request_executor(
                 unit(),
-                policy.run_idempotent(move |_| async move {
+                policy.run_idempotent(move || async move {
                     Waits(polls).await;
                     Ok::<_, Silent>(7)
                 }),

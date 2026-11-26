@@ -313,7 +313,9 @@ pub mod __private {
         KNOWN_VERBS, declare_unit, forget_cause, known_verb, measured_unit, protocol_version,
         set_span_rename, set_unit_end, str_eq, unit_opened_by,
     };
-    pub use crate::outcome::__private::{caught_problem, is_same_failure, kept, settled};
+    pub use crate::outcome::__private::{
+        caught_problem, is_same_failure, is_unavailable, kept, settled,
+    };
     pub use crate::panic::__private::{Unwound, unwound};
     pub use crate::param::{
         ParamProbe, ParamProbeAmbient, ParamProbeFallback, ParamProbeResolves, ProtocolArgument,

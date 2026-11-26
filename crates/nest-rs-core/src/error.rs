@@ -1201,7 +1201,7 @@ impl Redactions {
         let mut text = Cow::Borrowed(text);
         for (displayed, said) in &self.0 {
             if text.contains(displayed.as_str()) {
-                text = Cow::Owned(text.replace(displayed.as_str(), said));
+                text = Cow::Owned(spelled_as(&text, displayed, said));
             }
         }
         // validator's wording first: a value it lists may spell what serde's
@@ -1217,6 +1217,27 @@ impl Redactions {
         };
         rebuilt.map_or(text, Cow::Owned)
     }
+}
+
+/// `text` with each `displayed` it spells said as `said`, but where `text`
+/// already spells `said` there: a sayer's sentence may go on from the link's
+/// own (`"…: 503 UNAVAILABLE"`), and a text built from the chain's message
+/// holds it whole.
+fn spelled_as(text: &str, displayed: &str, said: &str) -> String {
+    let mut spelled = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(displayed) {
+        spelled.push_str(&rest[..at]);
+        spelled.push_str(said);
+        let from = &rest[at..];
+        rest = &from[if said.starts_with(displayed) && from.starts_with(said) {
+            said.len()
+        } else {
+            displayed.len()
+        }..];
+    }
+    spelled.push_str(rest);
+    spelled
 }
 
 /// `text` within [`DecodeError::MAX_LEN`] bytes, cut at a character boundary,
@@ -1483,6 +1504,26 @@ fn kind(rest: &str) -> &'static str {
 mod decode_error_tests {
     use serde::Deserialize;
     use serde_json::json;
+
+    #[test]
+    fn a_link_spelled_is_said_whole_and_what_a_sentence_already_says_is_kept() {
+        use super::spelled_as;
+
+        assert_eq!(
+            spelled_as("x: refused; refused: 503", "refused", "refused: 503"),
+            "x: refused: 503; refused: 503"
+        );
+        assert_eq!(
+            spelled_as(
+                "rejected: secret, rejected: secret",
+                "rejected: secret",
+                "rejected"
+            ),
+            "rejected, rejected",
+            "a sentence shorter than the link's own leaves none of it"
+        );
+        assert_eq!(spelled_as("nothing", "rejected", "said"), "nothing");
+    }
 
     use super::*;
 

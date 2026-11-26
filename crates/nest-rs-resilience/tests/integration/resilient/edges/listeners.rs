@@ -134,7 +134,7 @@ async fn a_listener_its_policy_refuses_fails_its_unit_and_the_emit_goes_on() {
         let mounted = logs.find(nest_rs_events::TARGET, "mounted");
         let failed = logs.find(
             nest_rs_events::TARGET,
-            "event listener failed — dispatch continues with the next listener",
+            "event listener failed; unavailable — dispatch continues with the next listener",
         );
         let ran = logs.find(OPERATIONS, nest_rs_events::unit::DISPATCH.name());
         let chain = refusing.chain(
@@ -157,7 +157,10 @@ async fn a_listener_its_policy_refuses_fails_its_unit_and_the_emit_goes_on() {
                 line.unwrap_or_else(|| panic!("a line for `{method}`: {lines:#?}"))
             };
             let (mounted, failed, ran) = (named(&mounted), named(&failed), named(&ran));
-            assert_eq!(failed.level, "error", "{failed:?}");
+            assert_eq!(
+                failed.level, "warn",
+                "a `503`, as every edge files it: {failed:?}"
+            );
             assert_eq!(
                 failed.field("error").as_deref(),
                 Some(&*chain),
@@ -177,7 +180,7 @@ async fn a_listener_its_policy_refuses_fails_its_unit_and_the_emit_goes_on() {
             2,
             "each listener's refusal, once: {failed:#?}"
         );
-        assert_eq!(logs.events_at(tracing::Level::ERROR).len(), 2);
+        assert!(logs.events_at(tracing::Level::ERROR).is_empty());
         assert!(
             !logs.quotes(RECIPIENT),
             "no line says what the event carried"

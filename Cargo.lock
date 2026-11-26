@@ -3497,7 +3497,6 @@ dependencies = [
  "nest-rs-testing",
  "object_store",
  "reqwest",
- "rustls",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -4771,7 +4770,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
- "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",

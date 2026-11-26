@@ -23,8 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_config::Config;
 use nest_rs_storage::{Storage, StorageConfig};
-use nest_rs_testing::{TestAuthority, TestCertificate, system_connector};
-use rustls::pki_types::ServerName;
+use nest_rs_testing::{TestAuthority, TestCertificate, Upstream};
 use std::sync::LazyLock;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -128,12 +127,10 @@ enum Then {
 /// of the calls' connections it took.
 async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, Arc<AtomicUsize>) {
     let parsed = reqwest::Url::parse(&endpoint()).expect("the storage endpoint parses");
-    let host = parsed
-        .host_str()
-        .expect("the storage endpoint names a host")
-        .to_owned();
-    let upstream = format!(
-        "{host}:{}",
+    let store = Upstream::tls(
+        parsed
+            .host_str()
+            .expect("the storage endpoint names a host"),
         parsed
             .port_or_known_default()
             .expect("the storage endpoint has a port"),
@@ -146,32 +143,23 @@ async fn proxy(carry: impl Fn(usize) -> Carry + Send + 'static) -> (SocketAddr, 
     let counted = Arc::clone(&taken);
     tokio::spawn(async move {
         let (proof, _) = listener.accept().await.expect("accept the proof");
-        let at = (host.clone(), upstream.clone());
-        tokio::spawn(carried(proof, at, Carry::default()));
+        tokio::spawn(carried(proof, store.clone(), Carry::default()));
         loop {
             let (client, _) = listener.accept().await.expect("accept");
             let carry = carry(counted.fetch_add(1, Ordering::SeqCst));
-            let at = (host.clone(), upstream.clone());
-            tokio::spawn(carried(client, at, carry));
+            tokio::spawn(carried(client, store.clone(), carry));
         }
     });
     (addr, taken)
 }
 
 /// One connection of a [`proxy`]'s, ending TLS from `client` and opening it to
-/// the store `at` (its host, and its address), carried as `carry` says.
-async fn carried(client: tokio::net::TcpStream, (host, upstream): (String, String), carry: Carry) {
-    let Ok(client) = PROXY.acceptor(None).accept(client).await else {
+/// the `store`, carried as `carry` says.
+async fn carried(client: tokio::net::TcpStream, store: Upstream, carry: Carry) {
+    let Some(client) = store.accept(client, &PROXY.acceptor(None)).await else {
         return;
     };
-    let server = tokio::net::TcpStream::connect(&upstream)
-        .await
-        .expect("reach the store");
-    let name = ServerName::try_from(host).expect("the store's host is a name");
-    let server = system_connector()
-        .connect(name, server)
-        .await
-        .expect("a TLS handshake with the store");
+    let server = store.dial().await.expect("a TLS handshake with the store");
     let (mut client_read, mut client_write) = tokio::io::split(client);
     let (mut server_read, mut server_write) = tokio::io::split(server);
     tokio::spawn(async move {

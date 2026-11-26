@@ -245,7 +245,7 @@ mod tests {
 
         let policy = policy(config(3));
         for _ in 0..3 {
-            let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+            let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
             assert!(
                 matches!(failed, Err(ResilienceError::Failed(Refused))),
                 "{failed:?}"
@@ -288,7 +288,7 @@ mod tests {
                 let policy = Arc::clone(&policy);
                 tokio::spawn(async move {
                     policy
-                        .run(|_| std::future::pending::<Result<(), Refused>>())
+                        .run(std::future::pending::<Result<(), Refused>>)
                         .await
                 })
             })
@@ -307,7 +307,7 @@ mod tests {
             );
         }
         let failed = || async {
-            let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+            let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
             assert!(
                 matches!(failed, Err(ResilienceError::Failed(Refused))),
                 "{failed:?}"
@@ -354,7 +354,7 @@ mod tests {
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(60) * nth).await;
                     policy
-                        .run(|_| async move {
+                        .run(|| async move {
                             tokio::time::sleep_until(answers).await;
                             Err::<(), _>(Refused)
                         })
@@ -469,7 +469,7 @@ mod tests {
                 let policy = Arc::clone(&policy);
                 tokio::spawn(async move {
                     policy
-                        .run(|_| async {
+                        .run(|| async {
                             tokio::time::sleep(Duration::from_secs(1)).await;
                             Ok::<_, Refused>(())
                         })
@@ -499,7 +499,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         for _ in 0..1_000 {
             let answered = policy
-                .run(|_| async {
+                .run(|| async {
                     calls.fetch_add(1, Ordering::Relaxed);
                     Ok::<_, Refused>(())
                 })
@@ -524,27 +524,27 @@ mod tests {
             ..ResilienceConfig::default()
         });
         let failing = || async { Err::<(), _>(Refused) };
-        assert!(policy.run(|_| failing()).await.is_err());
+        assert!(policy.run(&failing).await.is_err());
         tokio::time::advance(Duration::from_secs(61)).await;
-        assert!(policy.run(|_| failing()).await.is_err());
+        assert!(policy.run(&failing).await.is_err());
         assert_eq!(
             policy.breaker_state(),
             Some(BreakerState::Closed),
             "the first failure is past the age"
         );
-        assert!(policy.run(|_| failing()).await.is_err());
+        assert!(policy.run(failing).await.is_err());
         assert!(matches!(
             policy.breaker_state(),
             Some(BreakerState::Open { .. })
         ));
         tokio::time::advance(Duration::from_secs(10)).await;
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert_eq!(
             policy.breaker_state(),
             Some(BreakerState::HalfOpen),
             "one probe of two"
         );
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
     }
 }

@@ -123,7 +123,9 @@ owning crate's suite is undocumented.
 - `--workspace` builds one feature union, so a crate that compiles only
   because a sibling enabled a feature passes it. `just lint` builds the umbrella
   and `nest-rs-macro-hygiene` under each feature alone (`cargo hack`): the
-  install contract is `cargo add nest-rs --features <x>`, not a sub-crate.
+  install contract is `cargo add nest-rs --features <x>`, not a sub-crate. It
+  also checks every crate's targets, its suites included, without its default
+  features, so a suite reading a default feature's items gates them on it.
 
 ## CI
 

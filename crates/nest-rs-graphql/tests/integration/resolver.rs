@@ -531,6 +531,15 @@ impl LedgerResolver {
     async fn overdrawn(&self) -> Result<i32, BankDown> {
         Err(BankDown)
     }
+
+    /// `ret` records what the method itself answered, never the field's
+    /// answer it is resolved through, which has no `Debug`.
+    #[query]
+    #[public]
+    #[tracing::instrument(skip_all, ret)]
+    async fn balance(&self) -> Result<i32, BankDown> {
+        Ok(41)
+    }
 }
 
 #[module(
@@ -628,6 +637,28 @@ async fn an_instruments_err_records_the_error_the_method_answered() {
     assert_eq!(
         recorded[0].field("error").as_deref(),
         Some("the bank did not answer"),
+        "{recorded:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_instruments_ret_records_the_value_the_method_answered() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<LedgerModule>()
+        .await
+        .expect("the schema boots");
+
+    let answered = crate::graphql_answer(&app, "{ balance }").await;
+    assert_eq!(answered["data"]["balance"], 41, "{answered}");
+    let recorded: Vec<_> = logs
+        .events_at(tracing::Level::INFO)
+        .into_iter()
+        .filter(|event| event.target == module_path!())
+        .collect();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(
+        recorded[0].field("return").as_deref(),
+        Some("Ok(41)"),
         "{recorded:?}"
     );
 }

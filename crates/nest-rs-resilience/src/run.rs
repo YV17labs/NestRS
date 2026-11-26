@@ -1223,12 +1223,12 @@ mod tests {
         judge: J,
     ) -> Attempted<T>
     where
-        F: FnOnce(CancellationToken) -> Fut,
+        F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, Refused>>,
         J: Fn(&Result<T, Refused>) -> Verdict,
     {
         let mut call = pin!(Judged::<_, _, Answer<T, Refused>>::new(
-            crate::call::Once::<_, crate::call::Cancellable>::new(call),
+            crate::call::Once::<_, crate::call::Uncancelled>::new(call),
             ByHand(judge),
         ));
         let ended = std::future::poll_fn(|cx| run.as_mut().poll_attempt(call.as_mut(), cx)).await;
@@ -1262,7 +1262,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_call_answering_at_once_is_its_own_answer() {
         let answered = retrying(2)
-            .run(|_| async { Ok::<_, Refused>("charged") })
+            .run(|| async { Ok::<_, Refused>("charged") })
             .await;
         assert!(matches!(answered, Ok("charged")), "{answered:?}");
     }
@@ -1271,7 +1271,7 @@ mod tests {
     async fn a_call_not_declared_idempotent_is_never_attempted_again() {
         let calls = AtomicU32::new(0);
         let answered = retrying(2)
-            .run(|_| async {
+            .run(|| async {
                 calls.fetch_add(1, Ordering::Relaxed);
                 Err::<(), _>(Refused)
             })
@@ -1288,7 +1288,7 @@ mod tests {
         let calls = AtomicU32::new(0);
         let started = tokio::time::Instant::now();
         let answered = retrying(2)
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 calls.fetch_add(1, Ordering::Relaxed);
                 Err::<(), _>(Refused)
             })
@@ -1307,7 +1307,7 @@ mod tests {
     async fn an_idempotent_call_answering_on_a_retry_is_its_answer() {
         let calls = AtomicU32::new(0);
         let answered = retrying(2)
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 match calls.fetch_add(1, Ordering::Relaxed) {
                     0 => Err(Refused),
                     _ => Ok("tracked"),
@@ -1327,7 +1327,7 @@ mod tests {
             breaker_window: None,
             ..ResilienceConfig::default()
         })
-        .run(|cancel| async move {
+        .run_cancellable(|cancel| async move {
             let spawned = cancel.clone();
             tokio::spawn(async move {
                 spawned.cancelled().await;
@@ -1360,10 +1360,10 @@ mod tests {
 
     /// Whether the run of a call panicking at `site` unwinds out of the run.
     async fn unwinds(policy: &ResiliencePolicy<Upstream>, site: PanicSite) -> bool {
-        let making = |_: CancellationToken| -> std::future::Ready<Result<(), Refused>> {
+        let making = || -> std::future::Ready<Result<(), Refused>> {
             panic!("the upstream's client panicked before its future")
         };
-        let running = |_: CancellationToken| async {
+        let running = || async {
             if true {
                 panic!("the upstream's client panicked");
             }
@@ -1451,9 +1451,9 @@ mod tests {
                 ..ResilienceConfig::default()
             });
             let unwound = if again {
-                nest_rs_core::panic::contain(policy.run_idempotent(|_| PanicsAsDropped)).await
+                nest_rs_core::panic::contain(policy.run_idempotent(|| PanicsAsDropped)).await
             } else {
-                nest_rs_core::panic::contain(policy.run(|_| PanicsAsDropped)).await
+                nest_rs_core::panic::contain(policy.run(|| PanicsAsDropped)).await
             };
             assert!(
                 unwound.is_err(),
@@ -1490,7 +1490,7 @@ mod tests {
         let cancelled_at = Arc::new(std::sync::Mutex::new(None));
         let started = tokio::time::Instant::now();
         let answered = policy
-            .run_idempotent(|cancel: CancellationToken| {
+            .run_idempotent_cancellable(|cancel: CancellationToken| {
                 handed.borrow_mut().push(cancel.clone());
                 let first = handed.borrow().len() == 1;
                 if first {
@@ -1534,7 +1534,7 @@ mod tests {
 
         let mut handed = None;
         let answered = policy
-            .run(|cancel: CancellationToken| {
+            .run_cancellable(|cancel: CancellationToken| {
                 handed = Some(cancel.clone());
                 async move {
                     tokio::task::yield_now().await;
@@ -1566,7 +1566,7 @@ mod tests {
         let alive = std::cell::Cell::new(0_u32);
         let seen = std::cell::RefCell::new(Vec::new());
         let answered = policy
-            .run_idempotent(|_| {
+            .run_idempotent(|| {
                 seen.borrow_mut().push(alive.get());
                 let alive = &alive;
                 async move {
@@ -1628,7 +1628,7 @@ mod tests {
             let dropped = std::cell::Cell::new(false);
             let says = &dropped;
             let buffer = [7_u8; 16 * 1024 + 1];
-            let moving = move |_| {
+            let moving = move || {
                 std::hint::black_box(&buffer);
                 SaysItsDrop(says)
             };
@@ -1636,7 +1636,7 @@ mod tests {
             let mut run: Says<'_> = if past {
                 Box::pin(policy.run(moving))
             } else {
-                Box::pin(policy.run(|_| SaysItsDrop(says)))
+                Box::pin(policy.run(|| SaysItsDrop(says)))
             };
             let answered = std::future::poll_fn(|cx| run.as_mut().poll(cx)).await;
             assert!(matches!(answered, Ok("answered")), "{answered:?}");
@@ -1667,7 +1667,7 @@ mod tests {
             let dropped = std::cell::Cell::new(false);
             let gone = || dropped.set(true);
             let held = OnDrop(&gone);
-            let call = move |_| {
+            let call = move || {
                 let _held = &held;
                 async { Ok::<_, Refused>(()) }
             };
@@ -1711,7 +1711,7 @@ mod tests {
                 ..ResilienceConfig::default()
             });
             let gate = tokio::sync::Notify::new();
-            let call = |_| async {
+            let call = || async {
                 gate.notified().await;
                 Ok::<_, Refused>(())
             };
@@ -1750,7 +1750,7 @@ mod tests {
             breaker_window: None,
             ..ResilienceConfig::default()
         })
-        .run_idempotent(|_| async {
+        .run_idempotent(|| async {
             if calls.fetch_add(1, Ordering::Relaxed) == 0 {
                 std::future::pending::<()>().await;
             }
@@ -1775,7 +1775,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let given_up = nest_rs_core::__private::with_deadline(
             Some(started + left),
-            policy.run(|_| std::future::pending::<Result<(), Refused>>()),
+            policy.run(std::future::pending::<Result<(), Refused>>),
         )
         .await;
         assert!(
@@ -1783,7 +1783,7 @@ mod tests {
             "{given_up:?}"
         );
         assert_eq!(started.elapsed(), left, "the deadline, not the 5 s timeout");
-        let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
+        let refused = policy.run(|| async { Ok::<_, Refused>(()) }).await;
         assert!(
             matches!(
                 refused,
@@ -1807,7 +1807,7 @@ mod tests {
         let now = tokio::time::Instant::now();
         let answered = nest_rs_core::__private::with_deadline(
             Some(now + Duration::from_millis(100)),
-            policy.run_idempotent(|_| failing()),
+            policy.run_idempotent(&failing),
         )
         .await;
         assert!(matches!(answered, Err(ResilienceError::Failed(Refused))));
@@ -1819,7 +1819,7 @@ mod tests {
 
         let spent = nest_rs_core::__private::with_deadline(
             Some(tokio::time::Instant::now()),
-            policy.run_idempotent(|_| failing()),
+            policy.run_idempotent(failing),
         )
         .await;
         assert!(
@@ -1842,7 +1842,7 @@ mod tests {
         let policy = retrying(1);
         let mut failing = Box::pin(nest_rs_core::__private::with_deadline(
             Some(tokio::time::Instant::now() + Duration::from_secs(1)),
-            policy.run_idempotent(|_| async {
+            policy.run_idempotent(|| async {
                 calls.fetch_add(1, Ordering::Relaxed);
                 Err::<(), _>(Refused)
             }),
@@ -1867,18 +1867,18 @@ mod tests {
             breaker_failures: 1,
             ..ResilienceConfig::default()
         });
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         let spent = nest_rs_core::__private::with_deadline(
             Some(tokio::time::Instant::now()),
-            policy.run(|_| answering()),
+            policy.run(answering),
         )
         .await;
         assert!(
             matches!(spent, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "{spent:?}"
         );
-        let open = policy.run(|_| answering()).await;
+        let open = policy.run(answering).await;
         assert!(
             matches!(
                 open,
@@ -1898,7 +1898,7 @@ mod tests {
         let calls = AtomicU32::new(0);
         let started = tokio::time::Instant::now();
         let answered = retrying(1)
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 match calls.fetch_add(1, Ordering::Relaxed) {
                     0 => Err(Throttled(
                         Problem::new(429, nest_rs_core::code::RATE_LIMITED).with_retry_after(1),
@@ -1926,7 +1926,7 @@ mod tests {
             ..ResilienceConfig::default()
         });
         let answered = policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 calls.fetch_add(1, Ordering::Relaxed);
                 Err::<(), _>(Refused)
             })
@@ -1948,7 +1948,7 @@ mod tests {
         );
 
         let refused = policy
-            .run(|_| async {
+            .run(|| async {
                 calls.fetch_add(1, Ordering::Relaxed);
                 Ok::<_, Refused>(())
             })
@@ -1980,7 +1980,7 @@ mod tests {
             let (policy, release) = (Arc::clone(&policy), Arc::clone(&release));
             tokio::spawn(async move {
                 policy
-                    .run(|_| async move {
+                    .run(|| async move {
                         release.notified().await;
                         Ok::<_, Refused>(())
                     })
@@ -1988,7 +1988,7 @@ mod tests {
             })
         };
         tokio::task::yield_now().await;
-        let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
+        let refused = policy.run(|| async { Ok::<_, Refused>(()) }).await;
         assert!(
             matches!(
                 refused,
@@ -2001,7 +2001,7 @@ mod tests {
         );
         release.notify_one();
         assert!(holding.await.expect("the held call ends").is_ok());
-        assert!(policy.run(|_| async { Ok::<_, Refused>(()) }).await.is_ok());
+        assert!(policy.run(|| async { Ok::<_, Refused>(()) }).await.is_ok());
     }
 
     /// A call meeting an open breaker is refused before it waits for a slot of
@@ -2028,7 +2028,7 @@ mod tests {
             .settle(Some(TIMED_OUT));
 
         let started = tokio::time::Instant::now();
-        let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
+        let refused = policy.run(|| async { Ok::<_, Refused>(()) }).await;
         assert!(
             matches!(
                 refused,
@@ -2062,7 +2062,7 @@ mod tests {
         let spent = || {
             nest_rs_core::__private::with_deadline(
                 Some(tokio::time::Instant::now()),
-                policy.run(|_| answering()),
+                policy.run(answering),
             )
         };
         let held = begin(&policy).await.expect("the one slot");
@@ -2073,7 +2073,7 @@ mod tests {
         );
         drop(held);
 
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         let refused = spent().await;
         assert!(
@@ -2098,7 +2098,7 @@ mod tests {
         let sent = AtomicU32::new(0);
         let mut waiting = Box::pin(nest_rs_core::__private::with_deadline(
             Some(tokio::time::Instant::now() + Duration::from_secs(5)),
-            policy.run(|_| async {
+            policy.run(|| async {
                 sent.fetch_add(1, Ordering::Relaxed);
                 Ok::<_, Refused>(())
             }),
@@ -2117,7 +2117,7 @@ mod tests {
             "a unit out of time sends nothing"
         );
         assert!(
-            policy.run(|_| answering()).await.is_ok(),
+            policy.run(answering).await.is_ok(),
             "the slot it was handed is free again"
         );
     }
@@ -2142,7 +2142,7 @@ mod tests {
                 let policy = Arc::clone(&policy);
                 tokio::spawn(async move {
                     let answered = policy
-                        .run(|_| async {
+                        .run(|| async {
                             tokio::time::sleep(Duration::from_secs(1)).await;
                             Ok::<_, Refused>(())
                         })
@@ -2382,9 +2382,9 @@ mod tests {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok::<_, Refused>(())
         };
-        assert!(policy.run(|_| sent()).await.is_ok());
+        assert!(policy.run(&sent).await.is_ok());
         let retried = policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 match calls.fetch_add(1, Ordering::Relaxed) {
                     1 => Err(Refused),
                     _ => Ok(()),
@@ -2397,7 +2397,7 @@ mod tests {
             3,
             "a call, then one failing and its retry"
         );
-        let refused = policy.run(|_| sent()).await;
+        let refused = policy.run(sent).await;
         assert!(
             matches!(
                 refused,
@@ -2423,11 +2423,11 @@ mod tests {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok::<_, Refused>(())
         };
-        assert!(policy.run(|_| sent()).await.is_ok());
+        assert!(policy.run(&sent).await.is_ok());
         tokio::time::advance(Duration::from_secs(10)).await;
-        assert!(policy.run(|_| sent()).await.is_ok());
+        assert!(policy.run(&sent).await.is_ok());
         let started = tokio::time::Instant::now();
-        let Err(refused) = policy.run(|_| sent()).await else {
+        let Err(refused) = policy.run(sent).await else {
             panic!("past the limit");
         };
         let ResilienceError::Refused {
@@ -2461,7 +2461,7 @@ mod tests {
         let spent = || {
             nest_rs_core::__private::with_deadline(
                 Some(tokio::time::Instant::now()),
-                policy.run(|_| answering()),
+                policy.run(answering),
             )
         };
         let refused = spent().await;
@@ -2470,7 +2470,7 @@ mod tests {
             "{refused:?}"
         );
         assert!(
-            policy.run(|_| answering()).await.is_ok(),
+            policy.run(answering).await.is_ok(),
             "the attempt out of time took no token"
         );
         let refused = spent().await;
@@ -2488,10 +2488,10 @@ mod tests {
             breaker_open: Duration::from_secs(10),
             ..rated(2, Duration::from_secs(60), None)
         });
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         for _ in 0..3 {
-            let refused = policy.run(|_| answering()).await;
+            let refused = policy.run(answering).await;
             assert!(
                 matches!(
                     refused,
@@ -2504,7 +2504,7 @@ mod tests {
             );
         }
         tokio::time::advance(Duration::from_secs(10)).await;
-        let probed = policy.run(|_| answering()).await;
+        let probed = policy.run(answering).await;
         assert!(
             matches!(probed, Ok(())),
             "the probe takes the bucket's second token: {probed:?}"
@@ -2521,8 +2521,8 @@ mod tests {
             breaker_open: Duration::from_secs(3600),
             ..rated(1, Duration::from_secs(60), None)
         });
-        assert!(policy.run(|_| answering()).await.is_ok());
-        let limited = policy.run(|_| answering()).await;
+        assert!(policy.run(answering).await.is_ok());
+        let limited = policy.run(answering).await;
         assert!(
             matches!(
                 limited,
@@ -2534,7 +2534,7 @@ mod tests {
             "{limited:?}"
         );
         tokio::time::advance(Duration::from_secs(60)).await;
-        let answered = policy.run(|_| answering()).await;
+        let answered = policy.run(answering).await;
         assert!(
             matches!(answered, Ok(())),
             "the breaker stayed closed: {answered:?}"
@@ -2552,12 +2552,12 @@ mod tests {
             ..rated(2, Duration::from_secs(120), None)
         });
         for _ in 0..2 {
-            let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+            let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
             assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         }
         tokio::time::advance(Duration::from_secs(30)).await;
         for nth in ["the probe", "the call after it, probing in its turn"] {
-            let refused = policy.run(|_| answering()).await;
+            let refused = policy.run(answering).await;
             assert!(
                 matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. })
                     if retry_after == Duration::from_secs(30)),
@@ -2565,12 +2565,12 @@ mod tests {
             );
         }
         tokio::time::advance(Duration::from_secs(30)).await;
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(
             matches!(failed, Err(ResilienceError::Failed(Refused))),
             "a token is back, and a probe is sent at last: {failed:?}"
         );
-        let reopened = policy.run(|_| answering()).await;
+        let reopened = policy.run(answering).await;
         assert!(
             matches!(
                 reopened,
@@ -2595,10 +2595,10 @@ mod tests {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok::<_, Refused>(())
         };
-        assert!(policy.run(|_| sent()).await.is_ok());
+        assert!(policy.run(&sent).await.is_ok());
         tokio::time::advance(Duration::from_secs(4)).await;
         let started = tokio::time::Instant::now();
-        let answered = policy.run(|_| sent()).await;
+        let answered = policy.run(sent).await;
         assert!(matches!(answered, Ok(())), "{answered:?}");
         assert_eq!(
             started.elapsed(),
@@ -2615,10 +2615,10 @@ mod tests {
             Duration::from_secs(10),
             Some(Duration::from_secs(5)),
         ));
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         tokio::time::advance(Duration::from_secs(4)).await;
         let started = tokio::time::Instant::now();
-        let refused = policy.run(|_| answering()).await;
+        let refused = policy.run(answering).await;
         assert!(
             matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(6)),
@@ -2630,7 +2630,7 @@ mod tests {
         let deadline = |left| Some(tokio::time::Instant::now() + left);
         let refused = nest_rs_core::__private::with_deadline(
             deadline(Duration::from_secs(4)),
-            policy.run(|_| answering()),
+            policy.run(answering),
         )
         .await;
         assert!(
@@ -2642,7 +2642,7 @@ mod tests {
 
         let answered = nest_rs_core::__private::with_deadline(
             deadline(Duration::from_secs(5)),
-            policy.run(|_| answering()),
+            policy.run(answering),
         )
         .await;
         assert!(matches!(answered, Ok(())), "{answered:?}");
@@ -2660,7 +2660,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let mut sent = Vec::new();
         for _ in 0..4 {
-            assert!(policy.run(|_| answering()).await.is_ok());
+            assert!(policy.run(answering).await.is_ok());
             sent.push(started.elapsed().as_secs());
         }
         assert_eq!(sent, [0, 0, 5, 10]);
@@ -2679,7 +2679,7 @@ mod tests {
         let calls = AtomicU32::new(0);
         let started = tokio::time::Instant::now();
         let answered = policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 match calls.fetch_add(1, Ordering::Relaxed) {
                     0 => Err(Refused),
                     _ => Ok(started.elapsed()),
@@ -2700,7 +2700,7 @@ mod tests {
         let window = Duration::from_secs(10);
         let policy = policy(rated(1, window, Some(window)));
         let sent = AtomicU32::new(0);
-        let sending = |_| async {
+        let sending = || async {
             sent.fetch_add(1, Ordering::Relaxed);
             Ok::<_, Refused>(())
         };
@@ -2743,7 +2743,7 @@ mod tests {
                 Duration::from_secs(10),
                 Some(Duration::from_secs(wait)),
             ));
-            assert!(policy.run(|_| answering()).await.is_ok());
+            assert!(policy.run(answering).await.is_ok());
             let started = tokio::time::Instant::now();
             let answered = |answered: Ran| match answered {
                 Ok(()) => format!("sent at {:?}", started.elapsed()),
@@ -2755,10 +2755,10 @@ mod tests {
                 }
                 Err(other) => panic!("{other:?}"),
             };
-            let (first, second) = tokio::join!(
-                async { answered(policy.run(|_| answering()).await) },
-                async { answered(policy.run(|_| answering()).await) },
-            );
+            let (first, second) =
+                tokio::join!(async { answered(policy.run(answering).await) }, async {
+                    answered(policy.run(answering).await)
+                },);
             assert_eq!(
                 (first.as_str(), second.as_str()),
                 ("sent at 10s", behind),
@@ -2778,12 +2778,12 @@ mod tests {
             Duration::from_secs(10),
             Some(Duration::from_secs(10)),
         ));
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         let started = tokio::time::Instant::now();
-        let mut waiting = Box::pin(policy.run(|_| answering()));
+        let mut waiting = Box::pin(policy.run(answering));
         park(&mut waiting).await;
         tokio::time::advance(Duration::from_secs(12)).await;
-        let mut arrived = Box::pin(policy.run(|_| answering()));
+        let mut arrived = Box::pin(policy.run(answering));
         park(&mut arrived).await;
         assert!(waiting.await.is_ok());
         assert_eq!(
@@ -2809,14 +2809,14 @@ mod tests {
             Duration::from_secs(10),
             Some(Duration::from_secs(20)),
         )));
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         let started = tokio::time::Instant::now();
-        let mut first = Box::pin(policy.run(|_| answering()));
+        let mut first = Box::pin(policy.run(answering));
         park(&mut first).await;
         let behind = tokio::spawn({
             let policy = Arc::clone(&policy);
             async move {
-                let answered = policy.run(|_| answering()).await;
+                let answered = policy.run(answering).await;
                 (answered, started.elapsed())
             }
         });
@@ -2849,7 +2849,7 @@ mod tests {
                 matches!(rate.arrive(started + later, None), Arrived::Taken),
                 "the other call takes the token"
             );
-            let Err(refused) = policy.run(|_| answering()).await else {
+            let Err(refused) = policy.run(answering).await else {
                 panic!("with {wait:?} to wait, no token is free");
             };
             assert!(
@@ -2876,10 +2876,10 @@ mod tests {
             concurrency: Some(1),
             ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(20)))
         });
-        assert!(policy.run(|_| answering()).await.is_ok());
-        let (waited, refused) = tokio::join!(policy.run(|_| answering()), async {
+        assert!(policy.run(answering).await.is_ok());
+        let (waited, refused) = tokio::join!(policy.run(answering), async {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            policy.run(|_| answering()).await
+            policy.run(answering).await
         });
         assert!(matches!(waited, Ok(())), "{waited:?}");
         assert!(
@@ -2907,11 +2907,11 @@ mod tests {
             concurrency_wait: Some(Duration::from_secs(60)),
             ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(15)))
         });
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         let started = tokio::time::Instant::now();
-        let (waited, behind) = tokio::join!(policy.run(|_| answering()), async {
+        let (waited, behind) = tokio::join!(policy.run(answering), async {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            let answered = policy.run(|_| answering()).await;
+            let answered = policy.run(answering).await;
             (answered, started.elapsed())
         });
         assert!(waited.is_ok(), "{waited:?}");
@@ -2955,13 +2955,13 @@ mod tests {
             });
             let started = tokio::time::Instant::now();
             let (holding, waited) = tokio::join!(
-                policy.run(|_| async {
+                policy.run(|| async {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     Ok::<_, Refused>(())
                 }),
                 async {
                     tokio::task::yield_now().await;
-                    let waited = policy.run(|_| answering()).await;
+                    let waited = policy.run(answering).await;
                     (started.elapsed(), waited)
                 },
             );
@@ -3026,12 +3026,12 @@ mod tests {
             concurrency_wait: Some(Duration::from_secs(3)),
             ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(5)))
         });
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         let started = tokio::time::Instant::now();
         tokio::time::sleep(Duration::from_secs(6)).await;
-        let (waited, behind) = tokio::join!(policy.run(|_| answering()), async {
+        let (waited, behind) = tokio::join!(policy.run(answering), async {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            let refused = policy.run(|_| answering()).await;
+            let refused = policy.run(answering).await;
             (refused, started.elapsed())
         });
         assert!(waited.is_ok(), "{waited:?}");
@@ -3060,13 +3060,13 @@ mod tests {
         });
         let started = tokio::time::Instant::now();
         let (holding, waited) = tokio::join!(
-            policy.run(|_| async {
+            policy.run(|| async {
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 Ok::<_, Refused>(())
             }),
             async {
                 tokio::task::yield_now().await;
-                let waited = policy.run(|_| answering()).await;
+                let waited = policy.run(answering).await;
                 (waited, started.elapsed())
             },
         );
@@ -3098,15 +3098,14 @@ mod tests {
             ..ResilienceConfig::default()
         });
         assert!(
-            policy.run(|_| answering()).await.is_ok(),
+            policy.run(answering).await.is_ok(),
             "the bucket's one token"
         );
         let held = begin(&policy).await.expect("the one slot");
         let started = tokio::time::Instant::now();
 
         let spent =
-            nest_rs_core::__private::with_deadline(Some(started), policy.run(|_| answering()))
-                .await;
+            nest_rs_core::__private::with_deadline(Some(started), policy.run(answering)).await;
         assert!(
             matches!(spent, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "out of time, before the spent rate: {spent:?}"
@@ -3114,7 +3113,7 @@ mod tests {
         policy
             .open_breaker(Duration::from_secs(30))
             .expect("an open time `breaker_open` takes");
-        let open = policy.run(|_| answering()).await;
+        let open = policy.run(answering).await;
         assert!(
             matches!(open, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(30)),
@@ -3126,7 +3125,7 @@ mod tests {
         );
 
         policy.close_breaker().expect("a breaker");
-        let limited = policy.run(|_| answering()).await;
+        let limited = policy.run(answering).await;
         assert!(
             matches!(limited, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(60)),
@@ -3164,14 +3163,14 @@ mod tests {
             });
             probe_due(&policy).await;
             let (probed, refused) = tokio::join!(
-                policy.run(|_| async {
+                policy.run(|| async {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     Ok::<_, Refused>(())
                 }),
                 async {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     let arrived = tokio::time::Instant::now();
-                    let refused = policy.run(|_| answering()).await;
+                    let refused = policy.run(answering).await;
                     (arrived.elapsed(), refused)
                 },
             );
@@ -3196,9 +3195,9 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(800)).await;
             Ok::<_, Refused>("answered")
         };
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         let started = tokio::time::Instant::now();
-        let answered = policy.run(|_| slow()).await;
+        let answered = policy.run(&slow).await;
         assert!(
             matches!(answered, Ok("answered")),
             "a 5 s wait, then 800 ms of its 1 s timeout: {answered:?}"
@@ -3208,7 +3207,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let cut = nest_rs_core::__private::with_deadline(
             Some(started + Duration::from_millis(4_700)),
-            policy.run(|_| slow()),
+            policy.run(slow),
         )
         .await;
         assert!(
@@ -3231,11 +3230,11 @@ mod tests {
             Duration::from_secs(10),
             Some(Duration::from_secs(10)),
         ));
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         let sent = AtomicU32::new(0);
         let mut waiting = Box::pin(nest_rs_core::__private::with_deadline(
             Some(tokio::time::Instant::now() + Duration::from_secs(11)),
-            policy.run(|_| async {
+            policy.run(|| async {
                 sent.fetch_add(1, Ordering::Relaxed);
                 std::future::pending::<Result<(), Refused>>().await
             }),
@@ -3253,7 +3252,7 @@ mod tests {
             "a unit out of time sends nothing"
         );
         let resumed = tokio::time::Instant::now();
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert_eq!(
             resumed.elapsed(),
             Duration::ZERO,
@@ -3270,7 +3269,7 @@ mod tests {
         let calls = AtomicU32::new(0);
         let started = tokio::time::Instant::now();
         let answered = policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 calls.fetch_add(1, Ordering::Relaxed);
                 Err::<(), _>(Refused)
             })
@@ -3317,17 +3316,17 @@ mod tests {
             Err::<(), _>(Refused)
         };
         for _ in 0..2 {
-            let failed = policy.run(|_| failing()).await;
+            let failed = policy.run(&failing).await;
             assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         }
         tokio::time::advance(Duration::from_secs(30)).await;
 
-        let mut waiting = Box::pin(policy.run(|_| failing()));
+        let mut waiting = Box::pin(policy.run(&failing));
         park(&mut waiting).await;
         drop(waiting);
 
         let started = tokio::time::Instant::now();
-        let probed = policy.run(|_| failing()).await;
+        let probed = policy.run(failing).await;
         assert!(
             matches!(probed, Err(ResilienceError::Failed(Refused))),
             "the slot was freed and the breaker let it through: {probed:?}"
@@ -3342,7 +3341,7 @@ mod tests {
             3,
             "the dropped call was never sent"
         );
-        let reopened = policy.run(|_| answering()).await;
+        let reopened = policy.run(answering).await;
         assert!(
             matches!(
                 reopened,
@@ -3383,7 +3382,7 @@ mod tests {
                 ..ResilienceConfig::default()
             })));
         let calls = AtomicU32::new(0);
-        let mut holding = Box::pin(policy.run_idempotent(|_| async {
+        let mut holding = Box::pin(policy.run_idempotent(|| async {
             if calls.fetch_add(1, Ordering::Relaxed) == 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 return Err(Refused);
@@ -3391,7 +3390,7 @@ mod tests {
             std::future::pending::<Result<(), Refused>>().await
         }));
         park(&mut holding).await;
-        let waiting = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("sent") }));
+        let waiting = PollsOnWake::new(policy.run(|| async { Ok::<_, Refused>("sent") }));
         waiting.poll_now();
         assert!(
             waiting.answered().is_none(),
@@ -3433,14 +3432,14 @@ mod tests {
                 breaker_open: Duration::from_secs(1),
                 ..ResilienceConfig::default()
             })));
-        let mut holding = Box::pin(policy.run(|_| async {
+        let mut holding = Box::pin(policy.run(|| async {
             tokio::time::sleep(Duration::from_secs(1)).await;
             Ok::<_, Refused>("held")
         }));
         park(&mut holding).await;
-        let mut probing = Box::pin(policy.run(|_| std::future::pending::<Result<&str, Refused>>()));
+        let mut probing = Box::pin(policy.run(std::future::pending::<Result<&str, Refused>>));
         park(&mut probing).await;
-        let waiting = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("sent") }));
+        let waiting = PollsOnWake::new(policy.run(|| async { Ok::<_, Refused>("sent") }));
         waiting.poll_now();
         assert!(
             waiting.answered().is_none(),
@@ -3487,18 +3486,18 @@ mod tests {
                     breaker_open: Duration::from_secs(1),
                     ..rated(1, Duration::from_secs(60), Some(Duration::from_secs(60)))
                 })));
-            let mut failing = Box::pin(policy.run(|_| async {
+            let mut failing = Box::pin(policy.run(|| async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 Err::<(), _>(Refused)
             }));
             park(&mut failing).await;
             let mut probing: Dropped<'_> = if again {
-                Box::pin(policy.run_idempotent(|_| answering()))
+                Box::pin(policy.run_idempotent(answering))
             } else {
-                Box::pin(policy.run(|_| answering()))
+                Box::pin(policy.run(answering))
             };
             park(&mut probing).await;
-            let waiting = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("sent") }));
+            let waiting = PollsOnWake::new(policy.run(|| async { Ok::<_, Refused>("sent") }));
             waiting.poll_now();
             assert!(
                 matches!(failing.await, Err(ResilienceError::Failed(Refused))),
@@ -3535,7 +3534,7 @@ mod tests {
     /// `policy`'s breaker opened by one failure, then its open second passed,
     /// so the next run probes.
     async fn opened_then_passed(policy: &ResiliencePolicy<Upstream>) {
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(1)).await;
     }
@@ -3558,7 +3557,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_attempt_holding_its_call_leaves_a_success_to_settle_and_counts_a_failure_at_once() {
         let policy = Arc::new(probing_after_one_failure());
-        let answering = |_| async { Ok::<_, Refused>("answered") };
+        let answering = || async { Ok::<_, Refused>("answered") };
 
         opened_then_passed(&policy).await;
         let mut run = begin(&policy).await.expect("the probe's run");
@@ -3628,19 +3627,19 @@ mod tests {
         let mut run = begin(&policy).await.expect("the one slot");
         let next = Arc::clone(&policy);
         let waiting =
-            PollsOnWake::new(async move { next.run(|_| async { Ok::<_, Refused>("sent") }).await });
+            PollsOnWake::new(async move { next.run(|| async { Ok::<_, Refused>("sent") }).await });
         waiting.poll_now();
         assert!(
             waiting.answered().is_none(),
             "it waits for the slot the run holds"
         );
-        let failed = attempt_once(run.as_mut(), |_| async { Err::<(), _>(Refused) }, judged).await;
+        let failed = attempt_once(run.as_mut(), || async { Err::<(), _>(Refused) }, judged).await;
         assert!(matches!(
             failed,
             (Ended::Judged(Verdict::Final), Some(Err(Refused)))
         ));
         tokio::time::advance(Duration::from_secs(1)).await;
-        attempt_once(run.as_mut(), |_| async { Ok::<_, Refused>(()) }, judged).await;
+        attempt_once(run.as_mut(), || async { Ok::<_, Refused>(()) }, judged).await;
         let held = run.as_mut().hold();
         assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
 
@@ -3670,7 +3669,7 @@ mod tests {
         let mut run = begin(&policy).await.expect("a run");
         let (given_up, _) = attempt_once(
             run.as_mut(),
-            |_| std::future::pending::<Result<(), Refused>>(),
+            std::future::pending::<Result<(), Refused>>,
             judged,
         )
         .await;
@@ -3685,7 +3684,7 @@ mod tests {
         let mut run = begin(&policy).await.expect("a run");
         let panicking = attempt_once(
             run.as_mut(),
-            |_| async {
+            || async {
                 if true {
                     panic!("the upstream's client panicked");
                 }
@@ -3716,7 +3715,7 @@ mod tests {
             breaker_failures: 1,
             ..ResilienceConfig::default()
         });
-        let at_the_bound = |_| async move {
+        let at_the_bound = || async move {
             tokio::time::sleep(timeout).await;
             Ok::<_, Refused>("answered")
         };
@@ -3754,7 +3753,7 @@ mod tests {
         let policy = policy(ResilienceConfig::default());
         let attempted = runtime.block_on(async {
             let mut run = begin(&policy).await.expect("a run");
-            let answering = |_| async { Ok::<_, Refused>("answered") };
+            let answering = || async { Ok::<_, Refused>("answered") };
             attempt_once(run.as_mut(), answering, judged).await
         });
         assert!(
@@ -3779,7 +3778,7 @@ mod tests {
             let policy = probing_after_one_failure();
             opened_then_passed(&policy).await;
             let beside = std::cell::RefCell::new(Box::pin(
-                policy.run(|_| async { Ok::<_, Refused>("beside") }),
+                policy.run(|| async { Ok::<_, Refused>("beside") }),
             ));
             let answered = std::cell::RefCell::new(None);
             let poll_beside = || {
@@ -3788,7 +3787,7 @@ mod tests {
                     *answered.borrow_mut() = Some(answer);
                 }
             };
-            let probe = |_: CancellationToken| async {
+            let probe = || async {
                 let _torn_down = OnDrop(&poll_beside);
                 std::future::pending::<Result<(), Refused>>().await
             };
@@ -3816,7 +3815,7 @@ mod tests {
                 "again: {again}; polled as the probe's future was torn down, it met the probe's \
                  turn still held: {refused:?}"
             );
-            let next = policy.run(|_| async { Ok::<_, Refused>("next") }).await;
+            let next = policy.run(|| async { Ok::<_, Refused>("next") }).await;
             assert!(
                 matches!(next, Ok("next")),
                 "again: {again}; the turn was handed on with the run: {next:?}"
@@ -3888,9 +3887,9 @@ mod tests {
                 std::future::pending::<Result<(), Refused>>()
             };
             let mut probing: Dropped<'_> = if again {
-                Box::pin(policy.run_idempotent(probe))
+                Box::pin(policy.run_idempotent_cancellable(probe))
             } else {
-                Box::pin(policy.run(probe))
+                Box::pin(policy.run_cancellable(probe))
             };
             let parked =
                 std::future::poll_fn(|cx| Poll::Ready(probing.as_mut().poll(cx).is_pending()))
@@ -3898,7 +3897,7 @@ mod tests {
             assert!(parked, "the probe's call never answers");
             assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
             let token = handed.take().expect("the probe's call was made");
-            let woken = PollsOnWake::new(policy.run(|_| async { Ok::<_, Refused>("woken") }));
+            let woken = PollsOnWake::new(policy.run(|| async { Ok::<_, Refused>("woken") }));
             let waker = std::task::Waker::from(Arc::clone(&woken));
             let mut cancelled = Box::pin(token.cancelled_owned());
             assert!(
@@ -3936,7 +3935,7 @@ mod tests {
             deadline,
             nest_rs_core::__private::with_deadline(
                 Some(deadline),
-                policy.run(|_| async {
+                policy.run(|| async {
                     tokio::time::advance(Duration::from_millis(3)).await;
                     std::future::pending::<Result<(), Refused>>().await
                 }),
@@ -3967,7 +3966,7 @@ mod tests {
             deadline,
             nest_rs_core::__private::with_deadline(
                 Some(deadline),
-                policy.run(|_| async {
+                policy.run(|| async {
                     tokio::time::advance(Duration::from_millis(3)).await;
                     std::future::pending::<Result<(), Refused>>().await
                 }),
@@ -4013,7 +4012,7 @@ mod tests {
             deadline,
             nest_rs_core::__private::with_deadline(
                 Some(deadline),
-                policy.run_idempotent(|_| async {
+                policy.run_idempotent(|| async {
                     calls.fetch_add(1, Ordering::Relaxed);
                     tokio::time::advance(Duration::from_millis(3)).await;
                     std::future::pending::<Result<(), Refused>>().await
@@ -4063,7 +4062,7 @@ mod tests {
             policy: &ResiliencePolicy<Upstream>,
             idempotent: bool,
         ) -> Pin<Box<dyn Future<Output = Result<(), ResilienceError<Refused>>> + '_>> {
-            let call = |_| std::future::pending::<Result<(), Refused>>();
+            let call = || std::future::pending::<Result<(), Refused>>();
             if idempotent {
                 Box::pin(policy.run_idempotent(call))
             } else {
@@ -4115,7 +4114,7 @@ mod tests {
         probe_due(&policy).await;
         let cut = cut_first_at(
             Instant::now() + Duration::from_millis(300),
-            policy.run(|_| std::future::pending::<Result<(), Refused>>()),
+            policy.run(std::future::pending::<Result<(), Refused>>),
         )
         .await;
         assert!(cut.is_none(), "the edge cut the unit first: {cut:?}");
@@ -4150,12 +4149,12 @@ mod tests {
             breaker_open: Duration::from_secs(30),
             ..rated(1, Duration::from_secs(60), Some(Duration::from_secs(40)))
         });
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(30)).await;
-        let (probed, refused) = tokio::join!(policy.run(|_| answering()), async {
+        let (probed, refused) = tokio::join!(policy.run(answering), async {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            policy.run(|_| answering()).await
+            policy.run(answering).await
         });
         assert!(matches!(probed, Ok(())), "{probed:?}");
         assert!(
@@ -4181,7 +4180,7 @@ mod tests {
 
     /// Opens `policy`'s breaker by one failure, and lets its open time pass.
     async fn probe_due(policy: &ResiliencePolicy<Upstream>) {
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(1)).await;
     }
@@ -4199,13 +4198,13 @@ mod tests {
         });
         probe_due(&policy).await;
         let (probed, refused) = tokio::join!(
-            policy.run(|_| async {
+            policy.run(|| async {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 Ok::<_, Refused>(())
             }),
             async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                policy.run(|_| answering()).await
+                policy.run(answering).await
             },
         );
         assert!(matches!(probed, Ok(())), "{probed:?}");
@@ -4234,7 +4233,7 @@ mod tests {
             ),
             async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                policy.run(|_| answering()).await
+                policy.run(answering).await
             },
         );
         assert!(
@@ -4257,11 +4256,11 @@ mod tests {
         let (probed, refused) = tokio::join!(
             nest_rs_core::__private::with_deadline(
                 Some(tokio::time::Instant::now() + Duration::from_secs(2)),
-                policy.run(|_| std::future::pending::<Result<(), Refused>>()),
+                policy.run(std::future::pending::<Result<(), Refused>>),
             ),
             async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                policy.run(|_| answering()).await
+                policy.run(answering).await
             },
         );
         assert!(
@@ -4314,7 +4313,7 @@ mod tests {
                 ),
                 async {
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    policy.run(|_| answering()).await
+                    policy.run(answering).await
                 },
             );
             assert!(matches!(probed, Ok(())), "sent at its token: {probed:?}");
@@ -4336,12 +4335,9 @@ mod tests {
             ..probing(Duration::from_secs(5))
         });
         probe_due(&policy).await;
-        assert!(
-            policy.run(|_| answering()).await.is_ok(),
-            "one probe of two"
-        );
+        assert!(policy.run(answering).await.is_ok(), "one probe of two");
         let cut = policy
-            .run(|_| std::future::pending::<Result<(), Refused>>())
+            .run(std::future::pending::<Result<(), Refused>>)
             .await;
         assert!(
             matches!(cut, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. })
@@ -4356,13 +4352,13 @@ mod tests {
             "opened again for its whole open time"
         );
         tokio::time::advance(Duration::from_secs(1)).await;
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert_eq!(
             policy.breaker_state(),
             Some(BreakerState::HalfOpen),
             "one probe of two since it opened again"
         );
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
     }
 
@@ -4381,7 +4377,7 @@ mod tests {
         let sent = AtomicU32::new(0);
         let started = tokio::time::Instant::now();
         let (failed, waited) = tokio::join!(
-            policy.run(|_| async {
+            policy.run(|| async {
                 sent.fetch_add(1, Ordering::Relaxed);
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 Err::<(), _>(Refused)
@@ -4389,7 +4385,7 @@ mod tests {
             async {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 policy
-                    .run(|_| async {
+                    .run(|| async {
                         sent.fetch_add(1, Ordering::Relaxed);
                         Ok::<_, Refused>(())
                     })
@@ -4432,7 +4428,7 @@ mod tests {
         let sent = std::sync::Mutex::new(Vec::new());
         let call = |name: &'static str, answer: Result<(), Refused>, takes: Duration| {
             let sent = &sent;
-            move |_: CancellationToken| async move {
+            move || async move {
                 sent.lock().expect("the calls sent").push(name);
                 tokio::time::sleep(takes).await;
                 answer
@@ -4485,13 +4481,13 @@ mod tests {
             ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
         let (failed, probed) = tokio::join!(
-            policy.run(|_| async {
+            policy.run(|| async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 Err::<(), _>(Refused)
             }),
             async {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                policy.run(|_| answering()).await
+                policy.run(answering).await
             },
         );
         assert!(
@@ -4533,11 +4529,11 @@ mod tests {
                 })
                 .collect()
         };
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(1)).await;
         for _ in 0..10 {
-            let refused = policy.run(|_| answering()).await;
+            let refused = policy.run(answering).await;
             assert!(
                 matches!(
                     refused,
@@ -4552,7 +4548,7 @@ mod tests {
         assert_eq!(states(), ["open"], "ten probes the rate refused, none sent");
 
         tokio::time::advance(Duration::from_secs(34)).await;
-        let mut waiting = Box::pin(policy.run(|_| answering()));
+        let mut waiting = Box::pin(policy.run(answering));
         park(&mut waiting).await;
         drop(waiting);
         assert_eq!(
@@ -4562,7 +4558,7 @@ mod tests {
         );
 
         tokio::time::advance(Duration::from_secs(25)).await;
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert_eq!(
             states(),
             ["open", "half_open", "closed"],
@@ -4589,12 +4585,12 @@ mod tests {
                 .map(|line| line.field("state").unwrap_or_default())
                 .collect()
         };
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(1)).await;
         let mut probing = Box::pin(nest_rs_core::__private::with_deadline(
             Some(tokio::time::Instant::now() + Duration::from_secs(10)),
-            policy.run(|_| answering()),
+            policy.run(answering),
         ));
         park(&mut probing).await;
         tokio::time::advance(Duration::from_secs(11)).await;
@@ -4606,7 +4602,7 @@ mod tests {
         assert_eq!(states(), ["open"], "the probe given up, never sent");
 
         let resumed = tokio::time::Instant::now();
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert_eq!(
             resumed.elapsed(),
             Duration::ZERO,
@@ -4627,9 +4623,9 @@ mod tests {
             Duration::from_secs(10),
             Some(Duration::from_secs(5)),
         ));
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         tokio::time::advance(Duration::from_secs(4)).await;
-        let refused = policy.run(|_| answering()).await;
+        let refused = policy.run(answering).await;
         assert!(
             matches!(
                 refused,
@@ -4641,7 +4637,7 @@ mod tests {
             "{refused:?}"
         );
         tokio::time::advance(Duration::from_secs(2)).await;
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
 
         let refusal = lines.expect_one(TARGET, REFUSED_LIMITED);
         let wait = lines.expect_one(TARGET, WAITING_FOR_TOKEN);
@@ -4671,11 +4667,11 @@ mod tests {
         let refusing = policy(rated(1, window, None));
         let waiting = policy(rated(1, window, Some(Duration::from_millis(1))));
         for policy in [&refusing, &waiting] {
-            assert!(policy.run(|_| answering()).await.is_ok(), "the one token");
+            assert!(policy.run(answering).await.is_ok(), "the one token");
         }
         let near = Duration::from_micros(500);
         tokio::time::advance(window - near).await;
-        let refused = refusing.run(|_| answering()).await;
+        let refused = refusing.run(answering).await;
         assert!(
             matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. }) if retry_after == near),
             "{refused:?}"
@@ -4683,7 +4679,7 @@ mod tests {
         let back = tokio::time::Instant::now() + near;
         let sent = std::cell::Cell::new(None);
         let answered = waiting
-            .run(|_| async {
+            .run(|| async {
                 sent.set(Some(tokio::time::Instant::now()));
                 Ok::<_, Refused>(())
             })
@@ -4728,7 +4724,7 @@ mod tests {
 
         let lines = nest_rs_testing::LogCapture::install();
         let failed = policy
-            .run_idempotent(|_| async { Err::<(), _>(unreachable()) })
+            .run_idempotent(|| async { Err::<(), _>(unreachable()) })
             .await;
         assert!(
             matches!(failed, Err(ResilienceError::Failed(_))),
@@ -4742,7 +4738,7 @@ mod tests {
 
         let lines = nest_rs_testing::LogCapture::install();
         let timed_out = policy
-            .run_idempotent(|_| std::future::pending::<Result<(), Refused>>())
+            .run_idempotent(std::future::pending::<Result<(), Refused>>)
             .await;
         assert!(
             matches!(
@@ -4764,7 +4760,7 @@ mod tests {
         let asking =
             || Throttled(Problem::new(429, nest_rs_core::code::RATE_LIMITED).with_retry_after(60));
         let asked = policy
-            .run_idempotent(|_| async move { Err::<(), _>(asking()) })
+            .run_idempotent(|| async move { Err::<(), _>(asking()) })
             .await;
         assert!(
             matches!(asked, Err(ResilienceError::Failed(_))),
@@ -4779,7 +4775,7 @@ mod tests {
         let lines = nest_rs_testing::LogCapture::install();
         let out_of_time = nest_rs_core::__private::with_deadline(
             Some(tokio::time::Instant::now() + Duration::from_millis(1)),
-            policy.run_idempotent(|_| async { Err::<(), _>(unreachable()) }),
+            policy.run_idempotent(|| async { Err::<(), _>(unreachable()) }),
         )
         .await;
         assert!(
@@ -4873,8 +4869,8 @@ mod tests {
                 .open_breaker(Duration::from_secs(30))
                 .expect("a breaker");
             let lines = nest_rs_testing::LogCapture::install();
-            let once = policy.run(|_| answering()).await;
-            let again = policy.run_idempotent(|_| answering()).await;
+            let once = policy.run(answering).await;
+            let again = policy.run_idempotent(answering).await;
             assert!(
                 matches!(
                     (&once, &again),
@@ -4902,7 +4898,7 @@ mod tests {
         });
         let lines = nest_rs_testing::LogCapture::install();
         let opened = policy
-            .run_idempotent(|_| async { Err::<(), _>(Refused) })
+            .run_idempotent(|| async { Err::<(), _>(Refused) })
             .await;
         assert!(
             matches!(
@@ -4923,7 +4919,7 @@ mod tests {
     /// as its run opens under a bulkhead or as its attempt is let through.
     #[tokio::test(start_paused = true)]
     async fn a_run_ending_on_a_timeout_files_no_line_of_its_own() {
-        let never = |_| std::future::pending::<Result<(), Refused>>();
+        let never = || std::future::pending::<Result<(), Refused>>();
         let timed_out = |ran: &Ran| {
             matches!(
                 ran,
@@ -4957,7 +4953,7 @@ mod tests {
             let lines = nest_rs_testing::LogCapture::install();
             let spent = nest_rs_core::__private::with_deadline(
                 Some(tokio::time::Instant::now()),
-                policy.run(|_| answering()),
+                policy.run(answering),
             )
             .await;
             assert!(timed_out(&spent), "{spent:?}");
@@ -4984,7 +4980,7 @@ mod tests {
             let calls = AtomicU32::new(0);
             let spent = nest_rs_core::__private::with_deadline(
                 Some(tokio::time::Instant::now()),
-                policy.run_idempotent(|_| async {
+                policy.run_idempotent(|| async {
                     calls.fetch_add(1, Ordering::Relaxed);
                     Err::<(), _>(Refused)
                 }),
@@ -5042,7 +5038,7 @@ mod tests {
             });
             let held = begin(&policy).await.expect("the one slot");
             let lines = nest_rs_testing::LogCapture::install();
-            let refused = policy.run(|_| answering()).await;
+            let refused = policy.run(answering).await;
             assert!(
                 matches!(
                     refused,
@@ -5064,9 +5060,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_call_the_rate_refuses_files_its_one_line() {
         let policy = policy(rated(1, Duration::from_secs(60), None));
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         let lines = nest_rs_testing::LogCapture::install();
-        let refused = policy.run(|_| answering()).await;
+        let refused = policy.run(answering).await;
         assert!(
             matches!(
                 refused,
@@ -5087,12 +5083,12 @@ mod tests {
         });
         let mut held = begin(&policy).await.expect("the one slot");
         let lines = nest_rs_testing::LogCapture::install();
-        let taken = attempt_once(held.as_mut(), |_| answering(), judged).await;
+        let taken = attempt_once(held.as_mut(), answering, judged).await;
         assert!(
             matches!(taken, (Ended::Judged(_), Some(Ok(())))),
             "the bucket's one token"
         );
-        let refused = policy.run(|_| answering()).await;
+        let refused = policy.run(answering).await;
         assert!(
             matches!(
                 refused,
@@ -5147,7 +5143,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_policy_files_its_ten_lines_and_no_other() {
         let lines = nest_rs_testing::LogCapture::install();
-        let failing = |_| async { Err::<(), _>(Refused) };
+        let failing = || async { Err::<(), _>(Refused) };
         let retrying = retrying(1);
 
         assert!(retrying.run_idempotent(failing).await.is_err());
@@ -5161,7 +5157,7 @@ mod tests {
             .await;
         assert!(matches!(polled, Ok(40)), "{polled:?}");
         let asking = retrying
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 let slow_down = Problem::new(429, nest_rs_core::code::RATE_LIMITED);
                 Err::<(), _>(Throttled(slow_down.with_retry_after(3)))
             })
@@ -5175,7 +5171,7 @@ mod tests {
         assert!(out_of_time.is_err(), "{out_of_time:?}");
         let unsettled = nest_rs_database::__private::with_request_executor(
             Arc::new(Unsettling),
-            retrying.run_idempotent(|_| answering()),
+            retrying.run_idempotent(answering),
         )
         .await;
         assert!(
@@ -5183,7 +5179,7 @@ mod tests {
             "{unsettled:?}"
         );
         let never = retrying
-            .run(|_| std::future::pending::<Result<(), Refused>>())
+            .run(std::future::pending::<Result<(), Refused>>)
             .await;
         assert!(
             matches!(
@@ -5201,9 +5197,9 @@ mod tests {
             Duration::from_secs(10),
             Some(Duration::from_secs(5)),
         ));
-        assert!(rate.run(|_| answering()).await.is_ok());
+        assert!(rate.run(answering).await.is_ok());
         tokio::time::advance(Duration::from_secs(4)).await;
-        let limited = rate.run(|_| answering()).await;
+        let limited = rate.run(answering).await;
         assert!(
             matches!(
                 limited,
@@ -5215,14 +5211,14 @@ mod tests {
             "{limited:?}"
         );
         tokio::time::advance(Duration::from_secs(2)).await;
-        assert!(rate.run(|_| answering()).await.is_ok(), "its token waited");
+        assert!(rate.run(answering).await.is_ok(), "its token waited");
 
         let bulkhead = policy(ResilienceConfig {
             concurrency: Some(1),
             ..ResilienceConfig::default()
         });
         let held = begin(&bulkhead).await.expect("the one slot");
-        let full = bulkhead.run(|_| answering()).await;
+        let full = bulkhead.run(answering).await;
         assert!(
             matches!(
                 full,
@@ -5238,7 +5234,7 @@ mod tests {
         bulkhead
             .open_breaker(Duration::from_secs(30))
             .expect("a breaker");
-        let open = bulkhead.run(|_| answering()).await;
+        let open = bulkhead.run(answering).await;
         assert!(
             matches!(
                 open,
@@ -5288,7 +5284,7 @@ mod tests {
             breaker_open: Duration::from_secs(1),
             ..ResilienceConfig::default()
         });
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(1)).await;
 
@@ -5367,7 +5363,7 @@ mod tests {
 
         let lines = nest_rs_testing::LogCapture::install();
         let failed = opening()
-            .run(|_| async { Err::<(), _>(unreachable()) })
+            .run(|| async { Err::<(), _>(unreachable()) })
             .await;
         assert!(
             matches!(failed, Err(ResilienceError::Failed(_))),
@@ -5378,7 +5374,7 @@ mod tests {
 
         let lines = nest_rs_testing::LogCapture::install();
         let again = opening()
-            .run_idempotent(|_| async { Err::<(), _>(unreachable()) })
+            .run_idempotent(|| async { Err::<(), _>(unreachable()) })
             .await;
         assert!(
             matches!(again, Err(ResilienceError::Failed(_))),
@@ -5389,7 +5385,7 @@ mod tests {
 
         let lines = nest_rs_testing::LogCapture::install();
         let timed_out = opening()
-            .run(|_| std::future::pending::<Result<(), Refused>>())
+            .run(std::future::pending::<Result<(), Refused>>)
             .await;
         assert!(
             matches!(
@@ -5406,7 +5402,7 @@ mod tests {
 
         let lines = nest_rs_testing::LogCapture::install();
         let policy = opening();
-        let unwound = nest_rs_core::panic::contain(policy.run(|_| async {
+        let unwound = nest_rs_core::panic::contain(policy.run(|| async {
             if true {
                 panic!("{PAYLOAD}");
             }
@@ -5461,7 +5457,7 @@ mod tests {
         let lines = nest_rs_testing::LogCapture::install();
 
         let failed = policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 Err::<(), _>(Watching {
                     policy: Arc::clone(&policy),
                     said: Arc::clone(&said),
@@ -5520,7 +5516,7 @@ mod tests {
         });
         let said = Arc::new(AtomicU32::new(0));
         let failing = || {
-            policy.run(|_| {
+            policy.run(|| {
                 let said = Arc::clone(&said);
                 async move {
                     Err::<(), _>(Saying {
@@ -5553,7 +5549,7 @@ mod tests {
         });
         let said = Arc::new(AtomicU32::new(0));
         let lines = nest_rs_testing::LogCapture::install();
-        let run = policy.run(|_| {
+        let run = policy.run(|| {
             let said = Arc::clone(&said);
             async move { Err::<(), _>(Saying { said, panics: true }) }
         });
@@ -5593,7 +5589,7 @@ mod tests {
         opentelemetry::global::set_meter_provider(provider.clone());
 
         let failed = retrying(1)
-            .run_idempotent(|_| async { Err::<(), _>(Refused) })
+            .run_idempotent(|| async { Err::<(), _>(Refused) })
             .await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
 
@@ -5603,7 +5599,7 @@ mod tests {
             breaker_window: None,
             ..ResilienceConfig::default()
         })
-        .run(|_| std::future::pending::<Result<(), Refused>>())
+        .run(std::future::pending::<Result<(), Refused>>)
         .await;
         assert!(matches!(
             timed_out,
@@ -5620,7 +5616,7 @@ mod tests {
             ..ResilienceConfig::default()
         });
         let open = opening
-            .run_idempotent(|_| async { Err::<(), _>(Refused) })
+            .run_idempotent(|| async { Err::<(), _>(Refused) })
             .await;
         assert!(
             matches!(
@@ -5639,7 +5635,7 @@ mod tests {
             ..ResilienceConfig::default()
         });
         let held = begin(&narrow).await.expect("the one slot");
-        let full = narrow.run(|_| async { Ok::<_, Refused>(()) }).await;
+        let full = narrow.run(|| async { Ok::<_, Refused>(()) }).await;
         assert!(matches!(
             full,
             Err(ResilienceError::Refused {
@@ -5657,9 +5653,9 @@ mod tests {
             ..ResilienceConfig::default()
         });
         let held = begin(&waiting).await.expect("the one slot");
-        let mut queued = Box::pin(waiting.run(|_| async { Ok::<_, Refused>(()) }));
+        let mut queued = Box::pin(waiting.run(|| async { Ok::<_, Refused>(()) }));
         park(&mut queued).await;
-        let crowded = waiting.run(|_| async { Ok::<_, Refused>(()) }).await;
+        let crowded = waiting.run(|| async { Ok::<_, Refused>(()) }).await;
         assert!(
             matches!(
                 crowded,
@@ -5679,9 +5675,9 @@ mod tests {
             breaker_window: None,
             ..ResilienceConfig::default()
         });
-        assert!(spent.run(|_| async { Ok::<_, Refused>(()) }).await.is_ok());
+        assert!(spent.run(|| async { Ok::<_, Refused>(()) }).await.is_ok());
         let held = begin(&spent).await.expect("the one slot");
-        let read = spent.run(|_| async { Ok::<_, Refused>(()) }).await;
+        let read = spent.run(|| async { Ok::<_, Refused>(()) }).await;
         assert!(
             matches!(
                 read,
@@ -5701,7 +5697,7 @@ mod tests {
             ..ResilienceConfig::default()
         });
         let limited = rated
-            .run_idempotent(|_| async { Err::<(), _>(Refused) })
+            .run_idempotent(|| async { Err::<(), _>(Refused) })
             .await;
         assert!(
             matches!(
@@ -5723,7 +5719,7 @@ mod tests {
         });
         let spent = nest_rs_core::__private::with_deadline(
             Some(tokio::time::Instant::now()),
-            gated.run(|_| async { Ok::<_, Refused>(()) }),
+            gated.run(|| async { Ok::<_, Refused>(()) }),
         )
         .await;
         assert!(
@@ -5736,9 +5732,9 @@ mod tests {
             ),
             "a unit out of time, refused before the bulkhead: {spent:?}"
         );
-        let failed = gated.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = gated.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
-        let open = gated.run(|_| async { Ok::<_, Refused>(()) }).await;
+        let open = gated.run(|| async { Ok::<_, Refused>(()) }).await;
         assert!(
             matches!(
                 open,
@@ -5816,11 +5812,11 @@ mod tests {
             breaker_open: open,
             ..ResilienceConfig::default()
         });
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         let into = Duration::from_millis(200);
         tokio::time::advance(into).await;
-        let Err(refused) = policy.run(|_| answering()).await else {
+        let Err(refused) = policy.run(answering).await else {
             panic!("open for 500 ms");
         };
         let ResilienceError::Refused {
@@ -5835,7 +5831,7 @@ mod tests {
             .expect("the problem rides the chain");
         assert_eq!(problem.retry_after(), Some(1), "a second, rounded up");
         tokio::time::advance(open - into).await;
-        assert!(policy.run(|_| answering()).await.is_ok(), "the probe");
+        assert!(policy.run(answering).await.is_ok(), "the probe");
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
 
         policy
@@ -5844,7 +5840,7 @@ mod tests {
         tokio::time::advance(open - Duration::from_millis(1)).await;
         assert!(
             matches!(
-                policy.run(|_| answering()).await,
+                policy.run(answering).await,
                 Err(ResilienceError::Refused {
                     refusal: ResilienceRefusal::Open { .. },
                     ..
@@ -5853,7 +5849,7 @@ mod tests {
             "a millisecond short of the opening's end"
         );
         tokio::time::advance(Duration::from_millis(1)).await;
-        assert!(policy.run(|_| answering()).await.is_ok(), "the probe");
+        assert!(policy.run(answering).await.is_ok(), "the probe");
         assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
     }
 
@@ -5871,16 +5867,16 @@ mod tests {
             ..ResilienceConfig::default()
         });
         let failing = || async { Err::<(), _>(Refused) };
-        assert!(policy.run(|_| failing()).await.is_err());
+        assert!(policy.run(&failing).await.is_err());
         tokio::time::advance(age + Duration::from_millis(1)).await;
-        assert!(policy.run(|_| failing()).await.is_err());
+        assert!(policy.run(&failing).await.is_err());
         assert_eq!(
             policy.breaker_state(),
             Some(BreakerState::Closed),
             "the first failure is past the age"
         );
         tokio::time::advance(age).await;
-        assert!(policy.run(|_| failing()).await.is_err());
+        assert!(policy.run(failing).await.is_err());
         assert!(
             matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
             "two failures within the age of one another"
@@ -5900,11 +5896,11 @@ mod tests {
             calls.fetch_add(1, Ordering::Relaxed);
             Ok::<_, Refused>(())
         };
-        assert!(policy.run(|_| sent()).await.is_ok());
+        assert!(policy.run(&sent).await.is_ok());
         let into = Duration::from_millis(100);
         tokio::time::advance(into).await;
-        assert!(policy.run(|_| sent()).await.is_ok());
-        let Err(refused) = policy.run(|_| sent()).await else {
+        assert!(policy.run(&sent).await.is_ok());
+        let Err(refused) = policy.run(&sent).await else {
             panic!("past the limit");
         };
         let ResilienceError::Refused {
@@ -5928,7 +5924,7 @@ mod tests {
             "a refused call is never sent"
         );
         tokio::time::advance(window / 2 - into).await;
-        assert!(policy.run(|_| sent()).await.is_ok(), "the token is back");
+        assert!(policy.run(sent).await.is_ok(), "the token is back");
         assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 
@@ -5947,7 +5943,7 @@ mod tests {
             .open_breaker(Duration::from_secs(20))
             .expect("an open time `breaker_open` takes");
         tokio::time::advance(Duration::from_secs(5)).await;
-        let refused = policy.run_idempotent(|_| sent()).await;
+        let refused = policy.run_idempotent(&sent).await;
         assert!(
             matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(15)),
@@ -5955,7 +5951,7 @@ mod tests {
         );
         assert_eq!(calls.load(Ordering::Relaxed), 0, "refused unsent");
         policy.close_breaker().expect("a breaker");
-        assert!(policy.run(|_| sent()).await.is_ok());
+        assert!(policy.run(sent).await.is_ok());
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
@@ -5973,17 +5969,17 @@ mod tests {
             breaker_open: Duration::from_secs(1),
             ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(1)).await;
         let sent = AtomicU32::new(0);
-        let mut probing = Box::pin(policy.run(|_| async {
+        let mut probing = Box::pin(policy.run(|| async {
             sent.fetch_add(1, Ordering::Relaxed);
             Ok::<_, Refused>(())
         }));
         park(&mut probing).await;
         assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
-        let beside = policy.run(|_| answering()).await;
+        let beside = policy.run(answering).await;
         assert!(
             matches!(beside, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(14)),
@@ -6002,7 +5998,7 @@ mod tests {
         assert_eq!(sent.load(Ordering::Relaxed), 0, "the probe is never sent");
         policy.close_breaker().expect("a breaker");
         let resumed = tokio::time::Instant::now();
-        assert!(policy.run(|_| answering()).await.is_ok());
+        assert!(policy.run(answering).await.is_ok());
         assert_eq!(
             resumed.elapsed(),
             Duration::ZERO,
@@ -6024,11 +6020,11 @@ mod tests {
             breaker_open: Duration::from_secs(1),
             ..rated(1, Duration::from_secs(10), Some(Duration::from_secs(10)))
         });
-        let failed = policy.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = policy.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(1)).await;
         let sent = AtomicU32::new(0);
-        let mut probing = Box::pin(policy.run(|_| async {
+        let mut probing = Box::pin(policy.run(|| async {
             sent.fetch_add(1, Ordering::Relaxed);
             Ok::<_, Refused>(())
         }));
@@ -6079,16 +6075,16 @@ mod tests {
             rate_wait: Some(Duration::from_secs(60)),
             ..probing(Duration::from_secs(5))
         });
-        assert!(policy.run(|_| answering()).await.is_ok());
-        let mut ahead = Box::pin(policy.run(|_| answering()));
+        assert!(policy.run(answering).await.is_ok());
+        let mut ahead = Box::pin(policy.run(answering));
         park(&mut ahead).await;
         policy
             .open_breaker(Duration::from_secs(1))
             .expect("a breaker");
         tokio::time::advance(Duration::from_secs(1)).await;
-        let mut probe = Box::pin(policy.run(|_| answering()));
+        let mut probe = Box::pin(policy.run(answering));
         park(&mut probe).await;
-        let told = async || match policy.run(|_| answering()).await {
+        let told = async || match policy.run(answering).await {
             Err(ResilienceError::Refused {
                 refusal: ResilienceRefusal::Open { retry_after, .. },
                 ..
@@ -6171,11 +6167,11 @@ mod tests {
                 let deadline = deadline.map(|secs| Instant::now() + Duration::from_secs(secs));
                 let cut = nest_rs_core::__private::with_deadline(
                     deadline,
-                    outer.run(|_| async {
+                    outer.run(|| async {
                         if idempotent {
-                            inner.run_idempotent(|_| silent()).await
+                            inner.run_idempotent(silent).await
                         } else {
-                            inner.run(|_| silent()).await
+                            inner.run(silent).await
                         }
                     }),
                 )
@@ -6220,7 +6216,7 @@ mod tests {
         let soon = Duration::from_millis(300);
         for edge_first in [false, true] {
             let (outer, inner) = (policy(guarding()), policy(guarding()));
-            let nested = outer.run(|_| inner.run(|_| silent()));
+            let nested = outer.run(|| inner.run(silent));
             let deadline = Instant::now() + soon;
             if edge_first {
                 let cut = cut_first_at(deadline, nested).await;
@@ -6255,7 +6251,7 @@ mod tests {
         let outer = around(short);
         let inner = policy(probing(Duration::from_secs(5)));
         probe_due(&inner).await;
-        let cut = outer.run(|_| inner.run(|_| silent())).await;
+        let cut = outer.run(|| inner.run(silent)).await;
         assert!(timed_out_at(&cut, short), "{cut:?}");
         assert_eq!(
             inner.breaker_state(),
@@ -6299,7 +6295,7 @@ mod tests {
             ..guarding()
         });
         let slot = begin(&for_a_slot).await.expect("the one slot");
-        let cut = outer.run(|_| for_a_slot.run(|_| answering())).await;
+        let cut = outer.run(|| for_a_slot.run(answering)).await;
         assert!(timed_out_at(&cut, short), "{cut:?}");
         assert_eq!(counted(&for_a_slot), (0, 0));
         assert_eq!(for_a_slot.concurrency_waiting(), Some(0));
@@ -6312,17 +6308,17 @@ mod tests {
             ..probing(Duration::from_secs(5))
         });
         let started = Instant::now();
-        let failed = for_a_token.run(|_| async { Err::<(), _>(Refused) }).await;
+        let failed = for_a_token.run(|| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         tokio::time::advance(Duration::from_secs(1)).await;
-        let cut = outer.run(|_| for_a_token.run(|_| answering())).await;
+        let cut = outer.run(|| for_a_token.run(answering)).await;
         assert!(timed_out_at(&cut, short), "{cut:?}");
         assert_eq!(
             for_a_token.breaker_state(),
             Some(BreakerState::HalfOpen),
             "the probe's turn is free, nothing counted against it"
         );
-        let probed = for_a_token.run(|_| answering()).await;
+        let probed = for_a_token.run(answering).await;
         assert!(matches!(probed, Ok(())), "{probed:?}");
         assert_eq!(
             started.elapsed(),
@@ -6336,7 +6332,7 @@ mod tests {
             ..guarding()
         });
         let cut = around(Duration::from_millis(100))
-            .run(|_| backing_off.run_idempotent(|_| async { Err::<(), _>(Refused) }))
+            .run(|| backing_off.run_idempotent(|| async { Err::<(), _>(Refused) }))
             .await;
         assert!(timed_out_at(&cut, Duration::from_millis(100)), "{cut:?}");
         assert_eq!(counted(&backing_off), (1, 1), "its one failed attempt");
@@ -6353,8 +6349,8 @@ mod tests {
         let inner = Arc::new(policy(guarding()));
         let spawned = Arc::clone(&inner);
         let cut = outer
-            .run(|_| async move {
-                let task = tokio::spawn(async move { spawned.run(|_| silent()).await });
+            .run(|| async move {
+                let task = tokio::spawn(async move { spawned.run(silent).await });
                 task.await.expect("the task is not cancelled")
             })
             .await;
@@ -6363,7 +6359,7 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(4)).await;
         assert_eq!(counted(&inner), (1, 1), "given up at its own bound, at 5 s");
 
-        let dropped = tokio::time::timeout(short, inner.run(|_| silent())).await;
+        let dropped = tokio::time::timeout(short, inner.run(silent)).await;
         assert!(dropped.is_err(), "its caller dropped it");
         assert_eq!(
             counted(&inner),
@@ -6381,9 +6377,8 @@ mod tests {
         let short = Duration::from_secs(2);
         let (first, second) = (policy(guarding()), policy(guarding()));
         let cut = around(short)
-            .run(|_| async {
-                let (first, second) =
-                    tokio::join!(first.run(|_| silent()), second.run(|_| silent()));
+            .run(|| async {
+                let (first, second) = tokio::join!(first.run(silent), second.run(silent));
                 first.and(second)
             })
             .await;
@@ -6392,16 +6387,16 @@ mod tests {
 
         let (middle, innermost) = (policy(guarding()), policy(guarding()));
         let cut = around(short)
-            .run(|_| middle.run(|_| innermost.run(|_| silent())))
+            .run(|| middle.run(|| innermost.run(silent)))
             .await;
         assert!(timed_out_at(&cut, short), "{cut:?}");
         assert_eq!((counted(&middle), counted(&innermost)), ((1, 1), (1, 1)));
 
         let nested = policy(guarding());
         let cut = nested
-            .run(|_| async {
+            .run(|| async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                nested.run(|_| silent()).await
+                nested.run(silent).await
             })
             .await;
         assert!(timed_out_at(&cut, Duration::from_secs(5)), "{cut:?}");
@@ -6420,9 +6415,9 @@ mod tests {
         let short = Duration::from_secs(2);
         let inner = policy(guarding());
         let cut = around(short)
-            .run(|_| async {
+            .run(|| async {
                 let mut run = begin(&inner).await.expect("the request is let through");
-                match attempt_once(run.as_mut(), |_| silent(), judged).await {
+                match attempt_once(run.as_mut(), silent, judged).await {
                     (Ended::Refused(refusal), _) => {
                         Err(ResilienceError::<Refused>::refused(refusal, run.instance()))
                     }
@@ -6567,7 +6562,7 @@ mod tests {
             crate::resilient::resilient_method(|| "QuotesService", "quote", None, None)
                 .with_fallback();
         let run: Pin<Box<dyn Future<Output = Ran> + 'p>> = if idempotent {
-            Box::pin(policy.run_idempotent(|_| silent()))
+            Box::pin(policy.run_idempotent(silent))
         } else {
             Box::pin(policy.run_once::<Ran, _, Cancellable, _>(
                 Some(&FALLING_BACK),
@@ -6670,9 +6665,9 @@ mod tests {
         .expect("a valid policy");
         probe_due(&probed).await;
         let answered = probed
-            .run(|_| async {
+            .run(|| async {
                 between
-                    .run(|_| async { probed.run(|_| async { Ok::<_, Refused>("answered") }).await })
+                    .run(|| async { probed.run(|| async { Ok::<_, Refused>("answered") }).await })
                     .await
             })
             .await;
@@ -6692,7 +6687,7 @@ mod tests {
             ..ResilienceConfig::default()
         });
         let failed = walled
-            .run(|_| async { walled.run(|_| async { Err::<(), _>(Refused) }).await })
+            .run(|| async { walled.run(|| async { Err::<(), _>(Refused) }).await })
             .await;
         assert!(
             matches!(
@@ -6729,7 +6724,7 @@ mod tests {
             let deadline = Instant::now() + Duration::from_millis(300);
             let mut run = Box::pin(nest_rs_core::__private::with_deadline(
                 Some(deadline),
-                policy.run(|_| async move { answered.await.map_err(|_closed| Refused) }),
+                policy.run(|| async move { answered.await.map_err(|_closed| Refused) }),
             ));
             assert!(
                 run.as_mut()

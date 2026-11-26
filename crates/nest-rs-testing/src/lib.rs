@@ -32,7 +32,8 @@
 //! else the deployment set.
 //!
 //! With the `tls` feature, `TestAuthority` issues the certificates a TLS double
-//! presents, and `HttpsPeer` is the server an HTTP client under test calls.
+//! presents, `HttpsPeer` is the server an HTTP client under test calls, and
+//! `Upstream` is the development service a double in front of it dials.
 #![warn(missing_docs)]
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_variables))))]
 #![expect(
@@ -75,9 +76,13 @@ mod https_peer;
 #[cfg(feature = "tls")]
 mod tls;
 #[cfg(feature = "tls")]
+mod upstream;
+#[cfg(feature = "tls")]
 pub use https_peer::{HttpsPeer, PeerAnswer, RequestHead};
 #[cfg(feature = "tls")]
 pub use tls::{TestAuthority, TestCertificate, system_connector};
+#[cfg(feature = "tls")]
+pub use upstream::Upstream;
 
 #[cfg(feature = "orm")]
 mod database;

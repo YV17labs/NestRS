@@ -76,9 +76,6 @@ reqwest.workspace = true
 # `object_store`'s surface), so the suite reads the event the client emits with
 # `LogCapture`; `http` drives the probes the store's indicator gates.
 nest-rs-testing = { path = "../nest-rs-testing", features = ["http", "tls"] }
-# The suite's proxy names the store it dials over TLS, to stop an answer where
-# its body starts.
-rustls.workspace = true
 # The nets a call can run under: the authentication guard's around a strategy
 # injecting `Storage`, and the HTTP edge's default request timeout, which the
 # default operation budget sits below.

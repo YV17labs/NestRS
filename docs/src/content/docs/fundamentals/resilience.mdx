@@ -138,9 +138,12 @@ first, and counts as a timeout, in the breaker too. One its caller drops counts
 No retry starts whose wait would end past that deadline.
 
 A call that is part of a method takes the policy's own `run` or `run_idempotent`:
-`self.upstream.run_idempotent(|cancel| async move { … }).await`, its closure
-handed the attempt's `CancellationToken`. A run by hand takes no key: every `Err`
-is a failure, and what stands in for an error is the `Result` it answers.
+`self.upstream.run_idempotent(|| async move { … }).await`. A closure that hands
+work beyond its future — a spawned task, a request another client sends — takes
+the attempt's `CancellationToken` through `run_cancellable` or
+`run_idempotent_cancellable`, `|cancel| async move { … }`, as `cancel` names it
+on the decorator; no other run makes one. A run by hand takes no key: every
+`Err` is a failure, and what stands in for an error is the `Result` it answers.
 
 ### The keys
 

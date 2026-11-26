@@ -984,7 +984,7 @@ where
     let mut events = policy.events();
 
     let failed = policy
-        .run_idempotent(|_cancel| async { Err::<(), _>(attempt().await) })
+        .run_idempotent(|| async { Err::<(), _>(attempt().await) })
         .await
         .expect_err("each attempt fails");
     assert!(matches!(failed, ResilienceError::Failed(_)), "{failed:?}");

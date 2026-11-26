@@ -1736,3 +1736,88 @@ then 1,856. The integration suite counts 607 tests before the split and after.
 No compile time or code size per method is claimed: an accepted method
 expands as before but under a `record_if` naming no argument, which no bench
 row measures.
+
+## 2026-11-26 — what the earlier entries left to settle
+
+Each point an earlier report left open, decided by CLAUDE.md's values, the
+value named.
+
+- **`run` and `run_idempotent` take a closure of no argument**, and
+  `run_cancellable` and `run_idempotent_cancellable` hand the attempt its
+  `CancellationToken` — the four spellings the decorator's tier-2 runs already
+  had, read off what the call takes, as `cancel` reads it off a body.
+  Performance decided it: 341 hand-written call sites, the suites' and the
+  docs', took the token to drop it (`|_|`). `benches/policy.rs`, release, in the
+  dev container, against the head before the change: `run/bare` 62.0 →
+  38.8 ns, `run_idempotent/bare` 62.7 → 39.0 ns, a call answering at once 1 →
+  0 allocations (`a_call_answering_at_once_allocates_nothing_but_the_token_it_takes_in_a_release_build`);
+  `resilient/bare` 40.7 → 40.6, `token/new` 16.3 → 16.4, untouched. The
+  refusal of reading the closure's arity (2026-11-26) stands: two names, not
+  one entry guessing.
+- **A tick or a listener refused — any failure answering a `503` — is filed at
+  `warn`**, `scheduled job failed; unavailable` and `event listener failed;
+  unavailable — dispatch continues with the next listener`: a `503` is the
+  server unable to serve the unit in time, which every edge with a client
+  already files at `warn` (`edges.md`, item 12), and an open breaker refusing
+  is the policy working, filed once more on every occurrence it lasts. The
+  breaker's opening is its own `warn`, and the failures that opened it each
+  their unit's `error`. Correctness of the level decided it (CLAUDE.md,
+  *Observability*: `error` when unexpected). The `503` read is the one an
+  exception filter answered, else the one the failure's chain carries
+  (`nest_rs_core::__private::is_unavailable`). A job's retry was already a
+  `warn`, its dead letter an `error`: unchanged.
+- **The default breaker stays ten failures of twenty** (2026-11-20). No value
+  overturns it: the reference's default mapped gives five of ten, which opens
+  sooner on a dependency failing half its calls and refuses sooner a
+  dependency that answers the other half; neither is a security or a
+  correctness difference, and no bench measures one better. A deployment
+  moving it sets `BREAKER_FAILURES`.
+- **`link_as` stays tier 2.** Its hole — a community driver's sayer missing
+  its own type behind an `Arc` — is closed by the public contract
+  (`SafeLink::of` reads every pointer for every sayer, 2026-11-26), and a
+  public reader of a link beside it would be a second way to do one thing
+  (elegance). Core's own chain search now reads through it too: an edge finds
+  a `Problem` named as a source behind a pointer, and an opaque failure's
+  cause behind one stops the search, where a `Problem` beneath it answered the
+  client — correctness, and the security of the opaque cause.
+- **The umbrella's `full` keeps `resilience`**: "full takes every capability"
+  is the rule, and compatibility holds no design back (CLAUDE.md, *How we
+  work*); the break is told in the changelog. The 2026-11-24 limit naming it
+  the owner's is closed.
+- **`FieldAnswer` gets no `Debug`.** An operation's attributes stay on the
+  developer's method, so `#[tracing::instrument(ret)]` records the method's
+  own answer, never the field's (`an_instruments_ret_records_the_value_the_method_answered`);
+  nothing reads the wrapper's.
+- **A text redacted against its own chain says a sayer's sentence once**: a
+  refusal's sayer goes on from its link's `Display` (`…: 503 UNAVAILABLE`), and
+  `Redactions` appended the rest again to a text already holding it — the
+  ": 503 UNAVAILABLE" the problem detail once said twice. A spelling of the link
+  already followed by the whole sentence is kept. Correctness.
+- **rustls says nothing on a line**: the workspace takes rustls and
+  tokio-rustls without their `logging` feature, whose records quote what a peer
+  sent and which only a binary linking `nest-rs-http`'s clamp held back;
+  `prefer-post-quantum`, a default, is kept and named — the hybrid key exchange
+  preferred. Security decided both (`.claude/upstream/rustls.md`).
+- **One TLS double in `nest-rs-testing`, `Upstream`**: the Redis harness, the
+  storage suite's proxy and the Postgres double here each accepted a client
+  with the test authority's certificate and dialled the service on the
+  system's trust, Postgres's `SSLRequest` on both sides; at the third, one
+  type (elegance), each double keeping only what it holds back. The Postgres
+  fakes of `nest-rs-seaorm`'s and `nest-rs-testing`'s suites answer a pool
+  themselves and front no service: they keep their own.
+
+**Stand, no value overturning them:** a predicate that panics counts as a
+failure of its call (fail-closed: the run cannot tell its bug from the
+dependency's); a parameter bound by a pattern under `fallback`, and a fallback
+named by a method alone (one grammar); `RATE_BURST` and `RATE_WAITERS` not
+built, and no attempt number in a body (no feature for a hypothetical user); a
+refusal of an inner policy counted as the outer call's `Err` (every `Err` is the
+dependency failing); a reqwest cause `nest-rs-reqwest` cannot read left unsaid
+(security over diagnosis).
+
+**Not done, named:** the default instance's lines say `instance = ""`, a
+sentinel where no field would do; `error_message`'s narrower cut (userinfo,
+query, fragment, reqwest's reason phrase in a transparent wrapper) is not
+built; Valkey's Sentinel and Cluster suites were not run by hand on the
+`Upstream` the Redis harness now dials through — the driver did not change, the
+double did, so the standalone run is the one held.

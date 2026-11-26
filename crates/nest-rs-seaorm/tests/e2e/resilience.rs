@@ -336,7 +336,7 @@ async fn an_attempt_that_failed_leaves_no_write_for_the_next_to_repeat() {
     let lazy = Arc::new(LazyTransaction::new(conn.clone(), "test"));
     let ran = with_request_executor(
         SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
-        policy.run_idempotent(|_| async {
+        policy.run_idempotent(|| async {
             write(entry).await?;
             if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
                 return Err(Failure::Refused);
@@ -451,7 +451,7 @@ async fn a_statement_refused_inside_an_attempt_leaves_its_retry_free_to_write_an
     let ran = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         write_as(taken, entry).await.expect("the unit writes first");
         policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 let id = match attempts.fetch_add(1, Ordering::Relaxed) {
                     0 => taken,
                     _ => Uuid::now_v7(),
@@ -488,7 +488,7 @@ async fn an_attempt_answering_ok_over_a_statement_that_failed_ends_its_run_unset
     let ran = with_request_executor(SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(), async {
         write_as(taken, entry).await.expect("the unit writes first");
         policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 attempts.fetch_add(1, Ordering::Relaxed);
                 let refused = write_as(taken, entry).await;
                 assert!(refused.is_err(), "the key is taken: {refused:?}");
@@ -533,7 +533,7 @@ async fn a_run_whose_last_attempt_fails_leaves_its_unit_its_earlier_write_and_no
             .await
             .expect("the unit writes before the call");
         policy
-            .run_idempotent(|_| async {
+            .run_idempotent(|| async {
                 attempts.fetch_add(1, Ordering::Relaxed);
                 write(entry).await?;
                 Err::<(), _>(Failure::Refused)
@@ -604,7 +604,7 @@ async fn a_call_that_never_queries_sends_nothing() {
     let lazy = unit(&conn);
     let ran = with_request_executor(
         SeaOrmExecutor::Lazy(Arc::clone(&lazy)).into(),
-        policy.run_idempotent(|_| async {
+        policy.run_idempotent(|| async {
             if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
                 return Err(Failure::Refused);
             }
@@ -639,7 +639,7 @@ async fn a_run_dropped_mid_attempt_leaves_its_unit_unable_to_commit() {
         write(before)
             .await
             .expect("the unit writes before the call");
-        let run = policy.run_idempotent(|_| async {
+        let run = policy.run_idempotent(|| async {
             write(entry).await?;
             wrote.notify_one();
             std::future::pending::<Result<(), Failure>>().await
@@ -733,7 +733,7 @@ async fn on_the_pool_an_attempt_opens_no_transaction_and_its_writes_commit_as_th
 
     let ran = with_request_executor(
         SeaOrmExecutor::Pool(conn.clone()).into(),
-        policy.run_idempotent(|_| async {
+        policy.run_idempotent(|| async {
             let on_the_pool = matches!(current_executor(), Some(SeaOrmExecutor::Pool(_)));
             write(entry).await?;
             if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
@@ -768,7 +768,7 @@ async fn replayed(
 ) -> Result<bool, ResilienceError<Failure>> {
     let attempts = AtomicU32::new(0);
     policy
-        .run_idempotent(|_| async {
+        .run_idempotent(|| async {
             let in_a_transaction = nest_rs_database::current_executor().is_some_and(|handle| {
                 matches!(handle.holds(), nest_rs_database::Holds::Transaction(_))
             });
@@ -996,9 +996,6 @@ async fn an_attempt_cut_while_its_unit_waits_for_a_connection_leaves_its_unit_ab
     assert_eq!(written(&one, entry).await, 1);
 }
 
-/// The `SSLRequest` a Postgres client opens with, answered `S`.
-const SSL_REQUEST: [u8; 8] = [0, 0, 0, 8, 0x04, 0xd2, 0x16, 0x2f];
-
 /// A double between a pool and the suite's Postgres, ending TLS on both
 /// sides: it passes on every byte as it comes, but what Postgres answers
 /// while it is told to hold, so a statement sent stays unanswered for as long
@@ -1030,44 +1027,17 @@ impl AnswersHeld {
         let suite = crate::harness::url();
         let postgres =
             sqlx::postgres::PgConnectOptions::from_str(&suite).expect("the suite's Postgres URL");
-        let (host, port) = (postgres.get_host().to_owned(), postgres.get_port());
+        let postgres =
+            nest_rs_testing::Upstream::postgres(postgres.get_host(), postgres.get_port());
         let (holding, _) = tokio::sync::watch::channel(false);
         let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
         let relayed = (holding.clone(), Arc::clone(&sent));
         tokio::spawn(async move {
-            while let Ok((mut client, _)) = listener.accept().await {
-                let (acceptor, host) = (acceptor.clone(), host.clone());
+            while let Ok((client, _)) = listener.accept().await {
+                let (acceptor, postgres) = (acceptor.clone(), postgres.clone());
                 let (holding, sent) = relayed.clone();
                 tokio::spawn(async move {
-                    let mut request = [0_u8; 8];
-                    if client.read_exact(&mut request).await.is_err()
-                        || request != SSL_REQUEST
-                        || client.write_all(b"S").await.is_err()
-                    {
-                        return;
-                    }
-                    let Ok(client) = acceptor.accept(client).await else {
-                        return;
-                    };
-                    let Ok(mut server) =
-                        tokio::net::TcpStream::connect((host.as_str(), port)).await
-                    else {
-                        return;
-                    };
-                    let mut encrypts = [0_u8; 1];
-                    if server.write_all(&SSL_REQUEST).await.is_err()
-                        || server.read_exact(&mut encrypts).await.is_err()
-                        || encrypts != *b"S"
-                    {
-                        return;
-                    }
-                    let Ok(name) = host.try_into() else {
-                        return;
-                    };
-                    let Ok(server) = nest_rs_testing::system_connector()
-                        .connect(name, server)
-                        .await
-                    else {
+                    let Some((client, server)) = postgres.bridge(client, &acceptor).await else {
                         return;
                     };
                     let (mut asked, mut answering) = tokio::io::split(client);

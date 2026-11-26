@@ -89,3 +89,24 @@
   > list goes stale silently. Could `Error` offer the failure without its
   > context — a method returning a `&'static str` or a fieldless kind, or an
   > alternate `Display` — documented as never printing data from the peer?
+
+## Its default `logging` feature quotes what a peer sent
+
+- **Seen** — 0.23.46: `logging`, a default feature (and tokio-rustls 0.26's,
+  which turns rustls's on), sends `log` records the framework's console
+  bridges: a server's refusal of an SNI at `warn` names it, a ClientHello is
+  printed whole at `trace`.
+- **Effect** — `nest-rs-http` clamps the `rustls` target at `error`, but a
+  binary linking rustls without it — a worker on Redis, a client on
+  `nest-rs-reqwest` — had no clamp, and the workspace's requirement turned the
+  feature on for every crate taking it.
+- **Our side** — the root `Cargo.toml` takes rustls and tokio-rustls without
+  their default features and names the rest of rustls's defaults
+  (`aws_lc_rs`, `prefer-post-quantum`, `std`, `tls12`); no dependency of the
+  framework's turns `logging` on (reqwest, sqlx and redis take rustls without
+  it). The clamp stays for an app turning it on itself.
+- **Canary** — `cargo tree -e features -i rustls --workspace --all-features`
+  names no `logging`; read again when rustls, tokio-rustls, reqwest, sqlx or
+  redis moves.
+- **Upstream** — none to file: a default a library may choose.
+- **When fixed** — nothing to retire.

@@ -383,21 +383,23 @@ pub(crate) mod __private {
 
     /// The first `T` in `error`'s chain, `error` itself first, down to an
     /// opaque failure's cause: how an edge finds the framework vocabulary a
-    /// failure carries wherever it was wrapped.
+    /// failure carries wherever it was wrapped, a link handed out as a pointer
+    /// to it included ([`link_as`]).
     pub fn find_in_chain<'e, T: Error + 'static>(
         error: &'e (dyn Error + 'static),
     ) -> Option<&'e T> {
-        answerable_links(error).find_map(|link| link.downcast_ref::<T>())
+        answerable_links(error).find_map(link_as::<T>)
     }
 
     /// `error`'s chain, `error` itself first, ending at an
-    /// [`OpaqueCause`](crate::__private::OpaqueCause): what is beneath one is
-    /// the operator's to read, never the client's to be answered.
+    /// [`OpaqueCause`](crate::__private::OpaqueCause), bare or behind a
+    /// pointer: what is beneath one is the operator's to read, never the
+    /// client's to be answered.
     pub(crate) fn answerable_links<'e>(
         error: &'e (dyn Error + 'static),
     ) -> impl Iterator<Item = &'e (dyn Error + 'static)> {
         std::iter::successors(Some(error), |&link| {
-            if link.is::<crate::__private::OpaqueCause>() {
+            if link_as::<crate::__private::OpaqueCause>(link).is_some() {
                 None
             } else {
                 link.source()
@@ -637,6 +639,42 @@ mod tests {
         );
     }
 
+    /// A link handed out as the pointer an error names its source behind is
+    /// read as the error it holds, by the edges' search as by every sayer: the
+    /// vocabulary it carries is found, and an opaque failure stops the search.
+    #[test]
+    fn a_link_behind_a_pointer_is_found_and_an_opaque_one_stops_the_search() {
+        use super::__private::find_in_chain;
+        use crate::__private::OpaqueCause;
+
+        let shared = Naming(Arc::new(std::io::Error::other("timed out")));
+        assert!(
+            find_in_chain::<std::io::Error>(&shared).is_some(),
+            "behind an Arc"
+        );
+        let boxed = Naming(Box::new(std::io::Error::other("timed out")));
+        assert!(
+            find_in_chain::<std::io::Error>(&boxed).is_some(),
+            "behind a Box"
+        );
+        let erased: Arc<dyn Error + Send + Sync> = Arc::new(std::io::Error::other("timed out"));
+        assert!(
+            find_in_chain::<std::io::Error>(&Naming(erased)).is_some(),
+            "behind an erased Arc"
+        );
+
+        let cause = || {
+            OpaqueCause::new(
+                "the upstream reply did not decode",
+                Some(Arc::new(secret())),
+            )
+        };
+        assert!(find_in_chain::<serde_json::Error>(&Naming(Arc::new(cause()))).is_none());
+        assert!(find_in_chain::<serde_json::Error>(&Naming(Box::new(cause()))).is_none());
+        let erased: Arc<dyn Error + Send + Sync> = Arc::new(cause());
+        assert!(find_in_chain::<serde_json::Error>(&Naming(erased)).is_none());
+    }
+
     #[test]
     fn boxed_error_converts_any_other_error_as_into_does() {
         let message = boxed_error("the queue backend failed");
@@ -762,6 +800,37 @@ mod tests {
             "upstream answered: row rejected R42"
         );
         assert_eq!(DecodeError::redact(&text, None), text, "no chain, no sayer");
+    }
+
+    /// A refusal whose sayer goes on from its own sentence, as one telling a
+    /// class beside it does.
+    #[derive(Debug, thiserror::Error)]
+    #[error("the call was refused")]
+    struct Refused;
+
+    fn say_refused(_: &Refused) -> Option<String> {
+        Some("the call was refused: 503 UNAVAILABLE".to_owned())
+    }
+
+    inventory::submit! { SafeLink::of(&say_refused) }
+
+    #[test]
+    fn a_text_already_spelling_what_a_sayer_goes_on_with_is_not_said_twice() {
+        let said = error_message(&Refused);
+        assert_eq!(said, "the call was refused: 503 UNAVAILABLE");
+        assert_eq!(
+            DecodeError::redact(&said, Some(&Refused)),
+            said,
+            "a text built from the chain's own message"
+        );
+        assert_eq!(
+            DecodeError::redact(
+                "the call was refused, then the call was refused",
+                Some(&Refused)
+            ),
+            "the call was refused: 503 UNAVAILABLE, then the call was refused: 503 UNAVAILABLE",
+            "each spelling of the link alone goes on"
+        );
     }
 
     /// What thiserror's `#[source]` makes of a field: a sentence of the

@@ -315,7 +315,7 @@ mod tests {
     /// next request is its probe.
     async fn probing() -> Arc<ResiliencePolicy> {
         let policy = policy(1);
-        let failed = policy.run(|_| async { Err::<(), _>(io::Error::from(RESET)) });
+        let failed = policy.run(|| async { Err::<(), _>(io::Error::from(RESET)) });
         assert!(failed.await.is_err());
         tokio::time::advance(OPEN_FOR).await;
         policy
@@ -705,7 +705,7 @@ mod tests {
         let (held, _feed) = answered(&policy, Duration::from_secs(1), Verdict::Succeeded).await;
         for held_for in [Duration::ZERO, TIMEOUT, 10 * TIMEOUT] {
             tokio::time::advance(held_for).await;
-            let refused = policy.run(|_| async { Ok::<(), io::Error>(()) }).await;
+            let refused = policy.run(|| async { Ok::<(), io::Error>(()) }).await;
             assert!(
                 matches!(
                     refused,
@@ -1025,7 +1025,7 @@ mod tests {
         let stalled = policy(1);
         let (mut body, feed) = succeeded(&stalled).await;
         let cut = around
-            .run(move |_| async move {
+            .run(move || async move {
                 let read = read(&mut body).await;
                 Err::<(), _>(io::Error::other(format!("the body answered {read:?}")))
             })
@@ -1042,7 +1042,7 @@ mod tests {
         let (body, _feed) = succeeded(&unread).await;
         around.close_breaker().expect("a breaker");
         let cut = around
-            .run(move |_| async move {
+            .run(move || async move {
                 let _held = body;
                 std::future::pending::<Result<(), io::Error>>().await
             })

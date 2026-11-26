@@ -224,9 +224,10 @@ was.
 - **A refusal reaching a tick, a listener or a hook is that unit's error**,
   whichever refused: an open breaker, a timeout, a full bulkhead or a reached
   rate. A tick's, a listener's and a shutdown hook's, in any of the three
-  shutdown phases, are filed at `error` by their edge, a tick's at every
-  occurrence while the refusal lasts, and a listener's rolls its transaction
-  back. An init or bootstrap hook's fails the boot naming the hook, the chain
+  shutdown phases, are filed by their edge — a tick's and a listener's at
+  `warn`, a `503` as every edge files one, a tick's at every occurrence while
+  the refusal lasts, a hook's at `error` — and a listener's rolls its
+  transaction back. An init or bootstrap hook's fails the boot naming the hook, the chain
   in the error `init` returns and on no log line. A refused readiness
   indicator answers down, the chain in a `warn`, and so does one whose attempt
   ends at [its check's

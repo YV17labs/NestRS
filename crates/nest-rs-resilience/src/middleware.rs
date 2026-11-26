@@ -620,7 +620,7 @@ mod tests {
                 .build();
 
             let cut = around
-                .run(|_| async {
+                .run(|| async {
                     let answered = client.get("https://upstream.example/").send().await?;
                     Ok::<_, Error>(answered.bytes().await?)
                 })

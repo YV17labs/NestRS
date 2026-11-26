@@ -50,7 +50,7 @@ impl PreviewsController {
     #[public]
     async fn direct(&self) -> Result<String, ResilienceError<UpstreamDown>> {
         self.upstream
-            .run(|_| async { Err::<String, _>(UpstreamDown) })
+            .run(|| async { Err::<String, _>(UpstreamDown) })
             .await
     }
 
@@ -58,7 +58,7 @@ impl PreviewsController {
     #[public]
     async fn wrapped(&self) -> Result<String, NoPreview> {
         self.upstream
-            .run(|_| async { Err::<String, _>(UpstreamDown) })
+            .run(|| async { Err::<String, _>(UpstreamDown) })
             .await
             .map_err(NoPreview)
     }
@@ -247,7 +247,7 @@ mod graphql {
         #[public]
         async fn preview(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             self.upstream
-                .run(|_| async { Err::<String, _>(UpstreamDown) })
+                .run(|| async { Err::<String, _>(UpstreamDown) })
                 .await
         }
     }
@@ -309,7 +309,7 @@ mod ws {
         #[public]
         async fn preview(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             self.upstream
-                .run(|_| async { Err::<String, _>(UpstreamDown) })
+                .run(|| async { Err::<String, _>(UpstreamDown) })
                 .await
         }
     }
@@ -379,7 +379,7 @@ mod mcp {
         #[public]
         async fn preview(&self) -> Result<String, ResilienceError<UpstreamDown>> {
             self.upstream
-                .run(|_| async { Err::<String, _>(UpstreamDown) })
+                .run(|| async { Err::<String, _>(UpstreamDown) })
                 .await
         }
     }
@@ -446,7 +446,7 @@ mod queue {
         #[process(queue = PreviewsQueue, retries = 3)]
         async fn preview(&self, job: PreviewCommand) -> Result<(), ResilienceError<UpstreamDown>> {
             let _ = job;
-            self.upstream.run(|_| async { Err(UpstreamDown) }).await
+            self.upstream.run(|| async { Err(UpstreamDown) }).await
         }
     }
 

@@ -23,15 +23,15 @@ use tokio::time::{Instant, Sleep};
 use tokio_util::sync::DropGuard;
 
 use crate::attempting::Attempting;
-use crate::breaker::{Breaker, Cut, Pass, Sent};
+use crate::breaker::{Breaker, Cut, Failure, Pass, Sent};
 use crate::bulkhead::{Full, Slot};
 use crate::call::{Calling, Erased, Judged, Placing, Reads};
-use crate::error::{Refusal, ResilienceError, TIMED_OUT};
+use crate::error::{FAILED, PANICKED, ResilienceError, ResilienceRefusal, TIMED_OUT};
 use crate::mechanisms::Mechanisms;
 use crate::rate::{Arrived, Rate, Reservation};
 use crate::resilient::{ResilientAnswer, ResilientMethod};
 use crate::savepoint::{Savepoint, Settling, Then};
-use crate::verdict::{Ended, PANICKED, Verdict};
+use crate::verdict::{Ended, Verdict};
 
 /// What every attempt of one run is sent under, copied into the wait for a
 /// token, so that no wait borrows its run.
@@ -68,7 +68,7 @@ struct Bound {
 enum Admission<'p> {
     /// Let through, its call sent under the bound, holding the breaker's pass.
     Through(Option<Pass<'p>>, Bound),
-    Refused(Refusal),
+    Refused(ResilienceRefusal),
     /// No token of the rate free, postponed to the instant its reserved one is.
     Postponed(Instant),
 }
@@ -99,7 +99,7 @@ impl<'p> Terms<'p> {
     }
 
     /// `refusal`, which the run ends on, counted and told.
-    fn refused(&self, refusal: Refusal) -> Refusal {
+    fn refused(&self, refusal: ResilienceRefusal) -> ResilienceRefusal {
         self.policy.teller.refused(self.method, refusal)
     }
 
@@ -124,7 +124,7 @@ impl<'p> Terms<'p> {
     ) -> Admission<'p> {
         let bound = self.bound();
         if bound.wait.is_zero() {
-            return Admission::Refused(Refusal::OUT_OF_TIME);
+            return Admission::Refused(ResilienceRefusal::OUT_OF_TIME);
         }
         // While this one waited for its token, another call may have opened the
         // breaker or taken the probe's turn, and a manual switch voids a turn held.
@@ -137,7 +137,9 @@ impl<'p> Terms<'p> {
                 .transpose()
             {
                 Ok(admitted) => *pass = admitted,
-                Err(retry_after) => return Admission::Refused(Refusal::Open(retry_after)),
+                Err(retry_after) => {
+                    return Admission::Refused(ResilienceRefusal::Open { retry_after });
+                }
             }
         }
         match &self.policy.rate {
@@ -171,7 +173,7 @@ impl<'p> Terms<'p> {
             Arrived::Taken => Admission::Through(pass.take(), bound),
             Arrived::Refused(wait) => {
                 self.policy.teller.limited(self.method, wait);
-                Admission::Refused(Refusal::Limited(wait))
+                Admission::Refused(ResilienceRefusal::Limited { retry_after: wait })
             }
             Arrived::Reserved(reservation, at) => {
                 *reserved = Some(reservation);
@@ -203,7 +205,7 @@ pin_project_lite::pin_project! {
 }
 
 impl<'p> Future for Admitted<'p> {
-    type Output = Result<(Option<Pass<'p>>, Bound), Refusal>;
+    type Output = Result<(Option<Pass<'p>>, Bound), ResilienceRefusal>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
@@ -285,11 +287,22 @@ enum Stage {
 }
 
 /// A retry decided after an attempt: how long the run waits before it,
-/// counted from that attempt's answer, and what the attempt answered in
-/// error, which the retry's line says — nothing, for an `Ok` sent again.
+/// counted from that attempt's answer, and what its line and its event say
+/// the attempt answered in error.
 pub(crate) struct Retry {
     wait: Duration,
-    error: Option<Cow<'static, str>>,
+    error: Told,
+}
+
+/// What a retry's line and event say the attempt before it answered.
+enum Told {
+    /// An `Ok` sent again: no error.
+    Answered,
+    /// An error no line and no subscription heard as the retry was decided,
+    /// so never put in words: the retry tells nothing.
+    Unheard,
+    /// An error's chain, or the timeout's sentence.
+    Said(Cow<'static, str>),
 }
 
 /// What a run ended on, its last attempt's answer, when it has one, held by
@@ -298,7 +311,7 @@ pub(crate) enum Over {
     /// The call's own answer, its last attempt's.
     Answered,
     /// The policy's refusal, counted and told.
-    Refused(Refusal),
+    Refused(ResilienceRefusal),
     /// The savepoint of its last attempt, which the database could not
     /// settle.
     Unsettled(AtomicError),
@@ -455,7 +468,7 @@ impl<'p> Run<'p> {
     pub(crate) fn poll_open(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), Refusal>> {
+    ) -> Poll<Result<(), ResilienceRefusal>> {
         let mut this = self.project();
         if *this.stage == Stage::Opening {
             let policy = this.terms.policy;
@@ -475,11 +488,13 @@ impl<'p> Run<'p> {
             let deadline = this.terms.deadline;
             if deadline.is_some_and(|deadline| deadline <= Instant::now()) {
                 *this.stage = Stage::Answered;
-                return Poll::Ready(Err(this.terms.refused(Refusal::OUT_OF_TIME)));
+                return Poll::Ready(Err(this.terms.refused(ResilienceRefusal::OUT_OF_TIME)));
             }
             if let Some(retry_after) = policy.breaker.as_ref().and_then(Breaker::refusing) {
                 *this.stage = Stage::Answered;
-                return Poll::Ready(Err(this.terms.refused(Refusal::Open(retry_after))));
+                return Poll::Ready(Err(this
+                    .terms
+                    .refused(ResilienceRefusal::Open { retry_after })));
             }
             if let Some(free) = bulkhead.try_enter() {
                 *this.slot = Some(free);
@@ -490,7 +505,9 @@ impl<'p> Run<'p> {
             {
                 *this.stage = Stage::Answered;
                 policy.teller.limited(this.terms.method, wait);
-                return Poll::Ready(Err(this.terms.refused(Refusal::Limited(wait))));
+                return Poll::Ready(Err(this
+                    .terms
+                    .refused(ResilienceRefusal::Limited { retry_after: wait })));
             }
             this.wait.set(Wait::Entering {
                 entering: Box::pin(bulkhead.enter(deadline)),
@@ -512,7 +529,7 @@ impl<'p> Run<'p> {
                     *this.stage = Stage::Answered;
                     let terms = this.terms;
                     terms.policy.teller.full(terms.method, full.waiters());
-                    return Poll::Ready(Err(terms.refused(Refusal::Full)));
+                    return Poll::Ready(Err(terms.refused(ResilienceRefusal::Full)));
                 }
             }
         }
@@ -631,16 +648,28 @@ impl<'p> Run<'p> {
         let judged = answered.and_then(|()| {
             catch_unwind(AssertUnwindSafe(|| call.judge(idempotent))).map_err(Unanswered::Panicked)
         });
+        let mut judged = judged;
         if let Some(Attempt::Sent(sent)) = this.attempt.take() {
-            match &judged {
+            let counted = match judged {
                 // What the answer still owes — a response's body — may undo it.
                 #[cfg(feature = "reqwest")]
                 Ok(Verdict::Succeeded) if *this.holds => {
                     *this.attempt = Some(Attempt::Outstanding(Outstanding(Some(sent))));
+                    Ok(())
                 }
-                Ok(verdict) => verdict.settle(sent),
-                Err(Unanswered::Panicked(_)) => sent.settle(Some(PANICKED)),
-                Err(_elapsed) => sent.settle(Some(TIMED_OUT)),
+                Ok(Verdict::Succeeded | Verdict::Again) => sent.ended(None),
+                Ok(Verdict::Failed { .. } | Verdict::Final) => {
+                    sent.ended(Some(call.failure().unwrap_or(Failure::Said(FAILED))))
+                }
+                Ok(Verdict::Ignored | Verdict::IgnoredAgain { .. }) => {
+                    sent.ignore();
+                    Ok(())
+                }
+                Err(Unanswered::Panicked(_)) => sent.ended(Some(Failure::Said(PANICKED))),
+                Err(_) => sent.ended(Some(Failure::Said(TIMED_OUT))),
+            };
+            if let Err(payload) = counted {
+                judged = Err(Unanswered::Panicked(payload));
             }
         }
         let given_up = this.given_up.take();
@@ -650,7 +679,9 @@ impl<'p> Run<'p> {
                 Ended::Judged(verdict)
             }
             Err(Unanswered::Panicked(payload)) => Ended::Unwound(payload),
-            Err(_elapsed) => Ended::Refused(Refusal::TimedOut(*this.bound)),
+            Err(_elapsed) => Ended::Refused(ResilienceRefusal::TimedOut {
+                timeout: *this.bound,
+            }),
         }
     }
 
@@ -659,27 +690,47 @@ impl<'p> Run<'p> {
     /// again, unless its retries are spent or the retry is given up, whose
     /// line says why — the dependency asked a wait past the backoff's
     /// ceiling, or the wait ends past the unit's deadline — with what the
-    /// attempt answered in error, which an `Ok` sent again has none of. The
-    /// retry's own line is left to file once it is certain
-    /// ([`retrying`](Self::retrying)): at once for an attempt that opened no
-    /// savepoint, else once that savepoint was rolled back. What the attempt
-    /// answered in error is taken out of `ended`.
-    pub(crate) fn retry(self: Pin<&mut Self>, ended: &mut Ended) -> Option<Retry> {
+    /// attempt answered in error, its `failure`, which an `Ok` sent again has
+    /// none of. That error is put in words only when a line or a subscription
+    /// hears it; words that panic end the run there, `ended` then the panic
+    /// it unwinds on. The retry's own line is left to file once it is
+    /// certain ([`retrying`](Self::retrying)): at once for an attempt that
+    /// opened no savepoint, else once that savepoint was rolled back.
+    pub(crate) fn retry(
+        self: Pin<&mut Self>,
+        ended: &mut Ended,
+        failure: Option<Failure<'_>>,
+    ) -> Option<Retry> {
         let this = self.project();
         if !*this.idempotent {
             return None;
         }
-        let (asked, error) = sent_again(ended)?;
+        let (asked, failure) = sent_again(ended, failure)?;
         let terms = *this.terms;
         let policy = terms.policy;
         if *this.resent >= *this.retries {
             return None;
         }
+        let error = match failure {
+            None => Told::Answered,
+            Some(_) if !policy.teller.hears() => Told::Unheard,
+            Some(failure) => match failure.said() {
+                Ok(said) => Told::Said(said),
+                Err(payload) => {
+                    *ended = Ended::Unwound(payload);
+                    return None;
+                }
+            },
+        };
+        let said = match &error {
+            Told::Said(said) => Some(&**said),
+            Told::Answered | Told::Unheard => None,
+        };
         let ceiling = policy.backoff.ceiling();
         if let Some(asked) = asked.filter(|asked| *asked > ceiling) {
             policy
                 .teller
-                .past_ceiling(terms.method, asked, ceiling, error);
+                .past_ceiling(terms.method, asked, ceiling, said);
             return None;
         }
         let seed = *this.seed.get_or_insert_with(|| {
@@ -694,21 +745,13 @@ impl<'p> Run<'p> {
         if let Some(deadline) = terms.deadline
             && Instant::now() + wait >= deadline
         {
-            policy.teller.past_deadline(terms.method, wait, error);
+            policy.teller.past_deadline(terms.method, wait, said);
             return None;
         }
-        let error = match ended {
-            Ended::Judged(Verdict::Failed { error, .. } | Verdict::IgnoredAgain { error, .. }) => {
-                Some(std::mem::take(error))
-            }
-            Ended::Judged(_) => None,
-            Ended::Refused(timed_out) => {
-                // Given up at its bound, told as it ends: its run goes on.
-                policy.teller.given_up(terms.method, *timed_out);
-                Some(Cow::Borrowed(TIMED_OUT))
-            }
-            Ended::Unwound(_) => unreachable!("a call that unwound is not sent again"),
-        };
+        if let Ended::Refused(timed_out) = ended {
+            // Given up at its bound, told as it ends: its run goes on.
+            policy.teller.given_up(terms.method, *timed_out);
+        }
         Some(Retry { wait, error })
     }
 
@@ -716,14 +759,20 @@ impl<'p> Run<'p> {
     /// attempt before it answered: `attempt failed`, with its error's chain or
     /// the timeout's sentence, for an `Err` or a timeout, whichever way the
     /// `Err` counts in the breaker, and `attempt answered`, with no error, for
-    /// an `Ok` sent again.
+    /// an `Ok` sent again — and nothing for an error nothing heard as the
+    /// retry was decided.
     pub(crate) fn retrying(&self, retry: &Retry) {
         let terms = &self.terms;
+        let error = match &retry.error {
+            Told::Unheard => return,
+            Told::Answered => None,
+            Told::Said(said) => Some(&**said),
+        };
         terms.policy.teller.retrying(
             terms.method,
             self.resent.saturating_add(1),
             retry.wait,
-            retry.error.as_deref(),
+            error,
         );
     }
 
@@ -754,7 +803,7 @@ impl<'p> Run<'p> {
     /// attempt ends, before its savepoint settles: an edge cutting the unit at
     /// the deadline the attempt was given up at drops the run while it rolls
     /// back, and the breaker has counted that timeout.
-    pub(crate) fn finish(&self, refusal: Refusal) -> Refusal {
+    pub(crate) fn finish(&self, refusal: ResilienceRefusal) -> ResilienceRefusal {
         self.terms.refused(refusal)
     }
 
@@ -796,6 +845,13 @@ impl<'p> Run<'p> {
                 ready!(self.as_mut().poll_back_off(cx));
             }
             let mut ended = ready!(self.as_mut().poll_attempt(call.as_mut(), cx));
+            let retry = match ended {
+                Ended::Unwound(_) => None,
+                _ => {
+                    let failure = call.failure();
+                    self.as_mut().retry(&mut ended, failure)
+                }
+            };
             let savepoint = self.as_mut().project().savepoint.take();
             if let Ended::Unwound(payload) = ended {
                 // What a predicate that panicked left, let go before the rollback.
@@ -807,7 +863,6 @@ impl<'p> Run<'p> {
                     Some(savepoint.settle(false, Then::Unwound(payload)));
                 continue;
             }
-            let retry = self.as_mut().retry(&mut ended);
             let Some(retry) = retry else {
                 let (then, keep) = match ended {
                     Ended::Judged(verdict) => (Then::Answer, verdict.answered_ok()),
@@ -950,7 +1005,9 @@ impl Drop for Attempted<'_, '_> {
 impl<'p> Run<'p> {
     /// A run of a transport's call under `policy`, opened as the middleware
     /// opens one: holding its slot of the bulkhead when it has one.
-    pub(crate) async fn begin(policy: &'p Arc<Mechanisms>) -> Result<Pin<Box<Self>>, Refusal> {
+    pub(crate) async fn begin(
+        policy: &'p Arc<Mechanisms>,
+    ) -> Result<Pin<Box<Self>>, ResilienceRefusal> {
         let mut run = Box::pin(Self::holding(policy));
         std::future::poll_fn(|cx| run.as_mut().poll_open(cx)).await?;
         Ok(run)
@@ -962,17 +1019,26 @@ impl<'p> Run<'p> {
 /// call again after it: a timeout or an answer judged one to send again,
 /// never one the run ends on, nor a refusal that sent nothing — a unit out of
 /// time's included, which is no attempt given up at its bound.
-fn sent_again(ended: &Ended) -> Option<(Option<Duration>, Option<&str>)> {
+fn sent_again<'f>(
+    ended: &Ended,
+    failure: Option<Failure<'f>>,
+) -> Option<(Option<Duration>, Option<Failure<'f>>)> {
     match ended {
-        Ended::Judged(
-            Verdict::Failed { asked, error } | Verdict::IgnoredAgain { asked, error },
-        ) => Some((*asked, Some(error))),
+        Ended::Judged(Verdict::Failed { asked } | Verdict::IgnoredAgain { asked }) => {
+            Some((*asked, failure))
+        }
         Ended::Judged(Verdict::Again) => Some((None, None)),
-        Ended::Judged(Verdict::Succeeded | Verdict::Final { .. } | Verdict::Ignored)
-        | Ended::Refused(Refusal::OUT_OF_TIME | Refusal::Open(_) | Refusal::Full)
-        | Ended::Refused(Refusal::Limited(_))
+        Ended::Judged(Verdict::Succeeded | Verdict::Final | Verdict::Ignored)
+        | Ended::Refused(
+            ResilienceRefusal::OUT_OF_TIME
+            | ResilienceRefusal::Open { .. }
+            | ResilienceRefusal::Full
+            | ResilienceRefusal::Limited { .. },
+        )
         | Ended::Unwound(_) => None,
-        Ended::Refused(Refusal::TimedOut(_)) => Some((None, Some(TIMED_OUT))),
+        Ended::Refused(ResilienceRefusal::TimedOut { .. }) => {
+            Some((None, Some(Failure::Said(TIMED_OUT))))
+        }
     }
 }
 
@@ -1104,11 +1170,11 @@ mod tests {
 
     /// The verdict of an attempt that failed on [`Refused`], asking `asked`.
     fn failing(asked: Option<Duration>) -> Verdict {
-        Verdict::Failed {
-            asked,
-            error: error_message(&Refused).into(),
-        }
+        Verdict::Failed { asked }
     }
+
+    /// What [`Refused`] says, the failure an answer judged by hand fails on.
+    const REFUSED: &str = "the upstream refused";
 
     /// How the answer of a call sent once counts with no predicate of its
     /// own: every `Err` a failure.
@@ -1129,13 +1195,17 @@ mod tests {
         fn read(&self, answer: &Result<T, E>, _again: bool) -> Verdict {
             (self.0)(answer)
         }
+
+        fn failure<'a>(&self, _answer: &'a Result<T, E>) -> Option<Failure<'a>> {
+            Some(Failure::Said(REFUSED))
+        }
     }
 
     /// A run of a transport's call under `policy`, opened, holding its slot of
     /// the bulkhead when it has one, as the middleware's is.
     async fn begin<I: Instance>(
         policy: &ResiliencePolicy<I>,
-    ) -> Result<Pin<Box<Run<'_>>>, Refusal> {
+    ) -> Result<Pin<Box<Run<'_>>>, ResilienceRefusal> {
         Run::begin(&policy.mechanisms).await
     }
 
@@ -1171,7 +1241,7 @@ mod tests {
     /// Whether `run` attempts its call again after an attempt that `ended`
     /// so, its retry told and its backoff waited when so.
     async fn again(mut run: Pin<&mut Run<'_>>, mut ended: Ended) -> bool {
-        let Some(retry) = run.as_mut().retry(&mut ended) else {
+        let Some(retry) = run.as_mut().retry(&mut ended, Some(Failure::Said(REFUSED))) else {
             return false;
         };
         run.retrying(&retry);
@@ -1269,7 +1339,7 @@ mod tests {
         assert!(
             matches!(
                 answered,
-                Err(ResilienceError::TimedOut { timeout, .. }) if timeout == Duration::from_millis(300)
+                Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout == Duration::from_millis(300)
             ),
             "{answered:?}"
         );
@@ -1508,7 +1578,13 @@ mod tests {
             })
             .await;
         assert!(
-            matches!(answered, Err(ResilienceError::TimedOut { .. })),
+            matches!(
+                answered,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            ),
             "{answered:?}"
         );
         assert_eq!(
@@ -1703,13 +1779,19 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(given_up, Err(ResilienceError::TimedOut { timeout, .. }) if timeout == left),
+            matches!(given_up, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout == left),
             "{given_up:?}"
         );
         assert_eq!(started.elapsed(), left, "the deadline, not the 5 s timeout");
         let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Open { .. })),
+            matches!(
+                refused,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "the cut attempt opened the breaker: {refused:?}"
         );
     }
@@ -1741,7 +1823,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(spent, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(spent, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "{spent:?}"
         );
         assert_eq!(
@@ -1769,7 +1851,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(2)).await;
         let late = failing.await;
         assert!(
-            matches!(late, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(late, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "a backoff of about 200 ms ended at 2 s, past the deadline at 1 s: {late:?}"
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1, "the retry is never sent");
@@ -1793,12 +1875,18 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(spent, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(spent, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "{spent:?}"
         );
         let open = policy.run(|_| answering()).await;
         assert!(
-            matches!(open, Err(ResilienceError::Open { .. })),
+            matches!(
+                open,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "the breaker the failure opened: {open:?}"
         );
     }
@@ -1844,7 +1932,13 @@ mod tests {
             })
             .await;
         assert!(
-            matches!(answered, Err(ResilienceError::Open { .. })),
+            matches!(
+                answered,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "the breaker opened under the run: {answered:?}"
         );
         assert_eq!(
@@ -1859,7 +1953,11 @@ mod tests {
                 Ok::<_, Refused>(())
             })
             .await;
-        let Err(ResilienceError::Open { retry_after, .. }) = refused else {
+        let Err(ResilienceError::Refused {
+            refusal: ResilienceRefusal::Open { retry_after, .. },
+            ..
+        }) = refused
+        else {
             panic!("refused while open: {refused:?}");
         };
         assert!(retry_after <= Duration::from_secs(30), "{retry_after:?}");
@@ -1892,7 +1990,13 @@ mod tests {
         tokio::task::yield_now().await;
         let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Full { .. })),
+            matches!(
+                refused,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Full,
+                    ..
+                })
+            ),
             "{refused:?}"
         );
         release.notify_one();
@@ -1926,7 +2030,13 @@ mod tests {
         let started = tokio::time::Instant::now();
         let refused = policy.run(|_| async { Ok::<_, Refused>(()) }).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Open { .. })),
+            matches!(
+                refused,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "{refused:?}"
         );
         assert_eq!(
@@ -1958,7 +2068,7 @@ mod tests {
         let held = begin(&policy).await.expect("the one slot");
         let refused = spent().await;
         assert!(
-            matches!(refused, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "out of time before the full bulkhead: {refused:?}"
         );
         drop(held);
@@ -1967,7 +2077,7 @@ mod tests {
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         let refused = spent().await;
         assert!(
-            matches!(refused, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "out of time before the open breaker: {refused:?}"
         );
     }
@@ -1998,7 +2108,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(6)).await;
         let late = waiting.await;
         assert!(
-            matches!(late, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(late, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "the slot freed for it, its task run at 6 s, past its deadline at 5 s: {late:?}"
         );
         assert_eq!(
@@ -2045,7 +2155,13 @@ mod tests {
         for caller in callers {
             match caller.await.expect("the caller's task") {
                 (at, Ok(())) => sent.push(at.as_secs()),
-                (at, Err(ResilienceError::Full { .. })) => refused.push(at),
+                (
+                    at,
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Full,
+                        ..
+                    }),
+                ) => refused.push(at),
                 (_, other) => panic!("sent, or refused for a full bulkhead: {other:?}"),
             }
         }
@@ -2101,11 +2217,17 @@ mod tests {
         );
         drop(held);
         assert!(
-            matches!(waited, Err(ResilienceError::Full { .. })),
+            matches!(
+                waited,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Full,
+                    ..
+                })
+            ),
             "its wait ran out: {waited:?}"
         );
         assert!(
-            matches!(crowded, (at, Err(ResilienceError::Full { .. })) if at.is_zero()),
+            matches!(crowded, (at, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Full, .. })) if at.is_zero()),
             "refused at once, the one place taken: {crowded:?}"
         );
 
@@ -2277,7 +2399,13 @@ mod tests {
         );
         let refused = policy.run(|_| sent()).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Limited { .. })),
+            matches!(
+                refused,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "the retry took the bucket's last token: {refused:?}"
         );
         assert_eq!(
@@ -2302,7 +2430,11 @@ mod tests {
         let Err(refused) = policy.run(|_| sent()).await else {
             panic!("past the limit");
         };
-        let ResilienceError::Limited { retry_after, .. } = &refused else {
+        let ResilienceError::Refused {
+            refusal: ResilienceRefusal::Limited { retry_after, .. },
+            ..
+        } = &refused
+        else {
             panic!("refused by the rate: {refused:?}");
         };
         assert_eq!(
@@ -2334,7 +2466,7 @@ mod tests {
         };
         let refused = spent().await;
         assert!(
-            matches!(refused, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "{refused:?}"
         );
         assert!(
@@ -2343,7 +2475,7 @@ mod tests {
         );
         let refused = spent().await;
         assert!(
-            matches!(refused, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "no time left is said before the rate's limit: {refused:?}"
         );
     }
@@ -2361,7 +2493,13 @@ mod tests {
         for _ in 0..3 {
             let refused = policy.run(|_| answering()).await;
             assert!(
-                matches!(refused, Err(ResilienceError::Open { .. })),
+                matches!(
+                    refused,
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Open { .. },
+                        ..
+                    })
+                ),
                 "{refused:?}"
             );
         }
@@ -2386,7 +2524,13 @@ mod tests {
         assert!(policy.run(|_| answering()).await.is_ok());
         let limited = policy.run(|_| answering()).await;
         assert!(
-            matches!(limited, Err(ResilienceError::Limited { .. })),
+            matches!(
+                limited,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "{limited:?}"
         );
         tokio::time::advance(Duration::from_secs(60)).await;
@@ -2415,7 +2559,7 @@ mod tests {
         for nth in ["the probe", "the call after it, probing in its turn"] {
             let refused = policy.run(|_| answering()).await;
             assert!(
-                matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
+                matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. })
                     if retry_after == Duration::from_secs(30)),
                 "{nth}, admitted by the breaker and refused by the rate: {refused:?}"
             );
@@ -2428,7 +2572,13 @@ mod tests {
         );
         let reopened = policy.run(|_| answering()).await;
         assert!(
-            matches!(reopened, Err(ResilienceError::Open { .. })),
+            matches!(
+                reopened,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "the failed probe opened the breaker again, which no refused probe closed: {reopened:?}"
         );
     }
@@ -2470,7 +2620,7 @@ mod tests {
         let started = tokio::time::Instant::now();
         let refused = policy.run(|_| answering()).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(6)),
             "a token 6 s away, past the 5 s wait: {refused:?}"
         );
@@ -2484,7 +2634,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(4)),
             "a token at the unit's deadline leaves its call no time: {refused:?}"
         );
@@ -2573,7 +2723,7 @@ mod tests {
         );
         assert!(matches!(waited, Ended::Judged(Verdict::Succeeded)));
         assert!(
-            matches!(refused, Ended::Refused(Refusal::Limited(wait)) if wait == window * 2),
+            matches!(refused, Ended::Refused(ResilienceRefusal::Limited { retry_after: wait }) if wait == window * 2),
             "due the token after the one waited for, 20 s away"
         );
         assert_eq!(started.elapsed(), window * 2);
@@ -2597,7 +2747,10 @@ mod tests {
             let started = tokio::time::Instant::now();
             let answered = |answered: Ran| match answered {
                 Ok(()) => format!("sent at {:?}", started.elapsed()),
-                Err(ResilienceError::Limited { retry_after, .. }) => {
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { retry_after, .. },
+                    ..
+                }) => {
                     format!("limited {retry_after:?} at {:?}", started.elapsed())
                 }
                 Err(other) => panic!("{other:?}"),
@@ -2700,7 +2853,7 @@ mod tests {
                 panic!("with {wait:?} to wait, no token is free");
             };
             assert!(
-                matches!(refused, ResilienceError::Limited { retry_after, .. }
+                matches!(refused, ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. }
                     if retry_after == window + later),
                 "with {wait:?} to wait, told the token {later:?} past the window: {refused:?}"
             );
@@ -2730,7 +2883,13 @@ mod tests {
         });
         assert!(matches!(waited, Ok(())), "{waited:?}");
         assert!(
-            matches!(refused, Err(ResilienceError::Full { .. })),
+            matches!(
+                refused,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Full,
+                    ..
+                })
+            ),
             "the call waiting for its token holds the one slot: {refused:?}"
         );
     }
@@ -2827,7 +2986,7 @@ mod tests {
             )
             .await;
             assert!(
-                matches!(refused, Err(ResilienceError::Limited { retry_after, .. })
+                matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. })
                     if retry_after == Duration::from_secs(27)),
                 "the next token 27 s away, past {past}: {refused:?}"
             );
@@ -2879,7 +3038,7 @@ mod tests {
         assert!(
             matches!(
                 behind,
-                (Err(ResilienceError::Limited { retry_after, .. }), at)
+                (Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. }), at)
                     if retry_after == Duration::from_secs(13) && at == Duration::from_secs(7)
             ),
             "at once, told the token behind the one waited for: {behind:?}"
@@ -2915,7 +3074,7 @@ mod tests {
         assert!(
             matches!(
                 waited,
-                (Err(ResilienceError::Limited { retry_after, .. }), at)
+                (Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. }), at)
                     if retry_after == Duration::from_secs(7) && at == Duration::from_secs(3)
             ),
             "after its 3 s wait for the slot: {waited:?}"
@@ -2949,7 +3108,7 @@ mod tests {
             nest_rs_core::__private::with_deadline(Some(started), policy.run(|_| answering()))
                 .await;
         assert!(
-            matches!(spent, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(spent, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "out of time, before the spent rate: {spent:?}"
         );
         policy
@@ -2957,7 +3116,7 @@ mod tests {
             .expect("an open time `breaker_open` takes");
         let open = policy.run(|_| answering()).await;
         assert!(
-            matches!(open, Err(ResilienceError::Open { retry_after, .. })
+            matches!(open, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(30)),
             "the breaker opened by hand, before the spent rate: {open:?}"
         );
@@ -2969,7 +3128,7 @@ mod tests {
         policy.close_breaker().expect("a breaker");
         let limited = policy.run(|_| answering()).await;
         assert!(
-            matches!(limited, Err(ResilienceError::Limited { retry_after, .. })
+            matches!(limited, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(60)),
             "the spent rate, once neither refuses: {limited:?}"
         );
@@ -3018,7 +3177,7 @@ mod tests {
             );
             assert!(matches!(probed, Ok(())), "the probe {probe}: {probed:?}");
             assert!(
-                matches!(refused, (waited, Err(ResilienceError::Open { retry_after, .. }))
+                matches!(refused, (waited, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. }))
                     if waited.is_zero() && retry_after == Duration::from_secs(told)),
                 "beside the probe {probe}, refused at once: {refused:?}"
             );
@@ -3053,7 +3212,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(cut, Err(ResilienceError::TimedOut { timeout, .. })
+            matches!(cut, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. })
                 if timeout == Duration::from_millis(500)),
             "a 4.2 s wait leaves 500 ms of the deadline, below the timeout: {cut:?}"
         );
@@ -3085,7 +3244,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(12)).await;
         let late = waiting.await;
         assert!(
-            matches!(late, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(late, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "its wait for the token at 10 s ended at 12 s, past its deadline at 11 s: {late:?}"
         );
         assert_eq!(
@@ -3117,7 +3276,13 @@ mod tests {
             })
             .await;
         assert!(
-            matches!(answered, Err(ResilienceError::Limited { .. })),
+            matches!(
+                answered,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "its first retry was refused: {answered:?}"
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
@@ -3128,7 +3293,9 @@ mod tests {
         );
 
         let mut run = begin(&policy).await.expect("a run");
-        let limited = Ended::Refused(Refusal::Limited(Duration::from_secs(1)));
+        let limited = Ended::Refused(ResilienceRefusal::Limited {
+            retry_after: Duration::from_secs(1),
+        });
         assert!(!again(run.as_mut(), limited).await);
     }
 
@@ -3177,7 +3344,13 @@ mod tests {
         );
         let reopened = policy.run(|_| answering()).await;
         assert!(
-            matches!(reopened, Err(ResilienceError::Open { .. })),
+            matches!(
+                reopened,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "the next call was the probe: {reopened:?}"
         );
     }
@@ -3464,7 +3637,7 @@ mod tests {
         let failed = attempt_once(run.as_mut(), |_| async { Err::<(), _>(Refused) }, judged).await;
         assert!(matches!(
             failed,
-            (Ended::Judged(Verdict::Final { .. }), Some(Err(Refused)))
+            (Ended::Judged(Verdict::Final), Some(Err(Refused)))
         ));
         tokio::time::advance(Duration::from_secs(1)).await;
         attempt_once(run.as_mut(), |_| async { Ok::<_, Refused>(()) }, judged).await;
@@ -3502,7 +3675,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(given_up, Ended::Refused(Refusal::TimedOut(bound)) if bound == Duration::from_secs(2)),
+            matches!(given_up, Ended::Refused(ResilienceRefusal::TimedOut { timeout: bound }) if bound == Duration::from_secs(2)),
             "{given_up:?}"
         );
         assert_eq!(sent.elapsed(), Duration::from_secs(2));
@@ -3633,7 +3806,13 @@ mod tests {
             drop(probing);
             let refused = answered.take();
             assert!(
-                matches!(refused, Some(Err(ResilienceError::Open { .. }))),
+                matches!(
+                    refused,
+                    Some(Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Open { .. },
+                        ..
+                    }))
+                ),
                 "again: {again}; polled as the probe's future was torn down, it met the probe's \
                  turn still held: {refused:?}"
             );
@@ -3765,7 +3944,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(cut, Ok(Err(ResilienceError::TimedOut { timeout, .. }))
+            matches!(cut, Ok(Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }))
                 if timeout == Duration::from_millis(300)),
             "the policy gave the attempt up at the deadline, before the edge cut it: {cut:?}"
         );
@@ -3796,7 +3975,13 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(cut, Ok(Err(ResilienceError::TimedOut { .. }))),
+            matches!(
+                cut,
+                Ok(Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                }))
+            ),
             "{cut:?}"
         );
         assert_eq!(
@@ -3837,7 +4022,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(cut, Ok(Err(ResilienceError::TimedOut { timeout, .. }))
+            matches!(cut, Ok(Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }))
                 if timeout == Duration::from_millis(300)),
             "the policy gave the attempt up at the deadline, before the edge cut it: {cut:?}"
         );
@@ -3974,7 +4159,7 @@ mod tests {
         });
         assert!(matches!(probed, Ok(())), "{probed:?}");
         assert!(
-            matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(31)),
             "at 31 s, the probe waiting for its token at 60 s, then 2 s: {refused:?}"
         );
@@ -4025,7 +4210,7 @@ mod tests {
         );
         assert!(matches!(probed, Ok(())), "{probed:?}");
         assert!(
-            matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(4)),
             "the probe's call sent at once, 1 s into its 5 s timeout: {refused:?}"
         );
@@ -4057,7 +4242,7 @@ mod tests {
             "20 s of the method's 30 s: {probed:?}"
         );
         assert!(
-            matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(29)),
             "1 s into the method's 30 s, past the policy's 5 s: {refused:?}"
         );
@@ -4080,12 +4265,12 @@ mod tests {
             },
         );
         assert!(
-            matches!(probed, Err(ResilienceError::TimedOut { timeout, .. })
+            matches!(probed, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. })
                 if timeout == Duration::from_secs(2)),
             "{probed:?}"
         );
         assert!(
-            matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(1)),
             "1 s into the 2 s its unit had left, under the 5 s timeout: {refused:?}"
         );
@@ -4134,7 +4319,7 @@ mod tests {
             );
             assert!(matches!(probed, Ok(())), "sent at its token: {probed:?}");
             assert!(
-                matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+                matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                     if retry_after == Duration::from_secs(told)),
                 "at 2 s, the probe sent at its token's instant, 10 s, under {bound}: {refused:?}"
             );
@@ -4159,7 +4344,7 @@ mod tests {
             .run(|_| std::future::pending::<Result<(), Refused>>())
             .await;
         assert!(
-            matches!(cut, Err(ResilienceError::TimedOut { timeout, .. })
+            matches!(cut, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. })
                 if timeout == Duration::from_secs(5)),
             "{cut:?}"
         );
@@ -4216,7 +4401,7 @@ mod tests {
             "{failed:?}"
         );
         assert!(
-            matches!(waited, Err(ResilienceError::Open { retry_after, .. })
+            matches!(waited, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(21)),
             "the failure at 1 s opened the breaker until 31 s: {waited:?}"
         );
@@ -4270,7 +4455,7 @@ mod tests {
         );
         assert!(matches!(probed, Ok(())), "{probed:?}");
         assert!(
-            matches!(beside, Err(ResilienceError::Open { retry_after, .. })
+            matches!(beside, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(10)),
             "at 5 s, the probe due the token after its own, at 10 s, then its 5 s timeout: \
              {beside:?}"
@@ -4354,7 +4539,13 @@ mod tests {
         for _ in 0..10 {
             let refused = policy.run(|_| answering()).await;
             assert!(
-                matches!(refused, Err(ResilienceError::Limited { .. })),
+                matches!(
+                    refused,
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Limited { .. },
+                        ..
+                    })
+                ),
                 "a token 59 s away, past the 30 s wait: {refused:?}"
             );
         }
@@ -4409,7 +4600,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(11)).await;
         let late = probing.await;
         assert!(
-            matches!(late, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+            matches!(late, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
             "its wait for the token at 10 s ended at 12 s, past its deadline at 11 s: {late:?}"
         );
         assert_eq!(states(), ["open"], "the probe given up, never sent");
@@ -4440,7 +4631,13 @@ mod tests {
         tokio::time::advance(Duration::from_secs(4)).await;
         let refused = policy.run(|_| answering()).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Limited { .. })),
+            matches!(
+                refused,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "{refused:?}"
         );
         tokio::time::advance(Duration::from_secs(2)).await;
@@ -4480,7 +4677,7 @@ mod tests {
         tokio::time::advance(window - near).await;
         let refused = refusing.run(|_| answering()).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Limited { retry_after, .. }) if retry_after == near),
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. }) if retry_after == near),
             "{refused:?}"
         );
         let back = tokio::time::Instant::now() + near;
@@ -4548,7 +4745,13 @@ mod tests {
             .run_idempotent(|_| std::future::pending::<Result<(), Refused>>())
             .await;
         assert!(
-            matches!(timed_out, Err(ResilienceError::TimedOut { .. })),
+            matches!(
+                timed_out,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            ),
             "{timed_out:?}"
         );
         assert_eq!(
@@ -4676,8 +4879,14 @@ mod tests {
                 matches!(
                     (&once, &again),
                     (
-                        Err(ResilienceError::Open { .. }),
-                        Err(ResilienceError::Open { .. })
+                        Err(ResilienceError::Refused {
+                            refusal: ResilienceRefusal::Open { .. },
+                            ..
+                        }),
+                        Err(ResilienceError::Refused {
+                            refusal: ResilienceRefusal::Open { .. },
+                            ..
+                        })
                     )
                 ),
                 "{once:?}, {again:?}"
@@ -4696,7 +4905,13 @@ mod tests {
             .run_idempotent(|_| async { Err::<(), _>(Refused) })
             .await;
         assert!(
-            matches!(opened, Err(ResilienceError::Open { .. })),
+            matches!(
+                opened,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "{opened:?}"
         );
         assert_eq!(filed(&lines), [BREAKER_MOVED, RETRYING_FAILED]);
@@ -4709,7 +4924,15 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_run_ending_on_a_timeout_files_no_line_of_its_own() {
         let never = |_| std::future::pending::<Result<(), Refused>>();
-        let timed_out = |ran: &Ran| matches!(ran, Err(ResilienceError::TimedOut { .. }));
+        let timed_out = |ran: &Ran| {
+            matches!(
+                ran,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            )
+        };
         let policy = retrying(1);
 
         let lines = nest_rs_testing::LogCapture::install();
@@ -4768,7 +4991,7 @@ mod tests {
             )
             .await;
             assert!(
-                matches!(spent, Err(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+                matches!(spent, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
                 "{spent:?}"
             );
             assert_eq!(calls.load(Ordering::Relaxed), 0, "nothing was sent");
@@ -4821,7 +5044,13 @@ mod tests {
             let lines = nest_rs_testing::LogCapture::install();
             let refused = policy.run(|_| answering()).await;
             assert!(
-                matches!(refused, Err(ResilienceError::Full { .. })),
+                matches!(
+                    refused,
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Full,
+                        ..
+                    })
+                ),
                 "{refused:?}"
             );
             assert_eq!(filed(&lines), [REFUSED_FULL], "{concurrency_wait:?}");
@@ -4839,7 +5068,13 @@ mod tests {
         let lines = nest_rs_testing::LogCapture::install();
         let refused = policy.run(|_| answering()).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Limited { .. })),
+            matches!(
+                refused,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "{refused:?}"
         );
         assert_eq!(filed(&lines), [REFUSED_LIMITED]);
@@ -4859,7 +5094,13 @@ mod tests {
         );
         let refused = policy.run(|_| answering()).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Limited { .. })),
+            matches!(
+                refused,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "{refused:?}"
         );
         assert_eq!(filed(&lines), [REFUSED_LIMITED]);
@@ -4945,7 +5186,13 @@ mod tests {
             .run(|_| std::future::pending::<Result<(), Refused>>())
             .await;
         assert!(
-            matches!(never, Err(ResilienceError::TimedOut { .. })),
+            matches!(
+                never,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            ),
             "{never:?}"
         );
 
@@ -4958,7 +5205,13 @@ mod tests {
         tokio::time::advance(Duration::from_secs(4)).await;
         let limited = rate.run(|_| answering()).await;
         assert!(
-            matches!(limited, Err(ResilienceError::Limited { .. })),
+            matches!(
+                limited,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "{limited:?}"
         );
         tokio::time::advance(Duration::from_secs(2)).await;
@@ -4971,7 +5224,13 @@ mod tests {
         let held = begin(&bulkhead).await.expect("the one slot");
         let full = bulkhead.run(|_| answering()).await;
         assert!(
-            matches!(full, Err(ResilienceError::Full { .. })),
+            matches!(
+                full,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Full,
+                    ..
+                })
+            ),
             "{full:?}"
         );
         drop(held);
@@ -4981,7 +5240,13 @@ mod tests {
             .expect("a breaker");
         let open = bulkhead.run(|_| answering()).await;
         assert!(
-            matches!(open, Err(ResilienceError::Open { .. })),
+            matches!(
+                open,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "{open:?}"
         );
         let tracking =
@@ -5127,7 +5392,13 @@ mod tests {
             .run(|_| std::future::pending::<Result<(), Refused>>())
             .await;
         assert!(
-            matches!(timed_out, Err(ResilienceError::TimedOut { .. })),
+            matches!(
+                timed_out,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            ),
             "{timed_out:?}"
         );
         assert_eq!(opened(&lines).as_deref(), Some(TIMED_OUT));
@@ -5174,10 +5445,10 @@ mod tests {
 
     impl Error for Watching {}
 
-    /// A call's error is user code: it is said once per failed attempt, for
-    /// the breaker's opening and the retry's line alike, and before the
-    /// breaker is asked, never under its lock — where an error reading its
-    /// policy's breaker would wait for good.
+    /// A call's error is user code: it is said where a line hears it — the
+    /// retry's, then the breaker's opening — once for each, and never under
+    /// the breaker's lock, where an error reading its policy's breaker would
+    /// wait for good.
     #[tokio::test(start_paused = true)]
     async fn a_failed_attempts_error_is_said_once_and_never_under_the_breakers_lock() {
         let policy = Arc::new(policy(ResilienceConfig {
@@ -5218,6 +5489,89 @@ mod tests {
         );
     }
 
+    /// An error saying itself by counting how often it is said, and panicking
+    /// when told to.
+    #[derive(Debug)]
+    struct Saying {
+        said: Arc<AtomicU32>,
+        panics: bool,
+    }
+
+    impl fmt::Display for Saying {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.said.fetch_add(1, Ordering::Relaxed);
+            assert!(!self.panics, "the error's words panic");
+            f.write_str("the upstream refused, saying so")
+        }
+    }
+
+    impl Error for Saying {}
+
+    /// A failure below the breaker's threshold, with nothing listening, is
+    /// never put in words; the one opening the breaker is, once, for its
+    /// transition's line.
+    #[tokio::test(start_paused = true)]
+    async fn a_failure_is_put_in_words_only_where_it_opens_the_breaker() {
+        let policy = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(3),
+            breaker_failures: 2,
+            ..ResilienceConfig::default()
+        });
+        let said = Arc::new(AtomicU32::new(0));
+        let failing = || {
+            policy.run(|_| {
+                let said = Arc::clone(&said);
+                async move {
+                    Err::<(), _>(Saying {
+                        said,
+                        panics: false,
+                    })
+                }
+            })
+        };
+        assert!(failing().await.is_err());
+        assert_eq!(said.load(Ordering::Relaxed), 0, "below the threshold");
+        assert!(failing().await.is_err());
+        assert_eq!(said.load(Ordering::Relaxed), 1, "said for the opening");
+        assert!(matches!(
+            policy.breaker_state(),
+            Some(BreakerState::Open { .. })
+        ));
+    }
+
+    /// Words that panic as the failure they say opens the breaker count once,
+    /// as a panic of the call's, and unwind out of its run: the breaker is
+    /// open, its transition saying the call panicked.
+    #[tokio::test(start_paused = true)]
+    async fn words_panicking_at_the_opening_count_once_and_unwind() {
+        let policy = policy(ResilienceConfig {
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..ResilienceConfig::default()
+        });
+        let said = Arc::new(AtomicU32::new(0));
+        let lines = nest_rs_testing::LogCapture::install();
+        let run = policy.run(|_| {
+            let said = Arc::clone(&said);
+            async move { Err::<(), _>(Saying { said, panics: true }) }
+        });
+        let mut run = pin!(run);
+        let unwound = catch_unwind(AssertUnwindSafe(|| {
+            run.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+        }));
+        assert!(unwound.is_err(), "the run unwound");
+        assert_eq!(said.load(Ordering::Relaxed), 1);
+        assert!(matches!(
+            policy.breaker_state(),
+            Some(BreakerState::Open { .. })
+        ));
+        let opened = lines.find(TARGET, BREAKER_MOVED);
+        assert_eq!(opened.len(), 1, "{opened:?}");
+        assert_eq!(opened[0].field("error").as_deref(), Some(PANICKED));
+    }
+
     /// Each retry sent adds one to the retries' counter, and each run ending on
     /// the policy's refusal one to the refusals', by that refusal: a retry the
     /// breaker or the rate refuses, never sent, adds to the refusals' alone, and
@@ -5251,7 +5605,13 @@ mod tests {
         })
         .run(|_| std::future::pending::<Result<(), Refused>>())
         .await;
-        assert!(matches!(timed_out, Err(ResilienceError::TimedOut { .. })));
+        assert!(matches!(
+            timed_out,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::TimedOut { .. },
+                ..
+            })
+        ));
 
         let opening = policy(ResilienceConfig {
             retries: Some(1),
@@ -5263,7 +5623,13 @@ mod tests {
             .run_idempotent(|_| async { Err::<(), _>(Refused) })
             .await;
         assert!(
-            matches!(open, Err(ResilienceError::Open { .. })),
+            matches!(
+                open,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "its retry, refused unsent by the breaker its failure opened: {open:?}"
         );
 
@@ -5274,7 +5640,13 @@ mod tests {
         });
         let held = begin(&narrow).await.expect("the one slot");
         let full = narrow.run(|_| async { Ok::<_, Refused>(()) }).await;
-        assert!(matches!(full, Err(ResilienceError::Full { .. })));
+        assert!(matches!(
+            full,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::Full,
+                ..
+            })
+        ));
         drop(held);
 
         let waiting = policy(ResilienceConfig {
@@ -5289,7 +5661,13 @@ mod tests {
         park(&mut queued).await;
         let crowded = waiting.run(|_| async { Ok::<_, Refused>(()) }).await;
         assert!(
-            matches!(crowded, Err(ResilienceError::Full { .. })),
+            matches!(
+                crowded,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Full,
+                    ..
+                })
+            ),
             "the one place to wait in taken: {crowded:?}"
         );
         drop(held);
@@ -5305,7 +5683,13 @@ mod tests {
         let held = begin(&spent).await.expect("the one slot");
         let read = spent.run(|_| async { Ok::<_, Refused>(()) }).await;
         assert!(
-            matches!(read, Err(ResilienceError::Limited { .. })),
+            matches!(
+                read,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "finding no free slot, refused by the rate it reads first: {read:?}"
         );
         drop(held);
@@ -5320,7 +5704,13 @@ mod tests {
             .run_idempotent(|_| async { Err::<(), _>(Refused) })
             .await;
         assert!(
-            matches!(limited, Err(ResilienceError::Limited { .. })),
+            matches!(
+                limited,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                })
+            ),
             "its retry, refused unsent by the bucket its first attempt emptied: {limited:?}"
         );
 
@@ -5337,14 +5727,26 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(spent, Err(ResilienceError::TimedOut { .. })),
+            matches!(
+                spent,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            ),
             "a unit out of time, refused before the bulkhead: {spent:?}"
         );
         let failed = gated.run(|_| async { Err::<(), _>(Refused) }).await;
         assert!(matches!(failed, Err(ResilienceError::Failed(Refused))));
         let open = gated.run(|_| async { Ok::<_, Refused>(()) }).await;
         assert!(
-            matches!(open, Err(ResilienceError::Open { .. })),
+            matches!(
+                open,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
+            ),
             "the breaker its failure opened, refusing before the bulkhead: {open:?}"
         );
 
@@ -5421,7 +5823,11 @@ mod tests {
         let Err(refused) = policy.run(|_| answering()).await else {
             panic!("open for 500 ms");
         };
-        let ResilienceError::Open { retry_after, .. } = &refused else {
+        let ResilienceError::Refused {
+            refusal: ResilienceRefusal::Open { retry_after, .. },
+            ..
+        } = &refused
+        else {
             panic!("refused by the breaker: {refused:?}");
         };
         assert_eq!(*retry_after, open - into);
@@ -5439,7 +5845,10 @@ mod tests {
         assert!(
             matches!(
                 policy.run(|_| answering()).await,
-                Err(ResilienceError::Open { .. })
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                })
             ),
             "a millisecond short of the opening's end"
         );
@@ -5498,7 +5907,11 @@ mod tests {
         let Err(refused) = policy.run(|_| sent()).await else {
             panic!("past the limit");
         };
-        let ResilienceError::Limited { retry_after, .. } = &refused else {
+        let ResilienceError::Refused {
+            refusal: ResilienceRefusal::Limited { retry_after, .. },
+            ..
+        } = &refused
+        else {
             panic!("refused by the rate: {refused:?}");
         };
         assert_eq!(
@@ -5536,7 +5949,7 @@ mod tests {
         tokio::time::advance(Duration::from_secs(5)).await;
         let refused = policy.run_idempotent(|_| sent()).await;
         assert!(
-            matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(15)),
             "{refused:?}"
         );
@@ -5572,7 +5985,7 @@ mod tests {
         assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
         let beside = policy.run(|_| answering()).await;
         assert!(
-            matches!(beside, Err(ResilienceError::Open { retry_after, .. })
+            matches!(beside, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(14)),
             "at 1 s, the probe sent at its token's instant, 10 s, within its 5 s timeout: {beside:?}"
         );
@@ -5582,7 +5995,7 @@ mod tests {
             .expect("an open time `breaker_open` takes");
         let refused = probing.await;
         assert!(
-            matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+            matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
                 if retry_after == Duration::from_secs(21)),
             "at 10 s, what is left of the 30 s it was opened for at 1 s: {refused:?}"
         );
@@ -5676,7 +6089,10 @@ mod tests {
         let mut probe = Box::pin(policy.run(|_| answering()));
         park(&mut probe).await;
         let told = async || match policy.run(|_| answering()).await {
-            Err(ResilienceError::Open { retry_after, .. }) => retry_after.as_secs(),
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { retry_after, .. },
+                ..
+            }) => retry_after.as_secs(),
             other => panic!("{other:?}"),
         };
         assert_eq!(told().await, 24, "its token at 20 s, then 5 s");
@@ -5726,7 +6142,7 @@ mod tests {
         cut: &Result<T, ResilienceError<E>>,
         timeout: Duration,
     ) -> bool {
-        matches!(cut, Err(ResilienceError::TimedOut { timeout: at, .. }) if *at == timeout)
+        matches!(cut, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout: at, .. }, .. }) if *at == timeout)
     }
 
     /// An attempt in flight as the timeout of a policy around it drops it has
@@ -5814,7 +6230,7 @@ mod tests {
                 assert!(
                     matches!(
                         cut,
-                        Err(ResilienceError::Failed(ResilienceError::TimedOut { timeout, .. }))
+                        Err(ResilienceError::Failed(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }))
                             if timeout == soon
                     ),
                     "the inner attempt's own timer, polled first: {cut:?}"

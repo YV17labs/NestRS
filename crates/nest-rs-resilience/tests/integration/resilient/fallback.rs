@@ -10,10 +10,22 @@ use super::*;
 fn ended_on(error: &ResilienceError<CarrierDown>) -> &'static str {
     match error {
         ResilienceError::Failed(CarrierDown) => "failed",
-        ResilienceError::TimedOut { .. } => "timed out",
-        ResilienceError::Open { .. } => "open",
-        ResilienceError::Full { .. } => "full",
-        ResilienceError::Limited { .. } => "limited",
+        ResilienceError::Refused {
+            refusal: ResilienceRefusal::TimedOut { .. },
+            ..
+        } => "timed out",
+        ResilienceError::Refused {
+            refusal: ResilienceRefusal::Open { .. },
+            ..
+        } => "open",
+        ResilienceError::Refused {
+            refusal: ResilienceRefusal::Full,
+            ..
+        } => "full",
+        ResilienceError::Refused {
+            refusal: ResilienceRefusal::Limited { .. },
+            ..
+        } => "limited",
         _ => "unsettled",
     }
 }
@@ -101,7 +113,7 @@ impl RatesService {
     #[resilient(
         courier,
         fallback = last_known,
-        fallback_if = |error| !matches!(error, ResilienceError::Failed(_))
+        fallback_if = |error| matches!(error, ResilienceError::Refused { .. })
     )]
     async fn refused_rate(&self, zone: &str, weight: u32) -> Answer<u32> {
         self.attempts.fetch_add(1, Ordering::Relaxed);

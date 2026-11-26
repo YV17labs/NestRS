@@ -77,7 +77,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use nest_rs_resilience::{
-    BreakerState, ResilienceConfig, ResilienceError, ResiliencePolicy, resilient,
+    BreakerState, ResilienceConfig, ResilienceError, ResiliencePolicy, ResilienceRefusal, resilient,
 };
 use nest_rs_testing::HeadlessApp;
 use tokio::sync::oneshot;
@@ -589,9 +589,10 @@ impl Pair {
         });
         let ours = match poll_fn(|cx| Poll::Ready(run.as_mut().poll(cx))).await {
             Poll::Pending if sent.get() => Decision::Sent,
-            Poll::Ready(Err(ResilienceError::Open { retry_after, .. })) if !sent.get() => {
-                Decision::Refused { retry_after }
-            }
+            Poll::Ready(Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { retry_after, .. },
+                ..
+            })) if !sent.get() => Decision::Refused { retry_after },
             met => panic!("a call is sent and waits, or the breaker refuses it unsent: {met:?}"),
         };
         let permit = self.reference.acquire();
@@ -651,9 +652,13 @@ impl Pair {
             {
                 Decision::Sent
             }
-            (_, Err(ResilienceError::Open { retry_after, .. })) if !sent => {
-                Decision::Refused { retry_after }
-            }
+            (
+                _,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { retry_after, .. },
+                    ..
+                }),
+            ) if !sent => Decision::Refused { retry_after },
             (_, met) => panic!("a call answers as it was told to, or is refused unsent: {met:?}"),
         };
         let reference = match self.reference.acquire() {

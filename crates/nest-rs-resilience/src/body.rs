@@ -20,7 +20,6 @@ use tokio::time::{Instant, Sleep};
 use crate::breaker::Cut;
 use crate::error::TIMED_OUT;
 use crate::held::Held;
-use crate::told::told;
 
 pin_project_lite::pin_project! {
     /// A response's body under the policy its request ran under: until it
@@ -34,7 +33,7 @@ pin_project_lite::pin_project! {
     /// takes between two reads, or away from a read it abandoned, is never the
     /// dependency's. A read still waiting once the budget is spent is given up
     /// there, answering a
-    /// [`ResilienceError::TimedOut`](crate::ResilienceError::TimedOut): a
+    /// [`ResilienceRefusal::TimedOut`](crate::ResilienceRefusal::TimedOut): a
     /// failure counted as a timeout. A read that fails is a failure told as its
     /// chain, and one that panics a failure counted before the unwind goes on,
     /// as a panic in an attempt's call is.
@@ -101,7 +100,10 @@ pin_project_lite::pin_project! {
                     // A body of another policy's this one reads is dropped by this timeout.
                     Cut::dropping(|| this.body.set(reqwest::Body::default()));
                 }
-                Ok(Poll::Ready(Some(Err(error)))) => failed(held, &error),
+                Ok(Poll::Ready(Some(Err(error)))) => {
+                    // A drop has no caller to unwind into; the panic hook filed it.
+                    let _unwound = failed(held, &error);
+                }
                 Ok(Poll::Ready(Some(Ok(_)) | None)) => {}
                 // A destructor does not unwind: the panic is counted here, and the
                 // process hook has filed it.
@@ -166,9 +168,12 @@ impl Wake for Signal {
     }
 }
 
-/// A read of the answer's body failed on `error`: a failure, told as its chain.
-fn failed(held: &mut Held, error: &reqwest::Error) {
-    held.settle(Some(&told(error)));
+/// A read of the answer's body failed on `error`: a failure, put in words as
+/// its chain only where it opens the breaker. Words that panic unwind on from
+/// a read, once the failure is counted, and are the hook's alone to file from
+/// a drop.
+fn failed(held: &mut Held, error: &reqwest::Error) -> Result<(), crate::breaker::Unwound> {
+    held.failed(error)
 }
 
 impl ResilienceBody {
@@ -244,7 +249,10 @@ impl Body for ResilienceBody {
                 Poll::Ready(None)
             }
             Some(Err(error)) => {
-                failed(held, &error);
+                if let Err(unwound) = failed(held, &error) {
+                    *this.held = None;
+                    resume_unwind(unwound);
+                }
                 *this.held = None;
                 Poll::Ready(Some(Err(error.into())))
             }
@@ -272,11 +280,13 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+    use crate::breaker::Failure;
     use crate::call::{Judged, Once, Reads, Uncancelled};
-    use crate::error::{Refusal, ResilienceError};
+    use crate::error::PANICKED;
+    use crate::error::{ResilienceError, ResilienceRefusal};
     use crate::policy::ResiliencePolicy;
     use crate::run::Run;
-    use crate::verdict::{Ended, PANICKED, Verdict};
+    use crate::verdict::{Ended, Verdict};
     use crate::{BreakerState, ResilienceConfig, TARGET};
 
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -364,7 +374,11 @@ mod tests {
 
     impl Reads<Result<(), ResilienceError<io::Error>>> for AsJudged {
         fn read(&self, _head: &Result<(), io::Error>, _again: bool) -> Verdict {
-            self.0.clone()
+            self.0
+        }
+
+        fn failure<'a>(&self, _head: &'a Result<(), io::Error>) -> Option<Failure<'a>> {
+            Some(Failure::Said("the dependency answered 503"))
         }
     }
 
@@ -444,7 +458,7 @@ mod tests {
             .downcast_ref::<ResilienceError<Infallible>>()
             .expect("the policy's refusal");
         assert!(
-            matches!(refusal, ResilienceError::TimedOut { timeout, .. } if *timeout == TIMEOUT),
+            matches!(refusal, ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. } if *timeout == TIMEOUT),
             "{refusal:?}"
         );
         started.elapsed()
@@ -471,7 +485,7 @@ mod tests {
     /// Whether `policy`'s one slot is taken, which a call arriving meets once
     /// its breaker lets it through.
     async fn slot_taken(policy: &ResiliencePolicy) -> bool {
-        Run::begin(&policy.mechanisms).await.err() == Some(Refusal::Full)
+        Run::begin(&policy.mechanisms).await.err() == Some(ResilienceRefusal::Full)
     }
 
     fn is_open(policy: &ResiliencePolicy) -> bool {
@@ -495,7 +509,7 @@ mod tests {
         assert!(
             matches!(
                 Run::begin(&policy.mechanisms).await.err(),
-                Some(Refusal::Open(_))
+                Some(ResilienceRefusal::Open { .. })
             ),
             "half read, the probe still holds its turn"
         );
@@ -695,7 +709,7 @@ mod tests {
             assert!(
                 matches!(
                     refused,
-                    Err(ResilienceError::Open { retry_after, .. }) if retry_after == TIMEOUT
+                    Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. }) if retry_after == TIMEOUT
                 ),
                 "held for {held_for:?} more: {refused:?}"
             );
@@ -962,10 +976,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_head_judged_a_failure_counts_once_whatever_its_body_ends_on() {
         let policy = policy(2);
-        let failed = Verdict::Failed {
-            asked: None,
-            error: "the dependency answered 503".into(),
-        };
+        let failed = Verdict::Failed { asked: None };
         let (mut body, feed) = answered(&policy, Duration::ZERO, failed).await;
         assert!(slot_taken(&policy).await, "the unread body holds the slot");
         feed.send(Part::Fails).expect("the body is read");
@@ -1020,7 +1031,7 @@ mod tests {
             })
             .await;
         assert!(
-            matches!(cut, Err(ResilienceError::TimedOut { timeout, .. }) if timeout == SHORT),
+            matches!(cut, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout == SHORT),
             "{cut:?}"
         );
         assert!(is_open(&stalled), "{:?}", stalled.breaker_state());
@@ -1037,7 +1048,13 @@ mod tests {
             })
             .await;
         assert!(
-            matches!(cut, Err(ResilienceError::TimedOut { .. })),
+            matches!(
+                cut,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            ),
             "{cut:?}"
         );
         assert_eq!(counted(&unread), (1, 0), "its head's success");

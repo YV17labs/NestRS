@@ -34,7 +34,7 @@ use nest_rs_health::{
 use nest_rs_reqwest::ReqwestMiddleware;
 use nest_rs_resilience::{
     BreakerPhase, BreakerState, ResilienceConfig, ResilienceError, ResilienceEvent,
-    ResilienceMiddleware, ResilienceModule, ResiliencePolicy, TARGET, resilient,
+    ResilienceMiddleware, ResilienceModule, ResiliencePolicy, ResilienceRefusal, TARGET, resilient,
 };
 use nest_rs_testing::{
     HeadlessApp, HttpsPeer, LogCapture, PeerAnswer, TestAuthority, TestCertificate,
@@ -321,7 +321,13 @@ async fn an_open_breaker_refuses_the_request_unsent_with_the_503_every_edge_answ
         .expect_err("the breaker opened on the 500");
     let least = crate::breaker_wait(&policy);
     assert!(
-        matches!(refusal(&refused), ResilienceError::Open { .. }),
+        matches!(
+            refusal(&refused),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                ..
+            }
+        ),
         "{refused:?}"
     );
     let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
@@ -355,7 +361,13 @@ async fn every_request_sent_counts_against_the_rate_limit_a_resend_included() {
         .await
         .expect_err("the resend took the window's last request");
     assert!(
-        matches!(refusal(&refused), ResilienceError::Limited { .. }),
+        matches!(
+            refusal(&refused),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Limited { .. },
+                ..
+            }
+        ),
         "{refused:?}"
     );
     let problem = nest_rs_core::__private::find_in_chain::<Problem>(&refused)
@@ -414,7 +426,11 @@ async fn a_request_finding_no_token_waits_for_one_within_the_rates_wait_and_is_r
         "a request is not sent before its token: {took:?}"
     );
     let refused = refused.expect_err("its token comes after the waiting request's");
-    let ResilienceError::Limited { retry_after, .. } = refusal(&refused) else {
+    let ResilienceError::Refused {
+        refusal: ResilienceRefusal::Limited { retry_after, .. },
+        ..
+    } = refusal(&refused)
+    else {
         panic!("the rate refused: {refused:?}");
     };
     assert!(
@@ -469,7 +485,13 @@ async fn a_redirect_the_client_follows_is_sent_inside_the_attempt_and_counted_wi
         .await
         .expect_err("the window's one attempt was taken");
     assert!(
-        matches!(refusal(&refused), ResilienceError::Limited { .. }),
+        matches!(
+            refusal(&refused),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Limited { .. },
+                ..
+            }
+        ),
         "{refused:?}"
     );
     assert_eq!(peer.requests().len(), 2);
@@ -497,7 +519,13 @@ async fn a_client_following_no_redirect_sends_each_request_as_an_attempt_of_its_
         .await
         .expect_err("the window's one attempt was taken");
     assert!(
-        matches!(refusal(&refused), ResilienceError::Limited { .. }),
+        matches!(
+            refusal(&refused),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Limited { .. },
+                ..
+            }
+        ),
         "{refused:?}"
     );
     assert_eq!(
@@ -525,7 +553,7 @@ async fn a_peer_that_never_answers_is_given_up_at_the_policys_timeout() {
     assert!(
         matches!(
             refusal(&given_up),
-            ResilienceError::TimedOut { timeout, .. } if *timeout == Duration::from_millis(200)
+            ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. } if *timeout == Duration::from_millis(200)
         ),
         "{given_up:?}"
     );
@@ -583,7 +611,7 @@ async fn an_attempt_slow_to_first_wait_ends_at_the_deadline_its_edge_cuts_the_un
             panic!("the policy gave {sent} up at the deadline, before the edge cut it: {cut:?}");
         };
         assert!(
-            matches!(refusal(&refused), ResilienceError::TimedOut { timeout, .. }
+            matches!(refusal(&refused), ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }
                 if *timeout == Duration::from_millis(300)),
             "{sent}: {refused:?}"
         );
@@ -620,7 +648,7 @@ async fn a_timeout_the_run_sends_again_after_is_told_before_its_retry() {
         .expect_err("no answer");
     let timed_out = refusal(&given_up);
     assert!(
-        matches!(timed_out, ResilienceError::TimedOut { timeout, .. } if *timeout == BOUND),
+        matches!(timed_out, ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. } if *timeout == BOUND),
         "{given_up:?}"
     );
 
@@ -725,7 +753,13 @@ async fn an_answer_counted_as_a_failure_is_told_by_its_status_code_alone() {
         .await
         .expect_err("the second failure opened the breaker");
     assert!(
-        matches!(refusal(&refused), ResilienceError::Open { .. }),
+        matches!(
+            refusal(&refused),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                ..
+            }
+        ),
         "{refused:?}"
     );
 
@@ -772,7 +806,13 @@ async fn a_transport_failure_is_told_as_its_chain_without_the_url_it_was_sent_to
         .await
         .expect_err("the failure opened the breaker");
     assert!(
-        matches!(refusal(&refused), ResilienceError::Open { .. }),
+        matches!(
+            refusal(&refused),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                ..
+            }
+        ),
         "{refused:?}"
     );
     accepting.abort();
@@ -1088,7 +1128,7 @@ async fn a_wait_for_a_token_is_no_part_of_the_timeout_a_body_is_read_within() {
     assert!(
         matches!(
             read.as_ref().map_err(cut),
-            Err(Some(ResilienceError::TimedOut { timeout, .. })) if *timeout == BOUND
+            Err(Some(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. })) if *timeout == BOUND
         ),
         "the rest never came: {read:?}"
     );
@@ -1126,7 +1166,13 @@ async fn an_answers_body_holds_its_runs_slot_until_it_is_read_or_dropped() {
         .await
         .expect_err("the one slot is the unread body's");
     assert!(
-        matches!(refusal(&refused), ResilienceError::Full { .. }),
+        matches!(
+            refusal(&refused),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Full,
+                ..
+            }
+        ),
         "{refused:?}"
     );
     assert_eq!(peer.requests().len(), 1, "refused unsent");
@@ -1412,7 +1458,7 @@ async fn a_body_given_up_at_its_bound_answers_reqwests_error_holding_the_policys
     assert!(
         matches!(
             cut(&given_up),
-            Some(ResilienceError::TimedOut { timeout, .. }) if *timeout == Duration::from_millis(200)
+            Some(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if *timeout == Duration::from_millis(200)
         ),
         "{given_up:?}"
     );
@@ -1631,7 +1677,13 @@ async fn a_body_the_clients_policy_gave_up_is_told_as_its_timeout_by_the_method_
 
     let refused = carrier.parcel().await.expect_err("its breaker opened");
     assert!(
-        matches!(refused, ResilienceError::Open { .. }),
+        matches!(
+            refused,
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                ..
+            }
+        ),
         "{refused:?}"
     );
 
@@ -1876,7 +1928,7 @@ async fn the_body_of_a_request_answered_with_a_retry_left_is_read_under_the_poli
     assert!(
         matches!(
             cut(&given_up),
-            Some(ResilienceError::TimedOut { timeout, .. }) if *timeout == BODY_TIMEOUT
+            Some(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if *timeout == BODY_TIMEOUT
         ),
         "{given_up:?}"
     );
@@ -1936,7 +1988,7 @@ async fn a_probes_answer_closes_the_breaker_once_its_body_is_read_or_dropped() {
     assert!(
         matches!(
             refusal(&refused),
-            ResilienceError::Open { retry_after, .. } if *retry_after == timeout
+            ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. } if *retry_after == timeout
         ),
         "{refused:?}"
     );

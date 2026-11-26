@@ -27,7 +27,7 @@ use nest_rs_core::{injectable, instance, module};
 use nest_rs_database::__private::with_request_executor;
 use nest_rs_resilience::{
     BreakerState, CancellationToken, ResilienceConfig, ResilienceError, ResilienceModule,
-    ResiliencePolicy, resilient,
+    ResiliencePolicy, ResilienceRefusal, resilient,
 };
 use nest_rs_seaorm::__private::{
     FinalizeOutcome, LazyTransaction, SeaOrmExecutor, current_executor,
@@ -1291,7 +1291,13 @@ async fn two_calls_joined_in_one_unit_take_its_turn_in_order_and_the_one_waiting
         "the call holding the unit's turn answers: {went:?}"
     );
     assert!(
-        matches!(waited, Err(ResilienceError::TimedOut { .. })),
+        matches!(
+            waited,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::TimedOut { .. },
+                ..
+            })
+        ),
         "the call waiting for it spends its bound there: {waited:?}"
     );
     assert!(

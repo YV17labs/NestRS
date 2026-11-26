@@ -220,7 +220,13 @@ async fn a_method_of_a_trait_impl_takes_every_key_its_fallback_an_inherent_metho
     attempted();
     let refused = quotes.quote("far").await;
     assert!(
-        matches!(refused, Err(ResilienceError::Open { .. })),
+        matches!(
+            refused,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                ..
+            })
+        ),
         "a refusal `fallback_if` leaves to the caller: {refused:?}"
     );
     assert_eq!(attempted(), 0);
@@ -243,8 +249,14 @@ impl Journal {
     fn note(&self, what: &str, error: &ResilienceError<UpstreamDown>) {
         let ended_on = match error {
             ResilienceError::Failed(UpstreamDown) => "failed".to_owned(),
-            ResilienceError::Open { .. } => "open".to_owned(),
-            ResilienceError::TimedOut { timeout, .. } => format!("timed out at {timeout:?}"),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                ..
+            } => "open".to_owned(),
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::TimedOut { timeout, .. },
+                ..
+            } => format!("timed out at {timeout:?}"),
             _ => "another refusal".to_owned(),
         };
         self.entries
@@ -281,7 +293,8 @@ mod scheduled {
     use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
     use nest_rs_core::{injectable, module};
     use nest_rs_resilience::{
-        BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+        BreakerState, ResilienceError, ResilienceModule, ResiliencePolicy, ResilienceRefusal,
+        resilient,
     };
     use nest_rs_schedule::{Scheduler, scheduled};
     use nest_rs_testing::{HeadlessApp, LogCapture};
@@ -321,7 +334,7 @@ mod scheduled {
             retry_ok_if = |_| false,
             record_if = |_| false,
             fallback = skipped,
-            fallback_if = |error| !matches!(error, ResilienceError::TimedOut { .. }),
+            fallback_if = |error| !matches!(error, ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { .. }, .. }),
             cancel = token
         )]
         async fn refresh(&self) -> Result<(), ResilienceError<UpstreamDown>> {
@@ -654,7 +667,7 @@ mod indicators {
             retry_ok_if = |_| false,
             record_if = |_| false,
             fallback = degraded,
-            fallback_if = |error| !matches!(error, ResilienceError::Failed(_)),
+            fallback_if = |error| matches!(error, ResilienceError::Refused { .. }),
             cancel = token
         )]
         async fn upstream_answers(&self) -> Result<(), ResilienceError<UpstreamDown>> {

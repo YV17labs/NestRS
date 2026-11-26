@@ -91,7 +91,13 @@ async fn the_token_a_body_reads_is_cancelled_as_its_attempt_is_given_up_and_stop
 
     let given_up = dispatches.dispatch().await;
     assert!(
-        matches!(given_up, Err(ResilienceError::TimedOut { .. })),
+        matches!(
+            given_up,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::TimedOut { .. },
+                ..
+            })
+        ),
         "{given_up:?}"
     );
     let work = dispatches.work.lock().expect("unpoisoned").take();

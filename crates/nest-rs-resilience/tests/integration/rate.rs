@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use nest_rs_core::{Module, injectable, instance, module};
 use nest_rs_resilience::{
-    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, TARGET, resilient,
+    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, ResilienceRefusal,
+    TARGET, resilient,
 };
 use nest_rs_testing::{HeadlessApp, LogCapture};
 
@@ -108,7 +109,13 @@ async fn every_attempt_a_decorated_method_sends_takes_a_token_its_retry_included
 
     let refused = shipments.ship().await;
     assert!(
-        matches!(refused, Err(ResilienceError::Limited { .. })),
+        matches!(
+            refused,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::Limited { .. },
+                ..
+            })
+        ),
         "the other method's retry took the bucket's last token: {refused:?}"
     );
     assert_eq!(
@@ -138,7 +145,13 @@ async fn a_decorated_method_the_rate_refuses_ends_its_run_and_its_lines_name_it(
 
     let refused = shipments.insist().await;
     assert!(
-        matches!(refused, Err(ResilienceError::Limited { .. })),
+        matches!(
+            refused,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::Limited { .. },
+                ..
+            })
+        ),
         "its first retry found no token free, the next past the 5 s wait: {refused:?}"
     );
     assert_eq!(
@@ -205,7 +218,7 @@ async fn decorated_methods_finding_no_token_free_wait_in_one_line_each_for_its_o
         "the second in line, sent at the token after"
     );
     assert!(
-        matches!(refused, (Err(ResilienceError::Limited { retry_after, .. }), at)
+        matches!(refused, (Err(ResilienceError::Refused { refusal: ResilienceRefusal::Limited { retry_after, .. }, .. }), at)
             if retry_after == Duration::from_secs(30) && at.is_zero()),
         "the third, told at once the 30 s to the token it would be due: {refused:?}"
     );

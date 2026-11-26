@@ -1,7 +1,8 @@
 //! [`ResilienceError`] — what a policy answers when its call does not succeed:
-//! the call's own error, or the policy's refusal, which every edge answers
-//! `503` with the wait it knows — and [`BreakerError`], what a manual switch
-//! of its breaker answers when it changes nothing.
+//! the call's own error, or the policy's refusal, one of [`ResilienceRefusal`],
+//! which every edge answers `503` with the wait it knows — and
+//! [`BreakerError`], what a manual switch of its breaker answers when it
+//! changes nothing.
 
 use std::convert::Infallible;
 use std::error::Error;
@@ -18,16 +19,25 @@ const UNAVAILABLE: Problem = Problem::new(503, code::UNAVAILABLE);
 
 /// What an attempt given up at its bound says: the `error` of the lines telling
 /// that attempt, which name its policy's instance beside it, and the sentence of
-/// [`ResilienceError::TimedOut`] where the default instance's policy refused.
+/// [`ResilienceRefusal::TimedOut`] where the default instance's policy refused.
 pub(crate) const TIMED_OUT: &str = "the call did not answer within its timeout";
+
+/// What a call answering its own error is said to have done, and what an
+/// attempt judged a failure fails on where its call names no error.
+pub(crate) const FAILED: &str = "the call failed";
+
+/// What an attempt whose call unwound failed on, or words saying its error
+/// that panicked; its payload is its unit's to file.
+pub(crate) const PANICKED: &str = "the call panicked";
 
 /// Why a policy's call did not succeed.
 ///
 /// [`Failed`](Self::Failed) carries the call's own error, from its last
 /// attempt, and [`Unsettled`](Self::Unsettled) the failure of the unit's own
-/// database. Every other variant is the policy's refusal, answered on every edge
-/// as a `503`, `UNAVAILABLE`, an open breaker's and a reached rate limit's with
-/// the `Retry-After` each knows. The problem also rides the error's chain: a
+/// database. [`Refused`](Self::Refused) is the policy's refusal, one of the set
+/// [`ResilienceRefusal`] names, answered on every edge as a `503`,
+/// `UNAVAILABLE`, an open breaker's and a reached rate limit's with the
+/// `Retry-After` each knows. The problem also rides the error's chain: a
 /// domain error wrapping this one answers it by handing its
 /// [`to_problem`](ToProblem::to_problem) on, and a queue job failing with it
 /// waits at least that long before its retry, up to an hour.
@@ -51,7 +61,7 @@ pub(crate) const TIMED_OUT: &str = "the call did not answer within its timeout";
 /// use std::time::Duration;
 ///
 /// use nest_rs_core::{Problem, ToProblem, code};
-/// use nest_rs_resilience::{ResilienceError, ResiliencePolicy};
+/// use nest_rs_resilience::{ResilienceError, ResiliencePolicy, ResilienceRefusal};
 ///
 /// #[derive(Debug, thiserror::Error)]
 /// #[error("the payment provider failed")]
@@ -66,7 +76,10 @@ pub(crate) const TIMED_OUT: &str = "the call did not answer within its timeout";
 /// # async fn charge(policy: &ResiliencePolicy) {
 /// match policy.run(|_cancel| async { Ok::<_, ProviderDown>("charged") }).await {
 ///     Ok(receipt) => assert_eq!(receipt, "charged"),
-///     Err(ResilienceError::Open { retry_after, .. }) => {
+///     Err(ResilienceError::Refused {
+///         refusal: ResilienceRefusal::Open { retry_after, .. },
+///         ..
+///     }) => {
 ///         assert!(retry_after > Duration::ZERO);
 ///     }
 ///     Err(refused) => {
@@ -88,61 +101,12 @@ pub enum ResilienceError<E> {
     /// answer that did not decode is the server's failure on every edge, its
     /// chain filed.
     Failed(E),
-    /// The last attempt did not answer within the policy's timeout, or the
-    /// unit's deadline came first.
+    /// The policy answered in place of the call: its last attempt given up at
+    /// its bound, or the call refused unsent.
     #[non_exhaustive]
-    TimedOut {
-        /// What the attempt was given up at: the policy's timeout — the one a
-        /// `#[resilient]` method pins, for its own runs — or what was left of
-        /// the unit's deadline when that was shorter: none, for a call the unit
-        /// had no time left to send.
-        timeout: Duration,
-        /// The instance of the policy that refused, as its marker's
-        /// [`NAME`](nest_rs_core::Instance::NAME) says it: empty for the
-        /// default one.
-        instance: &'static str,
-        #[doc(hidden)]
-        __problem: Arc<Problem>,
-    },
-    /// The circuit breaker is open: the call was refused without being sent.
-    #[non_exhaustive]
-    Open {
-        /// How long until the breaker lets a call through again, at the
-        /// earliest — or, while another call probes the dependency, until that
-        /// probe has answered at the latest, and that probe's whole bound once
-        /// its answer is a response its caller holds, which ends when that
-        /// caller has read or dropped it: the `Retry-After` every edge
-        /// answers, in whole seconds rounded up.
-        retry_after: Duration,
-        /// The instance of the policy that refused, as its marker's
-        /// [`NAME`](nest_rs_core::Instance::NAME) says it: empty for the
-        /// default one.
-        instance: &'static str,
-        #[doc(hidden)]
-        __problem: Arc<Problem>,
-    },
-    /// Every slot of the bulkhead stayed taken for as long as the call waits
-    /// for one, or as many calls as may wait for one were waiting: the call
-    /// was refused without being sent. The error does not say which of the
-    /// two; the refusal's line does, by its `waiters`.
-    #[non_exhaustive]
-    Full {
-        /// The instance of the policy that refused, as its marker's
-        /// [`NAME`](nest_rs_core::Instance::NAME) says it: empty for the
-        /// default one.
-        instance: &'static str,
-        #[doc(hidden)]
-        __problem: Arc<Problem>,
-    },
-    /// The rate limit had no token free for the attempt, and the next one due
-    /// it, behind the attempts already waiting for theirs, came past what it
-    /// could wait or past its unit's deadline: the call was refused without
-    /// being sent, and is not attempted again.
-    #[non_exhaustive]
-    Limited {
-        /// How long until that token is free: the `Retry-After` every edge
-        /// answers, in whole seconds rounded up.
-        retry_after: Duration,
+    Refused {
+        /// Which mechanism refused, and the wait it knows.
+        refusal: ResilienceRefusal,
         /// The instance of the policy that refused, as its marker's
         /// [`NAME`](nest_rs_core::Instance::NAME) says it: empty for the
         /// default one.
@@ -164,7 +128,124 @@ pub enum ResilienceError<E> {
     },
 }
 
+/// What a policy answers in place of sending its call, or of waiting for it
+/// any longer: one member per mechanism that refuses, the next one added with
+/// the mechanism. [`ResilienceError::Refused`] carries it, and so does
+/// [`ResilienceEvent::Refusal`](crate::ResilienceEvent::Refusal), but for a
+/// timeout, which [`ResilienceEvent::Timeout`](crate::ResilienceEvent::Timeout)
+/// tells as the attempt it gave up, the run going on or not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResilienceRefusal {
+    /// The last attempt did not answer within the policy's timeout, or the
+    /// unit's deadline came first.
+    #[non_exhaustive]
+    TimedOut {
+        /// What the attempt was given up at: the policy's timeout — the one a
+        /// `#[resilient]` method pins, for its own runs — or what was left of
+        /// the unit's deadline when that was shorter: none, for a call the unit
+        /// had no time left to send.
+        timeout: Duration,
+    },
+    /// The circuit breaker is open, or another call holds its probe's turn:
+    /// the call was refused without being sent.
+    #[non_exhaustive]
+    Open {
+        /// How long until the breaker lets a call through again, at the
+        /// earliest — or, while another call probes the dependency, until that
+        /// probe has answered at the latest, and that probe's whole bound once
+        /// its answer is a response its caller holds, which ends when that
+        /// caller has read or dropped it: the `Retry-After` every edge
+        /// answers, in whole seconds rounded up.
+        retry_after: Duration,
+    },
+    /// The bulkhead took the call into no slot, for one of two causes the
+    /// refusal does not tell apart: every slot stayed taken for as long as the
+    /// call waits for one — at once, with no wait — or every place to wait
+    /// was taken, `CONCURRENCY_WAITERS` calls waiting already, which the
+    /// `waiters` of the refusal's line alone says. It carries no count: the
+    /// calls running and waiting are read on the policy, as they stand at the
+    /// read, through
+    /// [`concurrency_running`](crate::ResiliencePolicy::concurrency_running)
+    /// and
+    /// [`concurrency_waiting`](crate::ResiliencePolicy::concurrency_waiting).
+    Full,
+    /// The rate limit had no token free for the attempt, and the next one due
+    /// it, behind the attempts already waiting for theirs, came past what it
+    /// could wait or past its unit's deadline: the call was refused without
+    /// being sent, and is not attempted again.
+    #[non_exhaustive]
+    Limited {
+        /// How long until that token is free: the `Retry-After` every edge
+        /// answers, in whole seconds rounded up.
+        retry_after: Duration,
+    },
+}
+
+impl ResilienceRefusal {
+    /// A call its unit had no time left to send: refused unsent, so no
+    /// attempt, where any other [`TimedOut`](Self::TimedOut) is one given up
+    /// at its bound, which is never zero.
+    pub(crate) const OUT_OF_TIME: Self = Self::TimedOut {
+        timeout: Duration::ZERO,
+    };
+
+    /// The wait the refusal knows before a call is let through, which every
+    /// edge answers as its `Retry-After`: an open breaker's and a reached rate
+    /// limit's.
+    #[must_use]
+    pub const fn retry_after(self) -> Option<Duration> {
+        match self {
+            Self::Open { retry_after } | Self::Limited { retry_after } => Some(retry_after),
+            Self::TimedOut { .. } | Self::Full => None,
+        }
+    }
+
+    /// The word the refusals' counter says.
+    #[cfg(feature = "opentelemetry")]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::TimedOut { .. } => "timed_out",
+            Self::Open { .. } => "open",
+            Self::Full => "full",
+            Self::Limited { .. } => "limited",
+        }
+    }
+}
+
+impl fmt::Display for ResilienceRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        said(*self, "", f)
+    }
+}
+
+/// `refusal`'s sentence, naming the instance of the policy that made it after
+/// the mechanism that refused, and none for the default one.
+fn said(refusal: ResilienceRefusal, instance: &str, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let of = of_instance(instance);
+    match refusal {
+        ResilienceRefusal::TimedOut { .. } if instance.is_empty() => f.write_str(TIMED_OUT),
+        ResilienceRefusal::TimedOut { .. } => write!(
+            f,
+            "the call did not answer within the timeout of the instance `{instance}`"
+        ),
+        ResilienceRefusal::Open { .. } => write!(f, "the circuit breaker{of} is open"),
+        ResilienceRefusal::Full => write!(f, "the bulkhead{of} has no free slot"),
+        ResilienceRefusal::Limited { .. } => write!(f, "the rate limit{of} is reached"),
+    }
+}
+
 impl<E> ResilienceError<E> {
+    /// The policy's refusal the error is, or `None` for the call's own error
+    /// and an unsettled savepoint.
+    #[must_use]
+    pub const fn refusal(&self) -> Option<ResilienceRefusal> {
+        match self {
+            Self::Refused { refusal, .. } => Some(*refusal),
+            Self::Failed(_) | Self::Unsettled { .. } => None,
+        }
+    }
+
     /// The run ended on its attempt's savepoint, which `cause` left unsettled.
     pub(crate) fn unsettled(cause: AtomicError) -> Self {
         Self::Unsettled {
@@ -173,29 +254,17 @@ impl<E> ResilienceError<E> {
     }
 
     /// `refusal`, made by the policy of `instance`, as its caller is answered.
-    pub(crate) fn refused(refusal: Refusal, instance: &'static str) -> Self {
-        use nest_rs_core::__private::retry_after_secs;
-
-        match refusal {
-            Refusal::TimedOut(timeout) => Self::TimedOut {
-                timeout,
-                instance,
-                __problem: Arc::new(UNAVAILABLE),
-            },
-            Refusal::Open(retry_after) => Self::Open {
-                retry_after,
-                instance,
-                __problem: Arc::new(UNAVAILABLE.with_retry_after(retry_after_secs(retry_after))),
-            },
-            Refusal::Full => Self::Full {
-                instance,
-                __problem: Arc::new(UNAVAILABLE),
-            },
-            Refusal::Limited(retry_after) => Self::Limited {
-                retry_after,
-                instance,
-                __problem: Arc::new(UNAVAILABLE.with_retry_after(retry_after_secs(retry_after))),
-            },
+    pub(crate) fn refused(refusal: ResilienceRefusal, instance: &'static str) -> Self {
+        let problem = match refusal.retry_after() {
+            Some(wait) => {
+                UNAVAILABLE.with_retry_after(nest_rs_core::__private::retry_after_secs(wait))
+            }
+            None => UNAVAILABLE,
+        };
+        Self::Refused {
+            refusal,
+            instance,
+            __problem: Arc::new(problem),
         }
     }
 }
@@ -203,21 +272,10 @@ impl<E> ResilienceError<E> {
 impl<E> fmt::Display for ResilienceError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Failed(_) => f.write_str("the call failed"),
-            Self::TimedOut { instance: "", .. } => f.write_str(TIMED_OUT),
-            Self::TimedOut { instance, .. } => write!(
-                f,
-                "the call did not answer within the timeout of the instance `{instance}`"
-            ),
-            Self::Open { instance, .. } => {
-                write!(f, "the circuit breaker{} is open", of_instance(instance))
-            }
-            Self::Full { instance, .. } => {
-                write!(f, "the bulkhead{} has no free slot", of_instance(instance))
-            }
-            Self::Limited { instance, .. } => {
-                write!(f, "the rate limit{} is reached", of_instance(instance))
-            }
+            Self::Failed(_) => f.write_str(FAILED),
+            Self::Refused {
+                refusal, instance, ..
+            } => said(*refusal, instance, f),
             Self::Unsettled { .. } => f.write_str("an attempt's savepoint could not be settled"),
         }
     }
@@ -229,10 +287,7 @@ impl<E: Error + 'static> Error for ResilienceError<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Failed(error) => Some(error),
-            Self::TimedOut { __problem, .. }
-            | Self::Open { __problem, .. }
-            | Self::Full { __problem, .. }
-            | Self::Limited { __problem, .. } => Some(&**__problem),
+            Self::Refused { __problem, .. } => Some(&**__problem),
             Self::Unsettled { __cause } => Some(&**__cause),
         }
     }
@@ -259,15 +314,11 @@ nest_rs_core::inventory::submit! { SafeLink::of(&say) }
 ///
 /// An unsettled savepoint is not claimed: its chain is the database's to say.
 fn say(refused: &ResilienceError<Infallible>) -> Option<String> {
-    let problem = match refused {
-        ResilienceError::TimedOut { __problem, .. }
-        | ResilienceError::Open { __problem, .. }
-        | ResilienceError::Full { __problem, .. }
-        | ResilienceError::Limited { __problem, .. } => __problem,
+    match refused {
+        ResilienceError::Refused { __problem, .. } => Some(format!("{refused}: {__problem}")),
         ResilienceError::Failed(never) => match *never {},
-        ResilienceError::Unsettled { .. } => return None,
-    };
-    Some(format!("{refused}: {problem}"))
+        ResilienceError::Unsettled { .. } => None,
+    }
 }
 
 /// Why [`ResiliencePolicy::open_breaker`](crate::ResiliencePolicy::open_breaker)
@@ -300,37 +351,6 @@ impl BreakerError {
     /// A duration outside the open times `breaker_open` takes in code.
     pub(crate) const fn out_of_range() -> Self {
         Self::OutOfRange { most: LONGEST_OPEN }
-    }
-}
-
-/// A policy's refusal, before it is told in the caller's error type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Refusal {
-    /// An attempt given up at the bound it was sent under, or
-    /// [`OUT_OF_TIME`](Self::OUT_OF_TIME).
-    TimedOut(Duration),
-    /// For this long at least.
-    Open(Duration),
-    Full,
-    /// Until the token the attempt would be due is free.
-    Limited(Duration),
-}
-
-impl Refusal {
-    /// A call its unit had no time left to send: refused unsent, so no
-    /// attempt, where any other [`TimedOut`](Self::TimedOut) is one given up
-    /// at its bound, which is never zero.
-    pub(crate) const OUT_OF_TIME: Self = Self::TimedOut(Duration::ZERO);
-
-    /// The word the refusals' counter says.
-    #[cfg(feature = "opentelemetry")]
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::TimedOut(_) => "timed_out",
-            Self::Open(_) => "open",
-            Self::Full => "full",
-            Self::Limited(_) => "limited",
-        }
     }
 }
 
@@ -384,17 +404,23 @@ mod tests {
     }
 
     /// `refusal`, as the default instance's policy answers it.
-    fn refused<E>(refusal: Refusal) -> ResilienceError<E> {
+    fn refused<E>(refusal: ResilienceRefusal) -> ResilienceError<E> {
         ResilienceError::refused(refusal, "")
     }
 
     #[test]
     fn every_refusal_is_a_503_and_an_open_breaker_and_a_reached_rate_say_their_wait_rounded_up() {
         let refusals: [ResilienceError<Upstream>; 4] = [
-            refused(Refusal::TimedOut(Duration::from_secs(5))),
-            refused(Refusal::Open(Duration::from_millis(2_500))),
-            refused(Refusal::Full),
-            refused(Refusal::Limited(Duration::from_millis(40_200))),
+            refused(ResilienceRefusal::TimedOut {
+                timeout: Duration::from_secs(5),
+            }),
+            refused(ResilienceRefusal::Open {
+                retry_after: Duration::from_millis(2_500),
+            }),
+            refused(ResilienceRefusal::Full),
+            refused(ResilienceRefusal::Limited {
+                retry_after: Duration::from_millis(40_200),
+            }),
         ];
         let answered: Vec<_> = refusals
             .iter()
@@ -418,7 +444,9 @@ mod tests {
     /// chain every edge and the queue read.
     #[test]
     fn the_refusals_problem_rides_its_chain() {
-        let open: ResilienceError<Upstream> = refused(Refusal::Open(Duration::from_secs(30)));
+        let open: ResilienceError<Upstream> = refused(ResilienceRefusal::Open {
+            retry_after: Duration::from_secs(30),
+        });
         let found = nest_rs_core::__private::find_in_chain::<Problem>(&open)
             .expect("the problem is in the chain");
         assert_eq!(found.retry_after(), Some(30));
@@ -427,7 +455,9 @@ mod tests {
             "the circuit breaker is open: 503 UNAVAILABLE"
         );
 
-        let limited: ResilienceError<Upstream> = refused(Refusal::Limited(Duration::from_secs(12)));
+        let limited: ResilienceError<Upstream> = refused(ResilienceRefusal::Limited {
+            retry_after: Duration::from_secs(12),
+        });
         let found = nest_rs_core::__private::find_in_chain::<Problem>(&limited)
             .expect("the problem is in the chain");
         assert_eq!(
@@ -478,19 +508,25 @@ mod tests {
 
         let refusals = [
             (
-                Refusal::TimedOut(Duration::from_secs(5)),
+                ResilienceRefusal::TimedOut {
+                    timeout: Duration::from_secs(5),
+                },
                 "the call did not answer within its timeout: 503 UNAVAILABLE",
             ),
             (
-                Refusal::Open(Duration::from_secs(30)),
+                ResilienceRefusal::Open {
+                    retry_after: Duration::from_secs(30),
+                },
                 "the circuit breaker is open: 503 UNAVAILABLE",
             ),
             (
-                Refusal::Full,
+                ResilienceRefusal::Full,
                 "the bulkhead has no free slot: 503 UNAVAILABLE",
             ),
             (
-                Refusal::Limited(Duration::from_secs(12)),
+                ResilienceRefusal::Limited {
+                    retry_after: Duration::from_secs(12),
+                },
                 "the rate limit is reached: 503 UNAVAILABLE",
             ),
         ];
@@ -519,7 +555,7 @@ mod tests {
         use nest_rs_core::__private::claimed_link;
 
         assert_eq!(claimed_link(&ResilienceError::Failed(Upstream)), None);
-        let full: ResilienceError<Upstream> = refused(Refusal::Full);
+        let full: ResilienceError<Upstream> = refused(ResilienceRefusal::Full);
         assert_eq!(claimed_link(&full), None);
         let unsettled: ResilienceError<Infallible> =
             ResilienceError::unsettled(AtomicError::Poisoned { retryable: false });
@@ -537,10 +573,7 @@ mod tests {
     /// The instance `error`, a refusal, names its policy by.
     fn instance<E>(error: &ResilienceError<E>) -> Option<&'static str> {
         match error {
-            ResilienceError::TimedOut { instance, .. }
-            | ResilienceError::Open { instance, .. }
-            | ResilienceError::Full { instance, .. }
-            | ResilienceError::Limited { instance, .. } => Some(instance),
+            ResilienceError::Refused { instance, .. } => Some(instance),
             ResilienceError::Failed(_) | ResilienceError::Unsettled { .. } => None,
         }
     }
@@ -555,22 +588,28 @@ mod tests {
 
         let refusals = [
             (
-                Refusal::TimedOut(Duration::from_secs(5)),
+                ResilienceRefusal::TimedOut {
+                    timeout: Duration::from_secs(5),
+                },
                 "the call did not answer within the timeout of the instance `payments`",
                 TIMED_OUT,
             ),
             (
-                Refusal::Open(Duration::from_secs(30)),
+                ResilienceRefusal::Open {
+                    retry_after: Duration::from_secs(30),
+                },
                 "the circuit breaker of the instance `payments` is open",
                 "the circuit breaker is open",
             ),
             (
-                Refusal::Full,
+                ResilienceRefusal::Full,
                 "the bulkhead of the instance `payments` has no free slot",
                 "the bulkhead has no free slot",
             ),
             (
-                Refusal::Limited(Duration::from_secs(12)),
+                ResilienceRefusal::Limited {
+                    retry_after: Duration::from_secs(12),
+                },
                 "the rate limit of the instance `payments` is reached",
                 "the rate limit is reached",
             ),
@@ -606,10 +645,25 @@ mod tests {
     fn an_error_clones_where_the_calls_error_does_sharing_its_problem_or_its_cause() {
         let errors: [ResilienceError<Upstream>; 6] = [
             ResilienceError::Failed(Upstream),
-            ResilienceError::refused(Refusal::TimedOut(Duration::from_secs(5)), "payments"),
-            ResilienceError::refused(Refusal::Open(Duration::from_secs(30)), "payments"),
-            refused(Refusal::Full),
-            ResilienceError::refused(Refusal::Limited(Duration::from_secs(12)), "payments"),
+            ResilienceError::refused(
+                ResilienceRefusal::TimedOut {
+                    timeout: Duration::from_secs(5),
+                },
+                "payments",
+            ),
+            ResilienceError::refused(
+                ResilienceRefusal::Open {
+                    retry_after: Duration::from_secs(30),
+                },
+                "payments",
+            ),
+            refused(ResilienceRefusal::Full),
+            ResilienceError::refused(
+                ResilienceRefusal::Limited {
+                    retry_after: Duration::from_secs(12),
+                },
+                "payments",
+            ),
             ResilienceError::unsettled(AtomicError::Poisoned { retryable: true }),
         ];
         for error in &errors {
@@ -621,11 +675,15 @@ mod tests {
         }
         let [_, _, open, .., unsettled] = &errors;
         let (
-            ResilienceError::Open {
-                __problem: problem, ..
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                __problem: problem,
+                ..
             },
-            ResilienceError::Open {
-                __problem: cloned, ..
+            ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                __problem: cloned,
+                ..
             },
         ) = (open, open.clone())
         else {

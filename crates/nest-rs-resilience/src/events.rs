@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use crate::breaker::BreakerPhase;
-use crate::error::Refusal;
+use crate::error::ResilienceRefusal;
 use crate::resilient::ResilientMethod;
 
 /// How many events a subscription holds unread before the oldest are dropped,
@@ -57,7 +57,10 @@ pub enum ResilienceEvent {
         /// How many events were dropped, the ones before the next it answers.
         missed: u64,
     },
-    /// The policy refused a call without sending it.
+    /// The policy refused a call without sending it: an open breaker, a
+    /// full bulkhead or a reached rate limit, never
+    /// [`TimedOut`](ResilienceRefusal::TimedOut), which
+    /// [`Timeout`](Self::Timeout) tells.
     #[non_exhaustive]
     Refusal {
         /// The decorated method's host.
@@ -120,8 +123,8 @@ pub enum ResilienceEvent {
         host: Option<String>,
         /// The decorated method.
         method: Option<&'static str>,
-        /// The bound, as [`ResilienceError::TimedOut`](crate::ResilienceError::TimedOut)
-        /// says it: none, for a call its unit had no time left to send.
+        /// The bound, as [`ResilienceRefusal::TimedOut`] says it: none, for a
+        /// call its unit had no time left to send.
         timeout: Duration,
     },
     /// The circuit breaker changed phase, or was switched by hand. The events
@@ -148,54 +151,18 @@ pub enum ResilienceEvent {
     },
 }
 
-/// Why a policy refused a call without sending it, in the words
-/// [`ResilienceError`](crate::ResilienceError)'s variants say it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ResilienceRefusal {
-    /// The bulkhead took the call into no slot, for one of two causes the
-    /// event does not tell apart: every slot stayed taken for as long as the
-    /// call waits for one — at once, with no wait — or every place to wait
-    /// was taken, `CONCURRENCY_WAITERS` calls waiting already, which the
-    /// `waiters` of the refusal's line alone says. It carries no count: the
-    /// calls running and waiting are read on the policy, as they stand at the
-    /// read and not as the refusal met them, through
-    /// [`concurrency_running`](crate::ResiliencePolicy::concurrency_running)
-    /// and
-    /// [`concurrency_waiting`](crate::ResiliencePolicy::concurrency_waiting).
-    Full,
-    /// The rate limit had no token free that the call could wait for.
-    #[non_exhaustive]
-    Limited {
-        /// How long until the next token is free.
-        retry_after: Duration,
-    },
-    /// The circuit breaker is open, or another call holds its probe's turn.
-    #[non_exhaustive]
-    Open {
-        /// How long until the breaker lets a call through again, as
-        /// [`ResilienceError::Open`](crate::ResilienceError::Open) says it.
-        retry_after: Duration,
-    },
-}
-
 impl ResilienceEvent {
     /// `refusal`, told of a call `method` made when a decorated method ran it:
     /// a timeout as the attempt given up, any other as the call refused unsent.
-    pub(crate) fn refused(method: Option<&ResilientMethod>, refusal: Refusal) -> Self {
+    pub(crate) fn refused(method: Option<&ResilientMethod>, refusal: ResilienceRefusal) -> Self {
         let (host, method) = named(method);
-        let refusal = match refusal {
-            Refusal::TimedOut(timeout) => {
-                return Self::Timeout {
-                    host,
-                    method,
-                    timeout,
-                };
-            }
-            Refusal::Open(retry_after) => ResilienceRefusal::Open { retry_after },
-            Refusal::Full => ResilienceRefusal::Full,
-            Refusal::Limited(retry_after) => ResilienceRefusal::Limited { retry_after },
-        };
+        if let ResilienceRefusal::TimedOut { timeout } = refusal {
+            return Self::Timeout {
+                host,
+                method,
+                timeout,
+            };
+        }
         Self::Refusal {
             host,
             method,

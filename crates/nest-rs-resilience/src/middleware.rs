@@ -17,12 +17,12 @@ use reqwest::{Request, Response, ResponseBuilderExt, StatusCode};
 use reqwest_middleware::{Error, Middleware, Next, Result};
 
 use crate::body::ResilienceBody;
+use crate::breaker::Failure;
 use crate::call::{Calling, Judged, Once, Reads, Uncancelled};
-use crate::error::{Refusal, ResilienceError};
+use crate::error::{ResilienceError, ResilienceRefusal};
 use crate::held::Held;
 use crate::policy::ResiliencePolicy;
 use crate::run::Run;
-use crate::told::told;
 use crate::verdict::{Ended, Verdict};
 
 /// The header a client sends to make a request it could not otherwise replay
@@ -83,7 +83,7 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 ///   failure counted as a timeout: [`bytes`](Response::bytes),
 ///   [`chunk`](Response::chunk) and the others answer reqwest's error, whose
 ///   chain holds the `ResilienceError<Infallible>` a request given up before
-///   its head answers, the [`TimedOut`](crate::ResilienceError::TimedOut) that
+///   its head answers, the [`TimedOut`](crate::ResilienceRefusal::TimedOut) that
 ///   tells the policy's cut from a transport's. A part that came is handed on
 ///   whenever it is read, so a caller slower than the dependency is never cut,
 ///   and is charged only the round trip a transport's flow control makes the
@@ -184,7 +184,7 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
             };
             let mut call = pin!(sent(move || sending.run(copy, carried)));
             let mut ended = run.as_mut().attempt(call.as_mut()).await;
-            let Some(retry) = run.as_mut().retry(&mut ended) else {
+            let Some(retry) = run.as_mut().retry(&mut ended, call.failure()) else {
                 return answered(run, call, ended);
             };
             // Nothing of an attempt sent again is kept through the wait: it
@@ -250,6 +250,13 @@ impl Reads<Answer> for Statuses {
     fn read(&self, answer: &Result<Response>, _again: bool) -> Verdict {
         judged(answer)
     }
+
+    fn failure<'a>(&self, answer: &'a Result<Response>) -> Option<Failure<'a>> {
+        match answer {
+            Ok(response) => status_failure(response.status()).map(Failure::Said),
+            Err(error) => Some(Failure::Error(error)),
+        }
+    }
 }
 
 /// `response` as it came, but for its body, read through a
@@ -276,23 +283,18 @@ fn covered(response: Response, held: Held) -> Response {
 )]
 struct TracedOutside;
 
-/// A transport failure and the statuses a retry may cure fail, each said as
-/// the lines telling the attempt say it — a transport failure as its chain,
-/// without the URL it was sent to; any other answer is the dependency's.
+/// A transport failure and the statuses a retry may cure fail; any other
+/// answer is the dependency's. What each failed on is read where it is told
+/// ([`Statuses`]'s `failure`): a transport failure as its chain, without the
+/// URL it was sent to, a status by its code.
 fn judged(answer: &Result<Response>) -> Verdict {
-    let response = match answer {
-        Ok(response) => response,
-        Err(error) => {
-            return Verdict::Failed {
-                asked: None,
-                error: told(error).into(),
-            };
-        }
+    let Ok(response) = answer else {
+        return Verdict::Failed { asked: None };
     };
     let status = response.status();
-    let Some(error) = status_failure(status) else {
+    if status_failure(status).is_none() {
         return Verdict::Succeeded;
-    };
+    }
     let asked = match status {
         StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE => {
             response.headers().get(RETRY_AFTER).and_then(|asked| {
@@ -304,10 +306,7 @@ fn judged(answer: &Result<Response>) -> Verdict {
         }
         _ => None,
     };
-    Verdict::Failed {
-        asked,
-        error: error.into(),
-    }
+    Verdict::Failed { asked }
 }
 
 /// What an answer of `status` failed on, for a status a retry may cure: its
@@ -325,7 +324,7 @@ fn status_failure(status: StatusCode) -> Option<&'static str> {
 }
 
 /// `refusal`, made by the policy of `instance`, as reqwest's error carries it.
-fn refused(refusal: Refusal, instance: &'static str) -> Error {
+fn refused(refusal: ResilienceRefusal, instance: &'static str) -> Error {
     Error::middleware(ResilienceError::<Infallible>::refused(refusal, instance))
 }
 
@@ -359,13 +358,20 @@ mod tests {
             (StatusCode::SERVICE_UNAVAILABLE, true),
             (StatusCode::GATEWAY_TIMEOUT, false),
         ] {
+            let answered = answer(status, Some("7"));
             assert_eq!(
-                judged(&answer(status, Some("7"))),
+                judged(&answered),
                 Verdict::Failed {
                     asked: asks.then_some(Duration::from_secs(7)),
-                    error: format!("the dependency answered {}", status.as_str()).into(),
                 },
                 "{status}"
+            );
+            let said = Statuses
+                .failure(&answered)
+                .and_then(|failure| failure.said().ok());
+            assert_eq!(
+                said.as_deref(),
+                Some(format!("the dependency answered {}", status.as_str()).as_str()),
             );
         }
         for status in [
@@ -386,13 +392,11 @@ mod tests {
     #[test]
     fn a_middlewares_failure_is_told_as_its_chain() {
         let failed = Err(Error::middleware(std::io::Error::other("no route to host")));
-        assert_eq!(
-            judged(&failed),
-            Verdict::Failed {
-                asked: None,
-                error: "no route to host".into(),
-            }
-        );
+        assert_eq!(judged(&failed), Verdict::Failed { asked: None });
+        let said = Statuses
+            .failure(&failed)
+            .and_then(|failure| failure.said().ok());
+        assert_eq!(said.as_deref(), Some("no route to host"));
     }
 
     /// A dependency counting the requests it is sent, answering each `200`: a
@@ -446,7 +450,7 @@ mod tests {
                 Error::Reqwest(_) => None,
             };
             assert!(
-                matches!(refusal, Some(ResilienceError::TimedOut { timeout, .. }) if timeout.is_zero()),
+                matches!(refusal, Some(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout.is_zero()),
                 "{refused:?}"
             );
             assert_eq!(sent.load(Ordering::SeqCst), 0, "nothing was sent");
@@ -622,7 +626,7 @@ mod tests {
                 })
                 .await;
             assert!(
-                matches!(cut, Err(ResilienceError::TimedOut { timeout, .. }) if timeout == short),
+                matches!(cut, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout == short),
                 "head: {head}: {cut:?}"
             );
             assert!(

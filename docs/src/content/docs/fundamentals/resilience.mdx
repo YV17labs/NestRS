@@ -191,21 +191,28 @@ policy, with no `#[resilient]`: [Resilience middleware](/fundamentals/resilience
 
 ## What the client is told
 
-A decorated method answers a `ResilienceError`. Every refusal of the policy is
-one every edge answers `503`, `UNAVAILABLE`; the call's own error and an
-unsettled savepoint are not refusals:
+A decorated method answers a `ResilienceError`: `Failed`, the call's own error
+from its last attempt; `Unsettled`, an attempt's savepoint the database could not
+settle; or `Refused`, the policy's refusal, every edge answering it `503`,
+`UNAVAILABLE`. A refusal's `refusal` is one of `ResilienceRefusal`'s set, a
+member per mechanism that refuses:
 
-| Variant | When | Retry-After |
+| `ResilienceError` | When | Retry-After |
 |---|---|---|
-| `TimedOut` | the last attempt ended at its timeout or at the unit's deadline | none |
-| `Open` | the breaker is open, or half-open with another call holding its probe's turn; the call was not sent | the time until it lets a call through, or what is left of that probe's bound, all of it while its response is held, rounded up to whole seconds |
-| `Full` | every slot of the bulkhead stayed taken for as long as the call waits, or as many calls as may wait were waiting; the call was not sent | none |
-| `Limited` | the rate limit had no token free, and the one due the attempt, behind the attempts already waiting, came past what it may wait or past its unit's deadline; the call was not sent, nor attempted again | the time until that token is free, rounded up to whole seconds |
+| `Refused`, `TimedOut` | the last attempt ended at its timeout or at the unit's deadline | none |
+| `Refused`, `Open` | the breaker is open, or half-open with another call holding its probe's turn; the call was not sent | the time until it lets a call through, or what is left of that probe's bound, all of it while its response is held, rounded up to whole seconds |
+| `Refused`, `Full` | every slot of the bulkhead stayed taken for as long as the call waits, or as many calls as may wait were waiting; the call was not sent | none |
+| `Refused`, `Limited` | the rate limit had no token free, and the one due the attempt, behind the attempts already waiting, came past what it may wait or past its unit's deadline; the call was not sent, nor attempted again | the time until that token is free, rounded up to whole seconds |
 | `Failed` | the call answered its own error on its last attempt | what that error's `ToProblem` says, else a `Problem` its chain carries; opaque `500` otherwise |
 | `Unsettled` | an attempt's savepoint could not be settled | none: the server's own error, an opaque `500` |
 
-A refusal names the policy that refused it. `TimedOut`, `Open`, `Full` and
-`Limited` carry `instance`, the marker's `Instance::NAME`: `upstream` for
+`matches!(error, ResilienceError::Refused { .. })` reads any refusal, which a
+`fallback_if` answering for the policy alone writes; `error.refusal()` hands it
+over as a `ResilienceRefusal`, and `refusal.retry_after()` the wait an `Open` or a
+`Limited` knows.
+
+A refusal names the policy that refused it. `Refused` carries `instance`, the
+marker's `Instance::NAME`: `upstream` for
 `Upstream`, empty for the default instance. The refusal's sentence names it too,
 on every line that files the error's chain, so the edge's failure line says
 which of a handler's dependencies refused:

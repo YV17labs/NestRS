@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::TARGET;
 use crate::breaker::BreakerPhase;
 use crate::counters::Counters;
-use crate::error::Refusal;
+use crate::error::ResilienceRefusal;
 use crate::events::{ResilienceEvent, ResilienceEvents, Subscribers};
 use crate::millis::millis;
 use crate::resilient::ResilientMethod;
@@ -40,10 +40,10 @@ pub(crate) const NOT_ATTEMPTED_AGAIN_UNSETTLED: &str =
 /// An attempt waiting for the token of the rate it reserved.
 pub(crate) const WAITING_FOR_TOKEN: &str = "rate limit reached; waiting for a token";
 
-/// A call the bulkhead refuses ([`Refusal::Full`]).
+/// A call the bulkhead refuses ([`ResilienceRefusal::Full`]).
 pub(crate) const REFUSED_FULL: &str = "bulkhead full; the call is refused";
 
-/// A call the rate refuses ([`Refusal::Limited`]).
+/// A call the rate refuses ([`ResilienceRefusal::Limited`]).
 pub(crate) const REFUSED_LIMITED: &str = "rate limit reached; the call is refused";
 
 /// A fallback answering in place of the error its run ended on.
@@ -117,7 +117,11 @@ impl Teller {
 
     /// `refusal`, which a run of `method` ends on, counted and told. It files
     /// no line: the bulkhead's and the rate's file theirs where they refuse.
-    pub(crate) fn refused(&self, method: Option<&ResilientMethod>, refusal: Refusal) -> Refusal {
+    pub(crate) fn refused(
+        &self,
+        method: Option<&ResilientMethod>,
+        refusal: ResilienceRefusal,
+    ) -> ResilienceRefusal {
         self.counters.refusal(refusal);
         self.subscribers
             .tell(|| ResilienceEvent::refused(method, refusal));
@@ -127,7 +131,7 @@ impl Teller {
     /// An attempt of a run of `method` given up at its bound, which the run
     /// sends its call again after, told: its run ends on no refusal, where
     /// one is told otherwise ([`refused`](Self::refused)).
-    pub(crate) fn given_up(&self, method: Option<&ResilientMethod>, timed_out: Refusal) {
+    pub(crate) fn given_up(&self, method: Option<&ResilientMethod>, timed_out: ResilienceRefusal) {
         self.subscribers
             .tell(|| ResilienceEvent::refused(method, timed_out));
     }
@@ -169,6 +173,14 @@ impl Teller {
             wait_ms = millis(wait),
             "{WAITING_FOR_TOKEN}",
         );
+    }
+
+    /// Whether anything hears the facts a retry tells, which say an error's
+    /// chain: a subscription open, or a line at `debug` on [`TARGET`]
+    /// filed. Read where the retry is decided, so an error is put in words
+    /// only for what hears it.
+    pub(crate) fn hears(&self) -> bool {
+        self.subscribers.any() || tracing::enabled!(target: TARGET, tracing::Level::DEBUG)
     }
 
     /// A call sent again, counted as it is sent.

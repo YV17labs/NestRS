@@ -123,7 +123,7 @@ answers `None`.
 ```rust title="crates/features/src/posts/upstream.rs"
 use std::time::Duration;
 
-use nest_rs::resilience::{BreakerState, ResiliencePolicy};
+use nest_rs::resilience::{BreakerState, ResiliencePolicy, ResilienceRefusal};
 
 /// How long the upstream's breaker still refuses every call, while it is open.
 pub fn refused_for(upstream: &ResiliencePolicy<Upstream>) -> Option<Duration> {
@@ -225,7 +225,8 @@ async fn an_open_breaker_refuses_the_call_unsent() -> anyhow::Result<()> {
     let posts = app.container().get::<PostsService>().expect("provided");
 
     assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Failed(_))));
-    assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Open { .. })));
+    let refused = posts.preview(Uuid::nil()).await.err().and_then(|error| error.refusal());
+    assert!(matches!(refused, Some(ResilienceRefusal::Open { .. })));
     Ok(())
 }
 ```
@@ -250,7 +251,8 @@ async fn a_preview_is_refused_while_opened_by_hand_and_sent_once_closed() -> any
     let upstream = app.container().get::<ResiliencePolicy<Upstream>>().expect("built");
 
     upstream.open_breaker(Duration::from_secs(60))?;
-    assert!(matches!(posts.preview(Uuid::nil()).await, Err(ResilienceError::Open { .. })));
+    let refused = posts.preview(Uuid::nil()).await.err().and_then(|error| error.refusal());
+    assert!(matches!(refused, Some(ResilienceRefusal::Open { .. })));
 
     upstream.close_breaker()?;
     assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
@@ -292,12 +294,13 @@ and more than the rate lets answer within the age.
   with a breaker none of them opens. It takes each timeout as firing on time: a
   runtime stalled past a timeout can let more failures answer within the age
   than the check counts.
-- **A probe whose run is kept and never polled again holds the half-open
-  turn.** The turn comes back as the probe's future is polled, its answer or its
-  timer ending it, or dropped. A stream that stops being read while it awaits a
-  decorated call keeps one so, and every other call is refused meanwhile, told a
-  millisecond once the probe's bound has passed. A switch by hand takes the
-  breaker out of it.
+- **A runtime stalled past a whole bound voids a live probe.** A probe whose
+  answer was due a whole bound of its own ago hands its turn to the next call,
+  and what it says late counts nowhere: so a stream that stops being read while
+  it awaits a decorated call holds the turn no longer than that, every other call
+  refused meanwhile and told a millisecond once the probe's bound has passed. A
+  probe whose runtime was stalled that long is voided the same way, the breaker
+  half-open as the new probe leaves it.
 - **A transition is told once the breaker's lock is let go, by one thread at a
   time**, in the order the transitions took effect. A call that moves the breaker
   while another thread is telling can return before its own transition's line is

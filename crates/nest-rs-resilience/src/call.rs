@@ -18,8 +18,8 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 
 use self::placed::{Placed, placed, placed_mut, unplaced};
 pub(crate) use self::placed::{PlacedFuture, placed_future, placed_future_mut};
+use crate::breaker::Failure;
 use crate::resilient::{Judge, ResilientAnswer};
-use crate::told::told;
 use crate::verdict::{Verdict, asked};
 
 /// Past this size a release build boxes the closure of a call sent once:
@@ -126,6 +126,10 @@ pub(crate) trait Calling {
     /// when it may: a call sent once asks no predicate of a retry. A
     /// predicate that panics unwinds from here.
     fn judge(&self, again: bool) -> Verdict;
+
+    /// What the answer kept failed on, for an answer judged a failure or
+    /// sent again in error: read where it is told, never before.
+    fn failure(&self) -> Option<Failure<'_>>;
 
     /// The answer kept let go: its retry is decided, or a predicate judging
     /// it panicked.
@@ -448,6 +452,9 @@ impl<F, K: MakeAgain<F>> Placing for Again<F, K> {
 pub(crate) trait Reads<R: ResilientAnswer> {
     /// How `answer` counts, for a run that sends its call `again` when it may.
     fn read(&self, answer: &Result<R::Ok, R::Err>, again: bool) -> Verdict;
+
+    /// What `answer` failed on, read where it is told.
+    fn failure<'a>(&self, answer: &'a Result<R::Ok, R::Err>) -> Option<Failure<'a>>;
 }
 
 impl<R, J> Reads<R> for J
@@ -459,6 +466,10 @@ where
     fn read(&self, answer: &Result<R::Ok, R::Err>, again: bool) -> Verdict {
         judged(self, again, answer)
     }
+
+    fn failure<'a>(&self, answer: &'a Result<R::Ok, R::Err>) -> Option<Failure<'a>> {
+        answer.as_ref().err().map(|error| Failure::Error(error))
+    }
 }
 
 /// How one answer counts, on `judging`'s two axes: an `Ok` is a success,
@@ -467,8 +478,8 @@ where
 /// direction otherwise, and is sent again when the run may and `judging`
 /// retries it, after the wait a [`Problem`](nest_rs_core::Problem) in its
 /// chain asks, whichever it counts for. A call sent once asks neither retry
-/// predicate. Its chain is said for an `Err` that is a failure or sent again,
-/// and for no other.
+/// predicate. No chain is said here: what an `Err` failed on is read off the
+/// answer where it is told.
 pub(crate) fn judged<R, J>(judging: &J, again: bool, answer: &Result<R::Ok, R::Err>) -> Verdict
 where
     R: ResilientAnswer,
@@ -483,14 +494,10 @@ where
     match (judging.records(error), again && judging.retries(error)) {
         (true, true) => Verdict::Failed {
             asked: asked(error),
-            error: told(error).into(),
         },
-        (true, false) => Verdict::Final {
-            error: told(error).into(),
-        },
+        (true, false) => Verdict::Final,
         (false, true) => Verdict::IgnoredAgain {
             asked: asked(error),
-            error: told(error).into(),
         },
         (false, false) => Verdict::Ignored,
     }
@@ -561,6 +568,12 @@ where
         self.judging.read(answer, again)
     }
 
+    fn failure(&self) -> Option<Failure<'_>> {
+        self.answer
+            .as_ref()
+            .and_then(|answer| self.judging.failure(answer))
+    }
+
     fn let_go(self: Pin<&mut Self>) {
         *self.project().answer = None;
     }
@@ -568,10 +581,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
     use std::time::Duration;
 
-    use nest_rs_core::{Problem, error_message};
+    use nest_rs_core::Problem;
 
     use super::*;
     use crate::error::ResilienceError;
@@ -588,13 +600,12 @@ mod tests {
     /// The two axes are independent: `record_if` alone decides whether an
     /// `Err` is a failure or counts in neither direction, `retry_if` and
     /// `retry_ok_if` alone the retry, and the wait a `Problem` in the chain
-    /// asks rides an `Err` sent again whichever it counts for. The chain is
-    /// told for an `Err` that is a failure or sent again, and for no other.
+    /// asks rides an `Err` sent again whichever it counts for. No chain is
+    /// said in judging: what an `Err` failed on is its own, read where told.
     #[test]
     fn an_answer_is_judged_on_two_axes_each_by_its_own_predicate() {
         let throttled =
             Throttled(Problem::new(429, nest_rs_core::code::RATE_LIMITED).with_retry_after(7));
-        let chain: Cow<'static, str> = error_message(&throttled).into();
         type Quoted = Answer<u32, Throttled>;
 
         let asked = Some(Duration::from_secs(7));
@@ -614,25 +625,17 @@ mod tests {
 
         assert_eq!(
             again(every, none, every, &err),
-            Verdict::Failed {
-                asked,
-                error: chain.clone(),
-            },
+            Verdict::Failed { asked },
             "by default an `Err` is a failure, sent again"
         );
         assert_eq!(
             again(none, none, every, &err),
-            Verdict::Final {
-                error: chain.clone(),
-            },
+            Verdict::Final,
             "a failure `retry_if` refuses ends the run"
         );
         assert_eq!(
             again(every, none, none, &err),
-            Verdict::IgnoredAgain {
-                asked,
-                error: chain.clone(),
-            },
+            Verdict::IgnoredAgain { asked },
             "an `Err` `record_if` refuses counts in neither direction, still sent again"
         );
         assert_eq!(
@@ -658,7 +661,7 @@ mod tests {
 
         assert_eq!(
             once(every, &err),
-            Verdict::Final { error: chain },
+            Verdict::Final,
             "sent once, an `Err` is a failure the run ends on"
         );
         assert_eq!(

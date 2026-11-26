@@ -133,7 +133,7 @@ mod tests {
     use nest_rs_core::{Unnamed, instance};
 
     use super::*;
-    use crate::{BreakerState, ResilienceError, ResiliencePolicy};
+    use crate::{BreakerState, ResilienceError, ResiliencePolicy, ResilienceRefusal};
 
     #[instance]
     struct Upstream;
@@ -296,7 +296,13 @@ mod tests {
         for cut in cut {
             let cut = cut.await.expect("the call's task");
             assert!(
-                matches!(cut, Err(ResilienceError::TimedOut { .. })),
+                matches!(
+                    cut,
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::TimedOut { .. },
+                        ..
+                    })
+                ),
                 "{cut:?}"
             );
         }

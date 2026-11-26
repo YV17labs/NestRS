@@ -114,8 +114,8 @@ mod verdict;
 
 pub use breaker::{BreakerPhase, BreakerState, BreakerStats};
 pub use config::ResilienceConfig;
-pub use error::{BreakerError, ResilienceError};
-pub use events::{ResilienceEvent, ResilienceEvents, ResilienceRefusal};
+pub use error::{BreakerError, ResilienceError, ResilienceRefusal};
+pub use events::{ResilienceEvent, ResilienceEvents};
 #[cfg(feature = "reqwest")]
 pub use middleware::ResilienceMiddleware;
 pub use module::{ResilienceModule, ResilienceSetup};

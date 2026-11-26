@@ -82,7 +82,10 @@ async fn the_breakers_opening_carries_the_chain_of_the_failure_that_opened_it() 
     let mut refused = 0;
     for caller in callers {
         match caller.await.expect("no caller panics") {
-            Err(ResilienceError::Open { .. }) => refused += 1,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::Open { .. },
+                ..
+            }) => refused += 1,
             Err(ResilienceError::Failed(_)) => {}
             other => panic!("a down dependency fails or is refused: {other:?}"),
         }

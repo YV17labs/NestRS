@@ -392,7 +392,7 @@ impl<E, F> RecordIf<E, Refused, Refused> for F where F: Unshaped<E> {}
     label = "what `fallback_if` is given",
     note = "it says whether the fallback answers in place of that error, the call's own or the \
             policy's refusal: a function's path, or a closure such as \
-            `|error| matches!(error, ResilienceError::Open {{ .. }})` — a method of `self` is \
+            `|error| matches!(error, ResilienceError::Refused {{ .. }})` — a method of `self` is \
             called from one, `|error| self.is_refusal(error)`"
 )]
 pub trait FallbackIf<E, S>: Fn(&ResilienceError<E>) -> bool {}
@@ -808,7 +808,7 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
-    use crate::error::{Refusal, TIMED_OUT};
+    use crate::error::{ResilienceRefusal, TIMED_OUT};
     use crate::{BreakerState, ResilienceConfig, TARGET};
 
     #[instance]
@@ -1139,7 +1139,13 @@ mod tests {
         })
         .await;
         assert!(
-            matches!(ran, Err(ResilienceError::TimedOut { .. })),
+            matches!(
+                ran,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            ),
             "{ran:?}"
         );
         assert_eq!(attempts.load(Ordering::Relaxed), 3);
@@ -1225,7 +1231,7 @@ mod tests {
     }
 
     /// `refusal`, as the default instance's policy answers it.
-    fn default_refusal(refusal: Refusal) -> ResilienceError<Quote> {
+    fn default_refusal(refusal: ResilienceRefusal) -> ResilienceError<Quote> {
         ResilienceError::refused(refusal, "")
     }
 
@@ -1234,19 +1240,25 @@ mod tests {
         [
             (ResilienceError::Failed(Quote::Down), "the call failed"),
             (
-                default_refusal(Refusal::TimedOut(Duration::from_secs(1))),
+                default_refusal(ResilienceRefusal::TimedOut {
+                    timeout: Duration::from_secs(1),
+                }),
                 TIMED_OUT,
             ),
             (
-                default_refusal(Refusal::Open(Duration::from_secs(30))),
+                default_refusal(ResilienceRefusal::Open {
+                    retry_after: Duration::from_secs(30),
+                }),
                 "the circuit breaker is open",
             ),
             (
-                default_refusal(Refusal::Full),
+                default_refusal(ResilienceRefusal::Full),
                 "the bulkhead has no free slot",
             ),
             (
-                default_refusal(Refusal::Limited(Duration::from_secs(2))),
+                default_refusal(ResilienceRefusal::Limited {
+                    retry_after: Duration::from_secs(2),
+                }),
                 "the rate limit is reached",
             ),
         ]
@@ -1279,7 +1291,15 @@ mod tests {
             called.fetch_add(1, Ordering::Relaxed);
             Ok(7)
         };
-        let open = |error: &ResilienceError<Quote>| matches!(error, ResilienceError::Open { .. });
+        let open = |error: &ResilienceError<Quote>| {
+            matches!(
+                error,
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                }
+            )
+        };
 
         let refused = Fallback::in_place_of(
             fall_back::<Answer, _, _, _, _, _>(
@@ -1301,7 +1321,9 @@ mod tests {
             fall_back::<Answer, _, _, _, _, _>(
                 &policy,
                 &QUOTE,
-                Err(default_refusal(Refusal::Open(Duration::from_secs(30)))),
+                Err(default_refusal(ResilienceRefusal::Open {
+                    retry_after: Duration::from_secs(30),
+                })),
                 open,
             ),
             stale,
@@ -1435,7 +1457,10 @@ mod tests {
         let stale = |error: ResilienceError<Quote>| async move {
             match error {
                 ResilienceError::Failed(Quote::Down) => Ok(1),
-                ResilienceError::Open { .. } => Ok(2),
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                } => Ok(2),
                 other => Err(other),
             }
         };
@@ -1890,7 +1915,13 @@ mod tests {
                 )
                 .await;
                 assert_eq!(
-                    matches!(ran, Err(ResilienceError::Open { .. })),
+                    matches!(
+                        ran,
+                        Err(ResilienceError::Refused {
+                            refusal: ResilienceRefusal::Open { .. },
+                            ..
+                        })
+                    ),
                     refused,
                     "{panics_in:?}: {ran:?}"
                 );

@@ -18,7 +18,7 @@ use std::task::{Context, Poll, ready};
 use nest_rs_database::__private::InstalledSavepoint;
 use nest_rs_database::AtomicError;
 
-use crate::error::Refusal;
+use crate::error::ResilienceRefusal;
 use crate::run::Retry;
 
 /// One attempt's savepoint, of the transaction the ambient executor holds.
@@ -75,7 +75,7 @@ pub(crate) enum Then {
     /// It answers what its call answered, its call holding it.
     Answer,
     /// It answers the policy's refusal, counted and told.
-    Refused(Refusal),
+    Refused(ResilienceRefusal),
     /// It sends its call again, as the retry decided then says.
     Again(Retry),
     /// It unwinds on with the panic of its call, or of a predicate judging
@@ -632,7 +632,13 @@ mod tests {
         .await;
 
         assert!(
-            matches!(ran, Err(ResilienceError::TimedOut { .. })),
+            matches!(
+                ran,
+                Err(ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { .. },
+                    ..
+                })
+            ),
             "{ran:?}"
         );
         assert_eq!(

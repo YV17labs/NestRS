@@ -528,7 +528,7 @@ async fn a_pinned_timeout_ends_an_attempt_the_policys_would_not() {
     assert!(
         matches!(
             hurried,
-            Err(ResilienceError::TimedOut { timeout, .. }) if timeout == Duration::from_millis(100)
+            Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout == Duration::from_millis(100)
         ),
         "{hurried:?}"
     );
@@ -664,7 +664,13 @@ async fn a_decorated_method_refused_by_a_full_bulkhead_is_named_too() {
     });
     assert!(matches!(slow, Ok("answered")), "{slow:?}");
     assert!(
-        matches!(refused, Err(ResilienceError::Full { .. })),
+        matches!(
+            refused,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::Full,
+                ..
+            })
+        ),
         "{refused:?}"
     );
     assert_eq!(parcels.attempted(), 0, "a refused call is never sent");
@@ -699,7 +705,11 @@ async fn every_method_on_one_field_counts_in_one_breaker() {
     assert_eq!(opened.field("method"), None, "{opened:?}");
 
     let refused = parcels.quote().await;
-    let Err(ResilienceError::Open { retry_after, .. }) = refused else {
+    let Err(ResilienceError::Refused {
+        refusal: ResilienceRefusal::Open { retry_after, .. },
+        ..
+    }) = refused
+    else {
         panic!("the failure of another method opened the breaker: {refused:?}");
     };
     assert_eq!(retry_after, Duration::from_secs(30));
@@ -725,7 +735,7 @@ async fn an_idempotent_methods_attempt_slow_to_first_wait_ends_at_its_units_dead
     )
     .await;
     assert!(
-        matches!(cut, Ok(Err(ResilienceError::TimedOut { timeout, .. }))
+        matches!(cut, Ok(Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }))
             if timeout == Duration::from_millis(300)),
         "the policy gave the attempt up at the deadline, before the edge cut it: {cut:?}"
     );
@@ -938,7 +948,7 @@ async fn a_policy_pinned_to_open_on_one_failure_refuses_the_next_call_unsent() {
     );
     let refused = links.preview(7).await;
     assert!(
-        matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+        matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
             if retry_after <= Duration::from_secs(30)),
         "{refused:?}"
     );
@@ -960,7 +970,7 @@ async fn a_method_is_refused_unsent_while_its_breaker_is_opened_by_hand_and_sent
         .expect("an open time the breaker takes");
     let refused = parcels.quote().await;
     assert!(
-        matches!(refused, Err(ResilienceError::Open { retry_after, .. })
+        matches!(refused, Err(ResilienceError::Refused { refusal: ResilienceRefusal::Open { retry_after, .. }, .. })
             if retry_after == Duration::from_secs(60)),
         "{refused:?}"
     );
@@ -1085,7 +1095,7 @@ impl Previews {
     #[resilient(
         previewer,
         fallback = no_card,
-        fallback_if = |error| !matches!(error, ResilienceError::Failed(_))
+        fallback_if = |error| matches!(error, ResilienceError::Refused { .. })
     )]
     async fn card(&self, post: u64) -> Result<Option<String>, ResilienceError<PreviewFailed>> {
         let url = format!("{}/previews/{post}", self.config.upstream_url);

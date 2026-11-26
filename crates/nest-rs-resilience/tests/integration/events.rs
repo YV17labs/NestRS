@@ -270,7 +270,13 @@ async fn an_attempt_timed_out_is_told_with_its_bound_before_its_retry() {
     let mut events = policy.events();
 
     let given_up = policy.run_idempotent(|_| silent()).await;
-    assert!(matches!(given_up, Err(ResilienceError::TimedOut { .. })));
+    assert!(matches!(
+        given_up,
+        Err(ResilienceError::Refused {
+            refusal: ResilienceRefusal::TimedOut { .. },
+            ..
+        })
+    ));
     let told_of_the_run = told(&mut events);
     let [
         ResilienceEvent::Timeout {
@@ -299,7 +305,13 @@ async fn an_attempt_timed_out_is_told_with_its_bound_before_its_retry() {
     let out_of_time =
         nest_rs_core::__private::with_deadline(Some(Instant::now()), policy.run(|_| silent()))
             .await;
-    assert!(matches!(out_of_time, Err(ResilienceError::TimedOut { .. })));
+    assert!(matches!(
+        out_of_time,
+        Err(ResilienceError::Refused {
+            refusal: ResilienceRefusal::TimedOut { .. },
+            ..
+        })
+    ));
     let told = told(&mut events);
     assert!(
         matches!(&told[..], [ResilienceEvent::Timeout { timeout, .. }] if timeout.is_zero()),
@@ -321,7 +333,13 @@ async fn an_attempt_of_a_decorated_method_timed_out_is_told_with_its_method_befo
 
     let given_up = service.unanswered().await;
     assert!(
-        matches!(given_up, Err(ResilienceError::TimedOut { .. })),
+        matches!(
+            given_up,
+            Err(ResilienceError::Refused {
+                refusal: ResilienceRefusal::TimedOut { .. },
+                ..
+            })
+        ),
         "{given_up:?}"
     );
     let told = told(&mut events);
@@ -382,7 +400,7 @@ async fn a_timeout_that_leaves_no_run_to_answer_is_told_by_no_event() {
     let mut told_around = around.events();
     let cut = around.run(|_| policy.run(|_| silent())).await;
     assert!(
-        matches!(cut, Err(ResilienceError::TimedOut { timeout, .. })
+        matches!(cut, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. })
             if timeout == Duration::from_millis(50)),
         "{cut:?}"
     );
@@ -498,7 +516,11 @@ async fn a_call_refused_unsent_is_told_with_the_refusal_its_caller_is_answered()
         service.refresh().await,
         Err(ResilienceError::Failed(Down))
     ));
-    let Err(ResilienceError::Open { retry_after, .. }) = service.refresh().await else {
+    let Err(ResilienceError::Refused {
+        refusal: ResilienceRefusal::Open { retry_after, .. },
+        ..
+    }) = service.refresh().await
+    else {
         panic!("the breaker its failure opened refuses the next");
     };
     let told = refusals(&mut events);
@@ -519,7 +541,13 @@ async fn a_call_refused_unsent_is_told_with_the_refusal_its_caller_is_answered()
     let mut events = policy.events();
     let holding = parked(policy.run(|_| silent()));
     let full = policy.run(|_| silent()).await;
-    assert!(matches!(full, Err(ResilienceError::Full { .. })));
+    assert!(matches!(
+        full,
+        Err(ResilienceError::Refused {
+            refusal: ResilienceRefusal::Full,
+            ..
+        })
+    ));
     assert_eq!(
         refusals(&mut events),
         [(None, None, ResilienceRefusal::Full)]
@@ -534,8 +562,10 @@ async fn a_call_refused_unsent_is_told_with_the_refusal_its_caller_is_answered()
     .await;
     let mut events = policy.events();
     assert!(policy.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
-    let Err(ResilienceError::Limited { retry_after, .. }) =
-        policy.run(|_| async { Ok::<_, Down>(()) }).await
+    let Err(ResilienceError::Refused {
+        refusal: ResilienceRefusal::Limited { retry_after, .. },
+        ..
+    }) = policy.run(|_| async { Ok::<_, Down>(()) }).await
     else {
         panic!("the one token is taken");
     };
@@ -565,7 +595,13 @@ async fn a_call_refused_before_it_takes_a_slot_of_the_bulkhead_is_told_once() {
 
     let out_of_time =
         nest_rs_core::__private::with_deadline(Some(Instant::now()), service.refresh()).await;
-    assert!(matches!(out_of_time, Err(ResilienceError::TimedOut { .. })));
+    assert!(matches!(
+        out_of_time,
+        Err(ResilienceError::Refused {
+            refusal: ResilienceRefusal::TimedOut { .. },
+            ..
+        })
+    ));
     let told = told(&mut events);
     assert!(
         matches!(
@@ -579,7 +615,11 @@ async fn a_call_refused_before_it_takes_a_slot_of_the_bulkhead_is_told_once() {
     policy
         .open_breaker(Duration::from_secs(30))
         .expect("a breaker");
-    let Err(ResilienceError::Open { retry_after, .. }) = service.refresh().await else {
+    let Err(ResilienceError::Refused {
+        refusal: ResilienceRefusal::Open { retry_after, .. },
+        ..
+    }) = service.refresh().await
+    else {
         panic!("the breaker opened by hand refuses the call");
     };
     let told = refusals(&mut events);
@@ -858,10 +898,10 @@ impl fmt::Display for Watched {
 
 impl std::error::Error for Watched {}
 
-/// An event formats nothing a line had not: a retry's chain is the one its
-/// attempt was judged on, said once an attempt whether or not anything
-/// listens; and a fallback's, which nothing else reads, is said only for a
-/// subscription or a line, and once for both.
+/// A failure is put in words only when something tells it: with no line
+/// filed and no subscription open, a failing call formats no chain, its
+/// attempts' nor its fallback's; a retry's is said for its event alone, and a
+/// fallback's once for its line and its event.
 #[tokio::test(start_paused = true)]
 async fn with_no_subscription_a_failing_call_formats_no_chain_for_an_event() {
     let (_app, service, policy) = quotes(ResilienceConfig {
@@ -879,14 +919,10 @@ async fn with_no_subscription_a_failing_call_formats_no_chain_for_an_event() {
     };
 
     assert!(failing().await.is_err());
-    assert_eq!(asked(), 2, "each attempt's chain, said as it is judged");
+    assert_eq!(asked(), 0, "nothing hears an attempt's chain");
     let mut events = policy.events();
     assert!(failing().await.is_err());
-    assert_eq!(
-        asked(),
-        2,
-        "the retry's event copies the chain already said"
-    );
+    assert_eq!(asked(), 1, "the retry's event, the one that hears it");
     assert!(matches!(
         &told(&mut events)[..],
         [ResilienceEvent::Retry { error: Some(error), .. }] if error == "the upstream refused"
@@ -895,23 +931,15 @@ async fn with_no_subscription_a_failing_call_formats_no_chain_for_an_event() {
 
     let fallen = || service.watched(&said);
     assert!(matches!(fallen().await, Ok(7)));
-    assert_eq!(
-        asked(),
-        1,
-        "the attempt's alone: nothing listens, and the fallback's chain is not said"
-    );
+    assert_eq!(asked(), 0, "nothing listens: no chain is said");
     let mut events = policy.events();
     assert!(matches!(fallen().await, Ok(7)));
-    assert_eq!(
-        asked(),
-        2,
-        "the attempt's, and the fallback's for its event"
-    );
+    assert_eq!(asked(), 1, "the fallback's, for its event");
     let lines = LogCapture::install();
     assert!(matches!(fallen().await, Ok(7)));
     assert_eq!(
         asked(),
-        2,
+        1,
         "the fallback's chain said once for its line and its event"
     );
     assert_eq!(

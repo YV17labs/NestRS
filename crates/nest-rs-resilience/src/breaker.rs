@@ -9,8 +9,11 @@
 //! through closed, a call refused open and one more success of a quiet window
 //! read that word alone, and take no lock.
 
+use std::any::Any;
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::VecDeque;
+use std::error::Error;
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -19,8 +22,9 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use self::published::{Holding, Published};
-use crate::error::TIMED_OUT;
+use crate::error::{PANICKED, TIMED_OUT};
 use crate::teller::{Teller, Transition};
+use crate::told::told;
 
 /// The least a call refused beside a probe is told, one tick of the timer:
 /// what is left of a probe's bound once it has passed, the probe's own timer
@@ -47,7 +51,7 @@ pub enum BreakerState {
     #[non_exhaustive]
     Open {
         /// What is left of the open time, never zero: the wait a call refused
-        /// now is told, as [`ResilienceError::Open`](crate::ResilienceError::Open)
+        /// now is told, as [`ResilienceRefusal::Open`](crate::ResilienceRefusal::Open)
         /// says it.
         retry_after: Duration,
     },
@@ -61,19 +65,19 @@ pub enum BreakerState {
     /// - while the probe's call is sent, or still waits for its token of the
     ///   rate limit, what is left of its bound, when it has answered at the
     ///   latest — and a millisecond once that has passed, its own timer giving
-    ///   it up at any moment. The timeout of another policy, the one its
-    ///   caller runs under, may give it up sooner: it has failed then as at
-    ///   its own, and the breaker is open again;
+    ///   it up at any moment, until that bound has passed once more: a probe
+    ///   whose run was kept and never polled again, which no timer gives up,
+    ///   then hands its turn to the next call, and its late answer counts
+    ///   nowhere. The timeout of another policy, the one its caller runs
+    ///   under, may give it up sooner: it has failed then as at its own, and
+    ///   the breaker is open again;
     /// - once the probe's answer is a response its caller holds
     ///   ([`ResilienceMiddleware`](crate::ResilienceMiddleware)), that probe's
     ///   whole bound, however long it has been held: no timer gives a held
     ///   answer up, the turn comes back when its caller has read or dropped
     ///   it, and its reads wait for the dependency no longer than that bound.
     ///
-    /// It carries no time: that bound is the probe's own run's. A limit: the
-    /// turn is given up by the probe's own run, as it is polled or dropped,
-    /// so a caller keeping that run's future and never polling it again
-    /// holds the turn, and every other call refused, for as long as it does.
+    /// It carries no time: that bound is the probe's own run's.
     HalfOpen,
 }
 
@@ -166,60 +170,32 @@ impl BreakerStats {
     }
 }
 
-/// The probe's turn as a call takes it: the first since the breaker opened,
-/// the lines reading it open until that call is sent, the dependency not
-/// called — or the next of a series under way, `passed` of its probes having
-/// succeeded, the lines reading it half-open since the first was sent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Turn {
-    First,
-    Next { passed: usize },
-}
-
-impl Turn {
-    /// How many probes of the series succeeded before this one.
-    const fn passed(self) -> usize {
-        match self {
-            Self::First => 0,
-            Self::Next { passed } => passed,
-        }
-    }
-}
-
+/// Where a breaker is: closed, open until an instant, or half-open, its open
+/// time passed and calls probing the dependency one at a time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Closed,
     Open {
         until: Instant,
     },
-    /// The open time passed and one call holds the probe's `turn`, its call
-    /// not sent yet: every other call is refused until the probe has
-    /// answered, by `until` at the latest.
-    ProbePending {
-        until: Instant,
-        turn: Turn,
-    },
-    /// One call probes the dependency, `passed` probes of the series having
-    /// succeeded before it; every other is refused until it answers, as
-    /// `answers` says.
+    /// The open time passed, `passed` probes of the series having succeeded.
+    /// The lines read it open until a probe's call is `sent`, the dependency
+    /// not called yet; the `probe` out, when one holds the turn, is when it
+    /// has answered, and `None` is the turn free for the next call.
     HalfOpen {
-        answers: Answers,
         passed: usize,
-    },
-    /// Between two probes of a series, `passed` of them having succeeded —
-    /// none, where every probe sent so far counted in neither direction: the
-    /// probe's turn is free, and the next call takes it.
-    BetweenProbes {
-        passed: usize,
+        sent: bool,
+        probe: Option<Answers>,
     },
 }
 
-/// When the probe sent has answered, as far as its breaker knows: what a call
+/// When the probe out has answered, as far as its breaker knows: what a call
 /// refused beside it is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Answers {
-    /// By this instant at the latest, where its attempt's timer gives it up.
-    By(Instant),
+    /// By `until` at the latest, where its attempt's timer, armed for
+    /// `bound`, gives it up.
+    By { until: Instant, bound: Duration },
     /// When its caller has read or dropped the answer it holds past its run,
     /// which no timer bounds: a call refused meanwhile is told the bound the
     /// probe was sent under, the longest its reads wait for the dependency.
@@ -232,35 +208,55 @@ impl Phase {
     const fn told(self) -> BreakerPhase {
         match self {
             Self::Closed => BreakerPhase::Closed,
-            Self::Open { .. }
-            | Self::ProbePending {
-                turn: Turn::First, ..
-            } => BreakerPhase::Open,
-            Self::ProbePending { .. } | Self::HalfOpen { .. } | Self::BetweenProbes { .. } => {
-                BreakerPhase::HalfOpen
-            }
+            Self::Open { .. } | Self::HalfOpen { sent: false, .. } => BreakerPhase::Open,
+            Self::HalfOpen { sent: true, .. } => BreakerPhase::HalfOpen,
         }
     }
 
     /// What a call meeting the breaker in this phase gets: let through —
-    /// sent as the breaker is closed (`None`), or taking the probe's turn —
-    /// or refused for the wait the breaker knows.
-    fn admitting(self) -> Result<Option<Turn>, Duration> {
-        match self {
-            Self::Closed => Ok(None),
-            Self::Open { until } => left(until).map_or(Ok(Some(Turn::First)), Err),
-            Self::BetweenProbes { passed } => Ok(Some(Turn::Next { passed })),
-            Self::ProbePending { until, .. }
-            | Self::HalfOpen {
-                answers: Answers::By(until),
-                ..
-            } => Err(until.saturating_duration_since(Instant::now()).max(OVERDUE)),
+    /// sent as the breaker is closed (`None`), or taking the probe's turn, in
+    /// the phase that makes, its call sent under `bound` unless it postpones
+    /// it — or refused for the wait the breaker knows. A probe whose answer
+    /// was due a whole bound of its own ago — a run kept and never polled
+    /// again, which no timer of its own gives up — hands its turn on: the
+    /// arriving call takes it.
+    fn admitting(self, bound: Duration) -> Result<Option<Self>, Duration> {
+        let (passed, sent) = match self {
+            Self::Closed => return Ok(None),
+            Self::Open { until } => match left(until) {
+                Some(left) => return Err(left),
+                None => (0, false),
+            },
+            Self::HalfOpen {
+                passed,
+                sent,
+                probe: None,
+            } => (passed, sent),
+            Self::HalfOpen {
+                passed,
+                sent,
+                probe: Some(Answers::By { until, bound: own }),
+            } => {
+                let now = Instant::now();
+                if now < until + own {
+                    return Err(until.saturating_duration_since(now).max(OVERDUE));
+                }
+                (passed, sent)
+            }
             #[cfg(feature = "reqwest")]
             Self::HalfOpen {
-                answers: Answers::Held(bound),
+                probe: Some(Answers::Held(bound)),
                 ..
-            } => Err(bound.max(OVERDUE)),
-        }
+            } => return Err(bound.max(OVERDUE)),
+        };
+        Ok(Some(Self::HalfOpen {
+            passed,
+            sent,
+            probe: Some(Answers::By {
+                until: Instant::now() + bound,
+                bound,
+            }),
+        }))
     }
 
     /// The state a call arriving now meets.
@@ -270,9 +266,7 @@ impl Phase {
             Self::Open { until } => left(until).map_or(BreakerState::HalfOpen, |retry_after| {
                 BreakerState::Open { retry_after }
             }),
-            Self::ProbePending { .. } | Self::HalfOpen { .. } | Self::BetweenProbes { .. } => {
-                BreakerState::HalfOpen
-            }
+            Self::HalfOpen { .. } => BreakerState::HalfOpen,
         }
     }
 }
@@ -351,6 +345,32 @@ impl Held {
         }
         self.failed += usize::from(failed);
         self.failed
+    }
+
+    /// How many of the window's outcomes would be failures were one more
+    /// failure counted at the instant `now` reads, leaving the window as it
+    /// stands: what [`count`](Self::count) would answer. `now` is read only
+    /// where outcomes have an age.
+    fn failing(&self, window: usize, now: impl FnOnce() -> Instant) -> usize {
+        let (kept, aged_failed, oldest_kept) = match &self.outcomes {
+            Outcomes::Counted(outcomes) => (outcomes.len(), 0, outcomes.front().copied()),
+            Outcomes::Aged { age, counted } => {
+                let now = now();
+                let aged = counted
+                    .iter()
+                    .take_while(|(at, _)| now.saturating_duration_since(*at) > *age)
+                    .fold((0, 0), |(aged, failed), &(_, old)| {
+                        (aged + 1, failed + usize::from(old))
+                    });
+                (
+                    counted.len() - aged.0,
+                    aged.1,
+                    counted.get(aged.0).map(|&(_, failed)| failed),
+                )
+            }
+        };
+        let evicted = kept == window && oldest_kept == Some(true);
+        self.failed - aged_failed - usize::from(evicted) + 1
     }
 
     /// What the window counts at the instant `now` reads, leaving it as it
@@ -548,9 +568,7 @@ mod published {
                 Phase::Closed if quiet => Self::QUIET,
                 Phase::Closed => Self::CLOSED,
                 Phase::Open { .. } => Self::OPEN,
-                Phase::ProbePending { .. }
-                | Phase::HalfOpen { .. }
-                | Phase::BetweenProbes { .. } => Self::PROBING,
+                Phase::HalfOpen { .. } => Self::PROBING,
             };
             Self(held.epoch << 2 | phase)
         }
@@ -693,6 +711,49 @@ mod published {
     }
 }
 
+/// What an attempt failed on, put in words only when something tells it: the
+/// breaker's opening, a retry's line or its event.
+#[derive(Clone, Copy)]
+pub(crate) enum Failure<'a> {
+    /// A sentence of the policy's own: a timeout, a panic, a status.
+    Said(&'static str),
+    /// The error the call answered, told as its chain is
+    /// ([`told`]).
+    Error(&'a (dyn Error + 'static)),
+}
+
+impl Failure<'_> {
+    /// What the lines telling the attempt say it failed on — an error as its
+    /// chain is told — or the panic of words that panicked, which counts as a
+    /// panic of the call's, unwinding on once the failure is counted.
+    pub(crate) fn said(self) -> Result<Cow<'static, str>, Unwound> {
+        match self {
+            Self::Said(said) => Ok(Cow::Borrowed(said)),
+            Self::Error(error) => catch_unwind(AssertUnwindSafe(|| told(error))).map(Cow::Owned),
+        }
+    }
+}
+
+/// The payload of a panic a run unwinds on once it has counted it.
+pub(crate) type Unwound = Box<dyn Any + Send>;
+
+/// What an attempt comes to in its breaker.
+#[derive(Clone, Copy)]
+enum Outcome<'e> {
+    Success,
+    Failure(Failure<'e>),
+    /// An answer counting in neither direction.
+    Neither,
+    /// Given up by its caller before it answered, its call sent.
+    Abandoned,
+    /// Given up before its call was sent.
+    Withdrawn,
+}
+
+/// A failure opening the breaker, its words not said yet: the lock is let go
+/// for them.
+struct Unsaid;
+
 /// What a breaker is built from: its policy's settings.
 pub(crate) struct BreakerSettings {
     /// The latest attempts the window counts.
@@ -742,7 +803,9 @@ impl<'b> Pass<'b> {
     /// refuses meanwhile is told.
     pub(crate) fn postpone(&self, to: Instant, bound: Duration) {
         if self.probe {
-            self.breaker.probe_postponed(self.epoch, to + bound);
+            let until = to + bound;
+            self.breaker
+                .probe_out(self.epoch, Answers::By { until, bound }, false);
         }
     }
 
@@ -761,7 +824,9 @@ impl<'b> Pass<'b> {
             until,
         };
         if probe {
-            self.breaker.probe_sent(self.epoch, bound);
+            let until = Instant::now() + bound;
+            self.breaker
+                .probe_out(self.epoch, Answers::By { until, bound }, true);
         }
         sent
     }
@@ -771,7 +836,7 @@ impl Drop for Pass<'_> {
     #[inline]
     fn drop(&mut self) {
         if self.probe {
-            self.breaker.withdraw_probe(self.epoch);
+            self.breaker.handed_on(self.epoch, Outcome::Withdrawn);
         }
     }
 }
@@ -813,12 +878,25 @@ impl Sent<'_> {
         self.until.is_some_and(|until| Instant::now() >= until)
     }
 
+    /// The attempt answered: a success, or a failure on `failure`, put in
+    /// words only if it opens the breaker. Words that panic hand the panic
+    /// back, the failure counted.
     #[inline]
-    pub(crate) fn settle(self, failure: Option<&str>) {
+    pub(crate) fn ended(self, failure: Option<Failure<'_>>) -> Result<(), Unwound> {
         // Settled, it is dropped no more: its drop is an attempt given up
         // unanswered, and reads what gave it up.
         let sent = ManuallyDrop::new(self);
-        sent.breaker.record(sent.epoch, sent.probe, failure);
+        let outcome = failure.map_or(Outcome::Success, Outcome::Failure);
+        sent.breaker.settle(sent.epoch, sent.probe, outcome)
+    }
+
+    /// [`ended`](Self::ended) on a success, or on a failure the policy says
+    /// in its own words, which cannot panic.
+    #[cfg(any(test, feature = "reqwest"))]
+    #[inline]
+    pub(crate) fn settle(self, failure: Option<&'static str>) {
+        let said = self.ended(failure.map(Failure::Said));
+        debug_assert!(said.is_ok(), "the policy's own words never panic");
     }
 
     /// The attempt answered what counts in neither direction — an `Err` its
@@ -831,7 +909,7 @@ impl Sent<'_> {
     pub(crate) fn ignore(self) {
         let sent = ManuallyDrop::new(self);
         if sent.probe {
-            sent.breaker.probe_ignored(sent.epoch);
+            sent.breaker.handed_on(sent.epoch, Outcome::Neither);
         }
     }
 
@@ -843,7 +921,8 @@ impl Sent<'_> {
     pub(crate) fn hold(self, bound: Duration) -> HeldAttempt {
         let sent = ManuallyDrop::new(self);
         if sent.probe {
-            sent.breaker.probe_held(sent.epoch, bound);
+            sent.breaker
+                .probe_out(sent.epoch, Answers::Held(bound), false);
         }
         HeldAttempt {
             probe: sent.probe,
@@ -867,9 +946,11 @@ impl Drop for Sent<'_> {
     #[inline]
     fn drop(&mut self) {
         if Cut::encloses() || self.overdue() {
-            self.breaker.record(self.epoch, self.probe, Some(TIMED_OUT));
+            let failure = Outcome::Failure(Failure::Said(TIMED_OUT));
+            let said = self.breaker.settle(self.epoch, self.probe, failure);
+            debug_assert!(said.is_ok(), "the policy's own words never panic");
         } else if self.probe {
-            self.breaker.abandon_probe(self.epoch);
+            self.breaker.handed_on(self.epoch, Outcome::Abandoned);
         }
     }
 }
@@ -991,16 +1072,17 @@ impl Breaker {
             return Err(left);
         }
         let mut held = self.published.lock();
-        let turn = held.phase.admitting()?;
-        if let Some(turn) = turn {
-            held.phase = Phase::ProbePending {
-                until: Instant::now() + bound,
-                turn,
-            };
+        let probing = held.phase.admitting(bound)?;
+        if let Some(probing) = probing {
+            if matches!(held.phase, Phase::HalfOpen { probe: Some(_), .. }) {
+                // An overdue probe's turn taken: what it says late counts nowhere.
+                held.epoch += 1;
+            }
+            held.phase = probing;
         }
         Ok(Pass {
             breaker: self,
-            probe: turn.is_some(),
+            probe: probing.is_some(),
             epoch: held.epoch,
         })
     }
@@ -1032,7 +1114,7 @@ impl Breaker {
         {
             return Some(left);
         }
-        self.published.lock().phase.admitting().err()
+        self.published.lock().phase.admitting(Duration::ZERO).err()
     }
 
     /// The state a call arriving now meets, leaving the breaker as it stands.
@@ -1095,147 +1177,137 @@ impl Breaker {
         (held.epoch == epoch).then_some(held)
     }
 
-    /// Count the outcome of an attempt admitted in `epoch`, `failure` saying
-    /// what it failed on: a probe opens the breaker again, or closes it as the
-    /// last of its series, and any other attempt counts in the window of the
-    /// closed breaker that admitted it — and for nothing once another call
-    /// opened it, closed again since or not. A success the published word
-    /// says is voided so, or is one more in a quiet window, changes nothing,
-    /// and takes no lock.
-    #[inline]
-    fn record(&self, epoch: u64, probe: bool, failure: Option<&str>) {
-        if !probe && failure.is_none() {
-            let word = self.published.word();
-            if word.epoch() != epoch || word.quiet() {
-                return;
-            }
-        }
-        self.record_held(epoch, probe, failure);
-    }
-
-    /// [`record`](Self::record) under the lock.
-    #[inline(never)]
-    fn record_held(&self, epoch: u64, probe: bool, failure: Option<&str>) {
+    /// The probe out, of an attempt admitted in `epoch`, has answered as
+    /// `answers` says, its call sent when `sending`: the first probe sent of
+    /// a series makes the breaker half-open, which it files.
+    fn probe_out(&self, epoch: u64, answers: Answers, sending: bool) {
         let Some(mut held) = self.held_since(epoch) else {
             return;
         };
-        if probe {
-            let from = held.phase;
-            let Phase::HalfOpen { passed, .. } = from else {
-                return;
+        let from = held.phase;
+        if let Phase::HalfOpen { sent, probe, .. } = &mut held.phase {
+            *probe = Some(answers);
+            *sent |= sending;
+            if held.phase.told() != from.told() {
+                self.entered(held, from, Moved::Probe);
+            }
+        }
+    }
+
+    /// What an attempt admitted in `epoch` came to, the probe or not: a
+    /// probe opens the breaker again on a failure, closes it as the last of
+    /// its series to succeed, or hands its turn to the next call; any other
+    /// attempt counts in the window of the closed breaker that admitted it —
+    /// and for nothing once the breaker opened or was switched by hand since.
+    /// A success the published word says is voided so, or is one more in a
+    /// quiet window, changes nothing and takes no lock.
+    ///
+    /// A failure is put in words only when it opens the breaker, and never
+    /// under its lock: the lock is let go, the words said, and the breaker
+    /// read again. Words that panic count as [`PANICKED`], and the panic is
+    /// handed back for the attempt's run to unwind on.
+    #[inline]
+    fn settle(&self, epoch: u64, probe: bool, outcome: Outcome<'_>) -> Result<(), Unwound> {
+        if !probe {
+            match outcome {
+                Outcome::Success => {
+                    let word = self.published.word();
+                    if word.epoch() != epoch || word.quiet() {
+                        return Ok(());
+                    }
+                }
+                Outcome::Failure(_) => {}
+                Outcome::Neither | Outcome::Abandoned | Outcome::Withdrawn => return Ok(()),
+            }
+        }
+        self.settle_held(epoch, probe, outcome)
+    }
+
+    /// [`settle`](Self::settle) under the lock.
+    #[inline(never)]
+    fn settle_held(&self, epoch: u64, probe: bool, outcome: Outcome<'_>) -> Result<(), Unwound> {
+        let mut said = None;
+        let mut unwound = None;
+        while let Some(held) = self.held_since(epoch) {
+            let Err(Unsaid) = self.moved(held, probe, outcome, said.as_deref()) else {
+                break;
             };
-            if let Some(error) = failure {
+            let Outcome::Failure(failure) = outcome else {
+                unreachable!("only a failure opens the breaker");
+            };
+            said = Some(failure.said().unwrap_or_else(|payload| {
+                unwound = Some(payload);
+                Cow::Borrowed(PANICKED)
+            }));
+        }
+        unwound.map_or(Ok(()), Err)
+    }
+
+    /// The one transition `outcome` makes of the breaker `held` holds, for
+    /// the probe or another attempt — or, for a failure that opens it with
+    /// no words `said` yet, none: the lock is let go for them to be said.
+    fn moved(
+        &self,
+        mut held: Holding<'_>,
+        probe: bool,
+        outcome: Outcome<'_>,
+        said: Option<&str>,
+    ) -> Result<(), Unsaid> {
+        let from = held.phase;
+        let moved = match (from, outcome) {
+            (Phase::HalfOpen { .. }, Outcome::Failure(_)) if probe => {
+                let error = said.ok_or(Unsaid)?;
                 self.open(&mut held);
-                self.entered(held, from, Moved::Failures { failed: 1, error });
-            } else if passed + 1 < self.probes {
-                held.phase = Phase::BetweenProbes { passed: passed + 1 };
-            } else {
+                Moved::Failures { failed: 1, error }
+            }
+            (Phase::HalfOpen { passed, .. }, Outcome::Success)
+                if probe && passed + 1 >= self.probes =>
+            {
                 held.phase = Phase::Closed;
                 held.forget();
-                self.entered(held, from, Moved::Probe);
+                Moved::Probe
             }
-        } else if held.phase == Phase::Closed {
-            let failed = held.count(self.window, failure.is_some(), Instant::now);
-            if let Some(error) = failure
-                && failed >= self.failures
-            {
+            // The next call probes instead, the series keeping what it counted —
+            // and on no success yet, a probe abandoned once sent leaves it open again.
+            (Phase::HalfOpen { passed, sent, .. }, handed_on) if probe => {
+                let abandoned = passed == 0 && matches!(handed_on, Outcome::Abandoned);
+                held.phase = Phase::HalfOpen {
+                    passed: passed + usize::from(matches!(handed_on, Outcome::Success)),
+                    sent: sent && !abandoned,
+                    probe: None,
+                };
+                if held.phase.told() == from.told() {
+                    return Ok(());
+                }
+                Moved::Probe
+            }
+            (Phase::Closed, Outcome::Success | Outcome::Failure(_)) if !probe => {
+                let failure = matches!(outcome, Outcome::Failure(_));
+                if failure
+                    && said.is_none()
+                    && held.failing(self.window, Instant::now) >= self.failures
+                {
+                    return Err(Unsaid);
+                }
+                let failed = held.count(self.window, failure, Instant::now);
+                let Some(error) = said.filter(|_| failure && failed >= self.failures) else {
+                    return Ok(());
+                };
                 self.open(&mut held);
                 held.forget();
-                self.entered(held, Phase::Closed, Moved::Failures { failed, error });
+                Moved::Failures { failed, error }
             }
-        }
+            _ => return Ok(()),
+        };
+        self.entered(held, from, moved);
+        Ok(())
     }
 
-    /// The probe's call postponed: it has answered by `until` at the latest.
-    fn probe_postponed(&self, epoch: u64, until: Instant) {
-        let Some(mut held) = self.held_since(epoch) else {
-            return;
-        };
-        if let Phase::ProbePending { until: latest, .. } = &mut held.phase {
-            *latest = until;
-        }
-    }
-
-    /// The probe's call sent under `bound`: the breaker is half-open until it
-    /// answers, which the first probe of a series files.
-    fn probe_sent(&self, epoch: u64, bound: Duration) {
-        let Some(mut held) = self.held_since(epoch) else {
-            return;
-        };
-        let from = held.phase;
-        if let Phase::ProbePending { turn, .. } = from {
-            held.phase = Phase::HalfOpen {
-                answers: Answers::By(Instant::now() + bound),
-                passed: turn.passed(),
-            };
-            if turn == Turn::First {
-                self.entered(held, from, Moved::Probe);
-            }
-        }
-    }
-
-    /// The probe's answer held past its run, sent under `bound`: no instant
-    /// ends it from here.
-    #[cfg(feature = "reqwest")]
-    fn probe_held(&self, epoch: u64, bound: Duration) {
-        let Some(mut held) = self.held_since(epoch) else {
-            return;
-        };
-        if let Phase::HalfOpen { answers, .. } = &mut held.phase {
-            *answers = Answers::Held(bound);
-        }
-    }
-
-    /// A probe given up before its call was sent: the next call probes
-    /// instead, and the breaker, where it was all along, files no transition.
-    fn withdraw_probe(&self, epoch: u64) {
-        let Some(mut held) = self.held_since(epoch) else {
-            return;
-        };
-        if let Phase::ProbePending { turn, .. } = held.phase {
-            held.phase = match turn {
-                Turn::First => Phase::Open {
-                    until: Instant::now(),
-                },
-                Turn::Next { passed } => Phase::BetweenProbes { passed },
-            };
-        }
-    }
-
-    /// A probe its caller dropped once its call was sent, before it answered
-    /// and before its bound ended — or whenever, where it was sent under no
-    /// unit's deadline — and one dropped as the line of its own half-opening
-    /// panicked: the next call probes instead, the series keeping what it
-    /// counted — and the breaker, half-open on no success yet, open again,
-    /// saying so. A probe the timeout of a policy around it dropped is none
-    /// of them: it has failed ([`Cut`]).
-    fn abandon_probe(&self, epoch: u64) {
-        let Some(mut held) = self.held_since(epoch) else {
-            return;
-        };
-        let from = held.phase;
-        if let Phase::HalfOpen { passed, .. } = from {
-            if passed > 0 {
-                held.phase = Phase::BetweenProbes { passed };
-                return;
-            }
-            held.phase = Phase::Open {
-                until: Instant::now(),
-            };
-            self.entered(held, from, Moved::Probe);
-        }
-    }
-
-    /// A probe whose answer counts in neither direction: the next call probes
-    /// instead, the series keeping what it counted — and the breaker,
-    /// half-open as that answer found it, files no transition.
-    fn probe_ignored(&self, epoch: u64) {
-        let Some(mut held) = self.held_since(epoch) else {
-            return;
-        };
-        if let Phase::HalfOpen { passed, .. } = held.phase {
-            held.phase = Phase::BetweenProbes { passed };
-        }
+    /// A probe of an attempt admitted in `epoch` handed on with no answer to
+    /// count, or one counting in neither direction: words are never said.
+    fn handed_on(&self, epoch: u64, outcome: Outcome<'_>) {
+        let said = self.settle(epoch, true, outcome);
+        debug_assert!(said.is_ok(), "only a failure is put in words");
     }
 
     /// Open `held` for the whole open time, in an epoch of its own: the
@@ -1390,6 +1462,59 @@ mod tests {
         }
     }
 
+    /// An error counting how often it is said.
+    #[derive(Debug)]
+    struct Counted(AtomicUsize);
+
+    impl std::fmt::Display for Counted {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            f.write_str(DOWN)
+        }
+    }
+
+    impl Error for Counted {}
+
+    /// Two threads failing at once on the failure that opens the breaker,
+    /// each finding it would open it, let its lock go to say their error: it
+    /// opens once, and the other's failure, voided by that opening, counts
+    /// nowhere.
+    #[test]
+    fn two_threads_failing_at_the_threshold_open_the_breaker_once() {
+        for _ in 0..200 {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("a runtime");
+            let _entered = runtime.enter();
+            let breaker = breaker(3, 2);
+            attempt(&breaker, true);
+            let error = Counted(AtomicUsize::new(0));
+            let together = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                for _ in 0..2 {
+                    scope.spawn(|| {
+                        let _entered = runtime.enter();
+                        let sent = breaker
+                            .admit(BOUND)
+                            .expect("a closed breaker admits")
+                            .send(BOUND, None);
+                        together.wait();
+                        let said = sent.ended(Some(Failure::Error(&error)));
+                        assert!(said.is_ok());
+                    });
+                }
+            });
+            assert_eq!(breaker.state(), "open");
+            assert_eq!(breaker.published.lock().epoch, 1, "opened once");
+            let said = error.0.load(Ordering::Relaxed);
+            assert!(
+                (1..=2).contains(&said),
+                "said by the threads it opened for: {said}"
+            );
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn it_opens_once_the_window_holds_enough_failures() {
         let breaker = breaker(4, 2);
@@ -1447,7 +1572,8 @@ mod tests {
     /// A call refused while another holds the probe's turn is told what is
     /// left of the bound that probe handed the breaker — when it took its
     /// turn, when it postponed its call, and when it sent it — and, past it,
-    /// a tick: the probe is being given up, and still holds its turn.
+    /// a tick: the probe is being given up, and still holds its turn, until a
+    /// whole bound of its own more has passed.
     #[tokio::test(start_paused = true)]
     async fn a_call_refused_beside_the_probe_is_told_what_is_left_of_the_probes_own_bound() {
         let breaker = breaker(1, 1);
@@ -1467,10 +1593,42 @@ mod tests {
         assert_eq!(refused_for(&breaker), 3 * second, "sent, under 3 s");
         tokio::time::advance(second).await;
         assert_eq!(refused_for(&breaker), 2 * second);
-        tokio::time::advance(5 * second).await;
-        assert_eq!(refused_for(&breaker), OVERDUE);
+        tokio::time::advance(4 * second).await;
+        assert_eq!(refused_for(&breaker), OVERDUE, "a second past its bound");
         probe.settle(None);
         assert_eq!(breaker.state(), "closed");
+    }
+
+    /// A probe whose answer was due a whole bound of its own ago — its run
+    /// kept and never polled again, which no timer gives up — hands its turn
+    /// to the next call: that call probes, and the late answer, a success or
+    /// a failure, counts nowhere, the breaker as the new probe leaves it. One
+    /// due a tick short of that still holds the turn.
+    #[tokio::test(start_paused = true)]
+    async fn an_overdue_probe_gives_its_turn_up_and_its_late_answer_counts_nothing() {
+        for late in [None, Some(DOWN)] {
+            let breaker = breaker(1, 1);
+            attempt(&breaker, true);
+            tokio::time::advance(OPEN_FOR).await;
+            let kept = breaker
+                .admit(BOUND)
+                .expect("the open time passed")
+                .send(BOUND, None);
+            tokio::time::advance(2 * BOUND - Duration::from_millis(1)).await;
+            assert_eq!(refused_for(&breaker), OVERDUE, "a tick short, it holds");
+            tokio::time::advance(Duration::from_millis(1)).await;
+            assert!(breaker.refusing().is_none(), "the turn is free");
+            let next = breaker.admit(BOUND).expect("the turn handed on");
+            assert!(next.probes(), "the arriving call probes");
+            kept.settle(late);
+            assert_eq!(
+                breaker.state(),
+                "half_open",
+                "{late:?} came late, and counted nowhere"
+            );
+            next.send(BOUND, None).settle(None);
+            assert_eq!(breaker.state(), "closed", "the new probe closed it");
+        }
     }
 
     #[tokio::test(start_paused = true)]

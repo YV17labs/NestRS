@@ -2,14 +2,14 @@
 //! while a part of it is still to come: a response's body.
 
 use std::convert::Infallible;
+use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::breaker::HeldAttempt;
+use crate::breaker::{Failure, HeldAttempt, Unwound};
 use crate::bulkhead::HeldSlot;
-use crate::error::{Refusal, ResilienceError, TIMED_OUT};
+use crate::error::{PANICKED, ResilienceError, ResilienceRefusal, TIMED_OUT};
 use crate::mechanisms::Mechanisms;
-use crate::verdict::PANICKED;
 
 /// What a run's answer holds of its policy once the run is over, while a part
 /// of it is still to come — a response's body: the run's slot of the bulkhead,
@@ -54,7 +54,20 @@ impl Held {
     /// saying what it failed on, or `None` for the success it was judged. The
     /// breaker counts it and the slot is freed, once: settled again, it
     /// changes nothing.
-    pub(crate) fn settle(&mut self, failure: Option<&str>) {
+    pub(crate) fn settle(&mut self, failure: Option<&'static str>) {
+        let said = self.ended(failure.map(Failure::Said));
+        debug_assert!(said.is_ok(), "the policy's own words never panic");
+    }
+
+    /// A read of the answer failed on `error`: a failure, put in words only
+    /// if it opens the breaker, words that panic handed back once it is
+    /// counted.
+    pub(crate) fn failed(&mut self, error: &(dyn Error + 'static)) -> Result<(), Unwound> {
+        self.ended(Some(Failure::Error(error)))
+    }
+
+    /// [`settle`](Self::settle), whatever the failure.
+    fn ended(&mut self, failure: Option<Failure<'_>>) -> Result<(), Unwound> {
         let policy = &*self.policy;
         // Freed after the breaker, as a run's drop hands a probe's turn on before
         // its slot — and as the breaker's telling unwinds, should a line panic.
@@ -63,8 +76,9 @@ impl Held {
             .take()
             .zip(policy.bulkhead.as_ref())
             .map(|(slot, bulkhead)| bulkhead.resume(slot));
-        if let Some((attempt, breaker)) = self.attempt.take().zip(policy.breaker.as_ref()) {
-            breaker.resume(attempt).settle(failure);
+        match self.attempt.take().zip(policy.breaker.as_ref()) {
+            Some((attempt, breaker)) => breaker.resume(attempt).ended(failure),
+            None => Ok(()),
         }
     }
 
@@ -74,7 +88,12 @@ impl Held {
     pub(crate) fn timed_out(&mut self) -> ResilienceError<Infallible> {
         self.settle(Some(TIMED_OUT));
         let teller = &self.policy.teller;
-        let refusal = teller.refused(None, Refusal::TimedOut(self.bound));
+        let refusal = teller.refused(
+            None,
+            ResilienceRefusal::TimedOut {
+                timeout: self.bound,
+            },
+        );
         ResilienceError::refused(refusal, teller.instance())
     }
 

@@ -747,7 +747,7 @@ const PREDICATES: [Predicate; 4] = [
     Predicate {
         key: FALLBACK_IF,
         over: "`Fn(&ResilienceError<E>) -> bool` over the error the run ended on",
-        example: "|error| matches!(error, ResilienceError::Open { .. })",
+        example: "|error| matches!(error, ResilienceError::Refused { .. })",
     },
 ];
 
@@ -2857,7 +2857,7 @@ mod tests {
             (FALLBACK, "fallback = stale"),
             (
                 FALLBACK_IF,
-                "fallback_if = |error| matches!(error, ResilienceError::Open { .. })",
+                "fallback_if = |error| matches!(error, ResilienceError::Refused { .. })",
             ),
             (CANCEL, "cancel = token"),
         ] {

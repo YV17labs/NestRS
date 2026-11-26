@@ -228,7 +228,10 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   bound). A call refused beside a probe is told what is left of the probe's
   bound while its call is sent or waits for its token, a millisecond once that
   bound has passed, and, for a probe whose response the middleware's caller
-  still holds, the probe's whole bound, the same for as long as it is held. Each transition is a `warn` on
+  still holds, the probe's whole bound, the same for as long as it is held. A
+  probe whose answer was due a whole bound of its own ago — its run kept and
+  never polled again, or its runtime stalled that long — hands its turn to the
+  next call, and what it says late counts nowhere. Each transition is a `warn` on
   `nest_rs::resilience` and, beside the `opentelemetry` feature, one more on the
   counter `nestrs.resilience.breaker.transitions`, by
   `nestrs.resilience.instance` and `nestrs.resilience.breaker.state`. A
@@ -279,11 +282,16 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   rate limit — with the time to the next token — as a `ResilienceError`
   implementing `ToProblem`, whose problem rides its chain, so a queue job failing
   with it waits at least that long before its retry, up to an hour. The error is
-  non-exhaustive: `Failed` carries the call's own error, `TimedOut`, `Open`,
-  `Full` and `Limited` the refusals, and `Unsettled`, the error of the unit's
-  own database on an attempt's savepoint, answers the server's own error,
-  opaquely. A refusal names the instance of the policy that made it: each
-  refusal carries `instance`, the marker's `Instance::NAME`, empty for the
+  non-exhaustive: `Failed` carries the call's own error, `Refused` the policy's
+  refusal, and `Unsettled`, the error of the unit's own database on an attempt's
+  savepoint, answers the server's own error, opaquely. A refusal is one set,
+  `ResilienceRefusal` — `TimedOut { timeout }`, `Open { retry_after }`, `Full`,
+  `Limited { retry_after }`, one member per mechanism that refuses — which
+  `ResilienceEvent::Refusal` carries too, but for a timeout, its own `Timeout`
+  event; `matches!(error, ResilienceError::Refused { .. })` reads any refusal,
+  `error.refusal()` hands it over and `refusal.retry_after()` the wait it knows.
+  A refusal names the instance of the policy that made it: `Refused`
+  carries `instance`, the marker's `Instance::NAME`, empty for the
   default instance, and a named instance's sentence says it —
   `` the call did not answer within the timeout of the instance `carrier` ``,
   ``the circuit breaker of the instance `carrier` is open``,
@@ -355,6 +363,12 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   in part; an address with no `://` is left as written), and a status reqwest's own
   sentence says by its code, never the reason phrase after it; under
   `ResilienceMiddleware` a status is said by its code alone, never a header or a body.
+  The chain is put in words only where something tells it: the breaker's opening,
+  a retry's line at `debug` or a subscription's event. A failing call nothing
+  hears formats nothing and allocates nothing for it; an error whose `Display`
+  panics as it is said counts as a panic of the call's, once, and unwinds out of
+  the run, and is the caller's `Err` wherever nothing says it. A subscription
+  opened between a retry's decision and its line hears no `Retry` of it.
 - **A policy's state lives in its process**, each replica's breaker, bulkhead
   and rate its own, and the pages say so.
 - **A policy tells what it does three ways.** A line on `nest_rs::resilience`

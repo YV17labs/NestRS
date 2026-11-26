@@ -352,17 +352,41 @@ impl Refusing {
         let wait =
             nest_rs_core::ToProblem::to_problem(&error).and_then(|problem| problem.retry_after());
         match (self, &error) {
-            (Self::Open, ResilienceError::Open { .. }) => {
+            (
+                Self::Open,
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                },
+            ) => {
                 assert!(wait.is_some(), "an open breaker tells its wait: {error:?}");
             }
-            (Self::TimedOut, ResilienceError::TimedOut { timeout, .. }) => {
+            (
+                Self::TimedOut,
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::TimedOut { timeout, .. },
+                    ..
+                },
+            ) => {
                 assert_eq!(*timeout, PINNED);
                 assert_eq!(wait, None, "a timeout tells no wait: {error:?}");
             }
-            (Self::Full, ResilienceError::Full { .. }) => {
+            (
+                Self::Full,
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Full,
+                    ..
+                },
+            ) => {
                 assert_eq!(wait, None, "a full bulkhead tells no wait: {error:?}");
             }
-            (Self::Limited, ResilienceError::Limited { .. }) => {
+            (
+                Self::Limited,
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Limited { .. },
+                    ..
+                },
+            ) => {
                 assert!(
                     wait.is_some(),
                     "a reached rate tells the time to its next token: {error:?}"

@@ -36,7 +36,8 @@ refuses ends the run and is the method's answer.
 
 A predicate reads `self` and the arguments by reference, and `E` is the call's
 own error: a timeout is no `E`, so neither `retry_if` nor `record_if` reads it,
-and `fallback_if` reads it as `ResilienceError::TimedOut`. A `retry_if`,
+and `fallback_if` reads it as `ResilienceError::Refused` holding
+`ResilienceRefusal::TimedOut`. A `retry_if`,
 `retry_ok_if` or `record_if` that panics fails its attempt as a panic in the body
 does: one failure in the breaker, its savepoint rolled back, and the panic
 unwinds from the method. `fallback_if` and the fallback are asked once the run
@@ -76,7 +77,7 @@ own error to its caller:
 #[resilient(
     upstream,
     fallback = no_card,
-    fallback_if = |error| !matches!(error, ResilienceError::Failed(_))
+    fallback_if = |error| matches!(error, ResilienceError::Refused { .. })
 )]
 pub async fn card(&self, post: Uuid) -> Result<Option<String>, ResilienceError<UpstreamError>> {
     let url = format!("{}/previews/{post}", self.config.upstream_url);
@@ -182,7 +183,7 @@ was.
   `TimedOut` of its own bound), carried by the outer method's `Err`, is an `Err`
   like any other: its breaker counts it as a failure and an idempotent method sends
   it again, unless its `record_if` and `retry_if` refuse it, as in
-  `|error| !matches!(error, PostError::Upstream(ResilienceError::Open { .. }))`,
+  `|error| !matches!(error, PostError::Upstream(e) if e.refusal().is_some())`,
   written for the variant of the error that holds the `ResilienceError`. The
   `Retry-After` an `Open` or a `Limited` carries is waited whole before the call is
   sent again, and one past `BACKOFF_CEILING_MS`, as a fresh opening's is by default,

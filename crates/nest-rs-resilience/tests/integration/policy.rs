@@ -23,7 +23,7 @@ use nest_rs_health::{
 use nest_rs_http::{HttpConfig, HttpModule, controller, routes};
 use nest_rs_resilience::{
     BreakerState, ResilienceConfig, ResilienceError, ResilienceEvent, ResilienceModule,
-    ResiliencePolicy, resilient,
+    ResiliencePolicy, ResilienceRefusal, resilient,
 };
 use nest_rs_testing::{HeadlessApp, TestApp};
 
@@ -286,7 +286,7 @@ async fn a_dependency_hanging_under_its_callers_shorter_timeout_opens_its_own_br
     for _hung in 0..2 {
         let forwarded = shipments.forward().await;
         assert!(
-            matches!(forwarded, Err(ResilienceError::TimedOut { timeout, .. }) if timeout == short),
+            matches!(forwarded, Err(ResilienceError::Refused { refusal: ResilienceRefusal::TimedOut { timeout, .. }, .. }) if timeout == short),
             "{forwarded:?}"
         );
     }
@@ -302,7 +302,10 @@ async fn a_dependency_hanging_under_its_callers_shorter_timeout_opens_its_own_br
         matches!(
             refused,
             Err(ResilienceError::Failed(Forwarded(
-                ResilienceError::Open { .. }
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                }
             )))
         ),
         "{refused:?}"
@@ -433,7 +436,10 @@ async fn an_inner_policys_open_breaker_is_sent_again_after_its_whole_wait_or_not
         matches!(
             refused,
             Err(ResilienceError::Failed(Forwarded(
-                ResilienceError::Open { .. }
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                }
             )))
         ),
         "{refused:?}"
@@ -464,7 +470,10 @@ async fn an_inner_policys_full_bulkhead_is_sent_again_on_the_plain_backoff() {
         matches!(
             refused,
             Err(ResilienceError::Failed(Forwarded(
-                ResilienceError::Full { .. }
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Full,
+                    ..
+                }
             )))
         ),
         "{refused:?}"
@@ -494,7 +503,10 @@ async fn an_inner_policys_refusal_its_callers_predicates_refuse_is_sent_once_and
         matches!(
             refused,
             Err(ResilienceError::Failed(Forwarded(
-                ResilienceError::Open { .. }
+                ResilienceError::Refused {
+                    refusal: ResilienceRefusal::Open { .. },
+                    ..
+                }
             )))
         ),
         "{refused:?}"

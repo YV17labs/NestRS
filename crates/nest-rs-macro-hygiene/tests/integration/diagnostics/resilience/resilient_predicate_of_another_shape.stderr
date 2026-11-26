@@ -74,7 +74,7 @@ error[E0277]: a `#[resilient]` method's `fallback_if` is a `Fn(&ResilienceError<
    |     required by a bound introduced by this call
    |
    = help: the trait `nest_rs::resilience::__private::FallbackIf<CarrierDown, _>` is not implemented for fn item `for<'a> fn(&'a CarrierDown) -> bool {CarrierDown::transient}`
-   = note: it says whether the fallback answers in place of that error, the call's own or the policy's refusal: a function's path, or a closure such as `|error| matches!(error, ResilienceError::Open { .. })` — a method of `self` is called from one, `|error| self.is_refusal(error)`
+   = note: it says whether the fallback answers in place of that error, the call's own or the policy's refusal: a function's path, or a closure such as `|error| matches!(error, ResilienceError::Refused { .. })` — a method of `self` is called from one, `|error| self.is_refusal(error)`
 note: required by a bound in `nest_rs::resilience::__private::fall_back`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
@@ -150,7 +150,7 @@ error[E0277]: a `#[resilient]` method's `fallback_if` is a `Fn(&ResilienceError<
    |     required by a bound introduced by this call
    |
    = help: the trait `nest_rs::resilience::__private::FallbackIf<CarrierDown, _>` is not implemented for fn item `for<'a, 'b> fn(&'a ShipmentsService, &'b ResilienceError<CarrierDown>) -> bool {ShipmentsService::served}`
-   = note: it says whether the fallback answers in place of that error, the call's own or the policy's refusal: a function's path, or a closure such as `|error| matches!(error, ResilienceError::Open { .. })` — a method of `self` is called from one, `|error| self.is_refusal(error)`
+   = note: it says whether the fallback answers in place of that error, the call's own or the policy's refusal: a function's path, or a closure such as `|error| matches!(error, ResilienceError::Refused { .. })` — a method of `self` is called from one, `|error| self.is_refusal(error)`
 note: required by a bound in `nest_rs::resilience::__private::fall_back`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |

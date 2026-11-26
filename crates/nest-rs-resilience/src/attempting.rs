@@ -3,7 +3,7 @@
 //! policy, is that attempt's own call, let through by nothing again and
 //! counted once, by the attempt it is made in.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::mechanisms::Mechanisms;
 
@@ -14,37 +14,49 @@ const INLINE: usize = 8;
 /// the first [`INLINE`] in place, so a run allocates nothing to say so, and
 /// any deeper behind them.
 struct Polling {
-    inline: [*const Mechanisms; INLINE],
-    deeper: Vec<*const Mechanisms>,
-    len: usize,
+    inline: [Cell<*const Mechanisms>; INLINE],
+    deeper: RefCell<Vec<*const Mechanisms>>,
+    len: Cell<usize>,
 }
 
 impl Polling {
-    fn push(&mut self, policy: *const Mechanisms) {
-        match self.inline.get_mut(self.len) {
-            Some(free) => *free = policy,
-            None => self.deeper.push(policy),
+    #[inline]
+    fn push(&self, policy: *const Mechanisms) -> usize {
+        let len = self.len.get();
+        match self.inline.get(len) {
+            Some(free) => free.set(policy),
+            None => self.deeper.borrow_mut().push(policy),
         }
-        self.len += 1;
+        self.len.set(len + 1);
+        len
     }
 
     fn contains(&self, policy: *const Mechanisms) -> bool {
-        self.inline[..self.len.min(INLINE)].contains(&policy) || self.deeper.contains(&policy)
+        let len = self.len.get();
+        self.inline[..len.min(INLINE)]
+            .iter()
+            .any(|held| held.get() == policy)
+            || (len > INLINE && self.deeper.borrow().contains(&policy))
     }
 
-    fn truncate(&mut self, len: usize) {
-        self.len = len;
-        self.deeper.truncate(len.saturating_sub(INLINE));
+    #[inline]
+    fn truncate(&self, len: usize) {
+        if self.len.get() > INLINE {
+            self.deeper
+                .borrow_mut()
+                .truncate(len.saturating_sub(INLINE));
+        }
+        self.len.set(len);
     }
 }
 
 thread_local! {
-    static ATTEMPTING: RefCell<Polling> = const {
-        RefCell::new(Polling {
-            inline: [std::ptr::null(); INLINE],
-            deeper: Vec::new(),
-            len: 0,
-        })
+    static ATTEMPTING: Polling = const {
+        Polling {
+            inline: [const { Cell::new(std::ptr::null()) }; INLINE],
+            deeper: RefCell::new(Vec::new()),
+            len: Cell::new(0),
+        }
     };
 }
 
@@ -59,11 +71,7 @@ impl Attempting {
     /// The poll of an attempt of `policy`'s.
     #[inline]
     pub(crate) fn enter(policy: &Mechanisms) -> Self {
-        let pointer: *const Mechanisms = policy;
-        let around = ATTEMPTING.with_borrow_mut(|attempting| {
-            attempting.push(pointer);
-            attempting.len - 1
-        });
+        let around = ATTEMPTING.with(|attempting| attempting.push(policy));
         Self { around }
     }
 
@@ -71,13 +79,13 @@ impl Attempting {
     #[inline]
     pub(crate) fn inside(policy: &Mechanisms) -> bool {
         let pointer: *const Mechanisms = policy;
-        ATTEMPTING.with_borrow(|attempting| attempting.contains(pointer))
+        ATTEMPTING.with(|attempting| attempting.contains(pointer))
     }
 }
 
 impl Drop for Attempting {
     #[inline]
     fn drop(&mut self) {
-        ATTEMPTING.with_borrow_mut(|attempting| attempting.truncate(self.around));
+        ATTEMPTING.with(|attempting| attempting.truncate(self.around));
     }
 }

@@ -125,7 +125,7 @@ async fn an_instruments_err_on_an_operation_records_the_fields_error_as_debug() 
     assert_eq!(recorded.len(), 2, "{recorded:?}");
     assert_eq!(recorded[0], "UpstreamDown", "an attempt's: {recorded:?}");
     assert!(
-        recorded[1].starts_with("Open {"),
+        recorded[1].starts_with("Refused { refusal: Open {"),
         "the run's refusal: {recorded:?}"
     );
 }

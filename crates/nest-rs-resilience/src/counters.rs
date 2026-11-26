@@ -7,7 +7,7 @@
 //! them ([`Observed`](crate::observed::Observed)). Without the
 //! `opentelemetry` feature a record is nothing.
 
-use crate::error::Refusal;
+use crate::error::ResilienceRefusal;
 
 /// Each transition of a breaker, by the state it entered.
 #[cfg(feature = "opentelemetry")]
@@ -126,7 +126,7 @@ impl Counters {
         .add(1, &[self.instance()]);
     }
 
-    pub(crate) fn refusal(&self, refusal: Refusal) {
+    pub(crate) fn refusal(&self, refusal: ResilienceRefusal) {
         #[cfg(feature = "opentelemetry")]
         made(
             &self.refusals,

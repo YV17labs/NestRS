@@ -97,7 +97,8 @@ so a reader slower than the dependency is never cut.
 - A read that fails counts as a failure in the breaker.
 - A read still waiting once the budget is spent is given up there, and counts
   as a timeout in the breaker. `bytes()`, `chunk()` and the others answer
-  reqwest's error, whose chain holds the `ResilienceError::TimedOut` a request
+  reqwest's error, whose chain holds the `ResilienceError::Refused`, its
+  refusal `ResilienceRefusal::TimedOut`, a request
   given up before its head carries, and a line says that cut by the policy's own
   sentence.
 - Dropped before its end, the answer counts as its head did. Three cases differ: a

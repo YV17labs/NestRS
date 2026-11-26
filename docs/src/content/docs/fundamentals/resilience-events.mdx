@@ -36,7 +36,7 @@ impl PostsService {
 |---|---|
 | `Retry` | an attempt answered what the run sends its call again after, told once the retry is certain, before its call is sent: its `attempt`, the first being `1`, the `wait`, and the `error` — its chain, or the timeout's sentence, `None` for an `Ok` sent again |
 | `Timeout` | an attempt was given up at its bound, with the `timeout`: zero for a call its unit had no time left to send |
-| `Refusal` | the policy refused a call unsent: `ResilienceRefusal::Open`, `Full` or `Limited`, the first and the last with their `retry_after`; `Full` says neither its cause nor a count |
+| `Refusal` | the policy refused a call unsent: `ResilienceRefusal::Open`, `Full` or `Limited`, the first and the last with their `retry_after`; `Full` says neither its cause nor a count; never `TimedOut`, which `Timeout` tells |
 | `Transition` | the breaker moved, `from` and `to` a `BreakerPhase`, and whether by hand (`manual`) |
 | `Fallback` | a fallback answers, with the `error` it answers for |
 | `Lag` | the subscription fell behind, `missed` events dropped |

@@ -1496,3 +1496,125 @@ Four defects, each reproduced by a test that failed first, and one limit closed:
 - **An answer sent again is let go before the wait for its retry** already
   held, through the run and through the middleware
   (`an_answer_sent_again_is_let_go_before_the_wait_for_its_retry`): no change.
+
+## 2026-11-26 — a failure put in words only when something tells it, the breaker as one transition over three phases, and one refusal set
+
+Three of the steps the 2026-11-26 entry left *Not built*, on the run as it
+stands (one `Run<'p>`, the `Mechanisms`, the `Teller`, the published word):
+
+- **A failure is put in words only when something tells it.** `Verdict` is
+  `Copy` and holds no words; what an `Err` failed on stays the call's answer,
+  read through `Calling::failure` — and `Reads::failure` for a transport,
+  `ResilienceMiddleware` saying a status by its code — as a `Failure`: a
+  sentence of the policy's own, or the error. The breaker says it only for the
+  failure that opens it: under its lock it reads whether one more failure
+  would open it (`Held::failing`, what `count` would answer), and if so lets
+  the lock go, says the words, takes the lock again and starts over in the
+  attempt's epoch — no `Display` runs under the lock, and two threads failing
+  at the threshold open it once. A retry says its error when it is decided,
+  only where `Teller::hears` — a subscription open, or a `debug` line on
+  `nest_rs::resilience` enabled — and the two given-up lines say those same
+  words. Performance decided it: a failing call nothing hears formats and
+  allocates nothing. Words that panic count as a panic of the call's, the
+  failure counted once, and unwind out of the run after its savepoint rolls
+  back; where nothing says them, the error is its caller's `Err`. A
+  subscription opened between a retry's decision and its line hears no
+  `Retry` of it.
+- **The breaker is one transition over three phases.** `Phase` is `Closed`,
+  `Open { until }` and `HalfOpen { passed, sent, probe }`: `sent: false` reads
+  as open to the lines, `probe: None` is the turn free, and `probe` says when
+  the probe out has answered, `By { until, bound }` or `Held(bound)`. Every end
+  of a pass is one `settle(epoch, probe, Outcome)` over `Success`, `Failure`,
+  `Neither`, `Abandoned` and `Withdrawn`, one `match` of phase and outcome
+  (`Breaker::moved`), where seven locked methods each moved one case;
+  `probe_out` covers a probe postponed, sent and held. Elegance decided it: one
+  place per transition, the tests' reference model green trace by trace. An
+  abandoned probe is one dropped once sent: one withdrawn before it was sent
+  never files the breaker open.
+- **A probe overdue by a whole bound of its own gives its turn up.** In
+  `admitting`, a probe whose answer was due a whole bound ago — the bound it
+  stored, never the arriving call's, so `refusing` reads it exactly — hands its
+  turn to the arriving call, and the epoch moves so its late answer counts
+  nowhere. Correctness decided it: a run kept and never polled again, a stream
+  that stops being read while it awaits a decorated call, held the turn and
+  refused every call for as long as it was kept. The 2026-11-24 limit "**A
+  probe whose run is kept and never polled again holds the half-open turn**"
+  is closed, and one opens in its place below.
+- **One refusal set.** `ResilienceError<E>` is `Failed(E)`,
+  `Refused { refusal, instance }` and `Unsettled`; `ResilienceRefusal` —
+  `TimedOut { timeout }`, `Open { retry_after }`, `Full`,
+  `Limited { retry_after }` — is the set, read off the mechanisms, the next
+  member a mechanism added; it refuses anything that sent a call and answered.
+  The crate-private `Refusal` is gone: the run, the counters, the teller and
+  the event carry the public set, and `ResilienceEvent::Refusal` carries it
+  but for a timeout, which `Timeout` tells as the attempt it gave up.
+  `ResilienceError::refusal()` and `ResilienceRefusal::retry_after()` read it,
+  the error's problem is built from that wait, and the hidden `__problem` and
+  the conversion matches that spelled four variants are one each.
+  `matches!(error, ResilienceError::Refused { .. })` reads any refusal, where
+  the docs' `!matches!(error, ResilienceError::Failed(_))` read `Unsettled`
+  too. Elegance decided it; the crate is unreleased, so nothing published
+  breaks, and every spelling moved in this change: the suites, the seaorm
+  e2e, the docs, the decorator's note, its snapshot.
+
+**Names.** `ResilienceRefusal` was the event's already; it is now the error's
+too, one set for one fact. `refusal` is the field and the accessor, as the
+event's field was. `Failure` names what an attempt failed on, `Unsaid` the
+failure that opens the breaker before its words are said, `Outcome` what an
+attempt came to in its breaker; each is crate-private.
+
+**Refused:**
+
+- **The two given-up lines saying their words inside tracing's lazy field**,
+  as planned: the words are said once at the decision, for every line and the
+  event that hears them, where a lazy field would say them per line and a
+  panic of theirs would unwind from inside a line.
+- **The simplicity prototype's breaker as written**: built on a pass with no
+  borrow and no published word, and its overdue rule read the arriving call's
+  bound, which makes `refusing` read a millisecond early. Its phases and its
+  one `match` are kept, over this breaker's guards.
+
+**Limits, named:**
+
+- **A runtime stalled past a whole bound voids a live probe**: the breaker
+  stays half-open on the new probe, and the late one's answer counts nowhere,
+  a success included. Closing it is the probe's own timer firing on time.
+- **A subscription opened between a retry's decision and its line** hears no
+  `Retry` of it, and a filter enabling `debug` there files none.
+- **An error whose `Display` panics** fails its run only where something says
+  it; elsewhere it is its caller's `Err` as it came.
+
+**Measured**, release, `benches/policy.rs` in the dev container — aarch64,
+fourteen cores — criterion's medians in ns, before on the commit this lane
+started from (load 0.6 to 3.3), after on this one, the nesting record and the
+seated meter count included (load 1.4 to 6.1, the subset rerun twice):
+
+| Row | Before | After |
+|---|---|---|
+| `judged/bare/err_by_default` | 306.9 | 40.6 |
+| `run/bare` | 62.3 | 62.6 |
+| `resilient/bare` | 41.3 | 42.6 |
+| `resilient/breaker` | 46.0 | 50.1 |
+| `refused/run/no_subscription` | 51.6 | 55.8, 56.6, 57.4 |
+| `contended/refused` | 89.3 | 105.8, 100.4, 120.1 |
+| `token/new`, code no step touched | 16.4 | 17.1, 16.6, 17.6 |
+
+A failing call nothing hears costs what an answering one does: its chain was
+said for every failure, 266 ns of it. Every other row moved between −1 % and
++9 %, within what `token/new`, which nothing here touches, moved across the
+same runs (+1 % to +7 %) on a machine whose load rose fivefold: no gain or
+loss is claimed for them. What each step adds on the hot path is counted, not
+measured: a run reads one thread-local as it opens and writes it twice per
+poll of its call, reads the seated count once, and a refusal's counter reads
+it once more.
+
+**Superseded:** 2026-11-26, *Not built*: "a failure's chain put into words
+only when a line, an event or the breaker's opening tells it; the breaker as
+one transition over three phases, a probe long overdue giving its turn up; and
+the four refusals as one public set, `ResilienceError::Refused`" are built
+above, and "a failing call still has its chain said for the breaker's opening
+whether or not anything tells it: 285 ns on `judged/bare/err_by_default`" no
+longer holds. The rest of that list — a refused method's refusals in its body's
+place, `#[tracing::instrument]` read in one order, an `impl Trait` inferred,
+`record_if` lending only what it names, the macro crate split — is the
+decorator lane's.

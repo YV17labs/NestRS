@@ -97,7 +97,11 @@ just ci     # every check CI runs: lint, docs and tests
   trade-offs on performance, security and the standards, with the evidence. **A
   dependency is decided, never asked**: the market's standard for the job in its
   year — stable, maintained, within the freshness bar (`manifests-ci.md`) — is
-  taken, and the commit body says why it is that one.
+  taken, and the commit body says why it is that one. A report hands the owner
+  no list to settle: what this file answers is decided and said with the value
+  that decided it, and a security hole found anywhere is fixed, never asked.
+- Work not yet released names no release number: the owner numbers a release
+  when cutting it (`manifests-ci.md`, *Semver*).
 - A red check belongs to the change that turned it red: fixed at once or
   reverted. Code and a rule that drift: the code wins and the rule is fixed in
   that commit, unless the rule is a security invariant or a hard "no".

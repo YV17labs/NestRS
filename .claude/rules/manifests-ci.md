@@ -261,7 +261,9 @@ held by review: docs.rs builds the default features alone, and its page shows
 what `just doc` checks (`decisions/docs-rs-renders-every-feature.md`). The changelog
 follows Keep a Changelog, one file per minor line — `changelog/<major>.<minor>.md`
 holds that line's releases and patches — and `CHANGELOG.md` is their index, newest
-first. A new line opens its file under `[Unreleased]` and its index row; a breaking
-change carries its upgrading entry. A released entry is the record of what shipped
+first. What is not yet released lives in `changelog/unreleased.md`, its index row
+`Unreleased`, and no file, page, decision or rustdoc names the number it will
+carry: cutting the release numbers it and renames the file; a breaking change
+carries its upgrading entry. A released entry is the record of what shipped
 and is never rewritten to a later rule; `[Unreleased]` is prose like any other,
 `<PREFIX>_` included.

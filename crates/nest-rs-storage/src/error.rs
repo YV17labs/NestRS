@@ -279,11 +279,10 @@ fn said_code(code: Option<&str>) -> String {
 /// its retry error the request's URI — the key, a value when keys carry user
 /// input — and its HTTP client's the URL. Each link is said by its kind, and
 /// what lies below by the links that quote neither.
-fn say(link: &(dyn Error + 'static)) -> Option<String> {
-    let error = nest_rs_core::__private::link_as::<object_store::Error>(link)?;
+fn say(error: &object_store::Error) -> Option<String> {
     let kind = match error {
         object_store::Error::Generic { store, .. } => {
-            return Some(below(link.source(), (*store).to_owned()));
+            return Some(below(error.source(), (*store).to_owned()));
         }
         object_store::Error::NotFound { .. } => "no object at that key",
         object_store::Error::InvalidPath { .. } => "the key is not a valid path",
@@ -300,10 +299,10 @@ fn say(link: &(dyn Error + 'static)) -> Option<String> {
         object_store::Error::UnknownConfigurationKey { .. } => "an unknown configuration key",
         _ => "the store failed",
     };
-    Some(below(link.source(), kind.to_owned()))
+    Some(below(error.source(), kind.to_owned()))
 }
 
-nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say) }
 
 /// `said`, followed by what the links from `link` down say without quoting a
 /// URL: an I/O error (a refused connection, a TLS certificate, a bound the

@@ -416,6 +416,48 @@ impl fmt::Display for Problem {
 
 impl Error for Problem {}
 
+/// A decode failure said as the client's: `400` under
+/// [`INVALID_ARGUMENT`](code::INVALID_ARGUMENT), its detail the report — where
+/// it failed, once [`located`](crate::DecodeError::located), what kind of
+/// value was found and what was expected — and never the value.
+///
+/// How a handler that decodes its client's text by hand says so. A decode
+/// failure is no blame by its type: a chain holding one — an upstream's answer
+/// that did not decode, a stored value — is the server's failure, answered
+/// opaquely and filed, on every edge.
+///
+/// ```
+/// use nest_rs_core::{DecodeError, Problem, code};
+///
+/// #[derive(Debug, serde::Deserialize)]
+/// struct Order {
+///     quantity: u32,
+/// }
+///
+/// fn ordered(text: &str) -> Result<Order, Problem> {
+///     serde_json::from_str(text).map_err(|failure| {
+///         let again = &mut serde_json::Deserializer::from_str(text);
+///         Problem::from(DecodeError::from(failure).located::<Order, _>(again))
+///     })
+/// }
+///
+/// let refused = ordered(r#"{"quantity":"sk_live_51"}"#).expect_err("not a number");
+/// assert_eq!((refused.status(), refused.code()), (400, code::INVALID_ARGUMENT));
+/// assert_eq!(
+///     refused.detail(),
+///     Some("at `quantity`: invalid type: a string, expected u32"),
+/// );
+/// ```
+impl From<crate::DecodeError> for Problem {
+    fn from(report: crate::DecodeError) -> Self {
+        let detail = match report.path() {
+            Some(path) => format!("at `{path}`: {report}"),
+            None => report.to_string(),
+        };
+        Self::new(400, code::INVALID_ARGUMENT).with_detail(detail)
+    }
+}
+
 /// Whether `byte` may appear in a URI reference (RFC 3986 §2): unreserved,
 /// reserved, or the `%` of a percent-encoded octet.
 const fn is_uri_byte(byte: u8) -> bool {

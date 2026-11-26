@@ -47,11 +47,6 @@ seaorm_alone := kernel_alone + " --features seaorm"
 # without its `otlp` feature, the console alone, which the union turns on.
 console_alone := "cargo nextest run -p nest-rs-opentelemetry --no-default-features --no-fail-fast"
 
-# What `#[operations]` writes in a build without the resilience capability,
-# as 7.0 wrote it: nest-rs-graphql-macros' unit tests built for the crate alone,
-# since the workspace's one feature union turns that capability on.
-graphql_macros_alone := "cargo nextest run -p nest-rs-graphql-macros --lib --no-fail-fast"
-
 # What a release build holds that a debug one cannot reach: nest-rs-resilience's
 # run holds its call in place where a debug build boxes it.
 resilience_release := "cargo nextest run -p nest-rs-resilience --release --no-fail-fast"
@@ -66,7 +61,6 @@ all: && doc
     {{seaorm_alone}}
     {{kernel_alone}}
     {{console_alone}} --lib --test integration
-    {{graphql_macros_alone}}
     {{resilience_release}}
     # A failover moves the primaries every other test runs on, and a node
     # requiring a client certificate refuses their connections: last, one at a time.
@@ -78,7 +72,6 @@ all: && doc
 unit:
     {{nextest}} --lib --bins
     {{console_alone}} --lib
-    {{graphql_macros_alone}}
     {{resilience_release}} --lib
 
 # The in-process suites under each crate's `tests/`, no service needed

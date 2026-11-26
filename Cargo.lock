@@ -2848,7 +2848,6 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-database",
- "nest-rs-graphql",
  "nest-rs-graphql-macros",
  "nest-rs-guards",
  "nest-rs-http",
@@ -3241,6 +3240,7 @@ dependencies = [
  "reqwest",
  "reqwest-middleware",
  "rustls",
+ "rustls-webpki",
  "tokio",
 ]
 
@@ -3512,6 +3512,7 @@ dependencies = [
  "nest-rs-throttler",
  "nest-rs-ws",
  "rcgen",
+ "reqwest",
  "rustls",
  "schemars",
  "sea-orm",

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::future::Future;
 use std::panic::resume_unwind;
 use std::pin::Pin;
@@ -6,16 +5,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Continuation, TaskContext};
-use nest_rs_database::{AtomicBlock, AtomicError, Deferred};
+use nest_rs_database::{AtomicBlock, AtomicError, Holds};
 
-use crate::executor::{FinalizeOutcome, Installed, LazyTransaction, SeaOrmExecutor};
+use crate::executor::{FinalizeOutcome, InstalledTransaction, LazyTransaction};
 use crate::savepoint::Savepoint;
 use crate::unit::Settles;
 
-/// The executor an atomic block installs: a [`Repo`](crate::Repo) reads the
-/// SeaORM executor inside, and the block settles it once.
+/// The executor an atomic block installs: it holds the block's transaction,
+/// which a [`Repo`](crate::Repo) reads, and the block settles it once.
 pub(crate) struct AtomicExecutor {
-    executor: Installed,
+    held: InstalledTransaction,
     /// Where a block of its own on a framework pool unit commits.
     on_pool: Option<PoolCommit>,
 }
@@ -24,7 +23,7 @@ impl AtomicExecutor {
     /// A block running on a transaction of its own.
     pub(crate) fn own(transaction: Arc<LazyTransaction>) -> Self {
         Self {
-            executor: Installed(SeaOrmExecutor::Lazy(transaction)),
+            held: InstalledTransaction::Lazy(transaction),
             on_pool: None,
         }
     }
@@ -33,7 +32,7 @@ impl AtomicExecutor {
     /// whose commit runs where `on_pool` says.
     pub(crate) fn own_on_pool(transaction: Arc<LazyTransaction>, on_pool: PoolCommit) -> Self {
         Self {
-            executor: Installed(SeaOrmExecutor::Lazy(transaction)),
+            held: InstalledTransaction::Lazy(transaction),
             on_pool: Some(on_pool),
         }
     }
@@ -41,60 +40,15 @@ impl AtomicExecutor {
     /// A block running inside a savepoint of its enclosing unit.
     pub(crate) fn savepoint(savepoint: Arc<Savepoint>) -> Self {
         Self {
-            executor: Installed(SeaOrmExecutor::Savepoint(savepoint)),
+            held: InstalledTransaction::Savepoint(savepoint),
             on_pool: None,
         }
     }
 }
 
 impl nest_rs_database::Executor for AtomicExecutor {
-    fn as_any(&self) -> &dyn Any {
-        &self.executor
-    }
-
-    fn non_transactional(&self) -> Option<Arc<dyn nest_rs_database::Executor>> {
-        self.executor.0.non_transactional()
-    }
-
-    fn after_commit(&self, work: Deferred) -> Option<Deferred> {
-        self.executor.0.after_commit(work)
-    }
-
-    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        self.executor.0.atomic()
-    }
-
-    fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
-        self.executor.0.savepoint()
-    }
-
-    #[cfg(feature = "queue")]
-    fn write_outbox(
-        &self,
-        records: &mut dyn Iterator<Item = nest_rs_database::OutboxRecord>,
-    ) -> Option<futures_util::future::BoxFuture<'_, Result<(), nest_rs_database::OutboxError>>>
-    {
-        self.executor.0.write_outbox(records)
-    }
-
-    #[cfg(feature = "queue")]
-    fn remove_outbox<'a>(
-        &'a self,
-        queue: &'a str,
-        id: uuid::Uuid,
-    ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
-    {
-        self.executor.0.remove_outbox(queue, id)
-    }
-
-    #[cfg(feature = "queue")]
-    fn remove_outbox_unique<'a>(
-        &'a self,
-        queue: &'a str,
-        key: &'a str,
-    ) -> Option<futures_util::future::BoxFuture<'a, Result<bool, nest_rs_database::OutboxError>>>
-    {
-        self.executor.0.remove_outbox_unique(queue, key)
+    fn holds(&self) -> Holds<'_> {
+        Holds::Transaction(&self.held)
     }
 }
 
@@ -103,17 +57,16 @@ impl AtomicBlock for AtomicExecutor {
         self: Arc<Self>,
         ok: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), AtomicError>> + Send>> {
-        let (executor, on_pool) = (self.executor.0.clone(), self.on_pool.clone());
+        let (held, on_pool) = (self.held.clone(), self.on_pool.clone());
         // A handle still held past this point is one that escaped the block.
         drop(self);
         Box::pin(async move {
-            match executor {
-                SeaOrmExecutor::Savepoint(savepoint) => savepoint.settle(ok).await,
-                SeaOrmExecutor::Lazy(own) => match on_pool {
+            match held {
+                InstalledTransaction::Savepoint(savepoint) => savepoint.settle(ok).await,
+                InstalledTransaction::Lazy(own) => match on_pool {
                     Some(on_pool) if ok && own.is_opened() => on_pool.commit(own).await,
                     _ => settled(own.finalize(ok).await),
                 },
-                SeaOrmExecutor::Pool(_) => Ok(()),
             }
         })
     }

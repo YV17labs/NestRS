@@ -12,14 +12,12 @@ use nest_rs_core::__private::{
     RefusedAnswer, Shape, Tail, UnitChains, Withheld, caught_problem, dispatch, new_unit_context,
 };
 use nest_rs_core::{
-    DecodeError, Failure, Handler, Outcome, Peer, Problem, ServedAddress, Settled, UnitContext,
-    UnitView as _,
+    Failure, Handler, Outcome, Peer, Problem, ServedAddress, Settled, UnitContext, UnitView as _,
 };
 use nest_rs_database::{
     ExecutorScope, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec, run_unit,
 };
 use nest_rs_guards::Denial;
-use nest_rs_pipes::PipeError;
 
 use crate::client_ip::ClientOrigin;
 use crate::deadline::RequestDeadline;
@@ -27,7 +25,6 @@ use crate::endpoint::{BoxEndpoint, Endpoint};
 use crate::error::{HttpError, Result, file};
 use crate::guard_stage::denial_response;
 use crate::location::caller_uri;
-use crate::pipe::pipe_error;
 use crate::problem::{ProblemDetails, problem_response};
 use crate::request::Request;
 use crate::response::{IntoResponse, Response};
@@ -360,23 +357,16 @@ fn failure_response(failure: &Failure) -> Response {
     }
 }
 
-/// What a failure no layer answered renders: a refusal, a client error the
-/// framework names or a problem in its structured form, anything else the
-/// opaque `500`.
+/// What a failure no layer answered renders: a refusal, a problem in its
+/// structured form — a pipe's refusal carries one — anything else the opaque
+/// `500`, a decode failure among them: an interceptor's, an upstream's answer
+/// or a stored value that did not decode is the server's failure.
 fn unanswered(failure: &Failure) -> Response {
     if let Some(denial) = failure.find::<Denial>() {
         return denial_response(denial);
     }
     if let Some(problem) = failure.find::<Problem>() {
         return problem_response(problem);
-    }
-    if let Some(refused) = failure.find::<PipeError>() {
-        return pipe_error(refused).into_response();
-    }
-    if let Some(decode) = failure.find::<DecodeError>() {
-        return ProblemDetails::bad_request()
-            .with_detail(decode.to_string())
-            .into_response();
     }
     if let Some(error) = failure.find::<HttpError>() {
         return error.rendered_ref();
@@ -450,8 +440,18 @@ mod tests {
     struct Nowhere;
 
     impl Executor for Nowhere {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Pool(self)
+        }
+    }
+
+    impl nest_rs_database::HeldPool for Nowhere {
+        fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            unreachable!("no test opens a block on this handle")
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+            None
         }
     }
 
@@ -732,5 +732,40 @@ mod tests {
         assert_eq!(refused.status(), StatusCode::CONFLICT);
         assert_eq!(refused.answer().status(), StatusCode::CONFLICT);
         assert_eq!(unit.settled(), [false]);
+    }
+
+    /// What a layer fails a unit with and none answers: a pipe's refusal is
+    /// found as the problem it carries, wherever it was wrapped; a decode
+    /// failure — the framework's own report of one included, which a queue's
+    /// push or a stored value raises too — is no word of the client's.
+    #[test]
+    fn a_failure_no_layer_answered_is_read_for_its_problem_alone() {
+        use nest_rs_core::DecodeError;
+        use nest_rs_pipes::PipeError;
+
+        let refused = PipeError::new("must be a valid UUID");
+        assert_eq!(
+            unanswered(&Failure::from(refused.clone())).status(),
+            StatusCode::BAD_REQUEST
+        );
+        let wrapped = nest_rs_core::anyhow::Error::from(refused).context("reading the cursor");
+        assert_eq!(
+            unanswered(&Failure::new(wrapped)).status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let decode = || serde_json::from_str::<u64>(r#""sk_live_51H""#).expect_err("no number");
+        assert_eq!(
+            unanswered(&Failure::from(DecodeError::from(decode()))).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            unanswered(&Failure::from(decode())).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            unanswered(&Failure::from(Problem::from(DecodeError::from(decode())))).status(),
+            StatusCode::BAD_REQUEST
+        );
     }
 }

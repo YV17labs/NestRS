@@ -1,0 +1,5 @@
+error: `#[deprecated]` on an `#[operations]` method deprecates Rust code, whose only caller is the framework: a field is deprecated for its clients with `#[graphql(deprecation = "…")]` on its method, which the schema and its introspection follow
+  --> tests/integration/diagnostics/graphql/deprecated_on_an_operation.rs:15:5
+   |
+15 |     #[deprecated(since = "7.1.0", note = "ask `posts`")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

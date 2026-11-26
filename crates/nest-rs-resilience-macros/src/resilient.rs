@@ -5,8 +5,8 @@
 
 use nest_rs_codegen::__private::{
     HostBorrow, RESILIENT, RETRIES, TIMEOUT, answer_span, cfg_attrs, is_resilient,
-    mixed_site_ident, needs_a_value, opens_on_operation_field_mark, resilient_policy_setting,
-    resilient_retries, resilient_timeout, shared_receiver, site, takes_value, ungrouped_expr,
+    mixed_site_ident, needs_a_value, resilient_policy_setting, resilient_retries,
+    resilient_timeout, shared_receiver, site, takes_value, ungrouped_expr,
 };
 use nest_rs_codegen::{Arg, Grammar, Refusals};
 use proc_macro2::{Delimiter, Group, Span, TokenStream, TokenTree};
@@ -265,10 +265,9 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
         refusals.push(no_method(&item));
         return Err(refused(item, refusals));
     };
-    let (mut on_a_generated_field, mut run_already) = (false, false);
+    let mut run_already = false;
     let read = instrumented(&mut method.block.stmts, &mut |part| {
         if let Part::Written(stmts) = part {
-            on_a_generated_field = opens_on_operation_field_mark(stmts);
             run_already = opens_on_run_mark(stmts);
         }
     });
@@ -276,17 +275,6 @@ fn expansion(args: TokenStream, item: TokenStream) -> Result<TokenStream, Refuse
         return Err(Refused {
             kept: item,
             refusal: syn::Error::new(Span::call_site(), TWICE),
-        });
-    }
-    if on_a_generated_field {
-        return Err(Refused {
-            kept: item,
-            refusal: syn::Error::new(
-                Span::call_site(),
-                "#[resilient] reached the field `#[operations]` generates for this operation, not \
-                 the method written: `#[operations]` reads the decorator by its name — import it \
-                 as `resilient`, and it stays on the method, whose `self` holds the policy",
-            ),
         });
     }
     // A `fn` an instrument wrapped is read once it is an `async fn`: its refusal
@@ -3355,41 +3343,6 @@ mod tests {
             ),
             "{kept}"
         );
-    }
-
-    /// Handed to the field `#[operations]` generates, the decorator says so and
-    /// nothing else: what it would refuse of that field — its arguments, its
-    /// receiver's type — is not the developer's to fix.
-    #[test]
-    fn a_decorator_handed_to_a_generated_field_is_refused_once_and_the_field_kept_as_it_is() {
-        let mark = nest_rs_codegen::__private::operation_field_mark();
-        let field = quote! {
-            async fn preview(&self, ctx: &Context<'_>) -> Result<FieldAnswer<String>> {
-                #mark
-                run_field(SITE, ctx, move || async move { resolve(ctx).await }).await
-            }
-        };
-        for args in [
-            quote!(upstream),
-            quote!(upstream, retries = 0, breaker_open = 1),
-        ] {
-            let refused = refusals(args.clone(), field.clone());
-            assert_eq!(refused.len(), 1, "{refused:#?}");
-            assert!(
-                refused[0].starts_with("#[resilient] reached the field `#[operations]` generates")
-                    && refused[0].contains("import it as `resilient`"),
-                "{refused:#?}"
-            );
-            assert_eq!(kept(args, field.clone()), field.to_string());
-        }
-        // An instrument the field carries above the decorator wraps the mark with the body.
-        let wrapped = instrumented_above(quote! {
-            #mark
-            run_field(SITE, ctx, move || async move { resolve(ctx).await }).await
-        });
-        let refused = refusals(quote!(upstream), wrapped);
-        assert_eq!(refused.len(), 1, "{refused:#?}");
-        assert!(refused[0].starts_with("#[resilient] reached the field"));
     }
 
     /// A setting the policy holds for every caller is told whose it is and

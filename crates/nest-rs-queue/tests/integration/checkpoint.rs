@@ -257,8 +257,18 @@ struct BoundUnit;
 struct Nowhere;
 
 impl nest_rs_database::Executor for Nowhere {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for Nowhere {
+    fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 

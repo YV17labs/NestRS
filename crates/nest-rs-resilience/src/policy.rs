@@ -5969,12 +5969,22 @@ mod tests {
     struct Unsettling;
 
     impl nest_rs_database::Executor for Unsettling {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
+        }
+    }
+
+    impl nest_rs_database::HeldTransaction for Unsettling {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on this unit")
         }
 
-        fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
-            Some(Arc::new(Self))
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            Arc::new(Self)
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 
@@ -7515,12 +7525,22 @@ mod tests {
     struct Settling(Result<Duration, ()>);
 
     impl nest_rs_database::Executor for Settling {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
+        }
+    }
+
+    impl nest_rs_database::HeldTransaction for Settling {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on this unit")
         }
 
-        fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
-            Some(Arc::new(Self(self.0)))
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            Arc::new(Self(self.0))
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 

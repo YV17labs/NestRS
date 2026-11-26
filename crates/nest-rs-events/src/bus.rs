@@ -225,8 +225,8 @@ impl EventBus {
         let event_name = std::any::type_name::<E>();
         // Outside the loop: one emit is one trace, even with nothing ambient.
         let cause = nest_rs_core::Correlation::inherited();
-        // No capture here: the executor that holds the dispatch carries it into
-        // its commit, and one that hands it back runs it inside the emitter.
+        // No capture here: a transaction holding the dispatch carries it into
+        // its commit, and anywhere else it runs inside the emitter.
         nest_rs_database::after_commit(async move {
             if let Some(streams) = streams {
                 #[expect(

@@ -1,4 +1,4 @@
-//! The [`SafeLink`] saying reqwest's errors. reqwest's own sentence quotes the
+//! The [`SafeLink`]s saying reqwest's errors. reqwest's own sentence quotes the
 //! URL the request was sent to, whose path and query hold what the caller sent
 //! — an identifier, a token — and, of a status, the reason phrase the peer
 //! wrote; beneath it lie other crates' errors, whose sentences quote what the
@@ -8,42 +8,51 @@
 //! alone, or beneath an app's error naming it as its source, bare or behind
 //! the pointer `std` makes an error of (an `Arc`, a `Box`, an `Arc<dyn
 //! Error>`), or inside an I/O error holding one, what a reader over a body's
-//! stream makes of it — and says of each only what a type it can read tells,
-//! or a sentence it knows the constant opening of:
+//! stream makes of it, each of which `nest-rs-core` reads for every sayer —
+//! and says of each only what a type it can read tells, or a sentence it
+//! knows the constant opening of:
 //!
 //! - its kind, in reqwest's words, and of a status its class and its code:
 //!   never the URL, never the peer's phrase;
 //! - beneath it, a link another crate's [`SafeLink`] claims as that crate
 //!   says it — the policy's own cut of a body, `nest-rs-resilience`'s — and
-//!   a reqwest error the same way; a decode failure as [`DecodeError`]
-//!   reports it, without the value; an I/O error by the sentence its OS or
-//!   `std` gives it, and one holding another error by what that one tells, or
-//!   else by its kind;
+//!   a reqwest error the same way; a decode failure as `DecodeError` reports
+//!   it, without the value; an I/O error by the sentence its OS or `std`
+//!   gives it, and one holding another error by what that one tells, or else
+//!   by its kind;
 //! - a failure of TLS by rustls's own sentence where its variant holds nothing
 //!   the peer wrote but a code of the protocol ([`said_tls`]) — an alert by
 //!   its name, an answer that is not TLS by the type it was read as, a peer
 //!   sharing no version or suite with this client — and a certificate rustls
-//!   refuses by the opening of its sentence, without the names and the dates
-//!   it goes on to quote;
+//!   refuses by the constant reason it gives ([`refused_certificate`]): a bad
+//!   signature, an unknown issuer, a certificate authority's own certificate
+//!   presented as a server's, a purpose it does not allow — never the names,
+//!   the dates or the bytes the certificate holds;
 //! - a cause of any other type by the opening of its sentence when that is
 //!   one of [`KNOWN`], and by nothing otherwise — hyper's, HTTP/2's, a
 //!   redirect policy's, a serializer's — the chain being read on beneath it.
 //!
 //! An error handing reqwest's sentence on as its own (`#[error(transparent)]`)
-//! holds it as no link, so nothing here reads it — reqwest-middleware's and
-//! an I/O error's apart, which this crate knows — and that sentence's URL and
-//! phrase, with every cause beneath it, are its reader's to cut. A pointer to
-//! a pointer of a type of its own (`Arc<Box<reqwest::Error>>`) and a
-//! reference (`&'static reqwest::Error`) are types this crate does not name:
-//! one handed out as a link is said as `std` displays it, reqwest's sentence
-//! whole.
+//! holds it as no link, so nothing here reads it — reqwest-middleware's
+//! apart, which this crate claims — and that sentence's URL and phrase, with
+//! every cause beneath it, are its reader's to cut. A pointer to a pointer of
+//! a type of its own (`Arc<Box<reqwest::Error>>`) and a reference (`&'static
+//! reqwest::Error`) are types no reader names: one handed out as a link is
+//! said as `std` displays it, reqwest's sentence whole.
+//!
+//! An app wording reqwest's errors its own way claims an error type of its
+//! own holding one as its source: a second [`SafeLink`] of `reqwest::Error`
+//! refuses the boot (`nest_rs_core::ContestedSafeLinkError`).
 
 use std::error::Error;
 
-use nest_rs_core::__private::{claimed_link, link_as};
-use nest_rs_core::{DecodeError, SafeLink};
+use nest_rs_core::__private::{claimed_link, decode_failure, link_as};
+use nest_rs_core::SafeLink;
 
-nest_rs_core::inventory::submit! { SafeLink::new(say) }
+nest_rs_core::inventory::submit! { SafeLink::of(&say) }
+
+#[cfg(feature = "middleware")]
+nest_rs_core::inventory::submit! { SafeLink::of(&say_middleware) }
 
 /// What a reqwest error of a kind this crate does not know is said as.
 const UNREAD: &str = "the HTTP client failed";
@@ -54,12 +63,10 @@ const UNREAD: &str = "the HTTP client failed";
 /// to it (a bound of the client's that passed, a scheme it does not speak, a
 /// name that did not resolve, a redirect followed past its limit); `std`'s
 /// for a lookup that failed; hyper's for a connection closed under a request;
-/// hyper-util's for a proxy that opened no tunnel, a type it keeps private,
-/// whose sentences are constants — all but `missing destination host`, which
-/// no request meets, reqwest refusing a URL with no host first; and rustls's
-/// for a certificate it refuses, without the names and the dates it goes on
-/// to quote.
-const KNOWN: [&str; 17] = [
+/// and hyper-util's for a proxy that opened no tunnel, a type it keeps
+/// private, whose sentences are constants — all but `missing destination
+/// host`, which no request meets, reqwest refusing a URL with no host first.
+const KNOWN: [&str; 12] = [
     "operation timed out",
     "URL scheme is not allowed",
     "error resolving DNS",
@@ -72,33 +79,25 @@ const KNOWN: [&str; 17] = [
     "tunnel error: unsuccessful",
     "tunnel error: failed to create underlying connection",
     "tunnel error: io error establishing tunnel",
-    "invalid peer certificate: UnknownIssuer",
-    "invalid peer certificate: certificate expired",
-    "invalid peer certificate: certificate not valid yet",
-    "invalid peer certificate: certificate not valid for name",
-    "invalid peer certificate",
 ];
 
-/// A reqwest error, and reqwest-middleware's, said by what this crate reads of
-/// it — the one `link` is, or holds: behind a pointer, or inside an I/O error,
-/// which displays the error it holds whole and hands out that error's source.
-/// Any other link, an I/O error holding none included, is its own driver's.
-fn say(link: &(dyn Error + 'static)) -> Option<String> {
-    if let Some(error) = link_as::<reqwest::Error>(link) {
-        return Some(said(error));
-    }
-    #[cfg(feature = "middleware")]
-    if let Some(error) = link_as::<reqwest_middleware::Error>(link) {
-        // Both variants are transparent: they display the error they hold, URL
-        // included, and `source()` skips it.
-        return Some(match error {
-            reqwest_middleware::Error::Reqwest(error) => said(error),
-            reqwest_middleware::Error::Middleware(error) => {
-                nest_rs_core::error_message(error.as_ref())
-            }
-        });
-    }
-    say(link_as::<std::io::Error>(link)?.get_ref()?)
+/// rustls's opening for a certificate it refuses, before the reason.
+const REFUSED_CERTIFICATE: &str = "invalid peer certificate";
+
+/// A reqwest error said by what this crate reads of it.
+fn say(error: &reqwest::Error) -> Option<String> {
+    Some(said(error))
+}
+
+/// reqwest-middleware's error said as the error it holds. Both variants are
+/// transparent: they display that error, URL included, and `source()` skips
+/// it.
+#[cfg(feature = "middleware")]
+fn say_middleware(error: &reqwest_middleware::Error) -> Option<String> {
+    Some(match error {
+        reqwest_middleware::Error::Reqwest(error) => said(error),
+        reqwest_middleware::Error::Middleware(error) => nest_rs_core::error_message(error.as_ref()),
+    })
 }
 
 /// `error` by its kind, then what the causes beneath it tell.
@@ -167,39 +166,47 @@ fn below(mut link: Option<&(dyn Error + 'static)>, sentence: &mut String) -> boo
             }
             return true;
         }
-        // `in_chain` reads on beneath a link: only a last link is read alone.
-        if cause.source().is_none()
-            && let Some(report) = DecodeError::in_chain(cause)
-        {
+        if let Some(report) = decode_failure(cause) {
             tell(&report.to_string(), sentence);
             return true;
         }
-        let written = cause.to_string();
-        if link_as::<rustls::Error>(cause).is_some_and(said_tls) {
-            tell(&written, sentence);
-            told = true;
-        } else if let Some(known) = KNOWN.iter().find(|known| written.starts_with(**known)) {
-            tell(known, sentence);
-            told = true;
+        if let Some(refused) = link_as::<rustls::Error>(cause) {
+            if let Some(said) = said_tls(refused) {
+                tell(&said, sentence);
+                told = true;
+            }
+        } else {
+            let written = cause.to_string();
+            if let Some(known) = KNOWN.iter().find(|known| written.starts_with(**known)) {
+                tell(known, sentence);
+                told = true;
+            }
         }
         link = cause.source();
     }
     told
 }
 
-/// Whether rustls's own sentence for `error` is said: its variant holds
-/// nothing the peer wrote but a code of the protocol — an alert's, a message
-/// type's, an extension's — which rustls names where it knows it. An
-/// allowlist, the enum being open: a certificate's refusal quotes its names
-/// and its dates and is said by its opening ([`KNOWN`]); a rejected Encrypted
-/// Client Hello quotes the configuration the peer answered; and a catch-all's
-/// text (`General`, `Other`) is written by whoever raised it.
-fn said_tls(error: &rustls::Error) -> bool {
+/// What is said of a failure of TLS, and `None` for one nothing is said of.
+///
+/// rustls's own sentence where its variant holds nothing the peer wrote but a
+/// code of the protocol — an alert's, a message type's, an extension's —
+/// which rustls names where it knows it. An allowlist, the enum being open: a
+/// rejected Encrypted Client Hello quotes the configuration the peer
+/// answered, and a catch-all's text (`General`, `Other`) is written by
+/// whoever raised it. A certificate's refusal quotes its names and its dates,
+/// so it is said by rustls's opening and its constant reason
+/// ([`refused_certificate`]), or the opening alone.
+fn said_tls(error: &rustls::Error) -> Option<String> {
     use rustls::Error as Tls;
     use rustls::PeerIncompatible::ServerRejectedEncryptedClientHello as RejectedHello;
 
     match error {
-        Tls::PeerIncompatible(RejectedHello(_)) => false,
+        Tls::InvalidCertificate(refused) => Some(match refused_certificate(refused) {
+            Some(reason) => format!("{REFUSED_CERTIFICATE}: {reason}"),
+            None => REFUSED_CERTIFICATE.to_owned(),
+        }),
+        Tls::PeerIncompatible(RejectedHello(_)) => None,
         Tls::AlertReceived(_)
         | Tls::InvalidMessage(_)
         | Tls::InappropriateMessage { .. }
@@ -215,9 +222,110 @@ fn said_tls(error: &rustls::Error) -> bool {
         | Tls::EncryptError
         | Tls::FailedToGetCurrentTime
         | Tls::FailedToGetRandomBytes
-        | Tls::BadMaxFragmentSize => true,
-        _ => false,
+        | Tls::BadMaxFragmentSize => Some(error.to_string()),
+        _ => None,
     }
+}
+
+/// Why rustls refused a certificate, as a constant: a variant holding nothing
+/// by rustls's own word for it, its name; one holding what the certificate
+/// does — the dates it is valid between, the names it is for, the usages it
+/// allows, an algorithm's identifier — by the constant opening of rustls's
+/// sentence, or the name of the variant it replaced; and webpki's own refusal,
+/// which rustls hands on inside `Other` ([`refused_by_webpki`]). `None` for a
+/// variant read off no release this crate was written against, and for an
+/// `Other` a verifier of the app's raised, whose text is its own.
+fn refused_certificate(error: &rustls::CertificateError) -> Option<String> {
+    use rustls::CertificateError as Refused;
+    use rustls::ExtendedKeyPurpose as Purpose;
+
+    let reason = match error {
+        Refused::BadEncoding
+        | Refused::Expired
+        | Refused::NotValidYet
+        | Refused::Revoked
+        | Refused::UnhandledCriticalExtension
+        | Refused::UnknownIssuer
+        | Refused::UnknownRevocationStatus
+        | Refused::ExpiredRevocationList
+        | Refused::BadSignature
+        | Refused::NotValidForName
+        | Refused::InvalidPurpose
+        | Refused::InvalidOcspResponse
+        | Refused::ApplicationVerificationFailure => return Some(error.to_string()),
+        Refused::ExpiredContext { .. } => "certificate expired",
+        Refused::NotValidYetContext { .. } => "certificate not valid yet",
+        Refused::ExpiredRevocationListContext { .. } => "certificate revocation list expired",
+        Refused::NotValidForNameContext { .. } => "certificate not valid for name",
+        // What this client required of the certificate is its own; what the
+        // certificate allows instead is the certificate's.
+        Refused::InvalidPurposeContext {
+            required: Purpose::ServerAuth,
+            ..
+        } => "certificate does not allow extended key usage for server authentication",
+        Refused::InvalidPurposeContext {
+            required: Purpose::ClientAuth,
+            ..
+        } => "certificate does not allow extended key usage for client authentication",
+        Refused::InvalidPurposeContext { .. } => "certificate does not allow extended key usage",
+        Refused::UnsupportedSignatureAlgorithmContext { .. } => "UnsupportedSignatureAlgorithm",
+        Refused::UnsupportedSignatureAlgorithmForPublicKeyContext { .. } => {
+            "UnsupportedSignatureAlgorithmForPublicKey"
+        }
+        Refused::Other(raised) => return refused_by_webpki(raised.0.downcast_ref()?),
+        _ => return None,
+    };
+    Some(reason.to_owned())
+}
+
+/// webpki's refusal of a certificate, by its name, where rustls has no word of
+/// its own for it — a certificate authority's certificate presented as a
+/// server's, a name constraint — and the variant holds nothing: an allowlist
+/// read off 0.103.17, the enum being open, a variant holding the
+/// certificate's names, dates or identifiers never said.
+fn refused_by_webpki(error: &webpki::Error) -> Option<String> {
+    use webpki::Error as Refused;
+
+    matches!(
+        error,
+        Refused::BadDer
+            | Refused::BadDerTime
+            | Refused::CaUsedAsEndEntity
+            | Refused::CertDistrusted
+            | Refused::CertRevoked
+            | Refused::EmptyEkuExtension
+            | Refused::EndEntityUsedAsCa
+            | Refused::ExtensionValueInvalid
+            | Refused::InvalidCertValidity
+            | Refused::InvalidCrlNumber
+            | Refused::InvalidNetworkMaskConstraint
+            | Refused::InvalidSerialNumber
+            | Refused::InvalidCrlSignatureForPublicKey
+            | Refused::InvalidSignatureForPublicKey
+            | Refused::IssuerNotCrlSigner
+            | Refused::MalformedDnsIdentifier
+            | Refused::MalformedExtensions
+            | Refused::MalformedNameConstraint
+            | Refused::MaximumNameConstraintComparisonsExceeded
+            | Refused::MaximumPathBuildCallsExceeded
+            | Refused::MaximumPathDepthExceeded
+            | Refused::MaximumSignatureChecksExceeded
+            | Refused::NameConstraintViolation
+            | Refused::PathLenConstraintViolated
+            | Refused::SignatureAlgorithmMismatch
+            | Refused::UnknownIssuer
+            | Refused::UnknownRevocationStatus
+            | Refused::UnsupportedCertVersion
+            | Refused::UnsupportedCriticalExtension
+            | Refused::UnsupportedCrlIssuingDistributionPoint
+            | Refused::UnsupportedCrlVersion
+            | Refused::UnsupportedDeltaCrl
+            | Refused::UnsupportedIndirectCrl
+            | Refused::UnsupportedNameType
+            | Refused::UnsupportedRevocationReason
+            | Refused::UnsupportedRevocationReasonsPartitioning
+    )
+    .then(|| error.to_string())
 }
 
 #[cfg(test)]
@@ -429,10 +537,166 @@ mod tests {
                 format!(": invalid peer certificate: {said}")
             );
         }
-        assert_eq!(
-            beneath_tls(CertificateError::BadEncoding.into()),
-            ": invalid peer certificate"
-        );
+    }
+
+    /// What tells one refused certificate from another, and what to change
+    /// when reissuing it: rustls's own word where its variant holds nothing.
+    #[test]
+    fn a_certificate_rustls_refuses_is_said_by_its_constant_reason() {
+        use rustls::CertificateError;
+
+        for (refused, reason) in [
+            (CertificateError::BadEncoding, "BadEncoding"),
+            (CertificateError::Expired, "Expired"),
+            (CertificateError::NotValidYet, "NotValidYet"),
+            (CertificateError::Revoked, "Revoked"),
+            (
+                CertificateError::UnhandledCriticalExtension,
+                "UnhandledCriticalExtension",
+            ),
+            (CertificateError::UnknownIssuer, "UnknownIssuer"),
+            (
+                CertificateError::UnknownRevocationStatus,
+                "UnknownRevocationStatus",
+            ),
+            (
+                CertificateError::ExpiredRevocationList,
+                "ExpiredRevocationList",
+            ),
+            (CertificateError::BadSignature, "BadSignature"),
+            (CertificateError::NotValidForName, "NotValidForName"),
+            (CertificateError::InvalidPurpose, "InvalidPurpose"),
+            (CertificateError::InvalidOcspResponse, "InvalidOcspResponse"),
+            (
+                CertificateError::ApplicationVerificationFailure,
+                "ApplicationVerificationFailure",
+            ),
+        ] {
+            assert_eq!(
+                beneath_tls(refused.into()),
+                format!(": invalid peer certificate: {reason}")
+            );
+        }
+    }
+
+    /// A variant holding what the certificate does is said by rustls's
+    /// opening for it, never by what it holds: the usages the certificate
+    /// allows, a revocation list's dates, an algorithm's identifier.
+    #[test]
+    fn a_certificate_refused_for_what_it_holds_is_said_without_it() {
+        use std::time::Duration;
+
+        use rustls::pki_types::UnixTime;
+        use rustls::{CertificateError, ExtendedKeyPurpose};
+
+        let at = |secs| UnixTime::since_unix_epoch(Duration::from_secs(secs));
+        for (refused, said, quoted) in [
+            (
+                CertificateError::InvalidPurposeContext {
+                    required: ExtendedKeyPurpose::ServerAuth,
+                    presented: vec![ExtendedKeyPurpose::ClientAuth],
+                },
+                "certificate does not allow extended key usage for server authentication",
+                "client authentication",
+            ),
+            (
+                CertificateError::InvalidPurposeContext {
+                    required: ExtendedKeyPurpose::ClientAuth,
+                    presented: vec![ExtendedKeyPurpose::Other(vec![1, 3, 6, 1, 4, 1, 4242])],
+                },
+                "certificate does not allow extended key usage for client authentication",
+                "4242",
+            ),
+            (
+                CertificateError::InvalidPurposeContext {
+                    required: ExtendedKeyPurpose::Other(vec![1, 3, 6, 1, 4, 1, 4242]),
+                    presented: vec![ExtendedKeyPurpose::ServerAuth],
+                },
+                "certificate does not allow extended key usage",
+                "4242",
+            ),
+            (
+                CertificateError::ExpiredRevocationListContext {
+                    time: at(1_800_000_000),
+                    next_update: at(1_700_000_000),
+                },
+                "certificate revocation list expired",
+                "1700000000",
+            ),
+            (
+                CertificateError::UnsupportedSignatureAlgorithmContext {
+                    signature_algorithm_id: vec![42, 134, 72],
+                    supported_algorithms: Vec::new(),
+                },
+                "UnsupportedSignatureAlgorithm",
+                "134",
+            ),
+            (
+                CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext {
+                    signature_algorithm_id: vec![42, 134, 72],
+                    public_key_algorithm_id: vec![42, 134, 73],
+                },
+                "UnsupportedSignatureAlgorithmForPublicKey",
+                "134",
+            ),
+        ] {
+            let refused = rustls::Error::InvalidCertificate(refused);
+            assert!(refused.to_string().contains(quoted), "{refused}");
+            assert_eq!(
+                beneath_tls(refused),
+                format!(": invalid peer certificate: {said}")
+            );
+        }
+    }
+
+    /// webpki's refusals rustls has no word for reach a line inside `Other`:
+    /// one holding nothing is said by its name, and a text a verifier of the
+    /// app's raised, or a variant holding the certificate's names, is not.
+    #[test]
+    fn a_certificate_webpki_refuses_is_said_by_its_name_and_any_other_raiser_by_nothing() {
+        use std::sync::Arc;
+
+        use rustls::pki_types::ServerName;
+        use rustls::{CertificateError, OtherError};
+
+        let other = |raised: Arc<dyn Error + Send + Sync>| {
+            rustls::Error::InvalidCertificate(CertificateError::Other(OtherError(raised)))
+        };
+        for (refused, name) in [
+            (webpki::Error::CaUsedAsEndEntity, "CaUsedAsEndEntity"),
+            (webpki::Error::EndEntityUsedAsCa, "EndEntityUsedAsCa"),
+            (
+                webpki::Error::NameConstraintViolation,
+                "NameConstraintViolation",
+            ),
+            (
+                webpki::Error::PathLenConstraintViolated,
+                "PathLenConstraintViolated",
+            ),
+            (
+                webpki::Error::UnsupportedCertVersion,
+                "UnsupportedCertVersion",
+            ),
+        ] {
+            let refused = other(Arc::new(refused));
+            assert_eq!(
+                beneath_tls(refused),
+                format!(": invalid peer certificate: {name}")
+            );
+        }
+
+        let raised = other(Arc::new(std::io::Error::other(SENT)));
+        assert!(raised.to_string().contains(SENT), "{raised}");
+        assert_eq!(beneath_tls(raised), ": invalid peer certificate");
+
+        let named = other(Arc::new(webpki::Error::CertNotValidForName(
+            webpki::InvalidNameContext {
+                expected: ServerName::try_from("carrier.example").expect("a DNS name"),
+                presented: vec!["DnsName(\"ledger.internal\")".to_owned()],
+            },
+        )));
+        assert!(named.to_string().contains("ledger.internal"), "{named}");
+        assert_eq!(beneath_tls(named), ": invalid peer certificate");
     }
 
     /// What `#[error(transparent)]` expands to: reqwest's sentence as its own,

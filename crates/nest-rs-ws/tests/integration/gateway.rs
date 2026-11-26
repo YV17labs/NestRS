@@ -224,7 +224,16 @@ impl TestGateway {
         Err(LocalFailure::new())
     }
 
-    // A body the handler decodes itself, failing in each tier's shape.
+    // An answer the handler decodes itself, failing in each tier's shape.
+    #[subscribe_message("decode_by_hand")]
+    #[public]
+    async fn decode_by_hand_handler(&self) -> nest_rs_core::anyhow::Result<String> {
+        let amount: u64 = serde_json::from_str(SECRET_BODY).map_err(|failure| {
+            nest_rs_core::Problem::from(nest_rs_core::DecodeError::from(failure))
+        })?;
+        Ok(amount.to_string())
+    }
+
     #[subscribe_message("decode_anyhow")]
     #[public]
     async fn decode_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
@@ -313,7 +322,7 @@ impl nest_rs_core::ToProblem for Taken {
     }
 }
 
-/// What every `decode_*` handler decodes: a number, sent a secret.
+/// What every `decode_*` handler decodes: a number, answered a secret.
 const SECRET_BODY: &str = r#""sk_live_51HsecretTOKEN""#;
 
 /// A `Display`-only error spelling a decode failure — the third tier, which has
@@ -1445,8 +1454,18 @@ impl RecordingUnit {
 struct NoExecutor;
 
 impl nest_rs_database::Executor for NoExecutor {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for NoExecutor {
+    fn transaction(&self) -> std::sync::Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 
@@ -2057,24 +2076,38 @@ async fn a_hook_borrowing_through_the_lifetime_its_receiver_names_runs() {
     );
 }
 
-/// Every tier a handler's error takes: `anyhow::Result` with `?`, serde's error
-/// itself, an error that is not `Send`, and a `Display`-only one.
+/// Every tier a handler's error takes — `anyhow::Result` with `?`, serde's
+/// error itself, an error that is not `Send`, and a `Display`-only one: a
+/// decode failure its chain holds is the server's, answered opaquely and filed
+/// once without the value; one the handler says is its client's answers the
+/// report and files nothing.
 #[tokio::test]
 async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_value() {
     const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
     let logs = nest_rs_testing::LogCapture::install();
     let invalid = nest_rs_core::code::INVALID_ARGUMENT.as_str();
     let internal = nest_rs_core::code::INTERNAL.as_str();
-    for (event, framed, class) in [
-        ("decode_anyhow", REPORT.to_owned(), invalid),
-        ("decode_serde", REPORT.to_owned(), invalid),
-        ("decode_unsendable", REPORT.to_owned(), invalid),
+    let opaque = nest_rs_core::OPAQUE_CLIENT_MESSAGE;
+    for (event, framed, class, filed) in [
+        ("decode_by_hand", REPORT, invalid, None),
+        ("decode_anyhow", opaque, internal, Some(REPORT.to_owned())),
+        ("decode_serde", opaque, internal, Some(REPORT.to_owned())),
+        (
+            "decode_unsendable",
+            opaque,
+            internal,
+            Some(REPORT.to_owned()),
+        ),
         (
             "decode_display_only",
-            nest_rs_core::OPAQUE_CLIENT_MESSAGE.to_owned(),
+            opaque,
             internal,
+            Some(format!("could not read the amount: {REPORT}")),
         ),
     ] {
+        let seen = logs
+            .find(nest_rs_ws::TARGET, "websocket message failed")
+            .len();
         let reply = TestGateway
             .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
             .await;
@@ -2084,6 +2117,12 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
         assert_eq!(frame.error, framed, "{event}");
         assert_eq!(frame.code.as_deref(), Some(class), "{event}");
         assert!(frame.errors.is_none(), "{event}: {frame:?}");
+        let lines = logs.find(nest_rs_ws::TARGET, "websocket message failed");
+        let said: Vec<_> = lines[seen..]
+            .iter()
+            .filter_map(|line| line.field("error"))
+            .collect();
+        assert_eq!(said, Vec::from_iter(filed), "{event}");
     }
     let quoting: Vec<String> = logs
         .events()
@@ -2094,9 +2133,9 @@ async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_val
     assert!(quoting.is_empty(), "lines quoting the value: {quoting:#?}");
 }
 
-/// A decode failure a handler's error shares behind a pointer is no payload its
-/// client sent: the message answers opaquely, never `INVALID_ARGUMENT`, and its
-/// chain is filed without the value.
+/// A decode failure a handler's error shares behind a pointer is answered as
+/// one it names bare is: opaquely, never `INVALID_ARGUMENT`, its chain filed
+/// without the value.
 #[tokio::test]
 async fn a_decode_failure_shared_behind_a_pointer_is_answered_opaquely_and_filed() {
     let logs = nest_rs_testing::LogCapture::install();

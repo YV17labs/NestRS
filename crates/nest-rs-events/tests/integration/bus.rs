@@ -125,12 +125,22 @@ async fn emitting_an_event_with_no_listener_is_a_noop() {
     bus.emit(Unobserved).await;
 }
 
-/// Another driver's pool: nothing to hold work for, the trait's defaults.
+/// Another driver's pool: nothing to hold work for.
 struct Pool;
 
 impl nest_rs_database::Executor for Pool {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for Pool {
+    fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 
@@ -141,11 +151,21 @@ impl nest_rs_database::Executor for Pool {
 struct OpenTransaction(std::sync::Mutex<Vec<nest_rs_database::Deferred>>);
 
 impl nest_rs_database::Executor for OpenTransaction {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Transaction(self)
+    }
+}
+
+impl nest_rs_database::HeldTransaction for OpenTransaction {
+    fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a savepoint on this boundary")
     }
 
-    fn after_commit(&self, work: nest_rs_database::Deferred) -> Option<nest_rs_database::Deferred> {
+    fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+        None
+    }
+
+    fn after_commit(&self, work: nest_rs_database::Deferred) {
         let pool: Arc<dyn nest_rs_database::Executor> = Arc::new(Pool);
         let work: nest_rs_database::Deferred = match nest_rs_database::current_executor_scope() {
             Some(nest_rs_database::ExecutorScope::Request) => Box::pin(
@@ -162,7 +182,6 @@ impl nest_rs_database::Executor for OpenTransaction {
                 None => work,
             };
         self.held().push(work);
-        None
     }
 }
 
@@ -691,9 +710,9 @@ impl ExecutorListeners {
     #[on_event]
     async fn on_recorded(&self, _event: Recorded) {
         let executor = nest_rs_database::current_executor().map(|executor| {
-            if executor.as_any().is::<Pool>() {
+            if executor.holds().downcast_ref::<Pool>().is_some() {
                 "pool"
-            } else if executor.as_any().is::<OpenTransaction>() {
+            } else if executor.holds().downcast_ref::<OpenTransaction>().is_some() {
                 "transaction"
             } else {
                 "another"

@@ -75,15 +75,17 @@ async fn a_post_whose_listener_outlives_the_request_timeout_is_answered_at_the_d
     nest_rs_testing::wait_until(Duration::from_secs(5), || LISTENED.load(Ordering::SeqCst)).await;
 }
 
-/// Whether the running unit's handle downcasts, through the port's reader, to
-/// the executor type a service can name — one it could run an unfiltered
-/// statement on.
+/// Whether what the running unit's handle holds downcasts, through the port's
+/// reader, to a type a service can name — the executor, or sea-orm's own pool
+/// or transaction: one it could run an unfiltered statement on.
 fn reachable() -> bool {
-    current_executor()
-        .expect("the handler runs in a unit")
-        .as_any()
-        .downcast_ref::<SeaOrmExecutor>()
-        .is_some()
+    let handle = current_executor().expect("the handler runs in a unit");
+    let held = handle.holds();
+    held.downcast_ref::<SeaOrmExecutor>().is_some()
+        || held.downcast_ref::<DatabaseConnection>().is_some()
+        || held
+            .downcast_ref::<sea_orm::DatabaseTransaction>()
+            .is_some()
 }
 
 /// [`reachable`] inside an atomic block of the running unit.
@@ -110,18 +112,11 @@ impl SealedController {
     #[post("/")]
     #[public]
     async fn write(&self) -> String {
-        let outside = current_executor()
-            .expect("the handler runs in a unit")
-            .non_transactional()
-            .expect("a unit that sent nothing steps out to its pool")
-            .as_any()
-            .downcast_ref::<SeaOrmExecutor>()
-            .is_some();
         nest_rs_database::after_commit(async {
             *HELD.lock().unwrap() = Some(reachable());
         })
         .await;
-        format!("{} {} {outside}", reachable(), reachable_in_a_block().await)
+        format!("{} {}", reachable(), reachable_in_a_block().await)
     }
 }
 
@@ -151,7 +146,7 @@ async fn no_handle_a_unit_installs_downcasts_to_an_executor_a_service_can_name()
         .post("/sealed")
         .send()
         .await
-        .assert_text("false false false")
+        .assert_text("false false")
         .await;
     assert_eq!(
         *HELD.lock().unwrap(),

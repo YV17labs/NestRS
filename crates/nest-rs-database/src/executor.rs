@@ -3,130 +3,185 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
-use futures_util::future::BoxFuture;
 use nest_rs_core::__private::ExtendedContext;
 use nest_rs_core::{AmbientValue, Continuation};
 
 use crate::atomic::AtomicBlock;
-use crate::error::OutboxError;
-use crate::outbox::OutboxRecord;
+use crate::outbox::{Outbox, OutboxKept};
 use crate::unit::Bound;
 
 /// Work held until the ambient unit of work commits — what [`after_commit`]
-/// hands an [`Executor`] to keep.
+/// hands a [`HeldTransaction`] to keep.
 pub type Deferred = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
 /// An ambient handle to a unit of database work, installed in the ambient
 /// context for the lifetime of a request or a worker job.
 ///
-/// An ORM-specific `Repo` recovers its concrete handle via
-/// [`Executor::as_any`]. A downcast miss (mismatched `Module` + `Repo`) is
-/// logged at `error` and treated as no ambient executor, so the operation fails
-/// rather than panicking or reading "no rows".
-pub trait Executor: Any + Send + Sync + 'static {
-    /// Downcast handle, for an ORM-specific `Repo` to recover its concrete type.
-    fn as_any(&self) -> &dyn Any;
+/// A driver says one thing of its handle, [what it holds](Self::holds), and
+/// the port reads everything else off the answer: the block
+/// [`atomic`](fn@crate::atomic) opens, whether [`after_commit`] waits, the
+/// savepoint a policy runs an attempt in, where a pushed job is kept. A
+/// wrapper around a handle answers what that handle holds.
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use nest_rs_database::{
+///     AtomicBlock, Deferred, Executor, HeldPool, HeldTransaction, Holds, Outbox, OutboxKept,
+/// };
+///
+/// struct Handle {
+///     pool: Pool,
+///     transaction: Option<Transaction>,
+/// }
+/// struct Pool;
+/// struct Transaction;
+///
+/// impl Executor for Handle {
+///     fn holds(&self) -> Holds<'_> {
+///         match &self.transaction {
+///             Some(transaction) => Holds::Transaction(transaction),
+///             None => Holds::Pool(&self.pool),
+///         }
+///     }
+/// }
+///
+/// impl HeldPool for Pool {
+///     fn transaction(&self) -> Arc<dyn AtomicBlock> {
+///         # unreachable!()
+///         // BEGIN on the block's first statement, COMMIT or ROLLBACK as it settles.
+///     }
+///
+///     fn outbox(&self) -> Option<&dyn OutboxKept> {
+///         None
+///     }
+/// }
+///
+/// impl HeldTransaction for Transaction {
+///     fn after_commit(&self, work: Deferred) {
+///         # drop(work);
+///         // Kept until the transaction's boundary settles.
+///     }
+///
+///     fn savepoint(&self) -> Arc<dyn AtomicBlock> {
+///         # unreachable!()
+///         // SAVEPOINT on the block's first statement, RELEASE or ROLLBACK TO as it settles.
+///     }
+///
+///     fn outbox(&self) -> Option<&dyn Outbox> {
+///         None
+///     }
+/// }
+/// ```
+///
+/// A handle that does not say what it holds is no executor: the handle above,
+/// its `holds` left out.
+///
+/// ```compile_fail,E0046
+/// struct Handle;
+///
+/// impl nest_rs_database::Executor for Handle {}
+/// ```
+///
+/// Nor is a transaction offering no savepoint one a handle can hold: the
+/// transaction above, its `savepoint` left out.
+///
+/// ```compile_fail,E0046
+/// use nest_rs_database::{Deferred, HeldTransaction, Outbox};
+///
+/// struct Transaction;
+///
+/// impl HeldTransaction for Transaction {
+///     fn after_commit(&self, work: Deferred) {
+///         drop(work);
+///     }
+///
+///     fn outbox(&self) -> Option<&dyn Outbox> {
+///         None
+///     }
+/// }
+/// ```
+pub trait Executor: Send + Sync + 'static {
+    /// What this handle runs its statements on: the pool, or a transaction.
+    fn holds(&self) -> Holds<'_>;
+}
 
-    /// A handle on the same database **outside** this executor's transaction,
-    /// or `None` when there is nothing to step out of (already a pool) or the
-    /// ORM cannot produce one.
-    ///
-    /// **Only ever pass work that cannot write**: a mutation on the returned
-    /// handle loses atomicity and rollback.
-    fn non_transactional(&self) -> Option<Arc<dyn Executor>> {
-        None
+/// What an [`Executor`] runs its statements on, as its driver says it
+/// ([`Executor::holds`]): the one fact the port decides by.
+#[derive(Clone, Copy)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "closed by definition: a statement commits on its own or with a transaction, and every reader decides by naming both"
+)]
+pub enum Holds<'a> {
+    /// The pool: each statement commits on its own.
+    Pool(&'a dyn HeldPool),
+    /// A transaction — a unit's, the one an atomic block opens of its own on
+    /// the pool, or a block's savepoint inside one: what is written there
+    /// stands once it commits.
+    Transaction(&'a dyn HeldTransaction),
+}
+
+impl<'a> Holds<'a> {
+    /// What the handle holds, as the driver's own type `T` — how a driver's
+    /// query API recovers what it runs a statement on, through every wrapper
+    /// installed around it. `None` for another driver's.
+    pub fn downcast_ref<T: Any>(self) -> Option<&'a T> {
+        let held: &dyn Any = match self {
+            Self::Pool(pool) => pool,
+            Self::Transaction(transaction) => transaction,
+        };
+        held.downcast_ref()
     }
+}
 
-    /// Hold `work` until the transaction this executor's boundary settles has
-    /// committed, and drop it unrun when that transaction does not commit —
-    /// or hand it back, `Some(work)`, when this executor settles no transaction
-    /// the work could wait for, and the caller runs it at once.
-    ///
-    /// An executor that holds the work owes all of it: run after a commit (or a
-    /// boundary that opened none), dropped on every other outcome. The default
-    /// hands it back — right for a pool; a driver whose boundaries settle a
-    /// transaction overrides it.
+/// The pool, as an [`Executor`] holds it ([`Holds::Pool`]): nothing here
+/// waits for a commit, so [`after_commit`] runs its work at once, a pushed job
+/// is filed at once, and a policy's attempt runs on the pool itself.
+pub trait HeldPool: Any + Send + Sync {
+    /// Open a transaction of its own as the block [`atomic`](fn@crate::atomic)
+    /// runs on the pool, committed or rolled back as the block settles.
+    /// Opening sends nothing: the block's first statement does.
+    fn transaction(&self) -> Arc<dyn AtomicBlock>;
+
+    /// The records the driver's outbox keeps, for a cancel on the pool to
+    /// remove one a committed unit wrote and no relay has filed — or `None`
+    /// when it keeps none: a driver binding no
+    /// [`OutboxStore`](crate::OutboxStore), or one whose store no relay armed.
+    fn outbox(&self) -> Option<&dyn OutboxKept>;
+}
+
+/// A transaction, as an [`Executor`] holds it ([`Holds::Transaction`]): a
+/// unit's, the one an atomic block opens of its own on the pool, or the
+/// savepoint a block opens inside one.
+pub trait HeldTransaction: Any + Send + Sync {
+    /// Hold `work` until the transaction this handle's boundary settles has
+    /// committed, and drop it unrun when that transaction does not commit: run
+    /// after a commit (or a boundary that opened none), dropped on every other
+    /// outcome. A savepoint hands what it held to the unit around it when it
+    /// is kept.
     ///
     /// Held work runs where the boundary settles, so it runs under what the
-    /// unit carried where it was registered: the executor captures that here,
+    /// unit carried where it was registered: the handle captures that here,
     /// for a [`Commit`](Continuation::Commit)
     /// ([`RequestContinuation::capture`](nest_rs_core::RequestContinuation::capture)),
-    /// and installs inside it its own handle outside the transaction, under the
+    /// and installs inside it its own pool, outside the transaction, under the
     /// [`current_executor_scope`] read here.
-    fn after_commit(&self, work: Deferred) -> Option<Deferred> {
-        Some(work)
-    }
+    fn after_commit(&self, work: Deferred);
 
-    /// Open an atomic block on this executor — a savepoint of its transaction,
-    /// or a transaction of its own on a pool — or `None` when the driver offers
-    /// none, and [`atomic`](fn@crate::atomic) answers
-    /// [`AtomicError::Unsupported`](crate::AtomicError::Unsupported). Opening
-    /// sends nothing: the block's first statement does.
-    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        None
-    }
+    /// Open a savepoint of this transaction as an atomic block: what
+    /// [`atomic`](fn@crate::atomic) runs here, and what a resilience policy
+    /// runs each attempt of a call it may send again in. What a kept savepoint
+    /// wrote stays its unit's to commit or roll back. Opening sends nothing:
+    /// the block's first statement does.
+    fn savepoint(&self) -> Arc<dyn AtomicBlock>;
 
-    /// Open a savepoint of the transaction this executor runs its statements
-    /// in — the block [`atomic`](Self::atomic) opens there — or `None` when it
-    /// holds none: a pool, whose atomic block is a transaction of its own,
-    /// committed as it settles, where what a savepoint keeps stays its unit's
-    /// to commit or roll back. Opening sends nothing: the block's first
-    /// statement does.
-    ///
-    /// What a resilience policy runs each attempt of a call it may send again
-    /// in. The default offers none, and such an attempt then runs on this
-    /// executor itself; a driver whose `atomic` opens a savepoint inside a
-    /// transaction overrides it.
-    fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
-        None
-    }
-
-    /// Write `records` on the transaction this executor's unit holds, so they
-    /// commit or roll back with its writes — or `None` when it keeps no
-    /// outbox: a pool, a driver binding no [`OutboxStore`](crate::OutboxStore),
-    /// or one whose store no relay armed. The queue port then files the jobs at
-    /// once.
-    ///
-    /// `records` are built as they are read, each job sealed then: a handle
-    /// answering `None` reads none, so a push it files at once pays nothing
-    /// for them. A driver that writes reads them all before it answers, and
-    /// owes the rest: the records land in the store exactly when the unit
-    /// commits, the relay's [`written`](crate::OutboxStore::written) wakes once
-    /// it did, and a unit that never opened its transaction opens it, since
-    /// the write is a touch. A failed write fails the unit as a failed
-    /// statement does.
-    fn write_outbox(
-        &self,
-        records: &mut dyn Iterator<Item = OutboxRecord>,
-    ) -> Option<BoxFuture<'_, Result<(), OutboxError>>> {
-        let _unread = records;
-        None
-    }
-
-    /// Delete the record of job `id` on `queue` that no relay has filed yet, on
-    /// this executor's unit, answering whether there was one — or `None` when
-    /// the handle keeps no outbox. A record a relay is filing is waited for:
-    /// the removal answers once that relay settled, deleting the record it
-    /// left, or finding none once the backend holds the job.
-    fn remove_outbox<'a>(
-        &'a self,
-        queue: &'a str,
-        id: uuid::Uuid,
-    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
-        let _ = (queue, id);
-        None
-    }
-
-    /// [`remove_outbox`](Self::remove_outbox) for the record carrying the
-    /// unique key `key` on `queue`.
-    fn remove_outbox_unique<'a>(
-        &'a self,
-        queue: &'a str,
-        key: &'a str,
-    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
-        let _ = (queue, key);
-        None
-    }
+    /// The outbox a job pushed here is written into, on this transaction, so
+    /// it is filed after the commit and never on a rollback — or `None` when
+    /// the handle keeps none: a driver binding no
+    /// [`OutboxStore`](crate::OutboxStore), or one whose store no relay armed.
+    /// The queue port then files the job at once.
+    fn outbox(&self) -> Option<&dyn Outbox>;
 }
 
 /// Run `work` once the ambient unit of work has committed — or at once, when
@@ -140,15 +195,37 @@ pub async fn after_commit<F>(work: F)
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let work: Deferred = Box::pin(work);
-    let work = match current_executor() {
-        Some(executor) => match executor.after_commit(work) {
-            Some(work) => work,
-            None => return,
-        },
-        None => work,
+    if let Some(work) = held_or_back(work) {
+        work.await;
+    }
+}
+
+/// Hand `work` to the transaction the ambient executor holds, or back to run
+/// at once where it holds none.
+fn held_or_back<F>(work: F) -> Option<F>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let Some(executor) = current_executor() else {
+        return Some(work);
     };
-    work.await;
+    match executor.holds() {
+        Holds::Pool(_) => Some(work),
+        Holds::Transaction(transaction) => {
+            transaction.after_commit(Box::pin(work));
+            None
+        }
+    }
+}
+
+/// The block [`atomic`](fn@crate::atomic) runs on the ambient executor: a
+/// savepoint of the transaction it holds, a transaction of its own on the
+/// pool, `None` outside any unit.
+pub(crate) fn atomic_block() -> Option<Arc<dyn AtomicBlock>> {
+    Some(match current_executor()?.holds() {
+        Holds::Pool(pool) => pool.transaction(),
+        Holds::Transaction(transaction) => transaction.savepoint(),
+    })
 }
 
 /// Whether the ambient executor belongs to a request or a worker job, which
@@ -294,7 +371,10 @@ pub fn installed_scope(scope: ExecutorScope) -> ExecutorScope {
 }
 
 /// The installed ambient executor, or `None` outside any scope. An
-/// ORM-specific `Repo` calls this and downcasts via [`Executor::as_any`].
+/// ORM-specific `Repo` calls this and recovers its own handle off what the
+/// executor holds ([`Holds::downcast_ref`]). A miss (mismatched `Module` +
+/// `Repo`) is logged at `error` and treated as no ambient executor, so the
+/// operation fails rather than panicking or reading "no rows".
 pub fn current_executor() -> Option<Arc<dyn Executor>> {
     nest_rs_core::ambient::<AmbientExecutor>().and_then(|ambient| ambient.executor())
 }
@@ -338,12 +418,16 @@ pub struct InstalledSavepoint(ExtendedContext);
 
 impl InstalledSavepoint {
     /// A savepoint of the ambient executor's transaction
-    /// ([`Executor::savepoint`]), under the scope and the binding installed
-    /// here, or `None` where it holds none. Nothing is sent to the database
-    /// until a statement runs under it.
+    /// ([`HeldTransaction::savepoint`]), under the scope and the binding
+    /// installed here, or `None` where it holds none: outside any unit, and on
+    /// the pool. Nothing is sent to the database until a statement runs under
+    /// it.
     pub fn open() -> Option<Self> {
         let running = nest_rs_core::ambient::<AmbientExecutor>()?;
-        let block = running.executor()?.savepoint()?;
+        let block = match running.executor()?.holds() {
+            Holds::Transaction(transaction) => transaction.savepoint(),
+            Holds::Pool(_) => return None,
+        };
         Some(Self(ExtendedContext::with(Arc::new(AmbientExecutor {
             executor: Handle::Block(block),
             scope: running.scope,
@@ -456,10 +540,22 @@ mod tests {
 
     use super::*;
 
+    /// A pool no test opens a block on, keeping no outbox.
     struct StubExecutor;
+
     impl Executor for StubExecutor {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> Holds<'_> {
+            Holds::Pool(self)
+        }
+    }
+
+    impl HeldPool for StubExecutor {
+        fn transaction(&self) -> Arc<dyn AtomicBlock> {
+            unreachable!("no test opens a block on the stub")
+        }
+
+        fn outbox(&self) -> Option<&dyn OutboxKept> {
+            None
         }
     }
 
@@ -467,21 +563,9 @@ mod tests {
         Arc::new(StubExecutor)
     }
 
-    #[test]
-    fn a_handle_keeping_no_outbox_hands_every_job_back_to_be_filed_at_once() {
-        let mut unread = std::iter::from_fn(|| -> Option<OutboxRecord> {
-            panic!("a handle keeping no outbox builds no record")
-        });
-        let handle = StubExecutor;
-        assert!(handle.write_outbox(&mut unread).is_none());
-        assert!(handle.remove_outbox("notify", uuid::Uuid::nil()).is_none());
-        assert!(handle.remove_outbox_unique("notify", "key").is_none());
-    }
-
-    #[test]
-    fn a_driver_that_overrides_neither_offers_no_block_and_no_savepoint() {
-        assert!(StubExecutor.atomic().is_none());
-        assert!(StubExecutor.savepoint().is_none());
+    /// Whether the ambient executor holds a `T`.
+    fn holds<T: Any>() -> bool {
+        current_executor().is_some_and(|e| e.holds().downcast_ref::<T>().is_some())
     }
 
     /// A unit holding a transaction: its savepoint says how it was settled,
@@ -489,20 +573,44 @@ mod tests {
     struct InTransaction(Arc<std::sync::Mutex<Vec<(bool, usize)>>>);
 
     impl Executor for InTransaction {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> Holds<'_> {
+            Holds::Transaction(self)
+        }
+    }
+
+    impl HeldTransaction for InTransaction {
+        fn after_commit(&self, _work: Deferred) {
+            unreachable!("no test holds work on this unit")
         }
 
-        fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
-            Some(Arc::new(InSavepoint(Arc::clone(&self.0))))
+        fn savepoint(&self) -> Arc<dyn AtomicBlock> {
+            Arc::new(InSavepoint(Arc::clone(&self.0)))
+        }
+
+        fn outbox(&self) -> Option<&dyn Outbox> {
+            None
         }
     }
 
     struct InSavepoint(Arc<std::sync::Mutex<Vec<(bool, usize)>>>);
 
     impl Executor for InSavepoint {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> Holds<'_> {
+            Holds::Transaction(self)
+        }
+    }
+
+    impl HeldTransaction for InSavepoint {
+        fn after_commit(&self, _work: Deferred) {
+            unreachable!("no test holds work on this savepoint")
+        }
+
+        fn savepoint(&self) -> Arc<dyn AtomicBlock> {
+            unreachable!("no test nests a savepoint in this one")
+        }
+
+        fn outbox(&self) -> Option<&dyn Outbox> {
+            None
         }
     }
 
@@ -538,7 +646,7 @@ mod tests {
         );
         for _poll in 0..2 {
             savepoint.enter(|| {
-                assert!(current_executor().is_some_and(|e| e.as_any().is::<InSavepoint>()));
+                assert!(holds::<InSavepoint>());
                 assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
             });
         }
@@ -598,7 +706,7 @@ mod tests {
         with_job_executor(stub(), async {
             with_request_executor(Arc::new(OnPool), async {
                 assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
-                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+                assert!(holds::<OnPool>());
             })
             .await;
             assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
@@ -610,7 +718,7 @@ mod tests {
     async fn a_job_install_never_widens_a_unit_that_fails_closed() {
         let job = || {
             with_job_executor(Arc::new(OnPool), async {
-                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+                assert!(holds::<OnPool>());
                 current_executor_scope()
             })
         };
@@ -684,10 +792,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn downcast_round_trips_the_concrete_type() {
+    async fn what_a_handle_holds_downcasts_to_the_drivers_own_type_and_to_no_other() {
         with_request_executor(stub(), async {
             let e = current_executor().expect("installed");
-            assert!(e.as_any().is::<StubExecutor>());
+            assert!(e.holds().downcast_ref::<StubExecutor>().is_some());
+            assert!(e.holds().downcast_ref::<OnPool>().is_none());
         })
         .await;
     }
@@ -696,8 +805,18 @@ mod tests {
     struct OnPool;
 
     impl Executor for OnPool {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> Holds<'_> {
+            Holds::Pool(self)
+        }
+    }
+
+    impl HeldPool for OnPool {
+        fn transaction(&self) -> Arc<dyn AtomicBlock> {
+            unreachable!("no test opens a block on this pool")
+        }
+
+        fn outbox(&self) -> Option<&dyn OutboxKept> {
+            None
         }
     }
 
@@ -746,7 +865,7 @@ mod tests {
         with_request_executor(stub(), async {
             with_executor(Arc::new(OnPool), async {
                 assert_eq!(current_executor_scope(), Some(ExecutorScope::Request));
-                assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+                assert!(holds::<OnPool>());
             })
             .await;
         })
@@ -757,7 +876,7 @@ mod tests {
     async fn an_untagged_install_built_as_an_argument_keeps_the_scope_it_runs_under() {
         let untagged = with_executor(Arc::new(OnPool), async {
             assert_eq!(current_executor_scope(), Some(ExecutorScope::Job));
-            assert!(current_executor().is_some_and(|e| e.as_any().is::<OnPool>()));
+            assert!(holds::<OnPool>());
         });
         with_job_executor(stub(), untagged).await;
     }
@@ -797,15 +916,24 @@ mod tests {
     struct Holding(std::sync::Mutex<Vec<Deferred>>);
 
     impl Executor for Holding {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> Holds<'_> {
+            Holds::Transaction(self)
         }
+    }
 
-        fn after_commit(&self, work: Deferred) -> Option<Deferred> {
+    impl HeldTransaction for Holding {
+        fn after_commit(&self, work: Deferred) {
             self.0
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(work);
+        }
+
+        fn savepoint(&self) -> Arc<dyn AtomicBlock> {
+            unreachable!("no test opens a savepoint on this boundary")
+        }
+
+        fn outbox(&self) -> Option<&dyn Outbox> {
             None
         }
     }
@@ -829,7 +957,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_executor_with_nothing_to_wait_for_runs_the_work_inside_the_callers_scope() {
+    async fn a_pool_has_nothing_to_wait_for_and_runs_the_work_inside_the_callers_scope() {
         let seen = Arc::new(std::sync::Mutex::new(None));
         let record = seen.clone();
         with_request_executor(stub(), async move {
@@ -851,7 +979,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_executor_that_holds_the_work_keeps_it_until_the_boundary_runs_it() {
+    async fn a_transaction_keeps_the_work_until_its_boundary_runs_it() {
         let holding = Arc::new(Holding::default());
         let (flag, work) = ran();
         with_request_executor(holding.clone(), after_commit(work)).await;

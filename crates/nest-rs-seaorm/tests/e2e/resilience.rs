@@ -752,6 +752,119 @@ async fn on_the_pool_an_attempt_opens_no_transaction_and_its_writes_commit_as_th
     );
 }
 
+/// A unit as the WebSocket edge declares one, for the binding to open.
+const MESSAGE: nest_rs_core::operation_log::Unit = nest_rs_core::__private::declare_unit(
+    "nest-rs-ws",
+    "nest_rs::ws",
+    nest_rs_core::operation_log::Kind::Server,
+    "ws.message",
+);
+
+/// One row of `entry` under `policy`, its first attempt refused once it wrote
+/// its own: whether the attempts ran on a handle holding a transaction.
+async fn replayed(
+    policy: &ResiliencePolicy<Ledger>,
+    entry: Uuid,
+) -> Result<bool, ResilienceError<Failure>> {
+    let attempts = AtomicU32::new(0);
+    policy
+        .run_idempotent(|_| async {
+            let in_a_transaction = nest_rs_database::current_executor().is_some_and(|handle| {
+                matches!(handle.holds(), nest_rs_database::Holds::Transaction(_))
+            });
+            write(entry).await?;
+            if attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+                return Err(Failure::Refused);
+            }
+            Ok(in_a_transaction)
+        })
+        .await
+}
+
+/// [`replayed`], inside an atomic block of the running unit.
+async fn replayed_in_a_block(
+    policy: &ResiliencePolicy<Ledger>,
+    entry: Uuid,
+) -> Result<bool, Failure> {
+    nest_rs_database::atomic(async {
+        replayed(policy, entry)
+            .await
+            .map_err(|failed| Failure::Inside(Box::new(failed)))
+    })
+    .await
+}
+
+/// What a handle says it holds decides what a replay leaves, on each handle
+/// the binding's units install: every one holding a transaction — a unit's
+/// own, an atomic block's savepoint in it, the transaction of its own a block
+/// opens on a pool unit — offers the savepoint a failed attempt is rolled back
+/// in, so one row stands; the pool unit says it holds none, and each statement
+/// there is its own commit.
+#[tokio::test]
+async fn an_idempotent_replay_leaves_one_write_on_every_handle_holding_a_transaction() {
+    use nest_rs_database::{ExecutorScope, TransactionPolicy, UnitOfWork, UnitSpec, run_unit};
+
+    let conn = db().await;
+    let (_app, policy) = policy().await;
+    let binding: Arc<dyn UnitOfWork> = Arc::new(nest_rs_seaorm::SeaOrmUnitOfWork::new(
+        Arc::new(conn.clone()),
+        &nest_rs_seaorm::SeaOrmConfig::default(),
+    ));
+    let unit = |transactions| UnitSpec::new(MESSAGE, ExecutorScope::Job, transactions);
+    let unhonoured =
+        |why: nest_rs_database::Unhonoured| Err(Failure::Db(DbErr::Custom(why.reason.to_owned())));
+
+    for (handle, transactions, in_a_block, holds_a_transaction, rows) in [
+        (
+            "a unit's lazy transaction",
+            TransactionPolicy::PerUnit,
+            false,
+            true,
+            1,
+        ),
+        (
+            "a block's savepoint",
+            TransactionPolicy::PerUnit,
+            true,
+            true,
+            1,
+        ),
+        (
+            "a block of its own on a pool unit",
+            TransactionPolicy::Pool,
+            true,
+            true,
+            1,
+        ),
+        ("a pool unit", TransactionPolicy::Pool, false, false, 2),
+    ] {
+        let entry = Uuid::now_v7();
+        let body = async {
+            if in_a_block {
+                replayed_in_a_block(&policy, entry).await
+            } else {
+                replayed(&policy, entry)
+                    .await
+                    .map_err(|failed| Failure::Inside(Box::new(failed)))
+            }
+        };
+        let ran = run_unit(
+            Some(&binding),
+            unit(transactions),
+            body,
+            Result::is_ok,
+            unhonoured,
+        )
+        .await;
+        assert_eq!(
+            ran.as_ref().ok(),
+            Some(&holds_a_transaction),
+            "{handle}: {ran:?}"
+        );
+        assert_eq!(written(&conn, entry).await, rows, "{handle}");
+    }
+}
+
 const ABANDONED: &str = "atomic block abandoned before it settled; its unit cannot commit";
 
 /// What a block abandoned inside another block files: that block rolls back,

@@ -118,7 +118,7 @@ pub mod __private {
         duplicate_argument, key_as_written, missing_argument, needs_a_value, one_role_per_method,
         require_str_lit, site, takes_value, unknown_argument, unknown_value,
     };
-    pub use crate::attrs::{Conditional, cfg_attrs, delegated_attrs};
+    pub use crate::attrs::{Conditional, cfg_attrs, field_attrs, is_written};
     pub use crate::capability::guard_capability_bounds;
     pub use crate::casing::{camel_case, singular};
     pub use crate::crud::{
@@ -168,9 +168,7 @@ pub mod __private {
     pub use crate::queue_name::{invalid_queue_name, is_valid_queue_name};
     pub use crate::replicas::{REPLICAS, Replicas, replicas_value};
     pub use crate::resilient::{
-        RESILIENT, ResilientParted, is_resilient, opens_on_operation_field_mark,
-        operation_field_mark, resilient_parted, resilient_policy_setting, resilient_retries,
-        resilient_timeout,
+        RESILIENT, is_resilient, resilient_policy_setting, resilient_retries, resilient_timeout,
     };
     pub use crate::root::{CHECKED_BY_CRUD, refused_without, reroot_as, reroot_impl_half};
     pub use crate::route_path::RoutePath;

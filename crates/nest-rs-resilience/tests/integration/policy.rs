@@ -509,12 +509,22 @@ async fn an_inner_policys_refusal_its_callers_predicates_refuse_is_sent_once_and
 struct RoundTrip(Duration);
 
 impl nest_rs_database::Executor for RoundTrip {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Transaction(self)
+    }
+}
+
+impl nest_rs_database::HeldTransaction for RoundTrip {
+    fn after_commit(&self, _work: nest_rs_database::Deferred) {
+        unreachable!("no test holds work on this unit")
     }
 
-    fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
-        Some(Arc::new(Self(self.0)))
+    fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        Arc::new(Self(self.0))
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+        None
     }
 }
 
@@ -1038,20 +1048,44 @@ async fn a_closure_up_to_tokios_threshold_is_held_in_place_and_one_past_it_boxed
 struct InTransaction;
 
 impl nest_rs_database::Executor for InTransaction {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Transaction(self)
+    }
+}
+
+impl nest_rs_database::HeldTransaction for InTransaction {
+    fn after_commit(&self, _work: nest_rs_database::Deferred) {
+        unreachable!("no test holds work on this unit")
     }
 
-    fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
-        Some(Arc::new(InSavepoint))
+    fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        Arc::new(InSavepoint)
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+        None
     }
 }
 
 struct InSavepoint;
 
 impl nest_rs_database::Executor for InSavepoint {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Transaction(self)
+    }
+}
+
+impl nest_rs_database::HeldTransaction for InSavepoint {
+    fn after_commit(&self, _work: nest_rs_database::Deferred) {
+        unreachable!("no test holds work on this savepoint")
+    }
+
+    fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        Arc::new(Self)
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+        None
     }
 }
 

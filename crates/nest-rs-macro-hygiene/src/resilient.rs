@@ -608,13 +608,16 @@ pub mod routes {
 }
 
 /// A root field and two subscriptions of an `#[operations]` block, sent once
-/// and again.
+/// and again; the decorator under another name and under a condition, which
+/// `#[operations]` leaves on the method like any attribute; and a subscription
+/// under a posture naming a subject, answering a stream a type names.
 #[cfg(feature = "graphql")]
 pub mod operations {
     use std::sync::Arc;
 
     use nest_rs::graphql::async_graphql::futures_util::stream::{self, BoxStream};
     use nest_rs::graphql::{operations, resolver};
+    use nest_rs::resilience::resilient as hygiene_shielded;
     use nest_rs::resilience::{ResilienceError, ResiliencePolicy, resilient};
 
     use super::HygieneCarrierDown;
@@ -636,6 +639,31 @@ pub mod operations {
             Err(HygieneCarrierDown)
         }
 
+        #[query]
+        #[public]
+        #[hygiene_shielded(upstream)]
+        async fn hygiene_renamed(&self) -> Result<String, ResilienceError<HygieneCarrierDown>> {
+            Err(HygieneCarrierDown)
+        }
+
+        #[mutation]
+        #[public]
+        #[cfg_attr(all(), cfg_attr(all(), hygiene_shielded(upstream, idempotent)))]
+        async fn hygiene_conditional(&self) -> Result<String, ResilienceError<HygieneCarrierDown>> {
+            Err(HygieneCarrierDown)
+        }
+
+        /// A condition that does not hold leaves the method undecorated: its
+        /// body answers the method's own type.
+        #[query]
+        #[public]
+        #[cfg_attr(any(), resilient(upstream))]
+        async fn hygiene_unconditional(
+            &self,
+        ) -> Result<String, ResilienceError<HygieneCarrierDown>> {
+            Ok(String::new())
+        }
+
         #[subscription]
         #[public]
         #[resilient(upstream)]
@@ -652,6 +680,27 @@ pub mod operations {
             &self,
         ) -> Result<BoxStream<'static, i32>, ResilienceError<HygieneCarrierDown>> {
             Ok(Box::pin(stream::iter([1])))
+        }
+
+        #[cfg(feature = "authz")]
+        #[subscription]
+        #[authorize(nest_rs::authz::Read, crate::subject::HygieneExports)]
+        #[resilient(upstream)]
+        async fn hygiene_gated_feed(
+            &self,
+        ) -> Result<BoxStream<'static, i32>, ResilienceError<HygieneCarrierDown>> {
+            Err(HygieneCarrierDown)
+        }
+
+        #[cfg(feature = "authz")]
+        #[subscription]
+        #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+        #[resilient(upstream, idempotent)]
+        async fn hygiene_gated_arrivals(
+            &self,
+        ) -> Result<stream::Iter<std::ops::Range<i32>>, ResilienceError<HygieneCarrierDown>>
+        {
+            Ok(stream::iter(0..3))
         }
     }
 }

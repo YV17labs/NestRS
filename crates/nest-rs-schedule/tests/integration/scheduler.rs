@@ -380,8 +380,18 @@ struct Marking {
 struct Marker;
 
 impl nest_rs_database::Executor for Marker {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for Marker {
+    fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 
@@ -419,7 +429,9 @@ static OBSERVED_MARKER: AtomicBool = AtomicBool::new(false);
 
 fn tick_observe(_: &Container) -> RunFuture<'_> {
     Box::pin(async {
-        if nest_rs_database::current_executor().is_some_and(|e| e.as_any().is::<Marker>()) {
+        if nest_rs_database::current_executor()
+            .is_some_and(|e| e.holds().downcast_ref::<Marker>().is_some())
+        {
             OBSERVED_MARKER.store(true, Ordering::SeqCst);
         }
         Ok(())

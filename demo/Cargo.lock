@@ -3021,6 +3021,7 @@ dependencies = [
  "nest-rs-core",
  "reqwest",
  "rustls",
+ "rustls-webpki",
 ]
 
 [[package]]

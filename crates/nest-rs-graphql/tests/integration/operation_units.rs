@@ -5,7 +5,6 @@
 //! error rolls back alone, and one whose `null` reaches `data` rolls the whole
 //! operation back.
 
-use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -13,8 +12,8 @@ use std::time::Duration;
 
 use nest_rs_core::{Problem, code, module};
 use nest_rs_database::{
-    AtomicBlock, AtomicError, Executor, OpenUnit, Settlement, TransactionPolicy, Unhonoured,
-    UnitOfWork, UnitSpec,
+    AtomicBlock, AtomicError, Deferred, Executor, HeldPool, HeldTransaction, Holds, OpenUnit,
+    Outbox, OutboxKept, Settlement, TransactionPolicy, Unhonoured, UnitOfWork, UnitSpec,
 };
 use nest_rs_graphql::async_graphql::{Context, Object, Result};
 use nest_rs_graphql::{GraphqlModule, Opaque, operations, resolver};
@@ -71,7 +70,7 @@ enum Settles {
 struct Recording {
     journal: Arc<Journal>,
     settles: Settles,
-    /// Whether its executors offer an atomic block.
+    /// Whether the database settles its executors' atomic blocks.
     blocks: bool,
 }
 
@@ -93,6 +92,7 @@ struct Installed {
 /// An atomic block of an [`Installed`] executor.
 struct Block {
     journal: Arc<Journal>,
+    settles: bool,
 }
 
 fn policy_name(policy: TransactionPolicy) -> &'static str {
@@ -161,23 +161,65 @@ impl OpenUnit for Opened {
     }
 }
 
-impl Executor for Installed {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn atomic(&self) -> Option<Arc<dyn AtomicBlock>> {
-        self.blocks.then(|| {
-            Arc::new(Block {
-                journal: Arc::clone(&self.journal),
-            }) as Arc<dyn AtomicBlock>
+impl Installed {
+    fn block(&self) -> Arc<dyn AtomicBlock> {
+        Arc::new(Block {
+            journal: Arc::clone(&self.journal),
+            settles: self.blocks,
         })
     }
 }
 
+impl Executor for Installed {
+    fn holds(&self) -> Holds<'_> {
+        match self.policy {
+            TransactionPolicy::PerUnit => Holds::Transaction(self),
+            _ => Holds::Pool(self),
+        }
+    }
+}
+
+impl HeldPool for Installed {
+    fn transaction(&self) -> Arc<dyn AtomicBlock> {
+        self.block()
+    }
+
+    fn outbox(&self) -> Option<&dyn OutboxKept> {
+        None
+    }
+}
+
+impl HeldTransaction for Installed {
+    fn after_commit(&self, _work: Deferred) {
+        unreachable!("no test holds work on a recorded unit")
+    }
+
+    fn savepoint(&self) -> Arc<dyn AtomicBlock> {
+        self.block()
+    }
+
+    fn outbox(&self) -> Option<&dyn Outbox> {
+        None
+    }
+}
+
 impl Executor for Block {
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn holds(&self) -> Holds<'_> {
+        Holds::Transaction(self)
+    }
+}
+
+impl HeldTransaction for Block {
+    fn after_commit(&self, _work: Deferred) {
+        unreachable!("no test holds work on a block")
+    }
+
+    fn savepoint(&self) -> Arc<dyn AtomicBlock> {
+        unreachable!("no test nests a block in a root field's")
+    }
+
+    fn outbox(&self) -> Option<&dyn Outbox> {
+        None
     }
 }
 
@@ -186,6 +228,12 @@ impl AtomicBlock for Block {
         self: Arc<Self>,
         ok: bool,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), AtomicError>> + Send>> {
+        if !self.settles {
+            self.journal.note("block refused".to_owned());
+            return Box::pin(std::future::ready(Err(AtomicError::Database(
+                "RELEASE refused".into(),
+            ))));
+        }
         self.journal.note(format!(
             "block {}",
             if ok { "released" } else { "rolled back" }
@@ -200,10 +248,10 @@ fn ambient_policy() -> String {
     let Some(executor) = nest_rs_database::current_executor() else {
         return "none".into();
     };
-    if executor.as_any().is::<Block>() {
+    if executor.holds().downcast_ref::<Block>().is_some() {
         return "block".into();
     }
-    match executor.as_any().downcast_ref::<Installed>() {
+    match executor.holds().downcast_ref::<Installed>() {
         Some(installed) => policy_name(installed.policy).into(),
         None => "unknown".into(),
     }
@@ -648,10 +696,11 @@ async fn a_batch_settles_each_mutation_on_its_own_answer() {
     );
 }
 
-/// A driver offering no atomic block fails a mutation field closed; a Non-Null
-/// one's `null` reaches `data`, so the fields after it do not run to fail too.
+/// A block the database refuses to settle fails its mutation field closed; a
+/// Non-Null one's `null` reaches `data`, so the fields after it do not run to
+/// fail too.
 #[tokio::test]
-async fn a_driver_offering_no_atomic_block_fails_the_first_root_field_and_resolves_no_later_one() {
+async fn a_block_that_cannot_settle_fails_the_first_root_field_and_resolves_no_later_one() {
     let (app, journal) = boot_over::<ProbeModule>(Settles::At(Duration::ZERO), false).await;
     let reply = post(
         &app,
@@ -667,6 +716,7 @@ async fn a_driver_offering_no_atomic_block_fails_the_first_root_field_and_resolv
         journal.read(),
         [
             "open graphql.operation per_unit",
+            "block refused",
             "settle graphql.operation false",
         ],
     );

@@ -425,6 +425,27 @@ pub struct ContestedDeclarationError {
     pub remedy: &'static str,
 }
 
+/// Two functions claim one error type as its [`SafeLink`](crate::SafeLink),
+/// and one of them would be said in no line: which is asked first is link
+/// order. Raised where an [`App`](crate::App) is built, before any module
+/// collects.
+#[derive(Debug, Error)]
+#[error(
+    "contested safe link: `{link}` is claimed by two sayers — `{first}`, and `{second}`. A type \
+     has one sayer: drop one, or have the app's own claim an error type of its own that holds \
+     `{link}` as its source"
+)]
+#[non_exhaustive]
+pub struct ContestedSafeLinkError {
+    /// The error type claimed twice, as `std::any::type_name` spells it.
+    pub link: &'static str,
+    /// The function of the first entry read claiming it, by its path, which
+    /// names its crate.
+    pub first: &'static str,
+    /// The function of the entry that contested it, the same way.
+    pub second: &'static str,
+}
+
 /// Every factory left in the queue waits on a factory output still in it — one
 /// another's, or its own — so none can run first: a cycle in the `*_after`
 /// declarations.
@@ -1076,36 +1097,6 @@ impl DecodeError {
         self.path = (!path.is_empty()).then(|| bounded(&path).into_owned());
         self.position = None;
         self
-    }
-
-    /// The report of the first link of `error`'s chain that is a decode
-    /// failure, `error` itself first, down to an opaque failure's cause: what
-    /// an edge answers for a failure it reads as one.
-    ///
-    /// A link that is a pointer to one — an error naming an
-    /// `Arc<serde_json::Error>` as its source — is not read: an edge answers
-    /// such an error opaquely and files its chain, which
-    /// [`error_message`](fn@crate::error_message) says without the value.
-    ///
-    /// ```
-    /// use nest_rs_core::DecodeError;
-    ///
-    /// #[derive(Debug, thiserror::Error)]
-    /// #[error("the stored profile is unreadable")]
-    /// struct Unreadable(#[source] serde_json::Error);
-    ///
-    /// let failure = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
-    /// let report = DecodeError::in_chain(&Unreadable(failure)).expect("a decode failure in the chain");
-    /// assert_eq!(report.to_string(), "invalid type: a string, expected u64 at line 1 column 16");
-    /// ```
-    pub fn in_chain(error: &(dyn std::error::Error + 'static)) -> Option<Self> {
-        crate::error_message::__private::answerable_links(error).find_map(|link| {
-            if let Some(error) = link.downcast_ref::<serde_json::Error>() {
-                return Some(Self::new(error));
-            }
-            link.downcast_ref::<serde::de::value::Error>()
-                .map(Self::from)
-        })
     }
 
     /// `link` as the report a line says it by, when it is a decode failure —

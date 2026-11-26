@@ -960,28 +960,43 @@ impl Keeping {
 }
 
 impl DatabaseExecutor for Keeping {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Transaction(self)
+    }
+}
+
+impl nest_rs_database::HeldTransaction for Keeping {
+    fn after_commit(&self, _work: nest_rs_database::Deferred) {
+        unreachable!("no test holds work on this unit")
     }
 
-    fn write_outbox(
-        &self,
-        records: &mut dyn Iterator<Item = OutboxRecord>,
-    ) -> Option<BoxFuture<'_, Result<(), OutboxError>>> {
+    fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a savepoint on this unit")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+        Some(self)
+    }
+}
+
+impl nest_rs_database::Outbox for Keeping {
+    fn write(&self, records: Vec<OutboxRecord>) -> BoxFuture<'_, Result<(), OutboxError>> {
         let answer = if self.refuses {
             Err(OutboxError::Database("the transaction is aborted".into()))
         } else {
-            self.written.lock().expect("lock").push(records.collect());
+            self.written.lock().expect("lock").push(records);
             Ok(())
         };
-        Some(Box::pin(std::future::ready(answer)))
+        Box::pin(std::future::ready(answer))
     }
+}
 
-    fn remove_outbox<'a>(
+impl nest_rs_database::OutboxKept for Keeping {
+    fn remove<'a>(
         &'a self,
         queue: &'a str,
         id: uuid::Uuid,
-    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
+    ) -> BoxFuture<'a, Result<bool, OutboxError>> {
         self.removed
             .lock()
             .expect("lock")
@@ -992,14 +1007,14 @@ impl DatabaseExecutor for Keeping {
             records.retain(|record| !(record.queue == queue && record.id == id));
         }
         let removed = written.iter().flatten().count() < kept;
-        Some(Box::pin(std::future::ready(Ok(removed))))
+        Box::pin(std::future::ready(Ok(removed)))
     }
 
-    fn remove_outbox_unique<'a>(
+    fn remove_unique<'a>(
         &'a self,
         queue: &'a str,
         key: &'a str,
-    ) -> Option<BoxFuture<'a, Result<bool, OutboxError>>> {
+    ) -> BoxFuture<'a, Result<bool, OutboxError>> {
         self.removed
             .lock()
             .expect("lock")
@@ -1012,7 +1027,7 @@ impl DatabaseExecutor for Keeping {
             });
         }
         let removed = written.iter().flatten().count() < kept;
-        Some(Box::pin(std::future::ready(Ok(removed))))
+        Box::pin(std::future::ready(Ok(removed)))
     }
 }
 
@@ -1020,8 +1035,18 @@ impl DatabaseExecutor for Keeping {
 struct OnThePool;
 
 impl DatabaseExecutor for OnThePool {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for OnThePool {
+    fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 
@@ -1114,6 +1139,109 @@ async fn a_push_on_a_handle_keeping_no_outbox_is_filed_at_once() {
         "a pool keeps no outbox: the backend files it now"
     );
     assert_eq!(filed[0].1[0]["id"], json!(receipt.id().to_string()));
+}
+
+/// A pool whose driver keeps an outbox: the records committed units wrote
+/// there, which a cancel reaches and no push joins.
+#[derive(Default)]
+struct PoolKeeping(Keeping);
+
+impl DatabaseExecutor for PoolKeeping {
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for PoolKeeping {
+    fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this pool")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        Some(&self.0)
+    }
+}
+
+#[tokio::test]
+async fn on_a_pool_keeping_an_outbox_a_push_is_filed_at_once_and_a_cancel_removes_a_kept_record() {
+    let producer = RecordingProducer::on(&FULL);
+    let pool = Arc::new(PoolKeeping::default());
+    let kept = uuid::Uuid::now_v7();
+    pool.0
+        .written
+        .lock()
+        .expect("lock")
+        .push(vec![OutboxRecord::new(
+            "transcode",
+            kept,
+            "{}".to_owned(),
+            Some(HELD_KEY.to_owned()),
+            Duration::ZERO,
+        )]);
+
+    inside(
+        pool.clone(),
+        jobs_on(&producer).push(TranscodeQueue, song()),
+    )
+    .await
+    .expect("filed");
+    assert_eq!(producer.filed().len(), 1, "a pool holds nothing to keep it");
+    assert!(pool.0.keeps("transcode", kept), "and writes no record");
+
+    let cancelled = inside(
+        pool.clone(),
+        jobs_on(&producer).cancel_unique(TranscodeQueue, HELD_KEY),
+    )
+    .await;
+    assert!(
+        cancelled.expect("cancelled"),
+        "the record a committed unit left is removed on the pool"
+    );
+    assert!(!pool.0.keeps("transcode", kept));
+}
+
+/// A unit's transaction whose driver keeps no outbox.
+struct KeepingNothing;
+
+impl DatabaseExecutor for KeepingNothing {
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Transaction(self)
+    }
+}
+
+impl nest_rs_database::HeldTransaction for KeepingNothing {
+    fn after_commit(&self, _work: nest_rs_database::Deferred) {
+        unreachable!("no test holds work on this unit")
+    }
+
+    fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a savepoint on this unit")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn a_push_in_a_transaction_keeping_no_outbox_is_filed_at_once_and_a_cancel_asks_the_backend()
+{
+    let producer = RecordingProducer::on(&FULL);
+    let receipt = inside(
+        Arc::new(KeepingNothing),
+        jobs_on(&producer).push(TranscodeQueue, song()),
+    )
+    .await
+    .expect("filed");
+    assert_eq!(producer.filed().len(), 1);
+
+    inside(
+        Arc::new(KeepingNothing),
+        jobs_on(&producer).cancel(&receipt),
+    )
+    .await
+    .expect("the backend answers");
+    assert_eq!(producer.removed().len(), 1);
 }
 
 #[tokio::test]

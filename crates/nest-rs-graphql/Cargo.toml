@@ -16,11 +16,6 @@ categories = ["web-programming", "asynchronous"]
 [package.metadata.docs.rs]
 all-features = true
 
-[features]
-# `#[operations]` keeps a `#[resilient]` on the developer's method, whose body it
-# runs under its policy; the umbrella's `resilience` feature forwards it weakly.
-resilience = ["nest-rs-graphql-macros/resilience"]
-
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-graphql-macros.workspace = true
@@ -90,12 +85,9 @@ figment = { workspace = true, features = ["test"] }
 # The thread's CPU clock, which std lacks: a cost a test compares is read on
 # it, since a thread waiting for a core accrues none.
 libc.workspace = true
-# `#[resilient]` on an operation, the one attribute kept on the developer's
-# method, every other going on the field.
+# `#[resilient]` on an operation of each role, which stays on the developer's
+# method as every attribute `#[operations]` does not consume does.
 nest-rs-resilience = { path = "../nest-rs-resilience" }
-# Self dev-dependency: the suite runs a `#[resilient]` operation, which the
-# `resilience` feature keeps on the developer's method.
-nest-rs-graphql = { path = ".", features = ["resilience"] }
 # The spans a field's guard and pipe run in, read off the registry
 # `LogCapture` installs.
 tracing-subscriber.workspace = true

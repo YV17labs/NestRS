@@ -2,10 +2,14 @@
 //! every cause beneath it, each said once, and a driver's error as its driver
 //! says it ([`SafeLink`]).
 
-use std::any::Any;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::error::Error;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
+use ref_cast::RefCastCustom;
+use ref_cast::ref_cast_custom;
 use tokio::task::JoinError;
 
 use self::__private::link_as;
@@ -23,9 +27,8 @@ const NO_MESSAGE: &str = "an error with no message";
 /// below it; every other link is passed through [`DecodeError::redact`], which
 /// also says a claimed link wherever a wrapper spells it whole. A link that is
 /// a pointer `std` makes an error of — what an error naming its source behind
-/// one hands out — is read as the error it holds: an `Arc<dyn Error>` by every
-/// reader, an `Arc` or a `Box` of a type by the reader naming that type, a
-/// decode failure's and a joined task's here, a driver's in its `SafeLink`. A
+/// one hands out — is read as the error it holds, by every reader: an `Arc` or
+/// a `Box` of the type read, and an `Arc<dyn Error>` holding any of them. A
 /// wrapper wording the value its own way (`{0:?}`, a `format!` of the field,
 /// part of a driver's message) is not caught.
 pub fn error_message(error: &(dyn Error + 'static)) -> String {
@@ -68,28 +71,36 @@ fn said(link: &(dyn Error + 'static), redactions: &Redactions) -> (String, bool)
     (text, false)
 }
 
-/// How a driver says one of its error types without the values it quotes,
-/// submitted once per driver crate with `nest_rs_core::inventory::submit!`.
+/// How a driver says one of its error types without the values it quotes:
+/// one entry per type, submitted with `nest_rs_core::inventory::submit!`.
 ///
 /// A database server quotes the input it refused in its message, and a driver's
 /// error repeats that message in its own sentence and in its causes, so no
 /// renderer reading `Display` can keep it out of a log line, a dead letter or a
-/// reply. [`error_message`] and [`DecodeError::redact`] ask every sayer about
-/// each link before its `Display`: `say` answers `Some(sentence)` for a link of
-/// its own — its whole meaning, without a value — and the chain is said no
-/// further below it; `None` for any other, which is said as before.
+/// reply. [`error_message`] and [`DecodeError::redact`] ask the sayer of each
+/// link's type before its `Display`: `say` answers `Some(sentence)` — the
+/// link's whole meaning, without a value — and the chain is said no further
+/// below it; `None` for a value of its type it leaves as it reads.
 /// Identifiers — a code, a constraint, a table, a column — are schema, not
 /// payload, and stay in the sentence: they are what an operator searches for.
 ///
-/// `std` makes an `Arc` and a `Box` of an error an error of their own, which
-/// displays the error held, so an error naming its source behind one hands out
-/// the pointer as the link. An `Arc<dyn Error>`, `Send` and `Sync` or not, is
-/// read through before `say` is asked; an `Arc<T>` or a `Box<T>` of the
-/// driver's own type is a type only `say` can name, and is its to downcast to.
+/// **The type is read once, here, for every sayer**: where the link is the
+/// error itself, where it is the pointer `std` makes an error of — an `Arc` or
+/// a `Box` of it, which an error naming its source behind one hands out, and
+/// an `Arc<dyn Error>` holding any of those, `Send` and `Sync` or not — and
+/// where it is an I/O error holding one, which displays the error it holds
+/// whole. A sayer names its type in its signature and downcasts nothing.
+///
+/// **A type has one sayer.** Two functions claiming one type refuse the boot,
+/// naming the type and both ([`ContestedSafeLinkError`]): which of two would
+/// speak is link order, and the other's sentence would go quiet in every
+/// line. An app wording a library's error its own way claims an error type of
+/// its own holding that one as its source. One function linked twice — a
+/// crate's unit tests link the crate again through a dev-dependency on it — is
+/// one sayer. A binary building no [`App`](crate::App) runs no such check, and
+/// reads the first entry linked.
 ///
 /// ```
-/// use std::error::Error;
-///
 /// use nest_rs_core::{SafeLink, error_message};
 ///
 /// #[derive(Debug, thiserror::Error)]
@@ -99,37 +110,143 @@ fn said(link: &(dyn Error + 'static), redactions: &Redactions) -> (String, bool)
 ///     value: String,
 /// }
 ///
-/// fn say(link: &(dyn Error + 'static)) -> Option<String> {
-///     link.downcast_ref::<Refused>()
-///         .map(|refused| format!("row refused {}", refused.code))
+/// fn say(refused: &Refused) -> Option<String> {
+///     Some(format!("row refused {}", refused.code))
 /// }
 ///
-/// nest_rs_core::inventory::submit! { SafeLink::new(say) }
+/// nest_rs_core::inventory::submit! { SafeLink::of(&say) }
+///
+/// #[derive(Debug, thiserror::Error)]
+/// #[error("the import failed")]
+/// struct Import(#[source] std::sync::Arc<Refused>);
 ///
 /// # fn main() {
 /// let refused = Refused { code: "23505", value: "ada@example.com".into() };
-/// assert_eq!(error_message(&refused), "row refused 23505");
+/// assert_eq!(
+///     error_message(&Import(refused.into())),
+///     "the import failed: row refused 23505",
+/// );
 /// # }
 /// ```
+///
+/// [`ContestedSafeLinkError`]: crate::ContestedSafeLinkError
 pub struct SafeLink {
-    say: fn(&(dyn Error + 'static)) -> Option<String>,
+    claim: &'static dyn Claim,
 }
 
 impl SafeLink {
-    /// The entry whose `say` claims the driver's own error types.
-    pub const fn new(say: fn(&(dyn Error + 'static)) -> Option<String>) -> Self {
-        Self { say }
+    /// The entry saying a `T` through `say`, held by reference: a function's
+    /// name is a constant, so `SafeLink::of(&say)` is one too.
+    ///
+    /// A sayer claims one type, the one its signature names: one taking any
+    /// link, to downcast it itself, claims none.
+    ///
+    /// ```compile_fail,E0277
+    /// use std::error::Error;
+    ///
+    /// use nest_rs_core::SafeLink;
+    ///
+    /// fn say(link: &(dyn Error + 'static)) -> Option<String> {
+    ///     link.is::<std::fmt::Error>().then(|| "formatting failed".to_owned())
+    /// }
+    ///
+    /// nest_rs_core::inventory::submit! { SafeLink::of(&say) }
+    /// ```
+    pub const fn of<T, F>(say: &'static F) -> Self
+    where
+        T: Error + 'static,
+        F: Fn(&T) -> Option<String> + Sync + 'static,
+    {
+        Self {
+            claim: Typed::<T, F>::of(say),
+        }
     }
 
-    /// What the first sayer claiming `link`, or the error an `Arc<dyn Error>`
-    /// handed out as the link holds, says of it.
+    /// What the sayer of `link`'s type says of it — `link` itself, or the
+    /// error a pointer or an I/O error handed out as the link holds.
     pub(crate) fn said(link: &(dyn Error + 'static)) -> Option<String> {
-        let link = pointed(link);
-        inventory::iter::<Self>().find_map(|entry| (entry.say)(link))
+        let mut link = pointed(link);
+        loop {
+            if let Some(said) = inventory::iter::<Self>().find_map(|entry| entry.claim.say(link)) {
+                return said;
+            }
+            // Its sentence is the held error's, whole, and its source that
+            // error's: the link is the error it holds.
+            link = pointed(read_as::<std::io::Error>(link)?.get_ref()?);
+        }
+    }
+
+    /// The first type two of the linked entries claim, with both sayers.
+    pub(crate) fn contested() -> Option<crate::ContestedSafeLinkError> {
+        Self::contested_among(inventory::iter::<Self>())
+    }
+
+    fn contested_among<'s>(
+        entries: impl Iterator<Item = &'s Self>,
+    ) -> Option<crate::ContestedSafeLinkError> {
+        let mut claimed: HashMap<TypeId, &'static str> = HashMap::new();
+        for entry in entries {
+            let (id, link) = entry.claim.link();
+            let sayer = entry.claim.sayer();
+            // One function linked twice is one sayer: a crate's unit tests
+            // link the crate again through a dev-dependency on it.
+            match claimed.insert(id, sayer) {
+                Some(first) if first != sayer => {
+                    return Some(crate::ContestedSafeLinkError {
+                        link,
+                        first,
+                        second: sayer,
+                    });
+                }
+                _ => {}
+            }
+        }
+        None
     }
 }
 
 inventory::collect!(SafeLink);
+
+/// One sayer, its type erased: what a [`SafeLink`] holds.
+trait Claim: Sync {
+    /// The type claimed, and its name.
+    fn link(&self) -> (TypeId, &'static str);
+
+    /// The function saying it, by its path.
+    fn sayer(&self) -> &'static str;
+
+    /// `None` when `link` is no error of the type claimed; else what its
+    /// sayer answers.
+    fn say(&self, link: &(dyn Error + 'static)) -> Option<Option<String>>;
+}
+
+/// A sayer `F` read as the claim of the `T` it takes.
+#[derive(RefCastCustom)]
+#[repr(transparent)]
+struct Typed<T, F>(F, PhantomData<fn(&T)>);
+
+impl<T, F> Typed<T, F> {
+    #[ref_cast_custom]
+    const fn of(say: &F) -> &Self;
+}
+
+impl<T, F> Claim for Typed<T, F>
+where
+    T: Error + 'static,
+    F: Fn(&T) -> Option<String> + Sync + 'static,
+{
+    fn link(&self) -> (TypeId, &'static str) {
+        (TypeId::of::<T>(), std::any::type_name::<T>())
+    }
+
+    fn sayer(&self) -> &'static str {
+        std::any::type_name::<F>()
+    }
+
+    fn say(&self, link: &(dyn Error + 'static)) -> Option<Option<String>> {
+        read_as::<T>(link).map(&self.0)
+    }
+}
 
 /// The error `link` is, or the one an `Arc<dyn Error>` handed out as the link
 /// holds, however many hold one another: `std` makes that pointer an error
@@ -147,6 +264,14 @@ fn pointed<'e>(mut link: &'e (dyn Error + 'static)) -> &'e (dyn Error + 'static)
             return link;
         };
     }
+}
+
+/// The `T` that `link` is, or that an `Arc<T>` or a `Box<T>` handed out as the
+/// link holds.
+fn read_as<'e, T: Error + 'static>(link: &'e (dyn Error + 'static)) -> Option<&'e T> {
+    link.downcast_ref::<T>()
+        .or_else(|| link.downcast_ref::<Arc<T>>().map(|held| &**held))
+        .or_else(|| link.downcast_ref::<Box<T>>().map(|held| &**held))
 }
 
 /// How a joined task ended, as tokio says it of a panic whose payload is no
@@ -186,22 +311,26 @@ where
 pub(crate) mod __private {
     use std::error::Error;
     use std::fmt;
-    use std::sync::Arc;
 
     use ref_cast::RefCast;
 
     /// The `T` that `link` is, or that a pointer handed out as the link holds:
     /// an `Arc<T>` or a `Box<T>`, and an `Arc<dyn Error>` holding any of the
-    /// three. How a reader naming `T` reads a link — a
-    /// [`SafeLink`](crate::SafeLink)'s `say` its driver's error, a report its
-    /// decode failure: `std` makes each of those pointers an error displaying
-    /// the one it holds, so an error naming its source behind one hands out
-    /// the pointer, which a downcast to `T` misses.
+    /// three. How a reader of a chain reads a link whose type no
+    /// [`SafeLink`](crate::SafeLink) of its own claims — a sayer the causes
+    /// beneath its error: `std` makes each of those pointers an error
+    /// displaying the one it holds, so an error naming its source behind one
+    /// hands out the pointer, which a downcast to `T` misses.
     pub fn link_as<'e, T: Error + 'static>(link: &'e (dyn Error + 'static)) -> Option<&'e T> {
-        let link = super::pointed(link);
-        link.downcast_ref::<T>()
-            .or_else(|| link.downcast_ref::<Arc<T>>().map(|held| &**held))
-            .or_else(|| link.downcast_ref::<Box<T>>().map(|held| &**held))
+        super::read_as(super::pointed(link))
+    }
+
+    /// `link` as the report a line says it by, without its value, when it is
+    /// a decode failure — serde_json's error, or serde's own value error — or
+    /// a pointer handed out as the link holds one: how a sayer reading the
+    /// chain beneath an error of its own says one.
+    pub fn decode_failure(link: &(dyn Error + 'static)) -> Option<crate::DecodeError> {
+        crate::DecodeError::of(link)
     }
 
     /// What the driver claiming `link` says of it, its causes included, and
@@ -502,7 +631,6 @@ mod tests {
             )
         );
         assert!(find_in_chain::<serde_json::Error>(&*wrapped).is_none());
-        assert!(DecodeError::in_chain(&*wrapped).is_none());
         assert!(
             find_in_chain::<Wrapped>(&*wrapped).is_some(),
             "above it, found"
@@ -582,12 +710,11 @@ mod tests {
     }
 
     /// The driver's sayer: a code, never the value.
-    fn say_rejected(link: &(dyn Error + 'static)) -> Option<String> {
-        link.downcast_ref::<Rejected>()
-            .map(|rejected| format!("row rejected {}", rejected.code))
+    fn say_rejected(rejected: &Rejected) -> Option<String> {
+        Some(format!("row rejected {}", rejected.code))
     }
 
-    inventory::submit! { SafeLink::new(say_rejected) }
+    inventory::submit! { SafeLink::of(&say_rejected) }
 
     #[test]
     fn a_link_a_driver_claims_is_said_by_its_sayer_and_nothing_below_it() {
@@ -677,6 +804,109 @@ mod tests {
         );
     }
 
+    /// The sayer names its type and nothing else: the pointer an error hands
+    /// out as its link, and the I/O error a reader over a stream makes of one,
+    /// are read here.
+    #[test]
+    fn a_claimed_type_is_said_behind_every_pointer_handed_out_as_the_link() {
+        const SAID: &str = "the import failed: row rejected R42";
+
+        assert_eq!(error_message(&Naming(rejected())), SAID);
+        assert_eq!(error_message(&Naming(Arc::new(rejected()))), SAID);
+        assert_eq!(error_message(&Naming(Box::new(rejected()))), SAID);
+        let boxed: Arc<dyn Error + Send + Sync> = Arc::new(Box::new(rejected()));
+        assert_eq!(error_message(&Naming(boxed)), SAID);
+        let shared: Arc<dyn Error + Send + Sync> = Arc::new(Arc::new(rejected()));
+        assert_eq!(error_message(&Naming(shared)), SAID);
+
+        let read = std::io::Error::other(rejected());
+        assert!(read.to_string().contains("secret"), "std's own sentence");
+        assert_eq!(error_message(&Naming(read)), SAID);
+        let read = std::io::Error::other(Arc::new(rejected()));
+        assert_eq!(error_message(&Naming(Arc::new(read))), SAID);
+
+        let text = format!("upstream answered: {}", rejected());
+        assert_eq!(
+            DecodeError::redact(&text, Some(&Naming(Box::new(rejected())))),
+            "upstream answered: row rejected R42"
+        );
+    }
+
+    #[test]
+    fn an_io_error_holding_no_claimed_error_is_said_as_it_reads() {
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert_eq!(
+            error_message(&Naming(refused)),
+            "the import failed: connection refused"
+        );
+        let other = std::io::Error::other(Quoted("nothing"));
+        assert_eq!(
+            error_message(&Naming(other)),
+            "the import failed: the server refused nothing"
+        );
+    }
+
+    /// A value its sayer leaves is said as it reads, its chain read on.
+    #[derive(Debug, thiserror::Error)]
+    #[error("lookup failed")]
+    struct Declined(#[source] Quoted);
+
+    fn say_declined(_: &Declined) -> Option<String> {
+        None
+    }
+
+    inventory::submit! { SafeLink::of(&say_declined) }
+
+    #[test]
+    fn a_value_its_sayer_leaves_is_said_as_it_reads() {
+        assert_eq!(
+            error_message(&Declined(Quoted("nothing"))),
+            "lookup failed: the server refused nothing"
+        );
+    }
+
+    #[test]
+    fn two_sayers_of_one_type_are_contested_naming_the_type_and_both() {
+        fn other(_: &Rejected) -> Option<String> {
+            None
+        }
+
+        let first = SafeLink::of(&say_rejected);
+        let declined = SafeLink::of(&say_declined);
+        assert!(SafeLink::contested_among([&first, &declined].into_iter()).is_none());
+        let again = SafeLink::of(&say_rejected);
+        assert!(
+            SafeLink::contested_among([&first, &again].into_iter()).is_none(),
+            "one function linked twice is one sayer"
+        );
+
+        let second = SafeLink::of(&other);
+        let contested = SafeLink::contested_among([&first, &declined, &second].into_iter())
+            .expect("two sayers of `Rejected`");
+        assert!(contested.link.ends_with("::Rejected"), "{}", contested.link);
+        assert!(
+            contested.first.ends_with("::say_rejected"),
+            "{}",
+            contested.first
+        );
+        assert!(
+            contested.second.ends_with("::other"),
+            "{}",
+            contested.second
+        );
+        let said = contested.to_string();
+        assert!(
+            said.contains(contested.first) && said.contains(contested.second),
+            "{said}"
+        );
+    }
+
+    /// The suite's own entries, as every boot reads them.
+    #[test]
+    fn the_entries_linked_here_claim_a_type_each() {
+        assert!(SafeLink::contested().is_none());
+    }
+
     #[test]
     fn a_link_is_read_as_its_type_through_the_pointers_handed_out_as_the_link() {
         use super::__private::link_as;
@@ -735,19 +965,6 @@ mod tests {
             error_message(&Naming(Arc::new(secret()))),
             format!("the import failed: {REPORT}")
         );
-    }
-
-    /// What an edge answers is a link that is the failure itself: one held
-    /// behind a pointer, kept and shared, is answered opaquely and its chain
-    /// filed, which a line says through the pointer.
-    #[test]
-    fn a_decode_failure_behind_a_pointer_is_no_failure_an_edge_answers() {
-        assert!(DecodeError::in_chain(&Naming(secret())).is_some());
-
-        let erased: Arc<dyn Error + Send + Sync> = Arc::new(secret());
-        assert!(DecodeError::in_chain(&Naming(Arc::new(secret()))).is_none());
-        assert!(DecodeError::in_chain(&Naming(Box::new(secret()))).is_none());
-        assert!(DecodeError::in_chain(&Naming(erased)).is_none());
     }
 
     /// Displays its cause whole and returns it as its source — the queue's

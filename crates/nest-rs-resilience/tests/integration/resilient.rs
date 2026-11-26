@@ -2144,9 +2144,8 @@ mod operations {
             Err(UpstreamDown)
         }
 
-        /// An instrument's `err` on an operation records the field's error,
-        /// which has a `Debug` and no `Display`: written `err(Debug)`, it
-        /// compiles in either order.
+        /// An instrument on an operation is the method's, as on a route: its
+        /// `err(Debug)` records the method's own error, in either order.
         #[query]
         #[public]
         #[tracing::instrument(skip_all, err(Debug))]
@@ -2210,9 +2209,9 @@ mod operations {
         assert_eq!(extensions["retryAfterSeconds"], 30, "{refused}");
     }
 
-    /// The instrument is the field's, whichever side of the policy it is
-    /// written on: its `err(Debug)` records what the field answers, the
-    /// GraphQL error, once per field.
+    /// The instrument is the method's, as anywhere: above the policy its
+    /// `err(Debug)` records each attempt's error, below it the run's — here
+    /// the open breaker's refusal, the first field having opened it.
     #[tokio::test(start_paused = true)]
     async fn an_instruments_err_on_an_operation_records_the_fields_error_as_debug() {
         let app = TestApp::for_module::<DecoratedGraphqlModule>()
@@ -2239,9 +2238,10 @@ mod operations {
             .filter_map(|event| event.field("error"))
             .collect();
         assert_eq!(recorded.len(), 2, "{recorded:?}");
+        assert_eq!(recorded[0], "UpstreamDown", "an attempt's: {recorded:?}");
         assert!(
-            recorded.iter().all(|error| error.starts_with("Error {")),
-            "async-graphql's error, by its `Debug`: {recorded:?}"
+            recorded[1].starts_with("Open {"),
+            "the run's refusal: {recorded:?}"
         );
     }
 
@@ -6174,20 +6174,44 @@ mod fallback {
     struct Unit(Arc<RatesService>);
 
     impl nest_rs_database::Executor for Unit {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
+        }
+    }
+
+    impl nest_rs_database::HeldTransaction for Unit {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on this unit")
         }
 
-        fn savepoint(&self) -> Option<Arc<dyn nest_rs_database::AtomicBlock>> {
-            Some(Arc::new(Savepoint(Arc::clone(&self.0))))
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            Arc::new(Savepoint(Arc::clone(&self.0)))
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 
     struct Savepoint(Arc<RatesService>);
 
     impl nest_rs_database::Executor for Savepoint {
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
+        }
+    }
+
+    impl nest_rs_database::HeldTransaction for Savepoint {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on this savepoint")
+        }
+
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            Arc::new(Self(Arc::clone(&self.0)))
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 

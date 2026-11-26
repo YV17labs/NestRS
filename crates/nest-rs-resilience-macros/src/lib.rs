@@ -207,18 +207,11 @@ mod resilient;
 /// opening the stream, never the items it yields later. A WebSocket connection
 /// hook answers `()`, so it carries none and calls a decorated method instead.
 /// A GraphQL field writes its `Result<T, ResilienceError<E>>` out:
-/// `#[operations]` reads a field's `Result` by its spelling, and refuses any
-/// other answer of a decorated one. It keeps this attribute, read by its last
-/// segment, on the method — written plain, or as an entry of a `#[cfg_attr]`,
-/// kept under its condition — and hands the method's other attributes and
-/// entries to the field it generates, in a build with `graphql` and
-/// `resilience` both, whichever crate of it enables them, the umbrella's
-/// `resilience` enabling `nest-rs-graphql`'s. So the decorator is imported as
-/// `resilient` there: under another name it is handed to the field, and refused
-/// saying so. An app's own attribute of this name stays on the method too, where
-/// it fails to compile or applies to the method alone, so it is imported under
-/// another name; without `resilience` one of this name goes on the field, as
-/// 7.0.0 placed it. A method under `#[async_trait]` is a `fn` by the time this
+/// `#[operations]` reads a field's `Result` by its spelling, and a `Result`
+/// under another name whose error async-graphql cannot answer is refused at its
+/// return type in one sentence. `#[operations]` leaves this attribute on the
+/// method as it leaves every attribute but its own, under any name and in any
+/// `#[cfg_attr]`. A method under `#[async_trait]` is a `fn` by the time this
 /// attribute reads it, and is refused saying so.
 ///
 /// `#[tracing::instrument]` goes above it or below, and the order says what

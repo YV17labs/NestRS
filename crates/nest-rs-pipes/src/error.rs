@@ -1,20 +1,36 @@
-/// Why a pipe rejected its input. A surface adapter renders it (the HTTP one as
-/// a `400`). Carries a human `message` plus optional structured `details` (e.g.
-/// the field-level errors of a type's `validator` rules, `From` its
-/// `ValidationErrors`).
+use nest_rs_core::{Problem, ToProblem, code};
+
+/// Why a pipe rejected its input: a human `message` plus optional structured
+/// `details` (e.g. the field-level errors of a type's `validator` rules,
+/// `From` its `ValidationErrors`).
+///
+/// It carries the [`Problem`] every edge answers it as — `400` under
+/// `INVALID_ARGUMENT`, the message its detail and the details its `errors`
+/// field map — as its source, so a refusal answers the same wherever it was
+/// raised: by a per-argument pipe, or returned from a handler's body, bare or
+/// wrapped in the handler's own error.
+///
+/// ```
+/// use nest_rs_core::{ToProblem, code};
+/// use nest_rs_pipes::PipeError;
+///
+/// let refused = PipeError::new("must be a valid UUID");
+/// let problem = refused.to_problem().expect("a refusal answers its problem");
+/// assert_eq!((problem.status(), problem.code()), (400, code::INVALID_ARGUMENT));
+/// assert_eq!(problem.detail(), Some("must be a valid UUID"));
+/// ```
 #[derive(Debug, Clone, thiserror::Error)]
-#[error("{message}")]
+#[error("{}", .problem.detail().unwrap_or_default())]
 pub struct PipeError {
-    message: String,
-    details: Option<serde_json::Value>,
+    #[source]
+    problem: Problem,
 }
 
 impl PipeError {
     /// A rejection carrying just a human-readable message.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
-            message: message.into(),
-            details: None,
+            problem: Problem::new(400, code::INVALID_ARGUMENT).with_detail(message.into()),
         }
     }
 
@@ -22,24 +38,35 @@ impl PipeError {
     /// the surface adapter can render.
     pub fn with_details(message: impl Into<String>, details: serde_json::Value) -> Self {
         Self {
-            message: message.into(),
-            details: Some(details),
+            problem: Self::new(message).problem.with_errors(details),
         }
     }
 
     /// The human-readable rejection message.
     pub fn message(&self) -> &str {
-        &self.message
+        self.problem.detail().unwrap_or_default()
     }
 
     /// The structured details, if any were attached.
     pub fn details(&self) -> Option<&serde_json::Value> {
-        self.details.as_ref()
+        self.problem.errors()
     }
 
-    /// Take ownership of the structured details, if any.
+    /// The structured details as an owned value, if any were attached.
     pub fn into_details(self) -> Option<serde_json::Value> {
-        self.details
+        self.problem.errors().cloned()
+    }
+
+    /// The problem every edge answers the rejection as.
+    pub fn problem(&self) -> &Problem {
+        &self.problem
+    }
+}
+
+/// A rejection returned as a handler's error answers its problem.
+impl ToProblem for PipeError {
+    fn to_problem(&self) -> Option<Problem> {
+        Some(self.problem.clone())
     }
 }
 
@@ -79,5 +106,24 @@ mod tests {
     #[test]
     fn into_details_on_a_plain_error_returns_none() {
         assert!(PipeError::new("plain").into_details().is_none());
+    }
+
+    #[test]
+    fn a_rejection_is_found_in_a_chain_as_the_problem_it_answers() {
+        use std::error::Error as _;
+
+        let refused = PipeError::with_details("validation failed", serde_json::json!({"k": 1}));
+        let problem = refused
+            .source()
+            .and_then(|source| source.downcast_ref::<Problem>())
+            .expect("the problem is the rejection's source");
+        assert_eq!(problem, refused.problem());
+        assert_eq!(
+            (problem.status(), problem.code()),
+            (400, code::INVALID_ARGUMENT)
+        );
+        assert_eq!(problem.detail(), Some("validation failed"));
+        assert_eq!(problem.errors(), Some(&serde_json::json!({"k": 1})));
+        assert_eq!(refused.to_problem().as_ref(), Some(problem));
     }
 }

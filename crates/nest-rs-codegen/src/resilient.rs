@@ -1,147 +1,26 @@
 //! `#[resilient]`'s pins, read at compile time: a copy of the ranges
 //! `nest_rs_resilience::ResilienceConfig` holds its `timeout` and `retries` to,
 //! and of every other field of it, the settings its policy holds for every
-//! caller, each pinned against the config by a test in `nest-rs-resilience` —
-//! and how an impl half generating a method of its own reads the decorator:
-//! where it is kept, and the mark the generated method carries.
+//! caller, each pinned against the config by a test in `nest-rs-resilience`.
 
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
-use quote::quote;
-use syn::{Attribute, Expr, ExprLit, Item, Lit, Meta, Stmt};
+use syn::{Attribute, Expr, ExprLit, Lit};
 
 use crate::args::{site, takes_value};
 use crate::job::{RETRIES, TIMEOUT};
-use crate::ungrouped::{ungrouped_expr, ungrouped_tokens};
+use crate::ungrouped::ungrouped_expr;
 
 /// The decorator, as it is written.
 pub const RESILIENT: &str = "resilient";
 
 /// Whether `attr` is a `#[resilient]`, however its path is written: read by
-/// its last segment, since a macro resolves no name.
+/// its last segment, since a macro resolves no name. The decorator knows a
+/// second copy of itself by it; no impl half reads it, each leaving a method
+/// every attribute it does not consume.
 pub fn is_resilient(attr: &Attribute) -> bool {
     attr.path()
         .segments
         .last()
         .is_some_and(|segment| segment.ident == RESILIENT)
-}
-
-/// One attribute of a developer's method, parted between that method and the
-/// method an impl half generates beside it.
-pub struct ResilientParted {
-    /// What the developer's method keeps: the decorator, under the conditions
-    /// it was written under.
-    pub kept: Option<Attribute>,
-    /// What the generated method is handed: everything else.
-    pub handed: Option<Attribute>,
-}
-
-/// `attr` parted by [`is_resilient`]'s reading: a `#[resilient]` is kept, and a
-/// `#[cfg_attr]` is split by entry — each `resilient(…)` it holds, a nested
-/// `cfg_attr`'s included, kept under the same predicates, every other entry
-/// handed under them. Any other attribute, and a `#[cfg_attr]` holding no
-/// `resilient(…)`, is handed as written.
-pub fn resilient_parted(attr: &Attribute) -> ResilientParted {
-    if is_resilient(attr) {
-        return ResilientParted {
-            kept: Some(attr.clone()),
-            handed: None,
-        };
-    }
-    let entries = match &attr.meta {
-        Meta::List(list) if attr.path().is_ident("cfg_attr") => {
-            parted_cfg_attr(list.tokens.clone())
-        }
-        _ => None,
-    };
-    let Some((kept, handed)) = entries else {
-        return ResilientParted {
-            kept: None,
-            handed: Some(attr.clone()),
-        };
-    };
-    let holding = |tokens: TokenStream| {
-        let mut attr = attr.clone();
-        if let Meta::List(list) = &mut attr.meta {
-            list.tokens = tokens;
-        }
-        attr
-    };
-    ResilientParted {
-        kept: Some(holding(kept)),
-        handed: handed.map(holding),
-    }
-}
-
-/// The arguments of one `cfg_attr(predicate, ..)` as two, the first holding its
-/// `resilient(…)` entries and the second, when any is left, the others — or
-/// `None` when it holds no `resilient(…)`, or is not the attribute's grammar.
-fn parted_cfg_attr(arguments: TokenStream) -> Option<(TokenStream, Option<TokenStream>)> {
-    let mut entries = crate::attrs::split_at_commas(arguments).into_iter();
-    let predicate = entries.next().filter(|predicate| !predicate.is_empty())?;
-    let (mut kept, mut handed) = (Vec::new(), Vec::new());
-    for entry in entries {
-        let entry = ungrouped_tokens(entry);
-        if entry.is_empty() {
-            continue;
-        }
-        let mut tokens = entry.clone().into_iter();
-        let nested = match (tokens.next(), tokens.next(), tokens.next()) {
-            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), None)
-                if name == "cfg_attr" && group.delimiter() == Delimiter::Parenthesis =>
-            {
-                parted_cfg_attr(group.stream())
-            }
-            _ => None,
-        };
-        match nested {
-            Some((nested_kept, nested_handed)) => {
-                kept.push(quote!(cfg_attr(#nested_kept)));
-                handed.extend(nested_handed.map(|handed| quote!(cfg_attr(#handed))));
-            }
-            None if entry_is_resilient(&entry) => kept.push(entry),
-            None => handed.push(entry),
-        }
-    }
-    if kept.is_empty() {
-        return None;
-    }
-    let handed = (!handed.is_empty()).then(|| quote!(#predicate, #(#handed),*));
-    Some((quote!(#predicate, #(#kept),*), handed))
-}
-
-/// Whether a `cfg_attr`'s entry is a `resilient(…)`, read as [`is_resilient`]
-/// reads an attribute: by the last segment of the path it opens on.
-fn entry_is_resilient(entry: &TokenStream) -> bool {
-    let mut last = None;
-    for token in entry.clone() {
-        match token {
-            TokenTree::Ident(segment) => last = Some(segment),
-            TokenTree::Punct(punct) if punct.as_char() == ':' => {}
-            _ => break,
-        }
-    }
-    last.is_some_and(|segment| segment == RESILIENT)
-}
-
-/// The item a field `#[operations]` generates opens its body on, in the macro
-/// ABI's prefix: no developer writes it, so a decorator finding it knows it was
-/// handed to that field rather than to the method the developer wrote.
-const OPERATION_FIELD: &str = "__nestrs_operation_field";
-
-/// The mark a field `#[operations]` generates opens its body on: an item rustc
-/// reports as no dead code, its name leading with `_`, so it carries no lint
-/// level a crate's `forbid` could refuse.
-pub fn operation_field_mark() -> TokenStream {
-    let mark = syn::Ident::new(OPERATION_FIELD, proc_macro2::Span::call_site());
-    quote!(fn #mark() {})
-}
-
-/// Whether `stmts`, a method's body, opens on [`operation_field_mark`].
-pub fn opens_on_operation_field_mark(stmts: &[Stmt]) -> bool {
-    matches!(
-        stmts.first(),
-        Some(Stmt::Item(Item::Fn(mark))) if mark.sig.ident == OPERATION_FIELD
-    )
 }
 
 /// A mechanism the policy runs for every caller of its dependency.
@@ -388,121 +267,6 @@ mod tests {
         ));
         assert!(!read(parse_quote!(#[tracing::instrument(skip(self))])));
         assert!(!read(parse_quote!(#[resilient::other(courier)])));
-    }
-
-    fn parted(attr: Attribute) -> (Option<String>, Option<String>) {
-        let ResilientParted { kept, handed } = resilient_parted(&attr);
-        let written = |attr: Attribute| quote!(#attr).to_string();
-        (kept.map(written), handed.map(written))
-    }
-
-    #[test]
-    fn the_decorator_is_kept_and_any_other_attribute_handed_as_written() {
-        assert_eq!(
-            parted(parse_quote!(#[resilient(courier, idempotent)])),
-            (
-                Some(quote!(#[resilient(courier, idempotent)]).to_string()),
-                None
-            )
-        );
-        for other in [
-            parse_quote!(#[tracing::instrument(skip_all)]),
-            parse_quote!(#[cfg_attr(test, allow(unused), traced(skip(resilient)))]),
-            parse_quote!(#[cfg_attr(test, resilient::other(courier))]),
-            parse_quote!(#[cfg_attr(resilient, must_use)]),
-            parse_quote!(#[cfg_attr]),
-            parse_quote!(#[cfg_attr()]),
-        ] {
-            let written = quote!(#other).to_string();
-            assert_eq!(parted(other), (None, Some(written)));
-        }
-    }
-
-    /// Each entry of a `cfg_attr` goes where it would have gone written plain,
-    /// under the predicate it was written under and every one around it.
-    #[test]
-    fn a_cfg_attr_is_split_by_entry_under_the_predicates_it_was_written_under() {
-        assert_eq!(
-            parted(parse_quote!(
-                #[cfg_attr(feature = "shielded", resilient(courier, timeout = "2s"), traced(skip_all))]
-            )),
-            (
-                Some(
-                    quote!(#[cfg_attr(feature = "shielded", resilient(courier, timeout = "2s"))])
-                        .to_string()
-                ),
-                Some(quote!(#[cfg_attr(feature = "shielded", traced(skip_all))]).to_string()),
-            )
-        );
-        assert_eq!(
-            parted(parse_quote!(#[cfg_attr(all(), nest_rs::resilience::resilient(courier),)])),
-            (
-                Some(
-                    quote!(#[cfg_attr(all(), nest_rs::resilience::resilient(courier))]).to_string()
-                ),
-                None,
-            )
-        );
-        assert_eq!(
-            parted(parse_quote!(
-                #[cfg_attr(a, cfg(unix), cfg_attr(b, expect(dead_code), resilient(courier)), cfg_attr(c, must_use))]
-            )),
-            (
-                Some(quote!(#[cfg_attr(a, cfg_attr(b, resilient(courier)))]).to_string()),
-                Some(
-                    quote!(
-                        #[cfg_attr(a, cfg(unix), cfg_attr(b, expect(dead_code)), cfg_attr(c, must_use))]
-                    )
-                    .to_string()
-                ),
-            )
-        );
-    }
-
-    #[test]
-    fn a_decorator_passed_through_a_macro_fragment_is_kept() {
-        let fragment = proc_macro2::Group::new(Delimiter::None, quote!(resilient(courier)));
-        let split = parted_cfg_attr(quote!(all(), #fragment, must_use))
-            .map(|(kept, handed)| (kept.to_string(), handed.map(|handed| handed.to_string())));
-        assert_eq!(
-            split,
-            Some((
-                quote!(all(), resilient(courier)).to_string(),
-                Some(quote!(all(), must_use).to_string()),
-            ))
-        );
-    }
-
-    /// The mark is read where `#[operations]` writes it, the first thing a
-    /// generated field's body holds, and nowhere a developer's body could
-    /// carry the name by another road.
-    #[test]
-    fn the_operation_fields_mark_is_read_where_it_opens_a_body_alone() {
-        let mark = operation_field_mark();
-        let field: syn::Block = parse_quote!({
-            #mark
-            run().await
-        });
-        assert!(opens_on_operation_field_mark(&field.stmts));
-        for written in [
-            parse_quote!({ run().await }),
-            parse_quote!({
-                let __nestrs_operation_field = ();
-                run().await
-            }),
-            parse_quote!({
-                fn operation_field() {}
-                run().await
-            }),
-            parse_quote!({
-                run().await;
-                #mark
-            }),
-            parse_quote!({}),
-        ] {
-            let written: syn::Block = written;
-            assert!(!opens_on_operation_field_mark(&written.stmts));
-        }
     }
 
     #[test]

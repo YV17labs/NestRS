@@ -122,8 +122,8 @@ impl Error for OutboxError {
 /// Why an atomic block could not keep its promise.
 #[non_exhaustive]
 pub enum AtomicError {
-    /// No ambient executor, or one whose driver offers no atomic block: nothing
-    /// ran.
+    /// No ambient executor — outside any unit of work: nothing ran. Inside
+    /// one, every handle offers a block.
     Unsupported,
     /// The database refused to settle the block — its `RELEASE` or
     /// `ROLLBACK TO`, or the `COMMIT` of a block that is a transaction of its

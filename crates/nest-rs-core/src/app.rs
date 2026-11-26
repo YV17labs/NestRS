@@ -914,7 +914,9 @@ impl AppBuilder {
     /// factory waits drops it there and returns
     /// `BootInterruptedError`. A boot that
     /// fails closes what the factories already opened
-    /// ([`ContainerBuilder::provide_close`]) before it returns.
+    /// ([`ContainerBuilder::provide_close`]) before it returns. Two
+    /// `SafeLink`s claiming one error type refuse it before any module collects
+    /// (`ContestedSafeLinkError`).
     pub async fn build(self) -> Result<App> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
@@ -930,6 +932,9 @@ impl AppBuilder {
             framework = env!("CARGO_PKG_VERSION"),
             "app starting",
         );
+        if let Some(contested) = crate::SafeLink::contested() {
+            return Err(contested.into());
+        }
         let lifecycle = booting();
         let AppBuilder {
             mut builder,

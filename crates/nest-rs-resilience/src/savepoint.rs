@@ -186,17 +186,22 @@ mod tests {
     }
 
     impl Executor for Unit {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
+        }
+    }
+
+    impl nest_rs_database::HeldTransaction for Unit {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on this unit")
         }
 
-        fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
-            self.seen.saw(Saw::Opened);
-            Some(Arc::new(Block {
-                seen: Arc::clone(&self.seen),
-                settles: self.settles,
-                settled: AtomicBool::new(false),
-            }))
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            Block::open(&self.seen, self.settles)
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 
@@ -206,9 +211,34 @@ mod tests {
         settled: AtomicBool,
     }
 
+    impl Block {
+        fn open(seen: &Arc<Seen>, settles: Settles) -> Arc<dyn AtomicBlock> {
+            seen.saw(Saw::Opened);
+            Arc::new(Self {
+                seen: Arc::clone(seen),
+                settles,
+                settled: AtomicBool::new(false),
+            })
+        }
+    }
+
     impl Executor for Block {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
+        }
+    }
+
+    impl nest_rs_database::HeldTransaction for Block {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on this savepoint")
+        }
+
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            Self::open(&self.seen, self.settles)
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 
@@ -238,8 +268,18 @@ mod tests {
     struct Pool;
 
     impl Executor for Pool {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Pool(self)
+        }
+    }
+
+    impl nest_rs_database::HeldPool for Pool {
+        fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            unreachable!("no test opens a block on this handle")
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+            None
         }
     }
 
@@ -267,7 +307,8 @@ mod tests {
 
     /// One poll of a call, said with where it runs.
     fn called(seen: &Seen) {
-        let inside = current_executor().is_some_and(|ambient| ambient.as_any().is::<Block>());
+        let inside = current_executor()
+            .is_some_and(|ambient| ambient.holds().downcast_ref::<Block>().is_some());
         seen.saw(Saw::Called { inside });
     }
 
@@ -825,7 +866,7 @@ mod tests {
     async fn outside_a_transaction_each_attempt_runs_as_it_did() {
         let policy = retrying(Some(2));
         let on_pool = |ambient: Option<Arc<dyn Executor>>| {
-            ambient.is_some_and(|ambient| ambient.as_any().is::<Pool>())
+            ambient.is_some_and(|ambient| ambient.holds().downcast_ref::<Pool>().is_some())
         };
 
         let attempts = AtomicU32::new(0);

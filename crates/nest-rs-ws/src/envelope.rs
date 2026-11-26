@@ -365,7 +365,7 @@ impl WsReply {
     /// `INVALID_ARGUMENT` code with its field-level errors beside it, reported
     /// at `debug` on `nest_rs::ws`: the client's error, which the message's
     /// line files.
-    pub fn pipe_error(event: &str, what: &str, error: nest_rs_pipes::PipeError) -> WsReply {
+    pub fn pipe_error(event: &str, what: &str, error: PipeError) -> WsReply {
         let message = format!("invalid {what} for `{event}`: {}", error.message());
         tracing::debug!(
             target: crate::TARGET,
@@ -412,12 +412,13 @@ impl WsReply {
 
     /// The error frame a handler's `Err` produces, read off the vocabulary its
     /// chain carries: a [`WsError`] is sent whole, a [`Problem`] in its frame
-    /// ([`WsError::from_problem`]), a [`PipeError`] with its detail, a decode
-    /// failure without its value under the `INVALID_ARGUMENT` code — each a
-    /// refusal the message's line files, with nothing beside it.
-    /// Anything else answers [`OPAQUE_CLIENT_MESSAGE`] under the `INTERNAL`
-    /// code, its chain filed once at `error`, as is the chain behind a `5xx`
-    /// problem — at `warn` behind a `503`.
+    /// ([`WsError::from_problem`]) — a [`PipeError`]'s among them, which
+    /// carries one — each a refusal the message's line files, with nothing
+    /// beside it. Anything else — a decode failure among them, an upstream's
+    /// answer or a stored value being no word of the client's — answers
+    /// [`OPAQUE_CLIENT_MESSAGE`] under the `INTERNAL` code, its chain filed
+    /// once at `error`, as is the chain behind a `5xx` problem — at `warn`
+    /// behind a `503`.
     pub fn from_handler_error<E>(event: &str, error: E) -> WsReply
     where
         E: Into<Box<dyn Error + Send + Sync>> + 'static,
@@ -494,21 +495,17 @@ pub(crate) fn file(withheld: Withheld, path: Option<&str>, event: Option<&str>) 
 }
 
 /// The frame a failure's chain carries, else the opaque one. A frame the
-/// chain says — a [`WsError`], a client [`Problem`], a [`PipeError`], a
-/// decode failure — is a refusal and withholds nothing, but what a
-/// [`WsError`] keeps itself, `.opaque()`'s chain.
+/// chain says — a [`WsError`], a client [`Problem`] — is a refusal and
+/// withholds nothing, but what a [`WsError`] keeps itself, `.opaque()`'s
+/// chain.
 pub(crate) fn chain_rendered(error: &(dyn Error + 'static)) -> Rendered {
-    let mut frame = if let Some(frame) = find_in_chain::<WsError>(error) {
-        frame.clone()
-    } else if let Some(problem) = find_in_chain::<Problem>(error) {
-        return problem_rendered(error, problem);
-    } else if let Some(rejection) = find_in_chain::<PipeError>(error) {
-        WsError::piped(rejection.message(), rejection.details().cloned())
-    } else if let Some(report) = DecodeError::in_chain(error) {
-        WsError::invalid_argument(report.to_string())
-    } else {
-        return opaque_rendered(nest_rs_core::error_message(error));
+    let Some(frame) = find_in_chain::<WsError>(error) else {
+        return match find_in_chain::<Problem>(error) {
+            Some(problem) => problem_rendered(error, problem),
+            None => opaque_rendered(nest_rs_core::error_message(error)),
+        };
     };
+    let mut frame = frame.clone();
     let withheld = frame.take_withheld();
     Rendered { frame, withheld }
 }
@@ -883,27 +880,41 @@ mod tests {
         );
     }
 
-    /// A value that does not decode names the class HTTP's `400` names under
-    /// `errors`, its sentence kept and its value never said, whichever tier
-    /// read it: the payload's own decode, or a decode failure a handler's chain
-    /// carries.
+    /// A value that does not decode names `INVALID_ARGUMENT` and carries no
+    /// `errors`, its sentence kept and its value never said, where the client
+    /// sent it: the payload's own decode, or a handler saying so of a text it
+    /// decoded by hand. A decode failure a chain merely holds — an upstream's
+    /// answer, a stored value — is the server's, answered opaquely and filed
+    /// without the value.
     #[test]
-    fn a_decode_failure_names_the_invalid_argument_class() {
+    fn a_decode_failure_names_the_invalid_argument_class_only_where_the_client_sent_it() {
         let _logs = nest_rs_testing::LogCapture::install();
         let error = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
 
         let WsReply::Error(payload) = WsReply::payload_error("named", &error) else {
             panic!("a payload that does not decode answers an error frame");
         };
-        let carried = chain_rendered(&error).frame;
+        let by_hand = chain_rendered(&Problem::from(DecodeError::from(&error)));
+        assert_eq!(by_hand.withheld, None, "a refusal withholds nothing");
 
-        for frame in [payload, carried] {
+        for frame in [payload, by_hand.frame] {
             let said = serde_json::to_value(&frame).expect("a frame");
             assert_eq!(said["code"], "INVALID_ARGUMENT", "{said}");
             assert!(said.get("errors").is_none(), "no field map: {said}");
             assert!(frame.error.contains("invalid type"), "{frame:?}");
             assert!(!frame.error.contains("sk_live"), "{frame:?}");
         }
+
+        let carried = chain_rendered(&error);
+        let said = serde_json::to_value(&carried.frame).expect("a frame");
+        assert_eq!(said["code"], "INTERNAL", "{said}");
+        assert_eq!(carried.frame.error, OPAQUE_CLIENT_MESSAGE);
+        assert_eq!(
+            carried.withheld,
+            Some(Withheld::Failed(
+                "invalid type: a string, expected u64 at line 1 column 16".to_owned()
+            )),
+        );
     }
 
     #[test]
@@ -1115,9 +1126,10 @@ mod tests {
     }
 
     /// A refusal a handler answers — its own `WsError`, a `4xx` problem, a
-    /// pipe's rejection, a decode failure, bare or carried in a chain — is
-    /// the client's answer: the message's line files it, and the edge files
-    /// nothing beside it, as HTTP files its `4xx` on its access line alone.
+    /// pipe's rejection, a decode failure it says is its client's, bare or
+    /// carried in a chain — is the client's answer: the message's line files
+    /// it, and the edge files nothing beside it, as HTTP files its `4xx` on
+    /// its access line alone.
     #[test]
     fn a_refusal_a_handler_answers_files_nothing_beside_its_line() {
         use nest_rs_core::anyhow::Error as Anyhow;
@@ -1134,10 +1146,15 @@ mod tests {
                 Anyhow::from(Problem::new(409, code::CONFLICT)).context("reserving sku-42"),
             ),
             WsReply::from_handler_error("buy", PipeError::new("not for sale")),
-            WsReply::from_handler_error("buy", undecodable()),
             WsReply::from_handler_error(
                 "buy",
-                Anyhow::from(undecodable()).context("reading the basket"),
+                Anyhow::from(PipeError::new("not for sale")).context("reading the basket"),
+            ),
+            WsReply::from_handler_error("buy", Problem::from(DecodeError::from(undecodable()))),
+            WsReply::from_handler_error(
+                "buy",
+                Anyhow::from(Problem::from(DecodeError::from(undecodable())))
+                    .context("reading the basket"),
             ),
             ErrorReport::new(Problem::new(422, code::INVALID_ARGUMENT))
                 .into_failure()

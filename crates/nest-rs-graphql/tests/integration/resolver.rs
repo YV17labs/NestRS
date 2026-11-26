@@ -1,8 +1,9 @@
 //! Module-gating: a resolver in a reachable module appears in the schema; a
 //! resolver in no reachable module is silently skipped, unless a served parent
 //! carries its `#[field_resolver]`, which refuses the boot. Beside it, the
-//! developer's method an operation calls — by its path, its attributes on the
-//! field but `#[resilient]` — and the name each field is served under.
+//! developer's method an operation calls — by its path, keeping every
+//! attribute `#[operations]` does not consume — and the name each field is
+//! served under.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -392,11 +393,12 @@ async fn a_field_a_macro_fragment_writes_resolves_as_the_one_written_out() {
     assert_eq!(written["data"]["restack"]["number"], 8, "{written}");
 }
 
-// An operation's attributes go on its field, as 7.0 placed them, an instrument spanning its
-// guards and pipes; `#[resilient]` alone stays on the method, whose body it runs.
+// An operation's attributes stay on the developer's method, as a route's do: `#[operations]`
+// removes what it consumes, and the field it generates carries what describes it to
+// async-graphql alone.
 
 /// A ledger lookup's audit, built per request: a `Scoped<Audit>` is no argument
-/// of the schema, and no `Debug`, so the field leaves it out.
+/// of the schema, and no `Debug`, so an instrument skips it.
 #[injectable(scope = request)]
 #[derive(Default)]
 struct Audit {
@@ -430,6 +432,16 @@ fn note(part: &'static str) {
         .push((part, scope));
 }
 
+/// Where `part` ran, as [`note`] read it.
+fn ran_in(part: &str) -> Vec<&'static str> {
+    let ran_in = RAN_IN.lock().unwrap_or_else(PoisonError::into_inner);
+    ran_in
+        .iter()
+        .find(|(noted, _)| *noted == part)
+        .map(|(_, scope)| scope.clone())
+        .unwrap_or_else(|| panic!("the {part} ran: {ran_in:?}"))
+}
+
 /// Lets every caller through, noting the spans its check runs in.
 #[injectable]
 #[derive(Default, Layer)]
@@ -461,15 +473,29 @@ impl Pipe for NotingTrim {
     }
 }
 
+/// The desk a ledger is kept at, which an instrument reads off `self`.
+struct Desk(&'static str);
+
+impl Default for Desk {
+    fn default() -> Self {
+        Self("desk 4")
+    }
+}
+
 #[resolver]
-struct LedgerResolver;
+#[derive(Default)]
+struct LedgerResolver {
+    desk: Desk,
+}
 
 #[operations]
 impl LedgerResolver {
+    /// Instrumented as a route is: the span is the method's, so it names the
+    /// method's own `self` and records the label the pipe already trimmed.
     #[query]
     #[public]
     #[use_guards(NotingGuard)]
-    #[tracing::instrument(skip(self, ctx))]
+    #[tracing::instrument(skip_all, fields(desk = self.desk.0, id = id, label = %label.0))]
     async fn entry(
         &self,
         ctx: &Context<'_>,
@@ -485,13 +511,36 @@ impl LedgerResolver {
             audit.record()
         )
     }
+
+    /// Refused by its guard: the method never runs, so its instrument opens
+    /// no span and records nothing the caller sent.
+    #[query]
+    #[public]
+    #[use_guards(crate::FieldStoreDown)]
+    #[tracing::instrument(skip(self))]
+    async fn sealed(&self, account: String) -> String {
+        note("sealed");
+        account
+    }
+
+    /// `err` records what the method itself answered, never the opaque error
+    /// the field sends in its place.
+    #[query]
+    #[public]
+    #[tracing::instrument(skip_all, err)]
+    async fn overdrawn(&self) -> Result<i32, BankDown> {
+        Err(BankDown)
+    }
 }
 
-#[module(imports = [GraphqlModule], providers = [LedgerResolver, NotingGuard, Audit])]
+#[module(
+    imports = [GraphqlModule],
+    providers = [LedgerResolver, NotingGuard, Audit, crate::FieldStoreDown],
+)]
 struct LedgerModule;
 
 #[tokio::test]
-async fn an_attribute_on_an_operation_goes_on_its_field_spanning_its_guards_and_pipes() {
+async fn an_attribute_on_an_operation_stays_on_its_method_spanning_its_body_alone() {
     let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::for_module::<LedgerModule>()
         .await
@@ -504,35 +553,97 @@ async fn an_attribute_on_an_operation_goes_on_its_field_spanning_its_guards_and_
     );
     let span = logs.expect_span(module_path!(), "entry");
     assert_eq!(span.field("id").as_deref(), Some("7"), "{:?}", span.fields);
-    let ran_in = RAN_IN
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    for part in ["guard", "pipe", "method"] {
-        let (_, scope) = ran_in
-            .iter()
-            .find(|(noted, _)| *noted == part)
-            .unwrap_or_else(|| panic!("the {part} ran: {ran_in:?}"));
-        assert!(
+    assert_eq!(
+        span.field("desk").as_deref(),
+        Some("desk 4"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(
+        span.field("label").as_deref(),
+        Some("receipts"),
+        "the method's argument, past its pipe: {:?}",
+        span.fields
+    );
+    for (part, spanned) in [("guard", false), ("pipe", false), ("method", true)] {
+        let scope = ran_in(part);
+        assert_eq!(
             scope.contains(&"entry"),
-            "the {part} ran outside the field's span: {scope:?}"
+            spanned,
+            "the {part} ran in {scope:?}"
         );
     }
 }
 
-/// An attribute an app names `resilient` that compiles on both items, in this
-/// suite's build, which enables the resilience capability.
-mod named_resilient {
-    use std::sync::PoisonError;
+#[tokio::test]
+async fn a_caller_a_guard_denies_opens_no_span_of_the_methods_instrument() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<LedgerModule>()
+        .await
+        .expect("the schema boots");
 
+    let refused = crate::graphql_answer(&app, r#"{ sealed(account: "FR76 3000") }"#).await;
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "UNAVAILABLE",
+        "{refused}"
+    );
+    assert!(
+        RAN_IN
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
+        "the method ran"
+    );
+    let opened: Vec<_> = logs
+        .spans()
+        .into_iter()
+        .filter(|span| span.target == module_path!())
+        .collect();
+    assert!(opened.is_empty(), "{opened:?}");
+    assert!(
+        !logs.quotes("FR76 3000"),
+        "an argument of a refused caller reached a line"
+    );
+}
+
+#[tokio::test]
+async fn an_instruments_err_records_the_error_the_method_answered() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<LedgerModule>()
+        .await
+        .expect("the schema boots");
+
+    let answered = crate::graphql_answer(&app, "{ overdrawn }").await;
+    assert_eq!(
+        answered["errors"][0]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{answered}"
+    );
+    let recorded: Vec<_> = logs
+        .events_at(tracing::Level::ERROR)
+        .into_iter()
+        .filter(|event| event.target == module_path!())
+        .collect();
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(
+        recorded[0].field("error").as_deref(),
+        Some("the bank did not answer"),
+        "{recorded:?}"
+    );
+}
+
+/// An attribute of the app's own that shares the resilience decorator's name
+/// is the app's: `#[operations]` reads no attribute by its name, so it stays
+/// on the method like any other, whatever the method answers.
+mod named_resilient {
     use nest_rs_core::module;
     use nest_rs_graphql::{GraphqlModule, operations, resolver};
     use nest_rs_pipes::Piped;
     use nest_rs_testing::TestApp;
-    // A 7.0 program's own attribute macro, named as the decorator is.
+    // The app's own attribute macro, named as the decorator is.
     use tracing::instrument as resilient;
 
-    use super::{BankDown, NotingGuard, NotingTrim, RAN_IN, note};
+    use super::{NotingGuard, NotingTrim, note, ran_in};
 
     #[resolver]
     struct LookupResolver;
@@ -543,19 +654,17 @@ mod named_resilient {
         #[public]
         #[use_guards(NotingGuard)]
         #[resilient(skip_all)]
-        async fn lookup(&self, id: i32, label: Piped<NotingTrim>) -> Result<String, BankDown> {
+        async fn lookup(&self, id: i32, label: Piped<NotingTrim>) -> String {
             note("method");
-            Ok(format!("{id} {}", label.into_inner()))
+            format!("{id} {}", label.into_inner())
         }
     }
 
     #[module(imports = [GraphqlModule], providers = [LookupResolver, NotingGuard])]
     struct LookupModule;
 
-    /// The attribute stays on the developer's method, as the decorator does,
-    /// and spans that method alone: the field's guard and pipe run outside it.
     #[tokio::test]
-    async fn an_attribute_an_app_names_resilient_spans_the_developers_method_alone() {
+    async fn an_attribute_an_app_names_resilient_is_the_apps_own_on_its_method() {
         let _logs = nest_rs_testing::LogCapture::install();
         let app = TestApp::for_module::<LookupModule>()
             .await
@@ -563,15 +672,8 @@ mod named_resilient {
 
         let body = crate::graphql_answer(&app, r#"{ lookup(id: 7, label: "  receipts  ") }"#).await;
         assert_eq!(body["data"]["lookup"], "7 receipts", "{body}");
-        let ran_in = RAN_IN
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
         for (part, spanned) in [("guard", false), ("pipe", false), ("method", true)] {
-            let (_, scope) = ran_in
-                .iter()
-                .find(|(noted, _)| *noted == part)
-                .unwrap_or_else(|| panic!("the {part} ran: {ran_in:?}"));
+            let scope = ran_in(part);
             assert_eq!(
                 scope.contains(&"lookup"),
                 spanned,
@@ -622,7 +724,8 @@ impl ReconciledResolver {
     }
 
     /// Decorated under a condition that holds, beside an instrument in the same
-    /// `cfg_attr`, which names the field's own parameter.
+    /// `cfg_attr`: each entry is the method's, in the order written, so the one
+    /// span covers the whole run, every attempt of it.
     #[query]
     #[public]
     #[cfg_attr(
@@ -686,9 +789,9 @@ async fn a_resilient_operation_runs_its_developers_body_under_the_policy() {
     assert_eq!(reads.sent.load(Ordering::SeqCst), 1, "sent once closed");
 }
 
-/// `#[operations]` splits a `#[cfg_attr]` by entry: the decorator stays on the
-/// developer's method under its condition, so the operation runs under the
-/// policy while it holds, and its neighbour goes on the field, spanning it.
+/// A `#[cfg_attr]` stays on the developer's method whole: the decorator under
+/// its condition runs the operation under the policy while it holds, and the
+/// instrument beside it spans that method.
 #[tokio::test(start_paused = true)]
 async fn a_resilient_inside_a_cfg_attr_runs_its_operation_under_the_policy_while_it_holds() {
     let logs = nest_rs_testing::LogCapture::install();
@@ -737,13 +840,277 @@ async fn a_resilient_inside_a_cfg_attr_runs_its_operation_under_the_policy_while
         .into_iter()
         .filter(|span| span.target == module_path!() && span.name == "settled")
         .count();
-    assert_eq!(spanned, 2, "the instrument spans the field: once a query");
+    assert_eq!(
+        spanned, 2,
+        "the instrument below the decorator spans the whole run: once a query"
+    );
+}
+
+/// One operation of each role, as a route would be written: an instrument
+/// reading the resolver's own `self`, and the decorator imported under another
+/// name inside a nested `#[cfg_attr]`, each staying on the developer's method.
+mod every_role {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    use nest_rs_core::module;
+    use nest_rs_graphql::async_graphql::SimpleObject;
+    use nest_rs_graphql::async_graphql::futures_util::StreamExt as _;
+    use nest_rs_graphql::async_graphql::futures_util::stream::{self, BoxStream};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+    use nest_rs_resilience::resilient as shielded;
+    use nest_rs_resilience::{ResilienceError, ResilienceModule, ResiliencePolicy};
+    use nest_rs_testing::TestApp;
+
+    use super::{BalanceReads, Bank, BankDown};
+
+    #[derive(SimpleObject)]
+    #[graphql(complex)]
+    struct Account {
+        id: i32,
+    }
+
+    #[resolver]
+    struct AccountsResolver {
+        #[inject]
+        bank: Arc<ResiliencePolicy<Bank>>,
+        #[inject]
+        reads: Arc<BalanceReads>,
+    }
+
+    impl AccountsResolver {
+        /// The bank read once more, failing the first time it is asked.
+        fn read(&self) -> Result<u32, BankDown> {
+            match self.reads.sent.fetch_add(1, Ordering::SeqCst) {
+                0 => Err(BankDown),
+                sent => Ok(sent),
+            }
+        }
+    }
+
+    #[operations]
+    impl AccountsResolver {
+        #[query]
+        #[public]
+        #[cfg_attr(all(), cfg_attr(all(), shielded(bank, idempotent)))]
+        #[tracing::instrument(skip_all, fields(role = "query", sent = self.reads.sent.load(Ordering::SeqCst)))]
+        async fn account(&self) -> Result<Account, ResilienceError<BankDown>> {
+            self.read()?;
+            Ok(Account { id: 7 })
+        }
+
+        #[mutation]
+        #[public]
+        #[cfg_attr(all(), cfg_attr(all(), shielded(bank, idempotent)))]
+        #[tracing::instrument(skip_all, fields(role = "mutation", sent = self.reads.sent.load(Ordering::SeqCst)))]
+        async fn close_account(&self) -> Result<i32, ResilienceError<BankDown>> {
+            self.read()?;
+            Ok(7)
+        }
+
+        #[subscription]
+        #[public]
+        #[cfg_attr(all(), cfg_attr(all(), shielded(bank, idempotent)))]
+        #[tracing::instrument(skip_all, fields(role = "subscription", sent = self.reads.sent.load(Ordering::SeqCst)))]
+        async fn account_changes(
+            &self,
+        ) -> Result<BoxStream<'static, i32>, ResilienceError<BankDown>> {
+            self.read()?;
+            Ok(stream::iter([7, 8]).boxed())
+        }
+
+        #[entity]
+        #[public]
+        #[cfg_attr(all(), cfg_attr(all(), shielded(bank, idempotent)))]
+        #[tracing::instrument(skip_all, fields(role = "entity", sent = self.reads.sent.load(Ordering::SeqCst)))]
+        async fn find_account_by_id(&self, id: i32) -> Result<Account, ResilienceError<BankDown>> {
+            self.read()?;
+            Ok(Account { id })
+        }
+
+        /// The parent the field resolver below reads, built without the bank.
+        #[query]
+        #[public]
+        async fn opened_account(&self) -> Account {
+            Account { id: 7 }
+        }
+
+        #[field_resolver]
+        #[cfg_attr(all(), cfg_attr(all(), shielded(bank, idempotent)))]
+        #[tracing::instrument(skip_all, fields(role = "field", sent = self.reads.sent.load(Ordering::SeqCst)))]
+        async fn balance(&self, parent: &Account) -> Result<i32, ResilienceError<BankDown>> {
+            self.read()?;
+            Ok(parent.id * 6)
+        }
+    }
+
+    #[module(
+        imports = [
+            GraphqlModule::for_root(GraphqlConfig {
+                federation: true,
+                federation_sdl: nest_rs_config::Surface::Open,
+                ..GraphqlConfig::default()
+            }),
+            ResilienceModule<Bank>,
+        ],
+        providers = [AccountsResolver, BalanceReads],
+    )]
+    struct AccountsModule;
+
+    /// Each role's first read of the bank fails and its second answers: the
+    /// decorator ran the developer's body again, under the policy its `self`
+    /// holds, and the instrument's one span, reading that `self`, covers the run.
+    #[tokio::test(start_paused = true)]
+    async fn an_operation_of_each_role_keeps_its_instrument_and_its_renamed_decorator() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<AccountsModule>()
+            .await
+            .expect("the schema boots");
+        let reads = app
+            .container()
+            .get::<BalanceReads>()
+            .expect("the module provides the count");
+        let retried = |role: &str| {
+            assert_eq!(
+                reads.sent.swap(0, Ordering::SeqCst),
+                2,
+                "the {role} was sent again after its failure"
+            );
+        };
+
+        let read = crate::graphql_answer(&app, "{ account { id } }").await;
+        assert_eq!(read["data"]["account"]["id"], 7, "{read}");
+        retried("query");
+
+        let written = crate::graphql_answer(&app, "mutation { closeAccount }").await;
+        assert_eq!(written["data"]["closeAccount"], 7, "{written}");
+        retried("mutation");
+
+        let mut socket = app.graphql_socket().open();
+        socket.connect().await;
+        socket.subscribe("changes", "subscription { accountChanges }");
+        for change in [7, 8] {
+            let item = socket.next_item("changes").await.expect("an item");
+            assert_eq!(item["data"]["accountChanges"], change, "{item}");
+        }
+        retried("subscription");
+
+        let resolved = crate::graphql_answer(
+            &app,
+            r#"{ _entities(representations: [{ __typename: "Account", id: 4 }]) { ... on Account { id } } }"#,
+        )
+        .await;
+        assert_eq!(resolved["data"]["_entities"][0]["id"], 4, "{resolved}");
+        retried("entity");
+
+        let nested = crate::graphql_answer(&app, "{ openedAccount { balance } }").await;
+        assert_eq!(nested["data"]["openedAccount"]["balance"], 42, "{nested}");
+        retried("field resolver");
+
+        for (method, role) in [
+            ("account", "query"),
+            ("close_account", "mutation"),
+            ("account_changes", "subscription"),
+            ("find_account_by_id", "entity"),
+            ("balance", "field"),
+        ] {
+            let span = logs.expect_span(module_path!(), method);
+            assert_eq!(
+                span.field("role").as_deref(),
+                Some(role),
+                "{:?}",
+                span.fields
+            );
+            assert!(span.field("sent").is_some(), "{:?}", span.fields);
+        }
+    }
+}
+
+/// A field is deprecated for its clients by `#[graphql(deprecation = "…")]`,
+/// which the field `#[operations]` generates carries, where Rust's
+/// `#[deprecated]` on the method is refused: the schema's introspection says it.
+mod deprecated {
+    use nest_rs_core::module;
+    use nest_rs_graphql::async_graphql::SimpleObject;
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
+    use nest_rs_testing::TestApp;
+
+    #[derive(SimpleObject)]
+    #[graphql(complex)]
+    struct Invoice {
+        number: i32,
+    }
+
+    #[resolver]
+    struct InvoicesResolver;
+
+    #[operations]
+    impl InvoicesResolver {
+        #[query]
+        #[public]
+        #[graphql(deprecation = "ask `invoices`")]
+        async fn invoice(&self) -> Invoice {
+            Invoice { number: 7 }
+        }
+
+        #[field_resolver]
+        #[graphql(deprecation = "read `number`")]
+        async fn total(&self, parent: &Invoice) -> i32 {
+            parent.number * 6
+        }
+    }
+
+    #[module(
+        imports = [GraphqlModule::for_root(GraphqlConfig {
+            introspection: nest_rs_config::Surface::Open,
+            ..GraphqlConfig::default()
+        })],
+        providers = [InvoicesResolver],
+    )]
+    struct InvoicesModule;
+
+    #[tokio::test]
+    async fn a_field_deprecated_by_its_graphql_attribute_says_so_to_its_clients() {
+        let app = TestApp::for_module::<InvoicesModule>()
+            .await
+            .expect("the schema boots");
+
+        let read = crate::graphql_answer(&app, "{ invoice { number total } }").await;
+        assert_eq!(read["data"]["invoice"]["total"], 42, "{read}");
+        let described = crate::graphql_answer(
+            &app,
+            r#"{
+                query: __type(name: "Query") {
+                    fields(includeDeprecated: true) { name isDeprecated deprecationReason }
+                }
+                invoice: __type(name: "Invoice") {
+                    fields(includeDeprecated: true) { name isDeprecated deprecationReason }
+                }
+            }"#,
+        )
+        .await;
+        for (owner, field, reason) in [
+            ("query", "invoice", "ask `invoices`"),
+            ("invoice", "total", "read `number`"),
+        ] {
+            let fields = described["data"][owner]["fields"]
+                .as_array()
+                .unwrap_or_else(|| panic!("`{owner}` lists its fields: {described}"));
+            let deprecated = fields
+                .iter()
+                .find(|described| described["name"] == field)
+                .unwrap_or_else(|| panic!("`{owner}` lists `{field}`: {described}"));
+            assert_eq!(deprecated["isDeprecated"], true, "{deprecated}");
+            assert_eq!(deprecated["deprecationReason"], reason, "{deprecated}");
+        }
+    }
 }
 
 /// A lint level written on an operation describes the developer's method, where
-/// an expectation is checked: the field wrapper beside it trips neither lint
-/// below, so an expectation carried there would go unfulfilled — rustc's under
-/// this level, clippy's under the workspace's `-D warnings`.
+/// an expectation is checked, plain or under a `#[cfg_attr]`: the field wrapper
+/// beside it trips neither lint below, so an expectation carried there would go
+/// unfulfilled — rustc's under this level, clippy's under the workspace's
+/// `-D warnings`.
 #[deny(unfulfilled_lint_expectations)]
 mod expected {
     use nest_rs_core::module;
@@ -801,6 +1168,18 @@ mod expected {
         async fn weight(&self, parent: &Crate, unit: String) -> i32 {
             parent.number * 2
         }
+
+        /// Under a condition, where the expectation is checked on the method
+        /// too: `#[operations]` leaves a `#[cfg_attr]` on it as written.
+        #[query]
+        #[public]
+        #[cfg_attr(
+            all(),
+            expect(unused_variables, reason = "the bay narrows the count next release")
+        )]
+        async fn pallet_count(&self, bay: String) -> i32 {
+            5
+        }
     }
 
     #[module(imports = [GraphqlModule], providers = [ExpectedResolver])]
@@ -814,10 +1193,11 @@ mod expected {
 
         let body = crate::graphql_answer(
             &app,
-            r#"{ crateCount(depot: "Lyon") dock unloaded { weight(unit: "kg") } }"#,
+            r#"{ crateCount(depot: "Lyon") palletCount(bay: "B2") dock unloaded { weight(unit: "kg") } }"#,
         )
         .await;
         assert_eq!(body["data"]["crateCount"], 3, "{body}");
+        assert_eq!(body["data"]["palletCount"], 5, "{body}");
         assert_eq!(body["data"]["dock"], "dock 4", "{body}");
         assert_eq!(body["data"]["unloaded"]["weight"], 14, "{body}");
     }

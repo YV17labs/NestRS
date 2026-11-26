@@ -10,6 +10,4 @@ pub use outbox::SeaOrmOutbox;
 
 #[cfg(test)]
 pub(crate) use outbox::tests::armed;
-pub(crate) use outbox::{
-    KeepingPool, collect, insert, register, removal_of_job, removal_of_key, removed,
-};
+pub(crate) use outbox::{collect, insert, register, removal_of_job, removal_of_key, removed};

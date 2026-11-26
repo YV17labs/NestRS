@@ -69,6 +69,10 @@ serde_urlencoded = "0.7"
 form_urlencoded = "1.2"
 async-compression = { version = "0.4", features = ["tokio", "brotli", "deflate", "gzip", "zstd"] }
 rustls = "0.23"  # public in nest-rs-testing alone
+# webpki's own refusal of a certificate, which rustls hands on inside
+# `CertificateError::Other`, read by its type in `nest-rs-reqwest`: the release
+# rustls links, so the two move together.
+rustls-webpki = { version = "0.103", default-features = false, features = ["std"] }
 rustls-native-certs = "0.8"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem", "crypto"] }
 aws-lc-rs = { version = "1.19", default-features = false, features = ["aws-lc-sys"] }

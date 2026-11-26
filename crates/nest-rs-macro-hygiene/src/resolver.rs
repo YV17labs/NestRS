@@ -8,6 +8,8 @@
 
 use nest_rs::core::{Ambient, Layer, Scoped, UnitContext, async_trait};
 use nest_rs::graphql::async_graphql::SimpleObject;
+#[cfg(feature = "authz")]
+use nest_rs::graphql::async_graphql::futures_util::stream::BoxStream;
 use nest_rs::graphql::async_graphql::futures_util::stream::{self, Stream};
 use nest_rs::graphql::{GraphqlView, operations, resolver};
 use nest_rs::guards::{Denial, Guard, GuardFor};
@@ -94,6 +96,33 @@ impl GreetingResolver {
     #[authorize(nest_rs::authz::Manage, crate::subject::HygieneExports)]
     fn export(&self) -> bool {
         true
+    }
+
+    /// Under a posture naming a subject a stream is filtered by item, and one
+    /// a type names is answered as under a bare `#[public]`: boxed, here.
+    #[cfg(feature = "authz")]
+    #[subscription]
+    #[authorize(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    async fn exports(&self) -> BoxStream<'static, i32> {
+        Box::pin(stream::iter([1]))
+    }
+
+    /// A stream named by its own type, from a `fn`.
+    #[cfg(feature = "authz")]
+    #[subscription]
+    #[public(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    fn open_exports(&self) -> stream::Iter<std::ops::Range<i32>> {
+        stream::iter(0..3)
+    }
+
+    /// A named stream behind a `Result`.
+    #[cfg(feature = "authz")]
+    #[subscription]
+    #[authorize(nest_rs::authz::Read, crate::subject::HygieneExports)]
+    async fn exports_or_refusal(
+        &self,
+    ) -> nest_rs::graphql::async_graphql::Result<BoxStream<'static, i32>> {
+        Ok(Box::pin(stream::iter([1])))
     }
 
     /// An operation compiled out takes its root field and guard with it.

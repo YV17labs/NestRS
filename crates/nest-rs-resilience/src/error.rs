@@ -4,10 +4,8 @@
 //! of its breaker answers when it changes nothing.
 
 use std::convert::Infallible;
-use std::error::Error;
 use std::time::Duration;
 
-use nest_rs_core::__private::link_as;
 use nest_rs_core::{Problem, SafeLink, ToProblem, code};
 use nest_rs_database::AtomicError;
 
@@ -68,10 +66,9 @@ pub(crate) const TIMED_OUT: &str = "the call did not answer within its timeout";
 pub enum ResilienceError<E> {
     /// The call answered its own error on its last attempt. Every edge answers
     /// it as the error's own [`to_problem`](ToProblem::to_problem) says, else
-    /// by a problem its chain carries, opaquely when neither does — but where
-    /// the call's error is no [`ToProblem`], GraphQL, WebSocket and MCP answer
-    /// a decode failure in its chain as `INVALID_ARGUMENT`, which a
-    /// `to_problem` answering `None` keeps opaque.
+    /// by a problem its chain carries, opaquely when neither does: a partner's
+    /// answer that did not decode is the server's failure on every edge, its
+    /// chain filed.
     #[error("the call failed")]
     Failed(#[source] E),
     /// The last attempt did not answer within the policy's timeout, or the
@@ -151,7 +148,7 @@ impl<E> ResilienceError<E> {
     }
 }
 
-nest_rs_core::inventory::submit! { SafeLink::new(say) }
+nest_rs_core::inventory::submit! { SafeLink::of(&say) }
 
 /// A refusal no call's error type carries — the `ResilienceError<Infallible>`
 /// the middleware answers, and ends a read of the body it covers with, inside
@@ -161,8 +158,7 @@ nest_rs_core::inventory::submit! { SafeLink::new(say) }
 /// unclaimed, a body the policy gave up reads as one that did not decode.
 ///
 /// An unsettled savepoint is not claimed: its chain is the database's to say.
-fn say(link: &(dyn Error + 'static)) -> Option<String> {
-    let refused = link_as::<ResilienceError<Infallible>>(link)?;
+fn say(refused: &ResilienceError<Infallible>) -> Option<String> {
     let problem = match refused {
         ResilienceError::TimedOut { __problem, .. }
         | ResilienceError::Open { __problem, .. }

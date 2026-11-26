@@ -779,8 +779,9 @@ impl RefusingGateway {
 
     #[subscribe_message("undecodable")]
     #[public]
-    async fn undecodable(&self) -> Result<u64, serde_json::Error> {
+    async fn undecodable(&self) -> Result<u64, Problem> {
         serde_json::from_str(r#""sk_live_secret""#)
+            .map_err(|failure| Problem::from(nest_rs_core::DecodeError::from(failure)))
     }
 
     #[subscribe_message("unavailable")]

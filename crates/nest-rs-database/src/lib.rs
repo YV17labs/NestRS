@@ -21,8 +21,22 @@
 //!
 //! To add a new ORM:
 //!
-//! 1. Implement [`Executor`] on the type that represents your handle (a
-//!    pool, a transaction, or an enum forwarding to either).
+//! 1. Implement [`Executor`] on what your units install, and say what each
+//!    handle [holds](Executor::holds): the pool ([`HeldPool`]) or a
+//!    transaction ([`HeldTransaction`]). The port reads the rest off that
+//!    answer, and no method of the three traits has a default, so a handle
+//!    holding a transaction cannot leave one out:
+//!    - [`HeldTransaction::after_commit`] holds the work [`after_commit`]
+//!      hands it, runs it after the commit — or after a unit that succeeded
+//!      without opening one — and drops it otherwise; on a pool the port runs
+//!      the work at once.
+//!    - [`HeldTransaction::savepoint`] and [`HeldPool::transaction`] open the
+//!      [`AtomicBlock`] [`atomic`](fn@atomic) runs its work in — a savepoint
+//!      of the transaction, a transaction of its own on the pool — settled
+//!      once. A resilience policy runs each attempt of a call it may send
+//!      again in the savepoint, and on the pool itself.
+//!    - [`HeldTransaction::outbox`] and [`HeldPool::outbox`] answer the
+//!      outbox of step 5, or `None` for a driver keeping none.
 //! 2. Implement [`UnitOfWork`]: `open` answers an [`OpenUnit`] for the
 //!    [`UnitSpec`] an edge declares — a transaction opened on the unit's first
 //!    touch for [`TransactionPolicy::PerUnit`], the pool for
@@ -31,32 +45,22 @@
 //!    edge then opens its units through it, and every lifecycle hook runs in
 //!    one.
 //! 3. Provide your own `Repo`-equivalent query API that calls
-//!    [`current_executor`] and downcasts to your concrete type — a type private
-//!    to your crate, so a service reading [`current_executor`] finds no handle
-//!    it could run a statement on that your row filter never saw.
-//! 4. Override [`Executor::after_commit`] on every handle a unit settles a
-//!    transaction for: hold the work, run it after the commit — or after a
-//!    unit that succeeded without opening one — and drop it otherwise. The
-//!    default runs it at once, which is wrong for a transaction.
-//! 5. Override [`Executor::atomic`] to offer [`atomic`](fn@atomic) a block: an
-//!    [`AtomicBlock`] whose statements run inside a savepoint (a transaction of
-//!    its own on a pool), settled once. The default offers none, and `atomic`
-//!    then fails closed with [`AtomicError::Unsupported`]. Override
-//!    [`Executor::savepoint`] with the same block on every handle holding a
-//!    transaction, and never on a pool: a resilience policy runs each attempt
-//!    of a call it may send again in one, and on the handle itself without.
-//! 6. Match [`ExecutorScope`] and [`TransactionPolicy`] with a `_` arm that
+//!    [`current_executor`] and recovers your handle off what it holds
+//!    ([`Holds::downcast_ref`]) — a type private to your crate, so a service
+//!    reading [`current_executor`] finds no handle it could run a statement on
+//!    that your row filter never saw.
+//! 4. Match [`ExecutorScope`] and [`TransactionPolicy`] with a `_` arm that
 //!    fails closed: both can grow within 7.x.
-//! 7. Keep the queue port's transactional outbox, so a job pushed inside a
+//! 5. Keep the queue port's transactional outbox, so a job pushed inside a
 //!    unit is filed after its commit and never on its rollback: implement
 //!    [`OutboxStore`] over a table of your own, bind it as
 //!    `Arc<dyn OutboxStore>` beside your unit of work and import the queue
-//!    port's `OutboxModule`, which attaches the relay draining it; then
-//!    override [`Executor::write_outbox`] and its two `remove_outbox` methods
-//!    on every handle a unit settles a transaction for, writing on that
-//!    transaction once the store is armed, and the removals on the pool
-//!    handles your units install too, for a cancel there. Without them a push
-//!    is filed at once, and a rollback leaves its job behind.
+//!    port's `OutboxModule`, which attaches the relay draining it; then answer
+//!    an [`Outbox`] from every handle holding a transaction, writing on that
+//!    transaction once the store is armed, and an [`OutboxKept`] from the pool
+//!    handles your units install too, for a cancel there. A handle answering
+//!    `None` has its pushes filed at once, and a rollback leaves the job
+//!    behind.
 //!
 //! A new ORM integration ships its own row-level-filter equivalent: the
 //! SeaORM pieces (`Repo`, `condition_for`, the bound-subject loader) are unreachable from it.
@@ -72,9 +76,10 @@ mod unit;
 pub use atomic::{AtomicBlock, atomic};
 pub use error::{AtomicError, OutboxError, Unhonoured};
 pub use executor::{
-    Deferred, Executor, ExecutorScope, after_commit, current_executor, current_executor_scope,
+    Deferred, Executor, ExecutorScope, HeldPool, HeldTransaction, Holds, after_commit,
+    current_executor, current_executor_scope,
 };
-pub use outbox::{ClaimedRecord, OutboxClaim, OutboxRecord, OutboxStore};
+pub use outbox::{ClaimedRecord, Outbox, OutboxClaim, OutboxKept, OutboxRecord, OutboxStore};
 pub use unit::{
     BACKEND_REMEDY, JobRef, OpenUnit, Settlement, TransactionPolicy, UnitOfWork, UnitSpec,
     current_unit_of_work, provide_unit_of_work, run_unit,

@@ -10,6 +10,7 @@
 
 mod access_contract;
 mod bearer;
+mod chain_answers;
 mod client;
 mod config;
 mod cors;

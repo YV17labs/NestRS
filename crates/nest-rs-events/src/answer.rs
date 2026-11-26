@@ -53,9 +53,11 @@ mod tests {
 
     impl Error for Quoting {}
 
-    nest_rs_core::inventory::submit! {
-        nest_rs_core::SafeLink::new(|link| link.is::<Quoting>().then(|| "row refused".to_owned()))
+    fn say(_: &Quoting) -> Option<String> {
+        Some("row refused".to_owned())
     }
+
+    nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say) }
 
     /// An error a listener answers keeps its links' types, an `anyhow::Error`'s
     /// included, so the driver's sayer still claims its own and the value stays

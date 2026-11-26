@@ -209,9 +209,11 @@ impl Error for Coded {
     }
 }
 
-nest_rs_core::inventory::submit! {
-    nest_rs_core::SafeLink::new(|link| link.is::<Coded>().then(|| "refused R42".to_owned()))
+fn say_coded(_: &Coded) -> Option<String> {
+    Some("refused R42".to_owned())
 }
+
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_coded) }
 
 /// A cause another crate's `SafeLink` claims is said as that crate says it,
 /// with nothing beneath it: the driver's sentence is the whole of its meaning.
@@ -263,15 +265,29 @@ async fn an_io_error_holding_another_is_said_by_its_kind_never_the_sentence_it_h
 async fn a_cause_is_said_by_the_opening_this_crate_knows_never_what_follows_it() {
     let error = refused_with(|location| {
         Box::new(std::io::Error::other(Quoting(format!(
-            "invalid peer certificate: certificate not valid for name \"{location}\""
+            "tunnel error: unsuccessful, the proxy answered for \"{location}\""
         ))))
     })
     .await;
 
     assert_eq!(
         said(&error),
-        "error following redirect: invalid peer certificate: certificate not valid for name"
+        "error following redirect: tunnel error: unsuccessful"
     );
+}
+
+/// rustls's sentence for a certificate is read off its type, never off a text
+/// opening as it does: an error of another type spelling one says nothing.
+#[tokio::test]
+async fn a_text_opening_as_rustls_does_is_no_certificate_this_crate_reads() {
+    let error = refused_with(|location| {
+        Box::new(Quoting(format!(
+            "invalid peer certificate: certificate not valid for name \"{location}\""
+        )))
+    })
+    .await;
+
+    assert_eq!(said(&error), "error following redirect");
 }
 
 #[tokio::test]
@@ -315,9 +331,11 @@ async fn a_body_cut_short_is_said_by_its_kinds_and_its_io_error() {
     );
 }
 
-/// A certificate no authority the client trusts issued: the handshake's
-/// failure is an I/O error holding rustls's, said by the opening this crate
-/// knows of it.
+/// A certificate issued by an authority the client does not trust, under the
+/// name of one it does — an authority re-keyed, its old certificate still in
+/// the client's store: the handshake's failure is an I/O error holding
+/// rustls's, said by its constant reason, which tells it from an issuer the
+/// client never heard of.
 #[tokio::test]
 async fn a_certificate_the_client_does_not_trust_is_said_by_the_handshakes_failure() {
     let peer = peer([PeerAnswer::status(200)]).await;
@@ -332,12 +350,61 @@ async fn a_certificate_the_client_does_not_trust_is_said_by_the_handshakes_failu
         .get(peer.url(PARCEL))
         .send()
         .await
-        .expect_err("an unknown issuer");
+        .expect_err("a signature the trusted key did not make");
     assert!(error.is_connect(), "{error:?}");
 
     assert_eq!(
         said(&error),
-        "error sending request: invalid peer certificate"
+        "error sending request: invalid peer certificate: BadSignature"
+    );
+}
+
+/// An endpoint serving its authority's own certificate, which the client
+/// trusts: webpki refuses it in a way rustls has no word for, read off
+/// webpki's error inside rustls's.
+#[tokio::test]
+async fn an_authoritys_certificate_presented_as_a_servers_is_said_by_webpkis_name_for_it() {
+    let peer = HttpsPeer::answering(&AUTHORITY.certificate(), [PeerAnswer::status(200)]).await;
+    let error = trusting()
+        .build()
+        .expect("a client")
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect_err("an authority's certificate is no server's");
+    assert!(error.is_connect(), "{error:?}");
+
+    assert_eq!(
+        said(&error),
+        "error sending request: invalid peer certificate: CaUsedAsEndEntity"
+    );
+}
+
+/// A certificate issued for client authentication alone, served by an
+/// endpoint: said by the usage this client required, never by those the
+/// certificate allows.
+#[tokio::test]
+async fn a_certificate_issued_for_clients_alone_is_said_by_the_usage_it_lacks() {
+    let for_clients = AUTHORITY.client("127.0.0.1");
+    let peer = HttpsPeer::answering(&for_clients, [PeerAnswer::status(200)]).await;
+    let error = trusting()
+        .build()
+        .expect("a client")
+        .get(peer.url(PARCEL))
+        .send()
+        .await
+        .expect_err("no server authentication in its usages");
+    assert!(error.is_connect(), "{error:?}");
+    assert!(
+        error_message(error.source().expect("the connection's failure"))
+            .contains("allows client authentication"),
+        "rustls's own sentence goes on with what the certificate allows: {error:?}"
+    );
+
+    assert_eq!(
+        said(&error),
+        "error sending request: invalid peer certificate: certificate does not allow extended key \
+         usage for server authentication"
     );
 }
 

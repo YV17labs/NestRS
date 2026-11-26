@@ -1,8 +1,10 @@
 //! `#[operations]` reads a field's `Result` by its last path segment, so a
 //! decorated field answering its `Result<T, ResilienceError<E>>` through an
-//! alias would be read whole as the field's GraphQL type, which no
-//! `ResilienceError` is. One error at the return type says to spell it out,
-//! where the field's expansion would report bound after bound it cannot meet.
+//! alias answers the whole `Result` as its GraphQL type, which none failing
+//! with a `ResilienceError` is. It is known there by its type: one sentence at
+//! the return type says to spell it out. The bounds the derive and the wrapper
+//! then miss follow it in rustc's words, pinned so a change in the first line
+//! is seen.
 
 use std::sync::Arc;
 

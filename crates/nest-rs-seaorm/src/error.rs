@@ -4,7 +4,7 @@
 //! A database failure is classified once, here ([`RepoError`]), and said once:
 //! by its SQLSTATE and the names the server reported, never by the server's
 //! message or its `detail`, which quote the input it refused. This crate's
-//! [`SafeLink`](nest_rs_core::SafeLink) says a sea-orm or sqlx error a chain
+//! [`SafeLink`](nest_rs_core::SafeLink)s say a sea-orm or sqlx error a chain
 //! still holds the same way.
 
 use std::borrow::Cow;
@@ -12,7 +12,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use nest_rs_core::__private::{OpaqueCause, link_as};
+use nest_rs_core::__private::OpaqueCause;
 use nest_rs_core::DecodeError;
 use nest_rs_database::AtomicError;
 use ref_cast::RefCast;
@@ -592,19 +592,25 @@ pub(crate) fn server_error(err: &DbErr) -> Option<&(dyn DatabaseError + 'static)
     }
 }
 
-nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_db) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_runtime) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_sqlx) }
 
-/// What a sea-orm or sqlx error means, said without a value: a server error by
-/// its SQLSTATE and the names it reported; a variant whose text can hold a value
+/// What a sea-orm error means, said without a value: a server error by its
+/// SQLSTATE and the names it reported; a variant whose text can hold a value
 /// by its kind alone; every other by its own sentence, which holds none.
-fn say(link: &(dyn std::error::Error + 'static)) -> Option<String> {
-    if let Some(err) = link_as::<DbErr>(link) {
-        return Some(said_db(err));
-    }
-    if let Some(err) = link_as::<RuntimeErr>(link) {
-        return Some(said_runtime(err));
-    }
-    link_as::<SqlxError>(link).map(said_sqlx)
+fn say_db(err: &DbErr) -> Option<String> {
+    Some(said_db(err))
+}
+
+/// sea-orm's runtime error, said as [`say_db`] says the error holding one.
+fn say_runtime(err: &RuntimeErr) -> Option<String> {
+    Some(said_runtime(err))
+}
+
+/// An sqlx error a chain holds bare, said the same way.
+fn say_sqlx(err: &SqlxError) -> Option<String> {
+    Some(said_sqlx(err))
 }
 
 fn said_db(err: &DbErr) -> String {

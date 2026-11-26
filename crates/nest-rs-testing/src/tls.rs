@@ -93,6 +93,17 @@ impl TestAuthority {
         self.issue(&[name], ExtendedKeyUsagePurpose::ClientAuth)
     }
 
+    /// The authority's own certificate and its key: what a double presents to
+    /// stand for a server handed its authority's certificate, which a client
+    /// trusting the authority still refuses — an authority's certificate is no
+    /// server's.
+    pub fn certificate(&self) -> TestCertificate {
+        TestCertificate {
+            cert: self.pem.clone(),
+            key: self.issuer.key().serialize_pem(),
+        }
+    }
+
     fn issue(&self, names: &[&str], usage: ExtendedKeyUsagePurpose) -> TestCertificate {
         let key = KeyPair::generate().expect("a P-256 key generates");
         let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();

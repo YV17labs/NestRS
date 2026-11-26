@@ -4,7 +4,7 @@
 
 use nest_rs_codegen::__private::pair;
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Group, Spacing, TokenStream as TokenStream2, TokenTree};
 use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::spanned::Spanned as _;
@@ -16,19 +16,18 @@ use syn::{
 use nest_rs_codegen::__private::layers::{LayerScope, Layers, take_layers};
 use nest_rs_codegen::__private::{
     AUTHORIZED_NEEDS_BIND, BIND_NEEDS_AUTHORIZED, BIND_TAKES, Conditional, DispatchKeys,
-    HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, ResilientParted, SiteGuards,
-    SiteItems, SitePosture, TailParam, VersionedEdge, ambient_type_ids, answer_span,
-    authorized_entity, await_if_async, build_injectable_body, camel_case, cfg_attrs,
-    concrete_signature, delegated_attrs, exception_filter_specs, force_guard_typeids,
-    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
-    handler_const, host_meta_fn, host_runtime_entry, impl_self_ident, injected_keys_with_layers,
-    injected_methods_with_layers, injected_names_with_layers, injected_optional_fns,
-    injected_remedies_fn, injects_impls, interceptor_specs, key_as_written, layer_deps,
-    mixed_site_ident, no_row_answered, no_tail_decoded, normalize_forwarded_args, nth_generic_type,
-    one_role_per_method, operation_field_mark, piped_input, reject_meta_on_operations,
-    resilient_parted, return_type, scoped_specs, shared_receiver, site_items, site_ref, spelled,
-    tail_param, take_posture, takes_value, type_label, unit_of_work_required, unknown_argument,
-    validate_argument, withheld,
+    HandlerSite, HostBorrow, HostMeta, HostMount, InjectableBody, SiteGuards, SiteItems,
+    SitePosture, TailParam, VersionedEdge, ambient_type_ids, answer_span, authorized_entity,
+    await_if_async, build_injectable_body, camel_case, cfg_attrs, concrete_signature,
+    exception_filter_specs, field_attrs, force_guard_typeids, forwarded_arg_idents,
+    forwarded_idents, from_container_method, guard_capability_bounds, handler_const, host_meta_fn,
+    host_runtime_entry, impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    injected_names_with_layers, injected_optional_fns, injected_remedies_fn, injects_impls,
+    interceptor_specs, is_written, key_as_written, layer_deps, mixed_site_ident, no_row_answered,
+    no_tail_decoded, normalize_forwarded_args, nth_generic_type, one_role_per_method, piped_input,
+    reject_meta_on_operations, return_type, scoped_specs, shared_receiver, site_items, site_ref,
+    spelled, tail_param, take_posture, takes_value, type_label, unit_of_work_required,
+    unknown_argument, validate_argument, withheld,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -691,31 +690,39 @@ fn wrapper_output(sig: &Signature) -> syn::ReturnType {
 /// under the unit that built it, a `#[subscription]` each item it streams. A
 /// stream a type names is wrapped as it is, `FieldAnswers<S>`: its item read
 /// through `Stream` here, a type that is no stream would fail this signature,
-/// ahead of the body's refusal saying why (`answers_a_stream`).
-fn root_output(sig: &Signature, root: RootKind) -> syn::ReturnType {
+/// ahead of the body's refusal saying why (`answers_a_stream`). `gated`, a
+/// posture naming a subject, filters the stream by item, and the filter's type
+/// has no name: the field answers what the named stream yields, read through
+/// `AnsweredStream`, whose refusal of a type that is no stream says why itself.
+fn root_output(sig: &Signature, root: RootKind, gated: bool) -> syn::ReturnType {
     let value = returned(sig).value();
-    match (root, &value) {
-        (RootKind::Subscription, Type::ImplTrait(stream)) => {
-            let item = stream_item(stream);
-            parse_quote!(
+    let item: Type = match (root, &value) {
+        (RootKind::Subscription, Type::ImplTrait(stream)) => stream_item(stream),
+        (RootKind::Subscription, _) if gated => syn::parse_quote_spanned! {value.span()=>
+            <#value as ::nest_rs_graphql::__private::AnsweredStream>::Item
+        },
+        (RootKind::Subscription, _) => {
+            return parse_quote!(
                 -> ::nest_rs_graphql::async_graphql::Result<
-                    impl ::nest_rs_graphql::async_graphql::futures_util::Stream<
-                        Item = ::nest_rs_graphql::__private::FieldAnswer<#item>,
-                    >,
+                    ::nest_rs_graphql::__private::FieldAnswers<#value>,
                 >
-            )
+            );
         }
-        (RootKind::Subscription, _) => parse_quote!(
-            -> ::nest_rs_graphql::async_graphql::Result<
-                ::nest_rs_graphql::__private::FieldAnswers<#value>,
-            >
-        ),
-        (RootKind::Query | RootKind::Mutation, _) => parse_quote!(
-            -> ::nest_rs_graphql::async_graphql::Result<
-                ::nest_rs_graphql::__private::FieldAnswer<#value>,
-            >
-        ),
-    }
+        (RootKind::Query | RootKind::Mutation, _) => {
+            return parse_quote!(
+                -> ::nest_rs_graphql::async_graphql::Result<
+                    ::nest_rs_graphql::__private::FieldAnswer<#value>,
+                >
+            );
+        }
+    };
+    parse_quote!(
+        -> ::nest_rs_graphql::async_graphql::Result<
+            impl ::nest_rs_graphql::async_graphql::futures_util::Stream<
+                Item = ::nest_rs_graphql::__private::FieldAnswer<#item>,
+            >,
+        >
+    )
 }
 
 /// The item a `#[subscription]` returning the `impl` type `stream` yields, read
@@ -799,6 +806,78 @@ fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenS
     }}
 }
 
+/// Asks a field's answer, one async-graphql reads as a value, whether it is a
+/// `Result` under another name whose error async-graphql cannot answer
+/// (`AliasedAnswer`): one statement of the block's [`aliased_answers`], at the
+/// return type. Nothing for a `Result` spelled out, a `#[subscription]`, whose
+/// own probe refuses any, a method declaring no return type, or an answer no
+/// turbofish names — `!`, or one holding an `impl Trait`.
+fn aliased_answer_probe(sig: &Signature, cfgs: &[TokenStream2]) -> Option<TokenStream2> {
+    let Returned::Value(value) = returned(sig) else {
+        return None;
+    };
+    if matches!(sig.output, syn::ReturnType::Default)
+        || matches!(*value, Type::Never(_) | Type::ImplTrait(_))
+        || nests_impl_trait(&value)
+    {
+        return None;
+    }
+    let asked = lifetimes_static(quote!(#value));
+    Some(quote_spanned! {answer_span(sig)=>
+        #(#cfgs)*
+        ::nest_rs_graphql::__private::AliasedAnswer::<#asked>::new().spelled();
+    })
+}
+
+/// The block's `AliasedAnswers` impl, asking each of `probes`
+/// ([`aliased_answer_probe`]): written ahead of the GraphQL derive's impls, so
+/// its sentence leads the bounds they then miss.
+fn aliased_answers(self_ty: &Type, probes: &[TokenStream2]) -> TokenStream2 {
+    if probes.is_empty() {
+        return TokenStream2::new();
+    }
+    quote! {
+        const _: () = {
+            struct __NestrsAnswers;
+
+            impl ::nest_rs_graphql::__private::AliasedAnswers<__NestrsAnswers> for #self_ty {
+                #[allow(clippy::unused_async)]
+                async fn asked() {
+                    #[allow(unused_imports)]
+                    use ::nest_rs_graphql::__private::AliasedAnswerFallback as _;
+                    #(#probes)*
+                }
+            }
+        };
+    }
+}
+
+/// `tokens` with every named lifetime read as `'static`: a probe asks a type
+/// in a body no lifetime of the signature it was read off reaches.
+fn lifetimes_static(tokens: TokenStream2) -> TokenStream2 {
+    let mut out = Vec::new();
+    let mut tokens = tokens.into_iter().peekable();
+    while let Some(token) = tokens.next() {
+        match token {
+            TokenTree::Punct(tick)
+                if tick.as_char() == '\'' && tick.spacing() == Spacing::Joint =>
+            {
+                out.push(TokenTree::Punct(tick));
+                if let Some(name) = tokens.next_if(|next| matches!(next, TokenTree::Ident(_))) {
+                    out.push(TokenTree::Ident(Ident::new("static", name.span())));
+                }
+            }
+            TokenTree::Group(group) => {
+                let mut read = Group::new(group.delimiter(), lifetimes_static(group.stream()));
+                read.set_span(group.span());
+                out.push(TokenTree::Group(read));
+            }
+            other => out.push(other),
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// The parameters of `sig` the tail resolves, each with its type.
 fn tail_args(sig: &Signature) -> Vec<(Ident, Type, TailParam)> {
     sig.inputs
@@ -858,7 +937,7 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
         ));
     }
     // async-graphql's derive reads only the first `graphql` attribute on a method.
-    if let Some(attr) = other.iter().find(|a| a.path().is_ident("graphql")) {
+    if let Some(attr) = other.iter().find(|a| a.path().is_ident(GRAPHQL)) {
         return Err(syn::Error::new_spanned(
             attr,
             "an `#[entity]` takes no `#[graphql(...)]` of its own: async-graphql reads the \
@@ -894,7 +973,7 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
 /// the returned type, so the schema serves `_service` and `_entities` from a
 /// method no entity posture, federation site or boot check reads.
 fn refuse_entity_by_hand(role: &Attribute, attrs: &[Attribute]) -> syn::Result<()> {
-    for attr in attrs.iter().filter(|attr| attr.path().is_ident("graphql")) {
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident(GRAPHQL)) {
         let Ok(list) = attr.meta.require_list() else {
             continue;
         };
@@ -961,6 +1040,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // Each field's handler and site, and the sites the boot composes.
     let mut sites: Vec<TokenStream2> = Vec::new();
     let mut site_refs: Vec<(Vec<TokenStream2>, TokenStream2)> = Vec::new();
+    // Each field answering a value, asked whether it is a `Result` under another name.
+    let mut answer_probes: Vec<TokenStream2> = Vec::new();
     // async-graphql allows one `#[ComplexObject]` per parent type.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
     let mut all_guard_paths: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
@@ -1002,7 +1083,6 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         };
         shared_receiver(method, "#[operations]", &base, HostBorrow::Host)?;
         concrete_signature(method, "#[operations]")?;
-        refuse_a_resilient_answer_spelled_otherwise(&method.attrs, &method.sig)?;
         let cfgs = cfg_attrs(&method.attrs);
 
         let verb_attr = method.attrs.remove(idx);
@@ -1052,16 +1132,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             ));
         }
 
-        // Unfolded: async-graphql reads a plain `#[cfg]`, never one inside `#[cfg_attr]`.
-        let mut deleg_attrs = delegated_attrs(
-            &method
-                .attrs
-                .iter()
-                // All but `#[resilient]` go on the field: one naming the field's own
-                // parameters compiles only there, so moving any is a break.
-                .filter_map(|attr| placed(attr).handed)
-                .collect::<Vec<_>>(),
-        );
+        refuse_deprecated_method(&method.attrs)?;
+        let mut deleg_attrs = field_attrs(&method.attrs, GRAPHQL)?;
         let mut field = camel_case(&method.sig.ident.unraw().to_string());
         if !is_entity {
             match graphql_name(&method.attrs)? {
@@ -1090,6 +1162,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         let mut sig = method.sig.clone();
         // A plain binding name per argument: the wrapper's parameter names are the SDL's.
         normalize_forwarded_args(sig.inputs.iter_mut())?;
+        for input in sig.inputs.iter_mut() {
+            if let FnArg::Typed(pt) = input {
+                pt.attrs = field_attrs(&pt.attrs, GRAPHQL)?;
+            }
+        }
         let sig = sig;
         let method_name = method.sig.ident.clone();
         // Off the normalized signature, the one the wrapper resolves them from:
@@ -1103,6 +1180,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             return_type(&method.sig.output).as_slice(),
         ));
         sites.push(no_tail_decoded(&method_name, &cfgs, &method.sig.inputs));
+        if !verb_attr.path().is_ident("subscription") {
+            answer_probes.extend(aliased_answer_probe(&method.sig, &cfgs));
+        }
 
         if is_field {
             if authorize_spec.is_some() || is_public {
@@ -1371,7 +1451,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             };
             let route_label = format!("{role_label} {method_name}");
             let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
-            gsig.output = root_output(&sig, root_kind);
+            gsig.output = root_output(&sig, root_kind, authorize_spec.is_some());
             let authz_entity = |spec: &AuthorizeSpec| match &subject_entity {
                 Some(entity) => entity.clone(),
                 None => {
@@ -1521,12 +1601,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             let site_kind = chain_site.path();
             // async-graphql's `#[Subscription]` awaits the method it is given.
             gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
-            let field_mark = field_mark();
             let delegating = quote! {
                 #(#deleg_attrs)*
                 #entity_attr
                 #gsig {
-                    #field_mark
                     #run(#site, #gctx, #site_kind, move || async move {
                         #(#tail_prelude)*
                         #(#validate_prelude)*
@@ -1546,29 +1624,13 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             }
         }
 
-        // The developer's method keeps its docs, its `allow`s and `expect`s and its
-        // `#[cfg]`s, and `#[resilient]`, which runs the body the method is.
-        method.attrs = std::mem::take(&mut method.attrs)
-            .into_iter()
-            .filter_map(|a| {
-                if a.path().is_ident("doc")
-                    || a.path().is_ident("allow")
-                    || a.path().is_ident("expect")
-                {
-                    return Some(a);
-                }
-                placed(&a).kept
-            })
-            .collect();
-        for condition in &cfgs {
-            method.attrs.extend(syn::parse::Parser::parse2(
-                Attribute::parse_outer,
-                condition.clone(),
-            )?);
-        }
+        // The developer's method keeps every attribute `#[operations]` does not
+        // consume, as written and in order: only async-graphql's own, which the
+        // field carries and nothing would resolve here, leaves it.
+        method.attrs.retain(|attr| !attr.path().is_ident(GRAPHQL));
         for input in method.sig.inputs.iter_mut() {
             if let FnArg::Typed(pt) = input {
-                pt.attrs.clear();
+                pt.attrs.retain(|attr| !attr.path().is_ident(GRAPHQL));
             }
         }
     }
@@ -1650,6 +1712,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         HostMount::Linked,
         &[],
     );
+    let aliased_answers = aliased_answers(&self_ty, &answer_probes);
 
     Ok(quote! {
         #item
@@ -1665,6 +1728,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 __nestrs_sites
             }
         }
+
+        #aliased_answers
 
         ::nest_rs_graphql::__private::inventory::submit! {
             ::nest_rs_graphql::__private::GraphqlSiteRegistration {
@@ -1907,7 +1972,6 @@ fn field_method(
         ),
         RootKind::Query,
     );
-    let field_mark = field_mark();
     let method = quote! {
         #(#deleg_attrs)*
         async fn #method_name #generics (
@@ -1915,7 +1979,6 @@ fn field_method(
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>
             #(, #gql_args)*
         ) #output #where_clause {
-            #field_mark
             {
                 #[allow(unused_imports)]
                 use ::nest_rs_graphql::__private::ParentProbeFallback as _;
@@ -1950,60 +2013,32 @@ fn field_parent_label(sig: &Signature) -> String {
     }
 }
 
-/// Where `attr`, an operation's, goes: `#[resilient]`, which runs the body the
-/// developer's method is, stays on it, written plain or as an entry of a
-/// `#[cfg_attr]`, and everything else is handed to the field. It is read by its
-/// last segment, so an app's own of that name stays there too, failing to
-/// compile or applying to the method alone, and only in a build where any crate
-/// enables the resilience capability — Cargo unifies a package's features
-/// across a build — since 7.0.0 placed one of that name on the field like every
-/// other.
-fn placed(attr: &Attribute) -> ResilientParted {
-    if cfg!(feature = "resilience") {
-        resilient_parted(attr)
-    } else {
-        ResilientParted {
-            kept: None,
-            handed: Some(attr.clone()),
-        }
-    }
-}
+/// async-graphql's own attribute, which the field `#[operations]` generates
+/// carries and the developer's method does not.
+const GRAPHQL: &str = "graphql";
 
-/// What a generated field's body opens on: the mark `#[resilient]` knows the
-/// field by when the decorator, imported under another name, is handed to it —
-/// written in a build that reads the decorator by name alone, so one without
-/// the resilience capability expands as 7.0.0 did.
-fn field_mark() -> Option<TokenStream2> {
-    cfg!(feature = "resilience").then(operation_field_mark)
-}
-
-/// Refuse an operation carrying an attribute read as `#[resilient]` whose
-/// answer is not spelled `Result<…>`: the field's answer is read by that
-/// spelling, so under another name the whole `Result` would be the field's
-/// GraphQL type, which no `ResilienceError` is — unmet bounds deep in the
-/// expansion, where this is one sentence. An app's own attribute of that name
-/// reads it too, so the sentence says what such an app writes.
-fn refuse_a_resilient_answer_spelled_otherwise(
-    attrs: &[Attribute],
-    sig: &Signature,
-) -> syn::Result<()> {
-    if matches!(returned(sig), Returned::Fallible(_))
-        || !attrs.iter().any(|attr| placed(attr).kept.is_some())
+/// Refuse Rust's `#[deprecated]` on an operation, plain or under a
+/// `#[cfg_attr]`, as `#[routes]` refuses it on a handler: it deprecates the
+/// method for its Rust callers, and its one caller is the field `#[operations]`
+/// generates, while a client reads a field's deprecation off the schema.
+fn refuse_deprecated_method(attrs: &[Attribute]) -> syn::Result<()> {
+    match attrs
+        .iter()
+        .find(|attr| is_written(std::slice::from_ref(*attr), "deprecated"))
     {
-        return Ok(());
+        Some(attr) => Err(syn::Error::new_spanned(
+            attr,
+            "`#[deprecated]` on an `#[operations]` method deprecates Rust code, whose only caller \
+             is the framework: a field is deprecated for its clients with \
+             `#[graphql(deprecation = \"…\")]` on its method, which the schema and its \
+             introspection follow",
+        )),
+        None => Ok(()),
     }
-    Err(syn::Error::new(
-        answer_span(sig),
-        "`#[operations]` reads an attribute named `resilient` as the resilience decorator, whose \
-         operation returns `Result<T, ResilienceError<E>>`, spelled `Result<…>`: any other \
-         answer, an alias of one included, is read as the field's GraphQL type — spell the \
-         `Result` out, or, where `resilient` is an attribute of the app's own, import it under \
-         another name, which goes on the field as every other attribute does",
-    ))
 }
 
 fn graphql_name(attrs: &[Attribute]) -> syn::Result<Option<String>> {
-    for attr in attrs.iter().filter(|attr| attr.path().is_ident("graphql")) {
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident(GRAPHQL)) {
         let Ok(list) = attr.meta.require_list() else {
             continue;
         };
@@ -2029,10 +2064,7 @@ fn graphql_name(attrs: &[Attribute]) -> syn::Result<Option<String>> {
 /// developer's `#[graphql(...)]`: async-graphql strips only the first.
 fn name_the_field(attrs: &mut Vec<Attribute>, field: &str) -> syn::Result<()> {
     let name = LitStr::new(field, proc_macro2::Span::call_site());
-    match attrs
-        .iter_mut()
-        .find(|attr| attr.path().is_ident("graphql"))
-    {
+    match attrs.iter_mut().find(|attr| attr.path().is_ident(GRAPHQL)) {
         Some(attr) => {
             let list = attr.meta.require_list()?;
             let path = &list.path;
@@ -2307,110 +2339,277 @@ mod tests {
         );
     }
 
-    /// The mark `#[resilient]` knows a generated field by opens every field's
-    /// body, whatever its role, in a build reading the decorator by name; one
-    /// that does not expands as 7.0.0 did.
+    /// The method `#[operations]` re-emits for `name`, attributes and signature
+    /// alone, as tokens print.
+    fn written_method(expanded: &TokenStream2, name: &str) -> String {
+        let file: syn::File = syn::parse2(expanded.clone()).expect("the expansion parses");
+        let Some(syn::Item::Impl(written)) = file.items.first() else {
+            panic!("the expansion opens on the impl the developer wrote");
+        };
+        written
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ImplItem::Fn(method) if method.sig.ident == name => {
+                    let (attrs, sig) = (&method.attrs, &method.sig);
+                    Some(quote!(#(#attrs)* #sig).to_string())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the impl holds `{name}`"))
+    }
+
+    /// One rule for every role: the developer's method keeps each attribute
+    /// `#[operations]` does not consume, as written and in order, a parameter's
+    /// included, and the field carries only what describes it to async-graphql.
     #[test]
-    fn every_generated_field_opens_on_its_mark_where_the_decorator_is_read_by_name() {
+    fn a_method_keeps_every_attribute_operations_does_not_consume_whatever_its_role() {
+        for (role, posture, signature) in [
+            (
+                quote!(#[query]),
+                quote!(#[public]),
+                quote!(&self, #[graphql(default)] #[allow(unused_variables)] page: i32),
+            ),
+            (
+                quote!(#[mutation]),
+                quote!(#[public]),
+                quote!(&self, #[graphql(default)] #[allow(unused_variables)] page: i32),
+            ),
+            (
+                quote!(#[subscription]),
+                quote!(#[public]),
+                quote!(&self, #[graphql(default)] #[allow(unused_variables)] page: i32),
+            ),
+            (
+                quote!(#[entity]),
+                quote!(#[public]),
+                quote!(&self, #[allow(unused_variables)] page: i32),
+            ),
+            (
+                quote!(#[field_resolver]),
+                quote!(),
+                quote!(&self, parent: &Thing, #[graphql(default)] #[allow(unused_variables)] page: i32),
+            ),
+        ] {
+            let helper = (role.to_string() != quote!(#[entity]).to_string())
+                .then(|| quote!(#[graphql(complexity = 5)]));
+            let item: ItemImpl = parse_quote! {
+                impl DemoResolver {
+                    /// Today's rates.
+                    #role
+                    #posture
+                    #helper
+                    #[cfg(feature = "rates")]
+                    #[shielded(upstream, idempotent)]
+                    #[cfg_attr(feature = "traced", cfg_attr(test, traced(skip(self), err), resilient(upstream)))]
+                    #[resilient(skip_all)]
+                    #[deny(unused_must_use)]
+                    #[expect(clippy::unused_async, reason = "awaits next release")]
+                    #[must_use]
+                    async fn rates(#signature) -> Result<Rates, Declined> { Ok(Rates) }
+                }
+            };
+            let expanded = resolver_impl_inner(item).expect("expands");
+            let kept = quote! {
+                #[doc = r" Today's rates."]
+                #[cfg(feature = "rates")]
+                #[shielded(upstream, idempotent)]
+                #[cfg_attr(feature = "traced", cfg_attr(test, traced(skip(self), err), resilient(upstream)))]
+                #[resilient(skip_all)]
+                #[deny(unused_must_use)]
+                #[expect(clippy::unused_async, reason = "awaits next release")]
+                #[must_use]
+            }
+            .to_string();
+            let written = written_method(&expanded, "rates");
+            assert!(written.starts_with(&kept), "{role}: {written}");
+            assert!(
+                written.contains("# [allow (unused_variables)] page : i32"),
+                "{role}: {written}"
+            );
+            assert!(!written.contains("graphql"), "{role}: {written}");
+
+            let expanded = expanded.to_string();
+            let field = expanded
+                .split_once(&written)
+                .map(|(_, generated)| generated)
+                .expect("the developer's method comes first");
+            for theirs in [
+                "shielded",
+                "traced",
+                "resilient",
+                "must_use",
+                "unused_must_use",
+            ] {
+                assert!(
+                    !field.contains(theirs),
+                    "{role}: `{theirs}` left the method: {field}"
+                );
+            }
+            for described in [
+                "# [doc = r\" Today's rates.\"]",
+                "# [cfg (feature = \"rates\")]",
+                "# [allow (clippy :: unused_async , reason = \"awaits next release\")]",
+                "# [allow (unused_variables)] page : i32",
+            ] {
+                assert!(
+                    field.contains(described),
+                    "{role}: missing `{described}`: {field}"
+                );
+            }
+            if helper.is_some() {
+                assert!(
+                    field.contains("# [graphql (complexity = 5 , name = \"rates\")]")
+                        && field.contains(
+                            "# [graphql (default)] # [allow (unused_variables)] page : i32"
+                        ),
+                    "{role}: {field}"
+                );
+            }
+        }
+    }
+
+    /// Rust's `#[deprecated]` deprecates the method for its Rust callers, the
+    /// field alone: refused on every role, plain or under any condition, naming
+    /// the schema's deprecation, as `#[routes]` refuses it on a handler.
+    #[test]
+    fn a_deprecated_operation_is_refused_naming_the_schemas_deprecation() {
+        for method in [
+            quote! {
+                #[query]
+                #[public]
+                #[deprecated = "ask `rates`"]
+                async fn quotes(&self) -> i32 { 0 }
+            },
+            quote! {
+                #[mutation]
+                #[public]
+                #[cfg_attr(feature = "next", must_use, deprecated(note = "void it"))]
+                fn cancel(&self) -> i32 { 0 }
+            },
+            quote! {
+                #[subscription]
+                #[public]
+                #[deprecated]
+                async fn ticks(&self) -> impl Stream<Item = i32> { stream() }
+            },
+            quote! {
+                #[field_resolver]
+                #[cfg_attr(a, cfg_attr(b, deprecated))]
+                async fn label(&self, parent: &Thing) -> String { String::new() }
+            },
+        ] {
+            let item: ItemImpl = parse_quote! {
+                impl DemoResolver {
+                    #method
+                }
+            };
+            let refused = resolver_impl_inner(item)
+                .map(|_| ())
+                .expect_err("refused")
+                .to_string();
+            assert!(
+                refused.starts_with(
+                    "`#[deprecated]` on an `#[operations]` method deprecates Rust code"
+                ) && refused.contains("`#[graphql(deprecation = \"…\")]`"),
+                "{refused}"
+            );
+        }
+    }
+
+    /// Each field answering a value is asked whether it is a `Result` under
+    /// another name, under its conditions and its lifetimes read as `'static`,
+    /// in one impl the block writes ahead of the GraphQL derive's; a `Result`
+    /// spelled out, a subscription and an answer no turbofish names are not.
+    #[test]
+    fn each_answer_read_as_a_value_is_asked_ahead_of_the_derive() {
         let item: ItemImpl = parse_quote! {
             impl DemoResolver {
                 #[query]
                 #[public]
-                async fn count(&self) -> i32 { 0 }
+                #[cfg(feature = "rates")]
+                async fn rates(&self) -> Answer<Rates> { Ok(Rates) }
+
+                #[query]
+                #[public]
+                async fn aisle<'a>(&'a self) -> &'a str { "aisle 4" }
 
                 #[mutation]
                 #[public]
-                async fn bump(&self) -> Result<i32, Declined> { Ok(1) }
+                async fn spelled(&self) -> Result<i32, Declined> { Ok(1) }
 
                 #[subscription]
                 #[public]
-                async fn ticks(&self) -> impl Stream<Item = i32> { stream() }
+                async fn ticks(&self) -> BoxStream<'static, i32> { stream() }
 
-                #[entity]
-                #[public]
-                async fn thing(&self, id: i32) -> Thing { Thing }
-
-                #[field_resolver]
-                async fn label(&self, parent: &Thing) -> String { String::new() }
-            }
-        };
-        let expanded = resolver_impl_inner(item)
-            .expect("every role expands")
-            .to_string();
-        let marked = expanded
-            .matches("{ fn __nestrs_operation_field () { }")
-            .count();
-        let fields = if cfg!(feature = "resilience") { 5 } else { 0 };
-        assert_eq!(marked, fields, "{expanded}");
-        assert_eq!(
-            expanded.matches("__nestrs_operation_field").count(),
-            fields,
-            "the mark opens a field's body and stands nowhere else: {expanded}"
-        );
-    }
-
-    /// A `#[cfg_attr]` is split by entry: the decorator stays on the developer's
-    /// method under its condition, in a build reading it by name, and every other
-    /// entry goes on the field, where a build without the capability hands both.
-    #[test]
-    fn a_resilient_inside_a_cfg_attr_stays_on_the_method_under_its_condition() {
-        let item: ItemImpl = parse_quote! {
-            impl DemoResolver {
                 #[query]
                 #[public]
-                #[cfg_attr(feature = "shielded", resilient(upstream, idempotent), traced(skip_all))]
-                async fn rates(&self) -> Result<i32, ResilienceError<Declined>> { Ok(1) }
+                fn opaque(&self) -> Option<impl OutputType> { None::<i32> }
+
+                #[field_resolver]
+                async fn label(&self, parent: &Thing) -> Labelled<String> { Ok(String::new()) }
             }
         };
         let expanded = resolver_impl_inner(item).expect("expands").to_string();
-        let kept = "# [cfg_attr (feature = \"shielded\" , resilient (upstream , idempotent))] \
-                    async fn rates (& self)";
-        let handed_decorator =
-            "# [cfg_attr (all (feature = \"shielded\") , resilient (upstream , idempotent))]";
-        let handed_neighbour = "# [cfg_attr (all (feature = \"shielded\") , traced (skip_all))]";
-        assert!(expanded.contains(handed_neighbour), "{expanded}");
+        let asked = |answer: &str| {
+            format!(
+                ":: nest_rs_graphql :: __private :: AliasedAnswer :: < {answer} > :: new () . \
+                 spelled () ;"
+            )
+        };
+        for probe in [
+            format!(
+                "# [cfg (feature = \"rates\")] {}",
+                asked("Answer < Rates >")
+            ),
+            asked("& 'static str"),
+            asked("Labelled < String >"),
+        ] {
+            assert!(expanded.contains(&probe), "missing `{probe}`: {expanded}");
+        }
         assert_eq!(
-            expanded.contains(kept),
-            cfg!(feature = "resilience"),
+            expanded.matches("AliasedAnswer :: <").count(),
+            3,
             "{expanded}"
         );
-        assert_eq!(
-            expanded.contains(handed_decorator),
-            !cfg!(feature = "resilience"),
-            "{expanded}"
-        );
+        let impl_at = expanded
+            .find("AliasedAnswers < __NestrsAnswers > for DemoResolver")
+            .expect("the block asks its answers");
+        let derive_at = expanded
+            .find("pub struct __DemoResolverQuery")
+            .expect("the block writes its query root");
+        assert!(impl_at < derive_at, "{expanded}");
     }
 
-    /// An operation read as decorated answers a `Result` spelled out, whether
-    /// the decorator is written plain or under a condition; without the
-    /// capability the attribute is the app's own, and nothing is asked of it.
+    /// async-graphql's attribute under a condition would be read by nothing,
+    /// on a method as on a parameter: refused where it is written.
     #[test]
-    fn an_operation_read_as_resilient_spells_its_result_out() {
-        for decorator in [
-            quote!(#[resilient(upstream)]),
-            quote!(#[cfg_attr(feature = "shielded", resilient(upstream))]),
+    fn a_graphql_attribute_inside_a_cfg_attr_is_refused() {
+        for method in [
+            quote! {
+                #[cfg_attr(feature = "federated", graphql(shareable))]
+                async fn rates(&self) -> i32 { 0 }
+            },
+            quote! {
+                async fn rates(&self, #[cfg_attr(feature = "paged", graphql(default))] page: i32) -> i32 { 0 }
+            },
         ] {
             let item: ItemImpl = parse_quote! {
                 impl DemoResolver {
                     #[query]
                     #[public]
-                    #decorator
-                    async fn rates(&self) -> Answer<i32> { Ok(1) }
+                    #method
                 }
             };
             let refused = resolver_impl_inner(item)
                 .map(|_| ())
-                .map_err(|e| e.to_string());
-            if cfg!(feature = "resilience") {
-                let said = refused.expect_err("an alias is read as the field's type");
-                assert!(
-                    said.contains("spell the `Result` out")
-                        && said.contains("import it under another name"),
-                    "{said}"
-                );
-            } else {
-                assert_eq!(refused, Ok(()));
-            }
+                .expect_err("read by nothing")
+                .to_string();
+            assert!(
+                refused
+                    .starts_with("`#[graphql(…)]` inside a `#[cfg_attr]` would be read by nothing"),
+                "{refused}"
+            );
         }
     }
 
@@ -2433,7 +2632,7 @@ mod tests {
         }
         let sig: Signature =
             parse_quote!(async fn ticks(&self) -> Fallible<BoxStream<'static, i32>>);
-        let output = root_output(&sig, RootKind::Subscription);
+        let output = root_output(&sig, RootKind::Subscription, false);
         let output = quote!(#output).to_string();
         assert!(
             output.contains(
@@ -2442,5 +2641,36 @@ mod tests {
             ),
             "{output}"
         );
+    }
+
+    /// Under a posture naming a subject a stream is filtered by item, so a named
+    /// one answers what it yields, read by its type whatever the `Result` around
+    /// it; one written `impl Stream` answers the item its bound names, as ungated.
+    #[test]
+    fn a_gated_subscription_answers_the_items_its_named_stream_yields() {
+        for (answer, item) in [
+            (
+                quote!(BoxStream<'static, i32>),
+                "< BoxStream < 'static , i32 > as :: nest_rs_graphql :: __private :: \
+                 AnsweredStream > :: Item",
+            ),
+            (
+                quote!(Result<stream::Iter<Range<i32>>, ResilienceError<Down>>),
+                "< stream :: Iter < Range < i32 > > as :: nest_rs_graphql :: __private :: \
+                 AnsweredStream > :: Item",
+            ),
+            (quote!(Result<impl Stream<Item = Row> + use<>, Down>), "Row"),
+        ] {
+            let sig: Signature = parse_quote!(async fn ticks(&self) -> #answer);
+            let output = root_output(&sig, RootKind::Subscription, true);
+            assert_eq!(
+                quote!(#output).to_string(),
+                format!(
+                    "-> :: nest_rs_graphql :: async_graphql :: Result < impl :: nest_rs_graphql :: \
+                     async_graphql :: futures_util :: Stream < Item = :: nest_rs_graphql :: \
+                     __private :: FieldAnswer < {item} > , > , >"
+                ),
+            );
+        }
     }
 }

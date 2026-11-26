@@ -60,7 +60,7 @@ use std::future::Future;
 use nest_rs_core::__private::{
     RefusedAnswer, SaidFailure, Withheld, caught_problem, find_in_chain,
 };
-use nest_rs_core::{Code, DecodeError, Failure, Handler, Problem, ServedAddress, ToProblem, code};
+use nest_rs_core::{Code, Failure, Handler, Problem, ServedAddress, ToProblem, code};
 use nest_rs_guards::Denial;
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
@@ -198,19 +198,13 @@ pub(crate) fn file(withheld: Withheld, at: ServedAddress<'_>) {
     }
 }
 
-/// Render a rejected pipe as an `invalid_params` the model can act on: its
-/// message, and in the error's `data` the `INVALID_ARGUMENT` code HTTP's `400`
-/// names for it, its field-level `errors` beside it when it has some; emitted
-/// by `#[tools]`, never written by hand.
+/// Render a rejected pipe as an `invalid_params` the model can act on, the
+/// problem it carries in MCP's form: its message, and in the error's `data`
+/// the `INVALID_ARGUMENT` code HTTP's `400` names for it, its field-level
+/// `errors` beside it when it has some; emitted by `#[tools]`, never written
+/// by hand.
 pub fn pipe_error(err: &PipeError) -> McpError {
-    McpError::invalid_params(
-        err.message().to_owned(),
-        ClassData {
-            errors: err.details(),
-            ..ClassData::of(code::INVALID_ARGUMENT)
-        }
-        .into_data(),
-    )
+    rendered(err.problem())
 }
 
 /// What an error's `data` carries, one shape whoever writes it: the class a
@@ -270,8 +264,9 @@ impl ClassData<'_> {
 
 /// Render what a [`ToProblem`] error says — a
 /// [`Problem`] among them — as the JSON-RPC error an MCP
-/// operation answers with: a `4xx` as `invalid_request`, a `5xx` as
-/// `internal_error`, the problem's
+/// operation answers with: the `INVALID_ARGUMENT` class as `invalid_params`,
+/// any other `4xx` as `invalid_request`, a `5xx` as `internal_error`, the
+/// problem's
 /// [`client_message`](nest_rs_core::Problem::client_message) as the message,
 /// and its code under `data` — with its RFC 9457 `type` and `title`, its wait
 /// as `retryAfterSeconds` and its field map as `errors` when it has them. An
@@ -335,6 +330,9 @@ fn rendered(problem: &Problem) -> McpError {
     .into_data();
     if problem.is_server_error() {
         McpError::internal_error(problem.client_message(), data)
+    } else if problem.code() == code::INVALID_ARGUMENT {
+        // JSON-RPC's own code for an argument refused, whoever refused it.
+        McpError::invalid_params(problem.client_message(), data)
     } else {
         McpError::invalid_request(problem.client_message(), data)
     }
@@ -372,22 +370,18 @@ pub(crate) fn invalid_argument(sentence: String) -> McpError {
 }
 
 /// The vocabulary `error`'s chain carries, else the opaque answer: the
-/// method's own error, a problem, a pipe's refusal or a decode failure,
-/// first found from the error itself down.
+/// method's own error or a problem — a pipe's refusal carries one — first
+/// found from the error itself down. A decode failure is neither: an
+/// upstream's answer or a stored value that did not decode is the server's
+/// failure.
 fn chain_error(error: &(dyn StdError + 'static)) -> McpError {
     if let Some(deliberate) = find_in_chain::<McpError>(error) {
         return deliberate.clone();
     }
-    if let Some(problem) = find_in_chain::<Problem>(error) {
-        return answered(problem, error);
+    match find_in_chain::<Problem>(error) {
+        Some(problem) => answered(problem, error),
+        None => opaque_error(error),
     }
-    if let Some(rejection) = find_in_chain::<PipeError>(error) {
-        return pipe_error(rejection);
-    }
-    if let Some(report) = DecodeError::in_chain(error) {
-        return invalid_argument(report.to_string());
-    }
-    opaque_error(error)
 }
 
 /// Why an operation's tail failed: the failure the pipeline carries, which
@@ -890,12 +884,12 @@ impl From<LocalSessionManagerError> for SessionsError {
     }
 }
 
-nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_session) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_session) }
 
 /// rmcp's session manager error said by its kind: its own sentence names the
 /// session a client named.
-fn say_session(link: &(dyn std::error::Error + 'static)) -> Option<String> {
-    let said = match nest_rs_core::__private::link_as::<LocalSessionManagerError>(link)? {
+fn say_session(refused: &LocalSessionManagerError) -> Option<String> {
+    let said = match refused {
         LocalSessionManagerError::SessionNotFound(_) => "session not found",
         LocalSessionManagerError::SessionError(error) => match error {
             SessionError::DuplicatedRequestId(_) => "a request id the session already holds",
@@ -1392,10 +1386,27 @@ mod tests {
             .into_answer();
         assert_eq!(piped.message, "must be a valid UUID");
         assert_eq!(piped.code, ErrorCode::INVALID_PARAMS);
+        let wrapped = nest_rs_core::anyhow::Error::from(PipeError::new("must be a valid UUID"))
+            .context("reading the cursor");
+        let wrapped = ErrorReport(wrapped).into_failure().into_answer();
+        assert_eq!(wrapped, piped, "found in a chain as the problem it carries");
 
-        let decode = serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("not a number");
-        let said = ErrorReport(decode).into_failure().into_answer();
-        assert!(!said.message.contains("sk_live"), "{}", said.message);
+        let decode = || serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("no number");
+        let unread = ErrorReport(decode()).into_failure().into_answer();
+        assert_eq!(unread.message, OPAQUE);
+        assert_eq!(unread.code, ErrorCode::INTERNAL_ERROR);
+        assert_eq!(
+            unread.data,
+            Some(serde_json::json!({ "code": "INTERNAL" })),
+            "a decode failure a chain holds is the server's, never the caller's",
+        );
+
+        let by_hand = Problem::from(nest_rs_core::DecodeError::from(decode()));
+        let said = ErrorReport(by_hand).into_failure().into_answer();
+        assert_eq!(
+            said.message,
+            "invalid type: a string, expected u64 at line 1 column 16"
+        );
         assert_eq!(said.code, ErrorCode::INVALID_PARAMS);
         assert_eq!(
             said.data,

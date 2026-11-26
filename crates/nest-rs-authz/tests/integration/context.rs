@@ -2,7 +2,7 @@
 //! ability a request holds, and scopes a job's unscoped reads; a job unit
 //! opened, or a capture re-entered, inside a request reads as that request.
 
-use std::any::{Any, TypeId};
+use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -22,8 +22,18 @@ use crate::parent;
 struct Handle;
 
 impl Executor for Handle {
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn holds(&self) -> nest_rs_database::Holds<'_> {
+        nest_rs_database::Holds::Pool(self)
+    }
+}
+
+impl nest_rs_database::HeldPool for Handle {
+    fn transaction(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+        unreachable!("no test opens a block on this handle")
+    }
+
+    fn outbox(&self) -> Option<&dyn nest_rs_database::OutboxKept> {
+        None
     }
 }
 

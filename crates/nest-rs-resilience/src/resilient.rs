@@ -774,7 +774,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::any::Any;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1613,16 +1612,22 @@ mod tests {
     }
 
     impl Executor for Unit {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
+        }
+    }
+
+    impl nest_rs_database::HeldTransaction for Unit {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on this unit")
         }
 
-        fn savepoint(&self) -> Option<Arc<dyn AtomicBlock>> {
-            self.seen.saw(Saw::Opened);
-            Some(Arc::new(Block {
-                seen: Arc::clone(&self.seen),
-                settles: self.settles,
-            }))
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            Block::open(&self.seen, self.settles)
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 
@@ -1631,9 +1636,36 @@ mod tests {
         settles: fn() -> Result<(), AtomicError>,
     }
 
+    impl Block {
+        fn open(
+            seen: &Arc<Seen>,
+            settles: fn() -> Result<(), AtomicError>,
+        ) -> Arc<dyn AtomicBlock> {
+            seen.saw(Saw::Opened);
+            Arc::new(Self {
+                seen: Arc::clone(seen),
+                settles,
+            })
+        }
+    }
+
     impl Executor for Block {
-        fn as_any(&self) -> &dyn Any {
-            self
+        fn holds(&self) -> nest_rs_database::Holds<'_> {
+            nest_rs_database::Holds::Transaction(self)
+        }
+    }
+
+    impl nest_rs_database::HeldTransaction for Block {
+        fn after_commit(&self, _work: nest_rs_database::Deferred) {
+            unreachable!("no test holds work on this savepoint")
+        }
+
+        fn savepoint(&self) -> Arc<dyn nest_rs_database::AtomicBlock> {
+            Self::open(&self.seen, self.settles)
+        }
+
+        fn outbox(&self) -> Option<&dyn nest_rs_database::Outbox> {
+            None
         }
     }
 
@@ -1659,7 +1691,7 @@ mod tests {
 
     /// Whether the ambient executor is an attempt's savepoint.
     fn inside() -> bool {
-        current_executor().is_some_and(|ambient| ambient.as_any().is::<Block>())
+        current_executor().is_some_and(|ambient| ambient.holds().downcast_ref::<Block>().is_some())
     }
 
     /// The run, sent once, of a method declaring a fallback, in a unit

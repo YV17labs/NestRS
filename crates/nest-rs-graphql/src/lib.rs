@@ -96,7 +96,10 @@ pub mod __private {
     pub use crate::ambient::ambient_parameter;
     pub use crate::context::{ENDPOINT, connection_data};
     pub use crate::error::{ErrorReport, ErrorReportChain, ErrorReportDeliberate, FieldFailure};
-    pub use crate::field_answer::{FieldAnswer, FieldAnswers};
+    pub use crate::field_answer::{
+        AliasedAnswer, AliasedAnswerFallback, AliasedAnswers, AliasedError, AnsweredStream,
+        FieldAnswer, FieldAnswers,
+    };
     pub use crate::field_spellings::schema_field_spelling;
     pub use crate::filed_facts::first_in_operation;
     pub use crate::loader::{

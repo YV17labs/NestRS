@@ -1,5 +1,137 @@
-error: `#[operations]` reads an attribute named `resilient` as the resilience decorator, whose operation returns `Result<T, ResilienceError<E>>`, spelled `Result<…>`: any other answer, an alias of one included, is read as the field's GraphQL type — spell the `Result` out, or, where `resilient` is an attribute of the app's own, import it under another name, which goes on the field as every other attribute does
-  --> tests/integration/diagnostics/resilience/resilient_on_a_field_answering_an_alias.rs:36:32
+error[E0277]: a field answering a `Result` under another name answers it as its GraphQL type, which no `Result` failing with `ResilienceError<UpstreamDown>` is
+  --> tests/integration/diagnostics/resilience/resilient_on_a_field_answering_an_alias.rs:38:32
    |
-36 |     async fn preview(&self) -> Answer<String> {
-   |                                ^^^^^^
+38 |     async fn preview(&self) -> Answer<String> {
+   |                                ^^^^^^ a `Result` under another name
+   |
+   = help: the trait `nest_rs::graphql::__private::AliasedError` is not implemented for `ResilienceError<UpstreamDown>`
+   = note: write it `Result<…>` or `FieldResult<…>`: async-graphql reads a fallible answer by that spelling, and the field then answers the error by its own type
+note: required by a bound in `nest_rs::graphql::__private::AliasedAnswer::<Result<T, E>>::spelled`
+  --> $WORKSPACE/crates/nest-rs-graphql/src/field_answer.rs
+   |
+   | impl<T, E> AliasedAnswer<Result<T, E>> {
+...
+   |     pub fn spelled(&self)
+   |     where
+   |         E: AliasedError,
+   |            ^^^^^^^^^^^^ required by this bound in `AliasedAnswer::<Result<T, E>>::spelled`
+
+error[E0277]: the trait bound `ResilienceError<UpstreamDown>: Clone` is not satisfied
+  --> tests/integration/diagnostics/resilience/resilient_on_a_field_answering_an_alias.rs:33:1
+   |
+33 | #[operations]
+   | ^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ResilienceError<UpstreamDown>`
+   |
+help: the trait `OutputType` is conditionally implemented for `nest_rs::graphql::__private::FieldAnswer<T>`
+  --> $WORKSPACE/crates/nest-rs-graphql/src/field_answer.rs
+   |
+   | impl<T: OutputType> OutputType for FieldAnswer<T> {
+   | ^^^^^^^^----------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |         |
+   |         unsatisfied requirement introduced here: `Result<std::string::String, ResilienceError<UpstreamDown>>: OutputType`
+   |         unsatisfied requirement introduced here: `Result<std::string::String, ResilienceError<UpstreamDown>>: OutputType`
+   = note: required for `Result<std::string::String, ResilienceError<UpstreamDown>>` to implement `OutputType`
+   = note: 1 redundant requirement hidden
+   = note: required for `nest_rs::graphql::__private::FieldAnswer<Result<std::string::String, ResilienceError<UpstreamDown>>>` to implement `OutputType`
+   = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `nest_rs::graphql::async_graphql::Error: From<ResilienceError<UpstreamDown>>` is not satisfied
+  --> tests/integration/diagnostics/resilience/resilient_on_a_field_answering_an_alias.rs:33:1
+   |
+33 | #[operations]
+   | ^^^^^^^^^^^^^ the trait `From<ResilienceError<UpstreamDown>>` is not implemented for `nest_rs::graphql::async_graphql::Error`
+   |
+help: `nest_rs::graphql::async_graphql::Error` implements trait `From<T>`
+  --> $CARGO/async-graphql-$VERSION/src/error.rs
+   |
+   | impl From<&'static str> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<&str>`
+...
+   | impl From<String> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<std::string::String>`
+   |
+  ::: $WORKSPACE/crates/nest-rs-seaorm/src/error.rs
+   |
+   | impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<nest_rs::seaorm::ServiceError>`
+   = note: required for `ResilienceError<UpstreamDown>` to implement `Into<nest_rs::graphql::async_graphql::Error>`
+   = note: required for `Result<std::string::String, ResilienceError<UpstreamDown>>` to implement `OutputType`
+   = note: 1 redundant requirement hidden
+   = note: required for `nest_rs::graphql::__private::FieldAnswer<Result<std::string::String, ResilienceError<UpstreamDown>>>` to implement `OutputType`
+   = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `ResilienceError<UpstreamDown>: Clone` is not satisfied
+  --> tests/integration/diagnostics/resilience/resilient_on_a_field_answering_an_alias.rs:33:1
+   |
+33 | #[operations]
+   | ^^^^^^^^^^^^^ the trait `Clone` is not implemented for `ResilienceError<UpstreamDown>`
+   |
+help: the trait `OutputType` is conditionally implemented for `Result<T, E>`
+  --> $CARGO/async-graphql-$VERSION/src/base.rs
+   |
+   | impl<T: OutputType + Sync, E: Into<Error> + Send + Sync + Clone> OutputType for Result<T, E> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-----------^^^^^^^^^^^^^^^^^-----^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                               |                           |
+   |                               |                           unsatisfied requirement introduced here: `ResilienceError<UpstreamDown>: Clone`
+   |                               unsatisfied requirement introduced here: `ResilienceError<UpstreamDown>: Into<nest_rs::graphql::async_graphql::Error>`
+   = note: required for `Result<std::string::String, ResilienceError<UpstreamDown>>` to implement `OutputType`
+note: required by a bound in `<nest_rs::graphql::__private::FieldAnswer<T> as OutputType>`
+  --> $WORKSPACE/crates/nest-rs-graphql/src/field_answer.rs
+   |
+   | impl<T: OutputType> OutputType for FieldAnswer<T> {
+   |         ^^^^^^^^^^ required by this bound in `<FieldAnswer<T> as OutputType>`
+
+error[E0277]: the trait bound `nest_rs::graphql::async_graphql::Error: From<ResilienceError<UpstreamDown>>` is not satisfied
+  --> tests/integration/diagnostics/resilience/resilient_on_a_field_answering_an_alias.rs:33:1
+   |
+33 | #[operations]
+   | ^^^^^^^^^^^^^ the trait `From<ResilienceError<UpstreamDown>>` is not implemented for `nest_rs::graphql::async_graphql::Error`
+   |
+help: `nest_rs::graphql::async_graphql::Error` implements trait `From<T>`
+  --> $CARGO/async-graphql-$VERSION/src/error.rs
+   |
+   | impl From<&'static str> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<&str>`
+...
+   | impl From<String> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<std::string::String>`
+   |
+  ::: $WORKSPACE/crates/nest-rs-seaorm/src/error.rs
+   |
+   | impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<nest_rs::seaorm::ServiceError>`
+   = note: required for `ResilienceError<UpstreamDown>` to implement `Into<nest_rs::graphql::async_graphql::Error>`
+   = note: required for `Result<std::string::String, ResilienceError<UpstreamDown>>` to implement `OutputType`
+note: required by a bound in `<nest_rs::graphql::__private::FieldAnswer<T> as OutputType>`
+  --> $WORKSPACE/crates/nest-rs-graphql/src/field_answer.rs
+   |
+   | impl<T: OutputType> OutputType for FieldAnswer<T> {
+   |         ^^^^^^^^^^ required by this bound in `<FieldAnswer<T> as OutputType>`
+
+error[E0277]: the trait bound `nest_rs::graphql::async_graphql::Error: From<ResilienceError<UpstreamDown>>` is not satisfied
+  --> tests/integration/diagnostics/resilience/resilient_on_a_field_answering_an_alias.rs:33:1
+   |
+33 | #[operations]
+   | ^^^^^^^^^^^^^ the trait `From<ResilienceError<UpstreamDown>>` is not implemented for `nest_rs::graphql::async_graphql::Error`
+   |
+help: `nest_rs::graphql::async_graphql::Error` implements trait `From<T>`
+  --> $CARGO/async-graphql-$VERSION/src/error.rs
+   |
+   | impl From<&'static str> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<&str>`
+...
+   | impl From<String> for Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<std::string::String>`
+   |
+  ::: $WORKSPACE/crates/nest-rs-seaorm/src/error.rs
+   |
+   | impl From<ServiceError> for nest_rs_graphql::async_graphql::Error {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<nest_rs::seaorm::ServiceError>`
+note: required by a bound in `nest_rs::core::__private::Answer::<'_, Result<T, E>>::split`
+  --> $WORKSPACE/crates/nest-rs-core/src/answer.rs
+   |
+   | impl<T, E> Answer<'_, Result<T, E>> {
+...
+   |     pub fn split<X: From<E>>(&self) -> fn(Result<T, E>) -> Lifted<T, E, X> {
+   |                     ^^^^^^^ required by this bound in `Answer::<'_, Result<T, E>>::split`
+   = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)

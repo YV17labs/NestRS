@@ -11,7 +11,7 @@ use std::time::Duration;
 use http::{Extensions, StatusCode};
 
 use nest_rs_config::Namespaced as _;
-use nest_rs_core::__private::{Withheld, link_as};
+use nest_rs_core::__private::Withheld;
 use nest_rs_core::{DecodeError, Problem, ServedAddress, ToProblem, code};
 
 use crate::HttpConfig;
@@ -1583,13 +1583,12 @@ impl serde::de::Error for HeaderError {
 
 impl std::error::Error for HeaderError {}
 
-nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::new(say_h2) }
+nest_rs_core::inventory::submit! { nest_rs_core::SafeLink::of(&say_h2) }
 
 /// A GOAWAY error of h2's, said as h2 says it without the debug data its
 /// `Display` appends — the peer's own bytes; every other h2 error says nothing
-/// it was sent.
-fn say_h2(link: &(dyn Error + 'static)) -> Option<String> {
-    let error = link_as::<h2::Error>(link)?;
+/// it was sent, and is left as it reads.
+fn say_h2(error: &h2::Error) -> Option<String> {
     if !error.is_go_away() {
         return None;
     }

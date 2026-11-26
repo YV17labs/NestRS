@@ -423,15 +423,16 @@ enum Then {
     Answers,
     /// The dependency fails: the run ends on its error.
     Fails,
-    /// The dependency never answers: the policy gives the run up at the
-    /// method's timeout, a refusal.
-    Stalls,
 }
 
 #[derive(Clone)]
 struct RefundAsked {
     then: Then,
 }
+
+/// A refund whose dependency never answers.
+#[derive(Clone)]
+struct RefundStalled;
 
 #[derive(Clone)]
 struct RestockAsked;
@@ -459,9 +460,10 @@ struct ResilientListeners {
 
 #[listeners]
 impl ResilientListeners {
-    /// One row through `Repo`, then the call the event says.
+    /// One row through `Repo`, then the call the event says, under the
+    /// policy's timeout, which only a hang reaches.
     #[on_event]
-    #[resilient(upstream, timeout = "200ms")]
+    #[resilient(upstream)]
     async fn refund(&self, event: RefundAsked) -> Result<(), ResilienceError<Refund>> {
         Repo::<resilient_listener::Entity>::insert_unscoped(
             resilient_listener::ActiveModel::default(),
@@ -470,8 +472,19 @@ impl ResilientListeners {
         match event.then {
             Then::Answers => Ok(()),
             Then::Fails => Err(Refund::Refused),
-            Then::Stalls => std::future::pending().await,
         }
+    }
+
+    /// One row through `Repo`, then a call that never answers, given up at
+    /// the method's own timeout: a refusal.
+    #[on_event]
+    #[resilient(upstream, timeout = "200ms")]
+    async fn refund_stalled(&self, _event: RefundStalled) -> Result<(), ResilienceError<Refund>> {
+        Repo::<resilient_listener::Entity>::insert_unscoped(
+            resilient_listener::ActiveModel::default(),
+        )
+        .await?;
+        std::future::pending().await
     }
 
     /// One row through `Repo` each attempt, the first failing once it wrote
@@ -530,14 +543,18 @@ async fn a_decorated_listener_refused_or_failed_after_its_repo_write_leaves_noth
         .await
         .expect("boots");
 
-    for then in [Then::Fails, Then::Stalls] {
-        emitted_off_every_unit(bus(&app), RefundAsked { then }).await;
-        assert_eq!(
-            crate::harness::committed_rows(&conn, table).await,
-            0,
-            "{then:?}: the run's error rolled its unit's write back",
-        );
-    }
+    emitted_off_every_unit(bus(&app), RefundAsked { then: Then::Fails }).await;
+    assert_eq!(
+        crate::harness::committed_rows(&conn, table).await,
+        0,
+        "the run's error rolled its unit's write back",
+    );
+    emitted_off_every_unit(bus(&app), RefundStalled).await;
+    assert_eq!(
+        crate::harness::committed_rows(&conn, table).await,
+        0,
+        "the refusal rolled its unit's write back",
+    );
     let failed = logs.find(
         nest_rs_events::TARGET,
         "event listener failed — dispatch continues with the next listener",
@@ -554,7 +571,7 @@ async fn a_decorated_listener_refused_or_failed_after_its_repo_write_leaves_noth
         errors[1]
             .as_deref()
             .is_some_and(|error| error.contains("the call did not answer within its timeout")),
-        "the refusal, after the write: {failed:#?}"
+        "the refusal at the method's timeout: {failed:#?}"
     );
 
     emitted_off_every_unit(

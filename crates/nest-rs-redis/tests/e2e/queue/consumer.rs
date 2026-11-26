@@ -485,9 +485,10 @@ fn policy_of(replica: &crate::Replica) -> std::sync::Arc<ResiliencePolicy> {
         .expect("ResilienceModule builds the policy")
 }
 
-/// The breaker's one second, which a job's retry waits at least, by Redis's
-/// clock: the whole seconds its `Retry-After` says.
-const OPEN_FOR: Duration = Duration::from_secs(1);
+/// The breaker's three seconds, which a job's retry waits at least, by Redis's
+/// clock: past the 1.2 s the queue's own first backoff reaches at most, so a
+/// `due` ignoring the refusal's `Retry-After` falls short of it.
+const OPEN_FOR: Duration = Duration::from_secs(3);
 
 static CHARGED: Runs = Runs::new();
 

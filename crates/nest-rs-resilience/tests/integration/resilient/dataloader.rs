@@ -90,10 +90,8 @@ impl PartnersResolver {
 struct PartnersModule;
 
 /// Two fields asking one batch: it fails once and answers both on its retry,
-/// then, its breaker open, each field answers the refusal with its wait. On
-/// the real clock, which async-graphql's batching delay is read on: paused,
-/// tokio would move past it to the request's timeout.
-#[tokio::test]
+/// then, its breaker open, each field answers the refusal with its wait.
+#[tokio::test(start_paused = true)]
 async fn a_batch_answers_each_key_on_its_retry_and_its_refusal_each_field() {
     let app = TestApp::for_module::<PartnersModule>()
         .await

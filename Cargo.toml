@@ -105,8 +105,10 @@ parking_lot = "0.13"
 # its minors change without a major, so a new 7.3 is read before it is taken.
 # `custom-error-conversion` removes the blanket `From<T: Display>` into its
 # error: a `?` in a resolver body would otherwise ship a foreign error's
-# sentence before the wrapper could answer it opaquely.
-async-graphql = { version = "=7.2", default-features = false, features = ["custom-error-conversion", "dataloader", "playground"] }
+# sentence before the wrapper could answer it opaquely. `tokio-timer`: a
+# DataLoader's batching delay is tokio's, where async-io's would spawn a helper
+# thread and run a second timer beside the runtime's, out of a paused clock's reach.
+async-graphql = { version = "=7.2", default-features = false, features = ["custom-error-conversion", "dataloader", "playground", "tokio-timer"] }
 # `=` beside async-graphql, whose parser hands a document's argument values in
 # this crate's `Value`, which async-graphql re-exports only in its const form: a
 # document is read by reference, never cloned to be counted.

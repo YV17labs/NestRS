@@ -1,40 +1,14 @@
-//! Covers `src/resilient.rs`, what `#[resilient]` expands to: a method's body
-//! run under its policy as its attribute declares, on each receiver and host it
-//! takes (`expansion`), a refusal answered `503` by every edge serving a
-//! decorated handler, a method of every impl half that takes one, called
-//! through the framework's own path, attempted again within that one call, the
-//! batch of a `#[dataloader]` host, whose error the loader clones for each key
-//! (`dataloader`), a refusal where no client reads a `503` — a tick, a
-//! listener, an indicator, a hook — filed as that unit's failure with what the
-//! framework does next, what a decorated method's future holds (`footprint`):
-//! its size against its undecorated twin's, and a large one run on a worker of
-//! tokio's default stack — and what its other keys do: the predicates saying
-//! how an answer counts (`judged`), the fallback answering in place of a run's
-//! error (`fallback`), the attempt's token in the body (`cancel`), and all of
-//! them on each receiver and host (`keyed`), beside an instrument in either
-//! order (`instrumented`), and when its arguments and what its body's tail
-//! leaves drop, beside its undecorated twin (`dropped`).
+//! The decorator's folder, mirroring the macro crate's `src/`: what each key
+//! makes of a run (`args`), what a method's signature says (`method`), what an
+//! accepted method expands to (`expansion`), and the decorator on every impl
+//! half (`edges`), the one folder no file of the macro crate names. Its
+//! fixtures are what each file shares: the instance, the errors, the module
+//! boot.
 
-mod cancel;
-mod dataloader;
-mod dropped;
+mod args;
+mod edges;
 mod expansion;
-mod fallback;
-mod footprint;
-mod hooks;
-mod indicators;
-mod instrumented;
-mod judged;
-mod keyed;
-mod listeners;
-mod messages;
-mod operations;
-mod processor;
-mod routes;
-mod scheduled;
-mod shadowing;
-mod told;
-mod tools;
+mod method;
 
 use std::future::Future;
 use std::str::FromStr;

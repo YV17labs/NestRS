@@ -39,7 +39,7 @@
 - **Our side** — the body stays an async block, opening after its leading items
   on a `return` of the attempt's type that is never taken,
   `if false { return ::nest_rs_resilience::__private::attempt::<Answer>(); }`
-  (`body` in `crates/nest-rs-resilience-macros/src/resilient.rs`): an async
+  (`body` in `crates/nest-rs-resilience-macros/src/expansion.rs`): an async
   block's first `return` sets its output type, so its tail and every later
   `return` are checked, and coerced, against it. The async closure was not taken
   because rustc does not coerce in it, nor a `let` ascribed with the attempt's
@@ -300,8 +300,8 @@
   they captured in the order their bodies first name it, where an `async fn`
   drops its parameters last declared first. The Reference's *Destructors* says
   the second and leaves the order of a closure's captures unspecified.
-  `nest-rs-resilience`'s `dropped` module (`tests/integration/resilient/dropped.rs`)
-  runs each decorated method beside an undecorated twin written from the same
+  `nest-rs-resilience`'s `dropped` module
+  (`tests/integration/resilient/expansion/dropped.rs`) runs each decorated method beside an undecorated twin written from the same
   tokens.
 - **Effect** — a method whose body an expansion moves into a closure drops its
   arguments in the order the body happens to name them: a lock guard taken as
@@ -309,7 +309,7 @@
   warning.
 - **Our side** — the attempt owning the arguments opens on a statement naming,
   last declared first, each one its body names (`captured` in
-  `crates/nest-rs-resilience-macros/src/resilient.rs`), which rests on the order
+  `crates/nest-rs-resilience-macros/src/expansion.rs`), which rests on the order
   rustc has today. What it cannot name is a limit the decorator's rustdoc says.
   Under `record_if` the closure is not `move`, and the statement would be no
   naming but a borrow: it widens each capture from the place the body uses to

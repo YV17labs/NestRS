@@ -4,7 +4,12 @@
 
 use proc_macro::TokenStream;
 
+mod args;
+mod expansion;
+mod method;
 mod resilient;
+#[cfg(test)]
+mod testing;
 
 /// Runs an `async fn` method's body under the policy a field of `self` holds:
 /// `#[resilient(field)]` sends the call once, `#[resilient(field, idempotent)]`

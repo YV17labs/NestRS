@@ -100,5 +100,8 @@
 - **2026-11-26** — under a policy the instrument goes below `#[resilient]`
   alone, and the arguments drop last declared first there: the expansion's
   opening read sets the order its future takes them in. The test is
-  `dropped::below_an_instrument_the_arguments_drop_last_declared_first`, which
-  pins tracing's own order with no policy, the body's, as the canary.
+  `resilient::expansion::dropped::below_an_instrument_the_arguments_drop_last_declared_first`,
+  which pins tracing's own order with no policy, the body's, as the canary.
+  Our side under a policy is gone, and *When fixed* with it: no decorated
+  method has an instrument above, and `captured` lives in
+  `crates/nest-rs-resilience-macros/src/expansion.rs`.

@@ -1,6 +1,6 @@
 ---
 title: Upgrading to the unreleased changes
-description: "The order that moves a project on the published release onto the changes not yet released — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver, a route's posture, an HTTP error's detail — and what fails when a step is missed."
+description: "The order that moves a project on the published release onto the changes not yet released — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver, a route's posture, an HTTP error's detail, a 503 tick's level — and what fails when a step is missed."
 ---
 
 import { Steps } from '@astrojs/starlight/components';
@@ -9,8 +9,9 @@ The changes not yet released make a major: they take the designs the
 published release's compatibility held back, whatever they break. An attribute
 on a GraphQL operation applies to the method you wrote, a `Problem` is the one thing an edge reads in a handler's error, a
 `SafeLink` names the type it says, a data driver says what each handle holds,
-only a route's decorator opens its reads, and an HTTP reply's `detail` is a
-sentence written for the client.
+only a route's decorator opens its reads, an HTTP reply's `detail` is a
+sentence written for the client, and a tick or listener failing with a `503`
+is filed at `warn`.
 This page is the order to take the changes in; the
 [changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/unreleased.md) says
 why each was made. The release holding them is numbered when it is cut, and
@@ -20,7 +21,9 @@ You need the project building on the published release. Most steps are
 compile errors, so the compiler finds every site; a step that changes behaviour alone says so, and
 [What fails if you get it wrong](#what-fails-if-you-get-it-wrong) lists what the
 boot, a log or the wire shows when one is missed. An app on SeaORM with no
-`SafeLink` of its own takes steps 1 to 3 alone.
+`SafeLink` of its own takes steps 1 to 3, then reads steps 6 to 8: step 6 is a
+compile error only where a route read through one of the types it names, and
+steps 7 and 8 change behaviour alone, so no compiler sends you back to them.
 
 <Steps>
 
@@ -176,6 +179,9 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
   `E0405` at the `impl`, and the route it sat on reads withheld:
   `current_ability()` answers `None` in its handler.
 - **A client reading an HTTP `4xx`'s `detail` built from an error** finds none.
+- **An alert on `scheduled job failed` or `event listener failed` at `error`**
+  stays silent while a dependency refuses with a `503`: those occurrences are
+  filed at `warn`, under the `; unavailable` pair.
 
 ## Reference
 

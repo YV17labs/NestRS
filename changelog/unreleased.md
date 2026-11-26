@@ -160,7 +160,9 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   method calling another of its policy, directly or through a call under another
   — is that attempt's: let through by nothing again (no probe's turn, slot or
   token of its own), bound by the attempt, sent once and counted once, by it, so
-  a probe making it closes the breaker. The method's error
+  a probe making it closes the breaker; a request a client under that policy's
+  `ResilienceMiddleware` sends there is that attempt's too, its body holding
+  nothing of the policy. The method's error
   owns what it says (`'static`), one borrowing an argument being rustc's lifetime
   error at the answer.
 - **A fallback answers in place of the error a run ends on.**
@@ -317,9 +319,10 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   refusal — an open breaker, a timeout, a full bulkhead or a reached rate — is
   that unit's error,
   filed by its edge at every occurrence while it lasts: a tick
-  files `scheduled job failed` at `error` and the next occurrence runs, a
-  listener fails its own unit, its transaction rolled back, and the other
-  listeners are still called, an indicator answers down on its own probe while
+  files `scheduled job failed; unavailable` at `warn` and the next occurrence
+  runs, a listener fails its own unit, its transaction rolled back, filing
+  `event listener failed; unavailable — dispatch continues with the next
+  listener` at `warn`, and the other listeners are still called, an indicator answers down on its own probe while
   the other two stay up — a decorated liveness indicator has the orchestrator
   restart the process for a dependency's outage, a startup one holds the boot
   unfinished — an init or bootstrap hook fails the boot naming the hook, the
@@ -620,8 +623,9 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
   type of its own holding one as its source. An error handing reqwest's sentence on as its own
   (`#[error(transparent)]`) holds it as no link: on a resilience policy's lines its URL is cut to its origin and its status to its code, its
   causes said as they write themselves, and on an edge's own line nothing is cut.
-  A reply whose detail is such an error's sentence (`ProblemDetails::from_error`)
-  reads the same way: without the URL, its causes named.
+  No reply carries such an error's sentence: an `HttpError::new(e, status)` over
+  one answers its status's problem with no `detail`, the error kept as the cause
+  for the operator.
 - **A health indicator's check runs under a `nest_rs::core::Deadline`**, the sooner
   of `<PREFIX>_HEALTH__INDICATOR_TIMEOUT_MS` and
   `<PREFIX>_HEALTH__PROBE_DEADLINE_MS` from the probe's start, or its request's when

@@ -34,11 +34,11 @@ impl DecoratedResolver {
     }
 
     /// An instrument on an operation is the method's, as on a route: written
-    /// below the policy, its `err(Debug)` records the method's own error.
+    /// below the policy, its `err` and `ret` record what the method answers.
     #[query]
     #[public]
     #[resilient(upstream)]
-    #[tracing::instrument(skip_all, err(Debug))]
+    #[tracing::instrument(skip_all, err, ret)]
     async fn traced_below(&self) -> Result<String, ResilienceError<UpstreamDown>> {
         Err(UpstreamDown)
     }
@@ -88,11 +88,11 @@ async fn a_field_answers_its_refusal_unavailable_with_the_breakers_wait() {
     assert_eq!(extensions["retryAfterSeconds"], 30, "{refused}");
 }
 
-/// The instrument is the method's, as anywhere: below the policy its
-/// `err(Debug)` records the run's error — the dependency's, which opens the
+/// The instrument is the method's, as anywhere: below the policy its `err`
+/// records the run's error by its sentence — the dependency's, which opens the
 /// breaker, then the open breaker's refusal.
 #[tokio::test(start_paused = true)]
-async fn an_instruments_err_on_an_operation_records_the_fields_error_as_debug() {
+async fn an_instruments_err_on_an_operation_records_the_methods_error() {
     let app = TestApp::for_module::<DecoratedGraphqlModule>()
         .await
         .expect("a decorated resolver boots");
@@ -118,12 +118,9 @@ async fn an_instruments_err_on_an_operation_records_the_fields_error_as_debug() 
         .collect();
     assert_eq!(recorded.len(), 2, "{recorded:?}");
     assert_eq!(
-        recorded[0], "Failed(UpstreamDown)",
-        "the run's: {recorded:?}"
-    );
-    assert!(
-        recorded[1].starts_with("Refused { refusal: Open {"),
-        "the run's refusal: {recorded:?}"
+        recorded,
+        ["the call failed", "the circuit breaker is open"],
+        "the run's error, then its refusal"
     );
 }
 

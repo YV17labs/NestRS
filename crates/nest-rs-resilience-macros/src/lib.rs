@@ -242,9 +242,7 @@ mod testing;
 /// arguments and drops them in the order its tokens first name them — below
 /// the decorator, the order the expansion does, last declared first when the
 /// method is run once. On a GraphQL operation the instrument is the method's,
-/// as on a route: its `err` is written `err(Debug)`, the field's error having
-/// a `Debug` and no `Display`, and `ret` not at all, the field's answer having
-/// neither.
+/// as on a route, and its `err` and `ret` record what the method answers.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry made or
 /// given up, a savepoint left unsettled, a full bulkhead or a reached rate

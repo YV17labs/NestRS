@@ -441,6 +441,14 @@ impl<'p> Run<'p> {
         self.terms.policy.teller.instance()
     }
 
+    /// Whether an answer of the run's holds what the run held of its policy
+    /// past it: a transport's run's does, but for one opened inside an
+    /// attempt of its own policy, which holds nothing of it.
+    #[cfg(feature = "reqwest")]
+    pub(crate) const fn holds(&self) -> bool {
+        self.holds
+    }
+
     /// How many times the run attempted its call again so far.
     #[cfg(feature = "reqwest")]
     pub(crate) const fn resent(&self) -> u32 {
@@ -476,10 +484,12 @@ impl<'p> Run<'p> {
             this.terms.deadline = nest_rs_core::__private::deadline();
             *this.stage = Stage::Arriving;
             if Attempting::inside(policy) {
-                // Let through and counted by the attempt it is made in: taking the
-                // probe's turn, a slot or a token again would refuse it, or count it twice.
+                // Let through, bound and counted by the attempt it is made in: taking the
+                // probe's turn, a slot or a token again would refuse it, or count it twice,
+                // and an answer it held past itself would hold that attempt's own.
                 *this.nested = true;
                 *this.retries = 0;
+                *this.holds = false;
                 return Poll::Ready(Ok(()));
             }
             let Some(bulkhead) = &policy.bulkhead else {

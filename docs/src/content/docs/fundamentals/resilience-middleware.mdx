@@ -115,6 +115,11 @@ so a reader slower than the dependency is never cut.
 - A panic while the body is read counts as a failure in the breaker, then
   unwinds on.
 
+A request sent inside an attempt of its own policy, from a `policy.run(…)` or a
+method `#[resilient]` with that policy, is that attempt's call: its body holds
+nothing of the policy, and the attempt bounds it and counts it once. A body
+you read after that attempt has answered is under none of the policy's terms.
+
 ## Test it
 
 `nest_rs::testing::HttpsPeer` stands in for the upstream: an HTTPS peer on

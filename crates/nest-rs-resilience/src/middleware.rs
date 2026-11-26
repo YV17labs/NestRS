@@ -106,6 +106,12 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// - a panic while the body is read is a failure in the breaker, as a panic in
 ///   the request's own send is, and unwinds on.
 ///
+/// A request sent inside an attempt of its own policy — a
+/// [`run`](ResiliencePolicy::run) of it, or a method `#[resilient]` with it —
+/// is that attempt's call, and its body holds nothing of the policy: that
+/// attempt bounds it and counts it once, and a body read past that attempt is
+/// under none of the policy's terms.
+///
 /// So a response is read or dropped, never kept: one held unread holds its
 /// slot, and a probe's holds the half-open breaker's one turn, for as long as
 /// its caller takes — every call refused beside it told that probe's whole
@@ -216,7 +222,8 @@ where
 /// What `run` answers, over at its last attempt, which `ended` so: a response
 /// with a body to read hands that body what the run held of the policy; any
 /// other answer lets it go here, in a run's order — its attempt in the
-/// breaker, then its slot.
+/// breaker, then its slot — as does one sent inside an attempt of its own
+/// policy, which holds nothing of it: that attempt bounds and counts its body.
 fn answered<F, Fut>(
     run: Pin<&mut Run<'_>>,
     call: Pin<&mut Sending<F>>,
@@ -228,7 +235,7 @@ where
 {
     match ended {
         Ended::Judged(_) => match call.take() {
-            Some(Ok(response)) if response.content_length() != Some(0) => {
+            Some(Ok(response)) if run.holds() && response.content_length() != Some(0) => {
                 Ok(covered(response, run.hold()))
             }
             Some(answer) => {

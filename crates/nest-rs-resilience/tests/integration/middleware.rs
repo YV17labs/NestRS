@@ -1712,6 +1712,68 @@ async fn a_body_the_clients_policy_gave_up_is_told_as_its_timeout_by_the_method_
     );
 }
 
+/// A host whose decorated method sends through a client under the very policy
+/// it runs under.
+struct Courier {
+    upstream: Arc<ResiliencePolicy>,
+    http: ClientWithMiddleware,
+    parcel: String,
+}
+
+impl Courier {
+    #[resilient(upstream)]
+    async fn parcel(&self) -> Result<String, ResilienceError<CarrierFailed>> {
+        let answered = self.http.get(&self.parcel).send().await?;
+        Ok(answered.text().await?)
+    }
+}
+
+/// A request sent inside an attempt of its own client's policy — by a run of
+/// that policy or a method decorated with it — is that attempt's own call: its
+/// body is read whole, it takes no second slot, and the breaker counts the
+/// attempt alone, once.
+#[tokio::test]
+async fn a_request_sent_inside_an_attempt_of_its_own_policy_is_counted_once_by_that_attempt() {
+    const BODY: &str = "a parcel on its way";
+    let peer = answering([PeerAnswer::body(200, BODY), PeerAnswer::body(200, BODY)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        concurrency: Some(1),
+        breaker_window: Some(4),
+        breaker_failures: 1,
+        ..quiet()
+    })
+    .await;
+    let http = client(Arc::clone(&policy));
+    let url = peer.url(PARCEL);
+
+    let ran = policy
+        .run(|| async {
+            let answered = http.get(&url).send().await?;
+            Ok::<_, CarrierFailed>(answered.text().await?)
+        })
+        .await
+        .expect("the body read inside the run's attempt");
+    let courier = Courier {
+        upstream: Arc::clone(&policy),
+        http,
+        parcel: url,
+    };
+    let decorated = courier
+        .parcel()
+        .await
+        .expect("the body read inside the method's attempt");
+
+    assert_eq!([ran.as_str(), decorated.as_str()], [BODY, BODY]);
+    assert_eq!(peer.requests().len(), 2, "each sent once");
+    assert_eq!(policy.concurrency_running(), Some(0), "every slot freed");
+    let stats = policy.breaker_stats().expect("the policy has a breaker");
+    assert_eq!(
+        (stats.outcomes, stats.failures),
+        (2, 0),
+        "each attempt counted once, a success"
+    );
+}
+
 /// What the indicator below asks the carrier for, and whether its check got
 /// as far as reading the answer's body.
 struct Watched {

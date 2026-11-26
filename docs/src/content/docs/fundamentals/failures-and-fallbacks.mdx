@@ -192,10 +192,12 @@ was.
   in counts as a timeout in its own breaker: under an outer timeout of two
   seconds, an answer due after three is a failure there, whatever the inner
   timeout. One on a task the call spawned goes to its own bound.
-- **A method calling another under the same policy** keeps its breaker from
-  closing once it has opened: its own probe refuses the inner call, whose
-  refusal fails the probe and opens the breaker again. Call a method under
-  another policy, or share the body.
+- **A call made inside an attempt of its own policy is that attempt's.** A
+  decorated method calling another of its policy, directly or through a call
+  under another, is let through by nothing again — no probe's turn, slot or
+  token of its own — is bound by the attempt it is made in, is sent once, and
+  counts once, by that attempt: a probe making it closes the breaker as any
+  other does. A call spawned onto a task of its own is a call of its own.
 - **Arguments drop last declared first**, as the undecorated method's do, however
   the run ends, but for the cases that follow. Of a method run once, under no
   `record_if` and no `fallback`, an argument the body reads nowhere and the part

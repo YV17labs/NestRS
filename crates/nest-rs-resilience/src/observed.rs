@@ -39,19 +39,24 @@ type Provider = std::sync::Arc<dyn opentelemetry::metrics::MeterProvider + Send 
 
 /// What a policy's reads are observed off — its mechanisms, held weakly, so
 /// an instrument left on a meter never keeps a policy past its app — and
-/// where: on the meter provider installed as the policy is built, and on the
-/// one installed by its first run when `OpenTelemetry::init()` came between
-/// the two.
+/// where: on the meter provider installed as the policy is built, on the one
+/// installed by its first run when one came between the two, and on each one
+/// `OpenTelemetry::init()` seats after, from the run following it.
 pub(crate) struct Observed {
     #[cfg(feature = "opentelemetry")]
     reads: Reads,
-    /// The provider the reads were registered on as the policy was built,
-    /// until its first run compared it with the one installed then.
+    /// The provider the reads were registered on last.
     #[cfg(feature = "opentelemetry")]
-    built_on: parking_lot::Mutex<Option<Provider>>,
+    registered_on: parking_lot::Mutex<Provider>,
+    /// How many providers were seated when a run last compared the one
+    /// installed with it: none read yet, before the first run.
     #[cfg(feature = "opentelemetry")]
-    compared: std::sync::atomic::AtomicBool,
+    compared_at: std::sync::atomic::AtomicU64,
 }
+
+/// What [`Observed::compared_at`] holds before the first run.
+#[cfg(feature = "opentelemetry")]
+const NOT_COMPARED: u64 = u64::MAX;
 
 impl Observed {
     /// The reads of the policy of `instance` off `mechanisms`, of each of its
@@ -79,38 +84,44 @@ impl Observed {
             reads.observe(installed.as_ref());
             Self {
                 reads,
-                built_on: parking_lot::Mutex::new(Some(installed)),
-                compared: std::sync::atomic::AtomicBool::new(false),
+                registered_on: parking_lot::Mutex::new(installed),
+                compared_at: std::sync::atomic::AtomicU64::new(NOT_COMPARED),
             }
         }
         #[cfg(not(feature = "opentelemetry"))]
         Self {}
     }
 
-    /// Called as a run opens: the policy's first one observes its reads on the
-    /// meter provider installed since the policy was built, when one was.
-    /// Every later run reads one flag.
+    /// Called as a run opens: the policy's first one, and the first after
+    /// `OpenTelemetry::init()` seats a meter provider, observe its reads on
+    /// the provider installed then, when it is not the one they are on. Every
+    /// other run reads two counts.
     #[inline]
     pub(crate) fn at_run(&self) {
         #[cfg(feature = "opentelemetry")]
-        if !self.compared.load(std::sync::atomic::Ordering::Relaxed) {
-            self.compare();
+        {
+            let seated = nest_rs_core::__private::meter_providers_seated();
+            if self.compared_at.load(std::sync::atomic::Ordering::Relaxed) != seated {
+                self.compare(seated);
+            }
         }
     }
 
     #[cfg(feature = "opentelemetry")]
     #[cold]
-    fn compare(&self) {
-        // Taken by one run alone, so two racing on the first observe once.
-        let Some(built_on) = self.built_on.lock().take() else {
+    fn compare(&self, seated: u64) {
+        // Under the lock, so two runs racing on one seat observe once.
+        let mut registered_on = self.registered_on.lock();
+        if self.compared_at.load(std::sync::atomic::Ordering::Relaxed) == seated {
             return;
-        };
-        let installed = opentelemetry::global::meter_provider();
-        if !std::sync::Arc::ptr_eq(&built_on, &installed) {
-            self.reads.observe(installed.as_ref());
         }
-        self.compared
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let installed = opentelemetry::global::meter_provider();
+        if !std::sync::Arc::ptr_eq(&registered_on, &installed) {
+            self.reads.observe(installed.as_ref());
+            *registered_on = installed;
+        }
+        self.compared_at
+            .store(seated, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -613,6 +624,42 @@ mod tests {
                 .iter()
                 .all(|(_, instance, ..)| instance == "quotes"),
             "the carrier's policy is gone, and its instruments observe nothing"
+        );
+    }
+
+    /// A policy whose first run came before `OpenTelemetry::init()` seated
+    /// the meter provider reports its reads there from its next run, where
+    /// its first run's comparison was its last and it reported nothing, then
+    /// or after.
+    #[tokio::test]
+    async fn the_reads_of_a_policy_run_before_its_meter_provider_was_seated_report_once_it_is() {
+        let early = policy::<Quotes>(ResilienceConfig {
+            retries: None,
+            concurrency: Some(3),
+            ..ResilienceConfig::default()
+        });
+        assert!(early.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+        nest_rs_core::__private::meter_provider_seated();
+
+        assert!(early.run(|_| async { Ok::<_, Down>(()) }).await.is_ok());
+        provider.force_flush().expect("the export");
+        assert_eq!(
+            observed(&exporter),
+            sorted(&[
+                (BREAKER_OUTCOMES, "quotes", "failure", 0),
+                (BREAKER_OUTCOMES, "quotes", "success", 2),
+                (BREAKER_STATUS, "quotes", "closed", 1),
+                (BREAKER_STATUS, "quotes", "half_open", 0),
+                (BREAKER_STATUS, "quotes", "open", 0),
+                (CONCURRENCY_RUNNING, "quotes", "", 0),
+                (CONCURRENCY_WAITING, "quotes", "", 0),
+            ]),
+            "observed from the run after the seat"
         );
     }
 }

@@ -189,7 +189,8 @@ are listed there, each by the policy's `instance`.
     its body has waited past the bound, or that the edge cutting its unit drops
     while a read begun before the unit's deadline still waits;
   - an attempt its caller, or the edge cutting its unit, drops at or past the
-    instant its bound ends at, inside a unit whose edge set a deadline;
+    instant its bound ends at, inside a unit whose edge set a deadline, its call
+    still unanswered when it is read once more there;
   - an attempt, or such a response while a read of its body waits, dropped by the
     timeout of another policy: the one the method calling it runs under, whose own
     run tells its timeout.
@@ -229,9 +230,10 @@ that span, inside the request's `graphql.field` span.
 
 ## Limits
 
-- **A policy whose first run precedes `OpenTelemetry::init()`** never reports
-  its observed reads, and a counter it first counts on before then never reports
-  either: start OpenTelemetry before the first call a policy runs.
+- **A meter provider installed by hand**, with no `OpenTelemetry::init()`, is
+  met by a counter's first record and a policy's first run alone: one installed
+  after them reports neither. One `OpenTelemetry::init()` seats is met at any
+  time, from the next record and the next run.
 - **`ResilienceEvents` offers `next()` alone**, no `Stream`.
 
 ## Going further

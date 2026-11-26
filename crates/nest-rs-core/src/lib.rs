@@ -147,6 +147,7 @@ mod lifecycle;
 mod line_safe;
 #[cfg(feature = "logging")]
 pub mod logging;
+mod meter_seat;
 mod millis;
 mod module;
 mod net;
@@ -303,6 +304,7 @@ pub mod __private {
         ConsoleLayer, LibraryClamp, LogFilter, ProfileSource, TextFormat, filter_dispatch,
         install_global_subscriber, log_filter,
     };
+    pub use crate::meter_seat::__private::{meter_provider_seated, meter_providers_seated};
     pub use crate::millis::millis;
     pub use crate::module::__private::{ForRootValue, dynamic_import_module, module_registered};
     pub use crate::net::WithinHeld;

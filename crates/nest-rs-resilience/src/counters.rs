@@ -1,9 +1,9 @@
 //! The counters a policy records on — its breaker's transitions, its retries,
 //! the refusals its runs end on and the fallbacks answering in place of a
-//! run's error — each made at its first record, on the global meter installed
-//! then: first recorded after `OpenTelemetry::init()` it counts, its policy
-//! built before it or after, and first recorded before it, it stays on the
-//! meter that records nothing. What a policy holds now is observed beside
+//! run's error — each made at its first record on the global meter installed
+//! then, and made again at its first record after `OpenTelemetry::init()`
+//! seats another: recorded since, it counts on the meter seated last, its
+//! policy built before it or after. What a policy holds now is observed beside
 //! them ([`Observed`](crate::observed::Observed)). Without the
 //! `opentelemetry` feature a record is nothing.
 
@@ -56,9 +56,22 @@ pub(crate) struct Counters {
     fallbacks: Lazy,
 }
 
-/// A counter made at its first record, and kept.
+/// A counter made at its first record, and made again at the first after
+/// `OpenTelemetry::init()` seats another meter provider: one counter per
+/// provider seated since, oldest first, each read with no lock.
 #[cfg(feature = "opentelemetry")]
-type Lazy = std::sync::OnceLock<opentelemetry::metrics::Counter<u64>>;
+#[derive(Debug, Default)]
+struct Lazy(std::sync::OnceLock<Box<Made>>);
+
+/// A counter made on the meter provider seated `seated`th, and the one made
+/// on the next.
+#[cfg(feature = "opentelemetry")]
+#[derive(Debug)]
+struct Made {
+    seated: u64,
+    counter: opentelemetry::metrics::Counter<u64>,
+    next: Lazy,
+}
 
 impl Counters {
     pub(crate) fn new(instance: &'static str) -> Self {
@@ -149,9 +162,10 @@ impl Counters {
     }
 }
 
-/// The counter `lazy` holds, made at its first record on the global meter
-/// installed then: one made before `OpenTelemetry::init()` records nothing,
-/// after it too.
+/// The counter `lazy` holds for the meter provider seated last, made at its
+/// first record on the global meter installed then: one made before
+/// `OpenTelemetry::init()` records nothing, and the next record after it makes
+/// one that does.
 #[cfg(feature = "opentelemetry")]
 fn made<'c>(
     lazy: &'c Lazy,
@@ -159,13 +173,25 @@ fn made<'c>(
     unit: &'static str,
     description: &'static str,
 ) -> &'c opentelemetry::metrics::Counter<u64> {
-    lazy.get_or_init(|| {
-        opentelemetry::global::meter("nestrs")
-            .u64_counter(name)
-            .with_unit(unit)
-            .with_description(description)
-            .build()
-    })
+    let seated = nest_rs_core::__private::meter_providers_seated();
+    let mut lazy = lazy;
+    loop {
+        let made = lazy.0.get_or_init(|| {
+            Box::new(Made {
+                seated,
+                counter: opentelemetry::global::meter("nestrs")
+                    .u64_counter(name)
+                    .with_unit(unit)
+                    .with_description(description)
+                    .build(),
+                next: Lazy::default(),
+            })
+        });
+        if made.seated >= seated {
+            return &made.counter;
+        }
+        lazy = &made.next;
+    }
 }
 
 #[cfg(test)]
@@ -180,12 +206,33 @@ mod tests {
     use crate::breaker::{Breaker, BreakerSettings};
     use crate::teller::Teller;
 
-    /// A counter is made at its first record, on the meter installed then:
-    /// one first recorded once a provider is installed counts, though another
-    /// of its policy recorded before, and that other counts nothing, after
-    /// the provider is installed too.
+    /// The counters' names reported in `exporter`'s last export.
+    fn reported(exporter: &InMemoryMetricExporter) -> Vec<&'static str> {
+        let exported = exporter
+            .get_finished_metrics()
+            .expect("the exported metrics");
+        let mut reported: Vec<_> = exported
+            .last()
+            .into_iter()
+            .flat_map(|export| export.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .map(|metric| match metric.name() {
+                RETRIES => RETRIES,
+                FALLBACKS => FALLBACKS,
+                other => panic!("no other counter recorded: {other}"),
+            })
+            .collect();
+        reported.sort_unstable();
+        reported
+    }
+
+    /// A counter is made at its first record, on the meter installed then,
+    /// and made again at its first record after `OpenTelemetry::init()` seats
+    /// a meter provider: one first recorded before that counts from then on,
+    /// where it counted nothing for good. A provider installed by hand is met
+    /// by a counter's first record alone.
     #[test]
-    fn a_counter_reports_only_when_its_first_record_found_a_meter_provider_installed() {
+    fn a_counter_first_recorded_before_a_meter_provider_is_seated_counts_once_it_is() {
         let counters = Counters::new("quotes");
         counters.retry();
         let exporter = InMemoryMetricExporter::default();
@@ -195,21 +242,20 @@ mod tests {
         opentelemetry::global::set_meter_provider(provider.clone());
         counters.retry();
         counters.fallback();
-
         provider.force_flush().expect("the export");
-        let exported = exporter
-            .get_finished_metrics()
-            .expect("the exported metrics");
-        let reported: Vec<_> = exported
-            .iter()
-            .flat_map(|export| export.scope_metrics())
-            .flat_map(|scope| scope.metrics())
-            .map(|metric| metric.name())
-            .collect();
         assert_eq!(
-            reported,
+            reported(&exporter),
             [FALLBACKS],
-            "the fallbacks, first recorded since, and no retry"
+            "installed by hand, the fallbacks first recorded since, and no retry"
+        );
+
+        nest_rs_core::__private::meter_provider_seated();
+        counters.retry();
+        provider.force_flush().expect("the export");
+        assert_eq!(
+            reported(&exporter),
+            [FALLBACKS, RETRIES],
+            "seated, the retries first recorded before count from the next record"
         );
     }
 
@@ -239,7 +285,12 @@ mod tests {
         let panicking = opentelemetry::metrics::Counter::new(Arc::new(PanickingCounter));
         counters
             .transitions
-            .set(panicking)
+            .0
+            .set(Box::new(Made {
+                seated: nest_rs_core::__private::meter_providers_seated(),
+                counter: panicking,
+                next: Lazy::default(),
+            }))
             .expect("no transition was counted yet");
         let settings = BreakerSettings {
             window: 1,

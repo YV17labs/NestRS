@@ -13,7 +13,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::task::{Context, Poll, ready};
+use std::task::{Context, Poll, Waker, ready};
 use std::time::Duration;
 
 use nest_rs_core::__private::WithinHeld;
@@ -22,6 +22,7 @@ use nest_rs_database::AtomicError;
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::DropGuard;
 
+use crate::attempting::Attempting;
 use crate::breaker::{Breaker, Cut, Pass, Sent};
 use crate::bulkhead::{Full, Slot};
 use crate::call::{Calling, Erased, Judged, Placing, Reads};
@@ -362,6 +363,9 @@ pin_project_lite::pin_project! {
         holds: bool,
         // When the last attempt was sent, for a run that holds its answer.
         sent_at: Option<Instant>,
+        // Whether the run opened inside an attempt of its own policy, whose call
+        // it is: sent once, let through by nothing and bound by that attempt.
+        nested: bool,
     }
 }
 
@@ -402,6 +406,7 @@ impl<'p> Run<'p> {
             savepoints: idempotent || method.is_some_and(|method| method.fallback()),
             holds: false,
             sent_at: None,
+            nested: false,
         }
     }
 
@@ -457,6 +462,13 @@ impl<'p> Run<'p> {
             policy.observed.at_run();
             this.terms.deadline = nest_rs_core::__private::deadline();
             *this.stage = Stage::Arriving;
+            if Attempting::inside(policy) {
+                // Let through and counted by the attempt it is made in: taking the
+                // probe's turn, a slot or a token again would refuse it, or count it twice.
+                *this.nested = true;
+                *this.retries = 0;
+                return Poll::Ready(Ok(()));
+            }
             let Some(bulkhead) = &policy.bulkhead else {
                 return Poll::Ready(Ok(()));
             };
@@ -519,6 +531,13 @@ impl<'p> Run<'p> {
         mut call: Pin<&mut (dyn Calling + '_)>,
         cx: &mut Context<'_>,
     ) -> Poll<Ended> {
+        if self.stage == Stage::Arriving && self.nested {
+            let unbound = Bound {
+                wait: Duration::MAX,
+                until: None,
+            };
+            self.as_mut().send(None, unbound);
+        }
         if self.stage == Stage::Arriving {
             let (mut pass, mut reserved) = (None, None);
             match self.terms.admit(&mut pass, &mut reserved) {
@@ -558,6 +577,7 @@ impl<'p> Run<'p> {
             call: call.as_mut(),
             given_up: this.given_up,
         };
+        let _attempting = Attempting::enter(this.terms.policy);
         let answered = ready!(match this.savepoint {
             Some(savepoint) => within.poll(pin!(savepoint.around(Pin::new(&mut erased))), cx),
             None => within.poll(Pin::new(&mut erased), cx),
@@ -817,6 +837,39 @@ impl<'p> Run<'p> {
         }
     }
 
+    /// Whether the run's attempt is out past the instant its bound ends at,
+    /// its call not read since, and dropped by no policy's timeout around it.
+    fn overdue(&self) -> bool {
+        self.stage == Stage::Sending
+            && !Cut::encloses()
+            && matches!(&self.attempt, Some(Attempt::Sent(sent)) if sent.overdue())
+    }
+
+    /// The run dropped with `call`: an attempt out past the instant its bound
+    /// ends at — an edge cutting its unit at that deadline polled first, a
+    /// worker busy — has its call read once more, so an answer that came in
+    /// time counts as its run would have read it, and one still to come has
+    /// timed out. Any other drop leaves the attempt to what dropped it
+    /// ([`Sent`]).
+    pub(crate) fn dropped(self: Pin<&mut Self>, call: Pin<&mut (dyn Calling + '_)>) {
+        if !self.overdue() {
+            return;
+        }
+        // A panic of the call's is counted as its failure, its payload the unit's to file.
+        let _read = self.poll_attempt(call, &mut Context::from_waker(Waker::noop()));
+    }
+
+    /// One attempt of the run's call, as [`poll_attempt`](Self::poll_attempt)
+    /// polls it, read once more as it is dropped past its bound
+    /// ([`dropped`](Self::dropped)).
+    #[cfg(feature = "reqwest")]
+    pub(crate) fn attempt<'a>(
+        self: Pin<&'a mut Self>,
+        call: Pin<&'a mut (dyn Calling + Send + 'a)>,
+    ) -> Attempted<'a, 'p> {
+        Attempted { run: self, call }
+    }
+
     /// What the run holds let go as it is over, though its future is kept:
     /// its slot, and the attempt's bound, whose timer would wake the task once
     /// more.
@@ -867,6 +920,32 @@ impl Run<'_> {
     }
 }
 
+/// One attempt of a run's call, polled until it ends, read once more when it
+/// is dropped past its bound ([`Run::dropped`]).
+#[cfg(feature = "reqwest")]
+pub(crate) struct Attempted<'a, 'p> {
+    run: Pin<&'a mut Run<'p>>,
+    // `Send`, as the middleware's future holding it is.
+    call: Pin<&'a mut (dyn Calling + Send + 'a)>,
+}
+
+#[cfg(feature = "reqwest")]
+impl Future for Attempted<'_, '_> {
+    type Output = Ended;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Ended> {
+        let this = &mut *self;
+        this.run.as_mut().poll_attempt(this.call.as_mut(), cx)
+    }
+}
+
+#[cfg(feature = "reqwest")]
+impl Drop for Attempted<'_, '_> {
+    fn drop(&mut self) {
+        self.run.as_mut().dropped(self.call.as_mut());
+    }
+}
+
 #[cfg(all(test, feature = "reqwest"))]
 impl<'p> Run<'p> {
     /// A run of a transport's call under `policy`, opened as the middleware
@@ -904,6 +983,9 @@ pin_project_lite::pin_project! {
     pub(crate) struct Running<'p, R, P, J>
     where
         R: ResilientAnswer,
+        P: Placing,
+        P::Made: Future<Output = R::Attempt>,
+        J: Reads<R>,
     {
         // Dropped first: the call's future, then its closure, before what the run
         // holds — the probe's turn, the token, the slot.
@@ -912,9 +994,28 @@ pin_project_lite::pin_project! {
         #[pin]
         run: Run<'p>,
     }
+
+    impl<R, P, J> PinnedDrop for Running<'_, R, P, J>
+    where
+        R: ResilientAnswer,
+        P: Placing,
+        P::Made: Future<Output = R::Attempt>,
+        J: Reads<R>,
+    {
+        fn drop(this: Pin<&mut Self>) {
+            let this = this.project();
+            this.run.dropped(this.call);
+        }
+    }
 }
 
-impl<'p, R: ResilientAnswer, P, J> Running<'p, R, P, J> {
+impl<'p, R, P, J> Running<'p, R, P, J>
+where
+    R: ResilientAnswer,
+    P: Placing,
+    P::Made: Future<Output = R::Attempt>,
+    J: Reads<R>,
+{
     /// `call`, held in `place` and judged by `judging`, run by `run`.
     pub(crate) const fn new(place: P, judging: J, run: Run<'p>) -> Self {
         Self {
@@ -5857,9 +5958,8 @@ mod tests {
 
     /// The attempts of two policies in flight together in a call the timeout
     /// of a third drops have each timed out, as have the ones of two nested
-    /// one in the other's — and one of the same policy nested in its own
-    /// attempt, counted before the attempt around it: two timeouts, which
-    /// open the breaker.
+    /// one in the other's — and a call of the same policy nested in its own
+    /// attempt is that attempt's: one timeout, counted once.
     #[tokio::test(start_paused = true)]
     async fn every_attempt_in_flight_in_a_call_given_up_at_its_bound_has_timed_out() {
         let short = Duration::from_secs(2);
@@ -5881,7 +5981,6 @@ mod tests {
         assert!(timed_out_at(&cut, short), "{cut:?}");
         assert_eq!((counted(&middle), counted(&innermost)), ((1, 1), (1, 1)));
 
-        let lines = nest_rs_testing::LogCapture::install();
         let nested = policy(guarding());
         let cut = nested
             .run(|_| async {
@@ -5890,12 +5989,10 @@ mod tests {
             })
             .await;
         assert!(timed_out_at(&cut, Duration::from_secs(5)), "{cut:?}");
-        let opened = lines.find(TARGET, BREAKER_MOVED);
-        assert_eq!(opened.len(), 1, "{opened:?}");
         assert_eq!(
-            (opened[0].field("failed"), opened[0].field("error")),
-            (Some("2".to_owned()), Some(TIMED_OUT.to_owned())),
-            "the inner attempt, due a second later, then the one around it"
+            counted(&nested),
+            (1, 1),
+            "a call nested in an attempt of its own policy is that attempt's, counted once"
         );
     }
 
@@ -6135,6 +6232,118 @@ mod tests {
                 ),
                 "idempotent: {idempotent}, retries: {retries:?}: {heard:?}"
             );
+        }
+    }
+
+    #[instance]
+    struct Between;
+
+    /// A call nested in an attempt of its own policy, directly or through a
+    /// call of another policy, is that attempt's: let through again by nothing
+    /// — no turn of the breaker, no slot, no token — and counted once, by the
+    /// attempt it is made in. A probe whose call nests one of its own policy
+    /// closes the breaker, where each nested call took the probe's turn from
+    /// itself and was refused, the breaker opening again forever.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_nested_in_an_attempt_of_its_own_policy_is_that_attempts() {
+        let probed = policy(probing(Duration::from_secs(5)));
+        let between = ResiliencePolicy::<Between>::new(&ResilienceConfig {
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        })
+        .expect("a valid policy");
+        probe_due(&probed).await;
+        let answered = probed
+            .run(|_| async {
+                between
+                    .run(|_| async { probed.run(|_| async { Ok::<_, Refused>("answered") }).await })
+                    .await
+            })
+            .await;
+        assert!(matches!(answered, Ok("answered")), "{answered:?}");
+        assert_eq!(
+            probed.breaker_state(),
+            Some(BreakerState::Closed),
+            "the probe nesting its own policy's call closed the breaker"
+        );
+
+        let walled = policy(ResilienceConfig {
+            concurrency: Some(1),
+            rate_limit: Some(1),
+            rate_window: Duration::from_secs(60),
+            breaker_window: Some(2),
+            breaker_failures: 2,
+            ..ResilienceConfig::default()
+        });
+        let failed = walled
+            .run(|_| async { walled.run(|_| async { Err::<(), _>(Refused) }).await })
+            .await;
+        assert!(
+            matches!(
+                failed,
+                Err(ResilienceError::Failed(ResilienceError::Failed(Refused)))
+            ),
+            "the nested call took no second slot and no second token: {failed:?}"
+        );
+        assert_eq!(
+            counted(&walled),
+            (1, 1),
+            "its failure counted once, by the attempt it was made in"
+        );
+    }
+
+    /// An attempt whose call answered within its bound, inside a unit whose
+    /// edge cuts it at a deadline, counts as its answer though its run is
+    /// dropped past that bound before it is polled again — the edge's timer
+    /// polled first, a worker busy — as its run would have read it: a success
+    /// closes a probe's series and counts in the window, where it counted as
+    /// a timeout. One whose call has not answered by then has timed out.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_answered_within_its_bound_and_dropped_past_it_counts_as_its_answer() {
+        for (probing_first, answering) in [(false, true), (true, true), (false, false)] {
+            let policy = policy(ResilienceConfig {
+                breaker_window: Some(2),
+                breaker_failures: 1,
+                ..probing(Duration::from_secs(5))
+            });
+            if probing_first {
+                probe_due(&policy).await;
+            }
+            let (mut answer, answered) = tokio::sync::oneshot::channel::<()>();
+            let deadline = Instant::now() + Duration::from_millis(300);
+            let mut run = Box::pin(nest_rs_core::__private::with_deadline(
+                Some(deadline),
+                policy.run(|_| async move { answered.await.map_err(|_closed| Refused) }),
+            ));
+            assert!(
+                run.as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            let _unanswered = if answering {
+                std::mem::replace(&mut answer, tokio::sync::oneshot::channel().0)
+                    .send(())
+                    .expect("the call waits for its answer");
+                None
+            } else {
+                Some(answer)
+            };
+            tokio::time::advance(Duration::from_millis(400)).await;
+            drop(run);
+            if answering {
+                assert_eq!(policy.breaker_state(), Some(BreakerState::Closed));
+                assert_eq!(
+                    counted(&policy),
+                    (usize::from(!probing_first), 0),
+                    "probing first: {probing_first}: the answer counted as a success"
+                );
+            } else {
+                assert!(
+                    matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+                    "unanswered past its bound, it timed out: {:?}",
+                    policy.breaker_state()
+                );
+            }
         }
     }
 }

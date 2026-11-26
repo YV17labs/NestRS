@@ -1627,3 +1627,60 @@ async fn a_trait_impl_on_a_struct_built_by_hand_runs_alike() {
     );
     assert!(failed(&tracking.status("P9").await));
 }
+
+/// A host whose decorated method calls another of its own, under one policy.
+#[injectable]
+struct QuotesService {
+    #[inject]
+    courier: Arc<ResiliencePolicy<Courier>>,
+}
+
+impl QuotesService {
+    #[resilient(courier)]
+    async fn quoted(&self) -> Result<u32, ResilienceError<ResilienceError<CarrierDown>>> {
+        self.priced().await
+    }
+
+    #[resilient(courier)]
+    async fn priced(&self) -> Answer<u32> {
+        Ok(42)
+    }
+}
+
+#[module(
+    imports = [ResilienceModule::for_root((Courier, ResilienceConfig {
+        concurrency: Some(1),
+        ..opening_on_the_first_failure()
+    }))],
+    providers = [QuotesService],
+)]
+struct NestingModule;
+
+/// A decorated method calling another of its own policy is one attempt of
+/// it, the inner call let through by nothing again: it takes no second slot
+/// of a bulkhead of one, and the probe it makes closes the breaker, where the
+/// inner call took the probe's turn from it, was refused, and kept the
+/// breaker open for good.
+#[tokio::test(start_paused = true)]
+async fn a_method_calling_another_of_its_own_policy_is_one_attempt_of_it() {
+    let app = boot::<NestingModule>().await;
+    let quotes = app
+        .container()
+        .get::<QuotesService>()
+        .expect("the module provides it");
+    let courier = held::<Courier>(&app);
+    let quoted = quotes.quoted().await;
+    assert!(matches!(quoted, Ok(42)), "one slot, taken once: {quoted:?}");
+
+    courier
+        .open_breaker(Duration::from_secs(1))
+        .expect("an open time the breaker takes");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let probed = quotes.quoted().await;
+    assert!(matches!(probed, Ok(42)), "{probed:?}");
+    assert_eq!(
+        courier.breaker_state(),
+        Some(BreakerState::Closed),
+        "the probe closed the breaker"
+    );
+}

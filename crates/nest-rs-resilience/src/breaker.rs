@@ -392,15 +392,13 @@ mod published {
 
     use super::{Held, Outcomes, Phase, left};
 
-    /// A breaker's state, reached under its lock alone, and the word each
-    /// holder publishes of it as it lets the lock go: no change of the state
+    /// A breaker's state, reached under its lock alone, and the board each
+    /// holder publishes it on as it lets the lock go: no change of the state
     /// goes unpublished.
     pub(super) struct Published {
         held: Mutex<Held>,
-        word: AtomicU64,
-        /// The instant an open breaker's open time ends at, in nanoseconds
-        /// past `origin`.
-        open_until: AtomicU64,
+        board: Board,
+        /// The instant `open_until` counts from.
         origin: Instant,
         /// The latest attempts the window counts, which a quiet one holds.
         window: usize,
@@ -411,8 +409,7 @@ mod published {
             let word = Word::of(&held, window);
             Self {
                 held: Mutex::new(held),
-                word: AtomicU64::new(word.0),
-                open_until: AtomicU64::new(0),
+                board: Board::new(word.0),
                 origin: Instant::now(),
                 window,
             }
@@ -435,22 +432,94 @@ mod published {
 
         /// The word the last holder of the lock published.
         pub(super) fn word(&self) -> Word {
-            Word(self.word.load(Ordering::Acquire))
+            Word(self.board.word())
         }
 
         /// What is left of the open time of the breaker `word` says is open,
         /// read with no lock: `None` once it has passed, or once `word` is no
         /// more the one published.
         pub(super) fn open_left(&self, word: Word) -> Option<Duration> {
-            // Holders store `open_until`, then the word (Release). Read between two equal words
-            // (Acquire), an `until` still ahead is their epoch's opening's: later ones are `now`.
-            let until = Duration::from_nanos(self.open_until.load(Ordering::Acquire));
-            left(self.origin + until).filter(|_| self.word() == word)
+            let until = self.board.open_until_of(word.0)?;
+            left(self.origin + Duration::from_nanos(until))
         }
 
         /// `at` in nanoseconds past `origin`, none for an instant before it.
         fn nanos(&self, at: Instant) -> u64 {
             u64::try_from(at.saturating_duration_since(self.origin).as_nanos()).unwrap_or(u64::MAX)
+        }
+    }
+
+    /// One 64-bit cell of a [`Board`]: std's in the process, loom's in the
+    /// model that checks the board's orderings.
+    pub(super) trait Cell64 {
+        fn new(value: u64) -> Self;
+        fn load(&self, order: Ordering) -> u64;
+        fn store(&self, value: u64, order: Ordering);
+    }
+
+    impl Cell64 for AtomicU64 {
+        fn new(value: u64) -> Self {
+            Self::new(value)
+        }
+
+        #[inline]
+        fn load(&self, order: Ordering) -> u64 {
+            self.load(order)
+        }
+
+        #[inline]
+        fn store(&self, value: u64, order: Ordering) {
+            self.store(value, order);
+        }
+    }
+
+    /// What the holders of a breaker's lock publish, one after the other, for
+    /// a call to read with none: the [`Word`], and the instant an open one's
+    /// open time ends at, in nanoseconds past the breaker's origin.
+    pub(super) struct Board<C = AtomicU64> {
+        word: C,
+        open_until: C,
+    }
+
+    impl<C: Cell64> Board<C> {
+        pub(super) fn new(word: u64) -> Self {
+            Self {
+                word: C::new(word),
+                open_until: C::new(0),
+            }
+        }
+
+        /// `word` published, after the instant its open time ends at when it
+        /// opens: by one holder of the lock at a time.
+        #[inline]
+        pub(super) fn publish(&self, word: u64, open_until: Option<u64>) {
+            // An `until` stored before the word that says it, both Release: a reader of the
+            // word reads that `until` or a later one, and one of a later `until` a later word.
+            if let Some(until) = open_until
+                && self.open_until.load(Ordering::Relaxed) != until
+            {
+                self.open_until.store(until, Ordering::Release);
+            }
+            if self.word.load(Ordering::Relaxed) != word {
+                self.word.store(word, Ordering::Release);
+            }
+        }
+
+        /// The word last published.
+        #[inline]
+        pub(super) fn word(&self) -> u64 {
+            self.word.load(Ordering::Acquire)
+        }
+
+        /// The open time's end read between `word` and the word published
+        /// after it, `None` when the two differ: the end of `word`'s own
+        /// opening, or of the one published right after it, still being
+        /// published — never an earlier opening's, nor one a later word moved
+        /// past.
+        #[inline]
+        pub(super) fn open_until_of(&self, word: u64) -> Option<u64> {
+            let until = self.open_until.load(Ordering::Acquire);
+            (self.word() == word).then_some(until)
         }
     }
 
@@ -532,16 +601,94 @@ mod published {
         fn drop(&mut self) {
             // Still under the lock, which the guard lets go once this returns.
             let published = self.published;
-            if let Phase::Open { until } = self.held.phase {
-                let until = published.nanos(until);
-                if published.open_until.load(Ordering::Relaxed) != until {
-                    published.open_until.store(until, Ordering::Release);
-                }
-            }
+            let open_until = match self.held.phase {
+                Phase::Open { until } => Some(published.nanos(until)),
+                _ => None,
+            };
             let word = Word::of(&self.held, published.window).0;
-            if published.word.load(Ordering::Relaxed) != word {
-                published.word.store(word, Ordering::Release);
+            published.board.publish(word, open_until);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use loom::sync::Arc;
+        use loom::sync::atomic::AtomicU64 as ModelCell;
+
+        use super::*;
+
+        impl Cell64 for ModelCell {
+            fn new(value: u64) -> Self {
+                Self::new(value)
             }
+
+            fn load(&self, order: Ordering) -> u64 {
+                self.load(order)
+            }
+
+            fn store(&self, value: u64, order: Ordering) {
+                self.store(value, order);
+            }
+        }
+
+        /// The end of the open time an opening in `epoch` publishes: each
+        /// later one sooner, so a reader told an earlier opening's waits past
+        /// the breaker's.
+        const fn until_of(epoch: u64) -> u64 {
+            1_000 - epoch
+        }
+
+        /// What the holders of the lock enter, one epoch each, in the order
+        /// the lock lets them: whether each opens.
+        const ENTERED: [bool; 3] = [true, false, true];
+
+        /// Every interleaving of the holders of a breaker's lock — opening it,
+        /// closing it, opening it again — with a call reading the board with
+        /// none, and every value the board's orderings let each load read: a
+        /// call meeting the breaker open is told the open time of the opening
+        /// its word says, or of the one published right after it, never an
+        /// earlier one's, nor one a later word moved past. The word's
+        /// Release/Acquire holds the first, the open time's the second.
+        #[test]
+        fn a_call_reading_the_breaker_with_no_lock_is_told_its_own_openings_wait() {
+            loom::model(|| {
+                let board = Arc::new(Board::<ModelCell>::new(Word::CLOSED));
+                let holders = {
+                    let board = Arc::clone(&board);
+                    // One thread: the lock orders its holders as one thread's program does.
+                    loom::thread::spawn(move || {
+                        for (epoch, open) in (1..).zip(ENTERED) {
+                            let (phase, until) = if open {
+                                (Word::OPEN, Some(until_of(epoch)))
+                            } else {
+                                (Word::CLOSED, None)
+                            };
+                            board.publish(Word(epoch << 2 | phase).0, until);
+                        }
+                    })
+                };
+                // A thread of its own: loom runs the model's own thread to its first join.
+                let reader = loom::thread::spawn(move || {
+                    let word = Word(board.word());
+                    let told = word.open().then(|| board.open_until_of(word.0)).flatten();
+                    (word, told)
+                });
+                holders.join().expect("no holder panics");
+                let (word, told) = reader.join().expect("the call reads");
+                let Some(until) = told else {
+                    return;
+                };
+                let epoch = word.epoch();
+                let next_opens = usize::try_from(epoch)
+                    .ok()
+                    .and_then(|next| ENTERED.get(next))
+                    .copied()
+                    .unwrap_or(false);
+                assert!(
+                    until == until_of(epoch) || (next_opens && until == until_of(epoch + 1)),
+                    "epoch {epoch} told {until}"
+                );
+            });
         }
     }
 }
@@ -660,6 +807,12 @@ pub(crate) struct Sent<'b> {
 }
 
 impl Sent<'_> {
+    /// Whether the instant the attempt's bound ends at has passed: dropped
+    /// now, it has timed out unless its call answered in time.
+    pub(crate) fn overdue(&self) -> bool {
+        self.until.is_some_and(|until| Instant::now() >= until)
+    }
+
     #[inline]
     pub(crate) fn settle(self, failure: Option<&str>) {
         // Settled, it is dropped no more: its drop is an attempt given up
@@ -713,7 +866,7 @@ pub(crate) struct HeldAttempt {
 impl Drop for Sent<'_> {
     #[inline]
     fn drop(&mut self) {
-        if Cut::encloses() || self.until.is_some_and(|until| Instant::now() >= until) {
+        if Cut::encloses() || self.overdue() {
             self.breaker.record(self.epoch, self.probe, Some(TIMED_OUT));
         } else if self.probe {
             self.breaker.abandon_probe(self.epoch);

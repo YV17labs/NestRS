@@ -58,8 +58,9 @@
 //! its instance, each transition of its breaker, each call it sent again,
 //! each run it ended on its own refusal and each fallback answering, and its
 //! reads are observed there. The meter is the one `OpenTelemetry::init()`
-//! installs: a counter first recorded before it, and the reads of a policy
-//! whose first run came before it, report nothing, then or after. A count is
+//! seats: a counter first recorded before it counts there from its next
+//! record, and a policy run before it reports its reads from its next run. A
+//! count is
 //! not always an event's: a retry's line and event are told once the retry is
 //! certain — as it is decided, or once its attempt's savepoint rolled back —
 //! and its counter counts the call once it is sent again, so a retry the
@@ -84,6 +85,7 @@
 /// its breaker's transitions.
 pub const TARGET: &str = "nest_rs::resilience";
 
+mod attempting;
 #[cfg(feature = "reqwest")]
 mod body;
 mod breaker;

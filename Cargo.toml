@@ -198,6 +198,10 @@ libc = "0.2"
 # The micro-benchmarks' harness (`nest-rs-core`'s `benches/`): warm-up,
 # sampling and outlier analysis; the plots and the thread pool they pull are off.
 criterion = { version = "0.8", default-features = false }
+# The model checker the circuit breaker's word, published with no lock, is
+# proven under (`nest-rs-resilience`'s unit tests): every interleaving and every
+# value the C11 memory model lets a load read.
+loom = "0.7"
 
 # The embedded source of `nest-rs-static-files`: a folder compiled into the
 # binary. `debug-embed` embeds in a debug build too, so what a test serves is

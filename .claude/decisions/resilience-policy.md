@@ -1440,3 +1440,59 @@ a mutation of the behaviour it holds:
 None of it found a defect. The Redis proofs ran on the dev container's one
 server; Sentinel and Cluster take the same settle script, run by hand with
 their environments.
+
+## 2026-11-26 — a call nested in its own policy's attempt is that attempt's, an answer that came in time counts, the instruments follow the meter seated, and the breaker's word is model-checked
+
+Four defects, each reproduced by a test that failed first, and one limit closed:
+
+- **A call made inside an attempt of its own policy is that attempt's.** A
+  decorated method calling another of its policy — directly, or through a call
+  under another — met its own probe's turn, slot and token: the inner call was
+  refused by the probe around it, the probe failed on that refusal, and the
+  breaker opened again for good; a bulkhead of one refused it `Full`, and a rate
+  of one `Limited`; and a failure counted twice. A run now reads, as it opens,
+  the policies whose attempt its thread is polling (`src/attempting.rs`, eight
+  in place and any deeper behind them, so a call allocates nothing to say it):
+  one of its own is let through by nothing again, bound by the attempt it is
+  made in, sent once and counted once, by that attempt. Correctness decided it:
+  the dependency is called once, so the policy is applied once. A call spawned
+  onto a task of its own is a call of its own. The 2026-11-24 limit "**A method
+  calling another under the same policy** keeps its breaker from closing" is
+  closed, and the test pinning two timeouts for a nested call of one policy
+  now pins one.
+- **An attempt answered in time, dropped past its bound, counts as its
+  answer.** Under a unit's deadline, an attempt dropped at or past the instant
+  its bound ends at counted as a timeout, though its call had answered within
+  it and its run had not been polled since — the edge's timer polled first, a
+  worker busy. The run is now dropped with its call read once more
+  (`Run::dropped`, from `Running`'s drop and the middleware's attempt): an
+  answer that came counts as its run would have judged it, one still to come as
+  a timeout. Only that drop reads the call: one its caller drops before the
+  bound counts for nothing, and one another policy's timeout cuts has timed out.
+- **The instruments follow the meter provider `OpenTelemetry::init()`
+  seats.** A policy whose first run came before it never reported its observed
+  reads, and a counter first recorded before it stayed on the meter that
+  records nothing. `nest-rs-core` counts each provider the observability stack
+  seats (`__private::meter_provider_seated`, called by `nest-rs-opentelemetry`
+  as it seats one); a run compares that count with the one its reads were
+  registered at, and a counter keeps one instrument per provider seated, in a
+  chain of `OnceLock`s read with no lock. A run pays two relaxed loads, and a
+  record one more. A provider installed by hand, with no `init`, is met by a
+  counter's first record and a policy's first run alone, as before. The
+  2026-11-24 limit "**A policy whose first run precedes
+  `OpenTelemetry::init()`**" is closed.
+- **The breaker's word is checked under loom.** Its publication is a
+  `Board` generic over its 64-bit cell, std's in the process and loom's in a
+  model (`breaker.rs`, `published::tests`): every interleaving of holders
+  opening, closing and opening again beside a call reading with no lock, and
+  every value the orderings let a load read. A call meeting the breaker open is
+  told its word's opening's wait or the one published right after it, never an
+  earlier one's: each of the two lines named by the 2026-11-26 limit, relaxed
+  alone, fails it. loom is the standard for the job, tokio's own, released
+  2026-11-08. Its model needs no `--cfg loom`, so it runs in every `just test`;
+  a `--cfg loom` build would switch every dependency reading that cfg into its
+  own model. The limit "**Two memory-ordering lines of the breaker's word are
+  held by argument and review alone**" is closed.
+- **An answer sent again is let go before the wait for its retry** already
+  held, through the run and through the middleware
+  (`an_answer_sent_again_is_let_go_before_the_wait_for_its_retry`): no change.

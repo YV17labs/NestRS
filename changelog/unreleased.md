@@ -147,9 +147,11 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   `BACKOFF_CEILING_MS` — unless its `record_if` and `retry_if` refuse it, with a
   `matches!` on the error's own variant holding the `ResilienceError`. An attempt the enclosing policy's timeout cuts counts
   as a timeout in its own breaker, which so times its dependency out at its tightest
-  caller's bound. A method calling another under the same policy
-  keeps its breaker from closing once it opened, its own probe refusing the inner
-  call: call a method under another policy, or share the body. The method's error
+  caller's bound. A call made inside an attempt of its own policy — a decorated
+  method calling another of its policy, directly or through a call under another
+  — is that attempt's: let through by nothing again (no probe's turn, slot or
+  token of its own), bound by the attempt, sent once and counted once, by it, so
+  a probe making it closes the breaker. The method's error
   owns what it says (`'static`), one borrowing an argument being rustc's lifetime
   error at the answer.
 - **A fallback answers in place of the error a run ends on.**
@@ -336,8 +338,10 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
 - **No attempt outlives its unit**: each ends at the policy's timeout or the
   unit's deadline, whichever comes first, a health indicator's check included,
   and no retry starts past that deadline. An attempt its caller drops counts in
-  neither direction; under a unit's deadline, one dropped past its bound counts
-  as a timeout, and one another policy's timeout cuts does in a unit or outside one.
+  neither direction; under a unit's deadline, one dropped past its bound has its
+  call read once more as it is dropped, counting as its answer when that came in
+  time and as a timeout otherwise, and one another policy's timeout cuts counts as
+  a timeout in a unit or outside one.
   A call's own error answers as its `ToProblem` says or, where it is none, by the
   `Problem` its chain carries, opaquely where it carries none, and a `Retry-After`
   the error's chain carries holds its retry back.
@@ -387,9 +391,10 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   `nestrs.resilience.breaker.state`), `nestrs.resilience.breaker.outcomes` (by
   `nestrs.resilience.breaker.outcome`, `failure` or `success`),
   `nestrs.resilience.concurrency.running`, `nestrs.resilience.concurrency.waiting`
-  and `nestrs.resilience.rate.available`. A policy whose first run precedes
-  `OpenTelemetry::init()` never reports its observed ones, nor a counter it
-  first recorded before it. `refusals` counts each run ended on the policy's
+  and `nestrs.resilience.rate.available`. They follow the meter provider
+  `OpenTelemetry::init()` seats: a counter first recorded before it counts from
+  its next record after, and a policy run before it reports its observed ones
+  from its next run. `refusals` counts each run ended on the policy's
   own refusal, whether its caller is answered `503` or a fallback answers in
   its place. A transition to
   `open` not marked `manual` is failures opening the breaker, a probe failing,

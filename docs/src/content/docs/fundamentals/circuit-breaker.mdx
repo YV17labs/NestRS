@@ -65,8 +65,9 @@ turn to the next call, the breaker staying half-open.
 
 **An attempt its caller drops unanswered counts in neither direction**, as in a
 `select!` taking another branch. Under a unit's deadline — a request's, a job's, a tick's, a
-health check's — one dropped past its bound counts as a timeout, whether the
-policy or the unit's edge cut it. Outside one, no instant ends the bound, and its
+health check's — one dropped past its bound has its call read once more as it
+is dropped: an answer that came in time counts as itself, and one still to come
+as a timeout, whether the policy or the unit's edge cut it. Outside one, no instant ends the bound, and its
 caller's drop counts for nothing however late it comes. One that [another policy's
 timeout](/fundamentals/failures-and-fallbacks/#limits) cuts counts as a timeout,
 in a unit or outside one.

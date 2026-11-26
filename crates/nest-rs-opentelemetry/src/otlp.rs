@@ -251,6 +251,7 @@ impl Exporters {
         global::set_tracer_provider(self.tracer_provider.clone());
         if let Some(provider) = &self.meter_provider {
             global::set_meter_provider(provider.clone());
+            nest_rs_core::__private::meter_provider_seated();
         }
     }
 }

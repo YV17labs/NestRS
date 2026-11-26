@@ -136,6 +136,9 @@ opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # What a call pays its policy, measured in `benches/`.
 criterion.workspace = true
+# The breaker's published word, read with no lock, checked under every
+# interleaving and every value its memory orderings let a load read.
+loom.workspace = true
 
 [[bench]]
 name = "policy"

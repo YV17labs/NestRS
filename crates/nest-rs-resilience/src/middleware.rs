@@ -179,11 +179,11 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
                 .flatten();
             let Some(copy) = copy else {
                 let mut call = pin!(sent(move || sending.run(req, carried)));
-                let ended = poll_fn(|cx| run.as_mut().poll_attempt(call.as_mut(), cx)).await;
+                let ended = run.as_mut().attempt(call.as_mut()).await;
                 return answered(run, call, ended);
             };
             let mut call = pin!(sent(move || sending.run(copy, carried)));
-            let mut ended = poll_fn(|cx| run.as_mut().poll_attempt(call.as_mut(), cx)).await;
+            let mut ended = run.as_mut().attempt(call.as_mut()).await;
             let Some(retry) = run.as_mut().retry(&mut ended) else {
                 return answered(run, call, ended);
             };
@@ -675,5 +675,66 @@ mod tests {
             policy.breaker_state()
         );
         assert_eq!(policy.concurrency_running(), Some(0));
+    }
+
+    /// A dependency answering `204` once its answer is let through.
+    struct Answering(parking_lot::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>);
+
+    #[async_trait::async_trait]
+    impl Middleware for Answering {
+        async fn handle(
+            &self,
+            _req: Request,
+            _extensions: &mut Extensions,
+            _next: Next<'_>,
+        ) -> Result<Response> {
+            let answered = self.0.lock().take().expect("one request");
+            answered.await.expect("the test lets the answer through");
+            Ok(http::Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body("")
+                .expect("an answer")
+                .into())
+        }
+    }
+
+    /// A request whose answer came within its bound, inside a unit its edge
+    /// cuts at a deadline, counts as that answer though its run is dropped
+    /// past the bound before it is polled again: the breaker closed, where it
+    /// counted a timeout and opened.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_answered_in_time_and_dropped_past_its_bound_counts_its_answer() {
+        let config = crate::ResilienceConfig {
+            retries: None,
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            ..crate::ResilienceConfig::default()
+        };
+        let policy = Arc::new(ResiliencePolicy::<Unnamed>::new(&config).expect("a valid policy"));
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(ResilienceMiddleware::new(Arc::clone(&policy)))
+            .with(Answering(parking_lot::Mutex::new(Some(answered))))
+            .build();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let mut unit = Box::pin(nest_rs_core::__private::with_deadline(
+            Some(deadline),
+            client.get("https://upstream.example/").send(),
+        ));
+        assert!(
+            unit.as_mut()
+                .poll(&mut Context::from_waker(std::task::Waker::noop()))
+                .is_pending()
+        );
+        answer.send(()).expect("the request waits for its answer");
+        tokio::time::advance(Duration::from_millis(400)).await;
+        drop(unit);
+
+        assert_eq!(
+            policy.breaker_state(),
+            Some(crate::BreakerState::Closed),
+            "the answer that came in time counted"
+        );
     }
 }

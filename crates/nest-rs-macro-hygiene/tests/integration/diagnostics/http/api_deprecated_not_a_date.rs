@@ -10,7 +10,7 @@ struct PostsController;
 impl PostsController {
     #[get("/")]
     #[public]
-    #[api(deprecated = "7.1")]
+    #[api(deprecated = "2.1")]
     async fn list(&self) -> String {
         String::new()
     }

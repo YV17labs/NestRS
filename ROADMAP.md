@@ -11,15 +11,15 @@ Last reviewed **2026-11-17**, against NestJS 12.1 and the npm registry on that d
 | Proposed | Written down and sized, with no yes yet |
 | Accepted | The owner said yes; its open questions are answered below |
 | In progress | Being built by its issue's assignee, on the branch named here |
-| Shipped in 7.N | Released; its line lives in `changelog/7.N.md` |
+| Shipped | Released; its line lives in its release's `changelog/<major>.<minor>.md` |
 
 ---
 
 ## 1. The principle: the design comes first
 
-7.0 is the foundation. **What makes the framework considerably faster, safer or simpler is built whatever it breaks**
-(`.claude/decisions/semver-7x.md`, 2026-11-25): the release holding the break is a major, it ships when it is ready, and
-its changelog says what a program changes. The 7.x line lasts until something better is found, no longer.
+**What makes the framework considerably faster, safer or simpler is built whatever it breaks**
+(`.claude/decisions/semver.md`, 2026-11-25): the release holding the break is a major, it ships when it is ready, and
+its changelog says what a program changes. A major line lasts until something better is found, no longer.
 
 New capabilities arrive as minors. [The semver policy](https://nestrs.dev/semver/) lets a minor add each of these:
 
@@ -72,38 +72,38 @@ points apply that file's rule of 2026-11-18: a release ships when it is tagged, 
 stable major, and no release candidate holds it.
 
 1. **`redis` 2.0 is taken only if it is final before the tag**; tagged first, 7.0 ships on 1.8 and 2.0 waits for
-   NestRS 8. Built against rc.3, `nest-rs-redis` already passes every topology's suite, so a final release out first is
+   the next NestRS major. Built against rc.3, `nest-rs-redis` already passes every topology's suite, so a final release out first is
    a pin and its gates away. Shipping early has a gain: 6.x queue users do not compile on Rust 1.100 until 7.0 ships
    (`queue-redis-streams.md`). Past 2.0, a NestRS command API in place of implementing redis's `ConnectionLike` would
    turn redis majors into NestRS minors, at the price of the vocabulary an app writes today.
-2. **`async-graphql` 8 waits for NestRS 8.** rc.5 cannot be taken: one failing nullable field answers `data: null` for
+2. **`async-graphql` 8 waits for the next NestRS major.** rc.5 cannot be taken: one failing nullable field answers `data: null` for
    the whole response, and it still requires the `lru` RUSTSEC-2026-0253 names, so the advisory's ignore stays either
    way (`.claude/upstream/async-graphql.md`). 7.2.1 crosses the twelve-month freshness bar on 2027-01-20 if nothing
    ships before.
-3. **`chrono` stays in 7.x**: `time` would change how REST spells an instant and still leave chrono in every app with
-   migrations; jiff, NestRS 8's target, waits for sea-orm and sqlx to carry it (`public-dependencies.md`, 2026-11-18).
+3. **`chrono` stays in the published major**: `time` would change how REST spells an instant and still leave chrono in every app with
+   migrations; jiff, the next NestRS major's target, waits for sea-orm and sqlx to carry it (`public-dependencies.md`, 2026-11-18).
 4. **7.0 builds on rmcp 3.11 and jsonwebtoken 12**, the latest of each. `rmcp` is a smaller risk than its count of
    majors suggests: its majors followed the protocol's rewrite, 3.x passes the `2025-11-25` and `2026-07-28` conformance
    suites, `nest-rs-mcp` serves both, and the specification now keeps a deprecated feature for at least twelve months.
 5. **An exported telemetry name promises what its convention does**: one from a convention in development follows it,
-   its rename a minor named in the changelog (`semver-7x.md`, 2026-11-18).
+   its rename a minor named in the changelog (`semver.md`, 2026-11-18).
 6. **Every crate builds from its package before any is published**: `publish.yml` runs `cargo package` first.
 7. **The public surface added since 2026-10-31 was audited**, and the three items that would have frozen a mistake
    moved (changelog, *Tier 1 holds what a developer writes*).
 8. **A GraphQL id is `ID` and a timestamp `DateTime` at every position, an instant spelled once on every edge**
    (`a-column-reads-in-one-type.md`).
 
-**A major takes everything only a break can**: the dependency's move, what a 7.x minor deprecated, each listed under its
+**A major takes everything only a break can**: the dependency's move, what a minor deprecated, each listed under its
 changelog's *Deprecated*, and every design compatibility held back, each with its upgrading entry. It ships when it is
-ready (`semver-7x.md`, 2026-11-18). The 8.0 line exists (`changelog/8.0.md`), holding the breaks taken so far. The first
+ready (`semver.md`, 2026-11-18). The unreleased line (`changelog/unreleased.md`) holds the breaks taken so far. The first
 design it takes is built: `#[operations]` keeps every attribute a developer writes on a GraphQL operation on the
-developer's method, where 7.0 handed them to the field it generates, so a decorator, an instrument reading the method's own
+developer's method, where the published release handed them to the field it generates, so a decorator, an instrument reading the method's own
 `self` or an app's own attribute works there as on every other handler.
 
 What async-graphql 8 would require was measured against rc.5 on 2026-11-18. GraphQL Playground is gone upstream, so the
 `playground` setting and its variable become GraphiQL's. Every `DataLoader` a `#[dataloader]` builds takes a `Spawn` and
 a `Timer`. A field whose name has a digit before a letter is spelled anew (`get_2fa` becomes `get2fa`). And a `?` on a
-foreign error compiles again in a resolver, so the refusal 7.x holds at compile time would have to hold at run time.
+foreign error compiles again in a resolver, so the refusal nestrs holds at compile time would have to hold at run time.
 
 ---
 
@@ -119,7 +119,7 @@ to what NestRS already ships:
 | `@nestjs/authorization` | `nest-rs-authz`: abilities, row-level filtering, per-field masking, on every edge |
 | `@nestjs/outbox` | the queue's transactional push: a push inside a unit commits with it, and a relay files it (`transactional-outbox.md`) |
 | `@nestjs/http-client` | the app's own `reqwest` client with `nest_rs::reqwest::ReqwestMiddleware` (trace context and client spans), and `nest_rs::resilience::ResilienceMiddleware` for its timeouts and retries |
-| `@nestjs/resilience` | `nest-rs-resilience`, for 8.0 (`changelog/8.0.md`): `#[resilient(field)]` on the method making the call, on a provider as on a handler of every edge but a WebSocket connection hook, a scheduled tick included, with nine keys checked by the compiler — `idempotent` where it may be sent again, `timeout` and `retries`, `retry_if`, `retry_ok_if` and `record_if` to classify an answer, `fallback` and `fallback_if` for the method answering in its place, `cancel` for the attempt's token — each attempt of an idempotent or fallback method in a savepoint of the unit's transaction, under a named policy per dependency: a timeout per attempt within the unit's deadline, retries when the caller declares the call idempotent, a count-window circuit breaker with an age, a series of probes, a state read and a switch by hand, a bulkhead bounding its waiters, and an outbound token bucket — every refusal a `503` with the `Retry-After` it knows, events readable in code, reads and instruments on the meter, its state per process |
+| `@nestjs/resilience` | `nest-rs-resilience`, unreleased (`changelog/unreleased.md`): `#[resilient(field)]` on the method making the call, on a provider as on a handler of every edge but a WebSocket connection hook, a scheduled tick included, with nine keys checked by the compiler — `idempotent` where it may be sent again, `timeout` and `retries`, `retry_if`, `retry_ok_if` and `record_if` to classify an answer, `fallback` and `fallback_if` for the method answering in its place, `cancel` for the attempt's token — each attempt of an idempotent or fallback method in a savepoint of the unit's transaction, under a named policy per dependency: a timeout per attempt within the unit's deadline, retries when the caller declares the call idempotent, a count-window circuit breaker with an age, a series of probes, a state read and a switch by hand, a bulkhead bounding its waiters, and an outbound token bucket — every refusal a `503` with the `Retry-After` it knows, events readable in code, reads and instruments on the meter, its state per process |
 
 ## 4. Not planned, and why
 
@@ -137,7 +137,7 @@ to what NestRS already ships:
 
 ---
 
-## 5. Proposed for 7.x
+## 5. Proposed
 
 The order goes foundations first, then completing what already exists, then what users ask for, then the largest. Effort
 is in engineering hours, review and gates included. It is a guess calibrated on the 7.0 foundation work.
@@ -329,6 +329,6 @@ is settled before it ships, not iterated in public.
    (`CONTRIBUTING.md`, *Before you start*).
 3. It is built on its own branch, through `.claude/rules/manifests-ci.md`'s *Shipping a capability* checklist: umbrella
    feature, docs page with `## Install`, expansion and composition witnesses, and both test suites over TLS.
-4. It ships in the next minor, with its line in `changelog/7.N.md`. Its row moves to § 3, and the page
+4. It ships in the next minor, with its line in `changelog/unreleased.md` until that minor is cut. Its row moves to § 3, and the page
    `docs/src/content/docs/coming-from-nestjs/` gains its mapping.
 5. A refusal met along the way, or a limit, goes into `.claude/decisions/` and is named here under the item.

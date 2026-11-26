@@ -19,7 +19,7 @@
 - **Canary** — `nest-rs-seaorm`'s unit test
   `wire_date_time::tests::async_graphql_still_spells_offset_zero_plus_zero`.
 - **Upstream** — not filed.
-- **When fixed** — in nestrs 8, an `#[expose]`d instant can keep its column's
+- **When fixed** — in the next nestrs major, an `#[expose]`d instant can keep its column's
   own type on the wire and `WireDateTime` goes, if the scalar's description and
   `@specifiedBy` URL stay what they are: a wire row's field changes type, which
   an app reading it through `as_ref()` sees. About an hour, the macro's tests
@@ -55,12 +55,12 @@
   field alone; a mutation's fields run serially, so one already executed loses
   its answer and those after it never run. `nest-rs-graphql`'s in-process suite
   fails 35 of its 546 tests on rc.5, about 28 of them this.
-- **Our side** — none: 7.x stays on `=7.2`, and 8.0 waits for nestrs 8
+- **Our side** — none: nestrs stays on `=7.2`, and async-graphql 8.0 waits for the next nestrs major
   (`.claude/decisions/public-dependencies.md`, 2026-11-17).
 - **Canary** — none in the tree: the move to 8.0 runs `nest-rs-graphql`'s
   null-propagation suite, which fails while this holds.
 - **Upstream** — not filed.
-- **When fixed** — nothing in 7.x; the move to 8.0 is measured again on the
+- **When fixed** — nothing within a nestrs major; the move to 8.0 is measured again on the
   final release, nestrs's own null propagation re-read against it.
 - **Ticket** —
 
@@ -97,7 +97,7 @@
 - **Upstream** — not filed.
 - **When fixed** — a 7.x release requiring `lru` 0.18.2 or later is taken in a
   nestrs minor, and the ignore and the page's caution go; a fix in 8.0 alone
-  waits for nestrs 8. Minutes.
+  waits for the next nestrs major. Minutes.
 - **Ticket** —
 
   > **Require `lru` 0.18.2 or later (RUSTSEC-2026-0253), on 7.x too**

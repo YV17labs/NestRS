@@ -466,7 +466,7 @@ read them through `link_as`, or did not: a package's that forgot one left its ty
 said by its own `Display`, values included (`resilience-policy.md`, 2026-11-24). And
 two sayers claiming one type both stood: which spoke was link order, and the other
 went quiet in every line, an app's own beside `nest-rs-reqwest`'s among them. Taken
-under the directive of 2026-11-25 (`semver-7x.md`), a break of every sayer.
+under the directive of 2026-11-25 (`semver.md`), a break of every sayer.
 
 - **Decided**: `SafeLink::of(&say)`, over `fn(&T) -> Option<String>`. The sayer names
   its type and downcasts nothing; core reads `T` once, for every sayer — the link

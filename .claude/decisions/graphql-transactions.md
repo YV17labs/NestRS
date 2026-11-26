@@ -51,7 +51,7 @@ inside one transaction per operation.
 closed (`INTERNAL`) rather than commit a failed field's writes. A relation a
 mutation's response resolves through a DataLoader reads the pool, so it does
 not see the rows the operation wrote: running a mutation's batches on its own
-transaction, joined before the field's block settles, is planned for 7.x
+transaction, joined before the field's block settles, is planned for a minor
 (`ambient-carry.md`) — it changes no API.
 
 **2026-10-22 — a field that errs answers `null`.** An answer now follows

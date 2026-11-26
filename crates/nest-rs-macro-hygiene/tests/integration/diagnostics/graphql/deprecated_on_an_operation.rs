@@ -12,7 +12,7 @@ struct PostsResolver;
 impl PostsResolver {
     #[query]
     #[public]
-    #[deprecated(since = "7.1.0", note = "ask `posts`")]
+    #[deprecated(since = "2.1.0", note = "ask `posts`")]
     async fn feed(&self) -> String {
         String::new()
     }

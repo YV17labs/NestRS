@@ -1,14 +1,14 @@
 ---
 title: Semver policy
-description: "What every 7.x release keeps until 8.0 — the code, names and formats you build on — and how a package of your own depends on NestRS."
+description: "What every minor and patch keeps until the next major — the code, names and formats you build on — and how a package of your own depends on NestRS."
 ---
 
-Every `nest-rs-*` crate ships at one version, and no 7.x release breaks what
-you build on: your code compiles, your configuration boots, and your log
+Every `nest-rs-*` crate ships at one version, and no minor or patch breaks
+what you build on: your code compiles, your configuration boots, and your log
 filters and alerts keep matching — but on a name an OpenTelemetry convention
 still has in development, which a minor may rename, named in the changelog
 ([Telemetry names](#telemetry-names)). A minor adds, a patch fixes, and a break
-waits for 8.0. This page is that contract — what it covers, what it leaves
+makes its release the next major. This page is that contract — what it covers, what it leaves
 out, and how a package of your own depends on NestRS.
 
 ```toml title="Cargo.toml"
@@ -16,15 +16,15 @@ out, and how a package of your own depends on NestRS.
 nest-rs = { version = "7.0", features = ["http", "config", "seaorm"] }
 ```
 
-`7.0` is the oldest release the workspace accepts, and every later 7.x builds
-it unchanged; `cargo update` takes the newest.
+`7.0` is the oldest release the workspace accepts, and every later minor and
+patch of its major builds it unchanged; `cargo update` takes the newest.
 
-## What 7.x keeps
+## What a major keeps
 
 A break is a change to something a program or an operator matches. Everything
-in the middle column holds until 8.0:
+in the middle column holds until the next major:
 
-| What you build on | Kept until 8.0 | Not covered |
+| What you build on | Kept until the next major | Not covered |
 |---|---|---|
 | Rust items | every public item of every published crate, reached through no `__private` module, no `__`-prefixed item and no hidden item | the `__private` tier (below), and `nest-rs-cli`'s library, whose binary is the product |
 | Decorators | every key and what it means — refusing a program that used to compile is a break | the wording of a compile error |
@@ -57,7 +57,7 @@ convention still in development makes, named in the changelog
 
 A minor may deprecate a spelling it replaces. The old one keeps compiling and
 warns you at its line, naming what to write instead, and the changelog lists it
-under **Deprecated**. 8.0 refuses it.
+under **Deprecated**. The next major refuses it.
 
 **A patch fixes.** It corrects behaviour that disagrees with these docs, and
 may change anything in the `__private` tier. It never raises the minimum Rust
@@ -65,17 +65,17 @@ version: a project held to its toolchain takes a patch without reading it.
 
 One fix is a patch although it refuses what used to boot: a security fix that
 turns away an insecure configuration — insecure by a standard, an RFC or
-OWASP, never merely unusual. Safe by default cannot wait for 8.0, so it ships
+OWASP, never merely unusual. Safe by default cannot wait for a major, so it ships
 under the changelog's **Security** heading, and the upgrading guide names the
 configuration refused and the secure one to write instead. Nothing else that
-used to compile or boot is refused before 8.0.
+used to compile or boot is refused before the next major.
 
 ## Telemetry names
 
 Every name a span, a metric or the resource carries through NestRS's
 [OpenTelemetry](/opentelemetry/) export, a span's own name included, promises
 what its namer does. A name from a stable
-semantic convention, or one NestRS gives itself, is kept until 8.0; a name from
+semantic convention, or one NestRS gives itself, is kept until the next major; a name from
 a convention still in development follows its convention, and its rename comes
 in a minor, named in the changelog. If an alert of yours matches a name in
 development, read the changelog of each minor you take.
@@ -109,8 +109,8 @@ end on `..Default::default()`:
 HttpModule::for_root(HttpConfig { compression: true, ..Default::default() }),
 ```
 
-A literal naming every field stops compiling when a field arrives, and 7.x
-does not cover it. This is the one place the policy departs from Cargo's
+A literal naming every field stops compiling when a field arrives, and a
+minor does not cover it. This is the one place the policy departs from Cargo's
 SemVer reference, which counts a new public field as a break: a config is the
 one struct you write as a literal, and freezing it would freeze every module's
 settings for the whole line.
@@ -149,10 +149,10 @@ directly, and not as `nest_rs::<concern>::__private` either.
 Some libraries are part of what you write: you derive their traits, write
 their attributes and name their types in your own signatures. In Cargo's
 words, they are NestRS's public dependencies. Their majors are NestRS's — no
-7.x release moves one — and you may name each in your manifest, at a
+minor or patch moves one — and you may name each in your manifest, at a
 requirement compatible with the framework's:
 
-| Library, at the major 7.x holds | Where you write it |
+| Library, at the major NestRS holds | Where you write it |
 |---|---|
 | `async-graphql` 7 | a resolver: its derives and `Context` |
 | `rmcp` 3 | an MCP tool: its model types are the MCP schema |
@@ -199,8 +199,8 @@ nest-rs = { version = "7.0", default-features = false, features = ["http", "test
   releases.
 - **A decorator crate is the one exception.** A `proc-macro` crate depends on
   `nest-rs-codegen` and uses its root items alone. The code it emits names
-  public paths only: your package, built against 7.0, runs in an app on a later
-  7.x, where `__private` may differ.
+  public paths only: your package, built against one minor, runs in an app on a
+  later one, where `__private` may differ.
 
 ### Naming a package
 
@@ -231,7 +231,7 @@ a package's publisher before you add it.
 
 ## Going further
 
-- [Upgrading from 7.x](/upgrading-from-7/) and [from 6.x](/upgrading/) — each
-  major's breaks, in the order to take them.
+- [Upgrading to the unreleased changes](/upgrading-unreleased/) and
+  [from 6.x](/upgrading/) — each major's breaks, in the order to take them.
 - [Packages](/packages/) — every capability an umbrella feature turns on.
 - [Decorator reference](/decorators/) — every key this page keeps.

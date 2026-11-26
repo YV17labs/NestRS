@@ -88,7 +88,7 @@ just ci     # every check CI runs: lint, docs and tests
   considerably faster, safer or simpler is built whatever it breaks, and a rule
   or a decision refusing it for compatibility alone is changed with it. Such a
   break is never asked and always told: the commit, the changelog's upgrading
-  entry, the report (`decisions/semver-7x.md`, 2026-11-25).
+  entry, the report (`decisions/semver.md`, 2026-11-25).
 - Branch `<type>/<slug>`, Conventional Commit subjects stating what is now
   true. `just ci` green before a branch reaches the owner's. Push, tag,
   publish and anything posted outside are the owner's.

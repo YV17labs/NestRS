@@ -145,7 +145,7 @@ mod tests {
     #[scheduled]
     impl ArchiveTasks {
         /// Holds a buffer across an `.await`, so a run keeping two copies of
-        /// its call weighs twice what 7.0's did.
+        /// its call weighs twice what the published release's did.
         #[every("1h")]
         async fn archive(&self) -> anyhow::Result<()> {
             let buffer = [7_u8; 32 * 1024];
@@ -163,7 +163,8 @@ mod tests {
             .expect("the tick is submitted");
 
         let run = (tick.run())(&container);
-        // The future the expansion builds from the call, which 7.0 boxed as the run.
+        // The future the expansion builds from the call, which the published
+        // release boxed as the run.
         let container = &container;
         let call = async move {
             let provider = Container::get::<ArchiveTasks>(container).expect("the host is provided");

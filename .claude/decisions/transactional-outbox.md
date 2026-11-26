@@ -157,7 +157,7 @@ the unit's, and a pool files it at once. Nothing else about that line moved.
 ## 2026-11-26 — the outbox is a transaction's, and what a cancel reaches is the pool's too
 
 The first entry hands the sealed jobs to `Executor::write_outbox` of the ambient
-executor, and 7.0's trait handed a cancel to `remove_outbox` and
+executor, and the published release's trait handed a cancel to `remove_outbox` and
 `remove_outbox_unique`, each a default answering `None`. The port's `Executor` now
 says what a handle holds, and nothing a
 driver owes has a default (`resilience-policy.md`, this date): a driver leaving its

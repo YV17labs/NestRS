@@ -418,7 +418,7 @@ fn import_label(import: &Import) -> String {
     }
 }
 
-/// The refusal of a module written with the turbofish 7.0 taught, spanned at
+/// The refusal of a module written with the turbofish the published release taught, spanned at
 /// the developer's `::`: the module is still read as its type, so this is the
 /// one error.
 fn turbofish_refusal(import: &Import) -> Option<proc_macro2::TokenStream> {

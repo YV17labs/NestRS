@@ -1,6 +1,6 @@
 //! A module of a named instance is imported as its type, `ShelfModule<Cache>`;
-//! written with the turbofish 7.0 taught, it is refused at its `::`, naming
-//! the type to write. The type spelling beside it says nothing.
+//! written with the turbofish the published release taught, it is refused at
+//! its `::`, naming the type to write. The type spelling beside it says nothing.
 
 use std::marker::PhantomData;
 

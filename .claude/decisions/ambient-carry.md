@@ -36,7 +36,7 @@ detached write must open a unit of its own, and on `Connection`, where each
 message opens its own. One exception is planned: a mutation operation's
 batches run on the operation's own transaction, so its response reads its own
 writes, and are joined before the field's savepoint settles, so none outlives
-it. It lands with `feat/graphql-operation-unit`, or in 7.x, changing no API,
+it. It lands with `feat/graphql-operation-unit`, or in a later minor, changing no API,
 if the join proves infeasible.
 
 **Nothing but the envelope's keys crosses into a job.** A job is system work,
@@ -136,7 +136,7 @@ spawner reads the span to hold off the operation's unit rather than off the
 current span: a batch keeps the outermost unit's identity, and runs in that
 unit's span. The planned exception — a mutation operation's batches on its own
 transaction, joined before the field's block settles — does not land with
-it, and moves to 7.x, changing no API. Two things stand in its way beyond the
+it, and moves to a later minor, changing no API. Two things stand in its way beyond the
 join: a statement issued from inside a block on the operation's executor is
 refused, so a batch would run on the field's block, which a spawned task
 cannot share while the field awaits it; and a request-scoped DataLoader caches

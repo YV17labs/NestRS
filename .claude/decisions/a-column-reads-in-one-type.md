@@ -2,7 +2,7 @@
 
 Written on 2026-11-18, before 7.0's first publish, when a GraphQL timestamp was
 found to be two types: aligning them after it would change the SDL or the wire,
-a break inside 7.x (`semver-7x.md`).
+a break inside 7.x (`semver.md`).
 
 `#[expose]` rewrote a column's type by the spelling of its bare type, so an
 `Option` kept the type async-graphql gives it, which nest-rs-seaorm turns on
@@ -87,7 +87,7 @@ two ways depending on the edge. 6.x read the same types, and wrote the bare colu
   string, which the decorator's paths cannot reach under the umbrella's root.
   **A field resolver per instant**: async-graphql allows one `ComplexObject` per
   type, which an entity's own `#[field_resolver]` holds.
-- **A public instant or id type**: an item every 7.x keeps, for a field read
+- **A public instant or id type**: an item every minor keeps, for a field read
   through the standard conversions.
 
 **Not covered:** an array column, `Vec<…>`, which sea-orm maps only under its

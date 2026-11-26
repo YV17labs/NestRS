@@ -1,12 +1,14 @@
-# Changelog 8.0
+# Changelog — unreleased
 
 Every line is indexed in [CHANGELOG.md](../CHANGELOG.md).
 
 ## [Unreleased]
 
-8.0 holds breaks: compatibility with a published release no longer holds a better
-design back, and the release holding a break is a major
-(`.claude/decisions/semver-7x.md`, 2026-11-25).
+What is below holds breaks: compatibility with a published release no longer
+holds a better design back, and the release holding a break is a major
+(`.claude/decisions/semver.md`, 2026-11-25). It is numbered when it is cut, and
+[Upgrading to the unreleased changes](https://nestrs.dev/upgrading-unreleased/)
+is the order to take its breaks in.
 
 ### Added
 
@@ -438,7 +440,7 @@ answer at all — and keeping each `RequestHead`.
   boot, its type and the framework's both claiming it: name another `namespace`,
   or list the features the app uses in place of `full`.
 - **`reqwest-middleware` is public in `nest-rs-resilience`**, at the `0.5`
-  `nest-rs-reqwest` already holds for 7.x.
+  `nest-rs-reqwest` already holds.
 
 #### A module is imported as its type
 
@@ -448,7 +450,7 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
 
 ### Changed
 
-- **`RedisModule::<Cache>` in `imports`, the turbofish 7.0 taught, is refused** at
+- **`RedisModule::<Cache>` in `imports`, the turbofish the published release taught, is refused** at
   its `::`, naming the type to write. **Breaking:** write a module of a named
   instance as its type, `RedisModule<Cache>`.
 - **A data driver's handle says what it holds, and nothing it owes has a
@@ -458,7 +460,7 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
   `HeldTransaction` — `after_commit`, `savepoint` and `outbox`, what a push is
   written into. The port reads `atomic`, `after_commit`, a resilience attempt's
   savepoint and a push's outbox off that answer, so a driver leaving one out no
-  longer compiles: with 7.0's defaults it dispatched events before its `COMMIT`
+  longer compiles: with the defaults the published release gave it, it dispatched events before its `COMMIT`
   and filed jobs its rollback undid, and a savepoint left to a default would have
   committed a failed attempt's writes beside its retry's. `atomic` answers
   `AtomicError::Unsupported` only outside any unit of work. **Breaking** for a
@@ -488,7 +490,7 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
   `INVALID_ARGUMENT` on HTTP too, where it answered `500`, and a line says it as
   `<message>: 400 INVALID_ARGUMENT`; a queue job whose method returns one, bare
   or wrapped, dead-letters at its first attempt as any client error does, where
-  7.0 retried it within its budget; and an exception filter whose
+  it was retried within its budget; and an exception filter whose
   `type Exception = Problem` reads a chain catches a pipe's refusal it found
   there, a per-argument one on GraphQL and MCP and a global data pipe's on
   WebSocket included. An HTTP interceptor failing with the
@@ -545,13 +547,13 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
 - **A `nest_rs::database::atomic` block dropped before its `SAVEPOINT` was
   answered leaves its unit as it was.** Cancelled (a timeout, a `select!`)
   while its unit waited for a connection, for its `BEGIN` or for the block's
-  `SAVEPOINT`, a block left its unit unable to commit in 7.0.0, though no
-  statement of its own had run; in 8.0 the unit commits what it wrote beside
-  the block. A block dropped before any of these left its unit as it was in
-  7.0.0 too, and one dropped once its `SAVEPOINT` was answered still leaves
+  `SAVEPOINT`, a block left its unit unable to commit, though no
+  statement of its own had run; the unit now commits what it wrote beside
+  the block. A block dropped before any of these already left its unit as it
+  was, and one dropped once its `SAVEPOINT` was answered still leaves
   what it sits in unable to commit: its unit when it sits directly in it, and
   otherwise the block or savepoint it is nested in alone, the unit going on to
-  commit what it wrote beside it. A 7.0 app that relied on such a cancellation to
+  commit what it wrote beside it. An app that relied on such a cancellation to
   refuse its unit's commit answers an error from the unit instead.
 - **`nest_rs_reqwest` claims reqwest's errors as a `SafeLink`**, so an error chain
   holding one says it without the URL the request was sent to, whose path and
@@ -585,20 +587,20 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
 - **A health indicator's check runs under a `nest_rs::core::Deadline`**, the sooner
   of `<PREFIX>_HEALTH__INDICATOR_TIMEOUT_MS` and
   `<PREFIX>_HEALTH__PROBE_DEADLINE_MS` from the probe's start, or its request's when
-  that is sooner. The two cuts and their reasons are as 7.0.0 made them; a check
-  written against 7.0 that reads `ambient::<Deadline>()` reads that instant, where
+  that is sooner. The two cuts and their reasons are unchanged; a check
+  that reads `ambient::<Deadline>()` reads that instant, where
   it read none. A call a check makes under a resilience policy ends there, a
   timeout its breaker counts: a decorated indicator then reads `check failed`,
   filing `health indicator failed`.
 - **Every page, generator and boot remedy writes a module of a named instance as
-  its type**, `RedisModule<Cache>`, where 7.0 taught `RedisModule::<Cache>`.
+  its type**, `RedisModule<Cache>`, where the published release taught `RedisModule::<Cache>`.
 
 ### Fixed
 
 - An `#[expect]` on a GraphQL operation, written plain or under a `#[cfg_attr]`, is
   checked on the developer's method alone, the field's generated wrapper carrying
-  it as an `#[allow]` of the same lints, under its condition: 7.0.0 handed the
-  wrapper the expectation too, where a lint the wrapper does not trip left it
+  it as an `#[allow]` of the same lints, under its condition. The wrapper was
+  handed the expectation too, and a lint the wrapper does not trip left it
   unfulfilled — a warning, an error where `unfulfilled_lint_expectations` is
   denied.
 - A gated `#[subscription]` — `#[authorize(A, S)]` or `#[public(A, S)]` — answers

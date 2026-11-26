@@ -1,21 +1,21 @@
 ---
-title: Upgrading from 7.x to 8.0
-description: "The order that moves a 7.0 project to 8.0 — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver — and what fails when a step is missed."
+title: Upgrading to the unreleased changes
+description: "The order that moves a project on the published release onto the changes not yet released — manifest, GraphQL attributes, decode failures, a SafeLink, a data driver — and what fails when a step is missed."
 ---
 
 import { Steps } from '@astrojs/starlight/components';
 
-8.0 is a major release: it takes the designs 7.0's compatibility held back,
-whatever they break. An attribute on a GraphQL operation applies to the method
-you wrote, a `Problem` is the one thing an edge reads in a handler's error, a
+The changes not yet released make a major: they take the designs the
+published release's compatibility held back, whatever they break. An attribute
+on a GraphQL operation applies to the method you wrote, a `Problem` is the one thing an edge reads in a handler's error, a
 `SafeLink` names the type it says, and a data driver says what each handle holds.
 This page is the order to take the changes in; the
-[changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/8.0.md) says
-why each was made. 8.0 is not released yet, and this page holds the breaks of
-its line so far.
+[changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/unreleased.md) says
+why each was made. The release holding them is numbered when it is cut, and
+this page holds its breaks so far.
 
-You need the 7.0 project building. Most steps are compile errors, so the
-compiler finds every site; a step that changes behaviour alone says so, and
+You need the project building on the published release. Most steps are
+compile errors, so the compiler finds every site; a step that changes behaviour alone says so, and
 [What fails if you get it wrong](#what-fails-if-you-get-it-wrong) lists what the
 boot, a log or the wire shows when one is missed. An app on SeaORM with no
 `SafeLink` of its own takes steps 1 to 3 alone.
@@ -23,21 +23,17 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
 <Steps>
 
 1. **Move the manifest.** In the root `Cargo.toml`, the `nest-rs` requirement
-   under `[workspace.dependencies]` goes from `7.0` to `8.0`:
-
-   ```toml title="Cargo.toml"
-   # before
-   nest-rs = { version = "7.0", features = ["graphql", "seaorm"] }
-   # after
-   nest-rs = { version = "8.0", features = ["graphql", "seaorm"] }
-   ```
+   under `[workspace.dependencies]` moves from the published major to the one
+   holding these changes, at the number its changelog gives when it is cut; the
+   features you list stay as they are.
 
    The umbrella's `full` now takes `resilience`, so an app on `full` declaring a
    `#[config]` of its own in the `resilience` namespace fails its boot, its type
    and the framework's both claiming it: give yours another `namespace`, or list
    the features you use in place of `full`. A module of a named instance is
    written as its type, `RedisModule<Cache>`: `RedisModule::<Cache>`, the
-   spelling 7.0 taught, is refused at its `::`, naming the type to write.
+   spelling the published release taught, is refused at its `::`, naming the
+   type to write.
 
 2. **Read each attribute on a GraphQL operation as the method's.**
    `#[operations]` takes off a method only what it consumes — its role, its
@@ -45,7 +41,7 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
    leaves every other attribute on the method you wrote, as a route's handler
    does ([Attributes on an operation](/graphql/queries-mutations/#attributes-on-an-operation)):
 
-   | On an operation in 7.0 | In 8.0 |
+   | On an operation before | Now |
    |---|---|
    | `#[tracing::instrument]` naming the field's parameters, spanning the guards and the pipes | it spans the method's body, after the guards, the gate and the pipes, which the request's `graphql.field` span covers; skip the method's own parameters with no `Debug` — `skip_all`, or its `Scoped<T>`, `Piped<P>` and `&Context` by name — and its `err` records the method's own error |
    | Rust's `#[deprecated]` | `#[graphql(deprecation = "…")]`, which the schema and its introspection show |
@@ -100,7 +96,7 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
    `HeldTransaction`, every method required
    ([Writing a database driver](/database/writing-a-driver/#the-executor)):
 
-   | 7.0's `Executor` | 8.0 |
+   | The published `Executor` | Now |
    |---|---|
    | `as_any` | `executor.holds().downcast_ref::<T>()`, through every wrapper |
    | `after_commit(work) -> Option<Deferred>` | `HeldTransaction::after_commit(work)`, which holds the work; on the pool the port runs it at once |
@@ -119,7 +115,7 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
 - **A data driver's handle that does not say what it holds** does not compile:
   `E0046` names `holds`, and a `HeldPool` or `HeldTransaction` leaving out a
   method names that one.
-- **`SafeLink::new`** is rustc's `E0599`, a function 8.0 no longer has, and a
+- **`SafeLink::new`** is rustc's `E0599`, a function `SafeLink` no longer has, and a
   sayer over `&dyn Error` is `E0277` at `SafeLink::of`.
 - **Two sayers of one error type** refuse the boot, naming the type and both
   functions: `contested safe link: … is claimed by two sayers`.
@@ -149,7 +145,7 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
 
 ## Going further
 
-- [Changelog 8.0](https://github.com/YV17labs/NestRS/blob/main/changelog/8.0.md)
+- [Unreleased changelog](https://github.com/YV17labs/NestRS/blob/main/changelog/unreleased.md)
   — why each change was made.
 - [GraphQL errors](/graphql/errors/) — which error answers which envelope.
 - [Writing a database driver](/database/writing-a-driver/) — the contract a

@@ -1,14 +1,14 @@
-# 7.x keeps what a program or an operator matches
+# A major keeps what a program or an operator matches
 
-Written on 2026-10-11, before 7.0's first publish: what 7.0 exposes, every 7.x
-must keep, so the promise is written before anyone builds on it. Until then the
+Written on 2026-10-11, before 7.0's first publish: what a major's first release
+exposes, every minor and patch of it must keep, so the promise is written before anyone builds on it. Until then the
 repository said three things — `__private` is outside semver, a consumer names
 the umbrella alone, and "breaking changes wait for the next major" — and none
 said what counts as API beyond Rust items, what a minor may change, or how a
 package depends on nestrs.
 
 **API is what a program or an operator matches**, and a break to any of it
-waits for 8.0:
+makes its release the next major:
 
 - **Rust items in tier 1** (`visibility-tiers.md`): every item reachable by a
   path crossing no `__private` module, no `__`-prefixed item and no
@@ -62,13 +62,13 @@ because every framework crate requires its siblings at `=` the release
 `::nest_rs::<concern>::__private`.
 
 **A package depends on the umbrella, at the minor it builds against, with no
-default features**: `nest-rs = { version = "7.N", default-features = false,
-features = [...] }`. The umbrella's defaults turn on `http` and `config`, and
+default features**: `nest-rs = { version = "<major>.<minor>", default-features
+= false, features = [...] }`. The umbrella's defaults turn on `http` and `config`, and
 Cargo's features only add up, so a package taking them would compile HTTP into
 every app linking it, a headless worker included. Two exceptions: a
 `proc-macro` crate depends on `nest-rs-codegen` and uses its root items alone,
-emitting no `__private` path — a package built against one 7.x runs in an app
-on a later one, where tier 2 may differ — and a package's tests take `nest-rs`
+emitting no `__private` path — a package built against one minor runs in an
+app on a later one, where tier 2 may differ — and a package's tests take `nest-rs`
 with `testing` as a dev-dependency.
 
 **Third-party libraries** are classified in `public-dependencies.md`: a
@@ -77,9 +77,9 @@ is wrapped.
 
 **Held by** the tiers (the compiler, then review for a stray
 `#[doc(hidden)]`), `#[non_exhaustive]` where a type will grow, and review of
-each change against the list above. Once 7.0 is published, `cargo-semver-checks`
-against the last 7.x release adds a mechanical rung; before then there is no
-baseline to compare. It reads `#[doc(hidden)]` items as outside the API, which
+each change against the list above. Once a release is published, `cargo-semver-checks`
+against the last release of its major adds a mechanical rung; before then there
+is no baseline to compare. It reads `#[doc(hidden)]` items as outside the API, which
 is tier 2 — verified, together with the allowance a `#[config]` struct needs,
 when it is wired.
 
@@ -111,26 +111,26 @@ complete literal not covered. Agreed by the owner ("Tout faire (Recommandé)",
 
 ## Open — the owner's
 
-Whether a security fix that refuses a configuration 7.x used to accept — an
+Whether a security fix that refuses a configuration a major used to accept — an
 insecure one, booted before the fix, so a break by the rule above — may ship
-inside 7.x. Recommended: yes,
+inside that major. Recommended: yes,
 in a patch, under a `### Security` changelog heading with a line in the
-upgrading guide's 7.x notes: security comes first and "safe by default" cannot
-wait for 8.0, while the hard "no" on breaks stays absolute for items, grammar,
+upgrading guide's notes for that major: security comes first and "safe by
+default" cannot wait for the next major, while the hard "no" on breaks stays absolute for items, grammar,
 names and wire formats. The answer changes how `CLAUDE.md`'s "no breaking
 change inside a major" reads, so the policy holds no such clause until the
 owner gives it; until then such a fix is the owner's to schedule, never shipped
-in a 7.x on a session's judgement.
+in a minor or patch on a session's judgement.
 
 ## 2026-10-12 — answered: a security fix refusing an insecure configuration ships in a patch
 
 The owner's arbitration of 2026-10-12, written here on 2026-10-27, closes the
-open question above. A security fix that refuses a configuration 7.x used to
+open question above. A security fix that refuses a configuration a major used to
 accept — an insecure one, so a break by the rule above — is not a breaking
-change inside 7.x: it ships in a patch, under the changelog's `### Security`,
+change inside that major: it ships in a patch, under the changelog's `### Security`,
 with a line in the upgrading guide naming the refused configuration and the
 secure one to write instead. Security comes first, and "safe by default"
-cannot wait for 8.0. The hard "no" on breaks stays absolute for everything
+cannot wait for the next major. The hard "no" on breaks stays absolute for everything
 else — items, decorator grammar, names, variables and wire formats — and the
 exception is read narrowly: the configuration it refuses is insecure by a
 standard (an RFC, OWASP), never merely unusual.
@@ -190,10 +190,10 @@ page, and a move of the conventions pin reads every mark again.
 
 **Refused:**
 
-- **Freezing every exported name until 8.0**, one in development included: the
+- **Freezing every exported name until the next major**, one in development included: the
   dashboards a backend ships for a convention read the name it renamed to, and
   would stay dark for the rest of the line (standards over invention).
-- **Exporting the old and the new spelling side by side until 8.0**: two
+- **Exporting the old and the new spelling side by side until the next major**: two
   spellings of one fact on one span, which `actor-under-enduser-id.md` refused,
   and every metric series twice.
 - **Exporting a name only once its convention is stable**: the messaging,
@@ -219,16 +219,17 @@ on a date rather than on its readiness.
 
 ## 2026-11-25 — compatibility with a published release is no constraint
 
-The owner's directive, one week after 7.0: nobody is bound to keep what version
-7 exposed; what is wanted is performance and the best code, and where something
-better is found, version 7 is changed rather than worked around, plainly said,
-and a rule that contradicts this is changed with it.
+The owner's directive, one week after the current major's first publish: nobody
+is bound to keep what a published release exposed; what is wanted is
+performance and the best code, and where something better is found, the
+published design is changed rather than worked around, plainly said, and a rule
+that contradicts this is changed with it.
 
 **The list above still says what a break is; it decides a release's number,
 never a design.** A release holding a break is a major, and it ships when it is
-ready (2026-11-18): the 7.x line lasts until something better is found, no
-longer. "What 7.0 exposes, every 7.x must keep" is read of the releases numbered
-7.x alone.
+ready (2026-11-18): a major line lasts until something better is found, no
+longer. "What a major's first release exposes, every minor and patch of it must
+keep" is read of that major's releases alone.
 
 - **A considerable gain is taken whatever it breaks** — performance, safety, or
   an architecture with fewer cases — and is stated with its evidence: a measure,
@@ -242,14 +243,39 @@ longer. "What 7.0 exposes, every 7.x must keep" is read of the releases numbered
   again**, reopened by the change that takes it, with its own dated entry.
 
 **Superseded:** the hard "no" on breaks inside a major, and "a break waits for
-8.0" wherever this file and `manifests-ci.md` said it; `ROADMAP.md`'s "7.x
-lasts" and "8.0 stays mechanical … no redesign rides along".
+the next major" wherever this file and `manifests-ci.md` said it; `ROADMAP.md`'s
+"the line lasts" and "the next major stays mechanical … no redesign rides
+along".
 
 **Refused:**
 
-- **A break under a 7.x number.** Cargo takes a minor without asking, so a
+- **A break under a minor's number.** Cargo takes a minor without asking, so a
   program would stop compiling on `cargo update`: a number costs nothing, and
   SemVer is the standard the semver page promises to a reader.
 - **A grace period, the old API deprecated beside the new until the next
   major.** Two ways to do one thing for as long as it lasts, and the worse one
   the one every program already spells.
+
+## 2026-11-26 — unreleased work names no release number
+
+The owner's directive, 2026-11-26: nobody knows the number the work on a branch
+will ship under, so nothing says it. What is not yet released lives in
+`changelog/unreleased.md`, its index row `Unreleased`, and its upgrading guide
+is the page `/upgrading-unreleased/`; no file, page, decision, rustdoc, comment
+or fixture names the release it will join, nor compares it to a published one
+by number — it says "the published release", "before this change", or the
+behaviour alone. Cutting the release numbers it, and renames the changelog file
+and the page for that number. What a published release shipped keeps its number
+(`changelog/7.0.md` and older, a dated entry describing it), and so does a
+third-party crate's version.
+
+This file was `semver-7x.md`, a name presuming the line it describes; it is
+named for what it decides, and its rules read "a major", "a minor" and "the next
+major" where they named the published line and the next one by number. The
+2026-11-25 entry still decides the number a release holding a break takes: a
+major. Held by review.
+
+**Refused:** naming the line by the number it is expected to take until it is
+cut. A number written ahead is a promise the cut may not keep, and every page,
+decision and rustdoc naming it is one more edit when it moves, or one more
+sentence that lies.

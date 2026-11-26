@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>7.0 is the foundation the next versions build on</strong>: one way to declare each concern, one contract on every edge, a boot that refuses what would fail later — and no 7.x release breaks what you build on it. <a href="https://nestrs.dev/whats-new/">What's new in 7.0 →</a>
+  <strong>7.0 is the foundation the next versions build on</strong>: one way to declare each concern, one contract on every edge, a boot that refuses what would fail later — and no minor or patch breaks what you build on it. <a href="https://nestrs.dev/whats-new/">What's new in 7.0 →</a>
 </p>
 
 <p align="center">
@@ -140,7 +140,7 @@ Claims a clone of this repository lets you check:
 
 ## Stability
 
-**NestRS is stable and ready for production.** No 7.x release breaks what you
+**NestRS is stable and ready for production.** No minor or patch breaks what you
 build on — your code, your configuration, the names your log filters and
 alerts match — and the [semver policy](https://nestrs.dev/semver/) says
 exactly what that covers. Every `nest-rs-*` crate publishes at the same version

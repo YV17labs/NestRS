@@ -223,7 +223,7 @@ async fn a_diverging_tick_ends_its_occurrence_as_its_body_does() {
             ended_as("DivergingTasks", "pump", ERROR),
             ended_as("FragmentDivergingTasks", "halt", PANIC),
         ],
-        "a panic is contained and a wait cut at the tick's timeout, as 7.0 ran them",
+        "a panic is contained and a wait cut at the tick's timeout, as the published release ran them",
     );
 }
 

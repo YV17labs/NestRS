@@ -5,7 +5,7 @@
 use nest_rs::http::{controller, routes};
 
 #[controller(path = "/posts")]
-#[deprecated(since = "7.1.0")]
+#[deprecated(since = "2.1.0")]
 struct PostsController;
 
 #[routes]

@@ -263,7 +263,7 @@ export default defineConfig({
             // Last in the group a returning reader opens first: the page a
             // project follows to the next major, beside the orientation it no
             // longer needs, rather than under Reference, three screens down.
-            { label: 'Upgrading from 7.x', slug: 'upgrading-from-7' },
+            { label: 'Upgrading to unreleased', slug: 'upgrading-unreleased' },
             { label: 'Upgrading from 6.x', slug: 'upgrading' },
           ],
         },

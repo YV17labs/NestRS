@@ -115,7 +115,7 @@ impl Deletable for PostsService {}
 | Every `Repo` read and update — `list`, `page`, `access`, a bound subject, relation batches, a custom `Repo::scoped` query, `Repo::unscoped` | ANDs `deleted_at IS NULL` after the ability scope: a deleted row reads as absent |
 | `delete` (via `Deletable`) | `UPDATE … SET deleted_at = now()` — idempotent |
 | Reading a deleted row | `Repo::<E>::with_tombstones(action)` — the one way (admin, retention) |
-| Restoring a deleted row | Not offered in 7.0: `Repo::update` hides a tombstone too; `Repo::restore` is planned for 7.x |
+| Restoring a deleted row | Not offered yet: `Repo::update` hides a tombstone too; `Repo::restore` is planned for a minor |
 | Hard purge | `Repo::delete` directly, which reaches a tombstone |
 | `timestamps` flag | Emits `ActiveModelBehavior::before_save`, which stamps `created_at` on insert and `updated_at`, when the entity has one, on every save — **remove** any manual empty `impl ActiveModelBehavior` on the entity |
 

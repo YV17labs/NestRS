@@ -1,11 +1,11 @@
-# Room to grow: what 7.x may add to a public type
+# Room to grow: what a minor may add to a public type
 
-Written on 2026-10-23, before 7.0's first publish. A 7.x adds a variant or a
+Written on 2026-10-23, before 7.0's first publish. A minor adds a variant or a
 field only where the type is `#[non_exhaustive]` or has a private field
-(`semver-7x.md`), and adding either after 7.0 is itself a break. 7.0 had 64
+(`semver.md`), and adding either after 7.0 is itself a break. 7.0 had 64
 exhaustive public enums and about a hundred all-`pub` structs, each of which
 would have turned the next versioning strategy, OpenTelemetry span kind, MCP
-router or boot-error detail into an 8.0.
+router or boot-error detail into a major.
 
 **A public enum is `#[non_exhaustive]`**, held by clippy's `exhaustive_enums`
 in `[workspace.lints.clippy]`. The lint does not know tiers, so the
@@ -45,7 +45,7 @@ document's build when a strategy needs a place it does not describe.
 growth reaches it or the way it is built is how it grows:
 
 - **a configuration, built over its base**: a `#[config]` or a `Default`
-  struct nested in one, over `..Default::default()` (`semver-7x.md`), and
+  struct nested in one, over `..Default::default()` (`semver.md`), and
   `OpenTelemetryConfig`, over `new` or `from_env`. It is read before the
   container exists, so it is no `#[config]`, but a program builds it the same
   way, and a new field is a minor as a config's is;
@@ -124,7 +124,7 @@ crates' `__private` with the trait they implement (`visibility-tiers.md`,
 **2026-11-04 — `McpIdentity` is built over `Default`.** Its setters and `new(name,
 version)` are gone, as `OpenTelemetryConfig`'s went (above): a field is set one way, in
 a literal over its base, so it joins the configurations this decision lists and a new
-field stays a minor (`semver-7x.md`, this date). No environment twin came with it:
+field stays a minor (`semver.md`, this date). No environment twin came with it:
 `edges.md` still holds that identity travels in `for_root`'s value.
 
 **2026-11-06 — `provider_type_id()` is `host_type_id()`.** The accessors above keep the

@@ -270,9 +270,10 @@ module was already used as a type. `imports` now reads an entry as an
 expression first, for `for_root(..)`, then as a type, so `RedisModule<Cache>`
 is spelled as the field injecting its connection spells `RedisConnection<Cache>`.
 Decided on Elegance, at no cost to the others: the expansion is the same type.
-**The turbofish warns through 7.x and 8.0 refuses it.** Refusing it in 7.1 turns
-every 7.0 app that followed the docs into a compile error, the break
-`semver-7x.md` holds absolute for decorator grammar. The warning is the one a
+**The turbofish warns through the published major and the next major refuses
+it.** Refusing it in a minor turns every app that followed the docs into a
+compile error, the break
+`semver.md` holds absolute for decorator grammar. The warning is the one a
 stable proc macro can raise, a `#[deprecated]` item the expansion uses at the
 developer's `::`, held by `nest-rs-macro-hygiene`'s snapshot, and `just lint`'s
 `-D warnings` keeps the framework's own tree on the type spelling. The parse
@@ -288,14 +289,15 @@ day one does.
 (`container.md`); a type alias per instance in the docs, a name that hides the
 marker it imports.
 
-## 2026-11-26 — the turbofish refused in the 8.0 line
+## 2026-11-26 — the turbofish refused in the unreleased line
 
-"The turbofish warns through 7.x and 8.0 refuses it" is now true of this line,
-which holds breaks and is 8.0 (`semver-7x.md`, 2026-11-25): `#[module]` refuses
+"The turbofish warns through the published major and the next major refuses it"
+is now true of this line, which holds breaks and is a major (`semver.md`,
+2026-11-25): `#[module]` refuses
 `RedisModule::<Cache>` in `imports` at its `::`, one `compile_error!` naming
 the type to write, the module still read as its type so nothing else is said.
 The `#[deprecated]` item the expansion used goes, and the snapshot it was held by
-pins the refusal. Superseded: "Refusing it in 7.1 turns every 7.0 app that
-followed the docs into a compile error, the break `semver-7x.md` holds absolute
+pins the refusal. Superseded: "Refusing it in a minor turns every app that
+followed the docs into a compile error, the break `semver.md` holds absolute
 for decorator grammar" — the grace period it gave is the one the 2026-11-25
 entry refuses beside a break.

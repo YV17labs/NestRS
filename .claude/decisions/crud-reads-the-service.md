@@ -2,7 +2,7 @@
 
 Settled on 2026-10-30, under the owner's agreement to the identity audit's
 public-API breaks ("Tout faire", 2026-10-28), before 7.0's first publish, since
-a decorator's keys are API (`semver-7x.md`).
+a decorator's keys are API (`semver.md`).
 
 `#[crud]` took five keys — `service`, `entity`, `output`, `create`, `update` —
 and each edge restated all of them, though the service's `CrudService`,

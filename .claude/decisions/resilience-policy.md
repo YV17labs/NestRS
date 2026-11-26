@@ -181,7 +181,7 @@ no method is — a call needing its `CancellationToken`, or part of a method.
 - **An impl half keeps `#[resilient]` on the developer's method**, read by its
   name. `#[routes]`, `#[messages]`, `#[tools]` and `#[processor]` leave any other
   decorator there too; `#[operations]` hands an operation's other attributes to
-  the field it generates, where 7.0 placed them.
+  the field it generates, where the published release placed them.
 
 **Refused:**
 
@@ -297,8 +297,8 @@ How each holds:
   `E: Into<anyhow::Error>` and `!`, each impl `do_not_recommend`, every answer
   read by its type, `!` included. The expansion hands the call's own future to
   `answered`, which boxes `Answered` over it, the future pinned in place and held
-  once, at the size 7.0 boxed the run at; it binds no answer and writes no lint
-  attribute, so no lint level a crate sets refuses a tick 7.0 compiled, in
+  once, at the size the published release boxed the run at; it binds no answer and writes no lint
+  attribute, so no lint level a crate sets refuses a tick the published release compiled, in
   edition 2021 as in 2024. The family keeps two bounds: `#[hooks]`,
   `#[indicators]` and a tick take
   `E: Into<anyhow::Error>`; `#[on_event]` and `#[process]` take
@@ -315,20 +315,20 @@ How each holds:
   `let` ascribed with the type misses an early `return`, and an async closure
   declaring it coerces nothing (`.claude/upstream/rustc.md`). A policy setting
   written before the field is refused as one after it, told where it is set.
-- **`#[operations]` places an operation's attributes as 7.0.0 did**, on the
+- **`#[operations]` places an operation's attributes as the published release did**, on the
   wrapper it generates, but for what the developer's method keeps: its docs, its
-  `allow`s, its `expect`s and its `#[cfg]`s, as 7.0.0 kept them, and
+  `allow`s, its `expect`s and its `#[cfg]`s, as the published release kept them, and
   `#[resilient]`. The wrapper carries each `#[expect]` as an `#[allow]` of the
   same lints and reason, so the expectation is checked on the method alone;
-  7.0.0 handed it to the wrapper too, where it went unfulfilled. `#[resilient]` is
+  the published release handed it to the wrapper too, where it went unfulfilled. `#[resilient]` is
   read by its path's last segment in a build where any crate enables the
   capability — `nest-rs-graphql-macros`' `resilience` feature, which
   `nest-rs-graphql`'s enables and the umbrella's `resilience` forwards weakly,
   so no app writes a manifest line. Cargo unifies a package's features across a
   build, so a dependency, or a workspace member built beside a crate, turns the
   reading on for that crate too. A build without it places an attribute of that
-  name on the wrapper like any other, as 7.0.0 placed an app's own, and refuses
-  nothing 7.0.0 compiled; a crate with an attribute of its own by that name
+  name on the wrapper like any other, as the published release placed an app's own, and refuses
+  nothing the published release compiled; a crate with an attribute of its own by that name
   imports it under another name, which goes on the wrapper in every build.
 - **A bound's reason holds for every value its siblings take**: it says what its
   own mechanism does to a call or lets happen, true for every value it refuses,
@@ -412,11 +412,11 @@ How each holds:
 - **Inbound idempotency.** It is ROADMAP item 5, another capability, waiting on
   an owner's decision.
 - **Every attribute of an operation kept on the developer's method**: it
-  refuses 7.0 programs whose attribute names a parameter the field leaves out —
+  refuses programs the published release compiled whose attribute names a parameter the field leaves out —
   `#[tracing::instrument(skip(self, ctx))]` beside a `Scoped<T>`, which is no
-  `Debug` — a break inside a major. `#[resilient]`, new in 7.1, is the one kept
+  `Debug` — a break inside a major. `#[resilient]`, new in this line, is the one kept
   there, in a build where any crate enables its capability: a crate asking for
-  it, which none written against 7.0 does, or for the umbrella's `full`, which
+  it, which none written against the published release does, or for the umbrella's `full`, which
   takes every capability and which such a crate may write.
 - **`#[resilient]` read by its full path**: the docs import it under its short
   name, as every decorator is.
@@ -489,7 +489,7 @@ How each holds:
   checked against the epoch. By how much was measured against code since
   removed, with a harness never committed, so no figure of it is kept. Closing
   the first is the run written as `async` fns again once rustc holds an awaited
-  future once; the second, a breaker step 7.1's switches and probes do not
+  future once; the second, a breaker step this capability's switches and probes do not
   need. What a run costs now is `benches/policy.rs`'s to measure
   (`cargo bench -p nest-rs-resilience --bench policy`), a figure of the machine
   and the run it is read on, never a constant. In the dev container on
@@ -530,13 +530,13 @@ How each holds:
   applies to the method alone with no error or warning, an instrument then
   spanning the method's body and not the field's guards and pipes. The reading is by the path's last segment, so a full path ending in
   `resilient` is read too; the crate imports its attribute under another name,
-  which goes on the field as 7.0.0 placed it. Closing it is reading the
+  which goes on the field as the published release placed it. Closing it is reading the
   decorator by its path, which its short-name import defeats.
 - **An attribute of an operation reading the method's own `self`** —
   `#[tracing::instrument(fields(depot = self.depot.0))]` — does not compile, as
-  in 7.0: it goes on the field `#[operations]` generates, whose `self` is
+  in the published release: it goes on the field `#[operations]` generates, whose `self` is
   another type. Closing it is keeping the attributes on the method, a break only
-  8.0 can make (ROADMAP § 2).
+  a major can make (ROADMAP § 2).
 - **A `#[resilient]` inside a `#[cfg_attr]` on an operation** goes on the field
   with the other attributes, `#[operations]` reading it by its name only where
   it is written plain, and does not compile there while its condition holds.
@@ -704,7 +704,7 @@ reference's word first:
   certificate's names. rustls's failure is one of those types, read by an
   allowlist of the variants holding nothing the peer wrote but a code of the
   protocol: an alert says what a refused client certificate needs, and the
-  OAuth client's and the JWK Set's lines had said it in 7.0. This crate claims
+  OAuth client's and the JWK Set's lines had said it in the published release. This crate claims
   its own refusals there, so a body the policy gave up says its timeout.
 - **A `SafeLink` reads its error behind a pointer**: `std` makes an `Arc` and a
   `Box` of an error an error displaying the one held, so an error naming a
@@ -715,7 +715,7 @@ reference's word first:
   object_store's, rmcp's, h2's, and core's own of serde's and tokio's: a
   security fix ships at every member reaching the data. A line reads so; what
   an edge answers does not: `DecodeError::in_chain` reads a link that is a
-  decode failure, as 7.0 does, and one an error shares behind a pointer is
+  decode failure, as the published release does, and one an error shares behind a pointer is
   answered opaquely and its line filed, where reading through it told a client
   its payload was at fault and filed nothing.
 - **A call its unit had no time to send is no attempt**: it files no line, in
@@ -898,11 +898,11 @@ lock" and the limit it left, a transition being told once the lock is let go.
   a decorated call does that, and every other call is refused meanwhile.
   Closing it is the breaker giving an overdue probe up itself, its late answer
   voided by an epoch.
-- **The umbrella's `full` takes `resilience`**, as it takes every capability: a
-  7.0 app on it declaring a `#[config]` of its own in that namespace fails its
+- **The umbrella's `full` takes `resilience`**, as it takes every capability: an
+  app on it declaring a `#[config]` of its own in that namespace fails its
   boot, and one with an attribute of its own named `resilient` on an operation
   has it read as the decorator. The changelog says both. Closing it is `full`
-  leaving the capability out until 8.0, the owner's to decide.
+  leaving the capability out until the next major, the owner's to decide.
 - **The default breaker is not the reference's default mapped**: ten failures
   of twenty, where the mapping of the reference's 50 % after ten calls gives
   five. A deployment moving a default breaker sets `BREAKER_FAILURES`.
@@ -1012,11 +1012,11 @@ lock" and the limit it left, a transition being told once the lock is let go.
 
 ## 2026-11-26 — an operation keeps every attribute on its method, every driver owes the attempt's savepoint, and core reads a pointer for every sayer
 
-Taken under the owner's directive of 2026-11-25 (`semver-7x.md`): compatibility
+Taken under the owner's directive of 2026-11-25 (`semver.md`): compatibility
 with a published release is no constraint, and the release holding a break is a
-major. Three designs version 7 had held back went in one change, so the line
-these entries call 7.1 is 8.0: "new in 7.1" and "7.1's switches and probes"
-above name the release this capability ships in, 8.0.
+major. Three designs the published release had held back went in one change, so the
+release this capability ships in is a major, which the entries above name by no
+number (`semver.md`, 2026-11-26).
 
 - **`#[operations]` leaves every attribute it does not consume on the
   developer's method**, as every other impl half does: a decorator under any
@@ -1067,21 +1067,22 @@ above name the release this capability ships in, 8.0.
   webpki's error inside its `Other` (`.claude/upstream/rustls.md`).
 
 **Reopened and built.** The 2026-11-22 refusal of "**Every attribute of an
-operation kept on the developer's method**: it refuses 7.0 programs whose
+operation kept on the developer's method**: it refuses programs the published release compiled whose
 attribute names a parameter the field leaves out —
 `#[tracing::instrument(skip(self, ctx))]` beside a `Scoped<T>`, which is no
-`Debug` — a break inside a major." Its one reason was the break, which 8.0 holds;
-its changelog's upgrading entry says what a 7.0 program changes.
+`Debug` — a break inside a major." Its one reason was the break, which this line holds as a major;
+its changelog's upgrading entry says what a program on the published release
+changes.
 
 **Superseded:**
 
 - 2026-11-21: "**An impl half keeps `#[resilient]` on the developer's method**,
   read by its name. `#[routes]`, `#[messages]`, `#[tools]` and `#[processor]`
   leave any other decorator there too; `#[operations]` hands an operation's other
-  attributes to the field it generates, where 7.0 placed them." Every impl half
+  attributes to the field it generates, where the published release placed them." Every impl half
   leaves what it does not consume, and none reads it by name.
 - 2026-11-22, *How each holds*: "**`#[operations]` places an operation's
-  attributes as 7.0.0 did**, on the wrapper it generates", with its reading by the
+  attributes as the published release did**, on the wrapper it generates", with its reading by the
   path's last segment, under a feature Cargo unifies across a build.
 - 2026-11-22, refused: "**`#[resilient]` read by its full path**: the docs import
   it under its short name, as every decorator is." No impl half reads its path:
@@ -1092,7 +1093,7 @@ its changelog's upgrading entry says what a 7.0 program changes.
 - 2026-11-24: "**A `SafeLink` reads its error behind a pointer**: … each sayer of
   the workspace reads its type through `link_as` … A line reads so; what an edge
   answers does not: `DecodeError::in_chain` reads a link that is a decode
-  failure, as 7.0 does, and one an error shares behind a pointer is answered
+  failure, as the published release does, and one an error shares behind a pointer is answered
   opaquely and its line filed". Core reads the type once for every sayer, so no
   sayer calls `link_as`, and no edge answers a decode failure a chain holds,
   bare or behind a pointer.
@@ -1113,16 +1114,16 @@ its changelog's upgrading entry says what a 7.0 program changes.
   app's attribute is the app's.
 - 2026-11-22: "**An attribute of an operation reading the method's own `self`** —
   `#[tracing::instrument(fields(depot = self.depot.0))]` — does not compile, as
-  in 7.0 … Closing it is keeping the attributes on the method, a break only 8.0
-  can make (ROADMAP § 2)." Closed: 8.0 keeps them there.
+  in the published release … Closing it is keeping the attributes on the method, a break only a major
+  can make (ROADMAP § 2)." Closed: this line keeps them there.
 - 2026-11-22: "**A `#[resilient]` inside a `#[cfg_attr]` on an operation** goes
   on the field with the other attributes". Closed by the 2026-11-24 split, and
   now with no split.
 - 2026-11-24: "**The umbrella's `full` takes `resilience`** … and one with an
   attribute of its own named `resilient` on an operation has it read as the
-  decorator. … Closing it is `full` leaving the capability out until 8.0, the
+  decorator. … Closing it is `full` leaving the capability out until the next major, the
   owner's to decide." The attribute half is closed. The `#[config]` half stands
-  as a break of 8.0, told by its changelog, so nothing is left to wait for.
+  as a break of this line, told by its changelog, so nothing is left to wait for.
 - 2026-11-24: "A package's own `SafeLink` reads its pointers itself, `link_as`
   being tier 2." Closed: core reads a package's type behind every pointer it
   reads for its own. `link_as` and `decode_failure` stay tier 2 for a sayer

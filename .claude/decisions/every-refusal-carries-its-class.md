@@ -237,7 +237,7 @@ types being their libraries'.
 ## 2026-11-26 — a decode failure a chain holds is the server's, and `INVALID_ARGUMENT` is MCP's `invalid_params`
 
 Two answers named a class that did not hold. Changed under the directive of
-2026-11-25 (`semver-7x.md`), each a break of what a client reads.
+2026-11-25 (`semver.md`), each a break of what a client reads.
 
 - **A decode failure a handler's chain held answered `INVALID_ARGUMENT`** on
   GraphQL, WebSocket and MCP (`DecodeError::in_chain`) and filed nothing, where

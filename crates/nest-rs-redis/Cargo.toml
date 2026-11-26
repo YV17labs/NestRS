@@ -101,6 +101,10 @@ nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-http = { path = "../nest-rs-http" }
 # The suite declares `#[scheduled]` jobs against `RedisOccurrenceLock`.
 nest-rs-schedule = { path = "../nest-rs-schedule" }
+# A job `#[resilient]` decorates, whose policy's refusal the queue holds back
+# in Redis or files as a dead letter, and whose retry within one attempt it
+# acknowledges once.
+nest-rs-resilience = { path = "../nest-rs-resilience" }
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true

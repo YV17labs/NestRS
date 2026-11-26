@@ -120,7 +120,8 @@ async fn a_listener_its_policy_refuses_fails_its_unit_and_the_emit_goes_on() {
             .container()
             .get::<EventBus>()
             .expect("the bus is provided");
-        let (upstream, dependency) = refusing.arrange(app.container());
+        let refused = refusing.arrange(app.container()).await;
+        let (upstream, dependency) = (&refused.upstream, &refused.dependency);
         let mut events = upstream.events();
 
         bus.emit(Returned {

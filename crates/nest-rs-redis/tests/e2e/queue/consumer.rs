@@ -1,7 +1,9 @@
 //! The Redis queue's consumer under the port's worker, against a live Redis:
 //! the behaviour kit every queue backend runs, then what only Redis decides —
 //! the records a job leaves when it ends, its dead letter, a checkpoint through
-//! a retry and a dead replica, a throttle across replicas, a cancel refused
+//! a retry and a dead replica, a job its resilience policy refuses held back or
+//! dead-lettered and one answering on the policy's retry acknowledged once, a
+//! throttle across replicas, a cancel refused
 //! while a delivery runs, a group made again after its stream went, a read
 //! blocking on a connection of its own, and a stopped worker leaving its group.
 
@@ -11,6 +13,9 @@ use std::time::Duration;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{Checkpoint, QueueName, processor, queue};
 use nest_rs_redis::{RedisConnection, RedisModule, RedisQueueConfig, RedisQueueModule};
+use nest_rs_resilience::{
+    BreakerState, ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+};
 use nest_rs_testing::HeadlessApp;
 use nest_rs_testing::queue::{KitBackend, KitLease};
 use serde::{Deserialize, Serialize};
@@ -438,6 +443,298 @@ async fn a_job_asking_a_wait_is_held_in_redis_and_runs_again_no_earlier() {
         again.duration_since(failed) >= asked,
         "the second attempt ran {:?} after the failure, before the {asked:?} asked",
         again.duration_since(failed)
+    );
+}
+
+// --- a job its policy refuses --------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChargeCommand {
+    run: u64,
+}
+
+/// What the payment provider a decorated job calls answers in error.
+#[derive(Debug, thiserror::Error)]
+#[error("the payment provider answered 502")]
+struct ProviderDown;
+
+impl nest_rs_core::ToProblem for ProviderDown {
+    fn to_problem(&self) -> Option<nest_rs_core::Problem> {
+        None
+    }
+}
+
+/// One retry at once, and a breaker only a hand opens: a test sets what it is
+/// about.
+fn charging() -> ResilienceConfig {
+    ResilienceConfig {
+        retries: Some(1),
+        backoff_first: Duration::from_millis(1),
+        backoff_ceiling: Duration::from_millis(2),
+        breaker_window: Some(8),
+        breaker_failures: 8,
+        ..ResilienceConfig::default()
+    }
+}
+
+/// The policy `replica`'s app holds.
+fn policy_of(replica: &crate::Replica) -> std::sync::Arc<ResiliencePolicy> {
+    replica
+        .container
+        .get::<ResiliencePolicy>()
+        .expect("ResilienceModule builds the policy")
+}
+
+/// The breaker's one second, which a job's retry waits at least, by Redis's
+/// clock: the whole seconds its `Retry-After` says.
+const OPEN_FOR: Duration = Duration::from_secs(1);
+
+static CHARGED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-refused", job = ChargeCommand)]
+struct RefusedQueue;
+
+#[injectable]
+struct RefusedProcessor {
+    #[inject]
+    upstream: std::sync::Arc<ResiliencePolicy>,
+}
+
+#[processor]
+impl RefusedProcessor {
+    #[process(queue = RefusedQueue, retries = 1, transactional = false)]
+    #[resilient(upstream)]
+    async fn charge(&self, job: ChargeCommand) -> Result<(), ResilienceError<ProviderDown>> {
+        CHARGED.start(job.run);
+        CHARGED.finish(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [
+        RedisModule::for_root(crate::redis_config()),
+        RedisQueueModule,
+        nest_rs_queue::QueueModule,
+        ResilienceModule::for_root(charging()),
+    ],
+    providers = [RefusedProcessor],
+)]
+struct RefusedModule;
+
+/// A job its policy refuses is not acknowledged: the refusal's `503` holds it
+/// back in `due` at least the breaker's `Retry-After` by Redis's clock, never
+/// in a worker's memory, and the attempt after it, the breaker half-open,
+/// runs the job once and acknowledges it, leaving no record and no dead
+/// letter.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_its_policy_refuses_is_held_back_in_redis_and_acknowledged_once_it_runs() {
+    let queue = <RefusedQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let _forgotten = crate::forgetting(queue);
+    let run = crate::this_run();
+    let replica = crate::patient_replica::<RefusedModule>().await;
+    let upstream = policy_of(&replica);
+    upstream
+        .open_breaker(OPEN_FOR)
+        .expect("the policy has a breaker");
+    let before = super::producer::redis_now().await;
+    let receipt = replica
+        .producer
+        .push(RefusedQueue, ChargeCommand { run })
+        .await
+        .expect("enqueue");
+    let job = receipt.id();
+
+    crate::wait_for(Duration::from_secs(5), || async move {
+        super::producer::due_of(queue, job).await.is_some()
+    })
+    .await;
+    let due = super::producer::due_of(queue, job)
+        .await
+        .expect("the refused job is held back in `due`");
+    assert!(
+        CHARGED.of(run).is_empty(),
+        "the refused job's handler never ran"
+    );
+    let asked = u64::try_from(OPEN_FOR.as_millis()).expect("a short wait");
+    assert!(
+        due >= before + asked,
+        "due at {due} ms by Redis's clock, pushed at {before} ms: held less than the \
+         breaker's {OPEN_FOR:?}"
+    );
+
+    crate::wait_until(Duration::from_secs(20), || CHARGED.finished(run) == 1).await;
+    crate::wait_for(Duration::from_secs(5), || async move {
+        crate::keys_of(queue).await == [crate::key_of(queue, "jobs")]
+    })
+    .await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+    assert_eq!(CHARGED.of(run).len(), 1, "the job ran once, on its retry");
+    assert_eq!(crate::filed(queue).await, 0, "acknowledged off its stream");
+    assert!(
+        RedisKit::pending(&QueueName::new(queue).expect("a valid name"))
+            .await
+            .expect("XPENDING")
+            .is_empty(),
+        "no delivery left pending"
+    );
+    assert_eq!(upstream.breaker_state(), Some(BreakerState::Closed));
+}
+
+#[queue(name = "nestrs-e2e-refused-last", job = ChargeCommand)]
+struct RefusedLastQueue;
+
+#[injectable]
+struct RefusedLastProcessor {
+    #[inject]
+    upstream: std::sync::Arc<ResiliencePolicy>,
+}
+
+#[processor]
+impl RefusedLastProcessor {
+    #[process(queue = RefusedLastQueue, retries = 0, transactional = false)]
+    #[resilient(upstream)]
+    async fn charge(&self, job: ChargeCommand) -> Result<(), ResilienceError<ProviderDown>> {
+        CHARGED.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [
+        RedisModule::for_root(crate::redis_config()),
+        RedisQueueModule,
+        nest_rs_queue::QueueModule,
+        ResilienceModule::for_root(charging()),
+    ],
+    providers = [RefusedLastProcessor],
+)]
+struct RefusedLastModule;
+
+/// A job its policy refuses on its last attempt is not acknowledged done: it
+/// is filed as a dead letter, its reason the refusal's chain, and nothing
+/// else of it is left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_its_policy_refuses_on_its_last_attempt_is_dead_lettered_with_the_refusal() {
+    let queue = <RefusedLastQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let _forgotten = crate::forgetting(queue);
+    let run = crate::this_run();
+    let replica = crate::patient_replica::<RefusedLastModule>().await;
+    policy_of(&replica)
+        .open_breaker(Duration::from_secs(30))
+        .expect("the policy has a breaker");
+    let receipt = replica
+        .producer
+        .push(RefusedLastQueue, ChargeCommand { run })
+        .await
+        .expect("enqueue");
+
+    crate::wait_for(Duration::from_secs(10), || async move {
+        crate::keys_of(queue)
+            .await
+            .contains(&crate::key_of(queue, "dead"))
+    })
+    .await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+    assert!(CHARGED.of(run).is_empty(), "the handler never ran");
+    assert_eq!(
+        crate::keys_of(queue).await,
+        [crate::key_of(queue, "dead"), crate::key_of(queue, "jobs")],
+        "no record of the job is left but its dead letter",
+    );
+    assert_eq!(crate::filed(queue).await, 0);
+    let dead = crate::entries_of(queue, "dead").await;
+    let [(_, fields)] = &dead[..] else {
+        panic!("one dead letter: {dead:?}");
+    };
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value.clone())
+            .unwrap_or_else(|| panic!("a dead letter carries `{name}`: {fields:?}"))
+    };
+    assert_eq!(field("job"), receipt.id().to_string());
+    let reason = field("reason");
+    assert!(
+        reason.contains("the circuit breaker is open"),
+        "the refusal's chain: {reason}"
+    );
+}
+
+static RETRIED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-refused-retried", job = ChargeCommand)]
+struct RetriedQueue;
+
+#[injectable]
+struct RetriedProcessor {
+    #[inject]
+    upstream: std::sync::Arc<ResiliencePolicy>,
+}
+
+#[processor]
+impl RetriedProcessor {
+    /// The first attempt of the policy's fails; its retry, within the job's
+    /// one attempt, answers. The queue has no retry of its own to give.
+    #[process(queue = RetriedQueue, retries = 0, transactional = false)]
+    #[resilient(upstream, idempotent)]
+    async fn charge(&self, job: ChargeCommand) -> Result<(), ResilienceError<ProviderDown>> {
+        if RETRIED.start(job.run) == 1 {
+            return Err(ProviderDown);
+        }
+        RETRIED.finish(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [
+        RedisModule::for_root(crate::redis_config()),
+        RedisQueueModule,
+        nest_rs_queue::QueueModule,
+        ResilienceModule::for_root(charging()),
+    ],
+    providers = [RetriedProcessor],
+)]
+struct RetriedModule;
+
+/// A job whose handler answers on its policy's retry is acknowledged once,
+/// within its one delivery: off its stream, no delivery pending, no record
+/// and no dead letter left.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_answering_on_its_policys_retry_is_acknowledged_once() {
+    let queue = <RetriedQueue as nest_rs_queue::Queue>::NAME;
+    crate::forget(queue).await;
+    let _forgotten = crate::forgetting(queue);
+    let run = crate::this_run();
+    let replica = crate::patient_replica::<RetriedModule>().await;
+    replica
+        .producer
+        .push(RetriedQueue, ChargeCommand { run })
+        .await
+        .expect("enqueue");
+
+    crate::wait_until(Duration::from_secs(10), || RETRIED.finished(run) == 1).await;
+    crate::wait_for(Duration::from_secs(5), || async move {
+        crate::keys_of(queue).await == [crate::key_of(queue, "jobs")]
+    })
+    .await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+    assert_eq!(
+        RETRIED.of(run).len(),
+        2,
+        "the failed attempt and its retry, in one delivery"
+    );
+    assert_eq!(crate::filed(queue).await, 0, "acknowledged off its stream");
+    assert!(
+        RedisKit::pending(&QueueName::new(queue).expect("a valid name"))
+            .await
+            .expect("XPENDING")
+            .is_empty(),
+        "no delivery left pending"
     );
 }
 

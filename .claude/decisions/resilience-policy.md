@@ -1407,3 +1407,35 @@ one public set, `ResilienceError::Refused`. The limits each would close stand
 as the entries above name them, and a failing call still has its chain said for
 the breaker's opening whether or not anything tells it: 285 ns on
 `judged/bare/err_by_default`.
+
+## 2026-11-26 — a refusal no client reads, proven for every refusal, probe and phase
+
+What the 2026-11-24 entry's units were said to do was run on an open breaker
+and a timeout alone; the rest of the family is now run, each test failing under
+a mutation of the behaviour it holds:
+
+- **A full bulkhead and a reached rate limit** are refused on a tick, a
+  listener, an indicator and a hook as the open breaker and the timeout are:
+  the same `Err` path, filed by each edge with the refusal's chain, told to a
+  subscription with the method that made it, the unit after it run
+  (`tests/integration/resilient/`, `Refusing`'s four members).
+- **Every probe**: a refused `#[liveness]` indicator answers `503` on
+  `/health/live`, so an orchestrator restarts the process for its
+  dependency's refusal, and a refused `#[startup]` one holds `/health/startup`
+  down; the other two probes stay up, the chain in the `warn` alone.
+- **Every hook phase**: a refused `#[on_application_bootstrap]` hook fails the
+  boot naming it, as an `#[on_module_init]` one does; a refused
+  `#[before_application_shutdown]` or `#[on_application_shutdown]` hook is
+  filed at `error`, and the hook after it runs.
+- **Against the live services**: a decorated listener failed, or given up at
+  its timeout, after its `Repo` write leaves nothing committed, and an
+  idempotent one commits its retry's row alone (`nest-rs-seaorm`'s e2e
+  `events.rs`); a job its policy refuses is held back in Redis's `due` for the
+  breaker's `Retry-After` by Redis's clock and acknowledged once it runs, one
+  refused on its last attempt is a dead letter whose reason is the refusal's
+  chain, and one answering on its policy's retry is acknowledged within its one
+  delivery (`nest-rs-redis`'s e2e `queue/consumer.rs`).
+
+None of it found a defect. The Redis proofs ran on the dev container's one
+server; Sentinel and Cluster take the same settle script, run by hand with
+their environments.

@@ -13,7 +13,7 @@ use nest_rs_resilience::{
 use nest_rs_schedule::{Scheduler, scheduled};
 use nest_rs_testing::{HeadlessApp, LogCapture};
 
-use super::{Attempts, Dependency, Refusing, UpstreamDown, refusing, retrying_once};
+use super::{Attempts, Dependency, Refusing, UpstreamDown, refusing_for, retrying_once};
 
 #[injectable]
 struct RefreshTasks {
@@ -80,8 +80,12 @@ impl SyncTasks {
     }
 }
 
+/// How long a refusal of the tick below lasts: past its first occurrence, and
+/// no longer at its second.
+const REFUSED_FOR: Duration = Duration::from_millis(1500);
+
 #[module(
-    imports = [ResilienceModule::for_root(refusing())],
+    imports = [ResilienceModule::for_root(refusing_for(REFUSED_FOR))],
     providers = [SyncTasks, Dependency],
 )]
 struct RefusedScheduleModule;
@@ -98,9 +102,11 @@ async fn a_tick_its_policy_refuses_is_filed_failed_and_its_next_occurrence_runs(
             .await
             .expect("a decorated tick boots");
         let tasks = app.container().get::<SyncTasks>().expect("provided");
-        // Open past the first occurrence, and no longer at the second.
-        let (upstream, dependency) =
-            refusing.arrange_for(app.container(), Duration::from_millis(1500));
+        let mut refused = refusing.arrange_for(app.container(), REFUSED_FOR).await;
+        let (upstream, dependency) = (
+            Arc::clone(&refused.upstream),
+            Arc::clone(&refused.dependency),
+        );
         let mut events = upstream.events();
         let scheduler = app
             .spawn_transport(Scheduler::new())
@@ -124,14 +130,14 @@ async fn a_tick_its_policy_refuses_is_filed_failed_and_its_next_occurrence_runs(
         assert_eq!(dependency.called(), refusing.sent());
         assert_eq!(
             upstream.concurrency_running(),
-            Some(0),
+            Some(refusing.held()),
             "the refused run holds no slot of the bulkhead"
         );
 
-        // The breaker is left to its open time: the occurrence after it
-        // is the probe that closes it.
-        if refusing == Refusing::TimedOut {
-            refusing.lift(&upstream, &dependency);
+        // The breaker is left to its open time, the occurrence after it the
+        // probe that closes it, and the rate to its refill.
+        if !refusing.lapses() {
+            refused.lift().await;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
         scheduler.shutdown().await.expect("the scheduler stops");
@@ -148,8 +154,9 @@ async fn a_tick_its_policy_refuses_is_filed_failed_and_its_next_occurrence_runs(
             "the one refusal, filed once"
         );
 
-        // The occurrence that ran ended the refusal, its open time over or its stall lifted.
-        refusing.arrange(app.container());
+        // The occurrence that ran ended the refusal: its open time or its
+        // refill over, its stall lifted, the holding call dropped.
+        let _refused = refusing.arrange(app.container()).await;
         assert_eq!(
             failed.field("error"),
             Some(refusing.chain(tasks.sync().await)),

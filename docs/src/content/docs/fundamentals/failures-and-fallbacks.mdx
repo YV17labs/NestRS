@@ -216,18 +216,22 @@ was.
   given up having sent nothing. That timeout is counted against a dependency
   that answered, in its breaker, which can open for every caller. Send them one
   after the other, or outside the transaction.
-- **A refusal reaching a tick, a listener or a hook is that unit's error.** A
-  tick's, a listener's and a shutdown hook's are filed at `error` by their edge,
-  a tick's at every occurrence while the breaker is open. An init hook's fails
-  the boot naming the hook, the chain in the error `init` returns and on no log
-  line. A refused readiness indicator answers down, the chain in a `warn`, and so
-  does one whose attempt ends at [its check's
+- **A refusal reaching a tick, a listener or a hook is that unit's error**,
+  whichever refused: an open breaker, a timeout, a full bulkhead or a reached
+  rate. A tick's, a listener's and a shutdown hook's, in any of the three
+  shutdown phases, are filed at `error` by their edge, a tick's at every
+  occurrence while the refusal lasts, and a listener's rolls its transaction
+  back. An init or bootstrap hook's fails the boot naming the hook, the chain
+  in the error `init` returns and on no log line. A refused readiness
+  indicator answers down, the chain in a `warn`, and so does one whose attempt
+  ends at [its check's
   deadline](/health/indicators/#a-check-under-a-policy), a timeout its breaker
   counts.
-- **A decorated `#[liveness]` indicator refused by an open breaker fails the
-  liveness probe**, and the orchestrator restarts the process for a dependency's
-  outage: decorate readiness checks, never liveness ones. A `fallback` is how any
-  of these units answers instead of failing.
+- **A decorated `#[liveness]` indicator its policy refuses fails the liveness
+  probe**, and the orchestrator restarts the process for a dependency's outage:
+  decorate readiness checks, never liveness ones. A refused `#[startup]`
+  indicator holds `/health/startup` down, the boot read as unfinished. A
+  `fallback` is how any of these units answers instead of failing.
 
 ## Going further
 

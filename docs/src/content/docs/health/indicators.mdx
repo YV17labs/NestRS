@@ -175,9 +175,11 @@ See [Database health](/database/health/) for the pool end to end.
 ## A check under a policy
 
 An indicator under [`#[resilient]`](/fundamentals/resilience/) reports `down`
-while its breaker is open, so decorate `#[readiness]` checks only: a refused
-`#[liveness]` one fails the liveness probe, and the orchestrator restarts the
-process for a dependency's outage
+on its own probe while its policy refuses it — an open breaker, a full
+bulkhead, a reached rate — the other probes up, so decorate `#[readiness]`
+checks only: a refused `#[liveness]` one fails the liveness probe, and the
+orchestrator restarts the process for a dependency's outage; a refused
+`#[startup]` one holds the boot unfinished
 ([the limit](/fundamentals/failures-and-fallbacks/#limits)).
 
 Each check runs under the deadline its probe cuts it at, the sooner of

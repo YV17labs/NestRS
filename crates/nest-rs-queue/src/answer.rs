@@ -73,6 +73,22 @@ mod tests {
 
     use super::*;
 
+    /// A pipe's refusal carries its `400`, so a job returning one, bare or
+    /// wrapped, is never sent again: its input will not pass on a repeat.
+    #[test]
+    fn a_pipe_rejection_a_job_returns_dead_letters_at_its_first_attempt() {
+        use nest_rs_pipes::PipeError;
+
+        let bare = ProcessAnswer(PipeError::new("not a uuid")).into_job_error();
+        let wrapped = ProcessAnswer(
+            nest_rs_core::anyhow::Error::from(PipeError::new("not a uuid"))
+                .context("reading the payload"),
+        )
+        .into_job_error();
+        assert!(!bare.retryable, "bare");
+        assert!(!wrapped.retryable, "wrapped");
+    }
+
     #[test]
     fn a_client_error_dead_letters_but_one_inviting_a_repeat() {
         for (status, dead) in [

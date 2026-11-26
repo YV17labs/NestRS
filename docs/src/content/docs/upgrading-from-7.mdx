@@ -69,6 +69,11 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
    - a `PipeError` a handler returns, bare or wrapped in its own error,
      answers `400` `INVALID_ARGUMENT` on HTTP too, where an `anyhow` handler
      answered `500`;
+   - a queue job whose method returns a `PipeError` dead-letters at its first
+     attempt, as any client error does, where it was retried within its budget;
+   - an exception filter on `Problem` catches a pipe's refusal it finds in a
+     chain — a per-argument one on GraphQL and MCP, a global data pipe's on
+     WebSocket — which the edge answered itself;
    - an HTTP interceptor failing with the framework's `DecodeError` — a
      `QueueError::Serialize` — answers `500`, where it answered `400`;
    - on MCP, a `Problem` under `INVALID_ARGUMENT`, a `422` included, answers

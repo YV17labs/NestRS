@@ -1266,8 +1266,8 @@ idempotent 888 → 416, under a fallback 896 → 416 and 960 → 432, and one
 naming its token 416 and 432. The bench binary, holding the same decorated
 methods and runs, lost 8.1 % of its `.text` (3,420,496 → 3,141,776 B) with
 the run compiled once; the code and the compile time per decorated method were
-measured on the merged plan's prototype alone (13.4 → 3.8 KB, 142 → 37 ms),
-never on the build.
+measured on the merged plan's prototype alone, never on the build, and no
+figure of it is cited here: no committed bench reproduces it.
 
 **Held by** the suites as they stood, each hygiene snapshot that moved read
 before it was blessed, and what the change pins. Red under its mutation: an
@@ -1320,15 +1320,15 @@ then `_idempotent` where that key is written, then `_cancellable` where
   an instance as a `&'static str`, empty for the default one.
 - **An instance on `ResilienceRefusal`**, the event's: a subscription is its
   own policy's.
-- From the merged plan, measured on its prototypes: the run kept generic over
-  the call with the instance alone erased (14.0 KB of code per decorated method
-  against 13.4, 97.8 ns against 97.2 — what costs is the call's types
-  monomorphizing the whole run); a run driven by boxed `async fn`s (a box per
-  backoff, per savepoint settled and per wait for a slot; 68.6 ns against 59.7,
-  a 536-byte future against 336); a call's state as plain data given back by
-  hand (a pass or a slot then held by discipline, not by a guard's type);
-  dropping the 16 KiB boxing of a call sent once (a buffer moved into its
-  closure overflows a 2 MiB worker at 384–512 KiB, not 640–704); a file per
+- From the merged plan, judged on its prototypes, which are not committed: the
+  run kept generic over the call with the instance alone erased (no smaller
+  and no faster — what costs is the call's types monomorphizing the whole
+  run); a run driven by boxed `async fn`s (a box per backoff, per savepoint
+  settled and per wait for a slot, and a larger future); a call's state as
+  plain data given back by hand (a pass or a slot then held by discipline, not
+  by a guard's type); dropping the 16 KiB boxing of a call sent once (a buffer
+  moved into its closure overflows a 2 MiB worker sooner, the limit the
+  footprint tests pin); a file per
   type, which would end the two import cycles left — `teller` and `breaker`
   through `BreakerPhase`, `resilient` and `policy` through `ResilientMethod` —
   at 119 more lines of imports and no case removed; and a sharded or batched
@@ -1406,5 +1406,4 @@ three phases, a probe long overdue giving its turn up; and the four refusals as
 one public set, `ResilienceError::Refused`. The limits each would close stand
 as the entries above name them, and a failing call still has its chain said for
 the breaker's opening whether or not anything tells it: 285 ns on
-`judged/bare/err_by_default`, where the plan's prototype, on a harness of its
-own, took 40 and allocated nothing.
+`judged/bare/err_by_default`.

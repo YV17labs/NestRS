@@ -287,3 +287,15 @@ day one does.
 (`ResilienceModule::of(Upstream)`), a second seam beside `for_root`
 (`container.md`); a type alias per instance in the docs, a name that hides the
 marker it imports.
+
+## 2026-11-26 — the turbofish refused in the 8.0 line
+
+"The turbofish warns through 7.x and 8.0 refuses it" is now true of this line,
+which holds breaks and is 8.0 (`semver-7x.md`, 2026-11-25): `#[module]` refuses
+`RedisModule::<Cache>` in `imports` at its `::`, one `compile_error!` naming
+the type to write, the module still read as its type so nothing else is said.
+The `#[deprecated]` item the expansion used goes, and the snapshot it was held by
+pins the refusal. Superseded: "Refusing it in 7.1 turns every 7.0 app that
+followed the docs into a compile error, the break `semver-7x.md` holds absolute
+for decorator grammar" — the grace period it gave is the one the 2026-11-25
+entry refuses beside a break.

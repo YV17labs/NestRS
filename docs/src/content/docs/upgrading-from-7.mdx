@@ -36,8 +36,8 @@ boot, a log or the wire shows when one is missed. An app on SeaORM with no
    `#[config]` of its own in the `resilience` namespace fails its boot, its type
    and the framework's both claiming it: give yours another `namespace`, or list
    the features you use in place of `full`. A module of a named instance is
-   written as its type, `RedisModule<Cache>`; `RedisModule::<Cache>` still
-   compiles, and `#[module]` warns at its `::`.
+   written as its type, `RedisModule<Cache>`: `RedisModule::<Cache>`, the
+   spelling 7.0 taught, is refused at its `::`, naming the type to write.
 
 2. **Read each attribute on a GraphQL operation as the method's.**
    `#[operations]` takes off a method only what it consumes — its role, its

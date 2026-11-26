@@ -1,8 +1,6 @@
 //! A module of a named instance is imported as its type, `ShelfModule<Cache>`;
-//! written with the turbofish it is deprecated, warned at its `::` naming the
-//! type to write, and refused from 8.0. Denied here so the snapshot pins the
-//! warning; the type spelling beside it says nothing.
-#![deny(deprecated)]
+//! written with the turbofish 7.0 taught, it is refused at its `::`, naming
+//! the type to write. The type spelling beside it says nothing.
 
 use std::marker::PhantomData;
 

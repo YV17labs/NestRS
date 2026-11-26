@@ -268,8 +268,8 @@ on its own page: [Errors](/graphql/errors/).
 Every attribute `#[operations]` does not consume stays on your method, as on a
 route's handler. `#[tracing::instrument]` spans the method's body, reading its
 `self` and its arguments past the pipes, after the guards and the gate, which the
-request's `graphql.field` span covers; a decorator such as `#[resilient]` wraps
-that body. async-graphql's `#[graphql(…)]` describes the field, and a field is
+request's `graphql.field` span covers; `#[resilient]` goes above it, and the span
+then covers the policy's whole run. async-graphql's `#[graphql(…)]` describes the field, and a field is
 deprecated with `#[graphql(deprecation = "…")]`, which the schema and its
 introspection show. Rust's `#[deprecated]` on an operation is refused, as on a
 route's handler, and so is a `#[graphql(…)]` inside a `#[cfg_attr]`, which nothing

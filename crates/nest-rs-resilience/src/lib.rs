@@ -262,8 +262,7 @@ pub mod __private {
     pub use crate::resilient::{
         ChainedError, Fallback, FallbackIf, Judge, PolicyField, RecordIf, ResilientAnswer,
         ResilientMethod, RetryIf, RetryOkIf, attempt, every, fall_back, judging, none, policy,
-        refused, resilient_method, run, run_cancellable, run_idempotent,
-        run_idempotent_cancellable,
+        resilient_method, run, run_cancellable, run_idempotent, run_idempotent_cancellable,
     };
 }
 

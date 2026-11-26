@@ -1,10 +1,12 @@
-//! A decorated root field and subscription of an `#[operations]` block, and its
-//! query, mutation, field resolver, entity and subscription attempted again.
+//! A decorated root field and subscription of an `#[operations]` block, one
+//! answering an `impl Stream`, and its query, mutation, field resolver, entity
+//! and subscription attempted again.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use async_graphql::futures_util::StreamExt as _;
 use async_graphql::futures_util::stream::{self, BoxStream};
+use async_graphql::futures_util::{Stream, StreamExt as _};
 use nest_rs_core::module;
 use nest_rs_core::operation_log::{OK, TARGET as OPERATIONS};
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
@@ -31,16 +33,8 @@ impl DecoratedResolver {
         Err(UpstreamDown)
     }
 
-    /// An instrument on an operation is the method's, as on a route: its
-    /// `err(Debug)` records the method's own error, in either order.
-    #[query]
-    #[public]
-    #[tracing::instrument(skip_all, err(Debug))]
-    #[resilient(upstream)]
-    async fn traced_above(&self) -> Result<String, ResilienceError<UpstreamDown>> {
-        Err(UpstreamDown)
-    }
-
+    /// An instrument on an operation is the method's, as on a route: written
+    /// below the policy, its `err(Debug)` records the method's own error.
     #[query]
     #[public]
     #[resilient(upstream)]
@@ -94,16 +88,16 @@ async fn a_field_answers_its_refusal_unavailable_with_the_breakers_wait() {
     assert_eq!(extensions["retryAfterSeconds"], 30, "{refused}");
 }
 
-/// The instrument is the method's, as anywhere: above the policy its
-/// `err(Debug)` records each attempt's error, below it the run's — here
-/// the open breaker's refusal, the first field having opened it.
+/// The instrument is the method's, as anywhere: below the policy its
+/// `err(Debug)` records the run's error — the dependency's, which opens the
+/// breaker, then the open breaker's refusal.
 #[tokio::test(start_paused = true)]
 async fn an_instruments_err_on_an_operation_records_the_fields_error_as_debug() {
     let app = TestApp::for_module::<DecoratedGraphqlModule>()
         .await
         .expect("a decorated resolver boots");
     let logs = LogCapture::install();
-    for field in ["tracedAbove", "tracedBelow"] {
+    for field in ["tracedBelow", "tracedBelow"] {
         let answered = app
             .http()
             .post("/graphql")
@@ -123,7 +117,10 @@ async fn an_instruments_err_on_an_operation_records_the_fields_error_as_debug() 
         .filter_map(|event| event.field("error"))
         .collect();
     assert_eq!(recorded.len(), 2, "{recorded:?}");
-    assert_eq!(recorded[0], "UpstreamDown", "an attempt's: {recorded:?}");
+    assert_eq!(
+        recorded[0], "Failed(UpstreamDown)",
+        "the run's: {recorded:?}"
+    );
     assert!(
         recorded[1].starts_with("Refused { refusal: Open {"),
         "the run's refusal: {recorded:?}"
@@ -162,6 +159,79 @@ async fn a_subscription_answers_its_refusal_unavailable_with_the_breakers_wait()
         1,
         "sent once, and the opening the breaker refused never"
     );
+}
+
+#[resolver]
+struct ArrivalsResolver {
+    #[inject]
+    upstream: Arc<ResiliencePolicy>,
+    #[inject]
+    attempts: Arc<Attempts>,
+}
+
+#[operations]
+impl ArrivalsResolver {
+    #[query]
+    #[public]
+    async fn hub(&self) -> &'static str {
+        "Lyon"
+    }
+
+    /// The stream named by what it is, its hidden type inferred from the body.
+    #[subscription]
+    #[public]
+    #[resilient(upstream)]
+    async fn arrivals(
+        &self,
+    ) -> Result<impl Stream<Item = i32> + use<>, ResilienceError<UpstreamDown>> {
+        if self.attempts.first() {
+            return Err(UpstreamDown);
+        }
+        Ok(stream::iter([7]))
+    }
+}
+
+#[module(
+    imports = [GraphqlModule, ResilienceModule::for_root(opening_on_the_first_failure())],
+    providers = [ArrivalsResolver, Attempts],
+)]
+struct ArrivalsGraphqlModule;
+
+/// A subscription answering an `impl Stream` inside its `Result` is refused by
+/// the breaker its failure opened, and streams once the breaker closed.
+#[tokio::test(start_paused = true)]
+async fn a_subscription_answering_an_impl_stream_is_refused_while_open_and_streams_once_closed() {
+    let app = TestApp::for_module::<ArrivalsGraphqlModule>()
+        .await
+        .expect("a subscription answering an impl Stream boots");
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+
+    socket.subscribe("failed", "subscription { arrivals }");
+    let failed = socket
+        .next_item("failed")
+        .await
+        .expect("the opening answers");
+    assert_eq!(
+        failed["errors"][0]["extensions"]["code"], "INTERNAL",
+        "{failed}"
+    );
+    socket.subscribe("refused", "subscription { arrivals }");
+    let refused = socket
+        .next_item("refused")
+        .await
+        .expect("the opening answers");
+    assert_eq!(
+        refused["errors"][0]["extensions"]["code"], "UNAVAILABLE",
+        "{refused}"
+    );
+
+    tokio::time::advance(Duration::from_secs(31)).await;
+    socket.subscribe("streamed", "subscription { arrivals }");
+    let streamed = socket.next_item("streamed").await.expect("an item");
+    assert_eq!(streamed["data"]["arrivals"], 7, "{streamed}");
+    let attempts = app.container().get::<Attempts>().expect("provided");
+    assert_eq!(attempts.made(), 2, "the refused opening sent nothing");
 }
 
 /// A parcel, which a field resolver extends and an entity resolves by its

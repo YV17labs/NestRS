@@ -112,6 +112,8 @@ mutation, field resolver or entity, where `#[operations]` leaves it on your meth
 with every attribute it does not consume. On an `#[sse]`
 route or a `#[subscription]`, it runs the call opening the stream, never the items
 it yields: a stream calling the dependency per item calls a decorated method each.
+The stream is named or boxed, or an `impl Stream` inside the `Result`, whose hidden
+type rustc infers from the body.
 
 A method pins its own `timeout`, and an idempotent one its own `retries`, in
 place of the policy's: `#[resilient(upstream, idempotent, timeout = "2s",
@@ -316,12 +318,16 @@ off is `None`.
   answer is refused at the method's return type, which rustc labels the attribute's
   expansion, and one a `macro_rules!` writes on its own `$crate` is refused twice.
 - **A method carries `#[resilient]` once.** A second is refused as written
-  twice, under whatever name it is imported by, in a `#[cfg_attr]` or below a
-  `#[tracing::instrument]`: a method calling two dependencies is two methods.
+  twice, under whatever name it is imported by, in a `#[cfg_attr]` or with a
+  `#[tracing::instrument]` between the two: a method calling two dependencies is
+  two methods.
 - **A `fn` that is not `async` is refused**, a `const fn` told to drop `const`,
   and so are a free function, which has no host to hold a policy, and an answer
-  holding an `impl Trait`, which names no type in the expansion: name the type, or
-  box it. None shows rustc's own errors beside. An `async fn` under `#[async_trait]` is
+  that is an `impl Trait` whole, which names neither what an attempt answers nor
+  its error: put it inside the `Result`, `Result<impl Stream<Item = u32>,
+  ResilienceError<E>>`, whose hidden type rustc infers from the body. A refused
+  method is its refusals, which stand in its body's place: none shows rustc's own
+  errors beside, and the body's own come once they are fixed. An `async fn` under `#[async_trait]` is
   a `fn` by the time `#[resilient]` reads it, so write the trait's method as a
   native `async fn`. A trait's own declaration is refused, saying to decorate
   each impl's method; on a default body, whose `Self` has no field, it is

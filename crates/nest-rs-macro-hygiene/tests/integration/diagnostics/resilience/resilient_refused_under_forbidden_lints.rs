@@ -1,13 +1,9 @@
 //! Code forbidding a lint refuses every `#[allow]` of it an expansion writes
-//! inside (`E0453`). A refused method kept with no body — its `cancel` given no
-//! name, or an argument's, its instrument in a shape the decorator cannot read
-//! — reads its parameters in that body's place under no lint attribute, so its
-//! refusal is the one error here too. So does one kept with its body, in every
-//! form: the keys it was refused under are left out, and an argument only a
-//! predicate or the fallback read would be rustc's unused variable, whose fix
-//! breaks the key. A parameter a macro's pattern binds is taken as `_`, its
-//! names read by no attribute: a macro written for that one method is then
-//! rustc's unused macro, a warning beside the refusal.
+//! inside (`E0453`). A refused method's refusals stand in its body's place
+//! under no lint attribute, so whatever refused it — its `cancel` given no
+//! name, or an argument's, an instrument above it, a parameter a macro's
+//! pattern binds — its refusals are the errors here, and no argument the body
+//! no longer reads is rustc's unused variable.
 
 use std::sync::Arc;
 

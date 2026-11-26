@@ -168,9 +168,10 @@ impl Ledger {
         }
     }
 
-    // Both arguments consumed, past where the body may end.
+    // Both arguments consumed, past where the body may end, under a predicate
+    // naming the one it does not.
     twins! {
-        #[resilient(carrier, record_if = |_error| true)]
+        #[resilient(carrier, record_if = |_error| !matches!(ends, Ends::Waiting))]
         async fn plain_handing_on, judged_handing_on(
             &self,
             held: Noted,
@@ -184,7 +185,7 @@ impl Ledger {
 
     // The first argument consumed on one path, the others only read.
     twins! {
-        #[resilient(carrier, record_if = |_error| true)]
+        #[resilient(carrier, record_if = |_error| !matches!(ends, Ends::Waiting))]
         async fn plain_handing_one_on, judged_handing_one_on(
             &self,
             held: Noted,
@@ -203,7 +204,7 @@ impl Ledger {
 
     // Both consumed, named last declared first in a statement of the body's own.
     twins! {
-        #[resilient(carrier, record_if = |_error| true)]
+        #[resilient(carrier, record_if = |_error| !matches!(ends, Ends::Waiting))]
         async fn plain_naming_first, judged_naming_first(
             &self,
             held: Noted,
@@ -214,6 +215,30 @@ impl Ledger {
             ends.answer().await?;
             Self::handed(held, out)
         }
+    }
+
+    // Both consumed under a predicate naming no argument: the one attempt owns
+    // them all, as with no key.
+    #[resilient(carrier, record_if = |_error| true)]
+    async fn unjudged_handing_on(&self, held: Noted, out: Noted, ends: Ends) -> Answer<()> {
+        ends.answer().await?;
+        Self::handed(held, out)
+    }
+
+    #[resilient(carrier, record_if = |_error| true)]
+    async fn unjudged_handing_one_on(
+        &self,
+        held: Noted,
+        lent: Noted,
+        out: Noted,
+        ends: Ends,
+    ) -> Answer<()> {
+        if matches!(ends, Ends::Answered) {
+            drop(held);
+        }
+        lent.name();
+        out.name();
+        ends.answer().await
     }
 
     fn handed(held: Noted, out: Noted) -> Result<(), CarrierDown> {
@@ -250,14 +275,6 @@ impl Ledger {
 
     #[tracing::instrument(skip_all)]
     async fn traced_plain(&self, held: Noted, out: Noted, ends: Ends) -> Result<(), CarrierDown> {
-        let _local = held.beside();
-        out.name();
-        ends.answer().await
-    }
-
-    #[tracing::instrument(skip_all)]
-    #[resilient(carrier)]
-    async fn traced_above(&self, held: Noted, out: Noted, ends: Ends) -> Answer<()> {
         let _local = held.beside();
         out.name();
         ends.answer().await
@@ -449,24 +466,22 @@ async fn a_call_refused_unsent_drops_its_arguments_last_declared_first() {
     }
 }
 
-/// An instrument's own future takes the arguments it is written over.
-/// Above a method run once it takes them from the attempt, which then
-/// fixes no order: they drop as the instrumented method's do with no
-/// policy, sent or not. Below, it takes them in the order the expansion
-/// names them, the attempt's.
+/// An instrument's own future takes the arguments it is written over, in the
+/// order its tokens first name them: with no policy, the order the body names
+/// them in; below `#[resilient]`, the order the expansion names them in, last
+/// declared first, sent or refused unsent.
 #[tokio::test(start_paused = true)]
-async fn beside_an_instrument_the_arguments_drop_in_the_order_its_future_takes_them() {
+async fn below_an_instrument_the_arguments_drop_last_declared_first() {
     let (_app, ledger) = ledger(ResilienceConfig {
         retries: None,
         ..ResilienceConfig::default()
     })
     .await;
     for ends in ENDS {
-        let plain = dropped_by_method!(ledger.traced_plain, ends);
         assert_eq!(
-            dropped_by_method!(ledger.traced_above, ends),
-            plain,
-            "{ends:?}"
+            dropped_by_method!(ledger.traced_plain, ends),
+            ["held", "out"],
+            "{ends:?}: tracing's own order, the body's"
         );
         assert_eq!(
             dropped_by_method!(ledger.traced_below, ends),
@@ -478,10 +493,6 @@ async fn beside_an_instrument_the_arguments_drop_in_the_order_its_future_takes_t
         .carrier
         .open_breaker(Duration::from_secs(30))
         .expect("an open time the breaker takes");
-    assert_eq!(
-        dropped_by_method!(ledger.traced_above, Ends::Answered),
-        dropped_by_method!(ledger.traced_plain, Ends::Answered),
-    );
     assert_eq!(
         dropped_by_method!(ledger.traced_below, Ends::Answered),
         LAST_DECLARED_FIRST
@@ -558,10 +569,12 @@ macro_rules! dropped_of_three_by_method {
     }};
 }
 
-/// The one difference `record_if` keeps: an argument the body consumes is
-/// the attempt's own. One the body has not consumed when the attempt ends
-/// drops with it — in the order the body first names them, and ahead of
-/// those it only reads, which stay in the method's frame.
+/// The one difference a `record_if` naming an argument keeps: an argument the
+/// body consumes is the attempt's own. One the body has not consumed when the
+/// attempt ends drops with it — in the order the body first names them, and
+/// ahead of those it only reads, which stay in the method's frame. Under one
+/// naming none, the attempt owns every argument, and they drop as the
+/// undecorated method's do.
 #[tokio::test(start_paused = true)]
 async fn under_record_if_an_argument_the_body_would_consume_drops_with_the_attempt() {
     let (_app, ledger) = ledger(ResilienceConfig {
@@ -611,6 +624,35 @@ async fn under_record_if_an_argument_the_body_would_consume_drops_with_the_attem
     assert_eq!(
         dropped_of_three_by_method!(ledger.judged_handing_one_on, Ends::Answered),
         ["held", "out", "lent"]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn under_a_record_if_naming_no_argument_the_arguments_drop_as_the_undecorated_methods_do() {
+    let (_app, ledger) = ledger(ResilienceConfig {
+        retries: None,
+        ..ResilienceConfig::default()
+    })
+    .await;
+    for ends in ENDS {
+        assert_eq!(
+            dropped_by_method!(ledger.unjudged_handing_on, ends),
+            dropped_by_method!(ledger.plain_handing_on, ends),
+            "{ends:?}"
+        );
+        assert_eq!(
+            dropped_of_three_by_method!(ledger.unjudged_handing_one_on, ends),
+            dropped_of_three_by_method!(ledger.plain_handing_one_on, ends),
+            "{ends:?}"
+        );
+    }
+    ledger
+        .carrier
+        .open_breaker(Duration::from_secs(30))
+        .expect("an open time the breaker takes");
+    assert_eq!(
+        dropped_by_method!(ledger.unjudged_handing_on, Ends::Answered),
+        LAST_DECLARED_FIRST
     );
 }
 

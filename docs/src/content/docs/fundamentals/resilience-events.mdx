@@ -210,23 +210,28 @@ are listed there, each by the policy's `instance`.
 
 ## With `#[tracing::instrument]`
 
-`#[tracing::instrument]` goes above `#[resilient]` or below, and the order says
-what the span covers. Below, one span covers the whole run — every attempt, the
-waits between them, what the policy refuses unsent and the fallback — and its
-`err` and `ret` record what the method answers. Above, each attempt opens a span
-of its own, and `err` and `ret` record what that attempt answered, the
-dependency's own error; the fallback runs outside every attempt's span, and the
-token `cancel` names is no argument, so no span records it. Above, the decorator
-reads the body as `tracing-attributes` 0.1 wraps it, by the `__tracing_` names
-that expansion writes, and refuses one wrapped otherwise, saying to write
-`#[resilient]` above; a release writing none of those names would be read as no
-instrument.
+`#[tracing::instrument]` goes below `#[resilient]`: one span covers the whole run
+— every attempt, the waits between them, what the policy refuses unsent and the
+fallback — and its `err` and `ret` record what the method answers. The token
+`cancel` names is no argument, so no span records it.
 
-On a GraphQL operation the order says what it says on a route: the instrument
-stays on your method. Below `#[resilient]` one span covers the whole run, its
-`err` and `ret` recording what the method answers; above it, each attempt opens a
-span of its own. The field's guards, gate and pipes run before the method, outside
-that span, inside the request's `graphql.field` span.
+```rust
+#[resilient(upstream, idempotent)]
+#[tracing::instrument(skip(self), err)]
+pub async fn preview(&self, post: Uuid) -> Result<String, ResilienceError<UpstreamError>> {
+    let url = format!("{}/previews/{post}", self.config.upstream_url);
+    Ok(reqwest::get(url).await?.text().await?)
+}
+```
+
+Written above, tracing expands first and wraps the body in a future answering the
+method's type, where an attempt answers `Result<T, E>`: the method is refused at
+the instrument, saying to write it below. For a span per attempt, instrument a
+method the body calls: each attempt calls it, and opens its span.
+
+On a GraphQL operation the instrument stays on your method, as on a route, and
+goes below `#[resilient]` there too. The field's guards, gate and pipes run before
+the method, outside that span, inside the request's `graphql.field` span.
 
 ## Limits
 

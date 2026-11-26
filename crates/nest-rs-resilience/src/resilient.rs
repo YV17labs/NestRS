@@ -2,8 +2,8 @@
 //! probes reading the field it names and what it answers, the type its body is
 //! checked as, the runs that body goes through — once or again, handed its
 //! attempt's token where its `cancel` names one and made none otherwise — each
-//! handed the predicates its keys name, the fallback answering in place of a
-//! run's error, and the stand-in a refused method's body is checked against.
+//! handed the predicates its keys name, and the fallback answering in place of
+//! a run's error.
 //!
 //! A body stays in the braces it was written in, so what its tail expression
 //! leaves drops as its own crate's edition says: in a crate of edition 2021
@@ -780,19 +780,6 @@ impl<R, Fut> Future for FellBack<R, Fut, Refused> {
     fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<R> {
         unreachable!("a fallback refused where its key is written does not compile")
     }
-}
-
-/// What the body of a method `#[resilient]` refused is checked as: one attempt
-/// that nothing runs, so the method reports its refusal and no error of its
-/// body's, written as if it answered `Result<T, E>`.
-pub fn refused<R, C, F>(call: C) -> R
-where
-    R: ResilientAnswer,
-    C: FnOnce(CancellationToken) -> F,
-    F: Future<Output = R::Attempt>,
-{
-    drop(call);
-    unreachable!("a method `#[resilient]` refused does not compile")
 }
 
 #[cfg(test)]

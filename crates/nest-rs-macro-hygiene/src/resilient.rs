@@ -13,8 +13,9 @@
 //! pattern binds, a parameter under a `#[cfg]` beside every key, a fallback
 //! handed arguments a `macro_rules!` wrote apart from the decorator, a body
 //! declaring items under the names its method answers in, in each form the
-//! keys expand to, one opening on an inner attribute, and a policy held in a
-//! field named as a key is.
+//! keys expand to, one opening on an inner attribute, an answer holding an
+//! `impl Trait` in each shape a key changes, and a policy held in a field named
+//! as a key is.
 
 use std::sync::Arc;
 
@@ -280,6 +281,32 @@ impl HygieneResilientShipments {
     #[resilient(carrier, idempotent)]
     pub async fn stock(&self, parcel: &str) -> Result<usize, ResilienceError<HygieneDepotFailed>> {
         Ok(stocked(parcel)?)
+    }
+
+    /// An `impl Trait` inside the answer, its hidden type inferred from the
+    /// body as the undecorated method's is: run once, capturing nothing.
+    #[resilient(carrier)]
+    pub async fn label(&self, parcel: String) -> HygieneAnswer<impl std::fmt::Display + use<>> {
+        let label = depot(&parcel)?;
+        Ok(format!("{label}, labelled"))
+    }
+
+    /// Sent again with its token, an `impl Iterator` borrowing the host.
+    #[resilient(carrier, idempotent, cancel = token)]
+    pub async fn manifest(&self) -> HygieneAnswer<impl Iterator<Item = usize> + '_> {
+        if token.is_cancelled() {
+            return Err(HygieneCarrierDown);
+        }
+        Ok(std::iter::once(&self.carrier).map(Arc::strong_count))
+    }
+
+    /// Two in a tuple, under a predicate reading the argument its body reads.
+    #[resilient(carrier, record_if = |_error| !parcel.is_empty())]
+    pub async fn weigh_both(
+        &self,
+        parcel: String,
+    ) -> HygieneAnswer<(impl std::fmt::Display + use<>, impl Clone + use<>)> {
+        Ok((depot(&parcel)?, parcel.len()))
     }
 
     /// A parameter under a `#[cfg]`, plain or inside a `#[cfg_attr]`: handed

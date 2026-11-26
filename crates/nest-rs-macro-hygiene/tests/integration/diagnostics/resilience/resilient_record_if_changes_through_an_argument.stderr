@@ -1,14 +1,14 @@
 error[E0500]: closure requires unique access to `*crates` but it is already borrowed
-  --> tests/integration/diagnostics/resilience/resilient_record_if_changes_through_an_argument.rs:32:26
+  --> tests/integration/diagnostics/resilience/resilient_record_if_changes_through_an_argument.rs:33:26
    |
-32 |     #[resilient(carrier, record_if = |_error| crates.is_empty())]
+33 |     #[resilient(carrier, record_if = |_error| crates.is_empty())]
    |                          ^^^^^^^^^   -------- ------ first borrow occurs due to use of `*crates` in closure
    |                          |           |
    |                          |           borrow occurs here
    |                          closure construction occurs here
-33 |     async fn load(&self, crates: &mut Vec<String>) -> Answer<usize> {
+34 |     async fn load(&self, crates: &mut Vec<String>) -> Answer<usize> {
    |                                                       ------ first borrow later used by call
-34 |         crates.push(String::new());
+35 |         crates.push(String::new());
    |         ------ second borrow occurs due to use of `*crates` in closure
    |
    = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,11 +1,10 @@
-//! `#[tracing::instrument]` written above `#[resilient]` expands first, and the
-//! decorator types the body it wrapped as one attempt, in every shape
-//! tracing-attributes 0.1.31 writes. These bodies carry by hand a name under
-//! that expansion's own prefix — one it binds, then one it does not, below
-//! their own block — standing for a release writing another shape or other
-//! names: one error says which order compiles whatever tracing writes, where
-//! each answer of the body would be reported against a type the decorator
-//! could not give it.
+//! `#[tracing::instrument]` written above `#[resilient]` expands first and
+//! wraps the body in a future of its own, answering the method's type where an
+//! attempt answers `Result<T, E>`: each such method is one error, saying to
+//! write `#[resilient]` above the instrument, the order that compiles whatever
+//! tracing writes. The decorator tells the wrapper by the prefix every name
+//! tracing-attributes binds shares, so a body carrying one by hand, below its
+//! own block, is told the same.
 
 use std::sync::Arc;
 
@@ -30,17 +29,23 @@ struct PreviewService {
 }
 
 impl PreviewService {
+    #[tracing::instrument(skip_all)]
     #[resilient(upstream)]
     async fn preview(&self, slug: String) -> Result<String, ResilienceError<UpstreamDown>> {
-        let __tracing_attr_span = slug.len();
-        if __tracing_attr_span == 0 {
+        if slug.is_empty() {
             return Err(UpstreamDown);
         }
         Ok(slug)
     }
 
+    #[tracing::instrument(skip_all, err, ret)]
     #[resilient(upstream, idempotent)]
     async fn preview_again(&self, slug: String) -> Result<String, ResilienceError<UpstreamDown>> {
+        Ok(slug.clone())
+    }
+
+    #[resilient(upstream)]
+    async fn preview_by_hand(&self, slug: String) -> Result<String, ResilienceError<UpstreamDown>> {
         let traced = async move {
             let __tracing_instrument_span = slug.len();
             if __tracing_instrument_span == 0 {

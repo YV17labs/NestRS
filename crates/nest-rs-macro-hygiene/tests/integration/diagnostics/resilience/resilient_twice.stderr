@@ -46,6 +46,12 @@ error: #[resilient] is written twice here — a method runs under one policy, an
    |
    = note: this error originates in the attribute macro `shielded` (in Nightly builds, run with -Z macro-backtrace for more info)
 
+error: #[resilient] `cancel` needs a value — write `cancel = token`
+  --> tests/integration/diagnostics/resilience/resilient_twice.rs:77:26
+   |
+77 |     #[resilient(carrier, cancel)]
+   |                          ^^^^^^
+
 error: #[resilient] is written twice here — a method runs under one policy, and a second would run the first's whole run again at each of its attempts. Keep one; a method calling two dependencies is two methods, each decorated
   --> tests/integration/diagnostics/resilience/resilient_twice.rs:78:5
    |
@@ -53,9 +59,3 @@ error: #[resilient] is written twice here — a method runs under one policy, an
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    |
    = note: this error originates in the attribute macro `shielded` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error: #[resilient] `cancel` needs a value — write `cancel = token`
-  --> tests/integration/diagnostics/resilience/resilient_twice.rs:77:26
-   |
-77 |     #[resilient(carrier, cancel)]
-   |                          ^^^^^^

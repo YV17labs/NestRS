@@ -4,7 +4,6 @@
 
 use proc_macro::TokenStream;
 
-mod instrumented;
 mod resilient;
 
 /// Runs an `async fn` method's body under the policy a field of `self` holds:
@@ -39,7 +38,11 @@ mod resilient;
 /// is held in a type of the app's own that is, which each `?` converts into.
 /// One borrowing an argument, or generic over a type that is not `'static`, is
 /// rustc's lifetime error at the answer — `E0310` for the generic one, whose
-/// help adds the bound — and owns the value instead.
+/// help adds the bound — and owns the value instead. `T` may hold an
+/// `impl Trait` — `Result<impl Stream<Item = u32>, ResilienceError<E>>` on a
+/// `#[subscription]` — whose hidden type rustc infers from the body, as for
+/// the undecorated method; an answer that is an `impl Trait` whole names no
+/// `T` nor `E`, and is refused at it.
 ///
 /// - `idempotent` — the call is sent again after an `Err` or a timeout, up to
 ///   its retries. Only the developer declares it: sending again a call that is
@@ -49,9 +52,9 @@ mod resilient;
 ///   attempt consumes — rustc answers a consumed argument with `E0507`, whose
 ///   help shows the clone. Every attempt borrows the arguments across its
 ///   waits, so the method's future is `Send` only where each argument taken by
-///   value is `Sync`; run once under no `record_if` and no `fallback`, the
-///   method moves them, and its future is `Send` as the undecorated method's
-///   is.
+///   value is `Sync`; run once under no `fallback` and no `record_if` naming
+///   one, the method moves them, and its future is `Send` as the undecorated
+///   method's is.
 /// - `timeout = "2s"` — how long each attempt of this method waits, in place
 ///   of the policy's, from `"1ms"` to `"10m"`. The unit's deadline still ends
 ///   every attempt.
@@ -74,13 +77,17 @@ mod resilient;
 ///   refuses neither close nor reopen the breaker, so it stays half-open, one
 ///   call at a time, until an `Ok` or a counted `Err`. It says nothing of the
 ///   retry, which is `retry_if`'s: an `Err` counted for no failure is still
-///   sent again by an `idempotent` method whose `retry_if` takes it. Run once,
-///   the one attempt borrows each argument its body only reads, so the
-///   predicate reads it once that attempt answered, and the method's future is
-///   `Send` only where such an argument, taken by value, is `Sync`. An
-///   argument the body consumes or changes, the predicate does not read too:
-///   the decorator cannot tell which arguments a predicate reads, so the
-///   refusal is rustc's borrow error at the key, one code per case. Consumed,
+///   sent again by an `idempotent` method whose `retry_if` takes it. Run once
+///   under a predicate naming an argument — read by its tokens, a macro's
+///   arguments and a format string's captures included — the one attempt
+///   borrows each argument its body only reads, so the predicate reads it
+///   once that attempt answered, and the method's future is `Send` only where
+///   such an argument, taken by value, is `Sync`; under one naming none, a
+///   function's path or a closure over the error alone, the attempt owns
+///   them, as with no key. An argument the body consumes or changes, a
+///   predicate naming it does not read too: its tokens say which argument it
+///   names, never how it reads it, so the refusal is rustc's borrow error at
+///   the key, one code per case. Consumed,
 ///   it is `E0505`, and the body consumes a clone. Bound `mut` and changed, it
 ///   is `E0502`, and the method binds it without `mut` and changes a copy
 ///   inside the body, the predicate reading the argument as the method was
@@ -132,8 +139,8 @@ mod resilient;
 ///
 /// A predicate is an expression of the method: a closure reads `self` and the
 /// arguments by reference, as the `idempotent` method's attempts, the one
-/// attempt of a method run once under `record_if`, and the attempts of one
-/// naming a `fallback` do. It takes the one value it judges and answers at
+/// attempt of a method run once under a `record_if` naming one, and the
+/// attempts of one naming a `fallback` do. It takes the one value it judges and answers at
 /// once, so a closure of another arity and an `async` one are refused where
 /// written, and a method of the host, whose path takes `self` first, is
 /// called from a closure: `|error| self.is_transient(error)`. Named as
@@ -185,12 +192,12 @@ mod resilient;
 /// body's locals in edition 2024 and after them before it. Its arguments drop
 /// as the undecorated method's do, last declared first, however its run ends:
 /// answered, failed, panicked, dropped, or refused unsent. Run once under no
-/// `record_if` and no `fallback`, the one attempt owns the arguments its body
-/// names, so what the body does not name — an argument it reads nowhere, the
+/// `fallback` and no `record_if` naming an argument, the one attempt owns the
+/// arguments its body names, so what the body does not name — an argument it reads nowhere, the
 /// part of a pattern it leaves unbound — stays in the method's frame and
 /// drops once the attempt has, and an argument the body names under a leading
-/// `_` drops with the attempt, after the others. Run once under `record_if`
-/// and no `fallback`, an argument the body consumes is the attempt's own: one
+/// `_` drops with the attempt, after the others. Run once under a `record_if`
+/// naming an argument and no `fallback`, an argument the body consumes is the attempt's own: one
 /// it has not consumed when the attempt ends — failed sooner, cut, or refused
 /// unsent — drops with it, ahead of the arguments the body only reads and in
 /// the order the body first names them, which a body opening on
@@ -201,7 +208,9 @@ mod resilient;
 /// method carries none: its declaration is refused
 /// saying to decorate each impl's, and a default body, whose `Self` has no
 /// field, is rustc's `E0609` at the field named. A method carries it once: a
-/// second, under whatever name it is imported, is refused.
+/// second, under whatever name it is imported, is refused. A refused method is
+/// its refusals: they stand in its body's place, so nothing the body would
+/// make rustc say joins them, and its own errors come once they are fixed.
 ///
 /// On an `#[sse]` route or a `#[subscription]`, the policy runs the call
 /// opening the stream, never the items it yields later. A WebSocket connection
@@ -214,29 +223,23 @@ mod resilient;
 /// `#[cfg_attr]`. A method under `#[async_trait]` is a `fn` by the time this
 /// attribute reads it, and is refused saying so.
 ///
-/// `#[tracing::instrument]` goes above it or below, and the order says what
-/// the span covers. Below `#[resilient]`, one span covers the whole run —
-/// every attempt, the waits between them and what the policy refuses unsent —
-/// and its `err` and `ret` record what the method answers. Above, tracing
-/// expands first: each attempt opens a span of its own, and `err` and `ret`
-/// record what that attempt answered, the dependency's own error. Above, the
-/// decorator reads the body as tracing-attributes 0.1.31 wraps it, by the
-/// names that expansion binds: a release wrapping it otherwise, or under other
-/// names of the same `__tracing_` prefix, is refused saying to write
-/// `#[resilient]` above, the order that compiles whatever tracing writes. Both
-/// orders hold under every key: below, the span also covers the fallback and
-/// records what it answers; above, the fallback runs outside every attempt's
-/// span. The token `cancel` names is no argument of the method, so no span
-/// records it. The future tracing builds owns the arguments, and drops them in
-/// the order its tokens first name them, as on a method with no policy:
-/// written above a method run once, the order its body names them in; written
-/// below, the order the expansion does, last declared first when the method is
-/// run once. On a GraphQL operation the order says nothing: `#[operations]`
-/// hands the instrument to the field it generates, so one span covers the whole
-/// field, its guards and every attempt. Its `err` is written `err(Debug)`, the
-/// field's error having a `Debug` and no `Display`, and `ret` not at all, the
-/// field's answer having neither; a span per attempt there is that of a
-/// provider's decorated method the operation calls.
+/// `#[tracing::instrument]` goes below it, and one span covers the whole run —
+/// every attempt, the waits between them, what the policy refuses unsent and
+/// the fallback — and its `err` and `ret` record what the method answers.
+/// Above, tracing expands first and wraps the body in a future answering the
+/// method's type, where an attempt answers `Result<T, E>`: the method is
+/// refused at the instrument, saying to write it below. The wrapper is told by
+/// the prefix every name tracing-attributes binds shares, `__tracing_`, a
+/// courtesy for the sentence; a release binding none under it leaves rustc's
+/// `E0308` at the body's answers. A span per attempt is that of a method the
+/// body calls, instrumented itself. The token `cancel` names is no argument of
+/// the method, so no span records it. The future tracing builds owns the
+/// arguments and drops them in the order its tokens first name them — below
+/// the decorator, the order the expansion does, last declared first when the
+/// method is run once. On a GraphQL operation the instrument is the method's,
+/// as on a route: its `err` is written `err(Debug)`, the field's error having
+/// a `Debug` and no `Display`, and `ret` not at all, the field's answer having
+/// neither.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry made or
 /// given up, a savepoint left unsettled, a full bulkhead or a reached rate

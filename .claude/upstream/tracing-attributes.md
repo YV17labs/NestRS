@@ -55,6 +55,18 @@
   > expansion mark the body and its ascribed type in a documented way, or
   > `#[instrument]` take the type to ascribe?
 
+- **Retired, unfixed upstream** — 2026-11-26, by `feat(resilience): a refused
+  method is its refusals, an instrument goes below #[resilient] alone, an impl
+  Trait inside an answer is inferred, and record_if lends only an argument it
+  names`: `#[resilient]` no longer reads the expansion. Written above it, the
+  instrument is refused at its attribute, saying to write it below, where it
+  wraps the whole run and every tracing release compiles; the `__tracing_`
+  prefix is read for that sentence alone, a release binding none under it
+  leaving rustc's `E0308` at the body's answers. `instrumented.rs` is deleted,
+  and the snapshot is `resilient_below_an_instrument.stderr`. A span per
+  attempt is a method the body calls, instrumented itself. Filing the ticket
+  above would let the order come back.
+
 ## `#[instrument]` changes the order an `async fn` drops its arguments in
 
 - **Seen** — 0.1.31: `gen_block` (`src/expand.rs`) moves an `async fn`'s body
@@ -85,3 +97,8 @@
   > released before the value declared after it. Opening the block on
   > `let _ = (&last, …, &first);` restores the order for the parameters the body
   > names.
+- **2026-11-26** — under a policy the instrument goes below `#[resilient]`
+  alone, and the arguments drop last declared first there: the expansion's
+  opening read sets the order its future takes them in. The test is
+  `dropped::below_an_instrument_the_arguments_drop_last_declared_first`, which
+  pins tracing's own order with no policy, the body's, as the canary.

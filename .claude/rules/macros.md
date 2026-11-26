@@ -158,7 +158,9 @@ with a trybuild snapshot per decorator:
 **A method decorator outside a pair** (`#[resilient]`) takes the members'
 receiver rule, `self: &Arc<Self>` lent as a provider's, and their reading by
 type; it dispatches nothing, so a generic method is its own. It goes on a
-handler of every impl half but a socket's connection hook, which answers `()`.
+handler of every impl half but a socket's connection hook, which answers `()`. A
+method it refuses is its refusals, `compile_error!` standing in its body's place,
+so nothing the body would make rustc say joins them.
 **An impl half removes from a method what it consumes — its role, its posture,
 its layers, `#[meta]` and the attribute its edge reads (`#[api]` at `#[routes]`,
 async-graphql's `#[graphql(…)]` at `#[operations]`) — and leaves every other

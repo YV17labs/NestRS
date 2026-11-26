@@ -154,20 +154,21 @@ was.
 ## Limits
 
 - **A body consuming or changing an argument its `record_if` reads** is rustc's
-  borrow error at the key. Under `record_if` on a method run once, the one
-  attempt lends its arguments, for the predicate to read once that attempt
-  answered. One the body consumes is `E0505`: the body consumes a clone. One
+  borrow error at the key. Under a `record_if` naming an argument on a method
+  run once, the one attempt lends its arguments, for the predicate to read once
+  that attempt answered; under one naming none, a function's path or a closure
+  over the error alone, the attempt owns them, as with no key. One the body consumes is `E0505`: the body consumes a clone. One
   bound `mut` and changed is `E0502`: bind it plain and change a copy in the
   body. A `&mut` the body writes through is `E0500`: the predicate reads the
   error and the other arguments instead.
 - **A method lending its arguments to each attempt is `Send` only where each
   argument it takes by value is `Sync`.** That is every idempotent method, every
-  one naming a `fallback`, and one run once under `record_if`, for each argument
-  its body only reads. Where the future must be `Send`, a non-`Sync` argument
+  one naming a `fallback`, and one run once under a `record_if` naming an
+  argument, for each argument its body only reads. Where the future must be `Send`, a non-`Sync` argument
   taken by value is refused in rustc's words: for an idempotent method as
   `E0277`, the argument "cannot be shared between threads safely", with a note
-  pointing at the key; for a method run once that lends under `record_if` or a
-  `fallback`, as a future that is not `Send`, naming no key.
+  pointing at the key; for a method run once that lends under such a
+  `record_if` or a `fallback`, as a future that is not `Send`, naming no key.
 - **A fallback's future is held as an attempt's is**: in place in a release
   build, boxed in a debug build. clippy's `large_futures` says nothing of a
   decorated method's own `.await`s, whichever of its futures is large; a caller
@@ -201,18 +202,19 @@ was.
   other does. A call spawned onto a task of its own is a call of its own.
 - **Arguments drop last declared first**, as the undecorated method's do, however
   the run ends, but for the cases that follow. Of a method run once, under no
-  `record_if` and no `fallback`, an argument the body reads nowhere and the part
+  `fallback` and no `record_if` naming an argument, an argument the body reads nowhere and the part
   of a pattern it leaves unbound drop once the attempt has, and one it names under
   a leading `_` drops with the attempt, after the others. The body is read by its
   words there: a local or a struct literal's field spelled as an argument reads as
   it, and can cost rustc's `unused variable` warning on that argument. Run once
-  under `record_if` and no `fallback`, an argument the body consumes is the
-  attempt's own: one it has not consumed when the attempt ends (failed sooner,
+  under a `record_if` naming an argument and no `fallback`, an argument the body
+  consumes is the attempt's own: one it has not consumed when the attempt ends (failed sooner,
   cut, or refused unsent) drops with the attempt, ahead of the arguments the body
   only reads and in the order the body first names them. A body opening on
   `let _ = (&out, &held);`, its arguments declared `held` then `out`, sets that
-  order last declared first. Beside a `#[tracing::instrument]`, whose future takes
-  the arguments, they drop in the order it takes them.
+  order last declared first. Below a `#[tracing::instrument]`, whose future takes
+  the arguments in the order the expansion names them, they drop last declared
+  first too.
 - **Two decorated calls joined in one unit's transaction take its turn in
   order**: an attempt's savepoint holds the unit until it settles, its call to
   the dependency included, so the other waits inside its own bound and can be

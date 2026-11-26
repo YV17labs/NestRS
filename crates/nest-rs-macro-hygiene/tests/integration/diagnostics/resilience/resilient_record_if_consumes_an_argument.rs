@@ -1,7 +1,7 @@
-//! Run once under `record_if`, the one attempt lends the arguments its
-//! predicate may read once it answered, so an attempt consuming one the
-//! predicate reads is rustc's own `E0505`, at the `record_if` key that has it
-//! lend them; a clone in the body is the way out.
+//! Run once under a `record_if` naming an argument, the one attempt lends the
+//! arguments its predicate may read once it answered, so an attempt consuming
+//! one the predicate reads is rustc's own `E0505`, at the `record_if` key that
+//! has it lend them; a clone in the body is the way out.
 
 use std::sync::Arc;
 

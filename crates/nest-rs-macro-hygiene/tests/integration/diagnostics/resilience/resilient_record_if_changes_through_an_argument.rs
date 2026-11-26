@@ -1,8 +1,9 @@
-//! Run once under `record_if`, the one attempt lends the arguments its
-//! predicate may read once it answered, so an attempt writing through a `&mut`
-//! the predicate reads is rustc's own `E0500`, at the `record_if` key that has
-//! it lend them. A copy would keep the change from the caller: the predicate
-//! reads the error and the other arguments, or an argument of its own.
+//! Run once under a `record_if` naming an argument, the one attempt lends the
+//! arguments its predicate may read once it answered, so an attempt writing
+//! through a `&mut` the predicate reads is rustc's own `E0500`, at the
+//! `record_if` key that has it lend them. A copy would keep the change from the
+//! caller: the predicate reads the error and the other arguments, or an
+//! argument of its own.
 
 use std::sync::Arc;
 

@@ -55,19 +55,6 @@ impl QuotingService {
         Ok(parcel.len() * 10)
     }
 
-    #[tracing::instrument(skip_all)]
-    #[resilient(courier, idempotent)]
-    async fn above(&self, weight: &str) -> Result<u32, ResilienceError<CarrierDown>> {
-        use std::num::ParseIntError as CarrierDown;
-        if self.fails_first() {
-            return Err(super::CarrierDown);
-        }
-        let weight = weight
-            .parse()
-            .map_err(|_unparsed: CarrierDown| super::CarrierDown)?;
-        Ok(weight)
-    }
-
     #[resilient(courier, idempotent)]
     #[tracing::instrument(skip_all)]
     async fn below(&self, weight: &str) -> Result<u32, ResilienceError<CarrierDown>> {
@@ -110,11 +97,7 @@ async fn a_body_declaring_an_item_of_its_answers_name_runs_under_its_policy() {
     assert!(matches!(fallen_back, Ok(20)), "{fallen_back:?}");
     assert_eq!(quoting.attempted(), 1, "its fallback answers for it");
 
-    for (order, answered) in [
-        ("above", quoting.above("12").await),
-        ("below", quoting.below("12").await),
-    ] {
-        assert!(matches!(answered, Ok(12)), "{order}: {answered:?}");
-    }
-    assert_eq!(quoting.attempted(), 3, "the first call alone failed once");
+    let below = quoting.below("12").await;
+    assert!(matches!(below, Ok(12)), "{below:?}");
+    assert_eq!(quoting.attempted(), 2, "sent again after its failure");
 }

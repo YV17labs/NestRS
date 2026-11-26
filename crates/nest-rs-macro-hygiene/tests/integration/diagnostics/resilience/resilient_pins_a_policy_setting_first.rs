@@ -3,9 +3,8 @@
 //! the words it earns after the field: which mechanism shares it and where it
 //! is set, rather than as a field the list names wrong. Each body answers
 //! through a coercion the undecorated method makes — a `String` read as a
-//! `str`, a box unsized at an early `return` and at its tail — which the
-//! stand-in a refused method is checked against makes too, so no body adds an
-//! error of its own.
+//! `str`, a box unsized at an early `return` and at its tail — and none adds
+//! an error of its own: a refused method's refusals stand in its body's place.
 
 use std::sync::Arc;
 

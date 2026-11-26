@@ -62,10 +62,16 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   place are refused saying a named field is read; a `fallback` given type
   arguments or written as a call is refused saying to name the method alone; a
   second `#[resilient]` is refused as written twice, under whatever name it is
-  imported by, in a `#[cfg_attr]` or below a `#[tracing::instrument]`; a `fn`
-  that is not `async`, a `const fn` included, a free function, and an answer
-  holding an `impl Trait`, are refused without rustc's own errors beside; and a
-  fallback pattern binding `mut` is one error.
+  imported by, in a `#[cfg_attr]` or with a `#[tracing::instrument]` between
+  the two; a `#[tracing::instrument]` written above it, which wraps the body in
+  a future answering the method's type, is refused at the instrument saying to
+  write it below, where one span covers the whole run; a `fn` that is not
+  `async`, a `const fn` included, a free function, and an answer that is an
+  `impl Trait` whole are refused; and a fallback pattern binding `mut` is one
+  error. A refused method is its refusals, which stand in its body's place, so
+  no error of rustc's joins them. An `impl Trait` inside the answer —
+  `Result<impl Stream<Item = u32>, ResilienceError<E>>` on a `#[subscription]` —
+  is inferred from the body, as for the undecorated method.
   Some kinds stay rustc's own: a predicate closure whose body answers no `bool`
   (`E0308`, at the body); a name `self` lacks, as the field (`E0609`, a trait's
   default body included) or the fallback (`E0599`, a function of `Self` taking
@@ -77,8 +83,8 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   `fallback`) or consuming or changing one `record_if` reads (`E0505`, `E0502`,
   `E0500`). A non-`Sync` argument the attempts lend is refused where the
   method's future must be `Send`, in rustc's words too: under `idempotent` as
-  `E0277`, a note pointing at the key, and under `record_if` or a `fallback`
-  alone as a future that is not `Send`, naming no key. An error that is no
+  `E0277`, a note pointing at the key, and under a `record_if` naming an
+  argument or a `fallback` alone as a future that is not `Send`, naming no key. An error that is no
   `std::error::Error` is refused saying to give the method one, as a
   `thiserror` derive does, and to hold `anyhow::Error` or a boxed error in a
   type of the app's own that is one. A parameter under a `#[cfg]` is handed to
@@ -124,19 +130,21 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   or `record_if` that panics fails its attempt as a panic in the body does; a
   `fallback_if` or a fallback that panics, asked once the run is over, unwinds
   from the method and fails nothing more. A method declaring `idempotent`, a
-  `fallback` or a `record_if` lends its arguments to each attempt, so its
-  future is `Send` only where each argument it takes by value is `Sync` —
-  under `record_if` alone, each its body only reads; one run once under none of
-  them owns, in its one attempt, the arguments its body names. Every method drops its
+  `fallback` or a `record_if` naming an argument — read by its tokens, a
+  macro's arguments and a format string's captures included — lends its
+  arguments to each attempt, so its future is `Send` only where each argument
+  it takes by value is `Sync` — under such a `record_if` alone, each its body
+  only reads; one run once under none of them, a `record_if` naming no argument
+  included, owns, in its one attempt, the arguments its body names. Every method drops its
   arguments as the undecorated one does, last declared first, however its run ends, but
   for a method run once. Under none of the three keys, what its body leaves unnamed
   drops after the attempt, and an argument it names under a leading `_` drops with
-  the attempt, after the others. Under `record_if` and no `fallback`, an argument the
-  body consumes is the attempt's own: one it has not consumed when the attempt ends
+  the attempt, after the others. Under a `record_if` naming an argument and no
+  `fallback`, an argument the body consumes is the attempt's own: one it has not consumed when the attempt ends
   drops with it, ahead of the arguments the body only reads and in the order the body
   first names them, which a body opening on `let _ = (&out, &held);` sets last declared
-  first. Beside a `#[tracing::instrument]` they drop in the order its future takes
-  them. A body keeps its crate's edition for what its tail expression leaves. An answer
+  first. Below a `#[tracing::instrument]`, whose future takes them in the order the
+  expansion names them, they drop last declared first too. A body keeps its crate's edition for what its tail expression leaves. An answer
   counts in the breaker only in the phase its attempt was let through in: one sent before
   the breaker opened counts nowhere once it has closed again, by its probes or
   by `close_breaker()`.

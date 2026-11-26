@@ -1,11 +1,8 @@
-//! The expansion writes the method's return type where `impl Trait` names no
-//! type: refused at the `impl Trait`, saying to name the type or box it. Only
-//! the body names that type, so the method keeps it whatever else is refused:
-//! a token named as an argument adds its refusal and no error of a stand-in,
-//! and a token the decorator read a name for is bound for the body reading it.
-//! Where the `impl Trait` sits inside the answer, the body is checked as an
-//! attempt of it: an `Err(e)` and a `?` written as the decorator has them
-//! written add no error of rustc's.
+//! An answer that is an `impl Trait` whole names neither what an attempt
+//! answers nor its error: refused at the `impl Trait`, saying to put it inside
+//! the `Result<T, ResilienceError<E>>` or name the type. The body is the
+//! refusal's place, so a token named as an argument adds its own refusal and
+//! nothing else, and a body reading the token it names adds no error.
 
 use std::sync::Arc;
 
@@ -36,23 +33,6 @@ trait Quoted {}
 impl Quoted for String {}
 
 impl ShipmentsService {
-    #[resilient(carrier)]
-    async fn label(&self) -> Result<impl std::fmt::Display, ResilienceError<CarrierDown>> {
-        Ok("labelled")
-    }
-
-    #[resilient(carrier, idempotent, cancel = stop)]
-    async fn label_or_fail(
-        &self,
-        parcel: String,
-    ) -> Result<impl std::fmt::Display, ResilienceError<CarrierDown>> {
-        if stop.is_cancelled() {
-            return Err(CarrierDown);
-        }
-        let weighed: Result<usize, CarrierDown> = Ok(parcel.len());
-        Ok(weighed?)
-    }
-
     #[resilient(carrier, cancel = token)]
     async fn named_as_an_argument(&self, token: String) -> impl Quoted {
         token

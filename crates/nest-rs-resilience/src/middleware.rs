@@ -4,6 +4,9 @@
 //! idempotent is sent again.
 
 use std::convert::Infallible;
+use std::future::{Future, poll_fn};
+use std::panic::resume_unwind;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 
 use http::Extensions;
@@ -14,9 +17,13 @@ use reqwest::{Request, Response, ResponseBuilderExt, StatusCode};
 use reqwest_middleware::{Error, Middleware, Next, Result};
 
 use crate::body::ResilienceBody;
+use crate::call::{Calling, Judged, Once, Reads, Uncancelled};
 use crate::error::{Refusal, ResilienceError};
-use crate::policy::{Attempted, Held, Outstanding, ResiliencePolicy, Run, Verdict};
+use crate::held::Held;
+use crate::policy::ResiliencePolicy;
+use crate::run::Run;
 use crate::told::told;
+use crate::verdict::{Ended, Verdict};
 
 /// The header a client sends to make a request it could not otherwise replay
 /// safe to send again (`draft-ietf-httpapi-idempotency-key-header`).
@@ -158,67 +165,96 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
             return Err(Error::middleware(TracedOutside));
         }
         let replayed = req.method().is_idempotent() || req.headers().contains_key(IDEMPOTENCY_KEY);
-        let mut run = self.policy.begin(None).await.map_err(refused)?;
+        let mut run = pin!(Run::holding(&self.policy.mechanisms));
+        poll_fn(|cx| run.as_mut().poll_open(cx))
+            .await
+            .map_err(|refusal| refused(refusal, run.instance()))?;
         loop {
-            if run.resent > 0 {
-                extensions.insert(Resent(run.resent));
+            if run.resent() > 0 {
+                extensions.insert(Resent(run.resent()));
             }
             let (sending, carried) = (next.clone(), &mut *extensions);
-            let Some(copy) = (replayed && run.may_resend())
+            let copy = (replayed && run.may_resend())
                 .then(|| req.try_clone())
-                .flatten()
-            else {
-                let (attempted, outstanding) = run
-                    .attempt_once(move |_| sending.run(req, carried), judged)
-                    .await;
-                return self.answered(run, attempted, outstanding);
+                .flatten();
+            let Some(copy) = copy else {
+                let mut call = pin!(sent(move || sending.run(req, carried)));
+                let ended = poll_fn(|cx| run.as_mut().poll_attempt(call.as_mut(), cx)).await;
+                return answered(run, call, ended);
             };
-            let (attempted, outstanding) = run
-                .attempt_once(move |_| sending.run(copy, carried), judged)
-                .await;
-            let attempted = match run.again(attempted) {
-                Ok(backoff) => {
-                    // Nothing of an attempt sent again is kept through the
-                    // wait: it counted as it was judged.
-                    drop(outstanding);
-                    backoff.await;
-                    continue;
-                }
-                Err(attempted) => attempted,
+            let mut call = pin!(sent(move || sending.run(copy, carried)));
+            let mut ended = poll_fn(|cx| run.as_mut().poll_attempt(call.as_mut(), cx)).await;
+            let Some(retry) = run.as_mut().retry(&mut ended) else {
+                return answered(run, call, ended);
             };
-            return self.answered(run, attempted, outstanding);
+            // Nothing of an attempt sent again is kept through the wait: it
+            // counted as it was judged.
+            call.as_mut().let_go();
+            run.retrying(&retry);
+            run.as_mut().back_off(&retry);
+            poll_fn(|cx| run.as_mut().poll_back_off(cx)).await;
         }
     }
 }
 
-impl<I: Instance> ResilienceMiddleware<I> {
-    /// What `run` answers, over at its last attempt: a response with a body
-    /// to read hands that body what the run held of the policy, and what the
-    /// attempt left `outstanding`; any other answer ends them here.
-    fn answered(
-        &self,
-        run: Run<'_, I>,
-        attempted: Attempted<Result<Response>>,
-        outstanding: Outstanding<'_>,
-    ) -> Result<Response> {
-        match run.finish(attempted) {
-            Ok((Ok(response), _)) if response.content_length() != Some(0) => Ok(covered(
-                response,
-                run.hold(outstanding, Arc::clone(&self.policy)),
-            )),
-            Ok((answer, _)) => {
-                // In a run's order: its attempt in the breaker, then its slot.
-                drop(outstanding);
+/// What the middleware answers a request with: a response, or reqwest's error.
+type Answer = std::result::Result<Response, ResilienceError<Error>>;
+
+/// One request sent, its answer judged by its status.
+type Sending<F> = Judged<Once<F, Uncancelled>, Statuses, Answer>;
+
+/// The request `send` sends, once, judged by the answer's status: a request
+/// reads no cancellation token, so none is made for it.
+fn sent<F, Fut>(send: F) -> Sending<F>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Response>>,
+{
+    Judged::new(Once::new(send), Statuses)
+}
+
+/// What `run` answers, over at its last attempt, which `ended` so: a response
+/// with a body to read hands that body what the run held of the policy; any
+/// other answer lets it go here, in a run's order — its attempt in the
+/// breaker, then its slot.
+fn answered<F, Fut>(
+    run: Pin<&mut Run<'_>>,
+    call: Pin<&mut Sending<F>>,
+    ended: Ended,
+) -> Result<Response>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Response>>,
+{
+    match ended {
+        Ended::Judged(_) => match call.take() {
+            Some(Ok(response)) if response.content_length() != Some(0) => {
+                Ok(covered(response, run.hold()))
+            }
+            Some(answer) => {
+                run.release_outstanding();
                 answer
             }
-            Err(refusal) => Err(refused(refusal)),
-        }
+            None => unreachable!("an attempt judged holds its answer"),
+        },
+        Ended::Refused(refusal) => Err(refused(run.finish(refusal), run.instance())),
+        Ended::Unwound(payload) => resume_unwind(payload),
+    }
+}
+
+/// A request's answer judged by what it says of the dependency: its status,
+/// or the failure of its transport.
+struct Statuses;
+
+impl Reads<Answer> for Statuses {
+    fn read(&self, answer: &Result<Response>, _again: bool) -> Verdict {
+        judged(answer)
     }
 }
 
 /// `response` as it came, but for its body, read through a
 /// [`ResilienceBody`] holding `held` until it ends.
-fn covered<I: Instance>(response: Response, held: Held<I>) -> Response {
+fn covered(response: Response, held: Held) -> Response {
     // reqwest's own conversions drop the URL one way and read it back the
     // other off an extension its builder alone writes.
     let mut url = http::Response::builder().url(response.url().clone());
@@ -288,8 +324,9 @@ fn status_failure(status: StatusCode) -> Option<&'static str> {
     }
 }
 
-fn refused(refusal: Refusal) -> Error {
-    Error::middleware(ResilienceError::<Infallible>::from(refusal))
+/// `refusal`, made by the policy of `instance`, as reqwest's error carries it.
+fn refused(refusal: Refusal, instance: &'static str) -> Error {
+    Error::middleware(ResilienceError::<Infallible>::refused(refusal, instance))
 }
 
 #[cfg(test)]

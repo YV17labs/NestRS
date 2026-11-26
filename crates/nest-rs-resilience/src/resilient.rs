@@ -1,8 +1,9 @@
 //! What `#[resilient]` expands to: the decorated method a run comes from, the
 //! probes reading the field it names and what it answers, the type its body is
-//! checked as, the two runs that body goes through, each handed the predicates
-//! its keys name, the fallback answering in place of a run's error, and the
-//! stand-in a refused method's body is checked against.
+//! checked as, the runs that body goes through — once or again, handed its
+//! attempt's token where its `cancel` names one and made none otherwise — each
+//! handed the predicates its keys name, the fallback answering in place of a
+//! run's error, and the stand-in a refused method's body is checked against.
 //!
 //! A body stays in the braces it was written in, so what its tail expression
 //! leaves drops as its own crate's edition says: in a crate of edition 2021
@@ -127,6 +128,7 @@ use std::time::Duration;
 use nest_rs_core::Instance;
 use tokio_util::sync::CancellationToken;
 
+use crate::call::{Cancellable, PlacedFuture, Uncancelled, placed_future, placed_future_mut};
 use crate::error::ResilienceError;
 use crate::policy::ResiliencePolicy;
 
@@ -557,7 +559,7 @@ pub trait Fallback<T, E, A, Fut, W> {
         match ended.ended {
             Ok(answered) => FellBack::ran(answered),
             Err(error) => FellBack::FallingBack {
-                fallback: held(fallback.answer(error)),
+                fallback: placed_future(fallback.answer(error)),
             },
         }
     }
@@ -583,10 +585,28 @@ pub fn attempt<R: ResilientAnswer>() -> R::Attempt {
 }
 
 /// `call` run once under `policy`, as `method`'s body, an `Err` it answers
-/// counting as `judging` says.
+/// counting as `judging` says. The body reads no token, so none is made.
 pub fn run<R, I, J, C, F>(
     policy: &ResiliencePolicy<I>,
-    method: ResilientMethod,
+    method: &'static ResilientMethod,
+    judging: J,
+    call: C,
+) -> impl Future<Output = R>
+where
+    R: ResilientAnswer,
+    R::Err: ChainedError,
+    I: Instance,
+    J: Judge<R>,
+    C: FnOnce() -> F,
+    F: Future<Output = R::Attempt>,
+{
+    policy.run_once::<R, J, Uncancelled, C>(Some(method), judging, call)
+}
+
+/// [`run`], its body handed the attempt's token, which its `cancel` names.
+pub fn run_cancellable<R, I, J, C, F>(
+    policy: &ResiliencePolicy<I>,
+    method: &'static ResilientMethod,
     judging: J,
     call: C,
 ) -> impl Future<Output = R>
@@ -598,16 +618,39 @@ where
     C: FnOnce(CancellationToken) -> F,
     F: Future<Output = R::Attempt>,
 {
-    policy.run_once::<R, J, C, F>(Some(method), judging, call)
+    policy.run_once::<R, J, Cancellable, C>(Some(method), judging, call)
 }
 
 /// `call` run under `policy` as `method`'s idempotent body, attempted again
-/// after a timeout or an answer `judging` says to send again.
+/// after a timeout or an answer `judging` says to send again. The body reads
+/// no token, so none is made.
 // An `async fn`, holding its closure of borrows twice (rust-lang/rust#62958), so that
 // rustc's error for a future not `Send` points at the `idempotent` it is spanned at.
 pub async fn run_idempotent<R, I, J, C, F>(
     policy: &ResiliencePolicy<I>,
-    method: ResilientMethod,
+    method: &'static ResilientMethod,
+    judging: J,
+    mut call: C,
+) -> R
+where
+    R: ResilientAnswer,
+    R::Err: ChainedError,
+    I: Instance,
+    J: Judge<R>,
+    C: FnMut() -> F,
+    F: Future<Output = R::Attempt>,
+{
+    policy
+        .run_again::<R, J, Uncancelled, _>(Some(method), judging, &mut call)
+        .await
+}
+
+/// [`run_idempotent`], each attempt of its body handed its own token, which
+/// its `cancel` names.
+// An `async fn` for the reason `run_idempotent` is one.
+pub async fn run_idempotent_cancellable<R, I, J, C, F>(
+    policy: &ResiliencePolicy<I>,
+    method: &'static ResilientMethod,
     judging: J,
     mut call: C,
 ) -> R
@@ -620,7 +663,7 @@ where
     F: Future<Output = R::Attempt>,
 {
     policy
-        .run_again::<R, J, _, F>(Some(method), judging, &mut call)
+        .run_again::<R, J, Cancellable, _>(Some(method), judging, &mut call)
         .await
 }
 
@@ -643,7 +686,7 @@ where
 /// stays counted as it ended and the panic files no line.
 pub fn fall_back<R, T, E, I, P, S>(
     policy: &ResiliencePolicy<I>,
-    method: ResilientMethod,
+    method: &'static ResilientMethod,
     ran: R,
     fallback_if: P,
 ) -> Ended<R, T, E>
@@ -661,7 +704,7 @@ where
     if matches!(error, ResilienceError::Unsettled { .. }) || !fallback_if(&error) {
         return Ended::on(Ok(R::answered(Err(error))));
     }
-    policy.falling_back(&method, &error);
+    policy.mechanisms.teller.fallback(method, &error);
     Ended::on(Err(error))
 }
 
@@ -684,28 +727,6 @@ impl<R, T, E> Ended<R, T, E> {
     }
 }
 
-/// A fallback's future as its method holds it, which is how a run holds an
-/// attempt's: in place in a release build, whatever its size.
-#[cfg(not(debug_assertions))]
-type Held<Fut> = Fut;
-
-/// A fallback's future as its method holds it, which is how a run holds an
-/// attempt's: boxed in a debug build.
-// A debug build copies a value's whole type at each move, and a place that may hold
-// a large future has its size (`.claude/upstream/rustc.md`).
-#[cfg(debug_assertions)]
-type Held<Fut> = Pin<Box<Fut>>;
-
-#[cfg(not(debug_assertions))]
-const fn held<Fut>(fallback: Fut) -> Held<Fut> {
-    fallback
-}
-
-#[cfg(debug_assertions)]
-fn held<Fut>(fallback: Fut) -> Held<Fut> {
-    Box::pin(fallback)
-}
-
 pin_project_lite::pin_project! {
     /// What [`Fallback::in_place_of`] answers: the run's own answer, or its
     /// fallback's, polled where a run polls an attempt's — in place in a
@@ -722,7 +743,7 @@ pin_project_lite::pin_project! {
         /// The fallback's, once it answers.
         FallingBack {
             #[pin]
-            fallback: Held<Fut>,
+            fallback: PlacedFuture<Fut>,
         },
     }
 }
@@ -746,7 +767,9 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<R> {
         match self.project() {
             FellBackProj::Ran { ran, .. } => ran.poll(cx),
-            FellBackProj::FallingBack { fallback } => fallback.poll(cx).map(R::answered),
+            FellBackProj::FallingBack { fallback } => {
+                placed_future_mut(fallback).poll(cx).map(R::answered)
+            }
         }
     }
 }
@@ -854,7 +877,7 @@ mod tests {
         judging: impl Judge<Answer>,
         answers: impl Fn(u32) -> Result<u32, Quote>,
     ) -> Answer {
-        run_idempotent::<Answer, _, _, _, _>(policy, QUOTE, judging, |_| {
+        run_idempotent::<Answer, _, _, _, _>(policy, &QUOTE, judging, || {
             let attempt = attempts.fetch_add(1, Ordering::Relaxed) + 1;
             ready(answers(attempt))
         })
@@ -898,7 +921,7 @@ mod tests {
             (0, 0),
             "and none a success: the window holds nothing of them"
         );
-        let retried = lines.find(TARGET, crate::policy::RETRYING_FAILED);
+        let retried = lines.find(TARGET, crate::teller::RETRYING_FAILED);
         assert_eq!(retried.len(), 4, "{retried:#?}");
         assert!(
             retried.iter().all(|line| {
@@ -941,7 +964,7 @@ mod tests {
     /// the carrier is down.
     async fn quoted_once(policy: &ResiliencePolicy<Carrier>, answer: Result<u32, Quote>) -> Answer {
         let judging = judging(ANSWER, every, none, is_down);
-        run::<Answer, _, _, _, _>(policy, QUOTE, judging, |_| ready(answer)).await
+        run::<Answer, _, _, _, _>(policy, &QUOTE, judging, || ready(answer)).await
     }
 
     /// An `Err` `record_if` refuses counts in neither direction. Closed, the
@@ -950,7 +973,7 @@ mod tests {
     /// probe's answer it hands the turn on, the series as it was.
     #[tokio::test(start_paused = true)]
     async fn an_err_record_if_refuses_counts_in_neither_direction_and_hands_a_probes_turn_on() {
-        const MOVED: &str = crate::breaker::MOVED;
+        const MOVED: &str = crate::teller::MOVED;
         let policy = policy(ResilienceConfig {
             retries: None,
             breaker_window: Some(3),
@@ -1010,7 +1033,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_ok_retry_ok_if_takes_is_sent_again_and_the_last_answers_once_the_retries_are_spent()
     {
-        const RETRIED: &str = crate::policy::RETRYING_ANSWERED;
+        const RETRIED: &str = crate::teller::RETRYING_ANSWERED;
         let policy = guarded(2);
         let pending = |quote: &u32| *quote < 10;
 
@@ -1039,7 +1062,7 @@ mod tests {
             retried.iter().all(|line| line.field("error").is_none()),
             "an `Ok` sent again has no error to tell: {retried:#?}"
         );
-        lines.expect_none(TARGET, crate::policy::RETRYING_FAILED);
+        lines.expect_none(TARGET, crate::teller::RETRYING_FAILED);
         drop(lines);
 
         let attempts = AtomicU32::new(0);
@@ -1110,7 +1133,7 @@ mod tests {
         let policy = guarded(3);
         let attempts = AtomicU32::new(0);
         let unread = judging(ANSWER, unread, unread, unread);
-        let ran = run_idempotent::<Answer, _, _, _, _>(&policy, QUOTE, unread, |_| {
+        let ran = run_idempotent::<Answer, _, _, _, _>(&policy, &QUOTE, unread, || {
             attempts.fetch_add(1, Ordering::Relaxed);
             std::future::pending::<Result<u32, Quote>>()
         })
@@ -1143,33 +1166,33 @@ mod tests {
     /// Whether a run whose predicate at `site` panics unwinds; with no panic,
     /// each would be an answer, never a failure.
     async fn unwinds(policy: &ResiliencePolicy<Carrier>, site: Site) -> bool {
-        let down = |_| ready(Err::<u32, _>(Quote::Down));
-        let up = |_| ready(Ok::<_, Quote>(7));
+        let down = || ready(Err::<u32, _>(Quote::Down));
+        let up = || ready(Ok::<_, Quote>(7));
         let unwound = match site {
             Site::RetryIf => {
                 let judging = judging(ANSWER, panics, none, none);
                 contain(run_idempotent::<Answer, _, _, _, _>(
-                    policy, QUOTE, judging, down,
+                    policy, &QUOTE, judging, down,
                 ))
                 .await
             }
             Site::RetryOkIf => {
                 let judging = judging(ANSWER, every, panics, every);
                 contain(run_idempotent::<Answer, _, _, _, _>(
-                    policy, QUOTE, judging, up,
+                    policy, &QUOTE, judging, up,
                 ))
                 .await
             }
             Site::RecordIf => {
                 let judging = judging(ANSWER, none, none, panics);
                 contain(run_idempotent::<Answer, _, _, _, _>(
-                    policy, QUOTE, judging, down,
+                    policy, &QUOTE, judging, down,
                 ))
                 .await
             }
             Site::RecordIfOnce => {
                 let judging = judging(ANSWER, every, none, panics);
-                contain(run::<Answer, _, _, _, _>(policy, QUOTE, judging, down)).await
+                contain(run::<Answer, _, _, _, _>(policy, &QUOTE, judging, down)).await
             }
         };
         unwound.is_err()
@@ -1201,18 +1224,29 @@ mod tests {
         }
     }
 
+    /// `refusal`, as the default instance's policy answers it.
+    fn default_refusal(refusal: Refusal) -> ResilienceError<Quote> {
+        ResilienceError::refused(refusal, "")
+    }
+
     /// Each error a run ends on but an unsettled savepoint, and what it says.
     fn errors() -> [(ResilienceError<Quote>, &'static str); 5] {
         [
             (ResilienceError::Failed(Quote::Down), "the call failed"),
-            (Refusal::TimedOut(Duration::from_secs(1)).into(), TIMED_OUT),
             (
-                Refusal::Open(Duration::from_secs(30)).into(),
+                default_refusal(Refusal::TimedOut(Duration::from_secs(1))),
+                TIMED_OUT,
+            ),
+            (
+                default_refusal(Refusal::Open(Duration::from_secs(30))),
                 "the circuit breaker is open",
             ),
-            (Refusal::Full.into(), "the bulkhead has no free slot"),
             (
-                Refusal::Limited(Duration::from_secs(2)).into(),
+                default_refusal(Refusal::Full),
+                "the bulkhead has no free slot",
+            ),
+            (
+                default_refusal(Refusal::Limited(Duration::from_secs(2))),
                 "the rate limit is reached",
             ),
         ]
@@ -1224,7 +1258,7 @@ mod tests {
         for (error, says) in errors() {
             let handed = Mutex::new(None);
             let answered = Fallback::in_place_of(
-                fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Err(error), every),
+                fall_back::<Answer, _, _, _, _, _>(&policy, &QUOTE, Err(error), every),
                 |error: ResilienceError<Quote>| async {
                     *handed.lock().expect("the fallback's own") = Some(error);
                     Ok(7)
@@ -1250,7 +1284,7 @@ mod tests {
         let refused = Fallback::in_place_of(
             fall_back::<Answer, _, _, _, _, _>(
                 &policy,
-                QUOTE,
+                &QUOTE,
                 Err(ResilienceError::Failed(Quote::Down)),
                 open,
             ),
@@ -1266,8 +1300,8 @@ mod tests {
         let taken = Fallback::in_place_of(
             fall_back::<Answer, _, _, _, _, _>(
                 &policy,
-                QUOTE,
-                Err(Refusal::Open(Duration::from_secs(30)).into()),
+                &QUOTE,
+                Err(default_refusal(Refusal::Open(Duration::from_secs(30)))),
                 open,
             ),
             stale,
@@ -1287,7 +1321,7 @@ mod tests {
             let down = Err(ResilienceError::Failed(Quote::Down));
             let served = |_: &ResilienceError<Quote>| zone == "eu";
             let answered = Fallback::in_place_of(
-                fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, down, served),
+                fall_back::<Answer, _, _, _, _, _>(&policy, &QUOTE, down, served),
                 move |_: ResilienceError<Quote>| async move { Ok(zone.len() as u32) },
             )
             .await;
@@ -1301,7 +1335,7 @@ mod tests {
         let own = Fallback::in_place_of(
             fall_back::<Answer, _, _, _, _, _>(
                 &policy,
-                QUOTE,
+                &QUOTE,
                 Err(ResilienceError::Failed(Quote::Down)),
                 every,
             ),
@@ -1317,7 +1351,7 @@ mod tests {
         let answered = Fallback::in_place_of(
             fall_back::<Answer, _, _, _, _, _>(
                 &policy,
-                QUOTE,
+                &QUOTE,
                 Ok(3),
                 |_: &ResilienceError<Quote>| {
                     asked.fetch_add(1, Ordering::Relaxed);
@@ -1351,7 +1385,7 @@ mod tests {
         let made = size_of_val(&stale(ResilienceError::Failed(Quote::Down)));
         let down = Err(ResilienceError::Failed(Quote::Down));
         let falling = Fallback::in_place_of(
-            fall_back::<Large, _, _, _, _, _>(&policy, QUOTE, down, every),
+            fall_back::<Large, _, _, _, _, _>(&policy, &QUOTE, down, every),
             stale,
         );
         let weighs = size_of_val(&falling);
@@ -1375,7 +1409,7 @@ mod tests {
         let made = size_of_val(&laden(ResilienceError::Failed(Quote::Down)));
         let down = Err(ResilienceError::Failed(Quote::Down));
         let falling = Fallback::in_place_of(
-            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, down, every),
+            fall_back::<Answer, _, _, _, _, _>(&policy, &QUOTE, down, every),
             laden,
         );
         let weighs = size_of_val(&falling);
@@ -1416,7 +1450,7 @@ mod tests {
         )
         .await;
         let answered = Fallback::in_place_of(
-            fall_back::<Answer, _, _, _, _, _>(&retried, QUOTE, ran, every),
+            fall_back::<Answer, _, _, _, _, _>(&retried, &QUOTE, ran, every),
             stale,
         )
         .await;
@@ -1430,14 +1464,14 @@ mod tests {
         let opening = guarded(1);
         let ran = quoted_once(&opening, Err(Quote::Down)).await;
         let answered = Fallback::in_place_of(
-            fall_back::<Answer, _, _, _, _, _>(&opening, QUOTE, ran, every),
+            fall_back::<Answer, _, _, _, _, _>(&opening, &QUOTE, ran, every),
             stale,
         )
         .await;
         assert!(matches!(answered, Ok(1)), "{answered:?}");
         let ran = quoted_once(&opening, Ok(9)).await;
         let answered = Fallback::in_place_of(
-            fall_back::<Answer, _, _, _, _, _>(&opening, QUOTE, ran, every),
+            fall_back::<Answer, _, _, _, _, _>(&opening, &QUOTE, ran, every),
             stale,
         )
         .await;
@@ -1451,7 +1485,7 @@ mod tests {
     /// whole chain; a run its fallback does not answer for files none.
     #[tokio::test]
     async fn a_fallback_answering_files_a_debug_line_with_the_errors_chain() {
-        const FELL_BACK: &str = crate::policy::FALLBACK_ANSWERS;
+        const FELL_BACK: &str = crate::teller::FALLBACK_ANSWERS;
         let policy = unguarded();
         let stale = |_: ResilienceError<Quote>| async { Ok(7) };
         let throttled =
@@ -1459,13 +1493,13 @@ mod tests {
 
         let lines = LogCapture::install();
         let kept = Fallback::in_place_of(
-            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Err(throttled()), none),
+            fall_back::<Answer, _, _, _, _, _>(&policy, &QUOTE, Err(throttled()), none),
             stale,
         )
         .await;
         assert!(kept.is_err(), "{kept:?}");
         let answered = Fallback::in_place_of(
-            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Ok(3), every),
+            fall_back::<Answer, _, _, _, _, _>(&policy, &QUOTE, Ok(3), every),
             stale,
         )
         .await;
@@ -1473,7 +1507,7 @@ mod tests {
         lines.expect_none(TARGET, FELL_BACK);
 
         let fell_back = Fallback::in_place_of(
-            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Err(throttled()), every),
+            fall_back::<Answer, _, _, _, _, _>(&policy, &QUOTE, Err(throttled()), every),
             stale,
         )
         .await;
@@ -1514,13 +1548,13 @@ mod tests {
         let down = || Err(ResilienceError::Failed(Quote::Down));
         for fallback_if in [every, every, none] {
             let _answered: Answer = Fallback::in_place_of(
-                fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, down(), fallback_if),
+                fall_back::<Answer, _, _, _, _, _>(&policy, &QUOTE, down(), fallback_if),
                 stale,
             )
             .await;
         }
         let _answered: Answer = Fallback::in_place_of(
-            fall_back::<Answer, _, _, _, _, _>(&policy, QUOTE, Ok(3), every),
+            fall_back::<Answer, _, _, _, _, _>(&policy, &QUOTE, Ok(3), every),
             stale,
         )
         .await;
@@ -1704,10 +1738,10 @@ mod tests {
         fallback_if: fn(&ResilienceError<Quote>) -> bool,
     ) -> Answer {
         let policy = unguarded();
-        let method = QUOTE.with_fallback();
+        let method = const { &QUOTE.with_fallback() };
         with_request_executor(unit, async {
             let unrecorded = judging(ANSWER, every, none, none);
-            let ran = run::<Answer, _, _, _, _>(&policy, method, unrecorded, |_| {
+            let ran = run::<Answer, _, _, _, _>(&policy, method, unrecorded, || {
                 seen.saw(Saw::Called { inside: inside() });
                 ready(answer)
             })
@@ -1794,14 +1828,14 @@ mod tests {
     /// the one line is the fallback's, filed before it was called.
     #[tokio::test(start_paused = true)]
     async fn a_filter_or_a_fallback_that_panics_unwinds_from_a_run_already_counted() {
-        const FELL_BACK: &str = crate::policy::FALLBACK_ANSWERS;
+        const FELL_BACK: &str = crate::teller::FALLBACK_ANSWERS;
         #[derive(Clone, Copy, Debug)]
         enum Panics {
             Filter,
             Fallback,
         }
 
-        let method = QUOTE.with_fallback();
+        let method = const { &QUOTE.with_fallback() };
         for (panics_in, refused, counted, saw) in [
             (
                 Panics::Filter,
@@ -1849,7 +1883,7 @@ mod tests {
                     &policy,
                     method,
                     judging(ANSWER, every, none, every),
-                    |_| {
+                    || {
                         seen.saw(Saw::Called { inside: inside() });
                         ready(Err(Quote::Down))
                     },

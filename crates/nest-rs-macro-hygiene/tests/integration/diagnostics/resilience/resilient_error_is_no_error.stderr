@@ -61,13 +61,13 @@ help: the trait `nest_rs::resilience::__private::ChainedError` is not implemente
    | ^^^^^^^^^^^^^^^
    = note: the policy tells the error's chain in the line a retry files and in its breaker's opening, and reads it before a retry for the `Retry-After` a `Problem` in it asks
    = note: give the method an error implementing `std::error::Error`, as a `thiserror` derive does; one that cannot — `anyhow::Error`, a `Box<dyn Error>` — is held in a type of the app's own that does
-note: required by a bound in `nest_rs::resilience::__private::run`
+note: required by a bound in `nest_rs::resilience::__private::run_cancellable`
   --> $WORKSPACE/crates/nest-rs-resilience/src/resilient.rs
    |
-   | pub fn run<R, I, J, C, F>(
+   | pub fn run_cancellable<R, I, J, C, F>(
 ...
    |     R::Err: ChainedError,
-   |             ^^^^^^^^^^^^ required by this bound in `run`
+   |             ^^^^^^^^^^^^ required by this bound in `run_cancellable`
    = note: this error originates in the attribute macro `resilient` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: a `#[resilient]` method's error is a `std::error::Error`, and `anyhow::Error` is not one

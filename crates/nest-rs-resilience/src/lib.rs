@@ -94,14 +94,21 @@ mod counters;
 mod error;
 mod events;
 #[cfg(feature = "reqwest")]
+mod held;
+mod mechanisms;
+#[cfg(feature = "reqwest")]
 mod middleware;
 mod millis;
 mod module;
+mod observed;
 mod policy;
 mod rate;
 mod resilient;
+mod run;
 mod savepoint;
+mod teller;
 mod told;
+mod verdict;
 
 pub use breaker::{BreakerPhase, BreakerState, BreakerStats};
 pub use config::ResilienceConfig;
@@ -253,10 +260,13 @@ pub mod __private {
     pub use crate::resilient::{
         ChainedError, Fallback, FallbackIf, Judge, PolicyField, RecordIf, ResilientAnswer,
         ResilientMethod, RetryIf, RetryOkIf, attempt, every, fall_back, judging, none, policy,
-        refused, resilient_method, run, run_idempotent,
+        refused, resilient_method, run, run_cancellable, run_idempotent,
+        run_idempotent_cancellable,
     };
 }
 
-/// What each attempt is handed: cancelled when the policy gives the attempt up,
-/// so work the call handed to another task stops with it.
+/// What an attempt is handed when its call takes one — every call through
+/// [`ResiliencePolicy::run`] or [`ResiliencePolicy::run_idempotent`], and a
+/// decorated method whose `cancel` names it: cancelled when the policy gives
+/// the attempt up, so work the call handed to another task stops with it.
 pub use tokio_util::sync::CancellationToken;

@@ -5,7 +5,6 @@
 //!
 //! [`ResilienceMiddleware`]: crate::ResilienceMiddleware
 
-use std::convert::Infallible;
 use std::error::Error;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -15,13 +14,12 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use http_body::{Body, Frame, SizeHint};
-use nest_rs_core::Instance;
 use parking_lot::Mutex;
 use tokio::time::{Instant, Sleep};
 
 use crate::breaker::Cut;
-use crate::error::{ResilienceError, TIMED_OUT};
-use crate::policy::Held;
+use crate::error::TIMED_OUT;
+use crate::held::Held;
 use crate::told::told;
 
 pin_project_lite::pin_project! {
@@ -35,10 +33,11 @@ pin_project_lite::pin_project! {
     /// frame that came is handed on whenever it is read, so the time its reader
     /// takes between two reads, or away from a read it abandoned, is never the
     /// dependency's. A read still waiting once the budget is spent is given up
-    /// there, answering a [`ResilienceError::TimedOut`]: a failure counted as a
-    /// timeout. A read that fails is a failure told as its chain, and one that
-    /// panics a failure counted before the unwind goes on, as a panic in an
-    /// attempt's call is.
+    /// there, answering a
+    /// [`ResilienceError::TimedOut`](crate::ResilienceError::TimedOut): a
+    /// failure counted as a timeout. A read that fails is a failure told as its
+    /// chain, and one that panics a failure counted before the unwind goes on,
+    /// as a panic in an attempt's call is.
     ///
     /// Read to its end, the answer stands as its head was judged. Dropped
     /// before it, it is judged by what the dependency owes then: nothing while
@@ -56,17 +55,14 @@ pin_project_lite::pin_project! {
     /// stream, which its edge reads once the unit is over — is dropped under
     /// none, so a client leaving a read of it, the budget unspent, charges
     /// the dependency nothing.
-    pub(crate) struct ResilienceBody<I>
-    where
-        I: Instance,
-    {
+    pub(crate) struct ResilienceBody {
         #[pin]
         body: reqwest::Body,
         // Armed while a read waits, due when the budget is spent.
         #[pin]
         cut: Option<Sleep>,
         // `None` once the answer is settled.
-        held: Option<Held<I>>,
+        held: Option<Held>,
         // How long the reads may still wait for the dependency in all.
         left: Duration,
         // When the read still believed waiting found nothing.
@@ -76,10 +72,7 @@ pin_project_lite::pin_project! {
         waker: Waker,
     }
 
-    impl<I> PinnedDrop for ResilienceBody<I>
-    where
-        I: Instance,
-    {
+    impl PinnedDrop for ResilienceBody {
         fn drop(this: Pin<&mut Self>) {
             let mut this = this.project();
             let (Some(held), Some(since)) = (this.held.as_mut(), *this.waiting) else {
@@ -174,13 +167,13 @@ impl Wake for Signal {
 }
 
 /// A read of the answer's body failed on `error`: a failure, told as its chain.
-fn failed<I>(held: &mut Held<I>, error: &reqwest::Error) {
+fn failed(held: &mut Held, error: &reqwest::Error) {
     held.settle(Some(&told(error)));
 }
 
-impl<I: Instance> ResilienceBody<I> {
+impl ResilienceBody {
     /// `body`, holding `held` until it ends.
-    pub(crate) fn new(body: reqwest::Body, held: Held<I>) -> Self {
+    pub(crate) fn new(body: reqwest::Body, held: Held) -> Self {
         let signal = Arc::new(Signal::default());
         Self {
             body,
@@ -194,7 +187,7 @@ impl<I: Instance> ResilienceBody<I> {
     }
 }
 
-impl<I: Instance> Body for ResilienceBody<I> {
+impl Body for ResilienceBody {
     type Data = <reqwest::Body as Body>::Data;
     type Error = Box<dyn Error + Send + Sync>;
 
@@ -230,14 +223,12 @@ impl<I: Instance> Body for ResilienceBody<I> {
             if cut.is_some_and(|cut| cut.poll(cx).is_pending()) {
                 return Poll::Pending;
             }
-            let refusal = held.timed_out();
+            let timed_out = held.timed_out();
             *this.held = None;
             // Let go here, not when the response is dropped: its connection is the one
             // that stalled, and a body of another policy's it reads is cut by this timeout.
             Cut::dropping(|| this.body.set(reqwest::Body::default()));
-            return Poll::Ready(Some(Err(
-                ResilienceError::<Infallible>::from(refusal).into()
-            )));
+            return Poll::Ready(Some(Err(timed_out.into())));
         };
         if let Some(since) = this.waiting.take() {
             let came = signalled.unwrap_or_else(Instant::now);
@@ -271,18 +262,21 @@ impl<I: Instance> Body for ResilienceBody<I> {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
     use std::io;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::ready;
     use std::time::Duration;
 
-    use nest_rs_core::Unnamed;
     use nest_rs_testing::LogCapture;
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::error::Refusal;
-    use crate::policy::{PANICKED, ResiliencePolicy, Verdict};
+    use crate::call::{Judged, Once, Reads, Uncancelled};
+    use crate::error::{Refusal, ResilienceError};
+    use crate::policy::ResiliencePolicy;
+    use crate::run::Run;
+    use crate::verdict::{Ended, PANICKED, Verdict};
     use crate::{BreakerState, ResilienceConfig, TARGET};
 
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -351,7 +345,7 @@ mod tests {
         }
     }
 
-    type Covered = Pin<Box<ResilienceBody<Unnamed>>>;
+    type Covered = Pin<Box<ResilienceBody>>;
 
     /// The body of a response to a request run under `policy`, whose head
     /// came after `head` and was read as `judged`, and what feeds it.
@@ -365,6 +359,15 @@ mod tests {
         (body, feed)
     }
 
+    /// The head of a request's answer, judged as the test says.
+    struct AsJudged(Verdict);
+
+    impl Reads<Result<(), ResilienceError<io::Error>>> for AsJudged {
+        fn read(&self, _head: &Result<(), io::Error>, _again: bool) -> Verdict {
+            self.0.clone()
+        }
+    }
+
     /// `body` as the body of a response to a request run under `policy`,
     /// whose head came after `head` and was read as `judged`.
     async fn covering(
@@ -373,18 +376,26 @@ mod tests {
         judged: Verdict,
         body: reqwest::Body,
     ) -> Covered {
-        let run = policy
-            .begin(None)
+        let mut run = Run::begin(&policy.mechanisms)
             .await
             .expect("the request is let through");
-        let call = |_| async move {
+        let call = move || async move {
             tokio::time::sleep(head).await;
             Ok::<_, io::Error>(())
         };
-        let (attempted, outstanding) = run.attempt_once(call, move |_| judged.clone()).await;
-        let (head, _) = run.finish(attempted).expect("the request was sent");
-        head.expect("the head answered");
-        let held = run.hold(outstanding, Arc::clone(policy));
+        let mut call = std::pin::pin!(Judged::new(
+            Once::<_, Uncancelled>::new(call),
+            AsJudged(judged)
+        ));
+        let ended = std::future::poll_fn(|cx| run.as_mut().poll_attempt(call.as_mut(), cx)).await;
+        assert!(
+            matches!(ended, Ended::Judged(_)),
+            "the request was sent: {ended:?}"
+        );
+        call.take()
+            .expect("the head's answer")
+            .expect("the head answered");
+        let held = run.as_mut().hold();
         Box::pin(ResilienceBody::new(body, held))
     }
 
@@ -442,7 +453,7 @@ mod tests {
     /// Each transition `lines` holds, by the state it entered.
     fn states(lines: &LogCapture) -> Vec<String> {
         lines
-            .find(TARGET, crate::breaker::MOVED)
+            .find(TARGET, crate::teller::MOVED)
             .iter()
             .map(|line| line.field("state").unwrap_or_default())
             .collect()
@@ -451,7 +462,7 @@ mod tests {
     /// What each opening of the breaker by a failure says it failed on.
     fn opened_on(lines: &LogCapture) -> Vec<String> {
         lines
-            .find(TARGET, crate::breaker::MOVED)
+            .find(TARGET, crate::teller::MOVED)
             .iter()
             .filter_map(|line| line.field("error"))
             .collect()
@@ -460,7 +471,7 @@ mod tests {
     /// Whether `policy`'s one slot is taken, which a call arriving meets once
     /// its breaker lets it through.
     async fn slot_taken(policy: &ResiliencePolicy) -> bool {
-        policy.begin(None).await.err() == Some(Refusal::Full)
+        Run::begin(&policy.mechanisms).await.err() == Some(Refusal::Full)
     }
 
     fn is_open(policy: &ResiliencePolicy) -> bool {
@@ -482,7 +493,10 @@ mod tests {
             Some(b"half".to_vec())
         );
         assert!(
-            matches!(policy.begin(None).await.err(), Some(Refusal::Open(_))),
+            matches!(
+                Run::begin(&policy.mechanisms).await.err(),
+                Some(Refusal::Open(_))
+            ),
             "half read, the probe still holds its turn"
         );
         assert_eq!(policy.breaker_state(), Some(BreakerState::HalfOpen));
@@ -1302,7 +1316,7 @@ mod tests {
 
     impl tracing::field::Visit for Moved {
         fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-            self.0 |= field.name() == "message" && format!("{value:?}") == crate::breaker::MOVED;
+            self.0 |= field.name() == "message" && format!("{value:?}") == crate::teller::MOVED;
         }
     }
 

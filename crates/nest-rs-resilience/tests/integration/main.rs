@@ -144,14 +144,21 @@ unsafe impl GlobalAlloc for Counting {
 /// and how many allocations building and polling it made; a future that waits
 /// fails the test.
 fn allocations<F: Future>(make: impl FnOnce() -> F) -> (F::Output, usize) {
-    COUNTED.set(Some(0));
-    let mut fut = pin!(make());
-    let polled = fut.as_mut().poll(&mut Context::from_waker(Waker::noop()));
-    let made = COUNTED.replace(None).unwrap_or_default();
+    let (polled, made) = allocated(|| {
+        let mut fut = pin!(make());
+        fut.as_mut().poll(&mut Context::from_waker(Waker::noop()))
+    });
     let Poll::Ready(answer) = polled else {
         panic!("a call whose allocations are counted answers at its first poll");
     };
     (answer, made)
+}
+
+/// What `counted` answers, and how many allocations it made on this thread.
+fn allocated<T>(counted: impl FnOnce() -> T) -> (T, usize) {
+    COUNTED.set(Some(0));
+    let answer = counted();
+    (answer, COUNTED.replace(None).unwrap_or_default())
 }
 
 /// What an attempt's `CancellationToken` allocates, which every attempt hands

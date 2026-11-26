@@ -57,6 +57,12 @@ impl QuotesService {
         Ok(40)
     }
 
+    /// Never answers, sent again as each attempt is given up.
+    #[resilient(quotes, idempotent)]
+    async fn unanswered(&self) -> Answer {
+        silent().await
+    }
+
     #[resilient(quotes, fallback = stale_quote)]
     async fn latest_quote(&self) -> Answer<u32> {
         Err(Down)
@@ -299,6 +305,46 @@ async fn an_attempt_timed_out_is_told_with_its_bound_before_its_retry() {
         matches!(&told[..], [ResilienceEvent::Timeout { timeout, .. }] if timeout.is_zero()),
         "{told:?}"
     );
+}
+
+/// The timeout of an attempt a decorated method sends again names the method,
+/// as the retry it earns and the timeout its run ends on do.
+#[tokio::test(start_paused = true)]
+async fn an_attempt_of_a_decorated_method_timed_out_is_told_with_its_method_before_its_retry() {
+    let (_app, service, policy) = quotes(ResilienceConfig {
+        timeout: Duration::from_millis(100),
+        retries: Some(1),
+        ..quiet()
+    })
+    .await;
+    let mut events = policy.events();
+
+    let given_up = service.unanswered().await;
+    assert!(
+        matches!(given_up, Err(ResilienceError::TimedOut { .. })),
+        "{given_up:?}"
+    );
+    let told = told(&mut events);
+    let named: Vec<_> = told
+        .iter()
+        .map(|event| match event {
+            ResilienceEvent::Timeout { host, method, .. }
+            | ResilienceEvent::Retry { host, method, .. } => (host.as_deref(), *method),
+            other => panic!("a timeout or a retry: {other:?}"),
+        })
+        .collect();
+    assert!(
+        matches!(
+            &told[..],
+            [
+                ResilienceEvent::Timeout { .. },
+                ResilienceEvent::Retry { attempt: 1, .. },
+                ResilienceEvent::Timeout { .. },
+            ]
+        ),
+        "a timeout, its retry, the retry's timeout: {told:?}"
+    );
+    assert_eq!(named, [(Some("QuotesService"), Some("unanswered")); 3]);
 }
 
 /// A timeout that leaves no run to answer counts in the breaker and is told

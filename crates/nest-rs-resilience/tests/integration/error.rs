@@ -2,16 +2,19 @@
 //! dependency's breaker is open is answered `503` with the `Retry-After` the
 //! breaker knows, at once — whether the route answers the policy's error or a
 //! domain error of its own handing its problem on — and a failed call is
-//! answered opaquely.
+//! answered opaquely; the edge's line says which policy refused, by the
+//! instance it is named for, and the reply names none.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use http::StatusCode;
-use nest_rs_core::{Problem, ToProblem, code, module};
+use nest_rs_core::{Problem, ToProblem, code, injectable, instance, module};
 use nest_rs_http::{controller, routes};
-use nest_rs_resilience::{ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy};
-use nest_rs_testing::TestApp;
+use nest_rs_resilience::{
+    ResilienceConfig, ResilienceError, ResilienceModule, ResiliencePolicy, resilient,
+};
+use nest_rs_testing::{LogCapture, TestApp};
 
 /// What the dependency answers: a failure the route cannot describe.
 #[derive(Debug, thiserror::Error)]
@@ -98,6 +101,116 @@ async fn an_open_breaker_is_answered_503_with_its_retry_after_and_a_failure_opaq
             .get("code")
             .assert_string(code::UNAVAILABLE.as_str());
     }
+}
+
+/// The payment provider a checkout charges first.
+#[instance]
+struct Payments;
+
+/// The warehouse a checkout reserves its stock at once it is charged.
+#[instance]
+struct Warehouse;
+
+#[injectable]
+struct CheckoutService {
+    #[inject]
+    payments: Arc<ResiliencePolicy<Payments>>,
+    #[inject]
+    warehouse: Arc<ResiliencePolicy<Warehouse>>,
+}
+
+impl CheckoutService {
+    #[resilient(payments)]
+    async fn charge(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+        Ok(())
+    }
+
+    #[resilient(warehouse)]
+    async fn reserve(&self) -> Result<(), ResilienceError<UpstreamDown>> {
+        Ok(())
+    }
+}
+
+#[controller(path = "/checkout")]
+struct CheckoutController {
+    #[inject]
+    svc: Arc<CheckoutService>,
+}
+
+#[routes]
+impl CheckoutController {
+    /// One handler, two dependencies: either policy's refusal is its answer.
+    #[get("/")]
+    #[public]
+    async fn checkout(&self) -> Result<String, ResilienceError<UpstreamDown>> {
+        self.svc.charge().await?;
+        self.svc.reserve().await?;
+        Ok("reserved".to_owned())
+    }
+}
+
+#[module(
+    imports = [ResilienceModule<Payments>, ResilienceModule<Warehouse>],
+    providers = [CheckoutService, CheckoutController],
+)]
+struct CheckoutModule;
+
+/// Each policy of one handler refusing in turn: the line the edge files for
+/// its `503` says which one refused, by the instance its policy is named for,
+/// and the reply says neither — no instance and no mechanism.
+#[tokio::test(start_paused = true)]
+async fn the_edges_line_names_the_policy_that_refused_and_the_reply_none() {
+    const OPEN: Duration = Duration::from_secs(30);
+
+    let app = TestApp::for_module::<CheckoutModule>()
+        .await
+        .expect("a handler over two policies boots");
+    let container = app.container();
+    let payments = container
+        .get::<ResiliencePolicy<Payments>>()
+        .expect("the module built the payments policy");
+    let warehouse = container
+        .get::<ResiliencePolicy<Warehouse>>()
+        .expect("the module built the warehouse policy");
+    let logs = LogCapture::install();
+
+    payments.open_breaker(OPEN).expect("a breaker");
+    let charging = app.http().get("/checkout").send().await;
+    payments.close_breaker().expect("a breaker");
+    warehouse.open_breaker(OPEN).expect("a breaker");
+    let reserving = app.http().get("/checkout").send().await;
+
+    for refused in [charging, reserving] {
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        refused.assert_header("retry-after", "30");
+        let reply = refused
+            .json()
+            .await
+            .value()
+            .deserialize::<serde_json::Value>();
+        assert_eq!(reply["code"], code::UNAVAILABLE.as_str(), "{reply}");
+        for named in ["payments", "warehouse", "breaker"] {
+            assert!(!reply.to_string().contains(named), "`{named}` in {reply}");
+        }
+    }
+    let said: Vec<_> = logs
+        .find(nest_rs_http::target::HTTP, "request unavailable")
+        .iter()
+        .map(|line| line.field("error"))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            Some(
+                "the circuit breaker of the instance `payments` is open: 503 UNAVAILABLE"
+                    .to_owned()
+            ),
+            Some(
+                "the circuit breaker of the instance `warehouse` is open: 503 UNAVAILABLE"
+                    .to_owned()
+            ),
+        ]
+    );
 }
 
 /// A policy refusing every call but its first, which fails: what every edge

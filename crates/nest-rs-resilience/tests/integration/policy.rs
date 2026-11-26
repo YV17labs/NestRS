@@ -884,20 +884,34 @@ impl Answering {
     async fn stale(&self, _error: ResilienceError<Silent>) -> Result<u32, ResilienceError<Silent>> {
         Ok(0)
     }
+
+    #[resilient(policy, cancel = token)]
+    async fn named_once(&self) -> Result<u32, ResilienceError<Silent>> {
+        drop(token);
+        Ok(7)
+    }
+
+    #[resilient(policy, idempotent, cancel = token)]
+    async fn named_again(&self) -> Result<u32, ResilienceError<Silent>> {
+        drop(token);
+        Ok(7)
+    }
 }
 
 /// A slot of the bulkhead, a token of the rate and the breaker's pass, its
 /// outcome counted with its age, cost a call answering at once no allocation,
 /// by whichever path an app calls its policy, a fallback it declares never
-/// called: in a release build it allocates its token alone. A debug build
-/// boxes its future, and a decorated method's closure where it holds
-/// something, as an idempotent one's does.
+/// called: in a release build it allocates nothing but the cancellation token
+/// its call takes — a call through `run` or `run_idempotent` always, a
+/// decorated method only when its `cancel` names one. A debug build boxes its
+/// future, and a decorated method's closure where it holds something, as an
+/// idempotent one's does.
 #[tokio::test(start_paused = true)]
 #[cfg_attr(
     not(target_os = "linux"),
     ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
 )]
-async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_its_token_in_a_release_build()
+async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_the_token_it_takes_in_a_release_build()
  {
     let (_app, policy) = crate::policy(every_mechanism()).await;
     let host = Answering {
@@ -905,39 +919,56 @@ async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_
     };
     let token = crate::token_allocations();
     let debug = usize::from(cfg!(debug_assertions));
-    for (shape, boxed, (answered, made)) in [
+    for (shape, tokens, boxed, (answered, made)) in [
         (
             "run once",
+            1,
             debug,
             crate::allocations(|| policy.run(|_| async { Ok::<_, Silent>(7) })),
         ),
         (
             "run again",
+            1,
             debug,
             crate::allocations(|| policy.run_idempotent(|_| async { Ok::<_, Silent>(7) })),
         ),
         (
             "of a decorated method run once",
+            0,
             debug,
             crate::allocations(|| host.once()),
         ),
         (
             "of a decorated method run again",
+            0,
             2 * debug,
             crate::allocations(|| host.again()),
         ),
         (
             "of a decorated method declaring a fallback",
+            0,
             debug,
             crate::allocations(|| host.kept()),
+        ),
+        (
+            "of a decorated method run once naming its token",
+            1,
+            debug,
+            crate::allocations(|| host.named_once()),
+        ),
+        (
+            "of a decorated method run again naming its token",
+            1,
+            2 * debug,
+            crate::allocations(|| host.named_again()),
         ),
     ] {
         assert!(matches!(answered, Ok(7)), "{shape}: {answered:?}");
         assert_eq!(
             made,
-            token + boxed,
-            "through a breaker, a bulkhead and a rate, a call {shape} allocates its token, \
-             {token}, and in a debug build {boxed} box(es)"
+            tokens * token + boxed,
+            "through a breaker, a bulkhead and a rate, a call {shape} allocates {tokens} token(s), \
+             each {token}, and in a debug build {boxed} box(es)"
         );
     }
     assert_eq!(
@@ -946,8 +977,80 @@ async fn a_call_answering_at_once_through_every_mechanism_allocates_nothing_but_
             policy.rate_available(),
             policy.breaker_stats().map(|stats| stats.outcomes),
         ),
-        (Some(0), Some(995), Some(5)),
-        "each of the five took a slot, given back, and a token, and counted in the breaker"
+        (Some(0), Some(993), Some(7)),
+        "each of the seven took a slot, given back, and a token, and counted in the breaker"
+    );
+}
+
+/// One poll of `run` with no waker, counting what it allocates.
+fn polled_once<F: Future>(run: std::pin::Pin<&mut F>) -> (std::task::Poll<F::Output>, usize) {
+    crate::allocated(|| run.poll(&mut std::task::Context::from_waker(std::task::Waker::noop())))
+}
+
+/// A call that waits — for a slot of the bulkhead, or for a token of the rate
+/// — allocates that wait once, beside its token: a run holds the two waits a
+/// call may never meet in a box, so one that meets neither reserves no room
+/// for them. A debug build boxes its future too.
+#[tokio::test(start_paused = true)]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "pins the allocations a run makes on Linux, where the dev container and CI run it"
+)]
+async fn a_call_waiting_for_a_slot_or_a_token_allocates_its_wait_once() {
+    let token = crate::token_allocations();
+    let boxed = usize::from(cfg!(debug_assertions));
+
+    let (_app, policy) = crate::policy(ResilienceConfig {
+        concurrency: Some(1),
+        concurrency_wait: Some(Duration::from_secs(60)),
+        ..crate::quiet()
+    })
+    .await;
+    let mut holding = Box::pin(policy.run(|_| std::future::pending::<Result<u32, Silent>>()));
+    assert!(
+        polled_once(holding.as_mut()).0.is_pending(),
+        "it holds the one slot"
+    );
+    let mut waiting = std::pin::pin!(policy.run(|_| async { Ok::<_, Silent>(7) }));
+    let (entering, entered) = polled_once(waiting.as_mut());
+    assert!(entering.is_pending(), "it waits for the slot");
+    drop(holding);
+    let (answered, sent) = polled_once(waiting.as_mut());
+    assert!(
+        matches!(answered, std::task::Poll::Ready(Ok(7))),
+        "{answered:?}"
+    );
+    assert_eq!(
+        entered + sent,
+        token + 1 + boxed,
+        "a call waiting for a slot allocates its token, {token}, its wait, and in a debug build \
+         its future's box"
+    );
+
+    let (_app, policy) = crate::policy(ResilienceConfig {
+        rate_limit: Some(1),
+        rate_window: Duration::from_secs(1),
+        rate_wait: Some(Duration::from_secs(1)),
+        ..crate::quiet()
+    })
+    .await;
+    assert!(policy.run(|_| async { Ok::<_, Silent>(7) }).await.is_ok());
+    // The rate's line takes room for a waiting call the first time one waits.
+    assert!(policy.run(|_| async { Ok::<_, Silent>(7) }).await.is_ok());
+    let mut waiting = std::pin::pin!(policy.run(|_| async { Ok::<_, Silent>(7) }));
+    let (admitting, admitted) = polled_once(waiting.as_mut());
+    assert!(admitting.is_pending(), "it waits for the next token");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let (answered, sent) = polled_once(waiting.as_mut());
+    assert!(
+        matches!(answered, std::task::Poll::Ready(Ok(7))),
+        "{answered:?}"
+    );
+    assert_eq!(
+        admitted + sent,
+        token + 1 + boxed,
+        "a call waiting for a token allocates its token, {token}, its wait, and in a debug build \
+         its future's box"
     );
 }
 

@@ -3,8 +3,9 @@
 //! run once and idempotent, on a policy with no optional mechanism and with
 //! each one set — the breaker, the bulkhead, the rate; an answer its method's
 //! keys judge against one the defaults judge; a call an open breaker refuses
-//! unsent, with a subscription to the policy's events open and with none; and
-//! the token every attempt is handed, alone.
+//! unsent, with a subscription to the policy's events open and with none; a
+//! decorated method called on one policy from a thread per core at once; and
+//! the token an attempt is handed, alone.
 //!
 //! `cargo bench -p nest-rs-resilience --bench policy` prints criterion's
 //! estimate of each row. A figure is its machine's and its run's: quoted, it
@@ -276,6 +277,46 @@ fn refused(c: &mut Criterion, rt: &tokio::runtime::Runtime, app: &App) {
     group.finish();
 }
 
+/// A decorated method run once on the policy of `I`, called by a thread per
+/// core at once, each on a runtime of its own: a row is one call's wall time on
+/// one thread, while every other thread calls too.
+fn contended_on<I: Instance>(c: &mut Criterion, app: &App, mechanism: &str) {
+    let dependency = dependency::<I>(app);
+    let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    c.benchmark_group("contended")
+        .bench_function(mechanism, |b| {
+            b.iter_custom(|iters| {
+                let together = std::sync::Barrier::new(threads + 1);
+                std::thread::scope(|scope| {
+                    for _ in 0..threads {
+                        scope.spawn(|| {
+                            let rt = runtime();
+                            together.wait();
+                            rt.block_on(async {
+                                for _ in 0..iters {
+                                    let _answer = black_box(dependency.once().await);
+                                }
+                            });
+                            together.wait();
+                        });
+                    }
+                    together.wait();
+                    let started = Instant::now();
+                    together.wait();
+                    started.elapsed()
+                })
+            });
+        });
+}
+
+/// On a policy with no optional mechanism, on one with its breaker, and on
+/// that breaker opened by hand, refusing every call.
+fn contended(c: &mut Criterion, app: &App) {
+    contended_on::<Bare>(c, app, "bare");
+    contended_on::<Breaker>(c, app, "breaker");
+    contended_on::<Refusing>(c, app, "refused");
+}
+
 fn token(c: &mut Criterion) {
     c.benchmark_group("token")
         .bench_function("new", |b| b.iter(|| black_box(CancellationToken::new())));
@@ -289,6 +330,7 @@ fn policy(c: &mut Criterion) {
     answering_by_mechanism(c, &rt, &app);
     judged(c, &rt, &app);
     refused(c, &rt, &app);
+    contended(c, &app);
 }
 
 criterion_group!(benches, policy, token);

@@ -4,7 +4,10 @@
 //! its open time has passed, closed by enough probes in a row, and opened or
 //! closed by hand. An answer counts only while the breaker has neither opened
 //! nor been switched by hand since its attempt was let through. Its state
-//! lives in the process.
+//! lives in the process, behind one lock, and each holder of the lock
+//! publishes its phase and epoch in one word as it lets it go: a call let
+//! through closed, a call refused open and one more success of a quiet window
+//! read that word alone, and take no lock.
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -13,17 +16,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::{Mutex, MutexGuard};
 use tokio::time::Instant;
 
-use crate::TARGET;
-use crate::counters::Counters;
+use self::published::{Holding, Published};
 use crate::error::TIMED_OUT;
-use crate::events::{ResilienceEvent, Subscribers};
-use crate::millis::millis;
-
-/// The transition's line, the one a policy files at `warn`.
-pub(crate) const MOVED: &str = "circuit breaker changed state";
+use crate::teller::{Teller, Transition};
 
 /// The least a call refused beside a probe is told, one tick of the timer:
 /// what is left of a probe's bound once it has passed, the probe's own timer
@@ -93,8 +90,9 @@ impl BreakerState {
 }
 
 /// The phase a transition of a policy's circuit breaker leaves or enters, as
-/// [`ResilienceEvent::Transition`] says it: what the breaker does to the
-/// dependency, in the word the transition's `warn` files as its `state`.
+/// [`ResilienceEvent::Transition`](crate::ResilienceEvent::Transition) says
+/// it: what the breaker does to the dependency, in the word the transition's
+/// `warn` files as its `state`.
 ///
 /// It is no read of the breaker: [`BreakerState`] says what a call arriving
 /// now meets, which is half-open as soon as the open time has passed, where
@@ -317,21 +315,6 @@ struct Held {
     telling: bool,
 }
 
-/// One transition the breaker made, as its line, the counter and its event
-/// say it once the breaker's lock is let go.
-#[derive(Debug)]
-struct Transition {
-    from: BreakerPhase,
-    to: BreakerPhase,
-    /// The failures that opened it, when failures did.
-    failed: Option<usize>,
-    /// What the last of them failed on.
-    error: Option<Box<str>>,
-    /// The time it is open for, when it opened for one of its own.
-    open_for: Option<Duration>,
-    manual: bool,
-}
-
 impl Held {
     fn forget(&mut self) {
         match &mut self.outcomes {
@@ -397,15 +380,193 @@ impl Held {
     }
 }
 
+/// A breaker's state behind its lock, and what each holder of the lock
+/// publishes of it for a call to read with none.
+mod published {
+    use std::ops::{Deref, DerefMut};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    use parking_lot::{Mutex, MutexGuard};
+    use tokio::time::Instant;
+
+    use super::{Held, Outcomes, Phase, left};
+
+    /// A breaker's state, reached under its lock alone, and the word each
+    /// holder publishes of it as it lets the lock go: no change of the state
+    /// goes unpublished.
+    pub(super) struct Published {
+        held: Mutex<Held>,
+        word: AtomicU64,
+        /// The instant an open breaker's open time ends at, in nanoseconds
+        /// past `origin`.
+        open_until: AtomicU64,
+        origin: Instant,
+        /// The latest attempts the window counts, which a quiet one holds.
+        window: usize,
+    }
+
+    impl Published {
+        pub(super) fn new(held: Held, window: usize) -> Self {
+            let word = Word::of(&held, window);
+            Self {
+                held: Mutex::new(held),
+                word: AtomicU64::new(word.0),
+                open_until: AtomicU64::new(0),
+                origin: Instant::now(),
+                window,
+            }
+        }
+
+        /// The state, under the lock until the guard is dropped, which
+        /// publishes its word.
+        pub(super) fn lock(&self) -> Holding<'_> {
+            Holding {
+                published: self,
+                held: self.held.lock(),
+            }
+        }
+
+        /// Whether a thread holds the lock now.
+        #[cfg(test)]
+        pub(super) fn locked(&self) -> bool {
+            self.held.try_lock().is_none()
+        }
+
+        /// The word the last holder of the lock published.
+        pub(super) fn word(&self) -> Word {
+            Word(self.word.load(Ordering::Acquire))
+        }
+
+        /// What is left of the open time of the breaker `word` says is open,
+        /// read with no lock: `None` once it has passed, or once `word` is no
+        /// more the one published.
+        pub(super) fn open_left(&self, word: Word) -> Option<Duration> {
+            // Holders store `open_until`, then the word (Release). Read between two equal words
+            // (Acquire), an `until` still ahead is their epoch's opening's: later ones are `now`.
+            let until = Duration::from_nanos(self.open_until.load(Ordering::Acquire));
+            left(self.origin + until).filter(|_| self.word() == word)
+        }
+
+        /// `at` in nanoseconds past `origin`, none for an instant before it.
+        fn nanos(&self, at: Instant) -> u64 {
+            u64::try_from(at.saturating_duration_since(self.origin).as_nanos()).unwrap_or(u64::MAX)
+        }
+    }
+
+    /// What a breaker publishes of its state: the epoch, in the bits above
+    /// the two its phase takes, and whether it is closed — quiet, when one
+    /// more success changes nothing — or open.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(super) struct Word(u64);
+
+    impl Word {
+        /// A probe's turn held, or free between two probes: read under the
+        /// lock.
+        const PROBING: u64 = 0b00;
+        const CLOSED: u64 = 0b01;
+        const OPEN: u64 = 0b10;
+        /// Closed, its window counted with no age, full and holding no
+        /// failure: one more success changes neither the window nor what it
+        /// reads.
+        const QUIET: u64 = 0b11;
+        const PHASE: u64 = 0b11;
+
+        fn of(held: &Held, window: usize) -> Self {
+            let quiet = held.failed == 0
+                && matches!(&held.outcomes, Outcomes::Counted(outcomes) if outcomes.len() == window);
+            let phase = match held.phase {
+                Phase::Closed if quiet => Self::QUIET,
+                Phase::Closed => Self::CLOSED,
+                Phase::Open { .. } => Self::OPEN,
+                Phase::ProbePending { .. }
+                | Phase::HalfOpen { .. }
+                | Phase::BetweenProbes { .. } => Self::PROBING,
+            };
+            Self(held.epoch << 2 | phase)
+        }
+
+        /// The epoch the breaker was in.
+        pub(super) const fn epoch(self) -> u64 {
+            self.0 >> 2
+        }
+
+        /// Whether the breaker was closed, quiet or not.
+        pub(super) const fn closed(self) -> bool {
+            self.0 & Self::CLOSED != 0
+        }
+
+        /// Whether the breaker was closed and quiet.
+        pub(super) const fn quiet(self) -> bool {
+            self.0 & Self::PHASE == Self::QUIET
+        }
+
+        /// Whether the breaker was open, its open time passed or not.
+        pub(super) const fn open(self) -> bool {
+            self.0 & Self::PHASE == Self::OPEN
+        }
+    }
+
+    /// A breaker's state under its lock, its word published as the lock is
+    /// let go.
+    pub(super) struct Holding<'p> {
+        published: &'p Published,
+        held: MutexGuard<'p, Held>,
+    }
+
+    impl Deref for Holding<'_> {
+        type Target = Held;
+
+        fn deref(&self) -> &Held {
+            &self.held
+        }
+    }
+
+    impl DerefMut for Holding<'_> {
+        fn deref_mut(&mut self) -> &mut Held {
+            &mut self.held
+        }
+    }
+
+    impl Drop for Holding<'_> {
+        fn drop(&mut self) {
+            // Still under the lock, which the guard lets go once this returns.
+            let published = self.published;
+            if let Phase::Open { until } = self.held.phase {
+                let until = published.nanos(until);
+                if published.open_until.load(Ordering::Relaxed) != until {
+                    published.open_until.store(until, Ordering::Release);
+                }
+            }
+            let word = Word::of(&self.held, published.window).0;
+            if published.word.load(Ordering::Relaxed) != word {
+                published.word.store(word, Ordering::Release);
+            }
+        }
+    }
+}
+
+/// What a breaker is built from: its policy's settings.
+pub(crate) struct BreakerSettings {
+    /// The latest attempts the window counts.
+    pub(crate) window: usize,
+    /// The failures among them that open the breaker.
+    pub(crate) failures: usize,
+    /// How long it stays open once they did.
+    pub(crate) open_for: Duration,
+    /// How long an outcome counts, from its answer, when outcomes have an age.
+    pub(crate) age: Option<Duration>,
+    /// The probes in a row that close it, succeeding.
+    pub(crate) probes: usize,
+}
+
 pub(crate) struct Breaker {
-    instance: &'static str,
     window: usize,
     failures: usize,
     open_for: Duration,
     probes: usize,
-    held: Mutex<Held>,
-    counters: Arc<Counters>,
-    subscribers: Arc<Subscribers>,
+    published: Published,
+    teller: Arc<Teller>,
 }
 
 /// One attempt the breaker admitted, its call not sent yet. Dropped so — the
@@ -426,7 +587,7 @@ impl<'b> Pass<'b> {
     /// the turn.
     #[inline]
     pub(crate) fn probes(&self) -> bool {
-        self.probe && self.breaker.held.lock().epoch == self.epoch
+        self.probe && self.breaker.published.lock().epoch == self.epoch
     }
 
     /// The attempt's call postponed to `to`, then sent under `bound`: a probe
@@ -616,25 +777,19 @@ enum Moved<'e> {
 }
 
 impl Breaker {
-    /// A closed breaker for `instance`, opening for `open_for` once `failures`
-    /// of the latest `window` attempts failed, and closing once `probes`
-    /// probes in a row succeeded. With an `age`, an outcome counts until it is
-    /// older than that, its own age running from its answer. Each transition
-    /// counts on `counters` and is told to `subscribers`.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each is one setting of the breaker, or one of the two ways its policy tells a transition"
-    )]
-    pub(crate) fn new(
-        instance: &'static str,
-        window: usize,
-        failures: usize,
-        open_for: Duration,
-        age: Option<Duration>,
-        probes: usize,
-        counters: Arc<Counters>,
-        subscribers: Arc<Subscribers>,
-    ) -> Self {
+    /// A closed breaker, opening for `open_for` once `failures` of the latest
+    /// `window` attempts failed, and closing once `probes` probes in a row
+    /// succeeded. With an `age`, an outcome counts until it is older than
+    /// that, its own age running from its answer. `teller` tells each
+    /// transition.
+    pub(crate) fn new(settings: BreakerSettings, teller: Arc<Teller>) -> Self {
+        let BreakerSettings {
+            window,
+            failures,
+            open_for,
+            age,
+            probes,
+        } = settings;
         let outcomes = match age {
             None => Outcomes::Counted(VecDeque::with_capacity(window)),
             Some(age) => Outcomes::Aged {
@@ -642,22 +797,21 @@ impl Breaker {
                 counted: VecDeque::with_capacity(window),
             },
         };
+        let held = Held {
+            phase: Phase::Closed,
+            outcomes,
+            failed: 0,
+            epoch: 0,
+            untold: VecDeque::new(),
+            telling: false,
+        };
         Self {
-            instance,
             window,
             failures,
             open_for,
             probes,
-            held: Mutex::new(Held {
-                phase: Phase::Closed,
-                outcomes,
-                failed: 0,
-                epoch: 0,
-                untold: VecDeque::new(),
-                telling: false,
-            }),
-            counters,
-            subscribers,
+            published: Published::new(held, window),
+            teller,
         }
     }
 
@@ -666,10 +820,24 @@ impl Breaker {
     /// `bound` unless it postpones it — or refuse it for the wait the breaker
     /// knows: what is left of the open time, or of the probe's own bound while
     /// another call holds its turn — that whole bound, once the probe's answer
-    /// is held past its run.
+    /// is held past its run. A closed breaker lets the call through, and one
+    /// open with time left refuses it, off the published word: no lock.
     #[inline]
     pub(crate) fn admit(&self, bound: Duration) -> Result<Pass<'_>, Duration> {
-        let mut held = self.held.lock();
+        let word = self.published.word();
+        if word.closed() {
+            return Ok(Pass {
+                breaker: self,
+                probe: false,
+                epoch: word.epoch(),
+            });
+        }
+        if word.open()
+            && let Some(left) = self.published.open_left(word)
+        {
+            return Err(left);
+        }
+        let mut held = self.published.lock();
         let turn = held.phase.admitting()?;
         if let Some(turn) = turn {
             held.phase = Phase::ProbePending {
@@ -698,30 +866,41 @@ impl Breaker {
         }
     }
 
-    /// How long a call is refused for now, leaving the breaker as it stands.
+    /// How long a call is refused for now, leaving the breaker as it stands:
+    /// closed, or open with time left, read off the published word with no
+    /// lock.
     pub(crate) fn refusing(&self) -> Option<Duration> {
-        self.held.lock().phase.admitting().err()
+        let word = self.published.word();
+        if word.closed() {
+            return None;
+        }
+        if word.open()
+            && let Some(left) = self.published.open_left(word)
+        {
+            return Some(left);
+        }
+        self.published.lock().phase.admitting().err()
     }
 
     /// The state a call arriving now meets, leaving the breaker as it stands.
     pub(crate) fn read(&self) -> BreakerState {
-        self.held.lock().phase.state()
+        self.published.lock().phase.state()
     }
 
     /// What the window counts now, leaving the breaker as it stands.
     pub(crate) fn stats(&self) -> BreakerStats {
-        self.held.lock().stats(Instant::now)
+        self.published.lock().stats(Instant::now)
     }
 
     #[cfg(test)]
     fn state(&self) -> &'static str {
-        self.held.lock().phase.told().as_str()
+        self.published.lock().phase.told().as_str()
     }
 
     /// Whether the breaker's lock is held now.
     #[cfg(test)]
     pub(crate) fn locked(&self) -> bool {
-        self.held.try_lock().is_none()
+        self.published.locked()
     }
 
     /// Open the breaker by hand for `open_for` from now, whatever it was in:
@@ -746,8 +925,8 @@ impl Breaker {
     /// Enter `phase` by hand, in an epoch of its own, opened for `open_for`
     /// when it opens.
     fn switch(&self, phase: Phase, open_for: Option<Duration>) {
-        let mut held = self.held.lock();
-        held.epoch = held.epoch.wrapping_add(1);
+        let mut held = self.published.lock();
+        held.epoch += 1;
         let from = held.phase;
         held.phase = phase;
         held.forget();
@@ -758,8 +937,8 @@ impl Breaker {
     /// the breaker opened or was switched by hand since, which leaves the
     /// attempt nothing to change or count.
     #[inline]
-    fn held_since(&self, epoch: u64) -> Option<MutexGuard<'_, Held>> {
-        let held = self.held.lock();
+    fn held_since(&self, epoch: u64) -> Option<Holding<'_>> {
+        let held = self.published.lock();
         (held.epoch == epoch).then_some(held)
     }
 
@@ -767,9 +946,23 @@ impl Breaker {
     /// what it failed on: a probe opens the breaker again, or closes it as the
     /// last of its series, and any other attempt counts in the window of the
     /// closed breaker that admitted it — and for nothing once another call
-    /// opened it, closed again since or not.
+    /// opened it, closed again since or not. A success the published word
+    /// says is voided so, or is one more in a quiet window, changes nothing,
+    /// and takes no lock.
     #[inline]
     fn record(&self, epoch: u64, probe: bool, failure: Option<&str>) {
+        if !probe && failure.is_none() {
+            let word = self.published.word();
+            if word.epoch() != epoch || word.quiet() {
+                return;
+            }
+        }
+        self.record_held(epoch, probe, failure);
+    }
+
+    /// [`record`](Self::record) under the lock.
+    #[inline(never)]
+    fn record_held(&self, epoch: u64, probe: bool, failure: Option<&str>) {
         let Some(mut held) = self.held_since(epoch) else {
             return;
         };
@@ -895,7 +1088,7 @@ impl Breaker {
     /// Open `held` for the whole open time, in an epoch of its own: the
     /// attempts admitted before it change and count nothing from here on.
     fn open(&self, held: &mut Held) {
-        held.epoch = held.epoch.wrapping_add(1);
+        held.epoch += 1;
         held.phase = Phase::Open {
             until: Instant::now() + self.open_for,
         };
@@ -921,11 +1114,14 @@ impl Breaker {
     /// telling is lost as any other it panics out of, and those behind it are
     /// told with the next one made.
     #[inline(never)]
-    fn entered(&self, mut held: MutexGuard<'_, Held>, from: Phase, moved: Moved<'_>) {
+    fn entered(&self, mut held: Holding<'_>, from: Phase, moved: Moved<'_>) {
         let (failed, error, open_for, manual) = match moved {
-            Moved::Failures { failed, error } => {
-                (Some(failed), Some(error), Some(self.open_for), false)
-            }
+            Moved::Failures { failed, error } => (
+                Some((failed, self.window)),
+                Some(error),
+                Some(self.open_for),
+                false,
+            ),
             Moved::Probe => (None, None, None, false),
             Moved::Manual { open_for } => (None, None, open_for, true),
         };
@@ -958,7 +1154,7 @@ impl Breaker {
     fn tell(&self) {
         let turn = Telling(self);
         while let Some(transition) = self.untold() {
-            self.say(&transition);
+            self.teller.transition(&transition);
         }
         // The turn was given up as the queue was found empty: dropped, the
         // guard would take it from the thread telling since.
@@ -969,37 +1165,10 @@ impl Breaker {
     /// them given up in the same hold of the lock, so the next one queued
     /// finds it free.
     fn untold(&self) -> Option<Transition> {
-        let mut held = self.held.lock();
+        let mut held = self.published.lock();
         let next = held.untold.pop_front();
         held.telling = next.is_some();
         next
-    }
-
-    /// File `transition`'s line, count it and tell its event, no lock held.
-    fn say(&self, transition: &Transition) {
-        let Transition {
-            from,
-            to,
-            failed,
-            ref error,
-            open_for,
-            manual,
-        } = *transition;
-        let state = to.as_str();
-        tracing::warn!(
-            target: TARGET,
-            instance = self.instance,
-            state,
-            failed,
-            window = failed.map(|_| self.window),
-            open_ms = open_for.map(millis),
-            manual = manual.then_some(true),
-            error = error.as_deref(),
-            "{MOVED}",
-        );
-        self.counters.transition(state, manual);
-        self.subscribers
-            .tell(|| ResilienceEvent::Transition { from, to, manual });
     }
 }
 
@@ -1010,7 +1179,7 @@ struct Telling<'b>(&'b Breaker);
 
 impl Drop for Telling<'_> {
     fn drop(&mut self) {
-        self.0.held.lock().telling = false;
+        self.0.published.lock().telling = false;
     }
 }
 
@@ -1018,7 +1187,12 @@ impl Drop for Telling<'_> {
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    use parking_lot::Mutex;
+
     use super::*;
+    use crate::TARGET;
+    use crate::events::ResilienceEvent;
+    use crate::teller::MOVED;
 
     const OPEN_FOR: Duration = Duration::from_secs(30);
     /// What each call is sent under, but where a test sets its own.
@@ -1026,14 +1200,14 @@ mod tests {
 
     fn breaker(window: usize, failures: usize) -> Breaker {
         Breaker::new(
-            "upstream",
-            window,
-            failures,
-            OPEN_FOR,
-            None,
-            1,
-            Arc::new(Counters::new("upstream")),
-            Arc::default(),
+            BreakerSettings {
+                window,
+                failures,
+                open_for: OPEN_FOR,
+                age: None,
+                probes: 1,
+            },
+            Arc::new(Teller::new("upstream")),
         )
     }
 
@@ -1381,28 +1555,28 @@ mod tests {
     /// `failures` of the latest `window` attempts failed.
     fn aged(window: usize, failures: usize, age: Duration) -> Breaker {
         Breaker::new(
-            "upstream",
-            window,
-            failures,
-            OPEN_FOR,
-            Some(age),
-            1,
-            Arc::new(Counters::new("upstream")),
-            Arc::default(),
+            BreakerSettings {
+                window,
+                failures,
+                open_for: OPEN_FOR,
+                age: Some(age),
+                probes: 1,
+            },
+            Arc::new(Teller::new("upstream")),
         )
     }
 
     /// A breaker one failure opens, and `probes` probes in a row close.
     fn probing(probes: usize) -> Breaker {
         Breaker::new(
-            "upstream",
-            1,
-            1,
-            OPEN_FOR,
-            None,
-            probes,
-            Arc::new(Counters::new("upstream")),
-            Arc::default(),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: OPEN_FOR,
+                age: None,
+                probes,
+            },
+            Arc::new(Teller::new("upstream")),
         )
     }
 
@@ -1469,14 +1643,14 @@ mod tests {
         let lines = nest_rs_testing::LogCapture::install();
         let under = Duration::from_micros(500);
         let breaker = Breaker::new(
-            "upstream",
-            1,
-            1,
-            under,
-            None,
-            1,
-            Arc::new(Counters::new("upstream")),
-            Arc::default(),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: under,
+                age: None,
+                probes: 1,
+            },
+            Arc::new(Teller::new("upstream")),
         );
         attempt(&breaker, true);
         breaker.open_manually(under);
@@ -1612,14 +1786,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_breaker_open_for_no_time_lets_the_next_call_through_at_once_as_its_probe() {
         let breaker = Breaker::new(
-            "upstream",
-            1,
-            1,
-            Duration::ZERO,
-            None,
-            1,
-            Arc::new(Counters::new("upstream")),
-            Arc::default(),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: Duration::ZERO,
+                age: None,
+                probes: 1,
+            },
+            Arc::new(Teller::new("upstream")),
         );
         attempt(&breaker, true);
         let _probe = probe(&breaker);
@@ -1702,7 +1876,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_breaker_with_no_age_keeps_no_instant_and_counts_an_outcome_however_old() {
         let breaker = breaker(4, 2);
-        assert!(matches!(breaker.held.lock().outcomes, Outcomes::Counted(_)));
+        assert!(matches!(
+            breaker.published.lock().outcomes,
+            Outcomes::Counted(_)
+        ));
         attempt(&breaker, true);
         tokio::time::advance(Duration::from_secs(24 * 60 * 60)).await;
         attempt(&breaker, true);
@@ -1714,7 +1891,7 @@ mod tests {
     #[test]
     fn a_window_with_no_age_counts_an_outcome_reading_no_clock() {
         let breaker = breaker(4, 2);
-        let mut held = breaker.held.lock();
+        let mut held = breaker.published.lock();
         let unread = || -> Instant { panic!("a window with no age reads no clock to count") };
         assert_eq!(held.count(4, true, unread), 1);
         assert_eq!(held.count(4, false, unread), 1);
@@ -1890,19 +2067,19 @@ mod tests {
     async fn a_probe_ignored_hands_its_turn_on_and_moves_nothing_whatever_its_series_holds() {
         use BreakerPhase::{Closed, HalfOpen, Open};
 
-        let subscribers = Arc::new(Subscribers::default());
+        let teller = Arc::new(Teller::new("upstream"));
         let breaker = Breaker::new(
-            "upstream",
-            1,
-            1,
-            OPEN_FOR,
-            None,
-            2,
-            Arc::new(Counters::new("upstream")),
-            Arc::clone(&subscribers),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: OPEN_FOR,
+                age: None,
+                probes: 2,
+            },
+            Arc::clone(&teller),
         );
         let lines = nest_rs_testing::LogCapture::install();
-        let mut events = subscribers.subscribe();
+        let mut events = teller.subscribe();
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
 
@@ -2573,19 +2750,19 @@ mod tests {
     async fn each_transition_is_told_leaving_the_phase_the_one_before_it_entered() {
         use BreakerPhase::{Closed, HalfOpen, Open};
 
-        let subscribers = Arc::new(Subscribers::default());
+        let teller = Arc::new(Teller::new("upstream"));
         let breaker = Breaker::new(
-            "upstream",
-            1,
-            1,
-            OPEN_FOR,
-            None,
-            2,
-            Arc::new(Counters::new("upstream")),
-            Arc::clone(&subscribers),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: OPEN_FOR,
+                age: None,
+                probes: 2,
+            },
+            Arc::clone(&teller),
         );
         let lines = nest_rs_testing::LogCapture::install();
-        let mut events = subscribers.subscribe();
+        let mut events = teller.subscribe();
 
         attempt(&breaker, true);
         tokio::time::advance(OPEN_FOR).await;
@@ -2840,18 +3017,18 @@ mod tests {
     async fn a_line_is_filed_with_the_breaker_free_and_in_the_order_of_the_transitions() {
         use BreakerPhase::{Closed, HalfOpen, Open};
 
-        let subscribers = Arc::new(Subscribers::default());
+        let teller = Arc::new(Teller::new("upstream"));
         let breaker = Arc::new(Breaker::new(
-            "upstream",
-            1,
-            1,
-            OPEN_FOR,
-            None,
-            1,
-            Arc::new(Counters::new("upstream")),
-            Arc::clone(&subscribers),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: OPEN_FOR,
+                age: None,
+                probes: 1,
+            },
+            Arc::clone(&teller),
         ));
-        let mut events = subscribers.subscribe();
+        let mut events = teller.subscribe();
         let reading = Reading::new(&breaker);
         let (said, locked) = (Arc::clone(&reading.said), Arc::clone(&reading.locked));
         let reading = Arc::new(reading);
@@ -2952,7 +3129,7 @@ mod tests {
     /// Whether every transition `breaker` made was told, and no thread holds
     /// the turn to tell them.
     fn all_told(breaker: &Breaker) -> bool {
-        let held = breaker.held.lock();
+        let held = breaker.published.lock();
         held.untold.is_empty() && !held.telling
     }
 
@@ -2990,18 +3167,18 @@ mod tests {
 
         use BreakerPhase::{Closed, Open};
 
-        let subscribers = Arc::new(Subscribers::default());
+        let teller = Arc::new(Teller::new("upstream"));
         let breaker = Arc::new(Breaker::new(
-            "upstream",
-            1,
-            1,
-            OPEN_FOR,
-            None,
-            1,
-            Arc::new(Counters::new("upstream")),
-            Arc::clone(&subscribers),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: OPEN_FOR,
+                age: None,
+                probes: 1,
+            },
+            Arc::clone(&teller),
         ));
-        let mut events = subscribers.subscribe();
+        let mut events = teller.subscribe();
         let said = Arc::new(Mutex::new(Vec::new()));
         let (filing, in_line) = channel();
         let (let_go, go_on) = channel();
@@ -3110,18 +3287,18 @@ mod tests {
         // Under the 256 events a subscription holds unread, the threads' together.
         const SWITCHES: usize = 30;
 
-        let subscribers = Arc::new(Subscribers::default());
+        let teller = Arc::new(Teller::new("upstream"));
         let breaker = Arc::new(Breaker::new(
-            "upstream",
-            1,
-            1,
-            OPEN_FOR,
-            None,
-            1,
-            Arc::new(Counters::new("upstream")),
-            Arc::clone(&subscribers),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: OPEN_FOR,
+                age: None,
+                probes: 1,
+            },
+            Arc::clone(&teller),
         ));
-        let mut events = subscribers.subscribe();
+        let mut events = teller.subscribe();
         let ordered = Arc::new(Ordered {
             said: Mutex::default(),
             filing: AtomicBool::new(false),
@@ -3163,7 +3340,7 @@ mod tests {
             .collect();
         let mut orphaned = 0;
         while !switching.iter().all(std::thread::JoinHandle::is_finished) {
-            let held = breaker.held.lock();
+            let held = breaker.published.lock();
             orphaned += usize::from(!held.telling && !held.untold.is_empty());
         }
         for thread in switching {
@@ -3368,7 +3545,7 @@ mod tests {
         assert!(std::panic::catch_unwind(opening).is_err());
         assert_eq!(breaker.state(), "closed", "closed from inside the line");
         assert!(
-            said.lock().is_empty() && !breaker.held.lock().telling,
+            said.lock().is_empty() && !breaker.published.lock().telling,
             "the closing waits, the turn free"
         );
 
@@ -3636,18 +3813,18 @@ mod tests {
 
         use BreakerPhase::{Closed, HalfOpen, Open};
 
-        let subscribers = Arc::<Subscribers>::default();
+        let teller = Arc::new(Teller::new("upstream"));
         let breaker = Breaker::new(
-            "upstream",
-            1,
-            1,
-            OPEN_FOR,
-            None,
-            1,
-            Arc::new(Counters::new("upstream")),
-            Arc::clone(&subscribers),
+            BreakerSettings {
+                window: 1,
+                failures: 1,
+                open_for: OPEN_FOR,
+                age: None,
+                probes: 1,
+            },
+            Arc::clone(&teller),
         );
-        let mut events = subscribers.subscribe();
+        let mut events = teller.subscribe();
         let waker = Waker::from(Arc::new(PanickingWaker));
         let mut reader = Context::from_waker(&waker);
         let transition = |from, to| {
@@ -3744,4 +3921,223 @@ mod tests {
             "the probe failed, and the breaker is open for its whole open time"
         );
     }
+
+    /// One more success of a full window of successes, counted with no age,
+    /// changes nothing, and takes no lock; once a failure is in the window,
+    /// each success is counted, the failure leaving it by the window's length
+    /// as before, and the failures among the latest still open the breaker.
+    /// With an age, each success is counted, its own instant aging from its
+    /// answer.
+    #[tokio::test(start_paused = true)]
+    async fn a_quiet_window_counts_its_next_failure_and_every_success_after_it() {
+        let stats = |outcomes, failures| BreakerStats { outcomes, failures };
+        let breaker = breaker(4, 3);
+        for counted in 1..=4 {
+            attempt(&breaker, false);
+            assert_eq!(breaker.stats(), stats(counted, 0));
+        }
+        attempt(&breaker, false);
+        assert_eq!(breaker.stats(), stats(4, 0), "quiet");
+        attempt(&breaker, true);
+        assert_eq!(breaker.stats(), stats(4, 1));
+        for _ in 0..3 {
+            attempt(&breaker, false);
+            assert_eq!(
+                breaker.stats(),
+                stats(4, 1),
+                "the failure still in the window"
+            );
+        }
+        attempt(&breaker, false);
+        assert_eq!(
+            breaker.stats(),
+            stats(4, 0),
+            "the failure left by the window's length"
+        );
+        attempt(&breaker, true);
+        attempt(&breaker, true);
+        assert_eq!(breaker.state(), "closed");
+        attempt(&breaker, true);
+        assert_eq!(breaker.state(), "open", "three of the latest four failed");
+
+        let age = Duration::from_secs(60);
+        let aged = aged(4, 3, age);
+        for _ in 0..4 {
+            attempt(&aged, false);
+        }
+        tokio::time::advance(age / 2).await;
+        attempt(&aged, false);
+        attempt(&aged, false);
+        tokio::time::advance(age / 2 + Duration::from_secs(1)).await;
+        assert_eq!(
+            aged.stats(),
+            stats(2, 0),
+            "the two successes counted at half the age outlive the first four"
+        );
+    }
+
+    /// What `call` answers on a thread of its own while this thread holds
+    /// `breaker`'s lock, or `None` for a call waiting for it: given up past
+    /// a wait no call of these tests needs, so it fails a test rather than
+    /// hang it.
+    fn beside_the_lock<T: Send>(breaker: &Breaker, call: impl FnOnce() -> T + Send) -> Option<T> {
+        let (answering, answer) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let held = breaker.published.lock();
+            scope.spawn(move || {
+                answering.send(call()).expect("the test reads the answer");
+            });
+            let answered = answer.recv_timeout(HANG).ok();
+            drop(held);
+            answered
+        })
+    }
+
+    /// A closed breaker lets a call through, a quiet one counts one more
+    /// success, and an open one refuses a call with what is left of its open
+    /// time, each off the word the breaker published, while another thread
+    /// holds the breaker's lock.
+    #[test]
+    fn a_closed_breaker_and_an_open_one_answer_while_another_thread_holds_its_lock() {
+        let breaker = breaker(4, 2);
+        assert_eq!(
+            beside_the_lock(&breaker, || breaker.admit(BOUND).is_ok()),
+            Some(true),
+            "closed, a call is let through"
+        );
+        for _ in 0..4 {
+            attempt(&breaker, false);
+        }
+        assert_eq!(
+            beside_the_lock(&breaker, || attempt(&breaker, false)),
+            Some(()),
+            "quiet, one more success is counted"
+        );
+        assert_eq!(
+            breaker.stats(),
+            BreakerStats {
+                outcomes: 4,
+                failures: 0
+            }
+        );
+        breaker.open_manually(OPEN_FOR);
+        let refused = beside_the_lock(&breaker, || {
+            (breaker.admit(BOUND).err(), breaker.refusing())
+        });
+        assert!(
+            matches!(refused, Some((Some(left), Some(also)))
+                if !left.is_zero() && left <= OPEN_FOR && !also.is_zero() && also <= OPEN_FOR),
+            "open, a call is refused for what is left of the open time: {refused:?}"
+        );
+    }
+
+    /// Ten threads calling through one breaker, near half their calls
+    /// failing, beside a thread switching it by hand: whatever each reads
+    /// with no lock and counts under it, the window never holds more outcomes
+    /// than its length nor as many failures as open it, a refusal tells a
+    /// wait, and an opening by hand refuses the next call, its window
+    /// forgotten. The threads gone, as many failures as open the breaker open
+    /// it, and one fewer does not.
+    #[test]
+    fn threads_failing_beside_a_switch_leave_the_window_within_its_bounds_and_exact() {
+        const WINDOW: usize = 20;
+        const FAILURES: usize = 10;
+        let breaker = Breaker::new(
+            BreakerSettings {
+                window: WINDOW,
+                failures: FAILURES,
+                open_for: Duration::from_micros(10),
+                age: None,
+                probes: 1,
+            },
+            Arc::new(Teller::new("upstream")),
+        );
+        let (stop, violations) = (AtomicBool::new(false), AtomicUsize::new(0));
+        // Every thread stops at the bound: past it, one telling transitions would tell
+        // the others' forever.
+        let started = std::time::Instant::now();
+        let violated = |broken: bool| {
+            if broken {
+                violations.fetch_add(1, Ordering::Relaxed);
+            }
+        };
+        let switched = std::thread::scope(|scope| {
+            for thread in 1..=10_u64 {
+                let (breaker, stop, violated) = (&breaker, &stop, &violated);
+                scope.spawn(move || {
+                    let mut drawn = thread.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                    while !stop.load(Ordering::Relaxed) && started.elapsed() < HANG {
+                        drawn ^= drawn << 13;
+                        drawn ^= drawn >> 7;
+                        drawn ^= drawn << 17;
+                        let failed = drawn % 100 < 45;
+                        match breaker.admit(BOUND) {
+                            Ok(pass) => pass.send(BOUND, None).settle(failed.then_some(DOWN)),
+                            Err(retry_after) => violated(retry_after.is_zero()),
+                        }
+                        let stats = breaker.stats();
+                        violated(
+                            stats.failures > stats.outcomes
+                                || stats.outcomes > WINDOW
+                                || stats.failures >= FAILURES,
+                        );
+                    }
+                });
+            }
+            let mut switched = 0;
+            while switched < SWITCHES && started.elapsed() < HANG {
+                switched += 1;
+                breaker.open_manually(Duration::from_secs(60));
+                violated(breaker.admit(BOUND).is_ok());
+                violated(!matches!(breaker.read(), BreakerState::Open { .. }));
+                violated(breaker.stats().outcomes != 0);
+                breaker.close_manually();
+                for _ in 0..5 * WINDOW {
+                    if let Ok(pass) = breaker.admit(BOUND) {
+                        pass.send(BOUND, None).settle(None);
+                    }
+                }
+            }
+            stop.store(true, Ordering::Relaxed);
+            switched
+        });
+        assert_eq!(
+            switched, SWITCHES,
+            "the switching thread starved of the lock"
+        );
+        assert_eq!(violations.into_inner(), 0);
+
+        for _ in 0..SWITCHES / 10 {
+            breaker.close_manually();
+            for _ in 0..WINDOW {
+                attempt(&breaker, false);
+            }
+            for _ in 1..FAILURES {
+                attempt(&breaker, true);
+            }
+            assert_eq!(breaker.state(), "closed", "one failure short of opening");
+            for _ in 1..WINDOW {
+                attempt(&breaker, false);
+            }
+            assert_eq!(
+                breaker.stats().failures,
+                1,
+                "the last failure still in the window"
+            );
+            attempt(&breaker, false);
+            assert_eq!(breaker.stats().failures, 0);
+            for _ in 0..FAILURES {
+                attempt(&breaker, true);
+            }
+            assert_eq!(breaker.state(), "open");
+        }
+    }
+
+    /// How many times the thread switching a breaker under load opens and
+    /// closes it.
+    const SWITCHES: usize = 6_000;
+
+    /// A wall-clock bound no test here comes near but one waiting for a lock
+    /// it should not take: past it, the test fails rather than hang.
+    const HANG: Duration = Duration::from_secs(10);
 }

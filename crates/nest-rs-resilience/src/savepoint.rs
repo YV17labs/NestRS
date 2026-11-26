@@ -18,7 +18,8 @@ use std::task::{Context, Poll, ready};
 use nest_rs_database::__private::InstalledSavepoint;
 use nest_rs_database::AtomicError;
 
-use crate::policy::Retry;
+use crate::error::Refusal;
+use crate::run::Retry;
 
 /// One attempt's savepoint, of the transaction the ambient executor holds.
 pub(crate) struct Savepoint(InstalledSavepoint);
@@ -43,12 +44,12 @@ impl Savepoint {
     }
 
     /// The savepoint settling, released when `keep` and rolled back otherwise,
-    /// `ended` held until it has. The attempt's future is gone by then, with
-    /// every handle it took on the savepoint.
-    pub(crate) fn settle<T>(self, keep: bool, ended: Ended<T>) -> Box<Settling<T>> {
+    /// what the run does `then` held until it has. The attempt's future is
+    /// gone by then, with every handle it took on the savepoint.
+    pub(crate) fn settle(self, keep: bool, then: Then) -> Box<Settling> {
         Box::new(Settling {
             settle: self.0.settle(keep),
-            ended: Some(ended),
+            then: Some(then),
         })
     }
 }
@@ -69,35 +70,34 @@ impl<F: Future> Future for Around<'_, F> {
     }
 }
 
-/// What an attempt ended on, held while its savepoint settles.
-pub(crate) enum Ended<T> {
-    /// What the run answers.
-    Answer(T),
-    /// A failure the run goes on after: its call is sent again, as the retry
-    /// decided then says.
+/// What a run does once its attempt's savepoint settled.
+pub(crate) enum Then {
+    /// It answers what its call answered, its call holding it.
+    Answer,
+    /// It answers the policy's refusal, counted and told.
+    Refused(Refusal),
+    /// It sends its call again, as the retry decided then says.
     Again(Retry),
-    /// A panic, which unwinds on once the savepoint is rolled back.
+    /// It unwinds on with the panic of its call, or of a predicate judging
+    /// its answer.
     Unwound(Box<dyn Any + Send>),
 }
 
 /// A savepoint settling before its run goes on, in a box of its own: a run
-/// that opens none reserves no room for the answer one holds.
-pub(crate) struct Settling<T> {
+/// that opens none reserves no room for it.
+pub(crate) struct Settling {
     settle: Pin<Box<dyn Future<Output = Result<(), AtomicError>> + Send>>,
-    ended: Option<Ended<T>>,
+    then: Option<Then>,
 }
 
-impl<T> Settling<T> {
-    /// What the attempt ended on, once its savepoint settled, and how it did.
-    pub(crate) fn poll(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<(Ended<T>, Result<(), AtomicError>)> {
+impl Settling {
+    /// What the run does then, once its savepoint settled, and how it did.
+    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<(Then, Result<(), AtomicError>)> {
         let settled = ready!(self.settle.as_mut().poll(cx));
-        let Some(ended) = self.ended.take() else {
+        let Some(then) = self.then.take() else {
             unreachable!("a savepoint is polled after it settled");
         };
-        Poll::Ready((ended, settled))
+        Poll::Ready((then, settled))
     }
 }
 
@@ -112,8 +112,9 @@ mod tests {
     use nest_rs_database::{AtomicBlock, Executor, current_executor};
 
     use super::*;
-    use crate::policy::{NOT_ATTEMPTED_AGAIN_UNSETTLED, RETRYING_FAILED};
-    use crate::resilient::{judging_by_default, resilient_method};
+    use crate::call::{Cancellable, Uncancelled};
+    use crate::resilient::{ResilientMethod, judging_by_default, resilient_method};
+    use crate::teller::{NOT_ATTEMPTED_AGAIN_UNSETTLED, RETRYING_FAILED};
     use crate::{ResilienceConfig, ResilienceError, ResiliencePolicy};
 
     #[instance]
@@ -498,20 +499,27 @@ mod tests {
         let (unit, seen) = Unit::settling(settles);
 
         with_request_executor(unit, async {
-            let run = policy
-                .begin(None)
+            let mut run = std::pin::pin!(crate::run::Run::holding(&policy.mechanisms));
+            std::future::poll_fn(|cx| run.as_mut().poll_open(cx))
                 .await
                 .expect("the policy has no bulkhead");
-            let (attempted, _outstanding) = run
-                .attempt_once(
-                    |_| async {
-                        called(&seen);
-                        Ok::<u32, Refused>(7)
-                    },
-                    |_| crate::policy::Verdict::Succeeded,
-                )
-                .await;
-            assert!(matches!(attempted, Ok((Ok(7), _))), "{attempted:?}");
+            let mut call = std::pin::pin!(crate::call::Judged::<_, _, Answer>::new(
+                crate::call::Once::<_, Uncancelled>::new(|| async {
+                    called(&seen);
+                    Ok::<u32, Refused>(7)
+                }),
+                crate::resilient::judging_by_default::<Answer>(),
+            ));
+            let ended =
+                std::future::poll_fn(|cx| run.as_mut().poll_attempt(call.as_mut(), cx)).await;
+            assert!(
+                matches!(
+                    ended,
+                    crate::verdict::Ended::Judged(crate::verdict::Verdict::Succeeded)
+                ),
+                "answered"
+            );
+            assert!(matches!(call.take(), Some(Ok(7))));
         })
         .await;
 
@@ -539,9 +547,10 @@ mod tests {
     /// attempt is rolled back before the run answers what the fallback reads.
     #[tokio::test(start_paused = true)]
     async fn a_method_declaring_a_fallback_runs_its_one_attempt_in_a_savepoint() {
+        const FALLING_BACK: ResilientMethod =
+            resilient_method(host, "post", None, None).with_fallback();
+        const PLAIN: ResilientMethod = resilient_method(host, "post", None, None);
         let policy = retrying(None);
-        let falling_back = resilient_method(host, "post", None, None).with_fallback();
-        let plain = resilient_method(host, "post", None, None);
 
         for (answers, settled) in [
             (&[Err(Refused)][..], Saw::RolledBack),
@@ -551,7 +560,11 @@ mod tests {
             let call = answering(&seen, answers);
             let ran: Answer = with_request_executor(
                 unit,
-                policy.run_once::<Answer, _, _, _>(Some(falling_back), judging_by_default(), call),
+                policy.run_once::<Answer, _, Cancellable, _>(
+                    Some(&FALLING_BACK),
+                    judging_by_default(),
+                    call,
+                ),
             )
             .await;
             assert_eq!(ran.is_ok(), settled == Saw::Kept, "{ran:?}");
@@ -570,7 +583,7 @@ mod tests {
         let call = answering(&seen, &[]);
         let ran: Answer = with_request_executor(
             unit,
-            policy.run_once::<Answer, _, _, _>(Some(plain), judging_by_default(), call),
+            policy.run_once::<Answer, _, Cancellable, _>(Some(&PLAIN), judging_by_default(), call),
         )
         .await;
         assert!(ran.is_err(), "{ran:?}");
@@ -676,17 +689,18 @@ mod tests {
     /// attempt is rolled back before it unwinds on, as an idempotent call's is.
     #[tokio::test(start_paused = true)]
     async fn a_panicking_attempt_of_a_method_declaring_a_fallback_is_rolled_back_and_unwinds_on() {
+        const FALLING_BACK: ResilientMethod =
+            resilient_method(host, "post", None, None).with_fallback();
         let policy = retrying(None);
-        let falling_back = resilient_method(host, "post", None, None).with_fallback();
         let (unit, seen) = Unit::settling(settles);
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let unwound = nest_rs_core::panic::contain(with_request_executor(
             unit,
-            policy.run_once::<Answer, _, _, _>(
-                Some(falling_back),
+            policy.run_once::<Answer, _, Uncancelled, _>(
+                Some(&FALLING_BACK),
                 judging_by_default(),
-                |_| async {
+                || async {
                     let _spending = Spending(Arc::clone(&seen));
                     called(&seen);
                     tokio::task::yield_now().await;
@@ -832,17 +846,18 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_unsettled_savepoint_names_its_method_and_never_holds_a_panic_back() {
         let lines = nest_rs_testing::LogCapture::install();
+        const POST: ResilientMethod = resilient_method(host, "post", None, None);
         let policy = retrying(Some(2));
-        let method = resilient_method(host, "post", None, None);
         let (unit, _seen) = Unit::settling(refuses);
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
+        let call = || async {
+            tokio::task::yield_now().await;
+            panic!("inside the attempt")
+        };
         let unwound = nest_rs_core::panic::contain(with_request_executor(
             unit,
-            policy.run_again::<Answer, _, _, _>(Some(method), judging_by_default(), |_| async {
-                tokio::task::yield_now().await;
-                panic!("inside the attempt")
-            }),
+            policy.run_again::<Answer, _, Uncancelled, _>(Some(&POST), judging_by_default(), call),
         ))
         .await;
         std::panic::set_hook(previous);

@@ -1753,24 +1753,26 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
     let retries = optional(plan.retries);
     let declares = plan.fallback.as_ref().map(|_| quote!(.with_fallback()));
     let site = quote! {
-        ::nest_rs_resilience::__private::resilient_method(
-            ::core::any::type_name::<Self>,
-            #name,
-            #timeout,
-            #retries,
-        )
-        #declares
+        const {
+            &::nest_rs_resilience::__private::resilient_method(
+                ::core::any::type_name::<Self>,
+                #name,
+                #timeout,
+                #retries,
+            )
+            #declares
+        }
     };
     let lends = plan.lends;
     // A closure lending the arguments cannot lend its own parameter to the future it
     // answers: the attempt's block takes the token by value, under the name written.
     let (token, bound) = match (plan.cancel, lends) {
-        (None, _) => (quote!(_), None),
-        (Some(name), None) => (name.to_token_stream(), None),
+        (None, _) => (None, None),
+        (Some(name), None) => (Some(name.to_token_stream()), None),
         (Some(name), Some(_)) => {
             let handed = mixed_site_ident("__cancel");
             let bound: Stmt = syn::parse_quote!(let #name = #handed;);
-            (handed.into_token_stream(), Some(bound))
+            (Some(handed.into_token_stream()), Some(bound))
         }
     };
     let handed = plan
@@ -1798,17 +1800,27 @@ fn expand(mut method: ImplItemFn, receiver: Token![self], plan: &Plan<'_>) -> To
     };
     // Spanned at the key lending the arguments, where rustc's words for a body consuming
     // one point; its head alone is the expansion's, or a lint offers `async` in the key.
+    let taking = |at: Span| match &token {
+        Some(token) => quote_spanned!(at=> |#token|),
+        None => quote_spanned!(at=> ||),
+    };
     let attempt = match lends {
         Some(key) => {
-            let taking = quote_spanned!(Span::mixed_site().located_at(key.span())=> |#token|);
+            let taking = taking(Span::mixed_site().located_at(key.span()));
             quote_spanned!(key.span()=> #taking async #block)
         }
-        None => quote!(move |#token| async move #block),
+        None => {
+            let taking = taking(Span::call_site());
+            quote!(move #taking async move #block)
+        }
     };
-    let run = match plan.idempotent {
-        Some(_) => Ident::new("run_idempotent", at),
-        None => Ident::new("run", at),
+    let run = match (plan.idempotent, plan.cancel) {
+        (None, None) => "run",
+        (None, Some(_)) => "run_cancellable",
+        (Some(_), None) => "run_idempotent",
+        (Some(_), Some(_)) => "run_idempotent_cancellable",
     };
+    let run = Ident::new(run, at);
     let run = quote_spanned! {at=>
         ::nest_rs_resilience::__private::#run::<#answer, _, _, _, _>(
             #policy, #site, #judging, #attempt,
@@ -1984,9 +1996,10 @@ mod tests {
         for written in [
             "run_idempotent :: < Result < u32 , ResilienceError < E > > , _ , _ , _ , _ >",
             "policy (& self . carrier)",
-            "resilient_method (:: core :: any :: type_name :: < Self > , \"rates\" , :: core \
-             :: option :: Option :: Some (2000u64) , :: core :: option :: Option :: Some (3u32) ,)",
-            "| _ | async { if false { return :: nest_rs_resilience :: __private :: attempt :: < \
+            "const { & :: nest_rs_resilience :: __private :: resilient_method (:: core :: any :: \
+             type_name :: < Self > , \"rates\" , :: core :: option :: Option :: Some (2000u64) , :: \
+             core :: option :: Option :: Some (3u32) ,) }",
+            ", || async { if false { return :: nest_rs_resilience :: __private :: attempt :: < \
              Result < u32 , ResilienceError < E > > > () ; } ({ quote (zone) . await }) }",
         ] {
             assert!(expanded.contains(written), "{written} in {expanded}");
@@ -2010,7 +2023,7 @@ mod tests {
         );
         assert!(
             expanded.contains(
-                "move | _ | async move { if false { return :: nest_rs_resilience :: __private :: \
+                "move || async move { if false { return :: nest_rs_resilience :: __private :: \
                  attempt :: < Result < () , ResilienceError < E > > > () ; } ({ send (order) . await \
                  }) }"
             ),
@@ -2044,7 +2057,7 @@ mod tests {
         let read = "let _ = (& out , # [cfg (unix)] & r#type , & second , & first , & held ,) ;";
         let once = resilient(quote!(carrier), item.clone()).to_string();
         assert!(
-            once.contains(&format!("move | _ | async move {{ {read} if false {{")),
+            once.contains(&format!("move || async move {{ {read} if false {{")),
             "{once}"
         );
         let named = resilient(quote!(carrier, cancel = token), item.clone()).to_string();
@@ -2114,7 +2127,7 @@ mod tests {
         )
         .to_string();
         assert!(
-            underscored.contains("move | _ | async move { let _ = (& held ,) ; if false {"),
+            underscored.contains("move || async move { let _ = (& held ,) ; if false {"),
             "read first, `held` is captured ahead of the one named with a `_`: {underscored}"
         );
 
@@ -2138,7 +2151,7 @@ mod tests {
         )
         .to_string();
         assert!(
-            wrapped.contains("move | _ | async move { if false {"),
+            wrapped.contains("move || async move { if false {"),
             "tracing's own future takes the arguments from the attempt's: {wrapped}"
         );
     }
@@ -2214,7 +2227,7 @@ mod tests {
             let once = resilient(quote!(carrier, record_if = #record_if), item.clone()).to_string();
             assert!(once.contains("run :: < Answer , _ , _ , _ , _ >"), "{once}");
             assert!(
-                once.contains(&format!("{record_if}) , | _ | async {{ if false")),
+                once.contains(&format!("{record_if}) , || async {{ if false")),
                 "{once}"
             );
             assert!(!once.contains("move"), "{once}");
@@ -2523,7 +2536,7 @@ mod tests {
         let judged = |args: TokenStream| {
             let expanded = resilient(args, item.clone()).to_string();
             let (_, judging) = expanded.split_once("judging (").expect("a judging");
-            let attempt = judging.find(") , move | _ |").or(judging.find(") , | _ |"));
+            let attempt = judging.find(") , move ||").or(judging.find(") , ||"));
             judging[..attempt.expect("then the attempt")].to_owned()
         };
         let named = ":: core :: marker :: PhantomData :: < Answer >";
@@ -2568,7 +2581,7 @@ mod tests {
         assert_eq!(once.matches(". with_fallback ()").count(), 2, "{once}");
         for written in [
             "run :: < Answer , _ , _ , _ , _ >",
-            "| _ | async { if false",
+            "|| async { if false",
             "Fallback :: in_place_of (:: nest_rs_resilience :: __private :: fall_back (",
             ":: nest_rs_resilience :: __private :: every) , | __error | { let __handed_1 = weight \
              ; let __handed_0 = zone ; self . stale (__handed_0 , __handed_1 , __error) })) . \
@@ -2656,6 +2669,8 @@ mod tests {
     /// The token is the closure's parameter where the one attempt owns what it
     /// reads, and a `let` of the attempt's block where attempts borrow: ahead
     /// of the return never taken, outside the block the body was written in.
+    /// Only a body naming its token runs where one is made, and one naming
+    /// none takes no parameter.
     #[test]
     fn the_token_is_bound_under_the_name_written_as_the_attempt_takes_its_arguments() {
         let item = quote! {
@@ -2672,9 +2687,15 @@ mod tests {
             ),
             "{once}"
         );
-        for lending in [
-            quote!(carrier, idempotent, cancel = token),
-            quote!(carrier, cancel = token, fallback = stale),
+        for (lending, run) in [
+            (
+                quote!(carrier, idempotent, cancel = token),
+                "run_idempotent_cancellable",
+            ),
+            (
+                quote!(carrier, cancel = token, fallback = stale),
+                "run_cancellable",
+            ),
         ] {
             let lent = resilient(lending, item.clone()).to_string();
             assert!(
@@ -2684,6 +2705,24 @@ mod tests {
                      fmt :: Write as _ ;"
                 ),
                 "{lent}"
+            );
+            assert!(lent.contains(&format!("{run} :: < Answer")), "{lent}");
+        }
+        for (keys, run) in [
+            (quote!(carrier), "run"),
+            (quote!(carrier, cancel = token), "run_cancellable"),
+            (quote!(carrier, idempotent), "run_idempotent"),
+            (
+                quote!(carrier, idempotent, cancel = token),
+                "run_idempotent_cancellable",
+            ),
+        ] {
+            let expanded = resilient(keys.clone(), item.clone()).to_string();
+            assert!(
+                expanded.contains(&format!(
+                    ":: __private :: {run} :: < Answer , _ , _ , _ , _ >"
+                )),
+                "#[resilient({keys})]: {expanded}"
             );
         }
     }
@@ -3299,7 +3338,7 @@ mod tests {
             "{again}"
         );
         assert!(
-            again.contains("| _ | async { if false { return"),
+            again.contains("|| async { if false { return"),
             "the attempt opens on its own type, ahead of tracing's statements: {again}"
         );
         let lent = resilient(
@@ -4028,12 +4067,9 @@ mod tests {
         let attempt = ":: nest_rs_resilience :: __private :: attempt :: < Result < u32 , \
                        ResilienceError < Error > > > ()";
         for (keys, opens) in [
-            (quote!(carrier), "move | _ | async move {".to_owned()),
-            (quote!(carrier, idempotent), "| _ | async {".to_owned()),
-            (
-                quote!(carrier, fallback = stale),
-                "| _ | async {".to_owned(),
-            ),
+            (quote!(carrier), "move || async move {".to_owned()),
+            (quote!(carrier, idempotent), "|| async {".to_owned()),
+            (quote!(carrier, fallback = stale), "|| async {".to_owned()),
             (
                 quote!(carrier, cancel = token),
                 "move | token | async move {".to_owned(),

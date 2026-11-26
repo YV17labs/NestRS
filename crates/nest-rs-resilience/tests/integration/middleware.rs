@@ -11,9 +11,10 @@
 //! a pointer as one it names bare, and a body the client's policy gave up as
 //! that policy's timeout. The response it hands back is reqwest's
 //! own, its body read as it comes and holding the run's slot, the breaker's
-//! verdict and what its head left of the attempt's bound until it ends: the
-//! time its reads wait for the dependency, never the time its caller takes,
-//! and a read the health edge cuts with the indicator making it a timeout.
+//! verdict and what its head left of the attempt's bound — counted from its
+//! send, never from its wait for a token — until it ends: the time its reads
+//! wait for the dependency, never the time its caller takes, and a read the
+//! health edge cuts with the indicator making it a timeout.
 //! What its policy tells a subscription of all this names no method: a retry
 //! as its line files it, a timeout before the retry it earns, a body given up
 //! as the timeout it is, and one the dependency cut short, or dropped by its
@@ -26,7 +27,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use nest_rs_core::client_operation::{ClientOperation, HTTP_REQUEST_RESEND_COUNT, SERVER_PORT};
-use nest_rs_core::{Correlation, Problem, code, injectable, instance, module};
+use nest_rs_core::{Correlation, Instance, Problem, code, injectable, instance, module};
 use nest_rs_health::{
     HealthConfig, HealthModule, HealthService, IndicatorStatus, ProbeKind, indicators,
 };
@@ -66,13 +67,13 @@ fn header(peer: &HttpsPeer, nth: usize, name: &str) -> Option<String> {
 }
 
 /// A client trusting the peer's authority, under `policy`, each attempt traced.
-fn client(policy: Arc<ResiliencePolicy>) -> ClientWithMiddleware {
+fn client<I: Instance>(policy: Arc<ResiliencePolicy<I>>) -> ClientWithMiddleware {
     client_following(policy, reqwest::redirect::Policy::default())
 }
 
 /// [`client`], following the redirects `redirects` lets it follow.
-fn client_following(
-    policy: Arc<ResiliencePolicy>,
+fn client_following<I: Instance>(
+    policy: Arc<ResiliencePolicy<I>>,
     redirects: reqwest::redirect::Policy,
 ) -> ClientWithMiddleware {
     let authority =
@@ -1039,6 +1040,65 @@ async fn an_answers_body_is_read_within_its_attempts_timeout_and_counts_in_the_b
     );
 }
 
+/// A dependency answering a head at once and never the rest of its body, as a
+/// middleware after the policy's.
+struct HeadAlone;
+
+#[async_trait::async_trait]
+impl reqwest_middleware::Middleware for HeadAlone {
+    async fn handle(
+        &self,
+        _req: reqwest::Request,
+        _extensions: &mut http::Extensions,
+        _next: reqwest_middleware::Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        let never = nest_rs_http::futures_util::stream::pending::<
+            Result<nest_rs_http::Bytes, std::io::Error>,
+        >();
+        let body = reqwest::Body::wrap(nest_rs_http::Body::from_stream(never));
+        Ok(http::Response::new(body).into())
+    }
+}
+
+/// The wait for a rate's token is no part of the attempt: a request that
+/// waited for its token is handed its whole timeout, counted from its send, to
+/// read its body in.
+#[tokio::test(start_paused = true)]
+async fn a_wait_for_a_token_is_no_part_of_the_timeout_a_body_is_read_within() {
+    const BOUND: Duration = Duration::from_millis(100);
+    let (_app, policy) = policy(ResilienceConfig {
+        timeout: BOUND,
+        rate_limit: Some(1),
+        rate_window: BOUND,
+        rate_wait: Some(BOUND),
+        ..quiet()
+    })
+    .await;
+    let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+        .with(ResilienceMiddleware::new(policy))
+        .with(HeadAlone)
+        .build();
+    let send = || client.post(format!("https://127.0.0.1:1{PARCEL}")).send();
+    drop(send().await.expect("the bucket's one token"));
+
+    let arrived = tokio::time::Instant::now();
+    let answered = send().await.expect("its token came within the rate's wait");
+    assert_eq!(arrived.elapsed(), BOUND, "sent as its token came");
+    let read = answered.bytes().await;
+    assert!(
+        matches!(
+            read.as_ref().map_err(cut),
+            Err(Some(ResilienceError::TimedOut { timeout, .. })) if *timeout == BOUND
+        ),
+        "the rest never came: {read:?}"
+    );
+    assert_eq!(
+        arrived.elapsed(),
+        2 * BOUND,
+        "given up its whole timeout after its send"
+    );
+}
+
 /// The slot's call is read as running for as long as the body holds it.
 #[tokio::test]
 async fn an_answers_body_holds_its_runs_slot_until_it_is_read_or_dropped() {
@@ -1445,6 +1505,61 @@ async fn a_body_the_policy_gave_up_says_so_on_a_line() {
     assert_eq!(
         nest_rs_core::error_message(&CarrierFailed::Unread(given_up)),
         format!("the carrier's answer could not be read: {BODY_GIVEN_UP}")
+    );
+}
+
+/// A tracker's API, under a policy of its own.
+#[instance]
+struct Tracker;
+
+/// A bulkhead, so a run meets the breaker as it opens, before any attempt.
+#[module(imports = [ResilienceModule::for_root((Tracker, ResilienceConfig {
+    timeout: Duration::from_millis(200),
+    breaker_window: Some(2),
+    breaker_failures: 2,
+    concurrency: Some(1),
+    ..quiet()
+}))])]
+struct TrackerModule;
+
+/// Each refusal of a named instance's middleware names that instance wherever
+/// its chain is said: a body given up at the timeout, a head given up there,
+/// and the request the breaker those two failures opened refuses as its run
+/// opens, unsent.
+#[tokio::test]
+async fn a_named_instances_middleware_names_it_in_each_refusal() {
+    let peer = answering([PeerAnswer::stalling(200), PeerAnswer::Silent]).await;
+    let app = HeadlessApp::builder()
+        .module::<TrackerModule>()
+        .build_headless()
+        .await
+        .expect("a named instance's policy boots");
+    let client = client(held::<Tracker>(&app));
+    let sent = || client.get(peer.url(PARCEL)).send();
+
+    let cut = sent()
+        .await
+        .expect("the head answers")
+        .bytes()
+        .await
+        .expect_err("the body is given up");
+    let unanswered = sent().await.expect_err("the head is given up");
+    let refused = sent().await.expect_err("the breaker opened on both");
+
+    let named = "the call did not answer within the timeout of the instance `tracker`: 503 \
+                 UNAVAILABLE";
+    assert_eq!(
+        [&cut as &dyn std::error::Error, &unanswered, &refused].map(nest_rs_core::error_message),
+        [
+            format!("error decoding response body: request or response body error: {named}"),
+            named.to_owned(),
+            "the circuit breaker of the instance `tracker` is open: 503 UNAVAILABLE".to_owned(),
+        ]
+    );
+    assert_eq!(
+        peer.requests().len(),
+        2,
+        "the refused request is never sent"
     );
 }
 

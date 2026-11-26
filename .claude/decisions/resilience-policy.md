@@ -1618,3 +1618,121 @@ longer holds. The rest of that list — a refused method's refusals in its body'
 place, `#[tracing::instrument]` read in one order, an `impl Trait` inferred,
 `record_if` lending only what it names, the macro crate split — is the
 decorator lane's.
+
+## 2026-11-26 — a refused method is its refusals, an instrument below the decorator alone, an `impl Trait` inferred, `record_if` lending what it names, and the decorator crate split by job
+
+The decorator half of the redesign, on the run as the runtime lane left it:
+
+- **A refused method is its refusals.** What `#[resilient]` refuses on a
+  method is emitted as the signature as written, but for the attribute and an
+  `async` its body's own `.await` says it was meant with, then the run's mark
+  and one `compile_error!` per refusal in the body's place. An error
+  expression answers any type and leaves no body to check, so no error of the
+  body's and no lint of an argument it no longer reads joins the refusals.
+  Elegance decided it: one form, where five — no body, the stand-in, as written
+  beside an `impl Trait`, run once without the keys, the `async fn` meant —
+  were chosen by what refused the method, each with a reader of the arguments
+  to keep rustc quiet; the runtime's `__private::refused` goes with them. What
+  is no method, or one already run under a policy, is kept as written beside
+  its refusals, and a second decorator is told alone, its list going with it.
+- **`#[tracing::instrument]` goes below the decorator alone.** Written above,
+  it has wrapped the body in a future answering the method's type, where an
+  attempt answers `Result<T, E>`; the decorator read that wrapper by
+  tracing-attributes' private names and re-typed it. That reading goes: the
+  method is refused at the instrument, saying to write it below, where its
+  span covers the whole run and every release compiles. Correctness decided
+  it: an app's own `cargo update` of tracing-attributes could turn a method
+  that compiled into a compile error, a dependency on another crate's private
+  names no type holds. The `__tracing_` prefix is read for the sentence alone.
+  A span per attempt is that of a method the body calls, instrumented itself.
+  A second `#[resilient]` is found by its run's mark, an item `fn` of that name
+  at any depth, so one an instrument wrapped between the two is still told
+  twice.
+- **An `impl Trait` inside the answer is inferred.** The expansion writes `_`
+  in its place wherever it names the answer, and rustc infers the hidden type
+  from the body through the attempt's type, as for the undecorated method: a
+  `#[subscription]` answers `Result<impl Stream<Item = T>, ResilienceError<E>>`.
+  An answer that is an `impl Trait` whole names neither `T` nor `E`, and stays
+  refused. Elegance decided it: a refusal and a limit gone.
+- **`record_if` lends the arguments only where its predicate names one**, read
+  by tokens as a body is — a macro's arguments and a format string's captures
+  included — or where an argument is bound by a macro's pattern. A path or a
+  closure over the error alone leaves the one attempt owning them, as with no
+  key. Correctness decided it: such a method's arguments now drop as the
+  undecorated method's do, and its future asks no `Sync`. A false positive
+  only lends, as every `record_if` did; a false negative is rustc's
+  use-of-moved-value at the key, never a wrong run, since a closure reaches an
+  argument by its name alone.
+- **The decorator crate is split by job**: `resilient.rs` the entry,
+  `args.rs` what the list gives, `method.rs` what the signature says,
+  `expansion.rs` an accepted method's expansion, each with its own tests and
+  `testing.rs` what they share; one `skip_value` reads past a key's value
+  where two readers wrote it. Its integration folder mirrors it — `args/`,
+  `method/`, `expansion/` — and `edges/`, the decorator on every impl half, is
+  the one folder no file of the macro crate names. Elegance decided it.
+
+**Names.** `Refused::Method` and `Refused::Item` name what was refused;
+`decorated` is the entry's reading of an item, `emitted` what it hands rustc.
+The snapshot `resilient_under_an_instrument_it_cannot_read` is
+`resilient_below_an_instrument`, named for the order it asks.
+
+**Refused:**
+
+- **Keeping the span per attempt by attribute order** through a documented
+  marker: tracing-attributes has none, and the upstream ticket asking one is
+  the owner's to file (`.claude/upstream/tracing-attributes.md`). Should it
+  land, the order can come back read off that marker.
+- **The edge hosts folded into one host per impl half**, estimated at 350
+  lines of wiring and not counted: only a cut a mutation run proves duplicate
+  may be taken, and none was run.
+- **`footprint` and `told` moved to the suite's `call.rs` and `teller.rs`**:
+  every method of theirs is decorated, and the move would widen the
+  decorator folder's fixtures to the whole suite.
+
+**Limits, named:**
+
+- **A refused body's own errors come once its refusals are fixed**, and
+  rust-analyzer loses the body's highlighting while it is refused. A private
+  helper only that body called can be rustc's `dead_code` beside the
+  refusals, by reasoning, not pinned. A toolchain changing what an error
+  expression silences is caught by the snapshots on its bump.
+- **A release of tracing-attributes binding none of its names under
+  `__tracing_`** leaves an instrument above the decorator rustc's `E0308` at
+  the body's answers: the sentence is a courtesy, as the limit it replaces
+  said.
+- **A body whose hidden type nothing names** — an `impl Trait` answered by
+  `Err` alone — is rustc's `E0282` at the body, as in plain Rust; a fallback of
+  such a method answers the hidden type by name, two `impl Trait`s being two
+  types.
+- **A predicate naming an argument** still lends every argument to the one
+  attempt: one the body consumes drops with the attempt, ahead of those it
+  reads, and a non-`Sync` one makes a future that is not `Send`, in rustc's
+  words naming no key.
+
+**Superseded:**
+
+- 2026-11-21: "A refused method is kept in the nearest form its body compiles
+  in — run once, or typed against a stand-in (`refused`) that nothing runs
+  where the receiver or the field is what was refused — so its body adds no
+  error of its own": its refusals stand in its body's place.
+- 2026-11-24, *Limits*: "**`#[tracing::instrument]` above `#[resilient]` is
+  read by the names its expansion writes**" is closed: nothing is read, the
+  order is refused. "Under an instrument written above it the method keeps the
+  order that instrument gives it with no policy" no longer holds: no method has
+  one. "**Under `record_if`, an argument the body consumes drops with the
+  attempt**" and "a method sent once that lends its arguments and takes one
+  that is not `Sync`" hold for a `record_if` naming an argument alone.
+- 2026-11-26, *Limits*: "**The decorator's integration folder is split by
+  subject** … mirrors the macro crate's files … in `instrumented.rs` alone" is
+  closed by the split above. *Not built*: "a refused method's refusals in its
+  body's place, `#[tracing::instrument]` read in one order, an `impl Trait`
+  inferred, `record_if` lending only what it names, the macro crate split" are
+  built.
+
+**Measured**, counted by non-blank lines that are no comment, outside
+`#[cfg(test)]`: the macro crate's code 1,683 lines before, 1,396 after the four
+changes, 1,472 once split (the imports each file names); its unit tests 2,362,
+then 1,856. The integration suite counts 607 tests before the split and after.
+No compile time or code size per method is claimed: an accepted method
+expands as before but under a `record_if` naming no argument, which no bench
+row measures.

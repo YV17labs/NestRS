@@ -280,9 +280,11 @@ and more than the rate lets answer within the age.
 - **A breaker is its replica's.** It opens on the failures its own replica saw,
   and a switch by hand moves it alone. Taking a dependency out for the whole app
   switches the breaker of every replica.
-- **An age costs memory.** With one set, each outcome the window holds keeps the
-  instant it answered beside its byte, for every outcome up to the window's
-  ceiling of ten thousand.
+- **An age costs memory and a lock.** With one set, each outcome the window holds
+  keeps the instant it answered beside its byte, for every outcome up to the
+  window's ceiling of ten thousand, and every outcome it counts takes the
+  breaker's lock, each success being forgotten at its own age. Letting a call
+  through, and refusing one while its open time runs, take no lock, age or not.
 - **The boot's check of an age under a rate counts the longest attempt.** It
   takes each attempt as running up to ten minutes, the timeout's ceiling, which
   a method may pin: a policy whose attempts all end sooner can still be built

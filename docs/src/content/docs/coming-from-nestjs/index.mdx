@@ -259,6 +259,7 @@ The method's shape, with its keys written, is the first block of
 | `ResilienceService.circuitBreaker(name)`, `bulkhead(name)`, `circuitBreakers()` and `bulkheads()`, for an app to export | each policy injected by its type | A policy is reached by its type wherever it is injected; under the `opentelemetry` feature its reads are observed on the meter, by instance. |
 | `mapErrors`: `504`, `503`, `RpcException`, `WsException`, `GraphQLError`; `TIMEOUT`, `CIRCUIT_OPEN`, `BULKHEAD_FULL`, `RATE_LIMITED` | `ResilienceError`, through `ToProblem` | A refusal of the policy's is one `503` with the code `UNAVAILABLE` on every edge, and `Retry-After` where known; the variant tells the causes apart in code. `Failed` answers as the call's own error says. |
 | `mapErrors: false` | a method answering an error of its own | It maps the `ResilienceError` it holds, as it maps any error of its own. |
+| `error.policy`, the name of the policy instance that raised the error | `instance` on a refusal: `TimedOut`, `Open`, `Full` or `Limited` | The instance its policy is named for, empty for the default instance, and never a method's name: a decorated method's `host` and `method` are on its lines and events. The refusal's sentence names the instance too, so an edge's failure line says which dependency refused; no reply does. |
 
 A policy's state lives in its process: each replica keeps its own breaker,
 bulkhead and rate, and no store shares them. [The middleware](/fundamentals/resilience-middleware/)

@@ -10,7 +10,7 @@ use nest_rs_core::__private::SaidFailure;
 /// serialization failure or a deadlock is retryable; a constraint violation is
 /// not, nor a commit whose outcome is *unknown*, which may have landed.
 ///
-/// It can grow within 7.x: read its fields, and build one through a
+/// It can grow in a minor release: read its fields, and build one through a
 /// constructor, never a literal:
 ///
 /// ```compile_fail,E0639
@@ -65,7 +65,7 @@ impl std::error::Error for Unhonoured {}
 
 /// Why the outbox could not keep a record, or hand one over.
 ///
-/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm.
+/// It can grow in a minor release, so a `match` outside this crate keeps a `_` arm.
 #[non_exhaustive]
 pub enum OutboxError {
     /// The store's table is not there; `remedy` says how to create it.

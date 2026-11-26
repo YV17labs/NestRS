@@ -1138,3 +1138,273 @@ errors alone.
 design for keeping Rust's `#[deprecated]` on one: the wrapper would silence the
 lint, as `route-deprecation.md` refused for a route, and a deprecation meant for a
 client would never reach the schema.
+
+## 2026-11-26 — the run compiled once, a token made only where a call takes one, the breaker read off one word, and a refusal naming its instance
+
+The owner chose the core of the redesign four architects proposed and a judge
+merged, built in four steps, each green; the rest waits, named under *Not
+built*.
+
+- **One run, compiled once.** `Run<'p>` (`src/run.rs`) is one state machine
+  polled by hand, with no type parameter, for every policy, instance and call.
+  It polls the call through `Calling` (`src/call.rs`), the one `dyn` seam, so a
+  decorated method, or a call of `run` or `run_idempotent`, compiles only
+  `Running<'p, R, P, J>`: its closure, its future and its answer in their place
+  `P`, and its judge `J`. Each decorated method compiled the whole machine
+  again — two state machines and an attempt's future over seven type
+  parameters, the instance among them, though every type read it only as a
+  name. The instance is read at the policy's face alone: `ResiliencePolicy<I>`
+  holds an `Arc<Mechanisms>` (`src/mechanisms.rs`) — the timeout, the retries,
+  the backoff, the breaker, the bulkhead, the rate and the boot's three checks
+  — and reads `I` where it is built, where it names its remedy and at the
+  decorator's seam. `Teller` (`src/teller.rs`) says each fact once, its line,
+  its counter and its event, and holds the ten messages; the breaker is built
+  from its settings and that teller, where it took eight arguments; and the
+  observed reads hold the mechanisms through a `Weak`, which ends the import
+  cycle between the breaker and the counters. The two waits a call may never
+  meet, for a slot and for a token, are boxed: a run meeting neither reserves no
+  room for them, and the bulkhead's unnamed wait makes no type parameter of the
+  run. The middleware drives the same run, a success left in the breaker for
+  the response's body to settle, and its own retry path is gone. An answer the
+  run sends again is let go as its retry is decided, before the retry's line
+  and event, where it went just after them: before the wait, either way.
+- **A token only where the call takes one.** `#[resilient]` expands to one of
+  four tier-2 runs, read off the two keys that change its body's shape: `run`,
+  `run_cancellable` (`cancel`), `run_idempotent` (`idempotent`) and
+  `run_idempotent_cancellable` (both), the answer probe on each. A body is
+  handed its attempt's `CancellationToken` only where its `cancel` names it, so
+  a method without the key makes none, nor does `ResilienceMiddleware` for a
+  request; `run` and `run_idempotent` keep their signature, which hands every
+  attempt one. Whether an attempt makes a token is a zero-sized type parameter
+  of its call, `Cancellable` or `Uncancelled`, the closure held as written. The
+  method's site is a `&'static ResilientMethod` built in a `const` block of the
+  expansion: 8 bytes where a 56-byte value was held once in a run, twice in an
+  idempotent one, whose `async fn` holds its arguments twice
+  (rust-lang/rust#62958), and once more beside a fallback.
+- **A breaker closed or open is read off one word, with no lock.** Each holder
+  of its lock publishes as it lets it go — `Holding`'s `Drop`, still under it —
+  the instant an open time ends (`open_until`, in nanoseconds past the
+  breaker's origin), then one word: the epoch in its upper 62 bits, and whether
+  the breaker is closed, closed and quiet, or open. Quiet is a window counted
+  with no age, full and holding no failure, which one more success leaves as it
+  is, `breaker_stats()` included. Off that word, a call is let through on a
+  closed word, in the word's epoch; refused on an open word whose time is left,
+  read between two equal loads of the word; and its success is not counted
+  where the word is quiet, or the word's epoch has passed the attempt's.
+  Failures, probes, switches, `breaker_state()`, `breaker_stats()` and every
+  telling take the lock as before, and the mutex is reached only through the
+  guard that publishes, so no change goes unpublished. Why each read is the one
+  the lock would give:
+  - every change is made under the mutex and published there, both stores
+    `Release`, a store skipped where the value is unchanged;
+  - a pass taken off a closed word is one the lock would have given at that
+    word's time: an opening or a switch since bumps the epoch, so its outcome
+    counts nowhere, as the lock checks (`held_since`); and a thread never loads
+    an older word than one it read, so a word of another epoch than the
+    attempt's is newer, and its success returns with no lock;
+  - the first `Acquire` load of the word synchronizes with its publisher, so
+    `open_until` is that publisher's or a later one; one a later holder stored
+    in another epoch shows a different second word, but for a reopening by hand
+    straight from open, whose `until` is the open time in force; within one
+    epoch the breaker re-enters open only by withdrawing or abandoning a probe,
+    with an `until` already passed, and leaves an open time not yet passed only
+    by a switch, which bumps the epoch, so an `until` still ahead between two
+    equal words is that epoch's opening's, and an ABA within an epoch shows only
+    a passed one, which falls to the lock;
+  - a read missing a concurrent holder's stores is ordered before that holder's
+    section, as a call that took the lock first would be.
+- **A refusal names its instance, and the error is `Clone` where `E` is.**
+  `TimedOut`, `Open`, `Full` and `Limited` carry a public
+  `instance: &'static str`, the policy's marker's `NAME`, empty for the default
+  instance, read off the refusing run's teller where each refusal is built; a
+  named instance's sentence says it,
+  ``the circuit breaker of the instance `payments` is open``. A handler calling
+  two dependencies filed `the circuit breaker is open: 503 UNAVAILABLE` for
+  either, and its edge's failure line now names the one that refused. The
+  default instance's sentences, and every reply, are as they were: no `503`,
+  code or `Retry-After` names an instance or a mechanism. Clones share a
+  refusal's problem and an unsettled savepoint's cause, so a `#[dataloader]`
+  method can be decorated: async-graphql bounds a loader's error `Clone` and
+  hands each key of a batch a clone of it, and refused the decorated method
+  with its own `E0277`. A refusal holds its
+  problem behind an `Arc`, `Display` and `Error::source` written by hand so the
+  chain's link is still the `Problem` every edge and the queue downcast to:
+  `ResilienceError<()>` is 48 bytes, where its parts made 120.
+
+**Measured**, release, with `benches/policy.rs` in the dev container —
+aarch64, fourteen cores, criterion's `--quick` medians in ns, each step against
+the one before it on one harness, the load between 0.1 and 6. Before is the run
+as this change found it, the median of three runs; now, the last step's, of
+two to five. The `contended` group, a decorated method on one policy called by
+a thread per core at once, a row one call's wall time on one thread, came with
+the change and was first measured on the run already compiled once.
+
+| Row | Before | Now |
+|---|---|---|
+| `run/bare` | 80 | 62 |
+| `run/breaker` | 92 | 68 |
+| `resilient/bare` | 79 | 40 |
+| `resilient_idempotent/bare` | 100 | 41 |
+| `resilient_idempotent/breaker` | 115 | 46 |
+| `judged/breaker/ok_under_fallback` | 125 | 49 |
+| `judged/bare/err_by_default` | 333 | 285 |
+| `refused/run/no_subscription` | 62 | 50 |
+| `refused/resilient/subscription` | 134 | 116 |
+| `contended/bare` | 111–114 | 70 |
+| `contended/breaker` | 4,825–4,894 | 78 |
+| `contended/refused` | 2,490–2,493 | 87 |
+
+A decorated method answering at once allocates nothing in a release build,
+where it allocated its token; one naming `cancel` allocates that token, and a
+call of `run` or `run_idempotent` the one its closure is handed. A refusal
+costs its problem's `Arc`, 7 ns through `run` and 2 to 3 through a decorated
+method, and the smaller error made a call answering 5 to 10 ns faster on the
+decorated, fallback and contended rows. A future answering at once, its body
+trivial, measured once the token step was built: `run` 808 → 384 B,
+`run_idempotent` 784 → 368, a decorated method run once 824 → 400 and
+idempotent 888 → 416, under a fallback 896 → 416 and 960 → 432, and one
+naming its token 416 and 432. The bench binary, holding the same decorated
+methods and runs, lost 8.1 % of its `.text` (3,420,496 → 3,141,776 B) with
+the run compiled once; the code and the compile time per decorated method were
+measured on the merged plan's prototype alone (13.4 → 3.8 KB, 142 → 37 ms),
+never on the build.
+
+**Held by** the suites as they stood, each hygiene snapshot that moved read
+before it was blessed, and what the change pins. Red under its mutation: an
+idempotent method's last savepoint settled by its verdict, an attempt given up
+under a fallback rolled back before it, a token's wait no part of a body's
+budget, a retried attempt's timeout naming its method, a call's future
+panicking as it is dropped unwinding with no failure counted, an answer a
+predicate panicked on let go before its savepoint rolls back, and each place a
+refusal is built naming its instance. Pinned beside them: the allocations
+above, the breaker answering while another thread holds its lock, a refusal's
+instance on the HTTP edge's line and through the middleware, and a decorated
+batch's refusal answering each field it served. The breaker's word is
+stressed by ten threads failing near half their calls beside one switching it
+6,000 times, each bounded at ten seconds of wall clock
+(`threads_failing_beside_a_switch_leave_the_window_within_its_bounds_and_exact`).
+
+**The correspondence gains a row**, after `mapErrors`:
+
+| The reference | Here | Differs by |
+|---|---|---|
+| `ResilienceError.policy`, the name of the policy instance that raised it: a breaker's, a preset's, a handler's (`OrdersController.list`) | `instance` on `TimedOut`, `Open`, `Full` and `Limited`, its marker's `NAME`, and the refusal's sentence (``the circuit breaker of the instance `payments` is open``) | the default instance names none, and no method is named: a decorated method's `host` and `method` are on its lines and events; no reply names it, the `503` being the same whichever policy refused, as the reference's reply names none |
+
+**Names.** `instance` joins `timeout` and `retry_after` among what a refusal
+carries, read off the framework's one word for a policy's name —
+`Instance::NAME`, the `instance` of every line on `nest_rs::resilience`,
+`nestrs.resilience.instance`, `ConfigNotResolvedError::instance` — and never
+`policy`, which names the `ResiliencePolicy` here. The tier-2 runs read `run`,
+then `_idempotent` where that key is written, then `_cancellable` where
+`cancel` names a token.
+
+**Refused:**
+
+- **A wrapper per token shape** (`Cancellable<F>`): with the closure one type
+  deeper, rustc reported a body that is not `Send` through every type of the
+  run, where it says `` future returned by `ship` is not `Send` ``
+  (`resilient_record_if_shares_an_argument`). The marker keeps that snapshot as
+  it was.
+- **One entry for the four runs**: a closure built against no expected `Fn`
+  bound gets no kind and no parameter types, so a body reading its token would
+  need an annotation — by reasoning, not measured.
+- **`run` reading its closure's arity**, `run(|| …)` beside `run(|cancel| …)`:
+  a closure calling a method of its token is then `E0282`, type annotations
+  needed.
+- **The instance inline beside the problem**: `ResilienceError<()>` became 128
+  bytes, where clippy's `result_large_err`, on by default, fires at every
+  method answering it — 260 warnings in this crate's suite, one per decorated
+  method in an app. A one-word name behind an accessor measured 128 too: the
+  three variants holding a duration are equal, which leaves the tag no niche.
+- **`Option<&'static str>`**: `ConfigNotResolvedError::instance` already says
+  an instance as a `&'static str`, empty for the default one.
+- **An instance on `ResilienceRefusal`**, the event's: a subscription is its
+  own policy's.
+- From the merged plan, measured on its prototypes: the run kept generic over
+  the call with the instance alone erased (14.0 KB of code per decorated method
+  against 13.4, 97.8 ns against 97.2 — what costs is the call's types
+  monomorphizing the whole run); a run driven by boxed `async fn`s (a box per
+  backoff, per savepoint settled and per wait for a slot; 68.6 ns against 59.7,
+  a 536-byte future against 336); a call's state as plain data given back by
+  hand (a pass or a slot then held by discipline, not by a guard's type);
+  dropping the 16 KiB boxing of a call sent once (a buffer moved into its
+  closure overflows a 2 MiB worker at 384–512 KiB, not 640–704); a file per
+  type, which would end the two import cycles left — `teller` and `breaker`
+  through `BreakerPhase`, `resilient` and `policy` through `ResilientMethod` —
+  at 119 more lines of imports and no case removed; and a sharded or batched
+  window, a lock-free GCRA and a packed-word bulkhead: a sharded window opens
+  early or late against "opens at that many failures", one atomic GCRA needs a
+  128-bit compare-and-swap or loses exactness, and the bulkhead and the rate
+  contend only for a dependency answering in nanoseconds.
+
+**Superseded:**
+
+- 2026-11-21: "`idempotent` runs the body through `run_idempotent`, else `run`,
+  once", and the answer probe "on `run` and `run_idempotent` themselves": four
+  runs, read off `idempotent` and `cancel`, the probe on each.
+- 2026-11-22, *How each holds*: "the one `async fn` left, a decorated
+  idempotent run's" is two, one per token shape; "So a call answering at once
+  allocates nothing but its attempt's token" reads "but the token its call
+  takes"; and "what a run waits on besides its call — its attempt's bound, and
+  only when they come a slot, the rate's reset, a backoff — shares one place"
+  reads: what a run waits on besides its call shares one place — its attempt's
+  bound and a backoff in place, a slot of the bulkhead and the rate's token,
+  the waits a call may never meet, each in a box allocated when the call meets
+  it.
+- 2026-11-22, *Limits, named*: the figures of "**A run answering at once costs
+  more than the first policy's**", read on 2026-11-24, are this entry's; how a
+  run compares with the first policy's `async fn`s stays unmeasured.
+
+**Limit changed:** 2026-11-22, "**Each attempt allocates its
+`CancellationToken`**, which its call is handed". Now **a call through `run`
+or `run_idempotent` allocates its attempt's `CancellationToken`**, which its
+closure is handed whether it reads it or not, tokio-util's token being shared
+through an `Arc`; a decorated method makes one only where its `cancel` names
+it, and `ResilienceMiddleware` none. Closing it is a call through `run` saying
+it takes none, which its signature, handing one to every call, does not let a
+policy know; reading the closure's arity is refused above.
+
+**Limits, named:**
+
+- **A call waiting for a slot of the bulkhead or a token of the rate allocates
+  that wait once**, in a box beside its token: the run holds the two waits a
+  call may never meet in a box, so a call meeting neither reserves no room for
+  them (`a_call_waiting_for_a_slot_or_a_token_allocates_its_wait_once`).
+  Closing it is every run reserving the larger wait's room, which a call that
+  never waits would carry.
+- **A refusal allocates its problem**, an `Arc<Problem>` its clones share:
+  inline beside a duration and the instance, the problem took the error to 128
+  bytes. Closing it takes a `Problem` small enough to ride inline:
+  nest-rs-core's, its `problem_type` and `detail` out of line.
+- **Two memory-ordering lines of the breaker's word are held by argument and
+  review alone**: the second load of the word in `open_left`, and `open_until`
+  stored before the word. Each, mutated alone, passes every test, the stress
+  test included; the two-line comment in `open_left` and the argument above
+  hold them. Closing it is a model check of the publication — `loom` over
+  `Published`, `Holding` and `open_left`, a new dev-dependency — or a hook
+  between the two loads for a test alone.
+- **A breaker with an age takes its lock for every outcome it counts**, each
+  success forgotten at its own age; a closed breaker whose window holds a
+  failure, or is not yet full, takes it for every success; failures, probes and
+  switches always take it. The bulkhead, tokio's `Semaphore`, and the rate
+  contend as before, for a dependency answering in nanoseconds.
+- **The decorator's integration folder is split by subject**
+  (`tests/integration/resilient/`, the attribute's own expansion in
+  `expansion.rs`), and mirrors the macro crate's files, as `testing.md` asks,
+  in `instrumented.rs` alone: a deviation the one file it was split from
+  already made, which the split shows. Closing it is the macro crate's split
+  below, or `testing.md` naming this folder as split by subject: the owner's
+  pick.
+
+**Not built**, the owner having chosen the core: a refused method's refusals
+standing in its body's place; `#[tracing::instrument]` read in one order; an
+`impl Trait` inside an answer inferred; `record_if` lending the arguments only
+where its predicate names one; the macro crate split by what each file does,
+its suite mirroring it; a failure's chain put into words only when a line, an
+event or the breaker's opening tells it; the breaker as one transition over
+three phases, a probe long overdue giving its turn up; and the four refusals as
+one public set, `ResilienceError::Refused`. The limits each would close stand
+as the entries above name them, and a failing call still has its chain said for
+the breaker's opening whether or not anything tells it: 285 ns on
+`judged/bare/err_by_default`, where the plan's prototype, on a harness of its
+own, took 40 and allocated nothing.

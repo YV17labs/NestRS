@@ -9,7 +9,7 @@ use crate::error::OutboxError;
 /// ([`Outbox::write`]), read back by its relay through an [`OutboxStore`], and
 /// opaque to this port, which names no queue type.
 ///
-/// It can grow within 7.x: build one through [`OutboxRecord::new`].
+/// It can grow in a minor release: build one through [`OutboxRecord::new`].
 #[non_exhaustive]
 #[derive(Clone, PartialEq, Eq)]
 pub struct OutboxRecord {
@@ -61,7 +61,7 @@ impl std::fmt::Debug for OutboxRecord {
 /// A record an [`OutboxClaim`] holds: its place in the store, how many times
 /// filing it failed, and how long ago its unit wrote it.
 ///
-/// It can grow within 7.x: build one through [`ClaimedRecord::new`].
+/// It can grow in a minor release: build one through [`ClaimedRecord::new`].
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimedRecord {

@@ -57,7 +57,7 @@ callers must clear; the method's doc is the authority, not this list.
 - **`Repo::with_tombstones`** — the ability-scoped read that keeps
   soft-deleted rows: an administrator's view of deleted records, a retention
   job. Every other read hides them. It reads only: no `Repo` write un-deletes
-  a row (`Repo::restore` is planned for 7.x).
+  a row (`Repo::restore` is planned).
 - **A truly contextless path** — a one-shot command bootstrapped outside
   every unit of work — keeps an injected `Arc<DatabaseConnection>`, because no
   executor exists there. A lifecycle hook is a unit, and reaches `Repo` like
@@ -150,7 +150,7 @@ listeners each open a unit of their own through that binding) — and is dropped
 on a task handed to
 `TaskContext`, a connection's next message and a job's envelope, where a write
 opens a unit of its own. The ability crosses everywhere but a job's envelope.
-One exception is planned for 7.x: a mutation operation's batches on the
+One exception is planned: a mutation operation's batches on the
 operation's own transaction, joined before the field's savepoint settles.
 
 **The executor** is installed by each edge running its unit of work through

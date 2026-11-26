@@ -315,8 +315,8 @@ impl From<AtomicError> for ServiceError {
 /// # assert!(signing_up(Ok(())).is_ok());
 /// ```
 ///
-/// A variant the server raised carries its [`Diagnostics`]; it can grow within
-/// 7.x, so a `match` outside this crate keeps a `_` arm.
+/// A variant the server raised carries its [`Diagnostics`]; it can grow in a
+/// minor release, so a `match` outside this crate keeps a `_` arm.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum RepoError {

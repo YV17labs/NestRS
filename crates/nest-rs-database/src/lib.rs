@@ -50,7 +50,7 @@
 //!    reading [`current_executor`] finds no handle it could run a statement on
 //!    that your row filter never saw.
 //! 4. Match [`ExecutorScope`] and [`TransactionPolicy`] with a `_` arm that
-//!    fails closed: both can grow within 7.x.
+//!    fails closed: both can grow in a minor release.
 //! 5. Keep the queue port's transactional outbox, so a job pushed inside a
 //!    unit is filed after its commit and never on its rollback: implement
 //!    [`OutboxStore`] over a table of your own, bind it as

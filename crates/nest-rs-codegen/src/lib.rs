@@ -17,7 +17,7 @@
 //!    through [`reroot`], which rewrites each such root to the path the call
 //!    site resolves — `::nest_rs::<concern>::` behind the umbrella. It never
 //!    emits a hidden path: a package's macro source is written against one
-//!    7.x and runs in apps on later ones, where hidden items differ, and only
+//!    release and runs in apps on later ones of its major, where hidden items differ, and only
 //!    documented items hold across them.
 //! 2. **It emits its own package's items as `::<its_crate>::…`.**
 //!

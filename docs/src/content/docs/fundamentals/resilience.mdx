@@ -204,6 +204,17 @@ unsettled savepoint are not refusals:
 | `Failed` | the call answered its own error on its last attempt | what that error's `ToProblem` says, else a `Problem` its chain carries; opaque `500` otherwise |
 | `Unsettled` | an attempt's savepoint could not be settled | none: the server's own error, an opaque `500` |
 
+A refusal names the policy that refused it. `TimedOut`, `Open`, `Full` and
+`Limited` carry `instance`, the marker's `Instance::NAME`: `upstream` for
+`Upstream`, empty for the default instance. The refusal's sentence names it too,
+on every line that files the error's chain, so the edge's failure line says
+which of a handler's dependencies refused:
+``the circuit breaker of the instance `upstream` is open: 503 UNAVAILABLE``.
+The default instance's sentence names none, and no reply names one: a refusal
+answers its `503` whichever policy made it. `ResilienceError<E>` is `Clone`
+where `E` is, so a [`#[dataloader]`](/database/dataloaders/#writing-a-custom-loader)
+method takes `#[resilient]` too.
+
 The call's error says what it tells a client, so it implements `ToProblem` —
 answering nothing, for an error no client should read — names reqwest's error as
 its `#[source]`, without the URL that error quotes, and says whether the upstream
@@ -312,7 +323,8 @@ off is `None`.
   calls a decorated method — the gateway's own, or a service's — and handles its error.
 - **A decorated GraphQL field spells its `Result<…>` out**: `#[operations]` reads
   a field's answer by its spelling, so a `ResilienceError<E>` answered through an
-  alias is refused at the return type, in one sentence. The umbrella's `full`
+  alias is refused at the return type, in one sentence that rustc's unmet
+  bounds follow. The umbrella's `full`
   feature takes `resilience`, so an app on `full` cannot declare a `#[config]` of
   its own in the `resilience` namespace.
 - **No attempt number** is handed to a body, a predicate or a fallback: a closure

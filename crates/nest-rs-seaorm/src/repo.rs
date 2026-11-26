@@ -254,7 +254,7 @@ impl<E: EntityTrait> Repo<E> {
     /// view of deleted records, a retention job — never a read that means to
     /// show live rows. It reads a tombstone only: no `Repo` write un-deletes
     /// one, since [`update`](Self::update) hides it too; a restore write is
-    /// planned for 7.x.
+    /// planned.
     pub fn with_tombstones(action: Action) -> RepoSelect<E> {
         RepoSelect::new(E::find().filter(ability_scope::<E>(action)))
     }

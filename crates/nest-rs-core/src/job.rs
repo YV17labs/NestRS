@@ -16,7 +16,7 @@ pub const JOB_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// The timeout bounds the body alone: a body that returned in time is never
 /// this, however long its commit takes.
 ///
-/// It can grow within 7.x: read its field, and build one through
+/// It can grow in a minor release: read its field, and build one through
 /// [`JobTimedOut::new`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

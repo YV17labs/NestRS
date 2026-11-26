@@ -233,7 +233,7 @@
   (`crates/nest-rs-graphql/src/operation.rs`), an MCP operation's tail, a closure
   `dispatch` makes the future from (`crates/nest-rs-mcp/src/operation.rs`), a
   tick's `answered` (`crates/nest-rs-schedule/src/answer.rs`), and a resilience
-  run's (`crates/nest-rs-resilience/src/policy.rs`, and what it holds of its
+  run's (`crates/nest-rs-resilience/src/run.rs`, and what it holds of its
   call, `src/call.rs`), each but `within` held by a size test.
 - **Canary** — none in the suite: the size tests hold our side whether or not
   rustc fixes the layout. Each time `rust-toolchain.toml`'s pin moves,
@@ -269,7 +269,17 @@
 - **Our side** — `Placed` and `PlacedFuture` box in a debug build, and `Once`
   boxes a closure past the threshold beside the place it keeps for one that
   fits (`crates/nest-rs-resilience/src/call.rs`); the allocation tests state
-  what a debug build allocates.
+  what a debug build allocates. Each attempt's future is made in `made`,
+  `made_again` or `made_boxed`, never inlined, so the closure and the future it
+  returns, temporaries of the frame calling them, leave the stack before the
+  future is polled: made in the frame polling it, a debug build overflowed
+  `a_run_holding_a_large_buffer_across_an_await_runs_on_a_worker_of_tokios_default_stack`
+  and
+  `a_decorated_method_holding_a_large_buffer_across_an_await_runs_on_a_worker_its_twin_runs_on`.
+  `Once` is a struct whose two boxes are written alone past the threshold: as
+  one enum, whose boxed variant is built as a value of the whole enum's size, a
+  release build overflowed
+  `a_call_sent_once_moving_a_large_buffer_into_its_closure_runs_on_a_worker_of_tokios_default_stack`.
 - **Canary** — none in the suite: the feature is unstable, so no test on the
   pinned toolchain can use it. Each time `rust-toolchain.toml`'s pin moves, the
   new version's release notes are read for the stabilisation of
@@ -290,7 +300,7 @@
   they captured in the order their bodies first name it, where an `async fn`
   drops its parameters last declared first. The Reference's *Destructors* says
   the second and leaves the order of a closure's captures unspecified.
-  `nest-rs-resilience`'s `dropped` module (`tests/integration/resilient.rs`)
+  `nest-rs-resilience`'s `dropped` module (`tests/integration/resilient/dropped.rs`)
   runs each decorated method beside an undecorated twin written from the same
   tokens.
 - **Effect** — a method whose body an expansion moves into a closure drops its

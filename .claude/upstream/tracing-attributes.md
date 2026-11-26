@@ -36,9 +36,10 @@
   `//!`.
 - **Canary** — none that tells a fix; a change of shape fails
   `nest-rs-resilience`'s `instrumented` module
-  (`tests/integration/resilient.rs`), which runs every flavour in both orders,
-  on the framework's own lockfile alone. The renamed variants an app could
-  meet first are that file's unit tests.
+  (`tests/integration/resilient/instrumented.rs`), which runs every flavour in
+  both orders, on the framework's own lockfile alone. The renamed variants an
+  app could meet first are the unit tests of the macro crate's
+  `instrumented.rs`.
 - **Upstream** — not filed.
 - **When fixed** — `instrumented.rs` reads the documented marker and its
   recogniser of names goes. Half a day.

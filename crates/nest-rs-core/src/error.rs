@@ -20,7 +20,7 @@ use crate::type_name::shorten;
 /// its crate files, or one it carries ([`CarriesRemedy`](crate::CarriesRemedy)) —
 /// the refusal says that line.
 ///
-/// The boot builds it; a program reads its fields, and a later 7.x may add one:
+/// The boot builds it; a program reads its fields, and a later minor may add one:
 ///
 /// ```compile_fail,E0639
 /// let refused = nest_rs_core::AccessGraphError {

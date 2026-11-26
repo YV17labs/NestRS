@@ -231,7 +231,7 @@ pub(crate) fn atomic_block() -> Option<Arc<dyn AtomicBlock>> {
 /// Whether the ambient executor belongs to a request or a worker job, which
 /// decides how a `Repo` treats a missing ambient ability.
 ///
-/// It can grow within 7.x, so a `match` outside this crate keeps a `_` arm —
+/// It can grow in a minor release, so a `match` outside this crate keeps a `_` arm —
 /// and fails closed there, as a request does:
 ///
 /// ```compile_fail,E0004

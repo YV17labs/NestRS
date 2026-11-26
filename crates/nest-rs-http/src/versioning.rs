@@ -39,7 +39,7 @@ const MAX_VERSION_LEN: usize = 32;
 
 /// How a caller selects an API version.
 ///
-/// A later 7.x may add a strategy, so a `match` outside this crate ends in a
+/// A later minor may add a strategy, so a `match` outside this crate ends in a
 /// `_` arm:
 ///
 /// ```compile_fail,E0004

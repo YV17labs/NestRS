@@ -1666,13 +1666,13 @@ impl QuotesService {
 )]
 struct NestingModule;
 
-/// A decorated method calling another of its own policy is one attempt of
-/// it, the inner call let through by nothing again: it takes no second slot
-/// of a bulkhead of one, and the probe it makes closes the breaker, where the
-/// inner call took the probe's turn from it, was refused, and kept the
-/// breaker open for good.
+/// A decorated method calling another of its own policy hands it its
+/// attempt's slot and turn, so the two count once: the inner call takes no
+/// second slot of a bulkhead of one, and the probe it makes closes the
+/// breaker, where the inner call took the probe's turn from it, was refused,
+/// and kept the breaker open for good.
 #[tokio::test(start_paused = true)]
-async fn a_method_calling_another_of_its_own_policy_is_one_attempt_of_it() {
+async fn a_method_calling_another_of_its_own_policy_hands_it_its_attempts_turn() {
     let app = boot::<NestingModule>().await;
     let quotes = app
         .container()

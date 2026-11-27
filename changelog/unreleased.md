@@ -157,12 +157,16 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   `matches!` on the error's own variant holding the `ResilienceError`. An attempt the enclosing policy's timeout cuts counts
   as a timeout in its own breaker, which so times its dependency out at its tightest
   caller's bound. A call made inside an attempt of its own policy — a decorated
-  method calling another of its policy, directly or through a call under another
-  — is that attempt's: let through by nothing again (no probe's turn, slot or
-  token of its own), bound by the attempt, sent once and counted once, by it, so
-  a probe making it closes the breaker; a request a client under that policy's
-  `ResilienceMiddleware` sends there is that attempt's too, its body holding
-  nothing of the policy. The method's error
+  method calling another of its policy, directly or through a call under another,
+  or a request a client under that policy's `ResilienceMiddleware` sends there —
+  is a call that attempt makes: the first takes the attempt's slot, token and turn
+  of the breaker, a probe's included, and its outcome is the attempt's, counted
+  once, so a probe making it closes the breaker; every other takes its own slot,
+  token and turn and counts its own outcome, so `CONCURRENCY` and `RATE_LIMIT`
+  bound the calls an attempt fans out as they bound calls made alone. Each is
+  sent under its own timeout and sent once, the attempt around it being what is
+  sent again, and a run whose attempt lent its slot takes one again before its
+  next. The method's error
   owns what it says (`'static`), one borrowing an argument being rustc's lifetime
   error at the answer.
 - **A fallback answers in place of the error a run ends on.**

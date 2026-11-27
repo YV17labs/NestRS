@@ -1459,7 +1459,8 @@ Four defects, each reproduced by a test that failed first, and one limit closed:
   onto a task of its own is a call of its own. The 2026-11-24 limit "**A method
   calling another under the same policy** keeps its breaker from closing" is
   closed, and the test pinning two timeouts for a nested call of one policy
-  now pins one.
+  now pins one. Superseded for every nested call but the first by the entry
+  "a call nested in its own policy's attempt takes that attempt's turn first".
 - **An attempt answered in time, dropped past its bound, counts as its
   answer.** Under a unit's deadline, an attempt dropped at or past the instant
   its bound ends at counted as a timeout, though its call had answered within
@@ -1821,3 +1822,62 @@ query, fragment, reqwest's reason phrase in a transparent wrapper) is not
 built; Valkey's Sentinel and Cluster suites were not run by hand on the
 `Upstream` the Redis harness now dials through — the driver did not change, the
 double did, so the standalone run is the one held.
+
+## 2026-11-26 — a call nested in its own policy's attempt takes that attempt's turn first, and every other meets the policy
+
+The entry above ("a call nested in its own policy's attempt is that
+attempt's") let every run opened inside an attempt of its own policy through
+with nothing — no slot, no token, no turn of the breaker, no bound of its own —
+on the ground that "the dependency is called once, so the policy is applied
+once". An attempt calls its dependency as often as its body says: twenty pages
+read inside one `import()` under `CONCURRENCY=2` and `RATE_LIMIT=2` all went out
+at once on one token, and twenty failures counted one. That broke what an
+operator sets those bounds for — the partner's quota — so it was refused, by
+security and correctness: the bound an operator sets holds whatever shape the
+code calling it takes.
+
+- **An attempt lends what it holds to the first call of its policy it makes**
+  (`src/attempting.rs`, `Lending` in `src/run.rs`). While a thread polls an
+  attempt, its run's slot and its turn — its attempt in the breaker, a probe's
+  included, and the token it took — sit in that thread's entry, with no borrow
+  (`HeldSlot`, `LentAttempt`); the poll ends, or unwinds, taking back what no
+  call took. The first nested run to open takes the slot, the first let
+  through takes the turn: its outcome is the attempt's, counted once, and the
+  attempt's own answer counts nowhere. Every other nested run opens and is let
+  through as any call is: its own slot (waiting, or `Full`), token (waiting, or
+  `Limited`), turn (refused `Open` beside a probe), its own timeout, its own
+  outcome. So the single nested call keeps what the entry above fixed — a
+  bulkhead or a rate of one does not refuse it, a probe making it closes the
+  breaker, a failure counts once — and a fan-out meets the bounds as the same
+  calls made alone do.
+- **A slot lent goes with its call**: dropped there, it frees the bulkhead, so
+  a call waiting for one is handed it — a lent slot returned to the attempt
+  would sit unused while the fan-out waited behind it, and a bulkhead of one
+  would refuse every page but the first. The run takes a slot again before its
+  next attempt (`poll_back_off`, then `poll_open`), so every attempt is sent
+  holding one.
+- **A nested run is sent once**, its retries zeroed: the attempt around it is
+  what the policy sends again, and retries multiplied at two levels are the
+  storm a policy exists to prevent. Held by an idempotent nested call failing
+  under three retries, sent once — the test the review found missing.
+- **A nested request's body holds what it took**, as any request's does: the
+  middleware's `holds` flag no longer clears for a nested run, and the bound
+  it holds is its own, so `Run::hold` sums a finite bound.
+
+Held by run.rs's tests: twenty pages under a bulkhead of two and a rate of two
+send two, at most two at once, alone and inside one attempt, each failure
+counted; a probe's first nested call probes and the one beside it is refused
+`Open`; a run whose attempt lent its slot holds one again at its retry. The
+cost is a slot and a breaker attempt moved into a thread-local and back on each
+poll of an attempt (a flag alone when the attempt lends nothing), no allocation
+for eight nested attempts. Measured in `benches/policy.rs`, A/B on one quiet
+container, a call answering at once through `run`: bare 39.7 → 42.4 ns,
+breaker 46.6 → 54.3, bulkhead 43.9 → 48.1, rate 56.3 → 62.0. Paid, by the
+order of the values: the bounds an operator sets hold, then speed.
+
+**Not done, named:** a call of the policy an attempt makes on a task it spawns
+is a call of its own and takes nothing of the attempt — the attempt's slot then
+stays held beside it, so under a bulkhead of one such a call waits for its own
+until the attempt ends or its wait runs out. The middleware's own retry after a
+request whose attempt lent its slot takes one again as a run does, but no test
+sends a call of the same policy from inside a request's middleware chain.

@@ -139,6 +139,12 @@ every request it is sent, make each attempt send one. Build its client with
 and the request after it an attempt of its own. Send each request from a
 decorated method or a `run` closure of its own.
 
+A call of the same policy made inside an attempt — a decorated method, a `run`,
+a request through the policy's `ResilienceMiddleware` — is a call of its own.
+The first takes the attempt's slot and token, so a bulkhead or a rate of one
+does not refuse it. Every other one takes its own, so the calls an attempt fans
+out meet `CONCURRENCY` and `RATE_LIMIT` as the same calls made alone do.
+
 ## Configuration
 
 Each key reads as [Resilience](/fundamentals/resilience/#configuration) says,

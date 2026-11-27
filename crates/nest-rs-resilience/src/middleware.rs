@@ -108,9 +108,11 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 ///
 /// A request sent inside an attempt of its own policy — a
 /// [`run`](ResiliencePolicy::run) of it, or a method `#[resilient]` with it —
-/// is that attempt's call, and its body holds nothing of the policy: that
-/// attempt bounds it and counts it once, and a body read past that attempt is
-/// under none of the policy's terms.
+/// is a call that attempt makes: the first takes the attempt's slot, token
+/// and turn of the breaker, and counts for it, once; every other takes its
+/// own, as a request sent alone does, so `CONCURRENCY` and `RATE_LIMIT` bound
+/// the requests an attempt fans out. Each is sent once: the attempt around it
+/// is what the policy sends again.
 ///
 /// So a response is read or dropped, never kept: one held unread holds its
 /// slot, and a probe's holds the half-open breaker's one turn, for as long as
@@ -199,6 +201,9 @@ impl<I: Instance> Middleware for ResilienceMiddleware<I> {
             run.retrying(&retry);
             run.as_mut().back_off(&retry);
             poll_fn(|cx| run.as_mut().poll_back_off(cx)).await;
+            poll_fn(|cx| run.as_mut().poll_open(cx))
+                .await
+                .map_err(|refusal| refused(refusal, run.instance()))?;
         }
     }
 }
@@ -222,8 +227,7 @@ where
 /// What `run` answers, over at its last attempt, which `ended` so: a response
 /// with a body to read hands that body what the run held of the policy; any
 /// other answer lets it go here, in a run's order — its attempt in the
-/// breaker, then its slot — as does one sent inside an attempt of its own
-/// policy, which holds nothing of it: that attempt bounds and counts its body.
+/// breaker, then its slot.
 fn answered<F, Fut>(
     run: Pin<&mut Run<'_>>,
     call: Pin<&mut Sending<F>>,
@@ -235,7 +239,7 @@ where
 {
     match ended {
         Ended::Judged(_) => match call.take() {
-            Some(Ok(response)) if run.holds() && response.content_length() != Some(0) => {
+            Some(Ok(response)) if response.content_length() != Some(0) => {
                 Ok(covered(response, run.hold()))
             }
             Some(answer) => {

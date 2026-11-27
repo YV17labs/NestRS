@@ -194,12 +194,17 @@ was.
   in counts as a timeout in its own breaker: under an outer timeout of two
   seconds, an answer due after three is a failure there, whatever the inner
   timeout. One on a task the call spawned goes to its own bound.
-- **A call made inside an attempt of its own policy is that attempt's.** A
-  decorated method calling another of its policy, directly or through a call
-  under another, is let through by nothing again — no probe's turn, slot or
-  token of its own — is bound by the attempt it is made in, is sent once, and
-  counts once, by that attempt: a probe making it closes the breaker as any
-  other does. A call spawned onto a task of its own is a call of its own.
+- **A call made inside an attempt of its own policy takes that attempt's turn
+  first.** When a decorated method calls another of its policy, directly or
+  through a call under another, the first such call takes the attempt's slot,
+  token and turn of the breaker, and its outcome is the attempt's, counted once:
+  a probe making it closes the breaker as any other does, and a bulkhead of one
+  does not refuse it. Every other call the attempt makes takes its own slot,
+  token and turn, and counts its own outcome, so twenty pages read inside one
+  `import()` meet `CONCURRENCY` and `RATE_LIMIT` as twenty read alone do. Each
+  is sent under its own timeout, and once: the attempt around it is what the
+  policy sends again. A call spawned onto a task of its own is a call of its
+  own.
 - **Arguments drop last declared first**, as the undecorated method's do, however
   the run ends, but for the cases that follow. Of a method run once, under no
   `fallback` and no `record_if` naming an argument, an argument the body reads nowhere and the part

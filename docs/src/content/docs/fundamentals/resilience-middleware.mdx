@@ -56,7 +56,8 @@ connection or its stream. The last answer comes back as it came; a refusal is a
 `reqwest_middleware::Error::Middleware`.
 
 Each request it hands on is one attempt of the policy, and the rate limit, a
-token bucket, takes one token for it. A redirect the client follows is sent inside it ([what an attempt
+token bucket, takes one token for it — the attempt's own, for the first request
+sent inside an attempt of the same policy (below). A redirect the client follows is sent inside it ([what an attempt
 is](/fundamentals/bulkhead-and-rate-limit/#what-an-attempt-is)).
 
 <Aside type="caution">
@@ -116,9 +117,11 @@ so a reader slower than the dependency is never cut.
   unwinds on.
 
 A request sent inside an attempt of its own policy, from a `policy.run(…)` or a
-method `#[resilient]` with that policy, is that attempt's call: its body holds
-nothing of the policy, and the attempt bounds it and counts it once. A body
-you read after that attempt has answered is under none of the policy's terms.
+method `#[resilient]` with that policy, is a call that attempt makes. The first
+takes the attempt's slot, token and turn of the breaker, and counts for it,
+once; every other request the attempt sends takes its own, as a request sent
+alone does. Each is sent once: the attempt around it is what the policy sends
+again.
 
 ## Test it
 

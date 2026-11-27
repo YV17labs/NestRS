@@ -22,7 +22,7 @@ use nest_rs_database::AtomicError;
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::DropGuard;
 
-use crate::attempting::Attempting;
+use crate::attempting::{Attempting, Turn};
 use crate::breaker::{Breaker, Cut, Failure, Pass, Sent};
 use crate::bulkhead::{Full, Slot};
 use crate::call::{Calling, Erased, Judged, Placing, Reads};
@@ -341,6 +341,79 @@ impl Drop for Outstanding<'_> {
     }
 }
 
+/// The attempt let through with `pass`, sent under `bound`, in the breaker.
+#[inline]
+fn sent(pass: Option<Pass<'_>>, bound: Bound) -> Option<Sent<'_>> {
+    pass.map(|pass| pass.send(bound.wait, bound.until))
+}
+
+/// One poll of an attempt's call, lending the calls of its policy it makes
+/// what its run holds of that policy — its slot, and its turn while no call
+/// took it — and taking back, as the poll ends or unwinds, what none took: a
+/// slot taken goes with its call, and a turn taken makes that call's outcome
+/// the attempt's.
+struct Lending<'r, 'p> {
+    attempting: Attempting,
+    policy: &'p Mechanisms,
+    slot: &'r mut Option<Slot<'p>>,
+    attempt: &'r mut Option<Attempt<'p>>,
+    lends: &'r mut bool,
+}
+
+impl<'r, 'p> Lending<'r, 'p> {
+    #[inline]
+    fn enter(
+        policy: &'p Mechanisms,
+        slot: &'r mut Option<Slot<'p>>,
+        attempt: &'r mut Option<Attempt<'p>>,
+        lends: &'r mut bool,
+    ) -> Self {
+        let held = policy
+            .bulkhead
+            .as_ref()
+            .and_then(|bulkhead| slot.take().map(|slot| bulkhead.hold(slot)));
+        let turn = lends.then(|| Turn {
+            attempt: match attempt.take() {
+                Some(Attempt::Sent(sent)) => Some(sent.lend()),
+                other => {
+                    *attempt = other;
+                    None
+                }
+            },
+        });
+        Self {
+            attempting: Attempting::enter(policy, held, turn),
+            policy,
+            slot,
+            attempt,
+            lends,
+        }
+    }
+}
+
+impl Drop for Lending<'_, '_> {
+    #[inline]
+    fn drop(&mut self) {
+        let (slot, turn) = self.attempting.leave();
+        if let Some(held) = slot
+            && let Some(bulkhead) = &self.policy.bulkhead
+        {
+            *self.slot = Some(bulkhead.resume(held));
+        }
+        match turn {
+            Some(Turn { attempt }) => {
+                if let Some(lent) = attempt
+                    && let Some(breaker) = &self.policy.breaker
+                {
+                    let until = lent.until();
+                    *self.attempt = Some(Attempt::Sent(breaker.adopt(lent, until)));
+                }
+            }
+            None => *self.lends = false,
+        }
+    }
+}
+
 pin_project_lite::pin_project! {
     /// One run of a call under its policy.
     pub(crate) struct Run<'p> {
@@ -376,9 +449,12 @@ pin_project_lite::pin_project! {
         holds: bool,
         // When the last attempt was sent, for a run that holds its answer.
         sent_at: Option<Instant>,
-        // Whether the run opened inside an attempt of its own policy, whose call
-        // it is: sent once, let through by nothing and bound by that attempt.
+        // Whether the run opened inside an attempt of its own policy, a call that
+        // attempt makes: sent once, the attempt around it being what is sent again.
         nested: bool,
+        // Whether the last attempt still lends its turn — its attempt in the
+        // breaker and its token — to the first call of its policy it makes.
+        lends: bool,
     }
 }
 
@@ -420,6 +496,7 @@ impl<'p> Run<'p> {
             holds: false,
             sent_at: None,
             nested: false,
+            lends: false,
         }
     }
 
@@ -439,14 +516,6 @@ impl<'p> Run<'p> {
     /// The instance its policy is named for, which a refusal it answers names.
     pub(crate) fn instance(&self) -> &'static str {
         self.terms.policy.teller.instance()
-    }
-
-    /// Whether an answer of the run's holds what the run held of its policy
-    /// past it: a transport's run's does, but for one opened inside an
-    /// attempt of its own policy, which holds nothing of it.
-    #[cfg(feature = "reqwest")]
-    pub(crate) const fn holds(&self) -> bool {
-        self.holds
     }
 
     /// How many times the run attempted its call again so far.
@@ -472,7 +541,10 @@ impl<'p> Run<'p> {
     /// the rate as it stands once it holds its slot: refused there by a token
     /// still past the rate's wait. It is refused `Full` once no slot is freed
     /// for it in time or as many calls wait for one as may. A refusal is
-    /// counted and told.
+    /// counted and told. Opened inside an attempt of its own policy, it takes
+    /// the slot that attempt still lends, when it does, and is opened so
+    /// otherwise; once its run's last attempt lent its slot, the run waits
+    /// here for one again ([`poll_back_off`](Self::poll_back_off)).
     pub(crate) fn poll_open(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -484,13 +556,15 @@ impl<'p> Run<'p> {
             this.terms.deadline = nest_rs_core::__private::deadline();
             *this.stage = Stage::Arriving;
             if Attempting::inside(policy) {
-                // Let through, bound and counted by the attempt it is made in: taking the
-                // probe's turn, a slot or a token again would refuse it, or count it twice,
-                // and an answer it held past itself would hold that attempt's own.
                 *this.nested = true;
                 *this.retries = 0;
-                *this.holds = false;
-                return Poll::Ready(Ok(()));
+                // The attempt's own slot, which a bulkhead of one would otherwise refuse it.
+                if let Some(bulkhead) = &policy.bulkhead
+                    && let Some(lent) = Attempting::slot(policy)
+                {
+                    *this.slot = Some(bulkhead.resume(lent));
+                    return Poll::Ready(Ok(()));
+                }
             }
             let Some(bulkhead) = &policy.bulkhead else {
                 return Poll::Ready(Ok(()));
@@ -559,16 +633,12 @@ impl<'p> Run<'p> {
         cx: &mut Context<'_>,
     ) -> Poll<Ended> {
         if self.stage == Stage::Arriving && self.nested {
-            let unbound = Bound {
-                wait: Duration::MAX,
-                until: None,
-            };
-            self.as_mut().send(None, unbound);
+            self.as_mut().take_turn();
         }
         if self.stage == Stage::Arriving {
             let (mut pass, mut reserved) = (None, None);
             match self.terms.admit(&mut pass, &mut reserved) {
-                Admission::Through(pass, bound) => self.as_mut().send(pass, bound),
+                Admission::Through(pass, bound) => self.as_mut().send(sent(pass, bound), bound),
                 Admission::Refused(refusal) => return Poll::Ready(Ended::Refused(refusal)),
                 Admission::Postponed(at) => {
                     let mut this = self.as_mut().project();
@@ -592,7 +662,7 @@ impl<'p> Run<'p> {
             this.wait.set(Wait::within());
             *this.stage = Stage::Arriving;
             match admitted {
-                Ok((pass, bound)) => self.as_mut().send(pass, bound),
+                Ok((pass, bound)) => self.as_mut().send(sent(pass, bound), bound),
                 Err(refusal) => return Poll::Ready(Ended::Refused(refusal)),
             }
         }
@@ -604,24 +674,48 @@ impl<'p> Run<'p> {
             call: call.as_mut(),
             given_up: this.given_up,
         };
-        let _attempting = Attempting::enter(this.terms.policy);
-        let answered = ready!(match this.savepoint {
-            Some(savepoint) => within.poll(pin!(savepoint.around(Pin::new(&mut erased))), cx),
-            None => within.poll(Pin::new(&mut erased), cx),
-        });
+        let polled = {
+            let _lending = Lending::enter(this.terms.policy, this.slot, this.attempt, this.lends);
+            match this.savepoint {
+                Some(savepoint) => within.poll(pin!(savepoint.around(Pin::new(&mut erased))), cx),
+                None => within.poll(Pin::new(&mut erased), cx),
+            }
+        };
+        let answered = ready!(polled);
         Poll::Ready(self.settle(call, answered))
     }
 
-    /// The attempt let through with `pass`, sent under `bound`: its call is
-    /// made at its first poll, inside the bound, so one panicking before it
-    /// hands back its future fails the attempt as a panic while it runs does.
-    /// A retry counts on the retries' counter.
-    fn send(self: Pin<&mut Self>, pass: Option<Pass<'p>>, bound: Bound) {
+    /// The first attempt of a run opened inside an attempt of its own policy,
+    /// sent under its own bound with the turn that attempt still lends — its
+    /// attempt in the breaker, a probe's included, and its token — when no
+    /// call it made took it: the run is then the call that attempt counts by.
+    /// Any other is let through as [`Terms::admit`] says.
+    fn take_turn(self: Pin<&mut Self>) {
+        let bound = self.terms.bound();
+        if bound.wait.is_zero() {
+            return;
+        }
+        let policy = self.terms.policy;
+        if let Some(Turn { attempt }) = Attempting::turn(policy) {
+            let sent = attempt
+                .zip(policy.breaker.as_ref())
+                .map(|(lent, breaker)| breaker.adopt(lent, bound.until));
+            self.send(sent, bound);
+        }
+    }
+
+    /// The attempt let through as `sent`, its outcome in the breaker, under
+    /// `bound`: its call is made at its first poll, inside the bound, so one
+    /// panicking before it hands back its future fails the attempt as a panic
+    /// while it runs does. A retry counts on the retries' counter.
+    fn send(self: Pin<&mut Self>, sent: Option<Sent<'p>>, bound: Bound) {
         let this = self.project();
         if *this.resent > 0 {
             this.terms.policy.teller.resent();
         }
-        *this.attempt = pass.map(|pass| Attempt::Sent(pass.send(bound.wait, bound.until)));
+        *this.attempt = sent.map(Attempt::Sent);
+        // A policy with no breaker and no rate has no turn to lend.
+        *this.lends = this.terms.policy.breaker.is_some() || this.terms.policy.rate.is_some();
         *this.bound = bound.wait;
         if *this.holds {
             *this.sent_at = Some(Instant::now());
@@ -797,7 +891,9 @@ impl<'p> Run<'p> {
         *this.stage = Stage::BackingOff;
     }
 
-    /// The backoff waited out, the next attempt counted as a retry.
+    /// The backoff waited out, the next attempt counted as a retry, and a slot
+    /// the last attempt lent taken again: a free one at once, or the run left
+    /// to wait for one in [`poll_open`](Self::poll_open).
     pub(crate) fn poll_back_off(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let mut this = self.project();
         if let WaitProj::BackingOff { backoff } = this.wait.as_mut().project() {
@@ -805,6 +901,21 @@ impl<'p> Run<'p> {
             this.wait.set(Wait::within());
             *this.resent = this.resent.saturating_add(1);
             *this.stage = Stage::Arriving;
+            // A slot lent to a call the last attempt made went with that call: the
+            // next attempt takes one of its own, through `poll_open`.
+            if this.slot.is_none()
+                && let Some(bulkhead) = &this.terms.policy.bulkhead
+            {
+                match bulkhead.try_enter() {
+                    Some(free) => *this.slot = Some(free),
+                    None => {
+                        this.wait.set(Wait::Entering {
+                            entering: Box::pin(bulkhead.enter(this.terms.deadline)),
+                        });
+                        *this.stage = Stage::Entering;
+                    }
+                }
+            }
         }
         Poll::Ready(())
     }
@@ -853,6 +964,11 @@ impl<'p> Run<'p> {
             }
             if self.stage == Stage::BackingOff {
                 ready!(self.as_mut().poll_back_off(cx));
+            }
+            if self.stage == Stage::Entering
+                && let Err(refusal) = ready!(self.as_mut().poll_open(cx))
+            {
+                return Poll::Ready(Over::Refused(refusal));
             }
             let mut ended = ready!(self.as_mut().poll_attempt(call.as_mut(), cx));
             let retry = match ended {
@@ -6413,7 +6529,7 @@ mod tests {
         assert_eq!(
             counted(&nested),
             (1, 1),
-            "a call nested in an attempt of its own policy is that attempt's, counted once"
+            "a call nested in an attempt of its own policy counts for it, once"
         );
     }
 
@@ -6659,14 +6775,15 @@ mod tests {
     #[instance]
     struct Between;
 
-    /// A call nested in an attempt of its own policy, directly or through a
-    /// call of another policy, is that attempt's: let through again by nothing
-    /// — no turn of the breaker, no slot, no token — and counted once, by the
-    /// attempt it is made in. A probe whose call nests one of its own policy
-    /// closes the breaker, where each nested call took the probe's turn from
-    /// itself and was refused, the breaker opening again forever.
+    /// The first call nested in an attempt of its own policy, directly or
+    /// through a call of another policy, takes that attempt's turn of the
+    /// breaker, slot and token, and counts once, for it. A probe whose call
+    /// nests one of its own policy closes the breaker, where each nested call
+    /// took the probe's turn from itself and was refused, the breaker opening
+    /// again forever; a second nested beside the first is refused as any call
+    /// beside a probe is.
     #[tokio::test(start_paused = true)]
-    async fn a_call_nested_in_an_attempt_of_its_own_policy_is_that_attempts() {
+    async fn the_first_call_nested_in_an_attempt_of_its_own_policy_counts_for_it() {
         let probed = policy(probing(Duration::from_secs(5)));
         let between = ResiliencePolicy::<Between>::new(&ResilienceConfig {
             breaker_window: None,
@@ -6687,6 +6804,30 @@ mod tests {
             Some(BreakerState::Closed),
             "the probe nesting its own policy's call closed the breaker"
         );
+
+        probe_due(&probed).await;
+        let paged = || async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok::<_, Refused>(())
+        };
+        let fanned = probed
+            .run(|| async { Ok::<_, Refused>(all((0..2).map(|_| probed.run(paged))).await) })
+            .await
+            .expect("the probe answers what its calls did");
+        assert!(
+            matches!(
+                fanned[..],
+                [
+                    Ok(()),
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Open { .. },
+                        ..
+                    })
+                ]
+            ),
+            "the first call the probe made probed, the one beside it refused: {fanned:?}"
+        );
+        assert_eq!(probed.breaker_state(), Some(BreakerState::Closed));
 
         let walled = policy(ResilienceConfig {
             concurrency: Some(1),
@@ -6711,6 +6852,167 @@ mod tests {
             (1, 1),
             "its failure counted once, by the attempt it was made in"
         );
+    }
+
+    /// Every one of `calls` polled together in one task, as a body fanning
+    /// them out polls them, each answer in its place.
+    async fn all<F: Future>(calls: impl IntoIterator<Item = F>) -> Vec<F::Output> {
+        let mut calls: Vec<_> = calls.into_iter().map(|call| Some(Box::pin(call))).collect();
+        let mut answers: Vec<_> = calls.iter().map(|_| None).collect();
+        std::future::poll_fn(|cx| {
+            let mut pending = false;
+            for (call, answer) in calls.iter_mut().zip(&mut answers) {
+                if let Some(polled) = call {
+                    match polled.as_mut().poll(cx) {
+                        Poll::Ready(answered) => {
+                            *answer = Some(answered);
+                            *call = None;
+                        }
+                        Poll::Pending => pending = true,
+                    }
+                }
+            }
+            if pending {
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
+        .await;
+        answers
+            .into_iter()
+            .map(|answer| answer.expect("every call answered"))
+            .collect()
+    }
+
+    /// Calls fanned out inside one attempt of their own policy are each a
+    /// call of it: the attempt's slot, token and turn of the breaker go to the
+    /// first, every other takes its own, and each counts its outcome. Twenty
+    /// pages under a bulkhead of two and a rate of two send two, read alone or
+    /// inside one attempt, at most two at once, each failure counted.
+    #[tokio::test(start_paused = true)]
+    async fn calls_fanned_out_in_an_attempt_of_their_own_policy_each_meet_its_terms() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            concurrency: Some(2),
+            concurrency_wait: Some(Duration::from_secs(60)),
+            rate_limit: Some(2),
+            rate_window: Duration::from_secs(60),
+            breaker_window: Some(40),
+            breaker_failures: 40,
+            ..ResilienceConfig::default()
+        });
+        let (sent, running, most) = (AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0));
+        let (sent, running, most) = (&sent, &running, &most);
+        let page = move || async move {
+            sent.fetch_add(1, Ordering::Relaxed);
+            let now = running.fetch_add(1, Ordering::Relaxed) + 1;
+            most.fetch_max(now, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            running.fetch_sub(1, Ordering::Relaxed);
+            Err::<(), _>(Refused)
+        };
+        let pages = || all((0..20).map(|_| partner.run(page)));
+        let read = |answered: &[Result<(), ResilienceError<Refused>>]| {
+            let failed = answered
+                .iter()
+                .filter(|answer| matches!(answer, Err(ResilienceError::Failed(Refused))))
+                .count();
+            (
+                failed,
+                sent.swap(0, Ordering::Relaxed),
+                most.swap(0, Ordering::Relaxed),
+            )
+        };
+
+        let alone = pages().await;
+        assert_eq!(read(&alone), (2, 2, 2), "two sent, at most two at once");
+        assert_eq!(counted(&partner), (2, 2));
+
+        tokio::time::advance(Duration::from_secs(60)).await;
+        let imported = partner
+            .run(|| async { Ok::<_, Refused>(pages().await) })
+            .await
+            .expect("the import answers what its pages did");
+        assert_eq!(
+            read(&imported),
+            (2, 2, 2),
+            "inside one attempt as alone: two sent, at most two at once"
+        );
+        assert_eq!(
+            counted(&partner),
+            (4, 4),
+            "each page counted, the import by the first it made"
+        );
+        assert_eq!(partner.concurrency_running(), Some(0), "every slot freed");
+    }
+
+    /// A run whose attempt lent its slot to a call of its policy it made — the
+    /// slot going with that call — takes one again before its next attempt:
+    /// every attempt of a run is sent holding a slot.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_whose_attempt_lent_its_slot_takes_one_again_before_its_retry() {
+        let policy = policy(ResilienceConfig {
+            retries: Some(1),
+            concurrency: Some(1),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let (attempts, seen) = (AtomicU32::new(0), std::sync::Mutex::new(Vec::new()));
+        let (attempts, seen, partner) = (&attempts, &seen, &policy);
+        let answered = policy
+            .run_idempotent(move || async move {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                seen.lock()
+                    .expect("unpoisoned")
+                    .push(partner.concurrency_running());
+                if attempt == 0 {
+                    partner.run(|| async { Err::<(), _>(Refused) }).await
+                } else {
+                    Ok(())
+                }
+            })
+            .await;
+        assert!(answered.is_ok(), "{answered:?}");
+        assert_eq!(
+            *seen.lock().expect("unpoisoned"),
+            [Some(1), Some(1)],
+            "each attempt sent holding a slot"
+        );
+        assert_eq!(policy.concurrency_running(), Some(0), "its slot freed");
+    }
+
+    /// An idempotent call made inside an attempt of its own policy is sent
+    /// once: the attempt around it is the one its policy sends again, so a
+    /// failure there is sent no more than that attempt is, and counted once.
+    #[tokio::test(start_paused = true)]
+    async fn an_idempotent_call_nested_in_an_attempt_of_its_own_policy_is_sent_once() {
+        let policy = policy(ResilienceConfig {
+            retries: Some(3),
+            breaker_window: Some(10),
+            breaker_failures: 10,
+            ..ResilienceConfig::default()
+        });
+        let calls = AtomicU32::new(0);
+        let failed = policy
+            .run(|| async {
+                policy
+                    .run_idempotent(|| async {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        Err::<(), _>(Refused)
+                    })
+                    .await
+            })
+            .await;
+        assert!(
+            matches!(
+                failed,
+                Err(ResilienceError::Failed(ResilienceError::Failed(Refused)))
+            ),
+            "{failed:?}"
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1, "sent once");
+        assert_eq!(counted(&policy), (1, 1), "counted once");
     }
 
     /// An attempt whose call answered within its bound, inside a unit whose

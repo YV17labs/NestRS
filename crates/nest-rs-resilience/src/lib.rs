@@ -267,8 +267,9 @@ pub mod __private {
     };
 }
 
-/// What an attempt is handed when its call takes one — every call through
-/// [`ResiliencePolicy::run`] or [`ResiliencePolicy::run_idempotent`], and a
-/// decorated method whose `cancel` names it: cancelled when the policy gives
+/// What an attempt is handed when its call takes one — a closure run through
+/// [`ResiliencePolicy::run_cancellable`] or
+/// [`ResiliencePolicy::run_idempotent_cancellable`], and a decorated method
+/// whose `cancel` names it: cancelled when the policy gives
 /// the attempt up, so work the call handed to another task stops with it.
 pub use tokio_util::sync::CancellationToken;

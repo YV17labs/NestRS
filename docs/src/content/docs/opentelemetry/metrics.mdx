@@ -171,12 +171,12 @@ over that sum is `BreakerStats::failure_rate`. A dependency in trouble reads as
 `status` counts the replicas in each state. It reads `half_open` as soon as the
 open time has passed, where `transitions` counts `half_open` only once a probe
 is sent; and a window is forgotten as its breaker opens, so both `outcomes`
-read `0` until it has closed again. A policy built before
-`OpenTelemetry::init()` reports these reads from its first run, one built after
-it at once, and one whose first run came before `init()` not at all. A counter
-is made at its first record, so one first recorded before `init()` — a retry, a
-refusal, a transition or a fallback — records nothing after it either: start
-OpenTelemetry before the first call a policy runs.
+read `0` until it has closed again. A policy's reads are observed on the meter
+provider `OpenTelemetry::init()` seats from the policy's next run after it, and
+a counter — a retry, a refusal, a transition or a fallback — counts there from
+its next record after it. Neither loses what follows `init()`, whenever the
+policy was built or first ran; only what a call records before `init()` goes
+nowhere.
 
 No convention names a circuit breaker or a retry policy, so the names and
 their attributes are NestRS's own, and API: they change only in a major.

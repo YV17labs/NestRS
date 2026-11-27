@@ -425,12 +425,13 @@ impl HttpError {
     }
 
     /// The response this error answers: a ready response as it is, a
-    /// [`ResponseError`]'s own rendering, otherwise an RFC 9457 problem document
-    /// whose `detail` on a `4xx` is the cause's sentence said without any value
-    /// it quotes, and which a `5xx` answers without one. The extensions are
-    /// copied on last. What a `5xx` answer keeps from the client of it is filed
-    /// at once, naming no route: the edge renders a handler's error itself, and
-    /// names the route it answers.
+    /// [`ResponseError`]'s own rendering, otherwise its status's RFC 9457
+    /// problem document with no `detail`, whatever the status — a sentence for
+    /// the client is a [`Problem`]'s [`with_detail`](Problem::with_detail),
+    /// never a cause's `Display`. The extensions are copied on last. What a
+    /// `5xx` answer keeps from the client of it is filed at once, naming no
+    /// route: the edge renders a handler's error itself, and names the route
+    /// it answers.
     ///
     /// ```
     /// use nest_rs_http::{HttpError, StatusCode, header};

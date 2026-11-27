@@ -1836,6 +1836,40 @@ async fn a_body_read_inside_an_attempt_of_its_own_policy_gives_its_slot_back_as_
     assert_eq!(policy.concurrency_running(), Some(0), "every slot freed");
 }
 
+/// A nested request's body held unread keeps the slot it shares with its
+/// attempt: under a bulkhead of one, a second request of the policy sent
+/// while the first body is still held is refused unsent.
+#[tokio::test]
+async fn a_body_held_unread_inside_an_attempt_of_its_own_policy_keeps_its_slot() {
+    const BODY: &str = "a parcel on its way";
+    let peer = answering([PeerAnswer::body(200, BODY), PeerAnswer::body(200, BODY)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        concurrency: Some(1),
+        ..quiet()
+    })
+    .await;
+    let http = client(Arc::clone(&policy));
+    let url = peer.url(PARCEL);
+
+    let second = policy
+        .run(|| async {
+            let first = http.get(&url).send().await?;
+            let second = http.get(&url).send().await.map(|answer| answer.status());
+            drop(first);
+            Ok::<_, CarrierFailed>(second.map_err(|error| error.to_string()))
+        })
+        .await
+        .expect("the attempt answers");
+
+    assert!(second.is_err(), "{second:?}");
+    assert_eq!(
+        peer.requests().len(),
+        1,
+        "the second request refused unsent"
+    );
+    assert_eq!(policy.concurrency_running(), Some(0), "every slot freed");
+}
+
 /// A nested request's body that fails fails the attempt it was read in,
 /// though the attempt swallows the error and answers `Ok`: a breaker of one
 /// failure opens.

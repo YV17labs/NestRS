@@ -1967,9 +1967,11 @@ Held by run.rs's tests:
 - `a_call_refused_unsent_on_a_probes_turn_gives_the_turn_back`: a call
   refused `Limited` on the probe's turn gives it back, and the next call the
   probe makes shares it and is sent, where it was refused `Open`.
-- middleware.rs's `a_body_read_inside_an_attempt_of_its_own_policy_gives_its_slot_back_as_it_ends`
+- middleware.rs's `a_body_held_unread_inside_an_attempt_of_its_own_policy_keeps_its_slot`,
+  `a_body_read_inside_an_attempt_of_its_own_policy_gives_its_slot_back_as_it_ends`
   and `a_body_cut_short_inside_an_attempt_of_its_own_policy_fails_that_attempt`:
-  two parcels read whole in turn under a bulkhead of one both answer, and a
+  under a bulkhead of one, a second parcel asked while the first's body is held
+  unread is refused unsent, two parcels read whole in turn both answer, and a
   body cut short, its error swallowed, opens a breaker of one failure.
 - `an_attempt_whose_call_of_its_policy_succeeded_counts_its_own_failure`: the
   charge opens a breaker of one failure (it stayed `Closed` before), and so does

@@ -507,6 +507,11 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
 
 ### Changed
 
+- **`nest-rs-mcp` requires rmcp 3.12**, a minor of a public dependency. 3.12
+  answers a body typed JSON that is no JSON-RPC message with a `400` of its own,
+  which `nest-rs-mcp` reads and answers as before: no `id`, `-32700` (Parse
+  error) or `-32600` (Invalid Request) in its code's words, under
+  `{"code":"INVALID_ARGUMENT"}`, never serde's sentence.
 - **A Redis connection's lines of the default instance carry no `instance`**,
   where they carried `instance = ""`: a field that holds nothing is left out,
   as every other optional field of a line is, and a named instance's lines

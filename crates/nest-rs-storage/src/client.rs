@@ -1248,8 +1248,9 @@ mod tests {
     }
 
     /// A store answering its first request with a `403` whose document stops
-    /// short of the length it announced, then stopping the clock and holding the
-    /// connection, so the budget cuts the read.
+    /// short of the length it announced, then holding the connection, so the
+    /// budget cuts the read. The clock runs: stopped by the store as it answers,
+    /// it lets the budget cut a client still reading the head through TLS.
     async fn store_stalling_its_refusal(authority: &nest_rs_testing::TestAuthority) -> String {
         use tokio::io::AsyncWriteExt;
 
@@ -1269,7 +1270,6 @@ mod tests {
                 .await
                 .expect("answer the first request");
             tls.flush().await.expect("send the answer");
-            tokio::time::pause();
             std::future::pending::<()>().await;
             drop(tls);
         });
@@ -1278,9 +1278,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_refusal_stalling_its_document_is_named_by_the_budgets_cut() {
-        let budget = StorageConfig::default().operation_timeout;
+        let budget = Duration::from_millis(200);
         let authority = nest_rs_testing::TestAuthority::new();
         let storage = Storage::unproved(StorageConfig {
+            operation_timeout: budget,
             tls: authority.client_tls(),
             ..s3_at(
                 &store_stalling_its_refusal(&authority).await,

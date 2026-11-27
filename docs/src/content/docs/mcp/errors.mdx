@@ -102,9 +102,9 @@ inside the session's stream, before any host or the endpoint reads it.
 
 A body typed JSON that is no JSON-RPC message is input the server cannot
 accept, as MCP's Streamable HTTP transport says: it is answered `400` with a
-JSON-RPC error carrying no `id`, since none could be read — `-32700` (Parse
-error) for a body that is not JSON, `-32600` (Invalid Request) for JSON that is
-no message — under `{"code":"INVALID_ARGUMENT"}`, never what it held. A body
+JSON-RPC error carrying no `id`, as JSON-RPC 2.0 answers a request whose id it
+could not detect — `-32700` (Parse error) for a body that is not JSON, `-32600`
+(Invalid Request) for JSON that is no message — under `{"code":"INVALID_ARGUMENT"}`, never what it held. A body
 typed otherwise is the `415` rmcp answers,
 `Unsupported Media Type: Content-Type must be application/json`, under
 `UNSUPPORTED_MEDIA_TYPE`.

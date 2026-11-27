@@ -477,7 +477,7 @@ async fn a_transport_refusal_quoting_nothing_keeps_its_sentence() {
 
 /// A body typed JSON that is no JSON-RPC message is input the server cannot
 /// accept (MCP's Streamable HTTP transport, *Sending Messages*): `400`, and a
-/// JSON-RPC error carrying no id, since none could be read — JSON-RPC 2.0
+/// JSON-RPC error carrying no id, as one it could not detect — JSON-RPC 2.0
 /// §5.1's parse error for a body that is not JSON, its invalid request for
 /// JSON that is no request object, a repeated `id` or a request carrying a
 /// `result` among them — in the code's words, under the `INVALID_ARGUMENT`

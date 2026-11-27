@@ -151,7 +151,7 @@ trybuild = "1.0"
 
 flate2 = "1.1"
 
-rmcp = { version = "3.11", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }  # public
+rmcp = { version = "3.12", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }  # public
 schemars = { version = "1.2", features = ["uuid1", "chrono04"] }  # public
 
 croner = { version = "4.0", default-features = false }

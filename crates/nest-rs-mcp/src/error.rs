@@ -601,30 +601,35 @@ const PARSE_ERROR: &str = "Parse error";
 /// JSON-RPC 2.0's words for JSON that is no request object (§5.1).
 const INVALID_REQUEST: &str = "Invalid Request";
 
-/// How rmcp 3.11 opens its refusal of a body it cannot read as a JSON-RPC
-/// message, serde's error after it.
-const UNREAD_MESSAGE: &str = "fail to deserialize request body ";
+/// How rmcp opens the message of its parse error for a body that is not
+/// JSON, serde's error after it.
+const UNPARSED: &str = "Parse error: ";
 
-/// How rmcp words JSON that is none of a message's shapes: it reads every
-/// message through one untagged enum, so JSON of any other shape is said alike.
-const NO_MESSAGE_SHAPE: &str = "unrecognized JSON-RPC message";
+/// How rmcp opens the message of its invalid request for JSON that is no
+/// message, serde's error after it.
+const NO_MESSAGE: &str = "Invalid request: ";
 
 /// The JSON-RPC error answering a body rmcp's transport could not read as a
-/// message, when `text` is rmcp's refusal of one: JSON-RPC 2.0 §5.1's parse
-/// error for a body that is not JSON, its invalid request for JSON that is no
-/// message, each in its code's words under the `INVALID_ARGUMENT` class.
-pub(crate) fn unread_message(text: &str) -> Option<McpError> {
-    let decoded = text.strip_prefix(UNREAD_MESSAGE)?;
-    let (refused, said) = if decoded.starts_with(NO_MESSAGE_SHAPE) {
-        (ErrorCode::INVALID_REQUEST, INVALID_REQUEST)
-    } else {
-        (ErrorCode::PARSE_ERROR, PARSE_ERROR)
+/// message, when `refusal` is rmcp's JSON-RPC error refusing one: JSON-RPC
+/// 2.0 §5.1's parse error for a body that is not JSON, its invalid request
+/// for JSON that is no message, each in its code's words under the
+/// `INVALID_ARGUMENT` class. rmcp's message, serde's error, may quote the
+/// body, and the id it read off JSON that is no message may be one of two.
+pub(crate) fn unread_message(refusal: &[u8]) -> Option<McpError> {
+    let answer: serde_json::Value = serde_json::from_slice(refusal).ok()?;
+    let error: McpError = serde_json::from_value(answer.get("error")?.clone()).ok()?;
+    let (opens, said) = match error.code {
+        ErrorCode::PARSE_ERROR => (UNPARSED, PARSE_ERROR),
+        ErrorCode::INVALID_REQUEST => (NO_MESSAGE, INVALID_REQUEST),
+        _ => return None,
     };
-    Some(McpError::new(
-        refused,
-        said,
-        ClassData::of(code::INVALID_ARGUMENT).into_data(),
-    ))
+    error.message.starts_with(opens).then(|| {
+        McpError::new(
+            error.code,
+            said,
+            ClassData::of(code::INVALID_ARGUMENT).into_data(),
+        )
+    })
 }
 
 /// What a JSON-RPC error `code` says: JSON-RPC 2.0's words for its own codes
@@ -717,10 +722,10 @@ pub(crate) enum McpPostureError {
 /// MCP's words for a resource the server cannot read.
 const RESOURCE_NOT_FOUND: &str = "Resource not found";
 
-/// rmcp 3.11's answer to a session it does not hold, word for word.
+/// rmcp 3.12's answer to a session it does not hold, word for word.
 pub(crate) const SESSION_NOT_FOUND: &str = "Not Found: Session not found";
 
-/// rmcp 3.11's streamable-HTTP refusals written as text, word for word, that
+/// rmcp 3.12's streamable-HTTP refusals written as text, word for word, that
 /// quote nothing the request carried: what a client needs to fix its call.
 const TRANSPORT_SENTENCES: [&str; 14] = [
     "Not Acceptable: Client must accept both application/json and text/event-stream",
@@ -1096,12 +1101,13 @@ mod tests {
     }
 
     /// rmcp's refusal of a body it cannot read as a message, as its
-    /// transport words it for each body, is read by the category serde gives
-    /// the failure: a syntax error is no JSON, any other is JSON of no
-    /// message's shape. Its sentence, which may quote the body, is never kept.
+    /// transport words it for each body — a parse error for a body that is
+    /// not JSON, an invalid request for any other — is said in its code's
+    /// words. Its sentence, which may quote the body, is never kept, nor is
+    /// any other refusal of those codes read as one.
     #[test]
     fn an_unread_message_is_said_by_the_category_of_its_failure() {
-        use rmcp::model::ClientJsonRpcMessage;
+        use rmcp::model::{ClientJsonRpcMessage, ErrorData, JsonRpcError};
 
         for body in [
             "{ not json",
@@ -1115,9 +1121,14 @@ mod tests {
         ] {
             let failed = serde_json::from_slice::<ClientJsonRpcMessage>(body.as_bytes())
                 .expect_err("no message");
-            let syntax = failed.classify() != serde_json::error::Category::Data;
-            let refused =
-                unread_message(&format!("{UNREAD_MESSAGE}{failed}")).expect("rmcp's refusal");
+            let syntax = serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_err();
+            let said = if syntax {
+                ErrorData::parse_error(format!("{UNPARSED}{failed}"), None)
+            } else {
+                ErrorData::invalid_request(format!("{NO_MESSAGE}{failed}"), None)
+            };
+            let rmcps = serde_json::to_vec(&JsonRpcError::new(None, said)).expect("serialized");
+            let refused = unread_message(&rmcps).expect("rmcp's refusal");
             let (code, said) = if syntax {
                 (ErrorCode::PARSE_ERROR, PARSE_ERROR)
             } else {
@@ -1134,8 +1145,15 @@ mod tests {
                 "{body}",
             );
         }
+        for other in [
+            ErrorData::invalid_request("stateless server does not accept JSON-RPC responses", None),
+            ErrorData::invalid_params(format!("{NO_MESSAGE}marked"), None),
+        ] {
+            let rmcps = serde_json::to_vec(&JsonRpcError::new(None, other)).expect("serialized");
+            assert!(unread_message(&rmcps).is_none());
+        }
         assert!(
-            unread_message("Unsupported Media Type: Content-Type must be application/json")
+            unread_message(b"Unsupported Media Type: Content-Type must be application/json")
                 .is_none()
         );
     }

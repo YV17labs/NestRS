@@ -303,3 +303,25 @@ are unchanged: both wait for the next nestrs major.
 
 **Refused:** a date set per release candidate. It is still a wait, and the
 owner decides when a release ships, not a third party's calendar.
+
+## 2026-11-27 — rmcp's floor is 3.12
+
+The lockfile took rmcp 3.12.0 (`build(deps)`, 2026-11-27). 3.12's
+streamable-HTTP server answers a body typed JSON that is no JSON-RPC message
+itself, `400` with a JSON-RPC error: `-32700` and `Parse error: <serde's
+error>` for a body that is not JSON, `-32600` and `Invalid request: <serde's
+error>`, with the id it read off the JSON, for JSON that is no message. 3.11
+answered `415` with `fail to deserialize request body <serde's error>`, which
+`nest-rs-mcp` read by its opening and answered `400` itself. Under 3.12 that
+reading met nothing: rmcp's error reached the client in its code's words, as
+every rmcp JSON-RPC error does, but without the `INVALID_ARGUMENT` class.
+
+- **`nest-rs-mcp` reads rmcp 3.12's refusal** by its code and the opening of
+  its message (`error::unread_message`), and answers as before: `400`, no id,
+  the code's words, the `INVALID_ARGUMENT` class. rmcp's message is serde's
+  error, which may quote the body, and the id it reads off a body holding two
+  is one of them, so neither is kept: JSON-RPC 2.0 §5 answers an id it could not
+  detect with none.
+- **The requirement moves to `3.12`**, a minor of a public dependency: under
+  3.11 the refusal would be read by nothing, and the client answered the `415`'s
+  problem document. Correctness decided it, the floor being what the code reads.

@@ -288,6 +288,30 @@ impl Ledger {
         ends.answer().await
     }
 
+    #[resilient(carrier, idempotent)]
+    #[tracing::instrument(skip_all)]
+    async fn traced_again(&self, held: Noted, out: Noted, ends: Ends) -> Answer<()> {
+        let _local = held.beside();
+        out.name();
+        ends.answer().await
+    }
+
+    #[resilient(carrier, record_if = |_error| !held.name().is_empty())]
+    #[tracing::instrument(skip_all)]
+    async fn traced_judged(&self, held: Noted, out: Noted, ends: Ends) -> Answer<()> {
+        let _local = held.beside();
+        out.name();
+        ends.answer().await
+    }
+
+    #[resilient(carrier, fallback = recovered)]
+    #[tracing::instrument(skip_all)]
+    async fn traced_recovering(&self, held: Noted, out: Noted, ends: Ends) -> Answer<()> {
+        let _local = held.beside();
+        out.name();
+        ends.answer().await
+    }
+
     // The middle argument consumed.
     twins! {
         #[resilient(carrier)]
@@ -469,7 +493,8 @@ async fn a_call_refused_unsent_drops_its_arguments_last_declared_first() {
 /// An instrument's own future takes the arguments it is written over, in the
 /// order its tokens first name them: with no policy, the order the body names
 /// them in; below `#[resilient]`, the order the expansion names them in, last
-/// declared first, sent or refused unsent.
+/// declared first, sent or refused unsent — run once, or lending them to the
+/// next attempt, to a predicate or to a fallback.
 #[tokio::test(start_paused = true)]
 async fn below_an_instrument_the_arguments_drop_last_declared_first() {
     let (_app, ledger) = ledger(ResilienceConfig {
@@ -483,20 +508,51 @@ async fn below_an_instrument_the_arguments_drop_last_declared_first() {
             ["held", "out"],
             "{ends:?}: tracing's own order, the body's"
         );
-        assert_eq!(
-            dropped_by_method!(ledger.traced_below, ends),
-            LAST_DECLARED_FIRST,
-            "{ends:?}"
-        );
+        for (method, dropped) in [
+            (
+                "traced_below",
+                dropped_by_method!(ledger.traced_below, ends),
+            ),
+            (
+                "traced_again",
+                dropped_by_method!(ledger.traced_again, ends),
+            ),
+            (
+                "traced_judged",
+                dropped_by_method!(ledger.traced_judged, ends),
+            ),
+            (
+                "traced_recovering",
+                dropped_by_method!(ledger.traced_recovering, ends),
+            ),
+        ] {
+            assert_eq!(dropped, LAST_DECLARED_FIRST, "{method} ending {ends:?}");
+        }
     }
     ledger
         .carrier
         .open_breaker(Duration::from_secs(30))
         .expect("an open time the breaker takes");
-    assert_eq!(
-        dropped_by_method!(ledger.traced_below, Ends::Answered),
-        LAST_DECLARED_FIRST
-    );
+    for (method, dropped) in [
+        (
+            "traced_below",
+            dropped_by_method!(ledger.traced_below, Ends::Answered),
+        ),
+        (
+            "traced_again",
+            dropped_by_method!(ledger.traced_again, Ends::Answered),
+        ),
+        (
+            "traced_judged",
+            dropped_by_method!(ledger.traced_judged, Ends::Answered),
+        ),
+        (
+            "traced_recovering",
+            dropped_by_method!(ledger.traced_recovering, Ends::Answered),
+        ),
+    ] {
+        assert_eq!(dropped, LAST_DECLARED_FIRST, "{method} refused unsent");
+    }
 }
 
 #[tokio::test(start_paused = true)]

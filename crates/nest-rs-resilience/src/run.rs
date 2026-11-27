@@ -6910,6 +6910,65 @@ mod tests {
         );
     }
 
+    /// A call sharing its attempt's turn that the timeout of a policy between
+    /// them cuts has timed out in that attempt, whatever the attempt answers,
+    /// sent once or again: a breaker one failure opens opens on it, and a
+    /// probe of that shape opens the breaker again rather than closing it on
+    /// a dependency that never answered.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_sharing_its_attempts_turn_cut_by_a_policy_between_has_timed_out_there() {
+        let short = Duration::from_millis(100);
+        let between = ResiliencePolicy::<Between>::new(&ResilienceConfig {
+            timeout: short,
+            retries: None,
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        })
+        .expect("a valid policy");
+        for (idempotent, probe) in [(false, false), (true, false), (false, true), (true, true)] {
+            let partner = policy(ResilienceConfig {
+                retries: Some(1),
+                ..probing(Duration::from_secs(5))
+            });
+            if probe {
+                probe_due(&partner).await;
+            }
+            let lines = nest_rs_testing::LogCapture::install();
+            let answered = partner
+                .run(|| async {
+                    let cut = between
+                        .run(|| async {
+                            if idempotent {
+                                partner.run_idempotent(silent).await
+                            } else {
+                                partner.run(silent).await
+                            }
+                        })
+                        .await;
+                    assert!(timed_out_at(&cut, short), "{cut:?}");
+                    Ok::<_, Refused>(())
+                })
+                .await;
+            assert!(answered.is_ok(), "the attempt answered: {answered:?}");
+            assert!(
+                matches!(partner.breaker_state(), Some(BreakerState::Open { .. })),
+                "idempotent: {idempotent}, probe: {probe}: {:?}",
+                partner.breaker_state()
+            );
+            let opened: Vec<_> = lines
+                .find(TARGET, crate::teller::MOVED)
+                .into_iter()
+                .filter(|line| line.field("state").as_deref() == Some("open"))
+                .map(|line| line.field("error"))
+                .collect();
+            assert_eq!(
+                opened,
+                [Some(TIMED_OUT.to_owned())],
+                "idempotent: {idempotent}, probe: {probe}"
+            );
+        }
+    }
+
     /// Every one of `calls` polled together in one task, as a body fanning
     /// them out polls them, each answer in its place.
     async fn all<F: Future>(calls: impl IntoIterator<Item = F>) -> Vec<F::Output> {

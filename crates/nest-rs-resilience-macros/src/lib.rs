@@ -242,8 +242,9 @@ mod testing;
 /// body calls, instrumented itself. The token `cancel` names is no argument of
 /// the method, so no span records it. The future tracing builds owns the
 /// arguments and drops them in the order its tokens first name them — below
-/// the decorator, the order the expansion does, last declared first when the
-/// method is run once. On a GraphQL operation the instrument is the method's,
+/// the decorator, the order the expansion does, last declared first under every
+/// key: a method whose attempts borrow the arguments opens on that read itself.
+/// On a GraphQL operation the instrument is the method's,
 /// as on a route, and its `err` and `ret` record what the method answers.
 ///
 /// A run of a decorated method names it: the `debug` lines a retry made or

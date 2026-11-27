@@ -17,6 +17,8 @@ use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::Waker;
 
+use crate::breaker::Cut;
+use crate::error::TIMED_OUT;
 use crate::mechanisms::Mechanisms;
 
 /// The depth of nested attempts a thread holds with no allocation.
@@ -123,7 +125,7 @@ impl Drop for SharedSlot {
 
 /// The turn of the breaker of the attempt named `name` a call shares, let
 /// through in `epoch`, given back as it ends with what it failed on, or as it
-/// is dropped with nothing.
+/// is dropped: with a timeout inside a [`Cut`], with nothing elsewhere.
 #[must_use = "a shared turn is given back as it ends"]
 pub(crate) struct SharedTurn {
     name: NonZeroU64,
@@ -170,7 +172,17 @@ impl SharedTurn {
 impl Drop for SharedTurn {
     fn drop(&mut self) {
         let epoch = self.epoch;
-        ATTEMPTING.with(|attempting| attempting.named(self.name, |lent| lent.turn = Some(epoch)));
+        // Dropped by the timeout of a policy between, the call has timed out,
+        // as an attempt of its own in flight there would have (`Sent`).
+        let cut = Cut::encloses();
+        ATTEMPTING.with(|attempting| {
+            attempting.named(self.name, |lent| {
+                lent.turn = Some(epoch);
+                if cut {
+                    lent.met().failed.get_or_insert(Cow::Borrowed(TIMED_OUT));
+                }
+            })
+        });
     }
 }
 

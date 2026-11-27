@@ -146,7 +146,8 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   drops with it, ahead of the arguments the body only reads and in the order the body
   first names them, which a body opening on `let _ = (&out, &held);` sets last declared
   first. Below a `#[tracing::instrument]`, whose future takes them in the order the
-  expansion names them, they drop last declared first too. A body keeps its crate's edition for what its tail expression leaves. An answer
+  expansion first names them, they drop last declared first too, under every key: a
+  method whose attempts borrow them opens on that statement itself. A body keeps its crate's edition for what its tail expression leaves. An answer
   counts in the breaker only in the phase its attempt was let through in: one sent before
   the breaker opened counts nowhere once it has closed again, by its probes or
   by `close_breaker()`.
@@ -655,8 +656,9 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
   (`#[error(transparent)]`) holds it as no link: on a resilience policy's lines its URL is cut to its origin and its status to its code, its
   causes said as they write themselves, and on an edge's own line nothing is cut.
   No reply carries such an error's sentence: an `HttpError::new(e, status)` over
-  one answers its status's problem with no `detail`, the error kept as the cause
-  for the operator.
+  one answers its status's problem with no `detail`, the error kept as the cause:
+  filed for the operator behind a `5xx`, read by an exception filter alone behind a
+  `4xx`.
 - **A health indicator's check runs under a `nest_rs::core::Deadline`**, the sooner
   of `<PREFIX>_HEALTH__INDICATOR_TIMEOUT_MS` and
   `<PREFIX>_HEALTH__PROBE_DEADLINE_MS` from the probe's start, or its request's when
@@ -707,7 +709,8 @@ is, `RedisModule<Cache>`, spelled as the field injecting what it opens spells
   `10.0.0.3:5432 as svc_ledger`, and a partner's `?token=…` once its
   `reqwest::Error` was wrapped in `#[error(transparent)]`, reached the client.
   Each now answers its status's problem with no `detail`, the error kept as the
-  cause; the framework's own refusals (`Json`, `Query`, `Form`, `Multipart`,
+  cause, which the edge files behind a `5xx` and nothing files behind a `4xx`, an
+  exception filter its one reader; the framework's own refusals (`Json`, `Query`, `Form`, `Multipart`,
   `Path`, a body read, a path parameter) write theirs. WebSocket, MCP and
   GraphQL already took only a sentence passed in. **Breaking:**
   `ProblemDetails::from_error` is gone; a client's sentence is a `Problem`'s

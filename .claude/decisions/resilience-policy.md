@@ -742,7 +742,11 @@ reference's word first:
   them, and a closure's captures drop in the order its body first names them
   (`.claude/upstream/rustc.md`): the attempt opens on a statement naming those
   the body names, last declared first. A guard argument was released before the
-  writer it guards had flushed. Under an instrument written above it the method
+  writer it guards had flushed. A method whose attempts borrow them opens on
+  that statement itself, naming what the expansion names: borrowed for the
+  statement alone, it holds nothing across a wait, and a future an attribute
+  below wraps the body in — `#[tracing::instrument]`'s — takes them in that
+  order, where it took them first declared first (2026-11-27). Under an instrument written above it the method
   keeps the order that instrument gives it with no policy
   (`.claude/upstream/tracing-attributes.md`).
 - **The fallback answers after the run**, for the call's own error once its

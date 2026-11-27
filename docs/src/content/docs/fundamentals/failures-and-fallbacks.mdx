@@ -248,8 +248,9 @@ was.
   only reads and in the order the body first names them. A body opening on
   `let _ = (&out, &held);`, its arguments declared `held` then `out`, sets that
   order last declared first. Below a `#[tracing::instrument]`, whose future takes
-  the arguments in the order the expansion names them, they drop last declared
-  first too.
+  the arguments in the order the expansion first names them, they drop last
+  declared first too, under every key: the method opens on that statement
+  itself where its attempts borrow them.
 - **Two decorated calls joined in one unit's transaction take its turn in
   order**: an attempt's savepoint holds the unit until it settles, its call to
   the dependency included, so the other waits inside its own bound and can be

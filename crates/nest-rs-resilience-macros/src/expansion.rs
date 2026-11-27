@@ -119,14 +119,11 @@ fn as_written(written: syn::token::Brace, stmts: Vec<Stmt>) -> Stmt {
 /// whose body may consume one: read whole there, an argument the body reads a
 /// part of, or names without reading, would be borrowed whole across the
 /// attempt's waits — no `Send` future where it is no `Sync`, and no answer
-/// reborrowing a `&mut` it holds.
-fn captured(method: &ImplItemFn) -> Option<Stmt> {
-    let written: TokenStream = method
-        .block
-        .stmts
-        .iter()
-        .map(ToTokens::to_token_stream)
-        .collect();
+/// reborrowing a `&mut` it holds. Its method opens on the statement instead,
+/// naming what the whole expansion names, borrowed for that statement alone:
+/// a future an attribute below wraps the body in — `#[tracing::instrument]`'s
+/// — takes the arguments in that order.
+fn captured(method: &ImplItemFn, written: &TokenStream) -> Option<Stmt> {
     let own = Span::mixed_site();
     let (mut read, mut captured_later) = (Vec::new(), false);
     for typed in typed_inputs(method) {
@@ -152,6 +149,11 @@ fn captured(method: &ImplItemFn) -> Option<Stmt> {
     let ordered = read.len() > 1 || (captured_later && !read.is_empty());
     let read = read.iter().rev();
     ordered.then(|| syn::parse_quote_spanned!(own=> let _ = (#(#read,)*);))
+}
+
+/// `stmts`, a body, as the tokens it is written in.
+fn tokens(stmts: &[Stmt]) -> TokenStream {
+    stmts.iter().map(ToTokens::to_token_stream).collect()
 }
 
 /// Whether `ty` is a reference, read through parentheses and an invisible
@@ -289,11 +291,11 @@ pub(crate) fn expand(
         .fallback
         .as_ref()
         .map(|fallback| arguments(&method, fallback.key.span()));
-    let captured = match lends {
-        None => captured(&method),
+    let owned = match lends {
+        None => captured(&method, &tokens(&method.block.stmts)),
         Some(_) => None,
     };
-    let block = body(&mut method, &answer, at, captured, bound);
+    let block = body(&mut method, &answer, at, owned, bound);
     let every = quote_spanned!(at=> ::nest_rs_resilience::__private::every);
     let written = |predicate: Option<&Expr>| match predicate {
         Some(predicate) => predicate.to_token_stream(),
@@ -370,7 +372,12 @@ pub(crate) fn expand(
         }
         _ => run,
     };
-    method.block.stmts = vec![run_mark(), Stmt::Expr(Expr::Verbatim(call), None)];
+    let mut stmts = vec![run_mark()];
+    if lends.is_some() {
+        stmts.extend(captured(&method, &call));
+    }
+    stmts.push(Stmt::Expr(Expr::Verbatim(call), None));
+    method.block.stmts = stmts;
     method.into_token_stream()
 }
 
@@ -496,7 +503,8 @@ mod tests {
 
     /// The attempt owning the arguments reads first, last declared first, each
     /// one its body names: its closure and its future capture them in that
-    /// order, the one an `async fn` drops its parameters in.
+    /// order, the one an `async fn` drops its parameters in. An attempt lending
+    /// them reads none, and its method reads them instead.
     #[test]
     fn an_attempt_owning_the_arguments_reads_those_its_body_names_last_declared_first() {
         let arguments = quote! {
@@ -540,8 +548,9 @@ mod tests {
         ] {
             let lent = resilient(lending.clone(), read_only.clone()).to_string();
             assert!(
-                !lent.contains("let _ ="),
-                "#[resilient({lending})] leaves the arguments in the method's frame: {lent}"
+                lent.contains("fn __nestrs_resilient_run () { } let _ = (& out , & held ,) ;")
+                    && lent.matches("let _ =").count() == 1,
+                "#[resilient({lending})] reads the arguments in the method's frame alone: {lent}"
             );
         }
         for (arguments, body) in [

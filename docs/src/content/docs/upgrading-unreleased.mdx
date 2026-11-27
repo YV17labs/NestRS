@@ -137,8 +137,12 @@ app on Redis reads step 9 too, which changes behaviour alone.
    | `ProblemDetails::from_error(status, title, &err)` | `ProblemDetails::from_problem(&problem)`, or `ProblemDetails::from_status(status).with_detail("…")` |
    | `impl ResponseError` with no `as_response`, its `Display` the client's | `impl ToProblem`, its `Problem` carrying the sentence |
 
-   This step changes behaviour alone: status, `title` and `code` are unchanged,
-   and the cause stays for the operator and an exception filter.
+   This step changes behaviour alone: status, `title` and `code` are unchanged.
+   Behind a `5xx` the edge files the cause for the operator, at `error` (`warn`
+   behind a `503`). Behind a `4xx` nothing files it and only an [exception
+   filter](/fundamentals/exception-filters/) reads it: a reason the operator
+   needs there is a line the handler writes, and one the client needs is its
+   `with_detail`.
 
 8. **Move an alert on a `503` tick or listener to `warn`.** A scheduled job or
    an event listener failing with a `503` — a resilience policy's refusal, a

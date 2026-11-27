@@ -266,10 +266,11 @@ impl Cause {
 }
 
 impl HttpError {
-    /// `source` answering `status`'s problem document: `source` is the
-    /// operator's, kept as the cause, and its `Display` never reaches the
-    /// client. A sentence for the client is a [`Problem`]'s
-    /// [`with_detail`](Problem::with_detail).
+    /// `source` answering `status`'s problem document: `source` is kept as
+    /// the cause, and its `Display` never reaches the client. Behind a `5xx`
+    /// the edge files it for the operator; behind a `4xx` nothing does, and
+    /// an exception filter alone reads it. A sentence for the client is a
+    /// [`Problem`]'s [`with_detail`](Problem::with_detail).
     ///
     /// ```
     /// use nest_rs_http::{HttpError, StatusCode};

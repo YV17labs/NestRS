@@ -206,7 +206,9 @@ was.
   until it answers, so `CONCURRENCY` bounds its body past the call, and a
   bulkhead of one does not refuse the call. A call made while another shares the
   slot and turn takes its own slot, token and turn, refused `Open` beside a
-  probe, and counts its own outcome. So twenty pages read inside one `import()`
+  probe, and counts its own outcome. Finding no slot free, it waits
+  `CONCURRENCY_WAIT_MS` for one or for the attempt's, and with no wait, the
+  default, it is refused `Full` at once. So twenty pages read inside one `import()`
   meet `CONCURRENCY` and `RATE_LIMIT` as twenty read alone do. Each is sent under
   its own timeout, and once: the attempt around it is what the policy sends
   again. A call spawned onto a task of its own is a call of its own.

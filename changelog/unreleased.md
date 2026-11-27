@@ -164,8 +164,10 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   token. The attempt keeps its slot until it answers, so `CONCURRENCY` bounds
   its body past the call, and it counts once: a failure when its own answer or
   a call sharing its turn failed, otherwise as its answer is judged. A call made
-  while another shares them takes its own slot, or the attempt's as it comes
-  back, and its own token and turn, and counts its own outcome. So `CONCURRENCY`
+  while another shares them takes a free slot of its own, or, waiting
+  `CONCURRENCY_WAIT_MS` for one, the attempt's should it come back first —
+  refused `Full` at once with no wait — and its own token and turn, and counts
+  its own outcome. So `CONCURRENCY`
   and `RATE_LIMIT` bound the calls an attempt fans out as they bound calls made
   alone. Each is sent under its own timeout and sent once, the attempt around it
   being what is sent again. The method's error

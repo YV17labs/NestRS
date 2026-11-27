@@ -1774,6 +1774,66 @@ async fn a_request_sent_inside_an_attempt_of_its_own_policy_is_counted_once_by_t
     );
 }
 
+/// A nested request's body gives the attempt's slot back as it ends: two
+/// parcels read whole one after the other inside one attempt under a
+/// bulkhead of one both answer, the second on the slot the first gave back.
+#[tokio::test]
+async fn a_body_read_inside_an_attempt_of_its_own_policy_gives_its_slot_back_as_it_ends() {
+    const BODY: &str = "a parcel on its way";
+    let peer = answering([PeerAnswer::body(200, BODY), PeerAnswer::body(200, BODY)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        concurrency: Some(1),
+        ..quiet()
+    })
+    .await;
+    let http = client(Arc::clone(&policy));
+    let url = peer.url(PARCEL);
+
+    let read = policy
+        .run(|| async {
+            let first = http.get(&url).send().await?.text().await?;
+            let second = http.get(&url).send().await?.text().await?;
+            Ok::<_, CarrierFailed>([first, second])
+        })
+        .await
+        .expect("both bodies read on the attempt's slot");
+
+    assert_eq!(read, [BODY, BODY]);
+    assert_eq!(peer.requests().len(), 2, "each sent once");
+    assert_eq!(policy.concurrency_running(), Some(0), "every slot freed");
+}
+
+/// A nested request's body that fails fails the attempt it was read in,
+/// though the attempt swallows the error and answers `Ok`: a breaker of one
+/// failure opens.
+#[tokio::test]
+async fn a_body_cut_short_inside_an_attempt_of_its_own_policy_fails_that_attempt() {
+    let peer = answering([PeerAnswer::truncated(200)]).await;
+    let (_app, policy) = policy(ResilienceConfig {
+        breaker_window: Some(1),
+        breaker_failures: 1,
+        ..quiet()
+    })
+    .await;
+    let http = client(Arc::clone(&policy));
+    let url = peer.url(PARCEL);
+
+    let swallowed = policy
+        .run(|| async {
+            let answered = http.get(&url).send().await?;
+            let cut = answered.bytes().await.is_err();
+            Ok::<_, CarrierFailed>(cut)
+        })
+        .await;
+
+    assert!(matches!(swallowed, Ok(true)), "{swallowed:?}");
+    assert!(
+        matches!(policy.breaker_state(), Some(BreakerState::Open { .. })),
+        "the body's failure failed the attempt: {:?}",
+        policy.breaker_state()
+    );
+}
+
 /// What the indicator below asks the carrier for, and whether its check got
 /// as far as reading the answer's body.
 struct Watched {

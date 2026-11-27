@@ -513,7 +513,8 @@ impl<'p> Run<'p> {
     /// counted and told. Opened inside an attempt of its own policy, it shares
     /// that attempt's slot while no other call does; otherwise it is opened
     /// so, and takes the attempt's slot should it come back before one is
-    /// freed.
+    /// freed within the bulkhead's wait — with none, it is refused `Full` at
+    /// once.
     pub(crate) fn poll_open(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -6948,8 +6949,8 @@ mod tests {
     /// what the attempt does after it still runs inside the bulkhead. Three
     /// pushes under a bulkhead of one, each fetching a token of the policy's
     /// first, run one at a time; and pages an attempt fans out under a bulkhead
-    /// of one are read one at a time on its slot, each handed it as the one
-    /// before gives it back.
+    /// of one with a wait are read one at a time on its slot, each handed it
+    /// as the one before gives it back.
     #[tokio::test(start_paused = true)]
     async fn an_attempt_holds_its_slot_past_a_call_of_its_policy_it_made() {
         let partner = policy(ResilienceConfig {
@@ -6991,6 +6992,180 @@ mod tests {
         assert!(imported.iter().all(Result::is_ok), "{imported:?}");
         assert_eq!(most.load(Ordering::Relaxed), 1, "one page read at a time");
         assert_eq!(partner.concurrency_running(), Some(0), "every slot freed");
+    }
+
+    /// Every one of `calls` polled together in one task, each polled again
+    /// only once its own waker is woken, as `FuturesUnordered` and
+    /// `buffer_unordered` poll them: a call nothing wakes is never polled
+    /// again.
+    async fn unordered<F: Future>(calls: impl IntoIterator<Item = F>) -> Vec<F::Output> {
+        /// One call's waker: it marks the call woken and wakes the task.
+        struct OwnWaker {
+            woken: std::sync::atomic::AtomicBool,
+            task: std::sync::Mutex<Option<Waker>>,
+        }
+        impl std::task::Wake for OwnWaker {
+            fn wake(self: Arc<Self>) {
+                self.wake_by_ref();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.woken.store(true, Ordering::Relaxed);
+                if let Some(task) = self.task.lock().expect("unpoisoned").take() {
+                    task.wake();
+                }
+            }
+        }
+        let mut calls: Vec<_> = calls
+            .into_iter()
+            .map(|call| {
+                let woken = Arc::new(OwnWaker {
+                    woken: std::sync::atomic::AtomicBool::new(true),
+                    task: std::sync::Mutex::new(None),
+                });
+                (Some(Box::pin(call)), woken)
+            })
+            .collect();
+        let mut answers: Vec<_> = calls.iter().map(|_| None).collect();
+        std::future::poll_fn(|cx| {
+            let mut pending = false;
+            for ((call, woken), answer) in calls.iter_mut().zip(&mut answers) {
+                let Some(polled) = call else { continue };
+                *woken.task.lock().expect("unpoisoned") = Some(cx.waker().clone());
+                if !woken.woken.swap(false, Ordering::Relaxed) {
+                    pending = true;
+                    continue;
+                }
+                let waker = Waker::from(Arc::clone(woken));
+                match polled.as_mut().poll(&mut Context::from_waker(&waker)) {
+                    Poll::Ready(answered) => {
+                        *answer = Some(answered);
+                        *call = None;
+                    }
+                    Poll::Pending => pending = true,
+                }
+            }
+            if pending {
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
+        .await;
+        answers
+            .into_iter()
+            .map(|answer| answer.expect("every call answered"))
+            .collect()
+    }
+
+    /// A call waiting for its attempt's slot is woken as the call sharing it
+    /// gives it back: pages an import fans out unordered under a bulkhead of
+    /// one with a wait each read in turn on the attempt's slot, well inside
+    /// the wait, where a lost wake left them waiting it out and refused
+    /// `Full`.
+    #[tokio::test(start_paused = true)]
+    async fn calls_waiting_for_their_attempts_slot_are_woken_as_it_comes_back() {
+        const WAIT: Duration = Duration::from_secs(5);
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            concurrency: Some(1),
+            concurrency_wait: Some(WAIT),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let page = || async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok::<_, Refused>(())
+        };
+        let started = Instant::now();
+        let imported = partner
+            .run(|| async { Ok::<_, Refused>(unordered((0..5).map(|_| partner.run(page))).await) })
+            .await
+            .expect("the import answers what its pages did");
+        assert!(imported.iter().all(Result::is_ok), "{imported:?}");
+        assert!(
+            started.elapsed() < WAIT / 10,
+            "each page woken as the one before gave the slot back: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(partner.concurrency_running(), Some(0), "every slot freed");
+    }
+
+    /// A call made while another shares the attempt's slot waits for it only
+    /// within the bulkhead's own wait: with none, the default, it is refused
+    /// `Full` at once, as the same call made alone is.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_made_while_another_shares_its_attempts_slot_is_refused_full_with_no_wait() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            concurrency: Some(1),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let page = || async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok::<_, Refused>(())
+        };
+        let imported = partner
+            .run(|| async { Ok::<_, Refused>(all((0..3).map(|_| partner.run(page))).await) })
+            .await
+            .expect("the import answers what its pages did");
+        assert!(
+            matches!(
+                imported[..],
+                [
+                    Ok(()),
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Full,
+                        ..
+                    }),
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Full,
+                        ..
+                    })
+                ]
+            ),
+            "the first shared the slot, the others found none and no wait: {imported:?}"
+        );
+        assert_eq!(partner.concurrency_running(), Some(0), "every slot freed");
+    }
+
+    /// A call sharing a probe's turn and refused before it is sent gives the
+    /// turn back at once: the next call the probe makes shares it and is sent,
+    /// where it met the half-open breaker and was refused `Open`.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_refused_unsent_on_a_probes_turn_gives_the_turn_back() {
+        let probed = policy(ResilienceConfig {
+            rate_limit: Some(1),
+            rate_window: Duration::from_secs(1),
+            ..probing(Duration::from_secs(5))
+        });
+        probe_due(&probed).await;
+        let read = || probed.run(|| async { Ok::<_, Refused>(()) });
+        let answered = probed
+            .run(|| async {
+                let token = read().await;
+                let limited = read().await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok::<_, Refused>([token, limited, read().await])
+            })
+            .await
+            .expect("the probe answers what its calls did");
+        assert!(
+            matches!(
+                answered[..],
+                [
+                    Ok(()),
+                    Err(ResilienceError::Refused {
+                        refusal: ResilienceRefusal::Limited { .. },
+                        ..
+                    }),
+                    Ok(())
+                ]
+            ),
+            "the first took the probe's token, the second found none, the third \
+             shared the turn the second gave back: {answered:?}"
+        );
+        assert_eq!(probed.breaker_state(), Some(BreakerState::Closed));
     }
 
     /// An attempt counts once in the breaker, failed when its own answer or a

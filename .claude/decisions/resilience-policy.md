@@ -1913,10 +1913,16 @@ takes its own.
   entry said. While the thread polls an attempt, that attempt's entry says
   whether its slot is free to share. A call of its policy it makes shares the
   slot while no other call does and gives it back as it ends. A call made while
-  the slot is out waits for a slot of its own or for the attempt's to come
-  back, whichever comes first, and the call giving the slot back wakes the
-  ones waiting for it. A fan-out under a bulkhead of one therefore reads its
-  pages one at a time on the attempt's slot. This answers the entry above's
+  the slot is out takes a free slot of its own, or waits, within the
+  bulkhead's own wait (`CONCURRENCY_WAIT_MS`), for one or for the attempt's
+  to come back, whichever comes first; the call giving the slot back wakes the
+  ones waiting for it. With no wait, the default, it is refused `Full` at
+  once, as the same call made alone is: a fan-out under a bulkhead of one
+  reads its pages one at a time on the attempt's slot only when a wait lets
+  it. Waiting for the attempt's slot whatever the wait was refused:
+  `CONCURRENCY_WAIT_MS=0` says a call finding no slot is refused at once, and
+  correctness keeps one meaning for one setting, nested or not, with no wait
+  the operator did not set. This answers the entry above's
   reason for moving the slot, a returned slot sitting unused while a fan-out
   waited, without letting the attempt go on unbounded. The re-entry before a
   retry (`poll_back_off`, then `poll_open`, the middleware's loop too) is
@@ -1940,7 +1946,20 @@ takes its own.
 Held by run.rs's tests:
 - `an_attempt_holds_its_slot_past_a_call_of_its_policy_it_made`: three pushes
   under a bulkhead of one run one at a time (three before), and five pages fanned
-  out under it are read one at a time.
+  out under it, with a wait, are read one at a time.
+- `calls_waiting_for_their_attempts_slot_are_woken_as_it_comes_back`: pages
+  fanned out through a join polling only the call its own waker woke, as
+  `buffer_unordered` does, each read in turn well inside the bulkhead's wait;
+  with the wake dropped they wait it out and are refused `Full`.
+- `a_call_made_while_another_shares_its_attempts_slot_is_refused_full_with_no_wait`:
+  with no wait, the pages after the first are refused `Full` at once.
+- `a_call_refused_unsent_on_a_probes_turn_gives_the_turn_back`: a call
+  refused `Limited` on the probe's turn gives it back, and the next call the
+  probe makes shares it and is sent, where it was refused `Open`.
+- middleware.rs's `a_body_read_inside_an_attempt_of_its_own_policy_gives_its_slot_back_as_it_ends`
+  and `a_body_cut_short_inside_an_attempt_of_its_own_policy_fails_that_attempt`:
+  two parcels read whole in turn under a bulkhead of one both answer, and a
+  body cut short, its error swallowed, opens a breaker of one failure.
 - `an_attempt_whose_call_of_its_policy_succeeded_counts_its_own_failure`: the
   charge opens a breaker of one failure (it stayed `Closed` before), and so does
   a probe so shaped, as well as one whose helper failed beneath an `Ok`.

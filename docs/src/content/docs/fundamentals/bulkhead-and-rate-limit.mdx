@@ -144,8 +144,10 @@ a request through the policy's `ResilienceMiddleware` — shares the attempt's s
 while no other call does, and gives it back as it ends. The attempt keeps its slot
 until it answers, so what its body does after the call still runs inside the
 bulkhead, and a bulkhead of one does not refuse the call. A call made while
-another shares the slot takes a slot of its own, or the attempt's as it comes
-back, whichever is first. The first call takes the attempt's token, so a rate of
+another shares the slot takes a free slot of its own. Finding none, it waits
+`CONCURRENCY_WAIT_MS` as any call does, and takes the attempt's slot should
+that come back first; with no wait, the default, it is refused `Full` at once.
+The first call takes the attempt's token, so a rate of
 one does not refuse it, and every later one takes its own. So the calls an
 attempt fans out meet `CONCURRENCY` and `RATE_LIMIT` as the same calls made alone
 do. A call that outlives the attempt, such as a response handed out of a `run`

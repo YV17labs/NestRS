@@ -28,7 +28,8 @@ outcome ages, and one probe closes it.
 The breaker counts the latest `BREAKER_WINDOW` attempts. Once `BREAKER_FAILURES`
 of them failed, it opens: every call is refused at once, unsent, for
 `BREAKER_OPEN_SECS`. Then one call probes the dependency while the others are
-still refused. Its failure opens the breaker again, and its success closes it,
+still refused, but for the calls of its policy the probe makes itself, which
+share its turn. Its failure opens the breaker again, and its success closes it,
 or counts toward the [series of probes](#an-age-and-a-series-of-probes)
 `BREAKER_PROBES` asks for.
 
@@ -78,7 +79,15 @@ closed it or `close_breaker()` did: a late success does not push a fresh failure
 out of the new window, and a late failure does not open it.
 
 **One probe at a time.** While a call holds the probe's turn, every other call
-is refused, told what is left of that probe's own bound. The bound is the
+is refused, told what is left of that probe's own bound. A call of the same
+policy the probe makes itself — a decorated method its body calls, a `run`
+there, a request through the policy's `ResilienceMiddleware` — is part of the
+probe: it shares the probe's turn while no other call does, asks the breaker
+nothing, and its failure fails the probe
+([nested calls](/fundamentals/failures-and-fallbacks/#limits)). So a `sync()`
+reading twenty pages one after the other through a decorated `fetch_page()` of
+its policy sends all twenty on one probe, counted as one outcome, while one it
+makes beside a page still out is refused as any call beside a probe is. The bound is the
 probe's timeout, its method's pin included, or what its unit's deadline leaves
 when that is sooner. While the probe's call is sent, or waits for its token of the
 [rate limit](/fundamentals/bulkhead-and-rate-limit/#the-rate-limit), that is

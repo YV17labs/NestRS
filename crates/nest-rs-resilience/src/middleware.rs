@@ -117,9 +117,12 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// answered, fails nothing. A request sent while another shares them takes its own, as one
 /// sent alone does, so `CONCURRENCY` and `RATE_LIMIT` bound the requests an
 /// attempt fans out. Inside an attempt the policy may still send again, each
-/// is sent once, that attempt being what is sent again; inside one it never
-/// sends again — a run once, or the last attempt — it is sent again as any
-/// request is. A body read after that attempt has answered holds
+/// is sent once, so the two runs' retries do not multiply — though that
+/// attempt is sent again only if it then fails as its run retries, so one its
+/// `retry_if` refuses, given up past the ceiling or the deadline, or answering
+/// `Ok` over the request's error leaves the request sent once; inside one it
+/// never sends again — a run once, or the last attempt — it is sent again as
+/// any request is. A body read after that attempt has answered holds
 /// nothing of the policy.
 ///
 /// So a response is read or dropped, never kept: one held unread holds its

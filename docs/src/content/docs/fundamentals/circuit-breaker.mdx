@@ -82,8 +82,11 @@ out of the new window, and a late failure does not open it.
 is refused, told what is left of that probe's own bound. A call of the same
 policy the probe makes itself — a decorated method its body calls, a `run`
 there, a request through the policy's `ResilienceMiddleware` — is part of the
-probe: it shares the probe's turn while no other call does, asks the breaker
-nothing, and its failure fails the probe
+probe: it shares the probe's turn while no other call does and while the
+breaker has neither opened nor been switched by hand since the probe was let
+through. Once it has, the call meets the breaker as any call does, refused
+`Open` unsent while it is open. It fails the probe only when it ends on a
+failure: one it was sent again past, then answered, fails nothing
 ([nested calls](/fundamentals/failures-and-fallbacks/#limits)). So a `sync()`
 reading twenty pages one after the other through a decorated `fetch_page()` of
 its policy sends all twenty on one probe, counted as one outcome, while one it

@@ -52,7 +52,9 @@ half-open, one call at a time, until an `Ok` or a counted `Err` answers.
 `retry_ok_if` asks the same of an `Ok`, for a dependency answering "not ready
 yet" as a success: one it takes is sent again, and once the retries are spent the
 last `Ok` is the method's answer. A timeout is always a failure in the breaker,
-and always sent again by an idempotent method.
+and no predicate keeps an idempotent method from sending it again, but for a call
+made inside an attempt of its policy that may still be sent again, which is
+[sent once](#limits).
 
 An error whose chain carries a `Problem` with a `Retry-After` — an upstream's
 `429` passed on — holds its retry back at least that long. One asking past
@@ -215,13 +217,18 @@ was.
   `CONCURRENCY_WAIT_MS` for one or for the attempt's, and with no wait, the
   default, it is refused `Full` at once. So twenty pages read inside one `import()`
   meet `CONCURRENCY` and `RATE_LIMIT` as twenty read alone do. Each is sent under
-  its own timeout. Made in an attempt the policy may still send again, an
-  `idempotent` one is sent once, that attempt being what is sent again, and an
-  error of its the attempt swallows is sent no more; made in
-  one it never sends again, a method run once or the last attempt, it is sent
-  again as its own `RETRIES` say, since nothing around it multiplies them, so a
-  token helper answering on its retry leaves the `charge()` around it a
-  success. A call
+  its own timeout. Made in an attempt the policy may still send again — an
+  `idempotent` one with retries left, or one inside such an attempt — an
+  `idempotent` one is sent once, so that two retrying methods do not multiply
+  their sends to the dependency. Whether that attempt is sent again is decided
+  only once it answers, so where it is not, the call has still been sent only
+  once: when its `retry_if` refuses the error the call led to, as the one above
+  refuses a `TimedOut`, when its retry is given up past `BACKOFF_CEILING_MS` or
+  the deadline, or when it swallows the call's error and answers `Ok`. A method
+  whose nested calls must keep their own retries is run once. Made in an attempt
+  it never sends again, a method run once or the last attempt, it is sent again
+  as its own `RETRIES` say, since nothing around it multiplies them, so a token
+  helper answering on its retry leaves the `charge()` around it a success. A call
   spawned onto a task of its own is a call of its own.
 - **Arguments drop last declared first**, as the undecorated method's do, however
   the run ends, but for the cases that follow. Of a method run once, under no

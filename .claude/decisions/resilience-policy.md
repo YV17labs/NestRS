@@ -1953,6 +1953,9 @@ Held by run.rs's tests:
   with the wake dropped they wait it out and are refused `Full`.
 - `a_call_made_while_another_shares_its_attempts_slot_is_refused_full_with_no_wait`:
   with no wait, the pages after the first are refused `Full` at once.
+- `a_call_three_deep_shares_the_slot_its_attempt_shares`: a run sharing its
+  attempt's slot lends it on, so a call three runs of one policy deep answers
+  under a bulkhead of one with no wait.
 - `a_call_refused_unsent_on_a_probes_turn_gives_the_turn_back`: a call
   refused `Limited` on the probe's turn gives it back, and the next call the
   probe makes shares it and is sent, where it was refused `Open`.
@@ -2073,7 +2076,10 @@ hand on a probe: one sent, four refused `Open`; closed by hand, the next sent
 on its own and opening it) and
 `an_idempotent_call_nested_in_an_attempt_never_sent_again_is_sent_again`
 (three sends inside a run once, `1 + 1 + 3` inside a run sent again twice, and
-`1 + 1 + (1 + 1 + 3)` three deep), and the middleware suite's
+`1 + 1 + (1 + 1 + 3)` three deep),
+`a_call_that_waited_for_its_token_shares_its_probes_turn` (the epoch check after
+a wait for the rate's token: a probe's second helper waits out the window and is
+sent on the probe's turn), and the middleware suite's
 `a_request_sent_inside_an_attempt_never_sent_again_is_sent_again` (a GET inside
 a run once, answered `503` then `200`, sent again). The test pinning one send
 inside a run once is gone.
@@ -2083,11 +2089,21 @@ at once): bare 44.5 → 44.4 ns, breaker 59.3 → 58.0, bulkhead 55.4 → 53.7,
 rate 70.6 → 64.2. No cost is measured; the faster figures are within the
 container's run-to-run spread and claim nothing.
 
-**Not done, named:** a nested call's error the attempt around it swallows,
-answering `Ok`, is not sent again by that attempt either: inside an attempt
-that may still be sent again, such a call is sent once even though its attempt
-will not be resent. Closing it means deciding a resend only once the attempt
-answers, which a nested run cannot know as it opens.
+**Not done, named:** whether the attempt around a nested idempotent call is
+sent again is read as the call opens, from its retries left alone. An attempt
+that then ends without a resend — its `retry_if` refusing the error the call
+led to, as the page's own predicate refusing refusals does for the inner
+`TimedOut`, its retry given up past the ceiling or the deadline, or the call's
+error swallowed into an `Ok` — leaves the call sent once, fewer times than
+alone. Closing it means deciding the call's resend once the attempt answers,
+after the call has returned: no run can, short of re-entering a call that
+ended, so the limit is named on the failures page, the middleware's page and
+rustdoc, and the changelog, with the remedy (a method whose nested calls must
+keep their retries is run once), and pinned by run.rs's
+`a_nested_idempotent_call_is_sent_once_whatever_its_attempt_then_does`.
+Keeping the nested retries wherever the outer has a predicate was refused: it
+brings back `(n + 1)(m + 1)` sends on every error the predicate takes, the
+storm the zeroing exists to stop.
 
 ## 2026-11-27 — a nested call fails the attempt around it only when it ends failing
 

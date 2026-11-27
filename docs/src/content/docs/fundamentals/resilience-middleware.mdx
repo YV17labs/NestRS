@@ -126,9 +126,13 @@ counts in that attempt, once, as it ends: a failure it ends on, its body's
 included, fails the attempt, and one it was sent again past, then answered,
 fails nothing. A request sent while another shares them takes its own, as a request
 sent alone does. Inside an attempt the policy may still send again, each is
-sent once, that attempt being what is sent again; inside one it never sends
-again, a run once or the last attempt, it is sent again as the middleware
-sends any request. A body read after the attempt has answered, from a
+sent once, so the attempt's retries and the middleware's do not multiply; that
+attempt is sent again only if it then fails in a way its run retries, so a
+request its `retry_if` refuses, or its retry given up past the ceiling or the
+deadline, or its error swallowed into an `Ok`, has been sent once
+([nested calls](/fundamentals/failures-and-fallbacks/#limits)). Inside one it
+never sends again, a run once or the last attempt, it is sent again as the
+middleware sends any request. A body read after the attempt has answered, from a
 response handed out of the `run`, holds nothing of the policy.
 
 ## Test it

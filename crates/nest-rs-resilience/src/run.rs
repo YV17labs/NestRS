@@ -527,7 +527,9 @@ impl<'p> Run<'p> {
     /// so, and takes the attempt's slot should it come back before one is
     /// freed within the bulkhead's wait — with none, it is refused `Full` at
     /// once. Opened inside an attempt its policy may still send again, the
-    /// run sends its call once, that attempt being what is sent again; inside
+    /// run sends its call once, decided here: should that attempt then end
+    /// without being sent again — its predicate refusing, its retry given up,
+    /// the call's error swallowed — the call was still sent once; inside
     /// one never sent again — a run once, or the last attempt of a run — it
     /// keeps its own retries, which nothing around it multiplies, and fails
     /// that attempt only should it end failing.
@@ -7226,6 +7228,67 @@ mod tests {
         assert_eq!(probed.breaker_state(), Some(BreakerState::Closed));
     }
 
+    /// A call that waited for its token shares its probe's turn as it is let
+    /// through, as one that took its token at once does: a probe's second
+    /// helper, waiting out the rate's window, is sent on the probe's turn and
+    /// the probe closes the breaker, where asking the half-open breaker for a
+    /// pass of its own refused it `Open`.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_that_waited_for_its_token_shares_its_probes_turn() {
+        let probed = policy(ResilienceConfig {
+            rate_limit: Some(1),
+            rate_window: Duration::from_secs(1),
+            rate_wait: Some(Duration::from_secs(5)),
+            ..probing(Duration::from_secs(5))
+        });
+        probe_due(&probed).await;
+        let read = || probed.run(|| async { Ok::<_, Refused>(()) });
+        let started = Instant::now();
+        let answered = probed
+            .run(|| async { Ok::<_, Refused>([read().await, read().await]) })
+            .await
+            .expect("the probe answers what its calls did");
+        assert!(
+            matches!(answered[..], [Ok(()), Ok(())]),
+            "the first took the probe's token, the second waited for its own \
+             and shared the probe's turn: {answered:?}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_secs(1),
+            "the second waited for its token: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(probed.breaker_state(), Some(BreakerState::Closed));
+    }
+
+    /// A call three runs of its policy deep shares the slot its attempt
+    /// shares, the shape of a decorated method calling a decorated helper whose
+    /// request goes through the policy's middleware: it answers under a
+    /// bulkhead of one with no wait, where the innermost call, finding no slot
+    /// to share, was refused `Full`.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_three_deep_shares_the_slot_its_attempt_shares() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            concurrency: Some(1),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let partner = &partner;
+        let charged = partner
+            .run(|| async {
+                partner
+                    .run(|| async { partner.run(|| async { Ok::<_, Refused>("token") }).await })
+                    .await
+            })
+            .await;
+        assert!(
+            matches!(charged, Ok("token")),
+            "each call shared the one slot: {charged:?}"
+        );
+        assert_eq!(partner.concurrency_running(), Some(0), "every slot freed");
+    }
+
     /// An attempt counts once in the breaker, failed when its own answer or a
     /// call of its policy sharing its turn failed: a charge whose token came
     /// back but which failed opens a breaker of one failure, and a probe so
@@ -7364,6 +7427,36 @@ mod tests {
             calls.swap(0, Ordering::Relaxed),
             1 + 1 + (1 + 1 + 3),
             "once while any attempt around is still to be sent again"
+        );
+    }
+
+    /// Whether an idempotent call nested in an attempt that may still be sent
+    /// again is sent again is decided as it opens, not once that attempt
+    /// answers: an attempt answering `Ok` over the call's error is not sent
+    /// again, and the call was sent once, where alone it is sent three times.
+    #[tokio::test(start_paused = true)]
+    async fn a_nested_idempotent_call_is_sent_once_whatever_its_attempt_then_does() {
+        let policy = policy(ResilienceConfig {
+            retries: Some(2),
+            breaker_window: None,
+            ..ResilienceConfig::default()
+        });
+        let calls = AtomicU32::new(0);
+        let failing = || async {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Err::<(), _>(Refused)
+        };
+        let swallowed = policy
+            .run_idempotent(|| async {
+                let _ignored = policy.run_idempotent(failing).await;
+                Ok::<_, Refused>(())
+            })
+            .await;
+        assert!(swallowed.is_ok(), "{swallowed:?}");
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "sent once, its attempt answering and so sent no more"
         );
     }
 

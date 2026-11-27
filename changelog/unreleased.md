@@ -125,8 +125,9 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   breaker's window as it was and a probe's turn to the next call, with no
   line, no transition and no event, a half-open breaker staying half-open
   until an `Ok` or a counted `Err`. A timeout and a
-  panic are failures no predicate reads, and a timeout is always sent again by
-  an `idempotent` method. A predicate is a function's path or a closure,
+  panic are failures no predicate reads, and a timeout is sent again by an
+  `idempotent` method as its retries allow, but for a call nested in an
+  attempt of its policy that may still be sent again, sent once. A predicate is a function's path or a closure,
   reading `self` and the arguments by reference. A `retry_if`, `retry_ok_if`
   or `record_if` that panics fails its attempt as a panic in the body does; a
   `fallback_if` or a fallback that panics, asked once the run is over, unwinds
@@ -173,8 +174,11 @@ the failures of every caller. ([Resilience](https://nestrs.dev/fundamentals/resi
   its own outcome. So `CONCURRENCY`
   and `RATE_LIMIT` bound the calls an attempt fans out as they bound calls made
   alone. Each is sent under its own timeout. Inside an attempt its policy may
-  still send again an idempotent one is sent once, that attempt being what is
-  sent again; inside one never sent again — a run once, or the last attempt —
+  still send again an idempotent one is sent once, so two retrying runs do not
+  multiply their sends — decided as the call opens, so an attempt that then
+  ends without being sent again (its `retry_if` refusing the error the call led
+  to, its retry given up past the ceiling or the deadline, the call's error
+  swallowed into an `Ok`) leaves it sent once; inside one never sent again — a run once, or the last attempt —
   it keeps its own retries, which nothing around it multiplies, and fails the
   attempt only should it end failing. The method's error
   owns what it says (`'static`), one borrowing an argument being rustc's lifetime

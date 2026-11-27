@@ -7,8 +7,9 @@
 //! of the rate. A call sharing its turn counts in the attempt's outcome, once,
 //! as it ends — failed only when it ends on a failure, not on one it sends
 //! again past — and shares it only while the breaker is in the epoch the
-//! attempt was let through in. A call made in an attempt its policy may still send again is
-//! sent once, that attempt being what is sent again.
+//! attempt was let through in. A call made in an attempt its policy may still
+//! send again is sent once, decided as the call opens: an attempt that then
+//! ends without being sent again leaves it sent once.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};

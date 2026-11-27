@@ -1953,6 +1953,10 @@ Held by run.rs's tests:
   with the wake dropped they wait it out and are refused `Full`.
 - `a_call_made_while_another_shares_its_attempts_slot_is_refused_full_with_no_wait`:
   with no wait, the pages after the first are refused `Full` at once.
+- `a_page_that_waited_for_the_attempts_slot_counts_in_the_attempt`: a page
+  that waited for the attempt's slot takes it back with the turn, given back
+  before it, so five failing pages under a bulkhead of one with a wait count
+  as the import's one outcome, `(1, 1)`, and a breaker of three stays closed.
 - `a_call_three_deep_shares_the_slot_its_attempt_shares`: a run sharing its
   attempt's slot lends it on, so a call three runs of one policy deep answers
   under a bulkhead of one with no wait.
@@ -2137,7 +2141,13 @@ Held by run.rs's
 charges whose token answers on its retry leave a breaker of three closed,
 counted `(3, 0)`; a probe so shaped closes it; a failing call beside a
 recovered one, and a nested call whose retry is given up past the ceiling,
-still fail the attempt) and the middleware suite's
+still fail the attempt),
+`a_nested_call_answering_on_its_second_retry_fails_no_attempt_around_it` (a
+token failing twice, then answering, leaves a breaker of one failure closed:
+the second failure replaces the first, forgiven),
+`a_nested_call_answering_after_a_timeout_fails_no_attempt_around_it` (a helper
+timing out on its own timeout inside a longer attempt, then answering, leaves
+it closed: a timeout is owed as a failed verdict is) and the middleware suite's
 `a_request_sent_inside_an_attempt_never_sent_again_is_sent_again` (a GET
 answered `503` then `200` inside a run once leaves a breaker of one failure
 closed, counted `(1, 0)`).

@@ -212,11 +212,16 @@ was.
   shaped closes the breaker only if both succeed. The attempt holds its slot
   until it answers, so `CONCURRENCY` bounds its body past the call, and a
   bulkhead of one does not refuse the call. A call made while another shares the
-  slot and turn takes its own slot, token and turn, refused `Open` beside a
-  probe, and counts its own outcome. Finding no slot free, it waits
-  `CONCURRENCY_WAIT_MS` for one or for the attempt's, and with no wait, the
-  default, it is refused `Full` at once. So twenty pages read inside one `import()`
-  meet `CONCURRENCY` and `RATE_LIMIT` as twenty read alone do. Each is sent under
+  slot and turn takes a free slot of its own, with its own token and turn,
+  refused `Open` beside a probe, and counts its own outcome. Finding no slot
+  free, it waits `CONCURRENCY_WAIT_MS` for one or for the attempt's, and with no
+  wait, the default, it is refused `Full` at once. One that takes the attempt's
+  slot back takes its turn too, which the call before it gave back first: only
+  its token is its own, and it counts in the attempt as a call sharing the turn
+  does. So twenty pages read inside one `import()` meet `CONCURRENCY` and
+  `RATE_LIMIT` as twenty read alone do, and under a bulkhead of one with a wait,
+  pages failing in turn count as the import's one failure: `BREAKER_FAILURES`
+  counts imports there, not pages. Each is sent under
   its own timeout. Made in an attempt the policy may still send again — an
   `idempotent` one with retries left, or one inside such an attempt — an
   `idempotent` one is sent once, so that two retrying methods do not multiply

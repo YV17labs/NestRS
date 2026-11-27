@@ -7555,6 +7555,121 @@ mod tests {
         );
     }
 
+    /// A nested call failing twice before it answers owes the attempt around
+    /// it no failure: the second failure replaces the first, forgiven, so a
+    /// charge answering `Ok` leaves a breaker of one failure closed.
+    #[tokio::test(start_paused = true)]
+    async fn a_nested_call_answering_on_its_second_retry_fails_no_attempt_around_it() {
+        let partner = policy(ResilienceConfig {
+            retries: Some(2),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(60),
+            ..ResilienceConfig::default()
+        });
+        let tries = AtomicU32::new(0);
+        let charged = partner
+            .run(|| async {
+                partner
+                    .run_idempotent(|| async {
+                        if tries.fetch_add(1, Ordering::Relaxed) < 2 {
+                            Err(Refused)
+                        } else {
+                            Ok("token")
+                        }
+                    })
+                    .await
+                    .map_err(|_failed| Refused)
+            })
+            .await;
+        assert!(matches!(charged, Ok("token")), "{charged:?}");
+        assert_eq!(
+            tries.load(Ordering::Relaxed),
+            3,
+            "the token sent twice again"
+        );
+        assert_eq!(
+            counted(&partner),
+            (1, 0),
+            "the charge counted once, a success"
+        );
+        assert_eq!(partner.breaker_state(), Some(BreakerState::Closed));
+    }
+
+    /// A nested call timing out on its own timeout, then answering on its
+    /// retry inside an attempt of a longer one, owes that attempt no failure:
+    /// a timeout sent again past is owed as a failed verdict is.
+    #[tokio::test(start_paused = true)]
+    async fn a_nested_call_answering_after_a_timeout_fails_no_attempt_around_it() {
+        const CHARGING: ResilientMethod =
+            crate::resilient::resilient_method(|| "BillingService", "charge", Some(30_000), None);
+        let partner = policy(ResilienceConfig {
+            retries: Some(2),
+            timeout: Duration::from_millis(100),
+            breaker_window: Some(1),
+            breaker_failures: 1,
+            breaker_open: Duration::from_secs(60),
+            ..ResilienceConfig::default()
+        });
+        let tries = AtomicU32::new(0);
+        let charged = partner
+            .run_once::<Ran, _, Cancellable, _>(Some(&CHARGING), judging_by_default(), |_| async {
+                partner
+                    .run_idempotent(|| async {
+                        if tries.fetch_add(1, Ordering::Relaxed) == 0 {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                        Ok::<_, Refused>(())
+                    })
+                    .await
+                    .map_err(|_failed| Refused)
+            })
+            .await;
+        assert!(matches!(charged, Ok(())), "{charged:?}");
+        assert_eq!(
+            tries.load(Ordering::Relaxed),
+            2,
+            "the helper sent again once"
+        );
+        assert_eq!(
+            counted(&partner),
+            (1, 0),
+            "the charge counted once, a success"
+        );
+        assert_eq!(partner.breaker_state(), Some(BreakerState::Closed));
+    }
+
+    /// A call that waited for its attempt's slot and took it back shares that
+    /// attempt's turn, the turn given back before the slot: pages an import
+    /// fans out under a bulkhead of one with a wait, all failing, count as the
+    /// import's one outcome, a failure, and leave a breaker of three closed.
+    #[tokio::test(start_paused = true)]
+    async fn a_page_that_waited_for_the_attempts_slot_counts_in_the_attempt() {
+        let partner = policy(ResilienceConfig {
+            retries: None,
+            concurrency: Some(1),
+            concurrency_wait: Some(Duration::from_secs(5)),
+            breaker_window: Some(20),
+            breaker_failures: 3,
+            ..ResilienceConfig::default()
+        });
+        let page = || async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Err::<(), _>(Refused)
+        };
+        let imported = partner
+            .run(|| async { Ok::<_, Refused>(unordered((0..5).map(|_| partner.run(page))).await) })
+            .await
+            .expect("the import answers what its pages did");
+        assert!(imported.iter().all(Result::is_err), "{imported:?}");
+        assert_eq!(
+            counted(&partner),
+            (1, 1),
+            "every page counted in the import's attempt"
+        );
+        assert_eq!(partner.breaker_state(), Some(BreakerState::Closed));
+    }
+
     /// What opens a breaker beside an attempt making calls of its policy:
     /// another caller's failure, or a switch by hand, the attempt a probe or
     /// not.

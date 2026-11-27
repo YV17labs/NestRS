@@ -114,9 +114,11 @@ const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("idempotency-key");
 /// the attempt was let through, refused unsent once it is open — and counts
 /// in that attempt, once, as it ends: a failure it ends on, its body's
 /// included, fails the attempt, and one it was sent again past, then
-/// answered, fails nothing. A request sent while another shares them takes its own, as one
-/// sent alone does, so `CONCURRENCY` and `RATE_LIMIT` bound the requests an
-/// attempt fans out. Inside an attempt the policy may still send again, each
+/// answered, fails nothing. A request sent while another shares them takes a
+/// free slot of its own, with its own token and turn, as one sent alone does,
+/// so `CONCURRENCY` and `RATE_LIMIT` bound the requests an attempt fans out;
+/// one that waits for the attempt's slot and takes it back takes its turn too,
+/// and counts in that attempt, only its token its own. Inside an attempt the policy may still send again, each
 /// is sent once, so the two runs' retries do not multiply — though that
 /// attempt is sent again only if it then fails as its run retries, so one its
 /// `retry_if` refuses, given up past the ceiling or the deadline, or answering
